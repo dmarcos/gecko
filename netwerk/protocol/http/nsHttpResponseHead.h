@@ -9,7 +9,7 @@
 #include "nsHttpHeaderArray.h"
 #include "nsHttp.h"
 #include "nsString.h"
-#include "mozilla/ReentrantMonitor.h"
+#include "mozilla/RecursiveMutex.h"
 
 class nsIHttpHeaderVisitor;
 
@@ -37,14 +37,14 @@ public:
                          , mCacheControlNoCache(false)
                          , mCacheControlImmutable(false)
                          , mPragmaNoCache(false)
-                         , mReentrantMonitor("nsHttpResponseHead.mReentrantMonitor")
+                         , mRecursiveMutex("nsHttpResponseHead.mRecursiveMutex")
                          , mInVisitHeaders(false) {}
 
     nsHttpResponseHead(const nsHttpResponseHead &aOther);
     nsHttpResponseHead &operator=(const nsHttpResponseHead &aOther);
 
-    void Enter() { mReentrantMonitor.Enter(); }
-    void Exit() { mReentrantMonitor.Exit(); }
+    void Enter() { mRecursiveMutex.Lock(); }
+    void Exit() { mRecursiveMutex.Unlock(); }
 
     nsHttpVersion Version();
 // X11's Xlib.h #defines 'Status' to 'int' on some systems!
@@ -65,6 +65,8 @@ public:
      */
     int64_t TotalEntitySize();
 
+    MOZ_MUST_USE nsresult SetHeader(const nsACString &h, const nsACString &v,
+                                    bool m=false);
     MOZ_MUST_USE nsresult SetHeader(nsHttpAtom h, const nsACString &v,
                                     bool m=false);
     MOZ_MUST_USE nsresult GetHeader(nsHttpAtom h, nsACString &v);
@@ -138,8 +140,8 @@ public:
     bool HasContentType();
     bool HasContentCharset();
 private:
-    MOZ_MUST_USE nsresult SetHeader_locked(nsHttpAtom h, const nsACString &v,
-                              bool m=false);
+    MOZ_MUST_USE nsresult SetHeader_locked(nsHttpAtom atom, const nsACString &h,
+                                           const nsACString &v, bool m=false);
     void AssignDefaultStatusText();
     void ParseVersion(const char *);
     void ParseCacheControl(const char *);
@@ -183,9 +185,9 @@ private:
     bool              mCacheControlImmutable;
     bool              mPragmaNoCache;
 
-    // We are using ReentrantMonitor instead of a Mutex because VisitHeader
+    // We are using RecursiveMutex instead of a Mutex because VisitHeader
     // function calls nsIHttpHeaderVisitor::VisitHeader while under lock.
-    ReentrantMonitor  mReentrantMonitor;
+    RecursiveMutex  mRecursiveMutex;
     // During VisitHeader we sould not allow cal to SetHeader.
     bool              mInVisitHeaders;
 

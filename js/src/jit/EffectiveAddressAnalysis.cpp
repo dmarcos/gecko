@@ -5,6 +5,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "jit/EffectiveAddressAnalysis.h"
+
+#include "jsnum.h"
+
 #include "jit/IonAnalysis.h"
 #include "jit/MIR.h"
 #include "jit/MIRGraph.h"
@@ -259,8 +262,8 @@ EffectiveAddressAnalysis::analyze()
             if (!graph_.alloc().ensureBallast())
                 return false;
 
-            // Note that we don't check for MAsmJSCompareExchangeHeap
-            // or MAsmJSAtomicBinopHeap, because the backend and the OOB
+            // Note that we don't check for MWasmCompareExchangeHeap
+            // or MWasmAtomicBinopHeap, because the backend and the OOB
             // mechanism don't support non-zero offsets for them yet
             // (TODO bug 1254935).
             if (i->isLsh())

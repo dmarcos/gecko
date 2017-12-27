@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,6 +10,7 @@
 
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Event.h" // for nsIDOMEvent::InternalDOMEvent()
+#include "mozilla/dom/HTMLAreaElement.h"
 #include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/UniquePtr.h"
 #include "nsString.h"
@@ -29,10 +31,11 @@
 
 using namespace mozilla;
 using namespace mozilla::gfx;
+using namespace mozilla::dom;
 
 class Area {
 public:
-  explicit Area(nsIContent* aArea);
+  explicit Area(HTMLAreaElement* aArea);
   virtual ~Area();
 
   virtual void ParseCoords(const nsAString& aSpec);
@@ -45,17 +48,17 @@ public:
 
   void HasFocus(bool aHasFocus);
 
-  nsCOMPtr<nsIContent> mArea;
+  RefPtr<HTMLAreaElement> mArea;
   UniquePtr<nscoord[]> mCoords;
   int32_t mNumCoords;
   bool mHasFocus;
 };
 
-Area::Area(nsIContent* aArea)
+Area::Area(HTMLAreaElement* aArea)
   : mArea(aArea)
 {
   MOZ_COUNT_CTOR(Area);
-  NS_PRECONDITION(mArea, "How did that happen?");
+  MOZ_ASSERT(mArea, "How did that happen?");
   mNumCoords = 0;
   mHasFocus = false;
 }
@@ -266,7 +269,7 @@ void Area::HasFocus(bool aHasFocus)
 
 class DefaultArea : public Area {
 public:
-  explicit DefaultArea(nsIContent* aArea);
+  explicit DefaultArea(HTMLAreaElement* aArea);
 
   virtual bool IsInside(nscoord x, nscoord y) const override;
   virtual void Draw(nsIFrame* aFrame, DrawTarget& aDrawTarget,
@@ -275,7 +278,7 @@ public:
   virtual void GetRect(nsIFrame* aFrame, nsRect& aRect) override;
 };
 
-DefaultArea::DefaultArea(nsIContent* aArea)
+DefaultArea::DefaultArea(HTMLAreaElement* aArea)
   : Area(aArea)
 {
 }
@@ -310,7 +313,7 @@ void DefaultArea::GetRect(nsIFrame* aFrame, nsRect& aRect)
 
 class RectArea : public Area {
 public:
-  explicit RectArea(nsIContent* aArea);
+  explicit RectArea(HTMLAreaElement* aArea);
 
   virtual void ParseCoords(const nsAString& aSpec) override;
   virtual bool IsInside(nscoord x, nscoord y) const override;
@@ -320,7 +323,7 @@ public:
   virtual void GetRect(nsIFrame* aFrame, nsRect& aRect) override;
 };
 
-RectArea::RectArea(nsIContent* aArea)
+RectArea::RectArea(HTMLAreaElement* aArea)
   : Area(aArea)
 {
 }
@@ -416,7 +419,7 @@ void RectArea::GetRect(nsIFrame* aFrame, nsRect& aRect)
 
 class PolyArea : public Area {
 public:
-  explicit PolyArea(nsIContent* aArea);
+  explicit PolyArea(HTMLAreaElement* aArea);
 
   virtual void ParseCoords(const nsAString& aSpec) override;
   virtual bool IsInside(nscoord x, nscoord y) const override;
@@ -426,7 +429,7 @@ public:
   virtual void GetRect(nsIFrame* aFrame, nsRect& aRect) override;
 };
 
-PolyArea::PolyArea(nsIContent* aArea)
+PolyArea::PolyArea(HTMLAreaElement* aArea)
   : Area(aArea)
 {
 }
@@ -573,7 +576,7 @@ void PolyArea::GetRect(nsIFrame* aFrame, nsRect& aRect)
 
 class CircleArea : public Area {
 public:
-  explicit CircleArea(nsIContent* aArea);
+  explicit CircleArea(HTMLAreaElement* aArea);
 
   virtual void ParseCoords(const nsAString& aSpec) override;
   virtual bool IsInside(nscoord x, nscoord y) const override;
@@ -583,7 +586,7 @@ public:
   virtual void GetRect(nsIFrame* aFrame, nsRect& aRect) override;
 };
 
-CircleArea::CircleArea(nsIContent* aArea)
+CircleArea::CircleArea(HTMLAreaElement* aArea)
   : Area(aArea)
 {
 }
@@ -676,9 +679,9 @@ void CircleArea::GetRect(nsIFrame* aFrame, nsRect& aRect)
 //----------------------------------------------------------------------
 
 
-nsImageMap::nsImageMap() :
-  mImageFrame(nullptr),
-  mContainsBlockContents(false)
+nsImageMap::nsImageMap()
+  : mImageFrame(nullptr)
+  , mConsiderWholeSubtree(false)
 {
 }
 
@@ -692,15 +695,12 @@ NS_IMPL_ISUPPORTS(nsImageMap,
                   nsIDOMEventListener)
 
 nsresult
-nsImageMap::GetBoundsForAreaContent(nsIContent *aContent,
-                                    nsRect& aBounds)
+nsImageMap::GetBoundsForAreaContent(nsIContent *aContent, nsRect& aBounds)
 {
   NS_ENSURE_TRUE(aContent && mImageFrame, NS_ERROR_INVALID_ARG);
 
   // Find the Area struct associated with this content node, and return bounds
-  uint32_t i, n = mAreas.Length();
-  for (i = 0; i < n; i++) {
-    Area* area = mAreas.ElementAt(i);
+  for (auto& area : mAreas) {
     if (area->mArea == aContent) {
       aBounds = nsRect();
       area->GetRect(mImageFrame, aBounds);
@@ -711,111 +711,85 @@ nsImageMap::GetBoundsForAreaContent(nsIContent *aContent,
 }
 
 void
+nsImageMap::AreaRemoved(HTMLAreaElement* aArea)
+{
+  if (aArea->IsInUncomposedDoc()) {
+    NS_ASSERTION(aArea->GetPrimaryFrame() == mImageFrame,
+                 "Unexpected primary frame");
+
+    aArea->SetPrimaryFrame(nullptr);
+  }
+
+  aArea->RemoveSystemEventListener(NS_LITERAL_STRING("focus"), this, false);
+  aArea->RemoveSystemEventListener(NS_LITERAL_STRING("blur"), this, false);
+}
+
+void
 nsImageMap::FreeAreas()
 {
-  uint32_t i, n = mAreas.Length();
-  for (i = 0; i < n; i++) {
-    Area* area = mAreas.ElementAt(i);
-    if (area->mArea->IsInUncomposedDoc()) {
-      NS_ASSERTION(area->mArea->GetPrimaryFrame() == mImageFrame,
-                   "Unexpected primary frame");
-
-      area->mArea->SetPrimaryFrame(nullptr);
-    }
-
-    area->mArea->RemoveSystemEventListener(NS_LITERAL_STRING("focus"), this,
-                                           false);
-    area->mArea->RemoveSystemEventListener(NS_LITERAL_STRING("blur"), this,
-                                           false);
-    delete area;
+  for (UniquePtr<Area>& area : mAreas) {
+    AreaRemoved(area->mArea);
   }
+
   mAreas.Clear();
 }
 
-nsresult
+void
 nsImageMap::Init(nsImageFrame* aImageFrame, nsIContent* aMap)
 {
-  NS_PRECONDITION(aMap, "null ptr");
-  if (!aMap) {
-    return NS_ERROR_NULL_POINTER;
-  }
-  mImageFrame = aImageFrame;
+  MOZ_ASSERT(aMap);
+  MOZ_ASSERT(aImageFrame);
 
+  mImageFrame = aImageFrame;
   mMap = aMap;
   mMap->AddMutationObserver(this);
 
   // "Compile" the areas in the map into faster access versions
-  return UpdateAreas();
+  UpdateAreas();
 }
 
-
-nsresult
-nsImageMap::SearchForAreas(nsIContent* aParent, bool& aFoundArea,
-                           bool& aFoundAnchor)
+void
+nsImageMap::SearchForAreas(nsIContent* aParent)
 {
-  nsresult rv = NS_OK;
-  uint32_t i, n = aParent->GetChildCount();
+  // Look for <area> elements.
+  for (nsIContent* child = aParent->GetFirstChild();
+       child;
+       child = child->GetNextSibling()) {
+    if (auto* area = HTMLAreaElement::FromContent(child)) {
+      AddArea(area);
 
-  // Look for <area> or <a> elements. We'll use whichever type we find first.
-  for (i = 0; i < n; i++) {
-    nsIContent *child = aParent->GetChildAt(i);
-
-    // If we haven't determined that the map element contains an
-    // <a> element yet, then look for <area>.
-    if (!aFoundAnchor && child->IsHTMLElement(nsGkAtoms::area)) {
-      aFoundArea = true;
-      rv = AddArea(child);
-      NS_ENSURE_SUCCESS(rv, rv);
-
-      // Continue to next child. This stops mContainsBlockContents from
+      // Continue to next child. This stops mConsiderWholeSubtree from
       // getting set. It also makes us ignore children of <area>s which
       // is consistent with how we react to dynamic insertion of such
       // children.
       continue;
     }
 
-    // If we haven't determined that the map element contains an
-    // <area> element yet, then look for <a>.
-    if (!aFoundArea && child->IsHTMLElement(nsGkAtoms::a)) {
-      aFoundAnchor = true;
-      rv = AddArea(child);
-      NS_ENSURE_SUCCESS(rv, rv);
-    }
-
     if (child->IsElement()) {
-      mContainsBlockContents = true;
-      rv = SearchForAreas(child, aFoundArea, aFoundAnchor);
-      NS_ENSURE_SUCCESS(rv, rv);
+      mConsiderWholeSubtree = true;
+      SearchForAreas(child);
     }
   }
-
-  return NS_OK;
 }
 
-nsresult
+void
 nsImageMap::UpdateAreas()
 {
   // Get rid of old area data
   FreeAreas();
 
-  bool foundArea = false;
-  bool foundAnchor = false;
-  mContainsBlockContents = false;
+  mConsiderWholeSubtree = false;
+  SearchForAreas(mMap);
 
-  nsresult rv = SearchForAreas(mMap, foundArea, foundAnchor);
 #ifdef ACCESSIBILITY
-  if (NS_SUCCEEDED(rv)) {
-    nsAccessibilityService* accService = GetAccService();
-    if (accService) {
-      accService->UpdateImageMap(mImageFrame);
-    }
+  if (nsAccessibilityService* accService = GetAccService()) {
+    accService->UpdateImageMap(mImageFrame);
   }
 #endif
-  return rv;
 }
 
-nsresult
-nsImageMap::AddArea(nsIContent* aArea)
+void
+nsImageMap::AddArea(HTMLAreaElement* aArea)
 {
   static nsIContent::AttrValuesArray strings[] =
     {&nsGkAtoms::rect, &nsGkAtoms::rectangle,
@@ -824,39 +798,35 @@ nsImageMap::AddArea(nsIContent* aArea)
      &nsGkAtoms::poly, &nsGkAtoms::polygon,
      nullptr};
 
-  Area* area;
+  UniquePtr<Area> area;
   switch (aArea->FindAttrValueIn(kNameSpaceID_None, nsGkAtoms::shape,
                                  strings, eIgnoreCase)) {
   case nsIContent::ATTR_VALUE_NO_MATCH:
   case nsIContent::ATTR_MISSING:
   case 0:
   case 1:
-    area = new RectArea(aArea);
+    area = MakeUnique<RectArea>(aArea);
     break;
   case 2:
   case 3:
-    area = new CircleArea(aArea);
+    area = MakeUnique<CircleArea>(aArea);
     break;
   case 4:
-    area = new DefaultArea(aArea);
+    area = MakeUnique<DefaultArea>(aArea);
     break;
   case 5:
   case 6:
-    area = new PolyArea(aArea);
+    area = MakeUnique<PolyArea>(aArea);
     break;
   default:
     area = nullptr;
-    NS_NOTREACHED("FindAttrValueIn returned an unexpected value.");
+    MOZ_ASSERT_UNREACHABLE("FindAttrValueIn returned an unexpected value.");
     break;
   }
-  if (!area)
-    return NS_ERROR_OUT_OF_MEMORY;
 
   //Add focus listener to track area focus changes
-  aArea->AddSystemEventListener(NS_LITERAL_STRING("focus"), this, false,
-                                false);
-  aArea->AddSystemEventListener(NS_LITERAL_STRING("blur"), this, false,
-                                false);
+  aArea->AddSystemEventListener(NS_LITERAL_STRING("focus"), this, false, false);
+  aArea->AddSystemEventListener(NS_LITERAL_STRING("blur"), this, false, false);
 
   // This is a nasty hack.  It needs to go away: see bug 135040.  Once this is
   // removed, the code added to RestyleManager::RestyleElement,
@@ -868,17 +838,14 @@ nsImageMap::AddArea(nsIContent* aArea)
   nsAutoString coords;
   aArea->GetAttr(kNameSpaceID_None, nsGkAtoms::coords, coords);
   area->ParseCoords(coords);
-  mAreas.AppendElement(area);
-  return NS_OK;
+  mAreas.AppendElement(Move(area));
 }
 
 nsIContent*
 nsImageMap::GetArea(nscoord aX, nscoord aY) const
 {
   NS_ASSERTION(mMap, "Not initialized");
-  uint32_t i, n = mAreas.Length();
-  for (i = 0; i < n; i++) {
-    Area* area = mAreas.ElementAt(i);
+  for (const auto& area : mAreas) {
     if (area->IsInside(aX, aY)) {
       return area->mArea;
     }
@@ -898,17 +865,15 @@ nsImageMap::Draw(nsIFrame* aFrame, DrawTarget& aDrawTarget,
                  const ColorPattern& aColor,
                  const StrokeOptions& aStrokeOptions)
 {
-  uint32_t i, n = mAreas.Length();
-  for (i = 0; i < n; i++) {
-    Area* area = mAreas.ElementAt(i);
+  for (auto& area : mAreas) {
     area->Draw(aFrame, aDrawTarget, aColor, aStrokeOptions);
   }
 }
 
 void
-nsImageMap::MaybeUpdateAreas(nsIContent *aContent)
+nsImageMap::MaybeUpdateAreas(nsIContent* aContent)
 {
-  if (aContent == mMap || mContainsBlockContents) {
+  if (aContent == mMap || mConsiderWholeSubtree) {
     UpdateAreas();
   }
 }
@@ -917,7 +882,7 @@ void
 nsImageMap::AttributeChanged(nsIDocument*  aDocument,
                              dom::Element* aElement,
                              int32_t       aNameSpaceID,
-                             nsIAtom*      aAttribute,
+                             nsAtom*      aAttribute,
                              int32_t       aModType,
                              const nsAttrValue* aOldValue)
 {
@@ -945,8 +910,7 @@ nsImageMap::AttributeChanged(nsIDocument*  aDocument,
 void
 nsImageMap::ContentAppended(nsIDocument *aDocument,
                             nsIContent* aContainer,
-                            nsIContent* aFirstNewContent,
-                            int32_t     /* unused */)
+                            nsIContent* aFirstNewContent)
 {
   MaybeUpdateAreas(aContainer);
 }
@@ -954,20 +918,58 @@ nsImageMap::ContentAppended(nsIDocument *aDocument,
 void
 nsImageMap::ContentInserted(nsIDocument *aDocument,
                             nsIContent* aContainer,
-                            nsIContent* aChild,
-                            int32_t /* unused */)
+                            nsIContent* aChild)
 {
   MaybeUpdateAreas(aContainer);
+}
+
+static UniquePtr<Area>
+TakeArea(nsImageMap::AreaList& aAreas, HTMLAreaElement* aArea)
+{
+  UniquePtr<Area> result;
+  size_t index = 0;
+  for (UniquePtr<Area>& area : aAreas) {
+    if (area->mArea == aArea) {
+      result = Move(area);
+      break;
+    }
+    index++;
+  }
+
+  if (result) {
+    aAreas.RemoveElementAt(index);
+  }
+
+  return result;
 }
 
 void
 nsImageMap::ContentRemoved(nsIDocument *aDocument,
                            nsIContent* aContainer,
                            nsIContent* aChild,
-                           int32_t aIndexInContainer,
                            nsIContent* aPreviousSibling)
 {
-  MaybeUpdateAreas(aContainer);
+  if (aContainer != mMap && !mConsiderWholeSubtree) {
+    return;
+  }
+
+  auto* areaElement = HTMLAreaElement::FromContent(aChild);
+  if (!areaElement) {
+    return;
+  }
+
+  UniquePtr<Area> area = TakeArea(mAreas, areaElement);
+  if (!area) {
+    return;
+  }
+
+  AreaRemoved(area->mArea);
+
+#ifdef ACCESSIBILITY
+  if (nsAccessibilityService* accService = GetAccService()) {
+    accService->UpdateImageMap(mImageFrame);
+  }
+#endif
 }
 
 void
@@ -995,9 +997,8 @@ nsImageMap::HandleEvent(nsIDOMEvent* aEvent)
   if (!targetContent) {
     return NS_OK;
   }
-  uint32_t i, n = mAreas.Length();
-  for (i = 0; i < n; i++) {
-    Area* area = mAreas.ElementAt(i);
+
+  for (auto& area : mAreas) {
     if (area->mArea == targetContent) {
       //Set or Remove internal focus
       area->HasFocus(focus);
@@ -1012,7 +1013,7 @@ nsImageMap::HandleEvent(nsIDOMEvent* aEvent)
 }
 
 void
-nsImageMap::Destroy(void)
+nsImageMap::Destroy()
 {
   FreeAreas();
   mImageFrame = nullptr;

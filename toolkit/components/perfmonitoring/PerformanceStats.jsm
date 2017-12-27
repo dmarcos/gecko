@@ -26,7 +26,6 @@ const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
 Cu.import("resource://gre/modules/Services.jsm", this);
-Cu.import("resource://gre/modules/Task.jsm", this);
 Cu.import("resource://gre/modules/ObjectUtils.jsm", this);
 XPCOMUtils.defineLazyModuleGetter(this, "PromiseUtils",
   "resource://gre/modules/PromiseUtils.jsm");
@@ -229,7 +228,7 @@ var Probes = {
         totalCPUTime: xpcom.totalUserTime + xpcom.totalSystemTime,
         durations,
         longestDuration: lastNonZero(durations)
-      }
+      };
     },
     isEqual(a, b) {
       // invariant: `a` and `b` are both non-null
@@ -403,7 +402,7 @@ function PerformanceMonitor(probes) {
   // `this` object, a notification of `FINALIZATION_TOPIC` will be triggered
   // with `id` as message.
   this._id = PerformanceMonitor.makeId();
-  this._finalizer = finalizer.make(FINALIZATION_TOPIC, this._id)
+  this._finalizer = finalizer.make(FINALIZATION_TOPIC, this._id);
   PerformanceMonitor._monitors.set(this._id, probes);
 }
 PerformanceMonitor.prototype = {
@@ -478,8 +477,8 @@ PerformanceMonitor.prototype = {
   },
   promiseSnapshot(options = null) {
     let probes = this._checkBeforeSnapshot(options);
-    return Task.spawn(function*() {
-      let childProcesses = yield Process.broadcastAndCollect("collect", {probeNames: probes.map(p => p.name)});
+    return (async function() {
+      let childProcesses = await Process.broadcastAndCollect("collect", {probeNames: probes.map(p => p.name)});
       let xpcom = performanceStatsService.getSnapshot();
       return new ApplicationSnapshot({
         xpcom,
@@ -487,7 +486,7 @@ PerformanceMonitor.prototype = {
         probes,
         date: Cu.now()
       });
-    });
+    })();
   },
 
   /**
@@ -553,14 +552,14 @@ PerformanceMonitor.dispose = function(id) {
   for (let probe of probes) {
     probe.release();
   }
-}
+};
 
 // Generate a unique id for each PerformanceMonitor. Used during
 // finalization.
 PerformanceMonitor._counter = 0;
 PerformanceMonitor.makeId = function() {
   return "PerformanceMonitor-" + (this._counter++);
-}
+};
 
 // Once a `PerformanceMonitor` has been garbage-collected,
 // release the probes unless `dispose()` has already been called.
@@ -929,7 +928,7 @@ var Process = {
    * array of objects with a structure similar to PerformanceData. Note
    * that the array may be empty if no child process responded.
    */
-  broadcastAndCollect: Task.async(function*(topic, payload) {
+  async broadcastAndCollect(topic, payload) {
     if (!this.loader || this.loader.childCount == 1) {
       return undefined;
     }
@@ -951,7 +950,7 @@ var Process = {
         return;
       }
       if (data.data) {
-        collected.push(data.data)
+        collected.push(data.data);
       }
       if (--expecting > 0) {
         // We are still waiting for at least one response.
@@ -978,9 +977,9 @@ var Process = {
       clearTimeout(timeout);
     });
 
-    yield deferred.promise;
+    await deferred.promise;
     this.loader.removeMessageListener(TOPIC, observer);
 
     return collected;
-  })
+  }
 };

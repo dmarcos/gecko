@@ -75,120 +75,120 @@ function readServerContent(request, buffer)
 {
   let cc = request.QueryInterface(Ci.nsICacheInfoChannel);
 
-  do_check_eq(buffer, responseContent);
-  do_check_eq(cc.alternativeDataType, "");
+  Assert.equal(buffer, responseContent);
+  Assert.equal(cc.alternativeDataType, "");
 
-  do_execute_soon(() => {
+  executeSoon(() => {
     let os = cc.openAlternativeOutputStream(altContentType);
     os.write(altContent, altContent.length);
     os.close();
 
-    do_execute_soon(flushAndOpenAltChannel);
+    executeSoon(flushAndOpenAltChannel);
   });
 }
 
 function flushAndOpenAltChannel()
 {
   // We need to do a GC pass to ensure the cache entry has been freed.
-  gc();
+  Cu.forceShrinkingGC();
   Services.cache2.QueryInterface(Ci.nsICacheTesting).flush(cacheFlushObserver);
 }
 
 // needs to be rooted
 let cacheFlushObserver = { observe: function() {
   if (!cacheFlushObserver) {
-    do_print("ignoring cacheFlushObserver\n");
+    info("ignoring cacheFlushObserver\n");
     return;
   }
   cacheFlushObserver = null;
-  gc();
+  Cu.forceShrinkingGC();
   make_and_open_channel(URL, altContentType, readAltContent);
 }};
 
 function readAltContent(request, buffer, closure, fromCache)
 {
-  gc();
+  Cu.forceShrinkingGC();
   let cc = request.QueryInterface(Ci.nsICacheInfoChannel);
 
-  do_check_eq(fromCache || servedNotModified, true);
-  do_check_eq(cc.alternativeDataType, altContentType);
-  do_check_eq(buffer, altContent);
+  Assert.equal(fromCache || servedNotModified, true);
+  Assert.equal(cc.alternativeDataType, altContentType);
+  Assert.equal(buffer, altContent);
 
   make_and_open_channel(URL, "dummy/null", readServerContent2);
 }
 
 function readServerContent2(request, buffer, closure, fromCache)
 {
-  gc();
+  Cu.forceShrinkingGC();
   let cc = request.QueryInterface(Ci.nsICacheInfoChannel);
 
-  do_check_eq(fromCache || servedNotModified, true);
-  do_check_eq(buffer, responseContent);
-  do_check_eq(cc.alternativeDataType, "");
+  Assert.equal(fromCache || servedNotModified, true);
+  Assert.equal(buffer, responseContent);
+  Assert.equal(cc.alternativeDataType, "");
 
-  do_execute_soon(() => {
+  executeSoon(() => {
     let os = cc.openAlternativeOutputStream(altContentType);
     os.write(altContent, altContent.length);
     os.close();
 
-    do_execute_soon(flushAndOpenAltChannel2);
+    executeSoon(flushAndOpenAltChannel2);
   });
 }
 
 function flushAndOpenAltChannel2()
 {
   // We need to do a GC pass to ensure the cache entry has been freed.
-  gc();
+  Cu.forceShrinkingGC();
   Services.cache2.QueryInterface(Ci.nsICacheTesting).flush(cacheFlushObserver2);
 }
 
 // needs to be rooted
 let cacheFlushObserver2 = { observe: function() {
   if (!cacheFlushObserver2) {
-    do_print("ignoring cacheFlushObserver2\n");
+    info("ignoring cacheFlushObserver2\n");
     return;
   }
   cacheFlushObserver2 = null;
-  gc();
+  Cu.forceShrinkingGC();
   make_and_open_channel(URL, altContentType, readAltContent2);
 }};
 
 function readAltContent2(request, buffer, closure, fromCache)
 {
-  gc();
+  Cu.forceShrinkingGC();
   let cc = request.QueryInterface(Ci.nsICacheInfoChannel);
 
-  do_check_eq(servedNotModified || fromCache, true);
-  do_check_eq(cc.alternativeDataType, altContentType);
-  do_check_eq(buffer, altContent);
+  Assert.equal(servedNotModified || fromCache, true);
+  Assert.equal(cc.alternativeDataType, altContentType);
+  Assert.equal(buffer, altContent);
 
-  do_execute_soon(() => {
-    gc();
-    do_print("writing other content\n");
+  executeSoon(() => {
+    Cu.forceShrinkingGC();
+    info("writing other content\n");
     let os = cc.openAlternativeOutputStream(altContentType2);
     os.write(altContent2, altContent2.length);
     os.close();
 
-    do_execute_soon(flushAndOpenAltChannel3);
+    executeSoon(flushAndOpenAltChannel3);
   });
 }
 
 function flushAndOpenAltChannel3()
 {
   // We need to do a GC pass to ensure the cache entry has been freed.
-  gc();
+  Cu.forceShrinkingGC();
   Services.cache2.QueryInterface(Ci.nsICacheTesting).flush(cacheFlushObserver3);
 }
 
 // needs to be rooted
 let cacheFlushObserver3 = { observe: function() {
   if (!cacheFlushObserver3) {
-    do_print("ignoring cacheFlushObserver3\n");
+    info("ignoring cacheFlushObserver3\n");
     return;
   }
 
   cacheFlushObserver3 = null;
-  gc();
+  Cu.forceShrinkingGC();
   make_and_open_channel(URL, altContentType2, readAltContent3);
 }};
 
@@ -197,9 +197,9 @@ function readAltContent3(request, buffer, closure, fromCache)
 {
   let cc = request.QueryInterface(Ci.nsICacheInfoChannel);
 
-  do_check_eq(servedNotModified || fromCache, true);
-  do_check_eq(cc.alternativeDataType, altContentType2);
-  do_check_eq(buffer, altContent2);
+  Assert.equal(servedNotModified || fromCache, true);
+  Assert.equal(cc.alternativeDataType, altContentType2);
+  Assert.equal(buffer, altContent2);
 
   httpServer.stop(do_test_finished);
 }

@@ -7,6 +7,7 @@
 
 #include "nsICaptivePortalService.h"
 #include "nsICaptivePortalDetector.h"
+#include "nsINamed.h"
 #include "nsIObserver.h"
 #include "nsWeakReference.h"
 #include "nsITimer.h"
@@ -22,6 +23,7 @@ class CaptivePortalService
   , public nsSupportsWeakReference
   , public nsITimerCallback
   , public nsICaptivePortalCallback
+  , public nsINamed
 {
 public:
   NS_DECL_ISUPPORTS
@@ -29,6 +31,7 @@ public:
   NS_DECL_NSIOBSERVER
   NS_DECL_NSITIMERCALLBACK
   NS_DECL_NSICAPTIVEPORTALCALLBACK
+  NS_DECL_NSINAMED
 
   CaptivePortalService();
   nsresult Initialize();
@@ -42,6 +45,7 @@ private:
   virtual ~CaptivePortalService();
   nsresult PerformCheck();
   nsresult RearmTimer();
+  void NotifyConnectivityAvailable(bool aCaptive);
 
   nsCOMPtr<nsICaptivePortalDetector>    mCaptivePortalDetector;
   int32_t                               mState;

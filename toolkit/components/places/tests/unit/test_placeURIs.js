@@ -17,14 +17,12 @@ function run_test() {
   // XXX Full testing coverage for QueriesToQueryString and
   // QueryStringToQueries
 
-  var bs = Cc["@mozilla.org/browser/nav-bookmarks-service;1"].
-           getService(Ci.nsINavBookmarksService);
   const NHQO = Ci.nsINavHistoryQueryOptions;
   // Bug 376798
   var query = histsvc.getNewQuery();
-  query.setFolders([bs.placesRoot], 1);
-  do_check_eq(histsvc.queriesToQueryString([query], 1, histsvc.getNewQueryOptions()),
-              "place:folder=PLACES_ROOT");
+  query.setFolders([PlacesUtils.bookmarks.placesRoot], 1);
+  Assert.equal(histsvc.queriesToQueryString([query], 1, histsvc.getNewQueryOptions()),
+               "place:folder=PLACES_ROOT");
 
   // Bug 378828
   var options = histsvc.getNewQueryOptions();
@@ -33,10 +31,10 @@ function run_test() {
   var placeURI =
     "place:folder=PLACES_ROOT&sort=" + NHQO.SORT_BY_ANNOTATION_DESCENDING +
     "&sortingAnnotation=test%20anno";
-  do_check_eq(histsvc.queriesToQueryString([query], 1, options),
-              placeURI);
+  Assert.equal(histsvc.queriesToQueryString([query], 1, options),
+               placeURI);
   options = {};
   histsvc.queryStringToQueries(placeURI, { }, {}, options);
-  do_check_eq(options.value.sortingAnnotation, "test anno");
-  do_check_eq(options.value.sortingMode, NHQO.SORT_BY_ANNOTATION_DESCENDING);
+  Assert.equal(options.value.sortingAnnotation, "test anno");
+  Assert.equal(options.value.sortingMode, NHQO.SORT_BY_ANNOTATION_DESCENDING);
 }

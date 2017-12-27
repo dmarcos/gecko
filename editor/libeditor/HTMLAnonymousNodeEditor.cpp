@@ -13,7 +13,7 @@
 #include "nsDebug.h"
 #include "nsError.h"
 #include "nsGkAtoms.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsIContent.h"
 #include "nsID.h"
 #include "nsIDOMCSSPrimitiveValue.h"
@@ -161,18 +161,17 @@ ElementDeletionObserver::NodeWillBeDestroyed(const nsINode* aNode)
   NS_RELEASE_THIS();
 }
 
-already_AddRefed<Element>
-HTMLEditor::CreateAnonymousElement(nsIAtom* aTag,
-                                   nsIDOMNode* aParentNode,
+ManualNACPtr
+HTMLEditor::CreateAnonymousElement(nsAtom* aTag,
+                                   nsIContent& aParentContent,
                                    const nsAString& aAnonClass,
                                    bool aIsCreatedHidden)
 {
-  if (NS_WARN_IF(!aParentNode)) {
-    return nullptr;
-  }
-
-  nsCOMPtr<nsIContent> parentContent = do_QueryInterface(aParentNode);
-  if (NS_WARN_IF(!parentContent)) {
+  // Don't put anonymous editor element into non-HTML element.
+  // It is mainly for avoiding other anonymous element being inserted
+  // into <svg:use>, but in general we probably don't want to insert
+  // some random HTML anonymous element into a non-HTML element.
+  if (!aParentContent.IsHTMLElement()) {
     return nullptr;
   }
 
@@ -188,16 +187,16 @@ HTMLEditor::CreateAnonymousElement(nsIAtom* aTag,
   }
 
   // Create a new node through the element factory
-  RefPtr<Element> newContent = CreateHTMLContent(aTag);
-  if (NS_WARN_IF(!newContent)) {
+  RefPtr<Element> newContentRaw = CreateHTMLContent(aTag);
+  if (NS_WARN_IF(!newContentRaw)) {
     return nullptr;
   }
 
   // add the "hidden" class if needed
   if (aIsCreatedHidden) {
     nsresult rv =
-      newContent->SetAttr(kNameSpaceID_None, nsGkAtoms::_class,
-                          NS_LITERAL_STRING("hidden"), true);
+      newContentRaw->SetAttr(kNameSpaceID_None, nsGkAtoms::_class,
+                             NS_LITERAL_STRING("hidden"), true);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return nullptr;
     }
@@ -206,8 +205,8 @@ HTMLEditor::CreateAnonymousElement(nsIAtom* aTag,
   // add an _moz_anonclass attribute if needed
   if (!aAnonClass.IsEmpty()) {
     nsresult rv =
-      newContent->SetAttr(kNameSpaceID_None, nsGkAtoms::_moz_anonclass,
-                          aAnonClass, true);
+      newContentRaw->SetAttr(kNameSpaceID_None, nsGkAtoms::_moz_anonclass,
+                             aAnonClass, true);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return nullptr;
     }
@@ -217,34 +216,46 @@ HTMLEditor::CreateAnonymousElement(nsIAtom* aTag,
     nsAutoScriptBlocker scriptBlocker;
 
     // establish parenthood of the element
-    newContent->SetIsNativeAnonymousRoot();
+    newContentRaw->SetIsNativeAnonymousRoot();
     nsresult rv =
-      newContent->BindToTree(doc, parentContent, parentContent, true);
+      newContentRaw->BindToTree(doc, &aParentContent, &aParentContent, true);
     if (NS_FAILED(rv)) {
-      newContent->UnbindFromTree();
+      newContentRaw->UnbindFromTree();
       return nullptr;
     }
   }
 
+  ManualNACPtr newContent(newContentRaw.forget());
+
+  // Must style the new element, otherwise the PostRecreateFramesFor call
+  // below will do nothing.
+  if (ServoStyleSet* styleSet = ps->StyleSet()->GetAsServo()) {
+    // Sometimes editor likes to append anonymous content to elements
+    // in display:none subtrees, so avoid styling in those cases.
+    if (styleSet->MayTraverseFrom(newContent)) {
+      styleSet->StyleNewSubtree(newContent);
+    }
+  }
+
   ElementDeletionObserver* observer =
-    new ElementDeletionObserver(newContent, parentContent);
+    new ElementDeletionObserver(newContent, &aParentContent);
   NS_ADDREF(observer); // NodeWillBeDestroyed releases.
-  parentContent->AddMutationObserver(observer);
+  aParentContent.AddMutationObserver(observer);
   newContent->AddMutationObserver(observer);
 
 #ifdef DEBUG
-  // Editor anonymous content gets passed to RecreateFramesFor... which can't
-  // _really_ deal with anonymous content (because it can't get the frame tree
-  // ordering right).  But for us the ordering doesn't matter so this is sort of
-  // ok.
+  // Editor anonymous content gets passed to PostRecreateFramesFor... which
+  // can't _really_ deal with anonymous content (because it can't get the frame
+  // tree ordering right).  But for us the ordering doesn't matter so this is
+  // sort of ok.
   newContent->SetProperty(nsGkAtoms::restylableAnonymousNode,
 			  reinterpret_cast<void*>(true));
 #endif // DEBUG
 
   // display the element
-  ps->RecreateFramesFor(newContent);
+  ps->PostRecreateFramesFor(newContent);
 
-  return newContent.forget();
+  return Move(newContent);
 }
 
 // Removes event listener and calls DeleteRefToAnonymousNode.
@@ -252,21 +263,19 @@ void
 HTMLEditor::RemoveListenerAndDeleteRef(const nsAString& aEvent,
                                        nsIDOMEventListener* aListener,
                                        bool aUseCapture,
-                                       Element* aElement,
-                                       nsIContent* aParentContent,
+                                       ManualNACPtr aElement,
                                        nsIPresShell* aShell)
 {
   nsCOMPtr<nsIDOMEventTarget> evtTarget(do_QueryInterface(aElement));
   if (evtTarget) {
     evtTarget->RemoveEventListener(aEvent, aListener, aUseCapture);
   }
-  DeleteRefToAnonymousNode(aElement, aParentContent, aShell);
+  DeleteRefToAnonymousNode(Move(aElement), aShell);
 }
 
 // Deletes all references to an anonymous element
 void
-HTMLEditor::DeleteRefToAnonymousNode(nsIContent* aContent,
-                                     nsIContent* aParentContent,
+HTMLEditor::DeleteRefToAnonymousNode(ManualNACPtr aContent,
                                      nsIPresShell* aShell)
 {
   // call ContentRemoved() for the anonymous content
@@ -274,6 +283,12 @@ HTMLEditor::DeleteRefToAnonymousNode(nsIContent* aContent,
   // undisplay map, and its layout frames get destroyed!
 
   if (NS_WARN_IF(!aContent)) {
+    return;
+  }
+
+  nsIContent* parentContent = aContent->GetParent();
+  if (NS_WARN_IF(!parentContent)) {
+    // aContent was already removed?
     return;
   }
 
@@ -292,18 +307,16 @@ HTMLEditor::DeleteRefToAnonymousNode(nsIContent* aContent,
         docObserver->BeginUpdate(document, UPDATE_CONTENT_MODEL);
       }
 
-      // XXX This is wrong (bug 439258).  Once it's fixed, the NS_WARNING
-      // in RestyleManager::RestyleForRemove should be changed back
-      // to an assertion.
       docObserver->ContentRemoved(aContent->GetComposedDoc(),
-                                  aParentContent, aContent, -1,
+                                  parentContent, aContent,
                                   aContent->GetPreviousSibling());
       if (document) {
         docObserver->EndUpdate(document, UPDATE_CONTENT_MODEL);
       }
     }
   }
-  aContent->UnbindFromTree();
+
+  // The ManualNACPtr destructor will invoke UnbindFromTree.
 }
 
 // The following method is mostly called by a selection listener. When a
@@ -339,11 +352,7 @@ HTMLEditor::CheckSelectionStateForAnonymousButtons(nsISelection* aSelection)
   }
 
   // what's its tag?
-  nsAutoString focusTagName;
-  rv = focusElement->GetTagName(focusTagName);
-  NS_ENSURE_SUCCESS(rv, rv);
-  ToLowerCase(focusTagName);
-  nsCOMPtr<nsIAtom> focusTagAtom = NS_Atomize(focusTagName);
+  nsAtom* focusTagAtom = focusElementNode->NodeInfo()->NameAtom();
 
   nsCOMPtr<nsIDOMElement> absPosElement;
   if (mIsAbsolutelyPositioningEnabled) {
@@ -354,14 +363,11 @@ HTMLEditor::CheckSelectionStateForAnonymousButtons(nsISelection* aSelection)
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
-  nsCOMPtr<nsIDOMElement> cellElement;
+  RefPtr<Element> cellElement;
   if (mIsObjectResizingEnabled || mIsInlineTableEditingEnabled) {
     // Resizing or Inline Table Editing is enabled, we need to check if the
     // selection is contained in a table cell
-    rv = GetElementOrParentByTagName(NS_LITERAL_STRING("td"),
-                                     nullptr,
-                                     getter_AddRefs(cellElement));
-    NS_ENSURE_SUCCESS(rv, rv);
+    cellElement = GetElementOrParentByTagName(NS_LITERAL_STRING("td"), nullptr);
   }
 
   if (mIsObjectResizingEnabled && cellElement) {
@@ -372,8 +378,7 @@ HTMLEditor::CheckSelectionStateForAnonymousButtons(nsISelection* aSelection)
     if (nsGkAtoms::img != focusTagAtom) {
       // the element container of the selection is not an image, so we'll show
       // the resizers around the table
-      nsCOMPtr<nsIDOMNode> tableNode = GetEnclosingTable(cellElement);
-      focusElement = do_QueryInterface(tableNode);
+      focusElement = do_QueryInterface(GetEnclosingTable(cellElement));
       focusTagAtom = nsGkAtoms::table;
     }
   }
@@ -451,7 +456,7 @@ HTMLEditor::CheckSelectionStateForAnonymousButtons(nsISelection* aSelection)
   }
 
   if (mIsInlineTableEditingEnabled && cellElement &&
-      IsModifiableNode(cellElement) && cellElement != hostNode) {
+      IsModifiableNode(cellElement) && cellElement != hostContent) {
     if (mInlineEditedCell) {
       nsresult rv = RefreshInlineTableEditingUI();
       if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -471,7 +476,7 @@ HTMLEditor::CheckSelectionStateForAnonymousButtons(nsISelection* aSelection)
 // Resizing and Absolute Positioning need to know everything about the
 // containing box of the element: position, size, margins, borders
 nsresult
-HTMLEditor::GetPositionAndDimensions(nsIDOMElement* aElement,
+HTMLEditor::GetPositionAndDimensions(Element& aElement,
                                      int32_t& aX,
                                      int32_t& aY,
                                      int32_t& aW,
@@ -481,18 +486,13 @@ HTMLEditor::GetPositionAndDimensions(nsIDOMElement* aElement,
                                      int32_t& aMarginLeft,
                                      int32_t& aMarginTop)
 {
-  nsCOMPtr<Element> element = do_QueryInterface(aElement);
-  NS_ENSURE_ARG_POINTER(element);
-
   // Is the element positioned ? let's check the cheap way first...
-  bool isPositioned = false;
-  nsresult rv =
-    aElement->HasAttribute(NS_LITERAL_STRING("_moz_abspos"), &isPositioned);
-  NS_ENSURE_SUCCESS(rv, rv);
+  bool isPositioned =
+    aElement.HasAttr(kNameSpaceID_None, nsGkAtoms::_moz_abspos);
   if (!isPositioned) {
     // hmmm... the expensive way now...
     nsAutoString positionStr;
-    mCSSEditUtils->GetComputedProperty(*element, *nsGkAtoms::position,
+    mCSSEditUtils->GetComputedProperty(aElement, *nsGkAtoms::position,
                                        positionStr);
     isPositioned = positionStr.EqualsLiteral("absolute");
   }
@@ -503,7 +503,7 @@ HTMLEditor::GetPositionAndDimensions(nsIDOMElement* aElement,
 
     // Get the all the computed css styles attached to the element node
     RefPtr<nsComputedDOMStyle> cssDecl =
-      mCSSEditUtils->GetComputedStyle(element);
+      mCSSEditUtils->GetComputedStyle(&aElement);
     NS_ENSURE_STATE(cssDecl);
 
     aBorderLeft = GetCSSFloatValue(cssDecl, NS_LITERAL_STRING("border-left-width"));
@@ -519,7 +519,7 @@ HTMLEditor::GetPositionAndDimensions(nsIDOMElement* aElement,
     aH = GetCSSFloatValue(cssDecl, NS_LITERAL_STRING("height"));
   } else {
     mResizedObjectIsAbsolutelyPositioned = false;
-    nsCOMPtr<nsIDOMHTMLElement> htmlElement = do_QueryInterface(aElement);
+    nsCOMPtr<nsIDOMHTMLElement> htmlElement = do_QueryInterface(&aElement);
     if (!htmlElement) {
       return NS_ERROR_NULL_POINTER;
     }
@@ -527,7 +527,7 @@ HTMLEditor::GetPositionAndDimensions(nsIDOMElement* aElement,
 
     if (NS_WARN_IF(NS_FAILED(htmlElement->GetOffsetWidth(&aW))) ||
         NS_WARN_IF(NS_FAILED(htmlElement->GetOffsetHeight(&aH)))) {
-      return rv;
+      return NS_ERROR_FAILURE;
     }
 
     aBorderLeft = 0;

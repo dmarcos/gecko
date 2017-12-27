@@ -8,8 +8,6 @@ var Ci = Components.interfaces;
 var Cr = Components.results;
 
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Promise.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/AsyncShutdown.jsm");
 
 var asyncShutdownService = Cc["@mozilla.org/async-shutdown-service;1"].
@@ -76,17 +74,17 @@ function makeLock(kind) {
             name: blockerName,
             state,
             blockShutdown(aBarrierClient) {
-              return Task.spawn(function*() {
+              return (async function() {
                 try {
                   if (typeof condition == "function") {
-                    yield Promise.resolve(condition());
+                    await Promise.resolve(condition());
                   } else {
-                    yield Promise.resolve(condition);
+                    await Promise.resolve(condition);
                   }
                 } finally {
                   aBarrierClient.removeBlocker(blocker);
                 }
-              });
+              })();
             },
           };
           makeLock.xpcomMap.set(condition, blocker);
@@ -143,13 +141,13 @@ function longRunningAsyncTask(resolution = undefined, outResult = {}) {
   if (!("countFinished" in outResult)) {
     outResult.countFinished = 0;
   }
-  let deferred = Promise.defer();
-  do_timeout(100, function() {
-    ++outResult.countFinished;
-    outResult.isFinished = true;
-    deferred.resolve(resolution);
+  return new Promise(resolve => {
+    do_timeout(100, function() {
+      ++outResult.countFinished;
+      outResult.isFinished = true;
+      resolve(resolution);
+    });
   });
-  return deferred.promise;
 }
 
 function get_exn(f) {
@@ -162,13 +160,13 @@ function get_exn(f) {
 }
 
 function do_check_exn(exn, constructor) {
-  do_check_neq(exn, null);
+  Assert.notEqual(exn, null);
   if (exn.name == constructor) {
-    do_check_eq(exn.constructor.name, constructor);
+    Assert.equal(exn.constructor.name, constructor);
     return;
   }
-  do_print("Wrong error constructor");
-  do_print(exn.constructor.name);
-  do_print(exn.stack);
-  do_check_true(false);
+  info("Wrong error constructor");
+  info(exn.constructor.name);
+  info(exn.stack);
+  Assert.ok(false);
 }

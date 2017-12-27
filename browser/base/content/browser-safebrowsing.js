@@ -2,6 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// This file is loaded into the browser window scope.
+/* eslint-env mozilla/browser-window */
+
 var gSafeBrowsing = {
 
   setReportPhishingMenu() {
@@ -62,4 +65,4 @@ var gSafeBrowsing = {
     }
     return SafeBrowsing.getReportURL(name, reportInfo);
   }
-}
+};

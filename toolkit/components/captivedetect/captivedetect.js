@@ -10,10 +10,6 @@ const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 
-XPCOMUtils.defineLazyServiceGetter(this, "gSysMsgr",
-                                   "@mozilla.org/system-message-internal;1",
-                                   "nsISystemMessagesInternal");
-
 const DEBUG = false; // set to true to show debug messages
 
 const kCAPTIVEPORTALDETECTOR_CONTRACTID = "@mozilla.org/toolkit/captive-detector;1";
@@ -23,8 +19,6 @@ const kOpenCaptivePortalLoginEvent = "captive-portal-login";
 const kAbortCaptivePortalLoginEvent = "captive-portal-login-abort";
 const kCaptivePortalLoginSuccessEvent = "captive-portal-login-success";
 const kCaptivePortalCheckComplete = "captive-portal-check-complete";
-
-const kCaptivePortalSystemMessage = "captive-portal";
 
 function URLFetcher(url, timeout) {
   let self = this;
@@ -74,7 +68,7 @@ URLFetcher.prototype = {
       this._xhr.abort();
     }
   },
-}
+};
 
 function LoginObserver(captivePortalDetector) {
   const LOGIN_OBSERVER_STATE_DETACHED = 0; /* Should not monitor network activity since no ongoing login procedure */
@@ -89,8 +83,6 @@ function LoginObserver(captivePortalDetector) {
   let activityDistributor = Cc["@mozilla.org/network/http-activity-distributor;1"]
                               .getService(Ci.nsIHttpActivityDistributor);
   let urlFetcher = null;
-
-  let waitForNetworkActivity = Services.appinfo.widgetToolkit == "gonk";
 
   let pageCheckingDone = function pageCheckingDone() {
     if (state === LOGIN_OBSERVER_STATE_VERIFYING) {
@@ -180,14 +172,7 @@ function LoginObserver(captivePortalDetector) {
           state = LOGIN_OBSERVER_STATE_VERIFY_NEEDED;
           // Fall though to start polling timer
         case LOGIN_OBSERVER_STATE_IDLE:
-          if (waitForNetworkActivity) {
-            timer.initWithCallback(this,
-                                   captivePortalDetector._pollingTime,
-                                   timer.TYPE_ONE_SHOT);
-            break;
-          }
-          // if we don't need to wait for network activity, just fall through
-          // to perform a captive portal check.
+          // Just fall through to perform a captive portal check.
         case LOGIN_OBSERVER_STATE_VERIFY_NEEDED:
           // Polling the canonical website since network stays idle for a while
           state = LOGIN_OBSERVER_STATE_VERIFYING;
@@ -214,7 +199,7 @@ function CaptivePortalDetector() {
     this._canonicalSiteExpectedContent =
       Services.prefs.getCharPref("captivedetect.canonicalContent");
   } catch (e) {
-    debug("canonicalURL or canonicalContent not set.")
+    debug("canonicalURL or canonicalContent not set.");
   }
 
   this._maxWaitingTime =
@@ -260,8 +245,8 @@ CaptivePortalDetector.prototype = {
     let request = {interfaceName: aInterfaceName};
     if (aCallback) {
       let callback = aCallback.QueryInterface(Ci.nsICaptivePortalCallback);
-      request["callback"] = callback;
-      request["retryCount"] = 0;
+      request.callback = callback;
+      request.retryCount = 0;
     }
     this._addRequest(request);
   },
@@ -332,7 +317,7 @@ CaptivePortalDetector.prototype = {
       }
     };
 
-    this._runningRequest["urlFetcher"] = urlFetcher;
+    this._runningRequest.urlFetcher = urlFetcher;
   },
 
   _startLogin: function _startLogin() {
@@ -343,9 +328,8 @@ CaptivePortalDetector.prototype = {
       url: this._canonicalSiteURL,
     };
     this._loginObserver.attach();
-    this._runningRequest["eventId"] = id;
+    this._runningRequest.eventId = id;
     this._sendEvent(kOpenCaptivePortalLoginEvent, details);
-    gSysMsgr.broadcastMessage(kCaptivePortalSystemMessage, {});
   },
 
   _mayRetry: function _mayRetry() {
@@ -369,13 +353,13 @@ CaptivePortalDetector.prototype = {
       if (this._runningRequest.hasOwnProperty("eventId") && success) {
         let details = {
           type: kCaptivePortalLoginSuccessEvent,
-          id: this._runningRequest["eventId"],
+          id: this._runningRequest.eventId,
         };
         this._sendEvent(kCaptivePortalLoginSuccessEvent, details);
       }
 
       // Continue the following request
-      this._runningRequest["complete"] = true;
+      this._runningRequest.complete = true;
       this._removeRequest(this._runningRequest.interfaceName);
     }
   },

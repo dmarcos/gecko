@@ -23,11 +23,10 @@ class LazyScript;
 class LifoAlloc;
 class ModuleObject;
 class ScriptSourceObject;
-class SourceCompressionTask;
 
 namespace frontend {
 
-class TokenStream;
+class ErrorReporter;
 class FunctionBox;
 class ParseNode;
 
@@ -35,16 +34,14 @@ JSScript*
 CompileGlobalScript(JSContext* cx, LifoAlloc& alloc, ScopeKind scopeKind,
                     const ReadOnlyCompileOptions& options,
                     SourceBufferHolder& srcBuf,
-                    ScriptSourceObject** sourceObjectOut = nullptr,
-                    SourceCompressionTask** sourceCompressionTaskOut = nullptr);
+                    ScriptSourceObject** sourceObjectOut = nullptr);
 
 JSScript*
 CompileEvalScript(JSContext* cx, LifoAlloc& alloc,
                   HandleObject scopeChain, HandleScope enclosingScope,
                   const ReadOnlyCompileOptions& options,
                   SourceBufferHolder& srcBuf,
-                  ScriptSourceObject** sourceObjectOut = nullptr,
-                  SourceCompressionTask** sourceCompressionTaskOut = nullptr);
+                  ScriptSourceObject** sourceObjectOut = nullptr);
 
 ModuleObject*
 CompileModule(JSContext* cx, const ReadOnlyCompileOptions& options,
@@ -53,8 +50,7 @@ CompileModule(JSContext* cx, const ReadOnlyCompileOptions& options,
 ModuleObject*
 CompileModule(JSContext* cx, const ReadOnlyCompileOptions& options,
               SourceBufferHolder& srcBuf, LifoAlloc& alloc,
-              ScriptSourceObject** sourceObjectOut = nullptr,
-              SourceCompressionTask** sourceCompressionTaskOut = nullptr);
+              ScriptSourceObject** sourceObjectOut = nullptr);
 
 MOZ_MUST_USE bool
 CompileLazyFunction(JSContext* cx, Handle<LazyScript*> lazy, const char16_t* chars, size_t length);
@@ -96,11 +92,6 @@ CompileStandaloneAsyncGenerator(JSContext* cx, MutableHandleFunction fun,
                                 JS::SourceBufferHolder& srcBuf,
                                 const mozilla::Maybe<uint32_t>& parameterListEnd);
 
-MOZ_MUST_USE bool
-CompileAsyncFunctionBody(JSContext* cx, MutableHandleFunction fun,
-                         const ReadOnlyCompileOptions& options,
-                         Handle<PropertyNameVector> formals, JS::SourceBufferHolder& srcBuf);
-
 ScriptSourceObject*
 CreateScriptSourceObject(JSContext* cx, const ReadOnlyCompileOptions& options,
                          const mozilla::Maybe<uint32_t>& parameterListEnd = mozilla::Nothing());
@@ -133,6 +124,14 @@ IsKeyword(JSLinearString* str);
 void
 TraceParser(JSTracer* trc, JS::AutoGCRooter* parser);
 
+#if defined(JS_BUILD_BINAST)
+
+/* Trace all GC things reachable from binjs parser. Defined in BinSource.cpp. */
+void
+TraceBinParser(JSTracer* trc, JS::AutoGCRooter* parser);
+
+#endif // defined(JS_BUILD_BINAST)
+
 class MOZ_STACK_CLASS AutoFrontendTraceLog
 {
 #ifdef JS_TRACE_LOGGING
@@ -144,16 +143,13 @@ class MOZ_STACK_CLASS AutoFrontendTraceLog
 
   public:
     AutoFrontendTraceLog(JSContext* cx, const TraceLoggerTextId id,
-                         const char* filename, size_t line, size_t column);
+                         const ErrorReporter& reporter);
 
     AutoFrontendTraceLog(JSContext* cx, const TraceLoggerTextId id,
-                         const TokenStream& tokenStream);
+                         const ErrorReporter& reporter, FunctionBox* funbox);
 
     AutoFrontendTraceLog(JSContext* cx, const TraceLoggerTextId id,
-                         const TokenStream& tokenStream, FunctionBox* funbox);
-
-    AutoFrontendTraceLog(JSContext* cx, const TraceLoggerTextId id,
-                         const TokenStream& tokenStream, ParseNode* pn);
+                         const ErrorReporter& reporter, ParseNode* pn);
 };
 
 } /* namespace frontend */

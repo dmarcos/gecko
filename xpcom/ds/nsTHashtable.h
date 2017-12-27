@@ -12,7 +12,6 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/fallible.h"
-#include "mozilla/MemoryChecking.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Move.h"
 #include "mozilla/OperatorNewExtensions.h"
@@ -144,10 +143,9 @@ public:
   bool Contains(KeyType aKey) const { return !!GetEntry(aKey); }
 
   /**
-   * Get the entry associated with a key, or create a new entry,
+   * Infallibly get the entry associated with a key, or create a new entry,
    * @param     aKey the key to retrieve
-   * @return    pointer to the entry class retreived; nullptr only if memory
-                can't be allocated
+   * @return    pointer to the entry retrieved; never nullptr
    */
   EntryType* PutEntry(KeyType aKey)
   {
@@ -155,11 +153,37 @@ public:
     return static_cast<EntryType*>(mTable.Add(EntryType::KeyToPointer(aKey)));
   }
 
+  /**
+   * Fallibly get the entry associated with a key, or create a new entry,
+   * @param     aKey the key to retrieve
+   * @return    pointer to the entry retrieved; nullptr only if memory can't
+   *            be allocated
+   */
   MOZ_MUST_USE
   EntryType* PutEntry(KeyType aKey, const fallible_t&)
   {
     return static_cast<EntryType*>(mTable.Add(EntryType::KeyToPointer(aKey),
                                               mozilla::fallible));
+  }
+
+  /**
+   * Get the entry associated with a key, or create a new entry using infallible
+   * allocation and insert that.
+   * @param     aKey the key to retrieve
+   * @param     aEntry will be assigned (if non-null) to the entry that was found
+   *            or created
+   * @return    true if a new entry was created, or false if an existing entry
+   *            was found
+   */
+  MOZ_MUST_USE
+  bool EnsureInserted(KeyType aKey, EntryType** aEntry = nullptr)
+  {
+    auto oldCount = Count();
+    EntryType* entry = PutEntry(aKey);
+    if (aEntry) {
+      *aEntry = entry;
+    }
+    return oldCount != Count();
   }
 
   /**
@@ -169,6 +193,23 @@ public:
   void RemoveEntry(KeyType aKey)
   {
     mTable.Remove(EntryType::KeyToPointer(aKey));
+  }
+
+  /**
+   * Lookup the entry associated with aKey and remove it if found, otherwise
+   * do nothing.
+   * @param     aKey of the entry to remove
+   * @return    true if an entry was found and removed, or false if no entry
+   *            was found for aKey
+   */
+  bool EnsureRemoved(KeyType aKey)
+  {
+    auto* entry = GetEntry(aKey);
+    if (entry) {
+      RemoveEntry(entry);
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -338,9 +379,6 @@ template<class EntryType>
 nsTHashtable<EntryType>::nsTHashtable(nsTHashtable<EntryType>&& aOther)
   : mTable(mozilla::Move(aOther.mTable))
 {
-  // aOther shouldn't touch mTable after this, because we've stolen the table's
-  // pointers but not overwitten them.
-  MOZ_MAKE_MEM_UNDEFINED(&aOther.mTable, sizeof(aOther.mTable));
 }
 
 template<class EntryType>
@@ -372,7 +410,7 @@ template<class EntryType>
 PLDHashNumber
 nsTHashtable<EntryType>::s_HashKey(const void* aKey)
 {
-  return EntryType::HashKey(static_cast<const KeyTypePointer>(aKey));
+  return EntryType::HashKey(static_cast<KeyTypePointer>(aKey));
 }
 
 template<class EntryType>
@@ -381,7 +419,7 @@ nsTHashtable<EntryType>::s_MatchEntry(const PLDHashEntryHdr* aEntry,
                                       const void* aKey)
 {
   return ((const EntryType*)aEntry)->KeyEquals(
-    static_cast<const KeyTypePointer>(aKey));
+    static_cast<KeyTypePointer>(aKey));
 }
 
 template<class EntryType>
@@ -493,7 +531,6 @@ public:
 
   nsTHashtable(nsTHashtable&&) = default;
 
-  /* Wrapper functions */
   using Base::GetGeneration;
   using Base::Count;
   using Base::IsEmpty;
@@ -506,6 +543,7 @@ public:
   using Base::MarkImmutable;
 #endif
 
+  /* Wrapper functions */
   EntryType* GetEntry(T* aKey) const
   {
     return reinterpret_cast<EntryType*>(Base::GetEntry(aKey));
@@ -528,9 +566,20 @@ public:
       Base::PutEntry(aKey, mozilla::fallible));
   }
 
+  MOZ_MUST_USE
+  bool EnsureInserted(T* aKey, EntryType** aEntry = nullptr)
+  {
+    return Base::EnsureInserted(aKey, reinterpret_cast<::detail::VoidPtrHashKey**>(aEntry));
+  }
+
   void RemoveEntry(T* aKey)
   {
     Base::RemoveEntry(aKey);
+  }
+
+  bool EnsureRemoved(T* aKey)
+  {
+    return Base::EnsureRemoved(aKey);
   }
 
   void RemoveEntry(EntryType* aEntry)

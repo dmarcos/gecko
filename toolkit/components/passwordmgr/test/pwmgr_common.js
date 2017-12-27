@@ -128,6 +128,7 @@ function doKey(aKey, modifier) {
  * notifications might be confused by this.
  */
 function commonInit(selfFilling) {
+  // eslint-disable-next-line mozilla/use-services
   var pwmgr = SpecialPowers.Cc["@mozilla.org/login-manager;1"].
               getService(SpecialPowers.Ci.nsILoginManager);
   ok(pwmgr != null, "Access LoginManager");
@@ -220,13 +221,15 @@ function setMasterPassword(enable) {
     oldPW = masterPassword;
     newPW = "";
   }
-  // Set master password. Note that this does not log you in, so the next
-  // invocation of pwmgr can trigger a MP prompt.
+  // Set master password. Note that this logs in the user if no password was
+  // set before. But after logging out the next invocation of pwmgr can
+  // trigger a MP prompt.
 
   var pk11db = Cc["@mozilla.org/security/pk11tokendb;1"].getService(Ci.nsIPK11TokenDB);
   var token = pk11db.getInternalKeyToken();
   info("MP change from " + oldPW + " to " + newPW);
   token.changePassword(oldPW, newPW);
+  token.logoutSimple();
 }
 
 function logoutMasterPassword() {
@@ -373,10 +376,10 @@ if (this.addMessageListener) {
   // Ignore ok/is in commonInit since they aren't defined in a chrome script.
   ok = is = () => {}; // eslint-disable-line no-native-reassign
 
+  Cu.import("resource://gre/modules/AppConstants.jsm");
   Cu.import("resource://gre/modules/LoginHelper.jsm");
   Cu.import("resource://gre/modules/LoginManagerParent.jsm");
   Cu.import("resource://gre/modules/Services.jsm");
-  Cu.import("resource://gre/modules/Task.jsm");
 
   function onStorageChanged(subject, topic, data) {
     sendAsyncMessage("storageChanged", {
@@ -396,25 +399,25 @@ if (this.addMessageListener) {
   Services.obs.addObserver(onPrompt, "passwordmgr-prompt-save");
 
   addMessageListener("setupParent", ({selfFilling = false} = {selfFilling: false}) => {
-    // Force LoginManagerParent to init for the tests since it's normally delayed
-    // by apps such as on Android.
-    LoginManagerParent.init();
-
     commonInit(selfFilling);
     sendAsyncMessage("doneSetup");
   });
 
-  addMessageListener("loadRecipes", Task.async(function*(recipes) {
-    var recipeParent = yield LoginManagerParent.recipeParentPromise;
-    yield recipeParent.load(recipes);
-    sendAsyncMessage("loadedRecipes", recipes);
-  }));
+  addMessageListener("loadRecipes", function(recipes) {
+    (async function() {
+      var recipeParent = await LoginManagerParent.recipeParentPromise;
+      await recipeParent.load(recipes);
+      sendAsyncMessage("loadedRecipes", recipes);
+    })();
+  });
 
-  addMessageListener("resetRecipes", Task.async(function*() {
-    let recipeParent = yield LoginManagerParent.recipeParentPromise;
-    yield recipeParent.reset();
-    sendAsyncMessage("recipesReset");
-  }));
+  addMessageListener("resetRecipes", function() {
+    (async function() {
+      let recipeParent = await LoginManagerParent.recipeParentPromise;
+      await recipeParent.reset();
+      sendAsyncMessage("recipesReset");
+    })();
+  });
 
   addMessageListener("proxyLoginManager", msg => {
     // Recreate nsILoginInfo objects from vanilla JS objects.
@@ -441,7 +444,8 @@ if (this.addMessageListener) {
   // Code to only run in the mochitest pages (not in the chrome script).
   SpecialPowers.pushPrefEnv({"set": [["signon.rememberSignons", true],
                                      ["signon.autofillForms.http", true],
-                                     ["security.insecure_field_warning.contextual.enabled", false]]
+                                     ["security.insecure_field_warning.contextual.enabled", false],
+                                     ["network.auth.non-web-content-triggered-resources-http-auth-allow", true]]
                            });
   SimpleTest.registerCleanupFunction(() => {
     SpecialPowers.popPrefEnv();
@@ -472,7 +476,7 @@ if (this.addMessageListener) {
           dump("Removing " + notes.length + " popup notifications.\n");
         }
         for (let note of notes) {
-	  note.remove();
+          note.remove();
         }
       }
     });

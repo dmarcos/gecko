@@ -1,10 +1,11 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "ClientLayerManager.h"
-#include "GeckoProfiler.h"              // for PROFILER_LABEL
+#include "GeckoProfiler.h"              // for AUTO_PROFILER_LABEL
 #include "gfxPrefs.h"                   // for gfxPrefs::LayersTile...
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/Hal.h"
@@ -20,6 +21,7 @@
 #include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor
 #include "mozilla/layers/LayerTransactionChild.h"
 #include "mozilla/layers/PersistentBufferProvider.h"
+#include "mozilla/layers/SyncObject.h"
 #include "ClientReadbackLayer.h"        // for ClientReadbackLayer
 #include "nsAString.h"
 #include "nsDisplayList.h"
@@ -99,16 +101,12 @@ ClientLayerManager::ClientLayerManager(nsIWidget* aWidget)
   , mTransactionIncomplete(false)
   , mCompositorMightResample(false)
   , mNeedsComposite(false)
+  , mQueuedAsyncPaints(false)
   , mPaintSequenceNumber(0)
-  , mDeviceResetSequenceNumber(0)
   , mForwarder(new ShadowLayerForwarder(this))
 {
   MOZ_COUNT_CTOR(ClientLayerManager);
   mMemoryPressureObserver = new MemoryPressureObserver(this);
-
-  if (XRE_IsContentProcess()) {
-    mDeviceResetSequenceNumber = CompositorBridgeChild::Get()->DeviceResetSequenceNumber();
-  }
 }
 
 
@@ -117,9 +115,9 @@ ClientLayerManager::~ClientLayerManager()
   mMemoryPressureObserver->Destroy();
   ClearCachedResources();
   // Stop receiveing AsyncParentMessage at Forwarder.
-  // After the call, the message is directly handled by LayerTransactionChild. 
+  // After the call, the message is directly handled by LayerTransactionChild.
   // Basically this function should be called in ShadowLayerForwarder's
-  // destructor. But when the destructor is triggered by 
+  // destructor. But when the destructor is triggered by
   // CompositorBridgeChild::Destroy(), the destructor can not handle it correctly.
   // See Bug 1000525.
   mForwarder->StopReceiveAsyncParentMessge();
@@ -226,26 +224,15 @@ ClientLayerManager::CreateReadbackLayer()
 bool
 ClientLayerManager::BeginTransactionWithTarget(gfxContext* aTarget)
 {
+  // Wait for any previous async paints to complete before starting to paint again.
+  GetCompositorBridgeChild()->FlushAsyncPaints();
+  if (PaintThread::Get()) {
+    PaintThread::Get()->BeginLayerTransaction();
+  }
+
   MOZ_ASSERT(mForwarder, "ClientLayerManager::BeginTransaction without forwarder");
   if (!mForwarder->IPCOpen()) {
     gfxCriticalNote << "ClientLayerManager::BeginTransaction with IPC channel down. GPU process may have died.";
-    return false;
-  }
-
-  if (XRE_IsContentProcess() &&
-      mForwarder->DeviceCanReset() &&
-      mDeviceResetSequenceNumber != CompositorBridgeChild::Get()->DeviceResetSequenceNumber())
-  {
-    // The compositor has informed this process that a device reset occurred,
-    // but it has not finished informing each TabChild of its new
-    // TextureFactoryIdentifier. Until then, it's illegal to paint. Note that
-    // it is also illegal to request a new TIF synchronously, because we're
-    // not guaranteed the UI process has finished acquiring new compositors
-    // for each widget.
-    //
-    // Note that we only do this for accelerated backends, since we do not
-    // perform resets on basic compositors.
-    gfxCriticalNote << "Discarding a paint since a device reset has not yet been acknowledged.";
     return false;
   }
 
@@ -274,7 +261,7 @@ ClientLayerManager::BeginTransactionWithTarget(gfxContext* aTarget)
     orientation = currentConfig.orientation();
   }
   LayoutDeviceIntRect targetBounds = mWidget->GetNaturalBounds();
-  targetBounds.x = targetBounds.y = 0;
+  targetBounds.MoveTo(0, 0);
   mForwarder->BeginTransaction(targetBounds.ToUnknownRect(), mTargetRotation,
                                orientation);
 
@@ -326,7 +313,7 @@ ClientLayerManager::EndTransactionInternal(DrawPaintedLayerCallback aCallback,
                                            EndTransactionFlags)
 {
   PaintTelemetry::AutoRecord record(PaintTelemetry::Metric::Rasterization);
-  GeckoProfilerTracingRAII tracer("Paint", "Rasterize");
+  AUTO_PROFILER_TRACING("Paint", "Rasterize");
 
   Maybe<TimeStamp> startTime;
   if (gfxPrefs::LayersDrawFPS()) {
@@ -341,8 +328,7 @@ ClientLayerManager::EndTransactionInternal(DrawPaintedLayerCallback aCallback,
   }
 #endif
 
-  PROFILER_LABEL("ClientLayerManager", "EndTransactionInternal",
-    js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("ClientLayerManager::EndTransactionInternal", GRAPHICS);
 
 #ifdef MOZ_LAYERS_HAVE_LOG
   MOZ_LAYERS_LOG(("  ----- (beginning paint)"));
@@ -355,6 +341,7 @@ ClientLayerManager::EndTransactionInternal(DrawPaintedLayerCallback aCallback,
   ClientLayer* root = ClientLayer::ToClientLayer(GetRoot());
 
   mTransactionIncomplete = false;
+  mQueuedAsyncPaints = false;
 
   // Apply pending tree updates before recomputing effective
   // properties.
@@ -427,6 +414,12 @@ ClientLayerManager::EndTransaction(DrawPaintedLayerCallback aCallback,
     return;
   }
 
+  if (mTransactionIncomplete) {
+    // If the previous transaction was incomplete then we may have buffer operations
+    // running on the paint thread that haven't finished yet
+    GetCompositorBridgeChild()->FlushAsyncPaints();
+  }
+
   if (mWidget) {
     mWidget->PrepareWindowEffects();
   }
@@ -461,6 +454,9 @@ ClientLayerManager::EndEmptyTransaction(EndTransactionFlags aFlags)
     // Return without calling ForwardTransaction. This leaves the
     // ShadowLayerForwarder transaction open; the following
     // EndTransaction will complete it.
+    if (PaintThread::Get() && mQueuedAsyncPaints) {
+      PaintThread::Get()->EndLayerTransaction(nullptr);
+    }
     return false;
   }
   if (mWidget) {
@@ -491,7 +487,7 @@ ClientLayerManager::GetCompositorBridgeChild()
 }
 
 void
-ClientLayerManager::Composite()
+ClientLayerManager::ScheduleComposite()
 {
   mForwarder->Composite();
 }
@@ -502,6 +498,12 @@ ClientLayerManager::DidComposite(uint64_t aTransactionId,
                                  const TimeStamp& aCompositeEnd)
 {
   MOZ_ASSERT(mWidget);
+
+  // Notifying the observers may tick the refresh driver which can cause
+  // a lot of different things to happen that may affect the lifetime of
+  // this layer manager. So let's make sure this object stays alive until
+  // the end of the method invocation.
+  RefPtr<ClientLayerManager> selfRef = this;
 
   // |aTransactionId| will be > 0 if the compositor is acknowledging a shadow
   // layers transaction.
@@ -514,7 +516,9 @@ ClientLayerManager::DidComposite(uint64_t aTransactionId,
     if (listener) {
       listener->DidCompositeWindow(aTransactionId, aCompositeStart, aCompositeEnd);
     }
-    mTransactionIdAllocator->NotifyTransactionCompleted(aTransactionId);
+    if (mTransactionIdAllocator) {
+      mTransactionIdAllocator->NotifyTransactionCompleted(aTransactionId);
+    }
   }
 
   // These observers fire whether or not we were in a transaction.
@@ -621,8 +625,8 @@ ClientLayerManager::MakeSnapshotIfRequired()
           RefPtr<DataSourceSurface> surf = GetSurfaceForDescriptor(outSnapshot);
           DrawTarget* dt = mShadowTarget->GetDrawTarget();
 
-          Rect dstRect(bounds.x, bounds.y, bounds.width, bounds.height);
-          Rect srcRect(0, 0, bounds.width, bounds.height);
+          Rect dstRect(bounds.X(), bounds.Y(), bounds.Width(), bounds.Height());
+          Rect srcRect(0, 0, bounds.Width(), bounds.Height());
 
           gfx::Matrix rotate =
             ComputeTransformForUnRotation(outerBounds.ToUnknownRect(),
@@ -647,20 +651,27 @@ ClientLayerManager::FlushRendering()
 {
   if (mWidget) {
     if (CompositorBridgeChild* remoteRenderer = mWidget->GetRemoteRenderer()) {
-      remoteRenderer->SendFlushRendering();
+      if (mWidget->SynchronouslyRepaintOnResize() || gfxPrefs::LayersForceSynchronousResize()) {
+        remoteRenderer->SendFlushRendering();
+      } else {
+        remoteRenderer->SendFlushRenderingAsync();
+      }
     }
   }
 }
 
 void
-ClientLayerManager::UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier,
-                                                   uint64_t aDeviceResetSeqNo)
+ClientLayerManager::WaitOnTransactionProcessed()
 {
-  MOZ_ASSERT_IF(XRE_IsContentProcess(),
-                aDeviceResetSeqNo == CompositorBridgeChild::Get()->DeviceResetSequenceNumber());
-
+  CompositorBridgeChild* remoteRenderer = GetCompositorBridgeChild();
+  if (remoteRenderer) {
+    remoteRenderer->SendWaitOnTransactionProcessed();
+  }
+}
+void
+ClientLayerManager::UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier)
+{
   mForwarder->IdentifyTextureHost(aNewIdentifier);
-  mDeviceResetSequenceNumber = aDeviceResetSeqNo;
 }
 
 void
@@ -698,21 +709,34 @@ ClientLayerManager::StopFrameTimeRecording(uint32_t         aStartIndex,
 void
 ClientLayerManager::ForwardTransaction(bool aScheduleComposite)
 {
-  GeckoProfilerTracingRAII tracer("Paint", "ForwardTransaction");
+  AUTO_PROFILER_TRACING("Paint", "ForwardTransaction");
   TimeStamp start = TimeStamp::Now();
 
   // Skip the synchronization for buffer since we also skip the painting during
-  // device-reset status.
+  // device-reset status. With OMTP, we have to wait for async paints
+  // before we synchronize and it's done on the paint thread.
+  RefPtr<SyncObjectClient> syncObject = nullptr;
   if (!gfxPlatform::GetPlatform()->DidRenderingDeviceReset()) {
     if (mForwarder->GetSyncObject() &&
         mForwarder->GetSyncObject()->IsSyncObjectValid()) {
-      mForwarder->GetSyncObject()->FinalizeFrame();
+      syncObject = mForwarder->GetSyncObject();
     }
+  }
+
+  // If there were async paints queued, then we need to notify the paint thread
+  // that we finished queuing async paints so it can schedule a runnable after
+  // all async painting is finished to do a texture sync and unblock the main
+  // thread if it is waiting before doing a new layer transaction.
+  if (mQueuedAsyncPaints) {
+    MOZ_ASSERT(PaintThread::Get());
+    PaintThread::Get()->EndLayerTransaction(syncObject);
+  } else if (syncObject) {
+    syncObject->Synchronize();
   }
 
   mPhase = PHASE_FORWARD;
 
-  mLatestTransactionId = mTransactionIdAllocator->GetTransactionId();
+  mLatestTransactionId = mTransactionIdAllocator->GetTransactionId(!mIsRepeatTransaction);
   TimeStamp transactionStart;
   if (!mTransactionIdAllocator->GetTransactionStart().IsNull()) {
     transactionStart = mTransactionIdAllocator->GetTransactionStart();
@@ -794,6 +818,12 @@ ClientLayerManager::SetIsFirstPaint()
 }
 
 void
+ClientLayerManager::SetFocusTarget(const FocusTarget& aFocusTarget)
+{
+  mForwarder->SetFocusTarget(aFocusTarget);
+}
+
+void
 ClientLayerManager::ClearCachedResources(Layer* aSubtree)
 {
   if (mDestroyed) {
@@ -866,12 +896,6 @@ bool
 ClientLayerManager::AsyncPanZoomEnabled() const
 {
   return mWidget && mWidget->AsyncPanZoomEnabled();
-}
-
-void
-ClientLayerManager::SetNextPaintSyncId(int32_t aSyncId)
-{
-  mForwarder->SetPaintSyncId(aSyncId);
 }
 
 void

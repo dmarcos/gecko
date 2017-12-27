@@ -1,10 +1,6 @@
 const FRAME_URL = "http://example.org/";
 
 const METHODS = {
-  setVisible: {},
-  getVisible: {},
-  setActive: {},
-  getActive: {},
   addNextPaintListener: {},
   removeNextPaintListener: {},
   sendMouseEvent: {},
@@ -25,16 +21,9 @@ const METHODS = {
   clearMatch: {},
   executeScript: {},
   getWebManifest: {},
-  mute: {},
-  unmute: {},
-  getMuted: {},
-  setVolume: {},
-  getVolume: {},
 };
 
-const ATTRIBUTES = [
-  "allowedAudioChannels",
-];
+const ATTRIBUTES = [];
 
 function once(target, eventName, useCapture = false) {
   info("Waiting for event: '" + JSON.stringify(eventName) + "' on " + target + ".");
@@ -58,7 +47,7 @@ function once(target, eventName, useCapture = false) {
   });
 }
 
-function* loadFrame(attributes = {}) {
+async function loadFrame(attributes = {}) {
   let iframe = document.createElement("iframe");
   iframe.setAttribute("src", FRAME_URL);
   for (let key in attributes) {
@@ -66,6 +55,6 @@ function* loadFrame(attributes = {}) {
   }
   let loaded = once(iframe, [ "load", "mozbrowserloadend" ]);
   document.body.appendChild(iframe);
-  yield loaded;
+  await loaded;
   return iframe;
 }

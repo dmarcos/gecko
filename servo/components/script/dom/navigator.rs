@@ -4,8 +4,9 @@
 
 use dom::bindings::codegen::Bindings::NavigatorBinding;
 use dom::bindings::codegen::Bindings::NavigatorBinding::NavigatorMethods;
-use dom::bindings::js::{MutNullableJS, Root};
+use dom::bindings::codegen::Bindings::VRBinding::VRBinding::VRMethods;
 use dom::bindings::reflector::{Reflector, DomObject, reflect_dom_object};
+use dom::bindings::root::{DomRoot, MutNullableDom};
 use dom::bindings::str::DOMString;
 use dom::bluetooth::Bluetooth;
 use dom::gamepadlist::GamepadList;
@@ -13,21 +14,23 @@ use dom::mimetypearray::MimeTypeArray;
 use dom::navigatorinfo;
 use dom::permissions::Permissions;
 use dom::pluginarray::PluginArray;
+use dom::promise::Promise;
 use dom::serviceworkercontainer::ServiceWorkerContainer;
 use dom::vr::VR;
 use dom::window::Window;
 use dom_struct::dom_struct;
+use std::rc::Rc;
 
 #[dom_struct]
 pub struct Navigator {
     reflector_: Reflector,
-    bluetooth: MutNullableJS<Bluetooth>,
-    plugins: MutNullableJS<PluginArray>,
-    mime_types: MutNullableJS<MimeTypeArray>,
-    service_worker: MutNullableJS<ServiceWorkerContainer>,
-    vr: MutNullableJS<VR>,
-    gamepads: MutNullableJS<GamepadList>,
-    permissions: MutNullableJS<Permissions>,
+    bluetooth: MutNullableDom<Bluetooth>,
+    plugins: MutNullableDom<PluginArray>,
+    mime_types: MutNullableDom<MimeTypeArray>,
+    service_worker: MutNullableDom<ServiceWorkerContainer>,
+    vr: MutNullableDom<VR>,
+    gamepads: MutNullableDom<GamepadList>,
+    permissions: MutNullableDom<Permissions>,
 }
 
 impl Navigator {
@@ -44,8 +47,8 @@ impl Navigator {
         }
     }
 
-    pub fn new(window: &Window) -> Root<Navigator> {
-        reflect_dom_object(box Navigator::new_inherited(),
+    pub fn new(window: &Window) -> DomRoot<Navigator> {
+        reflect_dom_object(Box::new(Navigator::new_inherited()),
                            window,
                            NavigatorBinding::Wrap)
     }
@@ -88,7 +91,7 @@ impl NavigatorMethods for Navigator {
     }
 
     // https://webbluetoothcg.github.io/web-bluetooth/#dom-navigator-bluetooth
-    fn Bluetooth(&self) -> Root<Bluetooth> {
+    fn Bluetooth(&self) -> DomRoot<Bluetooth> {
         self.bluetooth.or_init(|| Bluetooth::new(&self.global()))
     }
 
@@ -98,12 +101,12 @@ impl NavigatorMethods for Navigator {
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-navigator-plugins
-    fn Plugins(&self) -> Root<PluginArray> {
+    fn Plugins(&self) -> DomRoot<PluginArray> {
         self.plugins.or_init(|| PluginArray::new(&self.global()))
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-navigator-mimetypes
-    fn MimeTypes(&self) -> Root<MimeTypeArray> {
+    fn MimeTypes(&self) -> DomRoot<MimeTypeArray> {
         self.mime_types.or_init(|| MimeTypeArray::new(&self.global()))
     }
 
@@ -113,7 +116,7 @@ impl NavigatorMethods for Navigator {
     }
 
     // https://w3c.github.io/ServiceWorker/#navigator-service-worker-attribute
-    fn ServiceWorker(&self) -> Root<ServiceWorkerContainer> {
+    fn ServiceWorker(&self) -> DomRoot<ServiceWorkerContainer> {
         self.service_worker.or_init(|| {
             ServiceWorkerContainer::new(&self.global())
         })
@@ -124,14 +127,8 @@ impl NavigatorMethods for Navigator {
         true
     }
 
-    #[allow(unrooted_must_root)]
-    // https://w3c.github.io/webvr/#interface-navigator
-    fn Vr(&self) -> Root<VR> {
-        self.vr.or_init(|| VR::new(&self.global()))
-    }
-
     // https://www.w3.org/TR/gamepad/#navigator-interface-extension
-    fn GetGamepads(&self) -> Root<GamepadList> {
+    fn GetGamepads(&self) -> DomRoot<GamepadList> {
         let root = self.gamepads.or_init(|| {
             GamepadList::new(&self.global(), &[])
         });
@@ -142,7 +139,19 @@ impl NavigatorMethods for Navigator {
         root
     }
     // https://w3c.github.io/permissions/#navigator-and-workernavigator-extension
-    fn Permissions(&self) -> Root<Permissions> {
+    fn Permissions(&self) -> DomRoot<Permissions> {
         self.permissions.or_init(|| Permissions::new(&self.global()))
+    }
+
+    // https://w3c.github.io/webvr/spec/1.1/#navigator-getvrdisplays-attribute
+    #[allow(unrooted_must_root)]
+    fn GetVRDisplays(&self) -> Rc<Promise> {
+        self.Vr().GetDisplays()
+    }
+}
+
+impl Navigator {
+    pub fn Vr(&self) -> DomRoot<VR> {
+        self.vr.or_init(|| VR::new(&self.global()))
     }
 }

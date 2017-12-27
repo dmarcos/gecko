@@ -15,12 +15,12 @@ function test()
 {
   waitForExplicitFinish();
 
-  gBrowser.selectedTab = gBrowser.addTab();
-  gBrowser.selectedBrowser.addEventListener("load", function () {
+  gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
+  BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser).then(function () {
     openScratchpad(runTests);
-  }, {capture: true, once: true});
+  });
 
-  content.location = "data:text/html,<p>test file open and save in Scratchpad";
+  gBrowser.loadURI("data:text/html,<p>test file open and save in Scratchpad");
 }
 
 function runTests()
@@ -32,7 +32,7 @@ function runTests()
       "The temporary file was saved successfully");
 
     gFile = aFile;
-    gScratchpad.importFromFile(gFile.QueryInterface(Ci.nsILocalFile), true,
+    gScratchpad.importFromFile(gFile.QueryInterface(Ci.nsIFile), true,
         fileImported);
   });
 }
@@ -55,7 +55,7 @@ function fileImported(aStatus, aFileContent)
   gFileContent += "// omg, saved!";
   gScratchpad.editor.setText(gFileContent);
 
-  gScratchpad.exportToFile(gFile.QueryInterface(Ci.nsILocalFile), true, true,
+  gScratchpad.exportToFile(gFile.QueryInterface(Ci.nsIFile), true, true,
                           fileExported);
 }
 
@@ -77,7 +77,7 @@ function fileExported(aStatus)
     return false;
   };
 
-  gScratchpad.exportToFile(gFile.QueryInterface(Ci.nsILocalFile), false, true,
+  gScratchpad.exportToFile(gFile.QueryInterface(Ci.nsIFile), false, true,
                           fileExported2);
 
   gScratchpadWindow.confirm = oldConfirm;

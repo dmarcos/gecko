@@ -79,13 +79,24 @@ public:
   }
 
   void Spin() {
-    while (!mTopicReceived) {
-      if ((PR_IntervalNow() - mStartTime) > (WAITFORTOPIC_TIMEOUT_SECONDS * PR_USEC_PER_SEC)) {
-        // Timed out waiting for the topic.
-        do_check_true(false);
-        break;
-      }
-      (void)NS_ProcessNextEvent();
+    bool timedOut = false;
+    mozilla::SpinEventLoopUntil([&]() -> bool {
+        if (mTopicReceived) {
+          return true;
+        }
+
+        if ((PR_IntervalNow() - mStartTime) >
+            (WAITFORTOPIC_TIMEOUT_SECONDS * PR_USEC_PER_SEC)) {
+          timedOut = true;
+          return true;
+        }
+
+        return false;
+      });
+
+    if (timedOut) {
+      // Timed out waiting for the topic.
+      do_check_true(false);
     }
   }
 
@@ -336,7 +347,7 @@ addURI(nsIURI* aURI)
   do_wait_async_updates();
 }
 
-static const char TOPIC_PROFILE_CHANGE[] = "profile-before-change";
+static const char TOPIC_PROFILE_CHANGE_QM[] = "profile-before-change-qm";
 static const char TOPIC_PLACES_CONNECTION_CLOSED[] = "places-connection-closed";
 
 class WaitForConnectionClosed final : public nsIObserver
@@ -354,7 +365,10 @@ public:
       do_GetService(NS_OBSERVERSERVICE_CONTRACTID);
     MOZ_ASSERT(os);
     if (os) {
-      MOZ_ALWAYS_SUCCEEDS(os->AddObserver(this, TOPIC_PROFILE_CHANGE, false));
+      // The places-connection-closed notification happens because of things
+      // that occur during profile-before-change, so we use the stage after that
+      // to wait for it.
+      MOZ_ALWAYS_SUCCEEDS(os->AddObserver(this, TOPIC_PROFILE_CHANGE_QM, false));
     }
     mSpinner = new WaitForTopicSpinner(TOPIC_PLACES_CONNECTION_CLOSED);
   }

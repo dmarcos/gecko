@@ -25,7 +25,7 @@ using namespace mozilla::a11y;
 
 void
 nsAccUtils::GetAccAttr(nsIPersistentProperties *aAttributes,
-                       nsIAtom *aAttrName, nsAString& aAttrValue)
+                       nsAtom *aAttrName, nsAString& aAttrValue)
 {
   aAttrValue.Truncate();
 
@@ -34,7 +34,7 @@ nsAccUtils::GetAccAttr(nsIPersistentProperties *aAttributes,
 
 void
 nsAccUtils::SetAccAttr(nsIPersistentProperties *aAttributes,
-                       nsIAtom *aAttrName, const nsAString& aAttrValue)
+                       nsAtom *aAttrName, const nsAString& aAttrValue)
 {
   nsAutoString oldValue;
   aAttributes->SetStringProperty(nsAtomCString(aAttrName), aAttrValue, oldValue);
@@ -42,7 +42,7 @@ nsAccUtils::SetAccAttr(nsIPersistentProperties *aAttributes,
 
 void
 nsAccUtils::SetAccAttr(nsIPersistentProperties *aAttributes,
-                       nsIAtom* aAttrName, nsIAtom* aAttrValue)
+                       nsAtom* aAttrName, nsAtom* aAttrValue)
 {
   nsAutoString oldValue;
   aAttributes->SetStringProperty(nsAtomCString(aAttrName),
@@ -84,7 +84,7 @@ nsAccUtils::GetDefaultLevel(Accessible* aAccessible)
     Accessible* parent = aAccessible->Parent();
     // It is a row inside flatten treegrid. Group level is always 1 until it
     // is overriden by aria-level attribute.
-    if (parent && parent->Role() == roles::TREE_TABLE) 
+    if (parent && parent->Role() == roles::TREE_TABLE)
       return 1;
   }
 
@@ -187,7 +187,7 @@ nsAccUtils::SetLiveContainerAttributes(nsIPersistentProperties *aAttributes,
 }
 
 bool
-nsAccUtils::HasDefinedARIAToken(nsIContent *aContent, nsIAtom *aAtom)
+nsAccUtils::HasDefinedARIAToken(nsIContent *aContent, nsAtom *aAtom)
 {
   NS_ASSERTION(aContent, "aContent is null in call to HasDefinedARIAToken!");
 
@@ -201,8 +201,8 @@ nsAccUtils::HasDefinedARIAToken(nsIContent *aContent, nsIAtom *aAtom)
   return true;
 }
 
-nsIAtom*
-nsAccUtils::GetARIAToken(dom::Element* aElement, nsIAtom* aAttr)
+nsAtom*
+nsAccUtils::GetARIAToken(dom::Element* aElement, nsAtom* aAttr)
 {
   if (!HasDefinedARIAToken(aElement, aAttr))
     return nsGkAtoms::_empty;
@@ -415,7 +415,7 @@ nsAccUtils::TextLength(Accessible* aAccessible)
 
   // For list bullets (or anything other accessible which would compute its own
   // text. They don't have their own frame.
-  // XXX In the future, list bullets may have frame and anon content, so 
+  // XXX In the future, list bullets may have frame and anon content, so
   // we should be able to remove this at that point
   nsAutoString text;
   aAccessible->AppendTextTo(text); // Get all the text

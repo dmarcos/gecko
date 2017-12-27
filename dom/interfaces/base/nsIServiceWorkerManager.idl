@@ -31,12 +31,13 @@ interface nsIWorkerDebugger;
 interface nsIServiceWorkerInfo : nsISupports
 {
   // State values below should match the ServiceWorkerState enumeration.
-  const unsigned short STATE_INSTALLING = 0;
-  const unsigned short STATE_INSTALLED = 1;
-  const unsigned short STATE_ACTIVATING = 2;
-  const unsigned short STATE_ACTIVATED = 3;
-  const unsigned short STATE_REDUNDANT = 4;
-  const unsigned short STATE_UNKNOWN = 5;
+  const unsigned short STATE_PARSED = 0;
+  const unsigned short STATE_INSTALLING = 1;
+  const unsigned short STATE_INSTALLED = 2;
+  const unsigned short STATE_ACTIVATING = 3;
+  const unsigned short STATE_ACTIVATED = 4;
+  const unsigned short STATE_REDUNDANT = 5;
+  const unsigned short STATE_UNKNOWN = 6;
 
   readonly attribute DOMString scriptSpec;
   readonly attribute DOMString cacheName;
@@ -65,10 +66,16 @@ interface nsIServiceWorkerRegistrationInfoListener : nsISupports
 [scriptable, builtinclass, uuid(ddbc1fd4-2f2e-4fca-a395-6e010bbedfe3)]
 interface nsIServiceWorkerRegistrationInfo : nsISupports
 {
+  // State values below should match the ServiceWorkerUpdateViaCache enumeration.
+  const unsigned short UPDATE_VIA_CACHE_IMPORTS = 0;
+  const unsigned short UPDATE_VIA_CACHE_ALL = 1;
+  const unsigned short UPDATE_VIA_CACHE_NONE = 2;
+
   readonly attribute nsIPrincipal principal;
 
   readonly attribute DOMString scope;
   readonly attribute DOMString scriptSpec;
+  readonly attribute unsigned short updateViaCache;
 
   readonly attribute PRTime lastUpdateTime;
 
@@ -110,7 +117,7 @@ interface nsIServiceWorkerManager : nsISupports
   nsISupports register(in mozIDOMWindow aWindow,
                        in nsIURI aScope,
                        in nsIURI aScriptURI,
-                       in nsLoadFlags aLoadFlags);
+                       in uint16_t aUpdateViaCache);
 
   /**
    * Unregister an existing ServiceWorker registration for `aScope`.
@@ -141,7 +148,7 @@ interface nsIServiceWorkerManager : nsISupports
    *
    * This MUST only be called once per document!
    */
-  [notxpcom,nostdcall] void MaybeStartControlling(in nsIDocument aDoc, in DOMString aDocumentId);
+  [notxpcom,nostdcall] void MaybeStartControlling(in nsIDocument aDoc);
 
   /**
    * Documents that have called MaybeStartControlling() should call this when
@@ -180,16 +187,13 @@ interface nsIServiceWorkerManager : nsISupports
   // Testing
   DOMString getScopeForUrl(in nsIPrincipal aPrincipal, in DOMString aPath);
 
-  // Note: This is meant to be used only by about:serviceworkers.
   // It returns an array of nsIServiceWorkerRegistrationInfos.
   nsIArray getAllRegistrations();
 
-  // Note: This is meant to be used only by about:serviceworkers.
   // It calls softUpdate() for each child process.
   [implicit_jscontext] void propagateSoftUpdate(in jsval aOriginAttributes,
                                                 in DOMString aScope);
 
-  // Note: This is meant to be used only by about:serviceworkers.
   // It calls unregister() in each child process. The callback is used to
   // inform when unregister() is completed on the current process.
   void propagateUnregister(in nsIPrincipal aPrincipal,
@@ -230,8 +234,6 @@ interface nsIServiceWorkerManager : nsISupports
   void addListener(in nsIServiceWorkerManagerListener aListener);
 
   void removeListener(in nsIServiceWorkerManagerListener aListener);
-
-  bool shouldReportToWindow(in mozIDOMWindowProxy aWindow, in ACString aScope);
 };
 
 %{ C++

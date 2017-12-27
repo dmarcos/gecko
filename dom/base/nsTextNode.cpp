@@ -21,6 +21,7 @@
 #ifdef DEBUG
 #include "nsRange.h"
 #endif
+#include "nsDocument.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -33,10 +34,10 @@ class nsAttributeTextNode final : public nsTextNode,
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
-  
+
   nsAttributeTextNode(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo,
                       int32_t aNameSpaceID,
-                      nsIAtom* aAttrName) :
+                      nsAtom* aAttrName) :
     nsTextNode(aNodeInfo),
     mGrandparent(nullptr),
     mNameSpaceID(aNameSpaceID),
@@ -90,15 +91,17 @@ private:
   nsIContent* mGrandparent;
   // What attribute we're showing
   int32_t mNameSpaceID;
-  nsCOMPtr<nsIAtom> mAttrName;
+  RefPtr<nsAtom> mAttrName;
 };
 
 nsTextNode::~nsTextNode()
 {
 }
 
-NS_IMPL_ISUPPORTS_INHERITED(nsTextNode, nsGenericDOMDataNode, nsIDOMNode,
-                            nsIDOMText, nsIDOMCharacterData)
+// Use the CC variant of this, even though this class does not define
+// a new CC participant, to make QIing to the CC interfaces faster.
+NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(nsTextNode, nsGenericDOMDataNode, nsIDOMNode,
+                                             nsIDOMText, nsIDOMCharacterData)
 
 JSObject*
 nsTextNode::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto)
@@ -109,7 +112,7 @@ nsTextNode::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto)
 bool
 nsTextNode::IsNodeOfType(uint32_t aFlags) const
 {
-  return !(aFlags & ~(eCONTENT | eTEXT | eDATA_NODE));
+  return !(aFlags & ~(eTEXT | eDATA_NODE));
 }
 
 nsGenericDOMDataNode*
@@ -155,6 +158,12 @@ void nsTextNode::UnbindFromTree(bool aDeep, bool aNullParent)
   nsGenericDOMDataNode::UnbindFromTree(aDeep, aNullParent);
 }
 
+bool
+nsTextNode::IsWebComponentsEnabled(JSContext* aCx, JSObject* aObject)
+{
+  return nsDocument::IsWebComponentsEnabled(aCx, aObject);
+}
+
 #ifdef DEBUG
 void
 nsTextNode::List(FILE* out, int32_t aIndent) const
@@ -165,10 +174,15 @@ nsTextNode::List(FILE* out, int32_t aIndent) const
   fprintf(out, "Text@%p", static_cast<const void*>(this));
   fprintf(out, " flags=[%08x]", static_cast<unsigned int>(GetFlags()));
   if (IsCommonAncestorForRangeInSelection()) {
-    typedef nsTHashtable<nsPtrHashKey<nsRange> > RangeHashTable;
-    RangeHashTable* ranges =
-      static_cast<RangeHashTable*>(GetProperty(nsGkAtoms::range));
-    fprintf(out, " ranges:%d", ranges ? ranges->Count() : 0);
+    const LinkedList<nsRange>* ranges = GetExistingCommonAncestorRanges();
+    int32_t count = 0;
+    if (ranges) {
+      // Can't use range-based iteration on a const LinkedList, unfortunately.
+      for (const nsRange* r = ranges->getFirst(); r; r = r->getNext()) {
+        ++count;
+      }
+    }
+    fprintf(out, " ranges:%d", count);
   }
   fprintf(out, " primaryframe=%p", static_cast<void*>(GetPrimaryFrame()));
   fprintf(out, " refcount=%" PRIuPTR "<", mRefCnt.get());
@@ -200,13 +214,13 @@ nsTextNode::DumpContent(FILE* out, int32_t aIndent, bool aDumpAll) const
 
 nsresult
 NS_NewAttributeContent(nsNodeInfoManager *aNodeInfoManager,
-                       int32_t aNameSpaceID, nsIAtom* aAttrName,
+                       int32_t aNameSpaceID, nsAtom* aAttrName,
                        nsIContent** aResult)
 {
   NS_PRECONDITION(aNodeInfoManager, "Missing nodeInfoManager");
   NS_PRECONDITION(aAttrName, "Must have an attr name");
   NS_PRECONDITION(aNameSpaceID != kNameSpaceID_Unknown, "Must know namespace");
-  
+
   *aResult = nullptr;
 
   already_AddRefed<mozilla::dom::NodeInfo> ni = aNodeInfoManager->GetTextNodeInfo();
@@ -263,7 +277,7 @@ void
 nsAttributeTextNode::AttributeChanged(nsIDocument* aDocument,
                                       Element* aElement,
                                       int32_t aNameSpaceID,
-                                      nsIAtom* aAttribute,
+                                      nsAtom* aAttribute,
                                       int32_t aModType,
                                       const nsAttrValue* aOldValue)
 {
@@ -273,7 +287,8 @@ nsAttributeTextNode::AttributeChanged(nsIDocument* aDocument,
     // that if we get unbound while the event is up that's ok -- we'll just
     // have no grandparent when it fires, and will do nothing.
     void (nsAttributeTextNode::*update)() = &nsAttributeTextNode::UpdateText;
-    nsContentUtils::AddScriptRunner(NewRunnableMethod(this, update));
+    nsContentUtils::AddScriptRunner(
+      NewRunnableMethod("nsAttributeTextNode::AttributeChanged", this, update));
   }
 }
 
@@ -291,6 +306,6 @@ nsAttributeTextNode::UpdateText(bool aNotify)
     nsAutoString attrValue;
     mGrandparent->GetAttr(mNameSpaceID, mAttrName, attrValue);
     SetText(attrValue, aNotify);
-  }  
+  }
 }
 

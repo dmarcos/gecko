@@ -18,16 +18,19 @@
 #include "IPCMessageStart.h"
 #include "mozilla/AlreadyAddRefed.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/ipc/ByteBuf.h"
 #include "mozilla/ipc/FileDescriptor.h"
 #include "mozilla/ipc/Shmem.h"
 #include "mozilla/ipc/Transport.h"
 #include "mozilla/ipc/MessageLink.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/MozPromise.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/NotNull.h"
 #include "mozilla/UniquePtr.h"
 #include "MainThreadUtils.h"
+#include "nsILabelableRunnable.h"
 
 #if defined(ANDROID) && defined(DEBUG)
 #include <android/log.h>
@@ -61,6 +64,8 @@ enum {
 class nsIEventTarget;
 
 namespace mozilla {
+class SchedulerGroup;
+
 namespace dom {
 class ContentParent;
 } // namespace dom
@@ -190,6 +195,12 @@ public:
     // aActor.
     void SetEventTargetForActor(IProtocol* aActor, nsIEventTarget* aEventTarget);
 
+    // Replace the event target for the messages of aActor. There must not be
+    // any messages of aActor in the task queue, or we might run into some
+    // unexpected behavior.
+    void ReplaceEventTargetForActor(IProtocol* aActor,
+                                    nsIEventTarget* aEventTarget);
+
     // Returns the event target set by SetEventTargetForActor() if available.
     virtual nsIEventTarget* GetActorEventTarget();
 
@@ -197,10 +208,14 @@ protected:
     friend class IToplevelProtocol;
 
     void SetId(int32_t aId) { mId = aId; }
+    void ResetManager() { mManager = nullptr; }
     void SetManager(IProtocol* aManager);
     void SetIPCChannel(MessageChannel* aChannel) { mChannel = aChannel; }
 
     virtual void SetEventTargetForActorInternal(IProtocol* aActor, nsIEventTarget* aEventTarget);
+    virtual void ReplaceEventTargetForActorInternal(
+      IProtocol* aActor,
+      nsIEventTarget* aEventTarget);
 
     virtual already_AddRefed<nsIEventTarget>
     GetActorEventTargetInternal(IProtocol* aActor);
@@ -255,6 +270,8 @@ protected:
     ~IToplevelProtocol();
 
 public:
+    using SchedulerGroupSet = nsILabelableRunnable::SchedulerGroupSet;
+
     void SetTransport(UniquePtr<Transport> aTrans)
     {
         mTrans = Move(aTrans);
@@ -281,6 +298,10 @@ public:
 
     bool Open(MessageChannel* aChannel,
               MessageLoop* aMessageLoop,
+              mozilla::ipc::Side aSide = mozilla::ipc::UnknownSide);
+
+    bool Open(MessageChannel* aChannel,
+              nsIEventTarget* aEventTarget,
               mozilla::ipc::Side aSide = mozilla::ipc::UnknownSide);
 
     void Close();
@@ -366,6 +387,16 @@ public:
     virtual void ProcessRemoteNativeEventsInInterruptCall() {
     }
 
+    // Override this method in top-level protocols to change the SchedulerGroups
+    // that a message might affect. This should be used only as a last resort
+    // when it's difficult to determine an EventTarget ahead of time. See the
+    // comment in nsILabelableRunnable.h for more information.
+    virtual bool
+    GetMessageSchedulerGroups(const Message& aMsg, SchedulerGroupSet& aGroups)
+    {
+        return false;
+    }
+
     virtual already_AddRefed<nsIEventTarget>
     GetMessageEventTarget(const Message& aMsg);
 
@@ -374,6 +405,11 @@ public:
 
     virtual nsIEventTarget*
     GetActorEventTarget();
+
+    virtual void OnChannelReceivedMessage(const Message& aMsg) {}
+
+    bool IsMainThreadProtocol() const { return mIsMainThreadProtocol; }
+    void SetIsMainThreadProtocol() { mIsMainThreadProtocol = NS_IsMainThread(); }
 
 protected:
     // Override this method in top-level protocols to change the event target
@@ -387,6 +423,9 @@ protected:
     GetSpecificMessageEventTarget(const Message& aMsg) { return nullptr; }
 
     virtual void SetEventTargetForActorInternal(IProtocol* aActor, nsIEventTarget* aEventTarget);
+    virtual void ReplaceEventTargetForActorInternal(
+      IProtocol* aActor,
+      nsIEventTarget* aEventTarget);
 
     virtual already_AddRefed<nsIEventTarget>
     GetActorEventTargetInternal(IProtocol* aActor);
@@ -399,6 +438,7 @@ protected:
     int32_t mLastRouteId;
     IDMap<Shmem::SharedMemory*> mShmemMap;
     Shmem::id_t mLastShmemId;
+    bool mIsMainThreadProtocol;
 
     Mutex mEventTargetMutex;
     IDMap<nsCOMPtr<nsIEventTarget>> mEventTargetMap;
@@ -534,11 +574,7 @@ DuplicateHandle(HANDLE aSourceHandle,
  * Annotate the crash reporter with the error code from the most recent system
  * call. Returns the system error.
  */
-#ifdef MOZ_CRASHREPORTER
 void AnnotateSystemError();
-#else
-#define AnnotateSystemError() do { } while (0)
-#endif
 
 /**
  * An endpoint represents one end of a partially initialized IPDL channel. To
@@ -577,35 +613,35 @@ public:
              mozilla::ipc::Transport::Mode aMode,
              TransportDescriptor aTransport,
              ProcessId aMyPid,
-             ProcessId aOtherPid,
-             ProtocolId aProtocolId)
+             ProcessId aOtherPid)
       : mValid(true)
       , mMode(aMode)
       , mTransport(aTransport)
       , mMyPid(aMyPid)
       , mOtherPid(aOtherPid)
-      , mProtocolId(aProtocolId)
     {}
 
     Endpoint(Endpoint&& aOther)
       : mValid(aOther.mValid)
-      , mMode(aOther.mMode)
       , mTransport(aOther.mTransport)
       , mMyPid(aOther.mMyPid)
       , mOtherPid(aOther.mOtherPid)
-      , mProtocolId(aOther.mProtocolId)
     {
+        if (aOther.mValid) {
+            mMode = aOther.mMode;
+        }
         aOther.mValid = false;
     }
 
     Endpoint& operator=(Endpoint&& aOther)
     {
         mValid = aOther.mValid;
-        mMode = aOther.mMode;
+        if (aOther.mValid) {
+            mMode = aOther.mMode;
+        }
         mTransport = aOther.mTransport;
         mMyPid = aOther.mMyPid;
         mOtherPid = aOther.mOtherPid;
-        mProtocolId = aOther.mProtocolId;
 
         aOther.mValid = false;
         return *this;
@@ -655,10 +691,9 @@ private:
     mozilla::ipc::Transport::Mode mMode;
     TransportDescriptor mTransport;
     ProcessId mMyPid, mOtherPid;
-    ProtocolId mProtocolId;
 };
 
-#if defined(MOZ_CRASHREPORTER) && defined(XP_MACOSX)
+#if defined(XP_MACOSX)
 void AnnotateCrashReportWithErrno(const char* tag, int error);
 #else
 static inline void AnnotateCrashReportWithErrno(const char* tag, int error)
@@ -672,8 +707,6 @@ nsresult
 CreateEndpoints(const PrivateIPDLInterface& aPrivate,
                 base::ProcessId aParentDestPid,
                 base::ProcessId aChildDestPid,
-                ProtocolId aProtocol,
-                ProtocolId aChildProtocol,
                 Endpoint<PFooParent>* aParentEndpoint,
                 Endpoint<PFooChild>* aChildEndpoint)
 {
@@ -688,10 +721,10 @@ CreateEndpoints(const PrivateIPDLInterface& aPrivate,
   }
 
   *aParentEndpoint = Endpoint<PFooParent>(aPrivate, mozilla::ipc::Transport::MODE_SERVER,
-                                          parentTransport, aParentDestPid, aChildDestPid, aProtocol);
+                                          parentTransport, aParentDestPid, aChildDestPid);
 
   *aChildEndpoint = Endpoint<PFooChild>(aPrivate, mozilla::ipc::Transport::MODE_CLIENT,
-                                        childTransport, aChildDestPid, aParentDestPid, aChildProtocol);
+                                        childTransport, aChildDestPid, aParentDestPid);
 
   return NS_OK;
 }
@@ -699,8 +732,6 @@ CreateEndpoints(const PrivateIPDLInterface& aPrivate,
 void
 TableToArray(const nsTHashtable<nsPtrHashKey<void>>& aTable,
              nsTArray<void*>& aArray);
-
-const char* StringFromIPCMessageType(uint32_t aMessageType);
 
 } // namespace ipc
 
@@ -802,7 +833,6 @@ struct ParamTraits<mozilla::ipc::Endpoint<PFooSide>>
 
         IPC::WriteParam(aMsg, aParam.mMyPid);
         IPC::WriteParam(aMsg, aParam.mOtherPid);
-        IPC::WriteParam(aMsg, static_cast<uint32_t>(aParam.mProtocolId));
     }
 
     static bool Read(const Message* aMsg, PickleIterator* aIter, paramType* aResult)
@@ -817,16 +847,14 @@ struct ParamTraits<mozilla::ipc::Endpoint<PFooSide>>
             return true;
         }
 
-        uint32_t mode, protocolId;
+        uint32_t mode;
         if (!IPC::ReadParam(aMsg, aIter, &mode) ||
             !IPC::ReadParam(aMsg, aIter, &aResult->mTransport) ||
             !IPC::ReadParam(aMsg, aIter, &aResult->mMyPid) ||
-            !IPC::ReadParam(aMsg, aIter, &aResult->mOtherPid) ||
-            !IPC::ReadParam(aMsg, aIter, &protocolId)) {
+            !IPC::ReadParam(aMsg, aIter, &aResult->mOtherPid)) {
             return false;
         }
         aResult->mMode = Channel::Mode(mode);
-        aResult->mProtocolId = mozilla::ipc::ProtocolId(protocolId);
         return true;
     }
 

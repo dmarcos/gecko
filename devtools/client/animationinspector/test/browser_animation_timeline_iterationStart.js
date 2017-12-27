@@ -10,7 +10,7 @@ add_task(function* () {
   yield addTab(URL_ROOT + "doc_script_animation.html");
   let {panel} = yield openAnimationInspector();
   let timelineComponent = panel.animationsTimelineComponent;
-  let timeBlockComponents = timelineComponent.timeBlocks;
+  let timeBlockComponents = getAnimationTimeBlocks(panel);
   let detailsComponent = timelineComponent.details;
 
   for (let i = 0; i < timeBlockComponents.length; i++) {
@@ -48,14 +48,37 @@ function checkAnimationTooltip(el, {iterationStart, duration}) {
   ok(title.match(regex), "The tooltip shows the expected iteration start");
 }
 
-function checkProgressAtStartingTime(el, { iterationStart }) {
+function checkProgressAtStartingTime(el, { delay, iterationStart }) {
   info("Check the progress of starting time");
-  const pathEl = el.querySelector(".iteration-path");
-  const pathSegList = pathEl.pathSegList;
-  const pathSeg = pathSegList.getItem(1);
-  const progress = pathSeg.y;
-  is(progress, iterationStart % 1,
-     `The progress at starting point should be ${ iterationStart % 1 }`);
+  const groupEls = el.querySelectorAll("svg g");
+  groupEls.forEach(groupEl => {
+    const pathEl = groupEl.querySelector(".iteration-path");
+    const pathSegList = pathEl.pathSegList;
+    const pathSeg = pathSegList.getItem(1);
+    const progress = pathSeg.y;
+    is(progress, iterationStart % 1,
+       `The progress at starting point should be ${ iterationStart % 1 }`);
+
+    if (delay) {
+      const delayPathEl = groupEl.querySelector(".delay-path");
+      const delayPathSegList = delayPathEl.pathSegList;
+      const delayStartingPathSeg = delayPathSegList.getItem(1);
+      const delayEndingPathSeg =
+        delayPathSegList.getItem(delayPathSegList.numberOfItems - 2);
+      const startingX = 0;
+      const endingX = delay;
+      is(delayStartingPathSeg.x, startingX,
+         `The x of starting point should be ${ startingX }`);
+      is(delayStartingPathSeg.y, progress,
+         "The y of starting point should be same to starting point of iteration-path "
+         + progress);
+      is(delayEndingPathSeg.x, endingX,
+         `The x of ending point should be ${ endingX }`);
+      is(delayStartingPathSeg.y, progress,
+         "The y of ending point should be same to starting point of iteration-path "
+         + progress);
+    }
+  });
 }
 
 function checkKeyframeOffset(timeBlockEl, frameEl, {iterationStart}) {

@@ -103,6 +103,10 @@ SharedPreferencesImpl.prototype = Object.freeze({
     this._setOne(prefName, value, "string");
   },
 
+  setSetPref: function setCharPref(prefName, value) {
+    this._setOne(prefName, value, "set");
+  },
+
   setIntPref: function setIntPref(prefName, value) {
     this._setOne(prefName, value, "int");
   },
@@ -119,7 +123,7 @@ SharedPreferencesImpl.prototype = Object.freeze({
       profileName: this._profileName,
       branch: this._branch,
     }, {
-      onSuccess: values => { result = values },
+      onSuccess: values => { result = values; },
       onError: msg => { throw new Error("Cannot get preference: " + msg); },
     });
 
@@ -144,6 +148,10 @@ SharedPreferencesImpl.prototype = Object.freeze({
 
   getCharPref: function getCharPref(prefName) {
     return this._getOne(prefName, "string");
+  },
+
+  getSetPref: function getSetPref(prefName) {
+    return this._getOne(prefName, "set");
   },
 
   getIntPref: function getIntPref(prefName) {
@@ -222,7 +230,7 @@ SharedPreferencesImpl.prototype = Object.freeze({
 
     if (msg.scope !== this._scope ||
         ((this._scope === Scope.PROFILE) && (msg.profileName !== this._profileName)) ||
-        ((this._scope === Scope.GLOBAL)  && (msg.branch !== this._branch))) {
+        ((this._scope === Scope.GLOBAL) && (msg.branch !== this._branch))) {
       return;
     }
 

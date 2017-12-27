@@ -83,7 +83,7 @@ MediateRace(const MessageChannel::MessageInfo& parent,
   }
 }
 
-#if defined(OS_LINUX)
+#if defined(OS_LINUX) || defined(OS_SOLARIS)
 static string
 ReplaceAll(const string& haystack, const string& needle, const string& with)
 {
@@ -102,7 +102,7 @@ ReplaceAll(const string& haystack, const string& needle, const string& with)
 string
 MungePluginDsoPath(const string& path)
 {
-#if defined(OS_LINUX)
+#if defined(OS_LINUX) || defined(OS_SOLARIS)
   // https://bugzilla.mozilla.org/show_bug.cgi?id=519601
   return ReplaceAll(path, "netscape", "netsc@pe");
 #else
@@ -113,7 +113,7 @@ MungePluginDsoPath(const string& path)
 string
 UnmungePluginDsoPath(const string& munged)
 {
-#if defined(OS_LINUX)
+#if defined(OS_LINUX) || defined(OS_SOLARIS)
   return ReplaceAll(munged, "netsc@pe", "netscape");
 #else
   return munged;
@@ -226,7 +226,11 @@ OpenFileNameIPC::AddToOfn(LPOPENFILENAMEW aLpofn) const
     aLpofn->nMaxCustFilter = 0;
   }
   aLpofn->nFilterIndex = mFilterIndex;
-  wcscpy(aLpofn->lpstrFile, mFile.c_str());
+  if (mNMaxFile > 0) {
+    wcsncpy(aLpofn->lpstrFile, mFile.c_str(),
+            std::min(static_cast<uint32_t>(mFile.size()+1), mNMaxFile));
+    aLpofn->lpstrFile[mNMaxFile - 1] = L'\0';
+  }
   aLpofn->nMaxFile = mNMaxFile;
   aLpofn->nMaxFileTitle = mNMaxFileTitle;
   if (mHasInitialDir) {
@@ -252,7 +256,7 @@ OpenFileNameIPC::AllocateOfnStrings(LPOPENFILENAMEW aLpofn) const
   }
   if (mHasCustomFilter) {
     aLpofn->lpstrCustomFilter =
-      static_cast<LPTSTR>(moz_xmalloc(sizeof(wchar_t) * (mCustomFilterIn.size() + 1) + mNMaxCustFilterOut));
+      static_cast<LPTSTR>(moz_xmalloc(sizeof(wchar_t) * (mCustomFilterIn.size() + 1 + mNMaxCustFilterOut)));
   }
   aLpofn->lpstrFile =
     static_cast<LPTSTR>(moz_xmalloc(sizeof(wchar_t) * mNMaxFile));

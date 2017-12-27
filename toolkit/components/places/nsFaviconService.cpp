@@ -22,7 +22,6 @@
 #include "nsNetUtil.h"
 #include "nsReadableUtils.h"
 #include "nsStreamUtils.h"
-#include "nsStringStream.h"
 #include "plbase64.h"
 #include "nsIClassInfoImpl.h"
 #include "mozilla/ArrayUtils.h"
@@ -130,12 +129,14 @@ NS_IMPL_ISUPPORTS_CI(
 , nsIFaviconService
 , mozIAsyncFavicons
 , nsITimerCallback
+, nsINamed
 )
 
 nsFaviconService::nsFaviconService()
   : mFailedFaviconSerial(0)
   , mFailedFavicons(MAX_FAILED_FAVICONS / 2)
   , mUnassociatedIcons(UNASSOCIATED_FAVICONS_LENGTH)
+  , mDefaultIconURIPreferredSize(UINT16_MAX)
 {
   NS_ASSERTION(!gFaviconService,
                "Attempting to create two instances of the service!");
@@ -166,7 +167,7 @@ nsFaviconService::Init()
   mDB = Database::GetDatabase();
   NS_ENSURE_STATE(mDB);
 
-  mExpireUnassociatedIconsTimer = do_CreateInstance("@mozilla.org/timer;1");
+  mExpireUnassociatedIconsTimer = NS_NewTimer();
   NS_ENSURE_STATE(mExpireUnassociatedIconsTimer);
 
   // Check if there are still icon payloads to be converted.
@@ -202,11 +203,15 @@ nsFaviconService::ExpireAllFavicons()
   , removeIconsStmt.get()
   , unlinkIconsStmt.get()
   };
+  nsCOMPtr<mozIStorageConnection> conn = mDB->MainConn();
+  if (!conn) {
+    return NS_ERROR_UNEXPECTED;
+  }
   nsCOMPtr<mozIStoragePendingStatement> ps;
   RefPtr<ExpireFaviconsStatementCallbackNotifier> callback =
     new ExpireFaviconsStatementCallbackNotifier();
-  return mDB->MainConn()->ExecuteAsync(stmts, ArrayLength(stmts),
-                                       callback, getter_AddRefs(ps));
+  return conn->ExecuteAsync(stmts, ArrayLength(stmts),
+                                        callback, getter_AddRefs(ps));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -236,6 +241,16 @@ nsFaviconService::Notify(nsITimer* timer)
   return NS_OK;
 }
 
+////////////////////////////////////////////////////////////////////////
+//// nsINamed
+
+NS_IMETHODIMP
+nsFaviconService::GetName(nsACString& aName)
+{
+  aName.AssignLiteral("nsFaviconService");
+  return NS_OK;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 //// nsIFaviconService
 
@@ -251,6 +266,13 @@ nsFaviconService::GetDefaultFavicon(nsIURI** _retval)
     NS_ENSURE_SUCCESS(rv, rv);
   }
   return mDefaultIcon->Clone(_retval);
+}
+
+NS_IMETHODIMP
+nsFaviconService::GetDefaultFaviconMimeType(nsACString& _retval)
+{
+  _retval = NS_LITERAL_CSTRING(FAVICON_DEFAULT_MIMETYPE);
+  return NS_OK;
 }
 
 void
@@ -295,6 +317,7 @@ nsFaviconService::SetAndFetchFaviconForPage(nsIURI* aPageURI,
                                             uint32_t aFaviconLoadType,
                                             nsIFaviconDataCallback* aCallback,
                                             nsIPrincipal* aLoadingPrincipal,
+                                            uint64_t aRequestContextID,
                                             mozIPlacesPendingOperation **_canceler)
 {
   MOZ_ASSERT(NS_IsMainThread());
@@ -368,7 +391,7 @@ nsFaviconService::SetAndFetchFaviconForPage(nsIURI* aPageURI,
       icon.host.Cut(0, 4);
     }
     nsAutoCString path;
-    rv = aFaviconURI->GetPath(path);
+    rv = aFaviconURI->GetPathQueryRef(path);
     if (NS_SUCCEEDED(rv) && path.EqualsLiteral("/favicon.ico")) {
       icon.rootIcon = 1;
     }
@@ -379,13 +402,14 @@ nsFaviconService::SetAndFetchFaviconForPage(nsIURI* aPageURI,
   // for database size and UX concerns.
   // Don't store favicons for error pages too.
   if (icon.spec.Equals(page.spec) ||
-      icon.spec.Equals(FAVICON_ERRORPAGE_URL)) {
+      icon.spec.EqualsLiteral(FAVICON_ERRORPAGE_URL)) {
     return NS_OK;
   }
 
   RefPtr<AsyncFetchAndSetIconForPage> event =
     new AsyncFetchAndSetIconForPage(icon, page, loadPrivate,
-                                    aCallback, aLoadingPrincipal);
+                                    aCallback, aLoadingPrincipal,
+                                    aRequestContextID);
 
   // Get the target thread and start the work.
   // DB will be updated and observers notified when data has finished loading.
@@ -441,7 +465,7 @@ nsFaviconService::ReplaceFaviconData(nsIURI* aFaviconURI,
   nsresult rv = aFaviconURI->GetSpec(iconData->spec);
   NS_ENSURE_SUCCESS(rv, rv);
   nsAutoCString path;
-  rv = aFaviconURI->GetPath(path);
+  rv = aFaviconURI->GetPathQueryRef(path);
   if (NS_SUCCEEDED(rv) && path.EqualsLiteral("/favicon.ico")) {
     iconData->rootIcon = 1;
   }
@@ -628,6 +652,45 @@ nsFaviconService::GetFaviconDataForPage(nsIURI* aPageURI,
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsFaviconService::CopyFavicons(nsIURI* aFromPageURI,
+                               nsIURI* aToPageURI,
+                               uint32_t aFaviconLoadType,
+                               nsIFaviconDataCallback* aCallback)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  NS_ENSURE_ARG(aFromPageURI);
+  NS_ENSURE_ARG(aToPageURI);
+  NS_ENSURE_TRUE(aFaviconLoadType >= nsIFaviconService::FAVICON_LOAD_PRIVATE &&
+                 aFaviconLoadType <= nsIFaviconService::FAVICON_LOAD_NON_PRIVATE,
+                 NS_ERROR_INVALID_ARG);
+
+  PageData fromPage;
+  nsresult rv = aFromPageURI->GetSpec(fromPage.spec);
+  NS_ENSURE_SUCCESS(rv, rv);
+  PageData toPage;
+  rv = aToPageURI->GetSpec(toPage.spec);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  bool canAddToHistory;
+  nsNavHistory* navHistory = nsNavHistory::GetHistoryService();
+  NS_ENSURE_TRUE(navHistory, NS_ERROR_OUT_OF_MEMORY);
+  rv = navHistory->CanAddURI(aToPageURI, &canAddToHistory);
+  NS_ENSURE_SUCCESS(rv, rv);
+  toPage.canAddToHistory = !!canAddToHistory &&
+                           aFaviconLoadType != nsIFaviconService::FAVICON_LOAD_PRIVATE;
+
+  RefPtr<AsyncCopyFavicons> event = new AsyncCopyFavicons(fromPage, toPage, aCallback);
+
+  // Get the target thread and start the work.
+  // DB will be updated and observers notified when done.
+  RefPtr<Database> DB = Database::GetDatabase();
+  NS_ENSURE_STATE(DB);
+  DB->DispatchToAsyncThread(event);
+
+  return NS_OK;
+}
+
 nsresult
 nsFaviconService::GetFaviconLinkForIcon(nsIURI* aFaviconURI,
                                         nsIURI** aOutputURI)
@@ -725,25 +788,6 @@ nsFaviconService::GetFaviconLinkForIconString(const nsCString& aSpec,
   return NS_NewURI(aOutput, annoUri);
 }
 
-
-// nsFaviconService::GetFaviconSpecForIconString
-//
-//    This computes a favicon spec for when you don't want a URI object (as in
-//    the tree view implementation), sparing all parsing and normalization.
-void
-nsFaviconService::GetFaviconSpecForIconString(const nsCString& aSpec,
-                                              nsACString& aOutput)
-{
-  if (aSpec.IsEmpty()) {
-    aOutput.AssignLiteral(FAVICON_DEFAULT_URL);
-  } else if (StringBeginsWith(aSpec, NS_LITERAL_CSTRING("chrome:"))) {
-    aOutput = aSpec;
-  } else {
-    aOutput.AssignLiteral("moz-anno:" FAVICON_ANNOTATION_NAME ":");
-    aOutput += aSpec;
-  }
-}
-
 /**
  * Checks the icon and evaluates if it needs to be optimized.
  *
@@ -774,17 +818,12 @@ nsFaviconService::OptimizeIconSizes(IconData& aIcon)
   // Make space for the optimized payloads.
   aIcon.payloads.Clear();
 
-  nsCOMPtr<nsIInputStream> stream;
-  nsresult rv = NS_NewByteInputStream(getter_AddRefs(stream),
-                                      payload.data.get(),
-                                      payload.data.Length(),
-                                      NS_ASSIGNMENT_DEPEND);
-  NS_ENSURE_SUCCESS(rv, rv);
-
   // decode image
   nsCOMPtr<imgIContainer> container;
-  rv = GetImgTools()->DecodeImageData(stream, payload.mimeType,
-                                      getter_AddRefs(container));
+  nsresult rv = GetImgTools()->DecodeImageFromBuffer(payload.data.get(),
+                                                     payload.data.Length(),
+                                                     payload.mimeType,
+                                                     getter_AddRefs(container));
   NS_ENSURE_SUCCESS(rv, rv);
 
   // For ICO files, we must evaluate each of the frames we care about.
@@ -797,33 +836,44 @@ nsFaviconService::OptimizeIconSizes(IconData& aIcon)
     newPayload.mimeType = NS_LITERAL_CSTRING(PNG_MIME_TYPE);
     newPayload.width = frameInfo.width;
     for (uint16_t size : sFaviconSizes) {
-      if (size <= frameInfo.width) {
+      // The icon could be smaller than 16, that is our minimum.
+      // Icons smaller than 16px are kept as-is.
+      if (frameInfo.width >= 16) {
+        if (size > frameInfo.width) {
+          continue;
+        }
         newPayload.width = size;
+      }
+
+      // If the original payload is png and the size is the same, rescale the
+      // image only if it's larger than the maximum allowed.
+      if (newPayload.mimeType.Equals(payload.mimeType) &&
+          newPayload.width == frameInfo.width &&
+          payload.data.Length() < nsIFaviconService::MAX_FAVICON_BUFFER_SIZE) {
+        newPayload.data = payload.data;
+      } else {
+        // Otherwise, scale and recompress.
+        // Since EncodeScaledImage uses SYNC_DECODE, it will pick the best frame.
+        nsCOMPtr<nsIInputStream> iconStream;
+        rv = GetImgTools()->EncodeScaledImage(container,
+                                              newPayload.mimeType,
+                                              newPayload.width,
+                                              newPayload.width,
+                                              EmptyString(),
+                                              getter_AddRefs(iconStream));
+        NS_ENSURE_SUCCESS(rv, rv);
+        // Read the stream into the new buffer.
+        rv = NS_ConsumeStream(iconStream, UINT32_MAX, newPayload.data);
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // If the icon size is good, we are done, otherwise try the next size.
+      if (newPayload.data.Length() < nsIFaviconService::MAX_FAVICON_BUFFER_SIZE) {
         break;
       }
     }
 
-    // If the original payload is png and the size is the same, no reason to
-    // rescale the image.
-    if (newPayload.mimeType.Equals(payload.mimeType) &&
-        newPayload.width == frameInfo.width) {
-      newPayload.data = payload.data;
-    } else {
-      // Scale and recompress.
-      // Since EncodeScaledImage use SYNC_DECODE, it will pick the best frame.
-      nsCOMPtr<nsIInputStream> iconStream;
-      rv = GetImgTools()->EncodeScaledImage(container,
-                                            newPayload.mimeType,
-                                            newPayload.width,
-                                            newPayload.width,
-                                            EmptyString(),
-                                            getter_AddRefs(iconStream));
-      NS_ENSURE_SUCCESS(rv, rv);
-      // Read the stream into the new buffer.
-      rv = NS_ConsumeStream(iconStream, UINT32_MAX, newPayload.data);
-      NS_ENSURE_SUCCESS(rv, rv);
-    }
-
+    MOZ_ASSERT(newPayload.data.Length() < nsIFaviconService::MAX_FAVICON_BUFFER_SIZE);
     if (newPayload.data.Length() < nsIFaviconService::MAX_FAVICON_BUFFER_SIZE) {
       aIcon.payloads.AppendElement(newPayload);
     }
@@ -875,9 +925,15 @@ nsFaviconService::ConvertUnsupportedPayloads(mozIStorageConnection* aDBConn)
 }
 
 NS_IMETHODIMP
+nsFaviconService::SetDefaultIconURIPreferredSize(uint16_t aDefaultSize) {
+  mDefaultIconURIPreferredSize = aDefaultSize > 0 ? aDefaultSize : UINT16_MAX;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsFaviconService::PreferredSizeFromURI(nsIURI* aURI, uint16_t* _size)
 {
-  *_size = UINT16_MAX;
+  *_size = mDefaultIconURIPreferredSize;
   nsAutoCString ref;
   // Check for a ref first.
   if (NS_FAILED(aURI->GetRef(ref)) || ref.Length() == 0)

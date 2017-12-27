@@ -9,10 +9,8 @@
 #include "MemoryBlobImpl.h"
 #include "mozilla/dom/BlobBinding.h"
 #include "MultipartBlobImpl.h"
-#include "ipc/nsIRemoteBlob.h"
 #include "nsIInputStream.h"
 #include "nsPIDOMWindow.h"
-#include "TemporaryBlobImpl.h"
 #include "StreamBlobImpl.h"
 #include "StringBlobImpl.h"
 
@@ -35,9 +33,6 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(Blob)
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(Blob)
-  // This class should not receive any nsIRemoteBlob QI!
-  MOZ_ASSERT(!aIID.Equals(NS_GET_IID(nsIRemoteBlob)));
-
   NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIDOMBlob)
   NS_INTERFACE_MAP_ENTRY(nsIDOMBlob)
@@ -98,31 +93,11 @@ Blob::CreateMemoryBlob(nsISupports* aParent, void* aMemoryBuffer,
   return blob.forget();
 }
 
-/* static */ already_AddRefed<Blob>
-Blob::CreateTemporaryBlob(nsISupports* aParent, PRFileDesc* aFD,
-                          uint64_t aStartPos, uint64_t aLength,
-                          const nsAString& aContentType)
-{
-  RefPtr<Blob> blob = Blob::Create(aParent,
-    new TemporaryBlobImpl(aFD, aStartPos, aLength, aContentType));
-  MOZ_ASSERT(!blob->mImpl->IsFile());
-  return blob.forget();
-}
-
 Blob::Blob(nsISupports* aParent, BlobImpl* aImpl)
   : mImpl(aImpl)
   , mParent(aParent)
 {
   MOZ_ASSERT(mImpl);
-
-#ifdef DEBUG
-  {
-    nsCOMPtr<nsPIDOMWindowInner> win = do_QueryInterface(aParent);
-    if (win) {
-      MOZ_ASSERT(win->IsInnerWindow());
-    }
-  }
-#endif
 }
 
 Blob::~Blob()
@@ -205,17 +180,28 @@ Blob::GetType(nsAString &aType)
 already_AddRefed<Blob>
 Blob::Slice(const Optional<int64_t>& aStart,
             const Optional<int64_t>& aEnd,
-            const nsAString& aContentType,
+            const Optional<nsAString>& aContentType,
             ErrorResult& aRv)
 {
+  nsAutoString contentType;
+  if (aContentType.WasPassed()) {
+    contentType = aContentType.Value();
+  }
+
   RefPtr<BlobImpl> impl =
-    mImpl->Slice(aStart, aEnd, aContentType, aRv);
+    mImpl->Slice(aStart, aEnd, contentType, aRv);
   if (aRv.Failed()) {
     return nullptr;
   }
 
   RefPtr<Blob> blob = Blob::Create(mParent, impl);
   return blob.forget();
+}
+
+size_t
+Blob::GetAllocationSize() const
+{
+  return mImpl->GetAllocationSize();
 }
 
 NS_IMETHODIMP
@@ -256,7 +242,7 @@ Blob::Constructor(const GlobalObject& aGlobal,
   if (aData.WasPassed()) {
     nsAutoString type(aBag.mType);
     MakeValidBlobType(type);
-    impl->InitializeBlob(aGlobal.Context(), aData.Value(), type,
+    impl->InitializeBlob(aData.Value(), type,
                          aBag.mEndings == EndingTypes::Native, aRv);
   } else {
     impl->InitializeBlob(aRv);
@@ -285,9 +271,16 @@ Blob::IsMemoryFile() const
 }
 
 void
-Blob::GetInternalStream(nsIInputStream** aStream, ErrorResult& aRv)
+Blob::CreateInputStream(nsIInputStream** aStream, ErrorResult& aRv)
 {
-  mImpl->GetInternalStream(aStream, aRv);
+  mImpl->CreateInputStream(aStream, aRv);
+}
+
+size_t
+BindingJSObjectMallocBytes(Blob* aBlob)
+{
+  MOZ_ASSERT(aBlob);
+  return aBlob->GetAllocationSize();
 }
 
 } // namespace dom

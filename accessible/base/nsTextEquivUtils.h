@@ -86,7 +86,7 @@ public:
    * @param aTextEquiv   [out] result text equivalent
    */
   static nsresult GetTextEquivFromIDRefs(Accessible* aAccessible,
-                                         nsIAtom *aIDRefsAttr,
+                                         nsAtom *aIDRefsAttr,
                                          nsAString& aTextEquiv);
 
   /**
@@ -121,7 +121,7 @@ private:
    */
   static nsresult AppendFromAccessibleChildren(Accessible* aAccessible,
                                                nsAString *aString);
-  
+
   /**
    * Calculates text equivalent from the given accessible and its subtree if
    * allowed.

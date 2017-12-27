@@ -21,12 +21,18 @@
 // this one for it, for ParentDict. Hopefully it won't begin to rely on it in more fundamental ways.
 namespace mozilla {
 namespace dom {
+class DocGroup;
 class TestExternalInterface;
 class Promise;
 } // namespace dom
 } // namespace mozilla
 
 // We don't export TestCodeGenBinding.h, but it's right in our parent dir.
+#ifdef XP_WIN
+// If we're on windows, simulate including windows.h. This step will cause
+// compilation failure if NeedsWindowsUndef is not defined.
+#define NO_ERROR 0x1
+#endif
 #include "../TestCodeGenBinding.h"
 
 extern bool TestFuncControlledMember(JSContext*, JSObject*);
@@ -110,8 +116,9 @@ class TestInterface : public nsISupports,
 public:
   NS_DECL_ISUPPORTS
 
-  // We need a GetParentObject to make binding codegen happy
+  // We need a GetParentObject and GetDocGroup to make binding codegen happy
   virtual nsISupports* GetParentObject();
+  DocGroup* GetDocGroup() const;
 
   // And now our actual WebIDL API
   // Constructors
@@ -885,7 +892,7 @@ public:
   void Overload19(JSContext*, const Dict&);
   void Overload20(JSContext*, const Dict&);
   void Overload20(const Sequence<int32_t>&);
-  
+
   // Variadic handling
   void PassVariadicThirdArg(const nsAString&, int32_t,
                             const Sequence<OwningNonNull<TestInterface> >&);
@@ -977,6 +984,10 @@ public:
   void SetDashed_attribute(int8_t);
   int8_t Dashed_attribute();
   void Dashed_method();
+
+  bool NonEnumerableAttr() const;
+  void SetNonEnumerableAttr(bool);
+  void NonEnumerableMethod();
 
   // Methods and properties imported via "implements"
   bool ImplementedProperty();
@@ -1217,6 +1228,8 @@ public:
   uint32_t Item(uint32_t, bool&) = delete;
   uint32_t Length();
   void LegacyCall(JS::Handle<JS::Value>);
+  int32_t CachedAttr();
+  int32_t StoreInSlotAttr();
 };
 
 class TestNamedGetterInterface : public nsISupports,
@@ -1467,8 +1480,9 @@ class TestCEReactionsInterface : public nsISupports,
 public:
   NS_DECL_ISUPPORTS
 
-  // We need a GetParentObject to make binding codegen happy
+  // We need a GetParentObject and GetDocGroup to make binding codegen happy
   virtual nsISupports* GetParentObject();
+  DocGroup* GetDocGroup() const;
 
   int32_t Item(uint32_t);
   uint32_t Length() const;

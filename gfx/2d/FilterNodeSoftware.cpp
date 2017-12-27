@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -218,17 +219,17 @@ FillRectWithPixel(DataSourceSurface *aSurface, const IntRect &aFillRect, IntPoin
   // Fill the first row by hand.
   if (bpp == 4) {
     uint32_t sourcePixel = *(uint32_t*)sourcePixelData;
-    for (int32_t x = 0; x < aFillRect.width; x++) {
+    for (int32_t x = 0; x < aFillRect.Width(); x++) {
       *((uint32_t*)data + x) = sourcePixel;
     }
   } else if (BytesPerPixel(aSurface->GetFormat()) == 1) {
     uint8_t sourcePixel = *sourcePixelData;
-    memset(data, sourcePixel, aFillRect.width);
+    memset(data, sourcePixel, aFillRect.Width());
   }
 
   // Copy the first row into the other rows.
-  for (int32_t y = 1; y < aFillRect.height; y++) {
-    PodCopy(data + y * surfMap.GetStride(), data, aFillRect.width * bpp);
+  for (int32_t y = 1; y < aFillRect.Height(); y++) {
+    PodCopy(data + y * surfMap.GetStride(), data, aFillRect.Width() * bpp);
   }
 }
 
@@ -252,13 +253,13 @@ FillRectWithVerticallyRepeatingHorizontalStrip(DataSourceSurface *aSurface,
   uint8_t* sampleData = DataAtOffset(aSurface, surfMap.GetMappedSurface(), aSampleRect.TopLeft());
   uint8_t* data = DataAtOffset(aSurface, surfMap.GetMappedSurface(), aFillRect.TopLeft());
   if (BytesPerPixel(aSurface->GetFormat()) == 4) {
-    for (int32_t y = 0; y < aFillRect.height; y++) {
-      PodCopy((uint32_t*)data, (uint32_t*)sampleData, aFillRect.width);
+    for (int32_t y = 0; y < aFillRect.Height(); y++) {
+      PodCopy((uint32_t*)data, (uint32_t*)sampleData, aFillRect.Width());
       data += surfMap.GetStride();
     }
   } else if (BytesPerPixel(aSurface->GetFormat()) == 1) {
-    for (int32_t y = 0; y < aFillRect.height; y++) {
-      PodCopy(data, sampleData, aFillRect.width);
+    for (int32_t y = 0; y < aFillRect.Height(); y++) {
+      PodCopy(data, sampleData, aFillRect.Width());
       data += surfMap.GetStride();
     }
   }
@@ -284,18 +285,18 @@ FillRectWithHorizontallyRepeatingVerticalStrip(DataSourceSurface *aSurface,
   uint8_t* sampleData = DataAtOffset(aSurface, surfMap.GetMappedSurface(), aSampleRect.TopLeft());
   uint8_t* data = DataAtOffset(aSurface, surfMap.GetMappedSurface(), aFillRect.TopLeft());
   if (BytesPerPixel(aSurface->GetFormat()) == 4) {
-    for (int32_t y = 0; y < aFillRect.height; y++) {
+    for (int32_t y = 0; y < aFillRect.Height(); y++) {
       int32_t sampleColor = *((uint32_t*)sampleData);
-      for (int32_t x = 0; x < aFillRect.width; x++) {
+      for (int32_t x = 0; x < aFillRect.Width(); x++) {
         *((uint32_t*)data + x) = sampleColor;
       }
       data += surfMap.GetStride();
       sampleData += surfMap.GetStride();
     }
   } else if (BytesPerPixel(aSurface->GetFormat()) == 1) {
-    for (int32_t y = 0; y < aFillRect.height; y++) {
+    for (int32_t y = 0; y < aFillRect.Height(); y++) {
       uint8_t sampleColor = *sampleData;
-      memset(data, sampleColor, aFillRect.width);
+      memset(data, sampleColor, aFillRect.Width());
       data += surfMap.GetStride();
       sampleData += surfMap.GetStride();
     }
@@ -315,50 +316,40 @@ DuplicateEdges(DataSourceSurface* aSurface, const IntRect &aFromRect)
   for (int32_t ix = 0; ix < 3; ix++) {
     switch (ix) {
       case 0:
-        fill.x = 0;
-        fill.width = aFromRect.x;
-        sampleRect.x = fill.XMost();
-        sampleRect.width = 1;
+        fill.SetRectX(0, aFromRect.X());
+        sampleRect.SetRectX(fill.XMost(), 1);
         break;
       case 1:
-        fill.x = aFromRect.x;
-        fill.width = aFromRect.width;
-        sampleRect.x = fill.x;
-        sampleRect.width = fill.width;
+        fill.SetRectX(aFromRect.X(), aFromRect.Width());
+        sampleRect.SetRectX(fill.X(), fill.Width());
         break;
       case 2:
-        fill.x = aFromRect.XMost();
-        fill.width = size.width - fill.x;
-        sampleRect.x = fill.x - 1;
-        sampleRect.width = 1;
+        fill.MoveToX(aFromRect.XMost());
+        fill.SetRightEdge(size.width);
+        sampleRect.SetRectX(fill.X() - 1, 1);
         break;
     }
-    if (fill.width <= 0) {
+    if (fill.Width() <= 0) {
       continue;
     }
     bool xIsMiddle = (ix == 1);
     for (int32_t iy = 0; iy < 3; iy++) {
       switch (iy) {
         case 0:
-          fill.y = 0;
-          fill.height = aFromRect.y;
-          sampleRect.y = fill.YMost();
-          sampleRect.height = 1;
+          fill.SetRectY(0, aFromRect.Y());
+          sampleRect.SetRectY(fill.YMost(), 1);
           break;
         case 1:
-          fill.y = aFromRect.y;
-          fill.height = aFromRect.height;
-          sampleRect.y = fill.y;
-          sampleRect.height = fill.height;
+          fill.SetRectY(aFromRect.Y(), aFromRect.Height());
+          sampleRect.SetRectY(fill.Y(), fill.Height());
           break;
         case 2:
-          fill.y = aFromRect.YMost();
-          fill.height = size.height - fill.y;
-          sampleRect.y = fill.y - 1;
-          sampleRect.height = 1;
+          fill.MoveToY(aFromRect.YMost());
+          fill.SetBottomEdge(size.height);
+          sampleRect.SetRectY(fill.Y() - 1, 1);
           break;
       }
-      if (fill.height <= 0) {
+      if (fill.Height() <= 0) {
         continue;
       }
       bool yIsMiddle = (iy == 1);
@@ -381,8 +372,8 @@ DuplicateEdges(DataSourceSurface* aSurface, const IntRect &aFromRect)
 static IntPoint
 TileIndex(const IntRect &aFirstTileRect, const IntPoint &aPoint)
 {
-  return IntPoint(int32_t(floor(double(aPoint.x - aFirstTileRect.x) / aFirstTileRect.width)),
-                  int32_t(floor(double(aPoint.y - aFirstTileRect.y) / aFirstTileRect.height)));
+  return IntPoint(int32_t(floor(double(aPoint.x - aFirstTileRect.X()) / aFirstTileRect.Width())),
+                  int32_t(floor(double(aPoint.y - aFirstTileRect.Y()) / aFirstTileRect.Height())));
 }
 
 static void
@@ -395,8 +386,8 @@ TileSurface(DataSourceSurface* aSource, DataSourceSurface* aTarget, const IntPoi
 
   for (int32_t ix = startIndex.x; ix <= endIndex.x; ix++) {
     for (int32_t iy = startIndex.y; iy <= endIndex.y; iy++) {
-      IntPoint destPoint(sourceRect.x + ix * sourceRect.width,
-                         sourceRect.y + iy * sourceRect.height);
+      IntPoint destPoint(sourceRect.X() + ix * sourceRect.Width(),
+                         sourceRect.Y() + iy * sourceRect.Height());
       IntRect destRect(destPoint, sourceRect.Size());
       destRect = destRect.Intersect(targetRect);
       IntRect srcRect = destRect - destPoint;
@@ -694,7 +685,7 @@ FilterNodeSoftware::GetInputDataSourceSurface(uint32_t aInputEnumIndex,
 
 #ifdef DEBUG_DUMP_SURFACES
   printf("<section><h1>GetInputDataSourceSurface with aRect: %d, %d, %d, %d</h1>\n",
-         aRect.x, aRect.y, aRect.width, aRect.height);
+         aRect.x, aRect.y, aRect.Width(), aRect.Height());
 #endif
   int32_t inputIndex = InputIndex(aInputEnumIndex);
   if (inputIndex < 0 || (uint32_t)inputIndex >= NumberOfSetInputs()) {
@@ -1117,8 +1108,8 @@ FilterNodeTransformSoftware::Render(const IntRect& aRect)
     return nullptr;
   }
 
-  Matrix transform = Matrix::Translation(srcRect.x, srcRect.y) * mMatrix *
-                     Matrix::Translation(-aRect.x, -aRect.y);
+  Matrix transform = Matrix::Translation(srcRect.X(), srcRect.Y()) * mMatrix *
+                     Matrix::Translation(-aRect.X(), -aRect.Y());
   if (transform.IsIdentity() && srcRect.Size() == aRect.Size()) {
     return input.forget();
   }
@@ -1147,7 +1138,7 @@ FilterNodeTransformSoftware::Render(const IntRect& aRect)
     return nullptr;
   }
 
-  Rect r(0, 0, srcRect.width, srcRect.height);
+  Rect r(0, 0, srcRect.Width(), srcRect.Height());
   dt->SetTransform(transform);
   dt->DrawSurface(input, r, r, DrawSurfaceOptions(mSamplingFilter));
 
@@ -1218,7 +1209,7 @@ ApplyMorphology(const IntRect& aSourceRect, DataSourceSurface* aInput,
 {
   IntRect srcRect = aSourceRect - aDestRect.TopLeft();
   IntRect destRect = aDestRect - aDestRect.TopLeft();
-  IntRect tmpRect(destRect.x, srcRect.y, destRect.width, srcRect.height);
+  IntRect tmpRect(destRect.X(), srcRect.Y(), destRect.Width(), srcRect.Height());
 #ifdef DEBUG
   IntMargin margin = srcRect - destRect;
   MOZ_ASSERT(margin.top >= ry && margin.right >= rx &&
@@ -1499,20 +1490,20 @@ FilterNodeFloodSoftware::Render(const IntRect& aRect)
 
   if (format == SurfaceFormat::B8G8R8A8) {
     uint32_t color = ColorToBGRA(mColor);
-    for (int32_t y = 0; y < aRect.height; y++) {
-      for (int32_t x = 0; x < aRect.width; x++) {
+    for (int32_t y = 0; y < aRect.Height(); y++) {
+      for (int32_t x = 0; x < aRect.Width(); x++) {
         *((uint32_t*)targetData + x) = color;
       }
-      PodZero(&targetData[aRect.width * 4], stride - aRect.width * 4);
+      PodZero(&targetData[aRect.Width() * 4], stride - aRect.Width() * 4);
       targetData += stride;
     }
   } else if (format == SurfaceFormat::A8) {
     uint8_t alpha = NS_lround(mColor.a * 255.0f);
-    for (int32_t y = 0; y < aRect.height; y++) {
-      for (int32_t x = 0; x < aRect.width; x++) {
+    for (int32_t y = 0; y < aRect.Height(); y++) {
+      for (int32_t x = 0; x < aRect.Width(); x++) {
         targetData[x] = alpha;
       }
-      PodZero(&targetData[aRect.width], stride - aRect.width);
+      PodZero(&targetData[aRect.Width()], stride - aRect.Width());
       targetData += stride;
     }
   } else {
@@ -1554,8 +1545,8 @@ FilterNodeTileSoftware::SetAttribute(uint32_t aIndex,
                                      const IntRect &aSourceRect)
 {
   MOZ_ASSERT(aIndex == ATT_TILE_SOURCE_RECT);
-  mSourceRect = IntRect(int32_t(aSourceRect.x), int32_t(aSourceRect.y),
-                        int32_t(aSourceRect.width), int32_t(aSourceRect.height));
+  mSourceRect.SetRect(int32_t(aSourceRect.X()), int32_t(aSourceRect.Y()),
+                      int32_t(aSourceRect.Width()), int32_t(aSourceRect.Height()));
   Invalidate();
 }
 
@@ -1564,16 +1555,16 @@ struct CompareIntRects
 {
   bool operator()(const IntRect& a, const IntRect& b) const
   {
-    if (a.x != b.x) {
-      return a.x < b.x;
+    if (a.X() != b.X()) {
+      return a.X() < b.X();
     }
-    if (a.y != b.y) {
-      return a.y < b.y;
+    if (a.Y() != b.Y()) {
+      return a.Y() < b.Y();
     }
-    if (a.width != b.width) {
-      return a.width < b.width;
+    if (a.Width() != b.Width()) {
+      return a.Width() < b.Width();
     }
-    return a.height < b.height;
+    return a.Height() < b.Height();
   }
 };
 
@@ -1599,8 +1590,8 @@ FilterNodeTileSoftware::Render(const IntRect& aRect)
   IntPoint endIndex = TileIndex(mSourceRect, aRect.BottomRight());
   for (int32_t ix = startIndex.x; ix <= endIndex.x; ix++) {
     for (int32_t iy = startIndex.y; iy <= endIndex.y; iy++) {
-      IntPoint sourceToDestOffset(ix * mSourceRect.width,
-                                  iy * mSourceRect.height);
+      IntPoint sourceToDestOffset(ix * mSourceRect.Width(),
+                                  iy * mSourceRect.Height());
       IntRect destRect = aRect.Intersect(mSourceRect + sourceToDestOffset);
       IntRect srcRect = destRect - sourceToDestOffset;
       if (srcRect.IsEmpty()) {
@@ -2504,10 +2495,10 @@ FilterNodeConvolveMatrixSoftware::DoRender(const IntRect& aRect,
   }
   int32_t bias = NS_lround(mBias * 255 * factorFromShifts);
 
-  for (int32_t y = 0; y < aRect.height; y++) {
-    for (int32_t x = 0; x < aRect.width; x++) {
+  for (int32_t y = 0; y < aRect.Height(); y++) {
+    for (int32_t x = 0; x < aRect.Width(); x++) {
       ConvolvePixel(sourceData, targetData,
-                    aRect.width, aRect.height, sourceStride, targetStride,
+                    aRect.Width(), aRect.Height(), sourceStride, targetStride,
                     x, y, intKernel, bias, shiftL, shiftR, mPreserveAlpha,
                     mKernelSize.width, mKernelSize.height, mTarget.x, mTarget.y,
                     aKernelUnitLengthX, aKernelUnitLengthY);
@@ -2650,8 +2641,8 @@ FilterNodeDisplacementMapSoftware::Render(const IntRect& aRect)
   float scaleOver255 = mScale / 255.0f;
   float scaleAdjustment = -0.5f * mScale;
 
-  for (int32_t y = 0; y < aRect.height; y++) {
-    for (int32_t x = 0; x < aRect.width; x++) {
+  for (int32_t y = 0; y < aRect.Height(); y++) {
+    for (int32_t x = 0; x < aRect.Width(); x++) {
       uint32_t mapIndex = y * mapStride + 4 * x;
       uint32_t targIndex = y * targetStride + 4 * x;
       int32_t sourceX = x +
@@ -2663,7 +2654,7 @@ FilterNodeDisplacementMapSoftware::Render(const IntRect& aRect)
     }
 
     // Keep valgrind happy.
-    PodZero(&targetData[y * targetStride + 4 * aRect.width], targetStride - 4 * aRect.width);
+    PodZero(&targetData[y * targetStride + 4 * aRect.Width()], targetStride - 4 * aRect.Width());
   }
 
   return target.forget();
@@ -2974,7 +2965,7 @@ FilterNodeBlurXYSoftware::Render(const IntRect& aRect)
   }
 
   RefPtr<DataSourceSurface> target;
-  Rect r(0, 0, srcRect.width, srcRect.height);
+  Rect r(0, 0, srcRect.Width(), srcRect.Height());
 
   if (input->GetFormat() == SurfaceFormat::A8) {
     target = Factory::CreateDataSourceSurface(srcRect.Size(), SurfaceFormat::A8);
@@ -3564,7 +3555,7 @@ FilterNodeLightingSoftware<LightType, LightingType>::DoRender(const IntRect& aRe
                                       x, y, mSurfaceScale,
                                       aKernelUnitLengthX, aKernelUnitLengthY);
 
-      IntPoint pointInFilterSpace(aRect.x + x, aRect.y + y);
+      IntPoint pointInFilterSpace(aRect.X() + x, aRect.Y() + y);
       Float Z = mSurfaceScale * sourceData[sourceIndex] / 255.0f;
       Point3D pt(pointInFilterSpace.x, pointInFilterSpace.y, Z);
       Point3D rayDir = mLight.GetVectorToLight(pt);

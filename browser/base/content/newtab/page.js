@@ -19,8 +19,14 @@ var gPage = {
     // Add ourselves to the list of pages to receive notifications.
     gAllPages.register(this);
 
-    // Listen for 'unload' to unregister this page.
-    addEventListener("unload", this, false);
+    // Listen for 'unload' to unregister this page. Save a promise that can be
+    // passed to others to know when to clean up, e.g., background thumbnails.
+    this.unloadingPromise = new Promise(resolve => {
+      addEventListener("unload", () => {
+        resolve();
+        this._handleUnloadEvent();
+      });
+    });
 
     // XXX bug 991111 - Not all click events are correctly triggered when
     // listening from xhtml nodes -- in particular middle clicks on sites, so
@@ -94,14 +100,14 @@ var gPage = {
       return;
     }
 
-    this._scheduleUpdateTimeout = setTimeout(() => {
+    this._scheduleUpdateTimeout = requestIdleCallback(() => {
       // Refresh if the grid is ready.
       if (gGrid.ready) {
         gGrid.refresh();
       }
 
       this._scheduleUpdateTimeout = null;
-    }, SCHEDULE_UPDATE_TIMEOUT_MS);
+    }, {timeout: SCHEDULE_UPDATE_TIMEOUT_MS});
   },
 
   /**
@@ -178,12 +184,7 @@ var gPage = {
     // many low buckets empty. Instead we use half-second precision to make low end
     // of histogram linear and not lose the change in user attention
     let delta = Math.round((Date.now() - this._firstVisibleTime) / 500);
-    if (this._suggestedTilePresent) {
-      Services.telemetry.getHistogramById("NEWTAB_PAGE_LIFE_SPAN_SUGGESTED").add(delta);
-    }
-    else {
-      Services.telemetry.getHistogramById("NEWTAB_PAGE_LIFE_SPAN").add(delta);
-    }
+    Services.telemetry.getHistogramById("NEWTAB_PAGE_LIFE_SPAN").add(delta);
   },
 
   /**
@@ -193,9 +194,6 @@ var gPage = {
     switch (aEvent.type) {
       case "load":
         this.onPageVisibleAndLoaded();
-        break;
-      case "unload":
-        this._handleUnloadEvent();
         break;
       case "click":
         let {button, target} = aEvent;
@@ -221,7 +219,7 @@ var gPage = {
       case "visibilitychange":
         // Cancel any delayed updates for hidden pages now that we're visible.
         if (this._scheduleUpdateTimeout) {
-          clearTimeout(this._scheduleUpdateTimeout);
+          cancelIdleCallback(this._scheduleUpdateTimeout);
           this._scheduleUpdateTimeout = null;
 
           // An update was pending so force an update now.
@@ -240,10 +238,7 @@ var gPage = {
 
     for (let site of gGrid.sites) {
       if (site) {
-        // The site may need to modify and/or re-render itself if
-        // something changed after newtab was created by preloader.
-        // For example, the suggested tile endTime may have passed.
-        site.onFirstVisible();
+        site.captureIfMissing();
       }
     }
 
@@ -258,40 +253,7 @@ var gPage = {
   },
 
   onPageVisibleAndLoaded() {
-    // Send the index of the last visible tile.
-    this.reportLastVisibleTileIndex();
     // Maybe tell the user they can undo an initial automigration
-    this.maybeShowAutoMigrationUndoNotification();
-  },
-
-  reportLastVisibleTileIndex() {
-    let cwu = window.QueryInterface(Ci.nsIInterfaceRequestor)
-                    .getInterface(Ci.nsIDOMWindowUtils);
-
-    let rect = cwu.getBoundsWithoutFlushing(gGrid.node);
-    let nodes = cwu.nodesFromRect(rect.left, rect.top, 0, rect.width,
-                                  rect.height, 0, true, false);
-
-    let i = -1;
-    let lastIndex = -1;
-    let sites = gGrid.sites;
-
-    for (let node of nodes) {
-      if (node.classList && node.classList.contains("newtab-cell")) {
-        if (sites[++i]) {
-          lastIndex = i;
-          if (sites[i].link.targetedSite) {
-            // record that suggested tile is shown to use suggested-tiles-histogram
-            this._suggestedTilePresent = true;
-          }
-        }
-      }
-    }
-
-    DirectoryLinksProvider.reportSitesAction(sites, "view", lastIndex);
-  },
-
-  maybeShowAutoMigrationUndoNotification() {
-    sendAsyncMessage("NewTab:MaybeShowAutoMigrationUndoNotification");
+    sendAsyncMessage("NewTab:MaybeShowMigrateMessage");
   },
 };

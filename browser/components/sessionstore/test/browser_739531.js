@@ -12,12 +12,14 @@ function test() {
     "browser/components/sessionstore/test/browser_739531_sample.html";
 
   let loadCount = 0;
-  let tab = gBrowser.addTab(testURL);
-  tab.linkedBrowser.addEventListener("load", function onLoad(aEvent) {
+  let tab = BrowserTestUtils.addTab(gBrowser, testURL);
+
+  let removeFunc;
+  removeFunc = BrowserTestUtils.addContentEventListener(tab.linkedBrowser, "load", function onLoad(aEvent) {
     // make sure both the page and the frame are loaded
     if (++loadCount < 2)
       return;
-    tab.linkedBrowser.removeEventListener("load", onLoad, true);
+    removeFunc();
 
     // executeSoon to allow the JS to execute on the page
     executeSoon(function() {
@@ -31,7 +33,7 @@ function test() {
         info(e);
       }
 
-      is(gBrowser.tabs.length, 3, "there should be 3 tabs")
+      is(gBrowser.tabs.length, 3, "there should be 3 tabs");
 
       ok(!caughtError, "duplicateTab didn't throw");
 

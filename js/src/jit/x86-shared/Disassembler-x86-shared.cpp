@@ -240,6 +240,8 @@ js::jit::Disassembler::DisassembleHeapAccess(uint8_t* ptr, HeapAccess* access)
           default:
             goto rex_done;
         }
+        if (l != 0) // 256-bit SIMD
+            MOZ_CRASH("Unable to disassemble instruction");
         type = VexOperandType(p);
         rex = MakeREXFlags(w, r, x, b);
         switch (m) {
@@ -255,8 +257,6 @@ js::jit::Disassembler::DisassembleHeapAccess(uint8_t* ptr, HeapAccess* access)
           default:
             MOZ_CRASH("Unable to disassemble instruction");
         }
-        if (l != 0) // 256-bit SIMD
-            MOZ_CRASH("Unable to disassemble instruction");
     }
   rex_done:;
     if (REX_W(rex))
@@ -353,7 +353,7 @@ js::jit::Disassembler::DisassembleHeapAccess(uint8_t* ptr, HeapAccess* access)
       case OP_GROUP11_EvIz:
         // opsize-sized signed immediate
         memcpy(&imm, ptr, opsize);
-        imm = (imm << (32 - opsize * 8)) >> (32 - opsize * 8);
+        imm = int32_t(uint32_t(imm) << (32 - opsize * 8)) >> (32 - opsize * 8);
         ptr += opsize;
         haveImm = true;
         break;

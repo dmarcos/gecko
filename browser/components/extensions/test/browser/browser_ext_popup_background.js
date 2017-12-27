@@ -1,8 +1,9 @@
 /* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set sts=2 sw=2 et tw=80: */
+/* eslint-disable mozilla/no-arbitrary-setTimeout */
 "use strict";
 
-add_task(function* testPopupBackground() {
+add_task(async function testPopupBackground() {
   let extension = ExtensionTestUtils.loadExtension({
     background() {
       browser.tabs.query({active: true, currentWindow: true}, tabs => {
@@ -34,41 +35,25 @@ add_task(function* testPopupBackground() {
     },
   });
 
-  yield extension.startup();
+  await extension.startup();
 
-  function* testPanel(browser, standAlone) {
+  async function testPanel(browser, standAlone) {
     let panel = getPanelForNode(browser);
     let arrowContent = document.getAnonymousElementByAttribute(panel, "class", "panel-arrowcontent");
     let arrow = document.getAnonymousElementByAttribute(panel, "anonid", "arrow");
 
-    let borderColor = getComputedStyle(arrowContent).borderTopColor;
-
     let checkArrow = (background = null) => {
-      let image = getComputedStyle(arrow).listStyleImage;
-
       if (background == null || !standAlone) {
-        ok(image.startsWith('url("chrome://'), `We should have the built-in background image (got: ${image})`);
+        ok(!arrow.style.hasOwnProperty("fill"), "Arrow fill should be the default one");
         return;
       }
 
-      if (AppConstants.platform == "mac") {
-        // Panels have a drop shadow rather than a border on OS-X, so we extend
-        // the background color through the border area instead.
-        borderColor = background;
-      }
-
-      image = decodeURIComponent(image);
-      let borderIndex = image.indexOf(`fill="${borderColor}"`);
-      let backgroundIndex = image.lastIndexOf(`fill="${background}"`);
-
-      ok(borderIndex >= 0, `Have border fill (index=${borderIndex})`);
-      ok(backgroundIndex >= 0, `Have background fill (index=${backgroundIndex})`);
       is(getComputedStyle(arrowContent).backgroundColor, background, "Arrow content should have correct background");
-      isnot(borderIndex, backgroundIndex, "Border and background fills are separate elements");
+      is(getComputedStyle(arrow).fill, background, "Arrow should have correct background");
     };
 
     function getBackground(browser) {
-      return ContentTask.spawn(browser, null, function* () {
+      return ContentTask.spawn(browser, null, async function() {
         return content.getComputedStyle(content.document.body)
                       .backgroundColor;
       });
@@ -80,21 +65,21 @@ add_task(function* testPopupBackground() {
     };
     /* eslint-enable mozilla/no-cpows-in-tests */
 
-    yield new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise(resolve => setTimeout(resolve, 100));
 
     info("Test that initial background color is applied");
 
-    checkArrow(yield getBackground(browser));
+    checkArrow(await getBackground(browser));
 
     info("Test that dynamically-changed background color is applied");
 
-    yield alterContent(browser, setBackground, "black");
+    await alterContent(browser, setBackground, "black");
 
-    checkArrow(yield getBackground(browser));
+    checkArrow(await getBackground(browser));
 
     info("Test that non-opaque background color results in default styling");
 
-    yield alterContent(browser, setBackground, "rgba(1, 2, 3, .9)");
+    await alterContent(browser, setBackground, "rgba(1, 2, 3, .9)");
 
     checkArrow(null);
   }
@@ -103,31 +88,31 @@ add_task(function* testPopupBackground() {
     info("Test stand-alone browserAction popup");
 
     clickBrowserAction(extension);
-    let browser = yield awaitExtensionPanel(extension);
-    yield testPanel(browser, true);
-    yield closeBrowserAction(extension);
+    let browser = await awaitExtensionPanel(extension);
+    await testPanel(browser, true);
+    await closeBrowserAction(extension);
   }
 
   {
     info("Test menu panel browserAction popup");
 
     let widget = getBrowserActionWidget(extension);
-    CustomizableUI.addWidgetToArea(widget.id, CustomizableUI.AREA_PANEL);
+    CustomizableUI.addWidgetToArea(widget.id, getCustomizableUIPanelID());
 
     clickBrowserAction(extension);
-    let browser = yield awaitExtensionPanel(extension);
-    yield testPanel(browser, false);
-    yield closeBrowserAction(extension);
+    let browser = await awaitExtensionPanel(extension);
+    await testPanel(browser, false);
+    await closeBrowserAction(extension);
   }
 
   {
     info("Test pageAction popup");
 
     clickPageAction(extension);
-    let browser = yield awaitExtensionPanel(extension);
-    yield testPanel(browser, true);
-    yield closePageAction(extension);
+    let browser = await awaitExtensionPanel(extension);
+    await testPanel(browser, true);
+    await closePageAction(extension);
   }
 
-  yield extension.unload();
+  await extension.unload();
 });

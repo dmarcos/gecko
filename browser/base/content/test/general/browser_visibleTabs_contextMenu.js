@@ -4,39 +4,17 @@
 
 const remoteClientsFixture = [ { id: 1, name: "Foo"}, { id: 2, name: "Bar"} ];
 
-add_task(function* test() {
+add_task(async function test() {
   // There should be one tab when we start the test
   let [origTab] = gBrowser.visibleTabs;
   is(gBrowser.visibleTabs.length, 1, "there is one visible tab");
-  let testTab = gBrowser.addTab();
+  let testTab = BrowserTestUtils.addTab(gBrowser);
   is(gBrowser.visibleTabs.length, 2, "there are now two visible tabs");
 
   // Check the context menu with two tabs
   updateTabContextMenu(origTab);
   is(document.getElementById("context_closeTab").disabled, false, "Close Tab is enabled");
   is(document.getElementById("context_reloadAllTabs").disabled, false, "Reload All Tabs is enabled");
-
-
-  if (gFxAccounts.sendTabToDeviceEnabled) {
-    const origIsSendableURI = gFxAccounts.isSendableURI;
-    gFxAccounts.isSendableURI = () => true;
-    // Check the send tab to device menu item
-    yield ensureSyncReady();
-    const oldGetter = setupRemoteClientsFixture(remoteClientsFixture);
-    yield updateTabContextMenu(origTab, function* () {
-      yield openMenuItemSubmenu("context_sendTabToDevice");
-    });
-    is(document.getElementById("context_sendTabToDevice").hidden, false, "Send tab to device is shown");
-    let targets = document.getElementById("context_sendTabToDevicePopupMenu").childNodes;
-    is(targets[0].getAttribute("label"), "Foo", "Foo target is present");
-    is(targets[1].getAttribute("label"), "Bar", "Bar target is present");
-    is(targets[3].getAttribute("label"), "All Devices", "All Devices target is present");
-    gFxAccounts.isSendableURI = () => false;
-    updateTabContextMenu(origTab);
-    is(document.getElementById("context_sendTabToDevice").hidden, true, "Send tab to device is hidden");
-    restoreRemoteClients(oldGetter);
-    gFxAccounts.isSendableURI = origIsSendableURI;
-  }
 
   // Hide the original tab.
   gBrowser.selectedTab = testTab;
@@ -50,14 +28,19 @@ add_task(function* test() {
 
   // Add a tab that will get pinned
   // So now there's one pinned tab, one visible unpinned tab, and one hidden tab
-  let pinned = gBrowser.addTab();
+  let pinned = BrowserTestUtils.addTab(gBrowser);
   gBrowser.pinTab(pinned);
   is(gBrowser.visibleTabs.length, 2, "now there are two visible tabs");
 
+  // Check the context menu on the pinned tab
+  updateTabContextMenu(pinned);
+  ok(!document.getElementById("context_closeOtherTabs").disabled, "Close Other Tabs is enabled on pinned tab");
+  ok(!document.getElementById("context_closeTabsToTheEnd").disabled, "Close Tabs To The End is enabled on pinned tab");
+
   // Check the context menu on the unpinned visible tab
   updateTabContextMenu(testTab);
-  is(document.getElementById("context_closeOtherTabs").disabled, true, "Close Other Tabs is disabled");
-  is(document.getElementById("context_closeTabsToTheEnd").disabled, true, "Close Tabs To The End is disabled");
+  ok(document.getElementById("context_closeOtherTabs").disabled, "Close Other Tabs is disabled on single unpinned tab");
+  ok(document.getElementById("context_closeTabsToTheEnd").disabled, "Close Tabs To The End is disabled on single unpinned tab");
 
   // Show all tabs
   let allTabs = Array.from(gBrowser.tabs);
@@ -65,22 +48,17 @@ add_task(function* test() {
 
   // Check the context menu now
   updateTabContextMenu(testTab);
-  is(document.getElementById("context_closeOtherTabs").disabled, false, "Close Other Tabs is enabled");
-  is(document.getElementById("context_closeTabsToTheEnd").disabled, true, "Close Tabs To The End is disabled");
+  ok(!document.getElementById("context_closeOtherTabs").disabled,
+     "Close Other Tabs is enabled on unpinned tab when there's another unpinned tab");
+  ok(document.getElementById("context_closeTabsToTheEnd").disabled, "Close Tabs To The End is disabled on last unpinned tab");
 
   // Check the context menu of the original tab
   // Close Tabs To The End should now be enabled
   updateTabContextMenu(origTab);
-  is(document.getElementById("context_closeTabsToTheEnd").disabled, false, "Close Tabs To The End is enabled");
+  ok(!document.getElementById("context_closeTabsToTheEnd").disabled,
+     "Close Tabs To The End is enabled on unpinned tab when followed by another");
 
   gBrowser.removeTab(testTab);
   gBrowser.removeTab(pinned);
 });
-
-function ensureSyncReady() {
-  let service = Cc["@mozilla.org/weave/service;1"]
-                  .getService(Components.interfaces.nsISupports)
-                  .wrappedJSObject;
-  return service.whenLoaded();
-}
 

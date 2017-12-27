@@ -14,7 +14,10 @@ function run_test() {
 
   gTestFiles = gTestFilesCompleteSuccess;
   gTestDirs = gTestDirsCompleteSuccess;
-  setupUpdaterTest(FILE_COMPLETE_MAR, undefined);
+  // The third parameter will test that a full path to the post update binary
+  // doesn't execute.
+  setupUpdaterTest(FILE_COMPLETE_MAR, undefined,
+                   getApplyDirFile(null, true).path + "/");
 }
 
 /**
@@ -28,26 +31,19 @@ function setupUpdaterTestFinished() {
  * Called after the call to runUpdateUsingApp finishes.
  */
 function runUpdateFinished() {
-  checkPostUpdateAppLog();
+  checkAppBundleModTime();
+  standardInit();
+  checkPostUpdateRunningFile(false);
+  checkFilesAfterUpdateSuccess(getApplyDirFile);
+  checkUpdateLogContents(LOG_COMPLETE_SUCCESS);
+  executeSoon(waitForUpdateXMLFiles);
 }
 
 /**
- * Called after the call to checkPostUpdateAppLog finishes.
+ * Called after the call to waitForUpdateXMLFiles finishes.
  */
-function checkPostUpdateAppLogFinished() {
-  checkAppBundleModTime();
-  standardInit();
-  Assert.equal(readStatusState(), STATE_NONE,
-               "the status file state" + MSG_SHOULD_EQUAL);
-  Assert.ok(!gUpdateManager.activeUpdate,
-            "the active update should not be defined");
-  Assert.equal(gUpdateManager.updateCount, 1,
-               "the update manager updateCount attribute" + MSG_SHOULD_EQUAL);
-  Assert.equal(gUpdateManager.getUpdateAt(0).state, STATE_SUCCEEDED,
-               "the update state" + MSG_SHOULD_EQUAL);
-  checkPostUpdateRunningFile(true);
-  checkFilesAfterUpdateSuccess(getApplyDirFile);
-  checkUpdateLogContents(LOG_COMPLETE_SUCCESS);
+function waitForUpdateXMLFilesFinished() {
+  checkUpdateManager(STATE_NONE, false, STATE_SUCCEEDED, 0, 1);
 
   let updatesDir = getUpdatesPatchDir();
   Assert.ok(updatesDir.exists(),

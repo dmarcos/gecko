@@ -38,8 +38,7 @@ const Cr = Components.results;
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/osfile.jsm");
-Cu.import("resource://gre/modules/Promise.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
+Cu.import("resource://gre/modules/PromiseUtils.jsm");
 Cu.import("resource://gre/modules/AsyncShutdown.jsm");
 
 const NOTIFICATIONS = [
@@ -78,7 +77,7 @@ var CrashMonitorInternal = {
   previousCheckpoints: null,
 
   /* Deferred for AsyncShutdown blocker */
-  profileBeforeChangeDeferred: Promise.defer(),
+  profileBeforeChangeDeferred: PromiseUtils.defer(),
 
   /**
    * Path to checkpoint file.
@@ -94,10 +93,10 @@ var CrashMonitorInternal = {
    * @return {Promise} A promise that resolves/rejects once loading is complete
    */
   loadPreviousCheckpoints() {
-    this.previousCheckpoints = Task.spawn(function*() {
+    this.previousCheckpoints = (async function() {
       let data;
       try {
-        data = yield OS.File.read(CrashMonitorInternal.path, { encoding: "utf-8" });
+        data = await OS.File.read(CrashMonitorInternal.path, { encoding: "utf-8" });
       } catch (ex) {
         if (!(ex instanceof OS.File.Error)) {
           throw ex;
@@ -124,7 +123,7 @@ var CrashMonitorInternal = {
       }
 
       return Object.freeze(notifications);
-    });
+    })();
 
     return this.previousCheckpoints;
   }
@@ -145,7 +144,7 @@ this.CrashMonitor = {
       throw new Error("CrashMonitor must be initialized before getting previous checkpoints");
     }
 
-    return CrashMonitorInternal.previousCheckpoints
+    return CrashMonitorInternal.previousCheckpoints;
   },
 
   /**
@@ -190,7 +189,7 @@ this.CrashMonitor = {
       // If this is the first time this notification is received,
       // remember it and write it to file
       CrashMonitorInternal.checkpoints[aTopic] = true;
-      Task.spawn(function* () {
+      (async function() {
         try {
           let data = JSON.stringify(CrashMonitorInternal.checkpoints);
 
@@ -200,7 +199,7 @@ this.CrashMonitor = {
            * written by the time the notification completes. The
            * exception is profile-before-change which has a shutdown
            * blocker. */
-          yield OS.File.writeAtomic(
+          await OS.File.writeAtomic(
             CrashMonitorInternal.path,
             data, {tmpPath: CrashMonitorInternal.path + ".tmp"});
 
@@ -210,7 +209,7 @@ this.CrashMonitor = {
             CrashMonitorInternal.profileBeforeChangeDeferred.resolve();
           }
         }
-      });
+      })();
     }
 
     if (NOTIFICATIONS.every(elem => elem in CrashMonitorInternal.checkpoints)) {

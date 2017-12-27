@@ -21,7 +21,7 @@
       disablefastfind="true">
 
   <xhtml:link rel="shortcut icon"
-              href="chrome://mozapps/skin/extensions/extensionGeneric-16.png"/>
+              href="chrome://mozapps/skin/extensions/extensionGeneric-16.svg"/>
 
   <script type="application/javascript"
           src="chrome://mozapps/content/extensions/extensions.js"/>
@@ -69,6 +69,16 @@
                 accesskey="&cmd.about.accesskey;"/>
     </menupopup>
 
+    <menulist popuponly="true" id="ContentSelectDropdown" hidden="true">
+      <menupopup rolluponmousewheel="true"
+                 activateontab="true" position="after_start"
+                 level="parent"
+#ifdef XP_WIN
+                 consumeoutsideclicks="false" ignorekeys="shortcuts"
+#endif
+        />
+    </menulist>
+
     <tooltip id="addonitem-tooltip"/>
   </popupset>
 
@@ -106,7 +116,6 @@
     <command id="cmd_enableItem"/>
     <command id="cmd_disableItem"/>
     <command id="cmd_installItem"/>
-    <command id="cmd_purchaseItem"/>
     <command id="cmd_uninstallItem"/>
     <command id="cmd_cancelUninstallItem"/>
     <command id="cmd_cancelOperation"/>
@@ -121,33 +130,16 @@
          command="cmd_focusSearch"/>
   </keyset>
   <hbox flex="1">
-    <vbox>
-      <hbox id="nav-header"
-            align="center"
-            pack="center">
-        <toolbarbutton id="back-btn"
-                       class="nav-button header-button"
-                       command="cmd_back"
-                       tooltiptext="&cmd.back.tooltip;"
-                       hidden="true"
-                       disabled="true"/>
-        <toolbarbutton id="forward-btn"
-                       class="nav-button header-button"
-                       command="cmd_forward"
-                       tooltiptext="&cmd.forward.tooltip;"
-                       hidden="true"
-                       disabled="true"/>
-      </hbox>
+    <vbox id="category-box">
       <!-- category list -->
       <richlistbox id="categories" flex="1">
-        <richlistitem id="category-search" value="addons://search/"
-                      class="category"
-                      name="&view.search.label;" priority="0"
-                      tooltiptext="&view.search.label;" disabled="true"/>
         <richlistitem id="category-discover" value="addons://discover/"
                       class="category"
                       name="&view.discover.label;" priority="1000"
                       tooltiptext="&view.discover.label;"/>
+        <richlistitem id="category-legacy" value="addons://legacy/"
+                      class="category" priority="20000"
+                      disabled="true"/>
         <richlistitem id="category-availableUpdates" value="addons://updates/available"
                       class="category"
                       name="&view.availableUpdates.label;" priority="100000"
@@ -176,14 +168,14 @@
             <spacer class="alert-spacer-before"/>
             <hbox>
               <spacer class="discover-spacer-before"/>
-              <hbox class="alert" align="center">
+              <vbox class="alert" align="center">
                 <image class="discover-logo"/>
                 <vbox flex="1" align="stretch">
                   <label class="discover-title">&discover.title;</label>
                   <description class="discover-description">&discover.description2;</description>
                   <description class="discover-footer">&discover.footer;</description>
                 </vbox>
-              </hbox>
+              </vbox>
               <spacer class="discover-spacer-after"/>
             </hbox>
             <spacer class="alert-spacer-after"/>
@@ -259,87 +251,10 @@
             </toolbarbutton>
             <textbox id="header-search" type="search" searchbutton="true"
                      searchbuttonlabel="&search.buttonlabel;"
-                     placeholder="&search.placeholder;"/>
+                     placeholder="&search.placeholder2;" maxlength="100"/>
           </hbox>
 
           <deck id="headered-views-content" flex="1" selectedIndex="0">
-            <!-- search view -->
-            <vbox id="search-view" flex="1" class="view-pane" tabindex="0">
-              <hbox class="view-header global-warning-container" align="center">
-                <!-- global warnings -->
-                <hbox class="global-warning" flex="1">
-                  <hbox class="global-warning-safemode" flex="1" align="center"
-                        tooltiptext="&warning.safemode.label;">
-                    <image class="warning-icon"/>
-                    <label class="global-warning-text" flex="1" crop="end"
-                           value="&warning.safemode.label;"/>
-                  </hbox>
-                  <hbox class="global-warning-checkcompatibility" flex="1" align="center"
-                        tooltiptext="&warning.checkcompatibility.label;">
-                    <image class="warning-icon"/>
-                    <label class="global-warning-text" flex="1" crop="end"
-                           value="&warning.checkcompatibility.label;"/>
-                  </hbox>
-                  <button class="button-link global-warning-checkcompatibility"
-                          label="&warning.checkcompatibility.enable.label;"
-                          tooltiptext="&warning.checkcompatibility.enable.tooltip;"
-                          command="cmd_enableCheckCompatibility"/>
-                  <hbox class="global-warning-updatesecurity" flex="1" align="center"
-                        tooltiptext="&warning.updatesecurity.label;">
-                    <image class="warning-icon"/>
-                    <label class="global-warning-text" flex="1" crop="end"
-                           value="&warning.updatesecurity.label;"/>
-                  </hbox>
-                  <button class="button-link global-warning-updatesecurity"
-                          label="&warning.updatesecurity.enable.label;"
-                          tooltiptext="&warning.updatesecurity.enable.tooltip;"
-                          command="cmd_enableUpdateSecurity"/>
-                  <spacer flex="5000"/> <!-- Necessary to allow the message to wrap -->
-                </hbox>
-                <spacer flex="1"/>
-                <hbox id="search-sorters" class="sort-controls"
-                      showrelevance="true" sortby="relevancescore" ascending="false"/>
-              </hbox>
-              <hbox id="search-filter" align="center">
-                <label id="search-filter-label" value="&search.filter2.label;"/>
-                <radiogroup id="search-filter-radiogroup" orient="horizontal"
-                            align="center" persist="value" value="remote">
-                  <radio id="search-filter-local" class="search-filter-radio"
-                         label="&search.filter2.installed.label;" value="local"
-                         tooltiptext="&search.filter2.installed.tooltip;"/>
-                  <radio id="search-filter-remote" class="search-filter-radio"
-                         label="&search.filter2.available.label;" value="remote"
-                         tooltiptext="&search.filter2.available.tooltip;"/>
-                </radiogroup>
-              </hbox>
-              <vbox id="search-loading" class="alert-container"
-                    flex="1" hidden="true">
-                <spacer class="alert-spacer-before"/>
-                <hbox class="alert loading" align="center">
-                  <image/>
-                  <label value="&loading.label;"/>
-                </hbox>
-                <spacer class="alert-spacer-after"/>
-              </vbox>
-              <vbox id="search-list-empty" class="alert-container"
-                    flex="1" hidden="true">
-                <spacer class="alert-spacer-before"/>
-                <vbox class="alert">
-                  <label value="&listEmpty.search.label;"/>
-                  <button class="discover-button"
-                          id="discover-button-search"
-                          label="&listEmpty.button.label;"
-                          command="cmd_goToDiscoverPane"/>
-                </vbox>
-                <spacer class="alert-spacer-after"/>
-              </vbox>
-              <richlistbox id="search-list" class="list" flex="1">
-                <hbox pack="center">
-                  <label id="search-allresults-link" class="text-link"/>
-                </hbox>
-              </richlistbox>
-            </vbox>
-
             <!-- list view -->
             <vbox id="list-view" flex="1" class="view-pane" align="stretch" tabindex="0">
               <!-- info UI for add-ons that have been disabled for being unsigned -->
@@ -353,19 +268,26 @@
                   &disabledUnsigned.devInfo.start;<label class="text-link plain" id="signing-dev-manual-link">&disabledUnsigned.devInfo.linkToManual;</label>&disabledUnsigned.devInfo.end;
                 </description>
               </vbox>
+              <vbox id="legacy-extensions-notice" class="alert-container" hidden="true">
+                <vbox class="alert">
+                  <description id="legacy-extensions-description">
+                    <label class="text-link plain" id="legacy-extensions-learnmore-link">&legacyWarning.showLegacy;</label>
+                  </description>
+                </vbox>
+              </vbox>
               <vbox id="plugindeprecation-notice" class="alert-container">
-                <hbox class="alert">
+                <vbox class="alert">
                   <description>&pluginDeprecation.description; &#160;
                     <label class="text-link plain" id="plugindeprecation-learnmore-link">&pluginDeprecation.learnMore;</label>
                   </description>
-                </hbox>
+                </vbox>
               </vbox>
               <vbox id="getthemes-container" class="alert-container">
-                <hbox class="alert">
+                <vbox class="alert">
                   <description>&getThemes.description; &#160;
                     <label class="text-link plain" id="getthemes-learnmore-link">&getThemes.learnMore;</label>
                   </description>
-                </hbox>
+                </vbox>
               </vbox>
               <hbox class="view-header global-warning-container">
                 <!-- global warnings -->
@@ -399,22 +321,25 @@
                   <spacer flex="5000"/> <!-- Necessary to allow the message to wrap -->
                 </hbox>
               </hbox>
-              <hbox class="view-header global-info-container experiment-info-container">
-                <hbox class="global-info" flex="1" align="center">
-                  <label value="&experiment.info.label;"/>
-                  <button id="experiments-learn-more"
-                          label="&experiment.info.learnmore;"
-                          tooltiptext="&experiment.info.learnmore;"
-                          accesskey="&experiment.info.learnmore.accesskey;"
-                          command="cmd_experimentsLearnMore"/>
-                  <button id="experiments-change-telemetry"
-                          label="&experiment.info.changetelemetry;"
-                          tooltiptext="&experiment.info.changetelemetry;"
-                          accesskey="&experiment.info.changetelemetry.accesskey;"
-                          command="cmd_experimentsOpenTelemetryPreferences"/>
-                  <spacer flex="5000"/> <!-- Necessary to allow the message to wrap. -->
-                </hbox>
-              </hbox>
+              <vbox class="alert-container experiment-info-container">
+                <vbox class="alert">
+                  <description>
+                    &experiment.info.label;
+                    <hbox>
+                      <button id="experiments-learn-more"
+                              label="&experiment.info.learnmore;"
+                              tooltiptext="&experiment.info.learnmore;"
+                              accesskey="&experiment.info.learnmore.accesskey;"
+                              command="cmd_experimentsLearnMore"/>
+                      <button id="experiments-change-telemetry"
+                              label="&experiment.info.changetelemetry;"
+                              tooltiptext="&experiment.info.changetelemetry;"
+                              accesskey="&experiment.info.changetelemetry.accesskey;"
+                              command="cmd_experimentsOpenTelemetryPreferences"/>
+                    </hbox>
+                  </description>
+                </vbox>
+              </vbox>
               <vbox id="addon-list-empty" class="alert-container"
                     flex="1" hidden="true">
                 <spacer class="alert-spacer-before"/>
@@ -429,6 +354,19 @@
               </vbox>
               <richlistbox id="addon-list" class="list" flex="1"/>
             </vbox>
+
+            <!-- legacy extensions view -->
+            <vbox id="legacy-view" flex="1" class="view-pane" align="stretch" tabindex="0">
+              <vbox id="legacy-extensions-info">
+                <label id="legacy-extensions-heading" value="&legacyExtensions.title;"/>
+                <description>
+                  &legacyExtensions.description;
+                  <label class="text-link plain" id="legacy-learnmore">&legacyExtensions.learnMore;</label>
+                </description>
+              </vbox>
+              <richlistbox id="legacy-list" class="list" flex="1"/>
+            </vbox>
+
             <!-- updates view -->
             <vbox id="updates-view" flex="1" class="view-pane" tabindex="0">
               <hbox class="view-header global-warning-container" align="center">
@@ -567,6 +505,7 @@
                               align="start">
                           <label id="detail-name" flex="1"/>
                           <label id="detail-version"/>
+                          <label id="detail-legacy-warning" class="legacy-warning text-link" value="&addon.legacy.label;"/>
                           <label class="disabled-postfix" value="&addon.disabled.postfix;"/>
                           <label class="update-postfix" value="&addon.update.postfix;"/>
                           <spacer flex="5000"/> <!-- Necessary to allow the name to wrap -->
@@ -680,8 +619,6 @@
                                 label="&cmd.uninstallAddon.label;"
                                 accesskey="&cmd.uninstallAddon.accesskey;"
                                 command="cmd_uninstallItem"/>
-                        <button id="detail-purchase-btn" class="addon-control purchase"
-                                command="cmd_purchaseItem"/>
                         <button id="detail-install-btn" class="addon-control install"
                                 label="&cmd.installAddon.label;"
                                 accesskey="&cmd.installAddon.accesskey;"

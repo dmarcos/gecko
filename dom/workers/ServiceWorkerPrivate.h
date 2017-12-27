@@ -18,6 +18,9 @@ class nsIInterceptedChannel;
 
 namespace mozilla {
 namespace dom {
+
+class ClientInfoAndState;
+
 namespace workers {
 
 class ServiceWorkerInfo;
@@ -27,6 +30,8 @@ class KeepAliveToken;
 class LifeCycleEventCallback : public Runnable
 {
 public:
+  LifeCycleEventCallback() : Runnable("dom::workers::LifeCycleEventCallback") {}
+
   // Called on the worker thread.
   virtual void
   SetResult(bool aResult) = 0;
@@ -83,7 +88,7 @@ public:
   nsresult
   SendMessageEvent(JSContext* aCx, JS::Handle<JS::Value> aMessage,
                    const Sequence<JSObject*>& aTransferable,
-                   UniquePtr<ServiceWorkerClientInfo>&& aClientInfo);
+                   const ClientInfoAndState& aClientInfoAndState);
 
   // This is used to validate the worker script and continue the installation
   // process.
@@ -117,10 +122,8 @@ public:
                         const nsAString& aScope);
 
   nsresult
-  SendFetchEvent(nsIInterceptedChannel* aChannel,
-                 nsILoadGroup* aLoadGroup,
-                 const nsAString& aDocumentId,
-                 bool aIsReload);
+  SendFetchEvent(nsIInterceptedChannel* aChannel, nsILoadGroup* aLoadGroup,
+                 const nsAString& aClientId, bool aIsReload);
 
   void
   StoreISupports(nsISupports* aSupports);
@@ -143,7 +146,7 @@ public:
   NoteStoppedControllingDocuments();
 
   void
-  Activated();
+  UpdateState(ServiceWorkerState aState);
 
   nsresult
   GetDebugger(nsIWorkerDebugger** aResult);

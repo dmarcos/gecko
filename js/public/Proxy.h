@@ -317,7 +317,7 @@ class JS_FRIEND_API(BaseProxyHandler)
     virtual bool construct(JSContext* cx, HandleObject proxy, const CallArgs& args) const;
 
     /* SpiderMonkey extensions. */
-    virtual bool enumerate(JSContext* cx, HandleObject proxy, MutableHandleObject objp) const;
+    virtual JSObject* enumerate(JSContext* cx, HandleObject proxy) const;
     virtual bool getPropertyDescriptor(JSContext* cx, HandleObject proxy, HandleId id,
                                        MutableHandle<PropertyDescriptor> desc) const;
     virtual bool hasOwn(JSContext* cx, HandleObject proxy, HandleId id, bool* bp) const;
@@ -330,13 +330,12 @@ class JS_FRIEND_API(BaseProxyHandler)
                                  ESClass* cls) const;
     virtual bool isArray(JSContext* cx, HandleObject proxy, JS::IsArrayAnswer* answer) const;
     virtual const char* className(JSContext* cx, HandleObject proxy) const;
-    virtual JSString* fun_toString(JSContext* cx, HandleObject proxy, unsigned indent) const;
-    virtual bool regexp_toShared(JSContext* cx, HandleObject proxy,
-                                 MutableHandle<js::RegExpShared*> shared) const;
+    virtual JSString* fun_toString(JSContext* cx, HandleObject proxy, bool isToSource) const;
+    virtual RegExpShared* regexp_toShared(JSContext* cx, HandleObject proxy) const;
     virtual bool boxedValue_unbox(JSContext* cx, HandleObject proxy, MutableHandleValue vp) const;
     virtual void trace(JSTracer* trc, JSObject* proxy) const;
     virtual void finalize(JSFreeOp* fop, JSObject* proxy) const;
-    virtual void objectMoved(JSObject* proxy, const JSObject* old) const;
+    virtual size_t objectMoved(JSObject* proxy, JSObject* old) const;
 
     // Allow proxies, wrappers in particular, to specify callability at runtime.
     // Note: These do not take const JSObject*, but they do in spirit.
@@ -344,12 +343,6 @@ class JS_FRIEND_API(BaseProxyHandler)
     //       in the external APIs that handle proxies.
     virtual bool isCallable(JSObject* obj) const;
     virtual bool isConstructor(JSObject* obj) const;
-
-    // These two hooks must be overridden, or not overridden, in tandem -- no
-    // overriding just one!
-    virtual bool watch(JSContext* cx, JS::HandleObject proxy, JS::HandleId id,
-                       JS::HandleObject callable) const;
-    virtual bool unwatch(JSContext* cx, JS::HandleObject proxy, JS::HandleId id) const;
 
     virtual bool getElements(JSContext* cx, HandleObject proxy, uint32_t begin, uint32_t end,
                              ElementAdder* adder) const;
@@ -367,29 +360,70 @@ inline bool IsProxy(const JSObject* obj)
 }
 
 namespace detail {
-const uint32_t PROXY_EXTRA_SLOTS = 2;
 
-// Layout of the values stored by a proxy. Note that API clients require the
-// private slot to be the first slot in the proxy's values, so that the private
-// slot can be accessed in the same fashion as the first reserved slot, via
-// {Get,Set}ReservedOrProxyPrivateSlot.
+// Proxy slot layout
+// -----------------
+//
+// Every proxy has a ProxyValueArray that contains the following Values:
+//
+// - The private slot.
+// - The reserved slots. The number of slots is determined by the proxy's Class.
+//
+// Proxy objects store a pointer to the reserved slots (ProxyReservedSlots*).
+// The ProxyValueArray and the private slot can be accessed using
+// ProxyValueArray::fromReservedSlots or ProxyDataLayout::values.
+//
+// Storing a pointer to ProxyReservedSlots instead of ProxyValueArray has a
+// number of advantages. In particular, it means js::GetReservedSlot and
+// js::SetReservedSlot can be used with both proxies and native objects. This
+// works because the ProxyReservedSlots* pointer is stored where native objects
+// store their dynamic slots pointer.
+
+struct ProxyReservedSlots
+{
+    Value slots[1];
+
+    static inline int offsetOfPrivateSlot();
+
+    void init(size_t nreserved) {
+        for (size_t i = 0; i < nreserved; i++)
+            slots[i] = JS::UndefinedValue();
+    }
+
+    ProxyReservedSlots(const ProxyReservedSlots&) = delete;
+    void operator=(const ProxyReservedSlots&) = delete;
+};
 
 struct ProxyValueArray
 {
     Value privateSlot;
-    Value extraSlots[PROXY_EXTRA_SLOTS];
+    ProxyReservedSlots reservedSlots;
 
-    ProxyValueArray()
-      : privateSlot(JS::UndefinedValue())
-    {
-        for (size_t i = 0; i < PROXY_EXTRA_SLOTS; i++)
-            extraSlots[i] = JS::UndefinedValue();
+    void init(size_t nreserved) {
+        privateSlot = JS::UndefinedValue();
+        reservedSlots.init(nreserved);
     }
 
-    static size_t offsetOfPrivateSlot() {
-        return offsetof(ProxyValueArray, privateSlot);
+    static size_t sizeOf(size_t nreserved) {
+        return offsetOfReservedSlots() + nreserved * sizeof(Value);
     }
+    static MOZ_ALWAYS_INLINE ProxyValueArray* fromReservedSlots(ProxyReservedSlots* slots) {
+        uintptr_t p = reinterpret_cast<uintptr_t>(slots);
+        return reinterpret_cast<ProxyValueArray*>(p - offsetOfReservedSlots());
+    }
+    static size_t offsetOfReservedSlots() {
+        return offsetof(ProxyValueArray, reservedSlots);
+    }
+
+    ProxyValueArray(const ProxyValueArray&) = delete;
+    void operator=(const ProxyValueArray&) = delete;
 };
+
+/* static */ inline int
+ProxyReservedSlots::offsetOfPrivateSlot()
+{
+    return -int(ProxyValueArray::offsetOfReservedSlots()) + offsetof(ProxyValueArray, privateSlot);
+}
 
 // All proxies share the same data layout. Following the object's shape and
 // type, the proxy has a ProxyDataLayout structure with a pointer to an array
@@ -401,8 +435,12 @@ struct ProxyValueArray
 // See GetReservedOrProxyPrivateSlot below.
 struct ProxyDataLayout
 {
-    ProxyValueArray* values;
+    ProxyReservedSlots* reservedSlots;
     const BaseProxyHandler* handler;
+
+    MOZ_ALWAYS_INLINE ProxyValueArray* values() const {
+        return ProxyValueArray::fromReservedSlots(reservedSlots);
+    }
 };
 
 const uint32_t ProxyDataOffset = 2 * sizeof(void*);
@@ -432,7 +470,7 @@ GetProxyHandler(const JSObject* obj)
 inline const Value&
 GetProxyPrivate(const JSObject* obj)
 {
-    return detail::GetProxyDataLayout(obj)->values->privateSlot;
+    return detail::GetProxyDataLayout(obj)->values()->privateSlot;
 }
 
 inline JSObject*
@@ -442,10 +480,10 @@ GetProxyTargetObject(JSObject* obj)
 }
 
 inline const Value&
-GetProxyExtra(const JSObject* obj, size_t n)
+GetProxyReservedSlot(const JSObject* obj, size_t n)
 {
-    MOZ_ASSERT(n < detail::PROXY_EXTRA_SLOTS);
-    return detail::GetProxyDataLayout(obj)->values->extraSlots[n];
+    MOZ_ASSERT(n < JSCLASS_RESERVED_SLOTS(GetObjectClass(obj)));
+    return detail::GetProxyDataLayout(obj)->reservedSlots->slots[n];
 }
 
 inline void
@@ -458,10 +496,10 @@ JS_FRIEND_API(void)
 SetValueInProxy(Value* slot, const Value& value);
 
 inline void
-SetProxyExtra(JSObject* obj, size_t n, const Value& extra)
+SetProxyReservedSlot(JSObject* obj, size_t n, const Value& extra)
 {
-    MOZ_ASSERT(n < detail::PROXY_EXTRA_SLOTS);
-    Value* vp = &detail::GetProxyDataLayout(obj)->values->extraSlots[n];
+    MOZ_ASSERT(n < JSCLASS_RESERVED_SLOTS(GetObjectClass(obj)));
+    Value* vp = &detail::GetProxyDataLayout(obj)->reservedSlots->slots[n];
 
     // Trigger a barrier before writing the slot.
     if (vp->isGCThing() || extra.isGCThing())
@@ -470,30 +508,22 @@ SetProxyExtra(JSObject* obj, size_t n, const Value& extra)
         *vp = extra;
 }
 
+inline void
+SetProxyPrivate(JSObject* obj, const Value& value)
+{
+    Value* vp = &detail::GetProxyDataLayout(obj)->values()->privateSlot;
+
+    // Trigger a barrier before writing the slot.
+    if (vp->isGCThing() || value.isGCThing())
+        SetValueInProxy(vp, value);
+    else
+        *vp = value;
+}
+
 inline bool
 IsScriptedProxy(const JSObject* obj)
 {
     return IsProxy(obj) && GetProxyHandler(obj)->isScripted();
-}
-
-inline const Value&
-GetReservedOrProxyPrivateSlot(const JSObject* obj, size_t slot)
-{
-    MOZ_ASSERT(slot == 0);
-    MOZ_ASSERT(slot < JSCLASS_RESERVED_SLOTS(GetObjectClass(obj)) || IsProxy(obj));
-    return reinterpret_cast<const shadow::Object*>(obj)->slotRef(slot);
-}
-
-inline void
-SetReservedOrProxyPrivateSlot(JSObject* obj, size_t slot, const Value& value)
-{
-    MOZ_ASSERT(slot == 0);
-    MOZ_ASSERT(slot < JSCLASS_RESERVED_SLOTS(GetObjectClass(obj)) || IsProxy(obj));
-    shadow::Object* sobj = reinterpret_cast<shadow::Object*>(obj);
-    if (sobj->slotRef(slot).isGCThing() || value.isGCThing())
-        SetReservedOrProxyPrivateSlotWithBarrier(obj, slot, value);
-    else
-        sobj->slotRef(slot) = value;
 }
 
 class MOZ_STACK_CLASS ProxyOptions {
@@ -643,6 +673,49 @@ inline void assertEnteredPolicy(JSContext* cx, JSObject* obj, jsid id,
 
 extern JS_FRIEND_API(JSObject*)
 InitProxyClass(JSContext* cx, JS::HandleObject obj);
+
+extern JS_FRIEND_DATA(const js::ClassOps) ProxyClassOps;
+extern JS_FRIEND_DATA(const js::ClassExtension) ProxyClassExtension;
+extern JS_FRIEND_DATA(const js::ObjectOps) ProxyObjectOps;
+
+template <unsigned Flags>
+constexpr unsigned
+CheckProxyFlags()
+{
+    // For now assert each Proxy Class has at least 1 reserved slot. This is
+    // not a hard requirement, but helps catch Classes that need an explicit
+    // JSCLASS_HAS_RESERVED_SLOTS since bug 1360523.
+    static_assert(((Flags >> JSCLASS_RESERVED_SLOTS_SHIFT) & JSCLASS_RESERVED_SLOTS_MASK) > 0,
+                  "Proxy Classes must have at least 1 reserved slot");
+
+    // ProxyValueArray must fit inline in the object, so assert the number of
+    // slots does not exceed MAX_FIXED_SLOTS.
+    static_assert((offsetof(js::detail::ProxyValueArray, reservedSlots) / sizeof(Value)) +
+                  ((Flags >> JSCLASS_RESERVED_SLOTS_SHIFT) & JSCLASS_RESERVED_SLOTS_MASK)
+                  <= shadow::Object::MAX_FIXED_SLOTS,
+                  "ProxyValueArray size must not exceed max JSObject size");
+
+    // Proxies must not have the JSCLASS_SKIP_NURSERY_FINALIZE flag set: they
+    // always have finalizers, and whether they can be nursery allocated is
+    // controlled by the canNurseryAllocate() method on the proxy handler.
+    static_assert(!(Flags & JSCLASS_SKIP_NURSERY_FINALIZE),
+                  "Proxies must not use JSCLASS_SKIP_NURSERY_FINALIZE; use "
+                  "the canNurseryAllocate() proxy handler method instead.");
+    return Flags;
+}
+
+#define PROXY_CLASS_DEF(name, flags)                                                    \
+    {                                                                                   \
+        name,                                                                           \
+        js::Class::NON_NATIVE |                                                         \
+            JSCLASS_IS_PROXY |                                                          \
+            JSCLASS_DELAY_METADATA_BUILDER |                                            \
+            js::CheckProxyFlags<flags>(),                                               \
+        &js::ProxyClassOps,                                                             \
+        JS_NULL_CLASS_SPEC,                                                             \
+        &js::ProxyClassExtension,                                                       \
+        &js::ProxyObjectOps                                                             \
+    }
 
 } /* namespace js */
 

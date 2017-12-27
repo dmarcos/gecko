@@ -11,11 +11,7 @@ var gVisits = [{url: "http://www.mozilla.com/",
                {url: "http://www.espn.com/",
                 transition: TRANSITION_LINK}];
 
-function run_test() {
-  run_next_test();
-}
-
-add_task(function* test_execute() {
+add_task(async function test_execute() {
   let observer;
   let completionPromise = new Promise(resolveCompletionPromise => {
     observer = {
@@ -23,8 +19,8 @@ add_task(function* test_execute() {
       _visitCount: 0,
       onVisit(aURI, aVisitID, aTime, aSessionID, aReferringID,
                         aTransitionType, aAdded) {
-        do_check_eq(aURI.spec, gVisits[this._visitCount].url);
-        do_check_eq(aTransitionType, gVisits[this._visitCount].transition);
+        Assert.equal(aURI.spec, gVisits[this._visitCount].url);
+        Assert.equal(aTransitionType, gVisits[this._visitCount].transition);
         this._visitCount++;
 
         if (this._visitCount == gVisits.length) {
@@ -40,19 +36,18 @@ add_task(function* test_execute() {
     if (visit.transition == TRANSITION_TYPED)
       PlacesUtils.history.markPageAsTyped(uri(visit.url));
     else if (visit.transition == TRANSITION_BOOKMARK)
-      PlacesUtils.history.markPageAsFollowedBookmark(uri(visit.url))
+      PlacesUtils.history.markPageAsFollowedBookmark(uri(visit.url));
     else {
      // because it is a top level visit with no referrer,
      // it will result in TRANSITION_LINK
     }
-    yield PlacesTestUtils.addVisits({
+    await PlacesTestUtils.addVisits({
       uri: uri(visit.url),
       transition: visit.transition
     });
   }
 
-  yield completionPromise;
+  await completionPromise;
 
   PlacesUtils.history.removeObserver(observer);
 });
-

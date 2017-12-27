@@ -4,9 +4,10 @@
 
 use ipc_channel::ipc::IpcSharedMemory;
 use piston_image::{self, DynamicImage, ImageFormat};
-use webrender_traits;
+use std::fmt;
+use webrender_api;
 
-#[derive(Clone, Copy, Deserialize, Eq, PartialEq, Serialize, HeapSizeOf)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, MallocSizeOf, PartialEq, Serialize)]
 pub enum PixelFormat {
     /// Luminance channel only
     K8,
@@ -15,21 +16,28 @@ pub enum PixelFormat {
     /// RGB, 8 bits per channel
     RGB8,
     /// RGB + alpha, 8 bits per channel
-    RGBA8,
+    BGRA8,
 }
 
-#[derive(Clone, Deserialize, Serialize, HeapSizeOf)]
+#[derive(Clone, Deserialize, MallocSizeOf, Serialize)]
 pub struct Image {
     pub width: u32,
     pub height: u32,
     pub format: PixelFormat,
-    #[ignore_heap_size_of = "Defined in ipc-channel"]
+    #[ignore_malloc_size_of = "Defined in ipc-channel"]
     pub bytes: IpcSharedMemory,
-    #[ignore_heap_size_of = "Defined in webrender_traits"]
-    pub id: Option<webrender_traits::ImageKey>,
+    #[ignore_malloc_size_of = "Defined in webrender_api"]
+    pub id: Option<webrender_api::ImageKey>,
 }
 
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize, HeapSizeOf)]
+impl fmt::Debug for Image {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Image {{ width: {}, height: {}, format: {:?}, ..., id: {:?} }}",
+               self.width, self.height, self.format, self.id)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, MallocSizeOf, PartialEq, Serialize)]
 pub struct ImageMetadata {
     pub width: u32,
     pub height: u32,
@@ -42,7 +50,8 @@ pub struct ImageMetadata {
 fn byte_swap_and_premultiply(data: &mut [u8]) {
     let length = data.len();
 
-    for i in (0..length).step_by(4) {
+    let mut i = 0;
+    while i < length {
         let r = data[i + 2];
         let g = data[i + 1];
         let b = data[i + 0];
@@ -50,6 +59,8 @@ fn byte_swap_and_premultiply(data: &mut [u8]) {
         data[i + 0] = r;
         data[i + 1] = g;
         data[i + 2] = b;
+
+        i += 4;
     }
 }
 
@@ -75,7 +86,7 @@ pub fn load_from_memory(buffer: &[u8]) -> Option<Image> {
                     Some(Image {
                         width: rgba.width(),
                         height: rgba.height(),
-                        format: PixelFormat::RGBA8,
+                        format: PixelFormat::BGRA8,
                         bytes: IpcSharedMemory::from_bytes(&*rgba),
                         id: None,
                     })
@@ -108,10 +119,7 @@ pub fn detect_image_format(buffer: &[u8]) -> Result<ImageFormat, &str> {
 }
 
 fn is_gif(buffer: &[u8]) -> bool {
-    match buffer {
-        &[b'G', b'I', b'F', b'8', n, b'a', _..] if n == b'7' || n == b'9' => true,
-        _ => false,
-    }
+    buffer.starts_with(b"GIF87a") || buffer.starts_with(b"GIF89a")
 }
 
 fn is_jpeg(buffer: &[u8]) -> bool {

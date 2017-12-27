@@ -53,33 +53,49 @@
 const {Cc, Ci, Cu} = require("chrome");
 const Services = require("Services");
 const protocol = require("devtools/shared/protocol");
-const {LayoutActor} = require("devtools/server/actors/layout");
 const {LongStringActor} = require("devtools/server/actors/string");
 const promise = require("promise");
+const defer = require("devtools/shared/defer");
 const {Task} = require("devtools/shared/task");
-const events = require("sdk/event/core");
-const {WalkerSearch} = require("devtools/server/actors/utils/walker-search");
-const {PageStyleActor, getFontPreviewData} = require("devtools/server/actors/styles");
-const {
-  HighlighterActor,
-  CustomHighlighterActor,
-  isTypeRegistered,
-  HighlighterEnvironment
-} = require("devtools/server/actors/highlighters");
-const {EyeDropper} = require("devtools/server/actors/highlighters/eye-dropper");
-const {
-  isAnonymous,
-  isNativeAnonymous,
-  isXBLAnonymous,
-  isShadowAnonymous,
-  getFrameElement
-} = require("devtools/shared/layout/utils");
-const {getLayoutChangesObserver, releaseLayoutChangesObserver} = require("devtools/server/actors/reflow");
-const nodeFilterConstants = require("devtools/shared/dom-node-filter-constants");
-const {colorUtils} = require("devtools/shared/css/color");
+const EventEmitter = require("devtools/shared/event-emitter");
 
-const {EventParsers} = require("devtools/server/event-parsers");
-const {nodeSpec, nodeListSpec, walkerSpec, inspectorSpec} = require("devtools/shared/specs/inspector");
+const {walkerSpec, inspectorSpec} = require("devtools/shared/specs/inspector");
+const {nodeSpec, nodeListSpec} = require("devtools/shared/specs/node");
+
+loader.lazyRequireGetter(this, "DevToolsUtils", "devtools/shared/DevToolsUtils");
+loader.lazyRequireGetter(this, "AsyncUtils", "devtools/shared/async-utils");
+loader.lazyRequireGetter(this, "CssLogic", "devtools/server/css-logic", true);
+loader.lazyRequireGetter(this, "findCssSelector", "devtools/shared/inspector/css-logic", true);
+loader.lazyRequireGetter(this, "getCssPath", "devtools/shared/inspector/css-logic", true);
+loader.lazyRequireGetter(this, "getXPath", "devtools/shared/inspector/css-logic", true);
+loader.lazyRequireGetter(this, "colorUtils", "devtools/shared/css/color", true);
+loader.lazyRequireGetter(this, "EyeDropper", "devtools/server/actors/highlighters/eye-dropper", true);
+loader.lazyRequireGetter(this, "WalkerSearch", "devtools/server/actors/utils/walker-search", true);
+loader.lazyRequireGetter(this, "PageStyleActor", "devtools/server/actors/styles", true);
+loader.lazyRequireGetter(this, "getFontPreviewData", "devtools/server/actors/styles", true);
+loader.lazyRequireGetter(this, "flags", "devtools/shared/flags");
+loader.lazyRequireGetter(this, "throttle", "devtools/shared/throttle", true);
+loader.lazyRequireGetter(this, "LayoutActor", "devtools/server/actors/layout", true);
+loader.lazyRequireGetter(this, "HighlighterActor", "devtools/server/actors/highlighters", true);
+loader.lazyRequireGetter(this, "CustomHighlighterActor", "devtools/server/actors/highlighters", true);
+loader.lazyRequireGetter(this, "isTypeRegistered", "devtools/server/actors/highlighters", true);
+loader.lazyRequireGetter(this, "HighlighterEnvironment", "devtools/server/actors/highlighters", true);
+loader.lazyRequireGetter(this, "EventParsers", "devtools/server/event-parsers", true);
+loader.lazyRequireGetter(this, "isAnonymous", "devtools/shared/layout/utils", true);
+loader.lazyRequireGetter(this, "isNativeAnonymous", "devtools/shared/layout/utils", true);
+loader.lazyRequireGetter(this, "isXBLAnonymous", "devtools/shared/layout/utils", true);
+loader.lazyRequireGetter(this, "isShadowAnonymous", "devtools/shared/layout/utils", true);
+loader.lazyRequireGetter(this, "getFrameElement", "devtools/shared/layout/utils", true);
+loader.lazyRequireGetter(this, "loadSheet", "devtools/shared/layout/utils", true);
+loader.lazyRequireGetter(this, "getLayoutChangesObserver", "devtools/server/actors/reflow", true);
+loader.lazyRequireGetter(this, "releaseLayoutChangesObserver", "devtools/server/actors/reflow", true);
+loader.lazyRequireGetter(this, "nodeFilterConstants", "devtools/shared/dom-node-filter-constants");
+
+loader.lazyServiceGetter(this, "DOMParser",
+  "@mozilla.org/xmlextras/domparser;1", "nsIDOMParser");
+
+loader.lazyServiceGetter(this, "eventListenerService",
+  "@mozilla.org/eventlistenerservice;1", "nsIEventListenerService");
 
 const FONT_FAMILY_PREVIEW_TEXT = "The quick brown fox jumps over the lazy dog";
 const FONT_FAMILY_PREVIEW_TEXT_SIZE = 20;
@@ -89,6 +105,16 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 const IMAGE_FETCHING_TIMEOUT = 500;
+
+// Minimum delay between two "new-mutations" events.
+const MUTATIONS_THROTTLING_DELAY = 100;
+// List of mutation types that should -not- be throttled.
+const IMMEDIATE_MUTATIONS = [
+  "documentUnload",
+  "frameLoad",
+  "newRoot",
+  "pseudoClassLock",
+];
 
 // SKIP_TO_* arguments are used with the DocumentWalker, driving the strategy to use if
 // the starting node is incompatible with the filter function of the walker.
@@ -127,7 +153,7 @@ const PSEUDO_SELECTORS = [
   ["::selection", 0]
 ];
 
-var HELPER_SHEET = `
+var HELPER_SHEET = "data:text/css;charset=utf-8," + encodeURIComponent(`
   .__fx-devtools-hide-shortcut__ {
     visibility: hidden !important;
   }
@@ -136,28 +162,7 @@ var HELPER_SHEET = `
     outline: 2px dashed #F06!important;
     outline-offset: -2px !important;
   }
-`;
-
-const flags = require("devtools/shared/flags");
-
-loader.lazyRequireGetter(this, "DevToolsUtils",
-                         "devtools/shared/DevToolsUtils");
-
-loader.lazyRequireGetter(this, "AsyncUtils", "devtools/shared/async-utils");
-
-loader.lazyGetter(this, "DOMParser", function () {
-  return Cc["@mozilla.org/xmlextras/domparser;1"]
-           .createInstance(Ci.nsIDOMParser);
-});
-
-loader.lazyGetter(this, "eventListenerService", function () {
-  return Cc["@mozilla.org/eventlistenerservice;1"]
-           .getService(Ci.nsIEventListenerService);
-});
-
-loader.lazyRequireGetter(this, "CssLogic", "devtools/server/css-logic", true);
-loader.lazyRequireGetter(this, "findCssSelector", "devtools/shared/inspector/css-logic", true);
-loader.lazyRequireGetter(this, "getCssPath", "devtools/shared/inspector/css-logic", true);
+`);
 
 /**
  * We only send nodeValue up to a certain size by default.  This stuff
@@ -295,7 +300,7 @@ var NodeActor = exports.NodeActor = protocol.ActorClassWithSpec(nodeSpec, {
 
     // Fire an event so, other modules can create its own properties
     // that should be passed to the client (within the form.props field).
-    events.emit(NodeActor, "form", {
+    EventEmitter.emit(NodeActor, "form", {
       target: this,
       data: form
     });
@@ -665,6 +670,18 @@ var NodeActor = exports.NodeActor = protocol.ActorClassWithSpec(nodeSpec, {
   },
 
   /**
+   * Get the XPath for this node.
+   *
+   * @return {String} The XPath for finding this node on the page.
+   */
+  getXPath: function () {
+    if (Cu.isDeadWrapper(this.rawNode)) {
+      return "";
+    }
+    return getXPath(this.rawNode);
+  },
+
+  /**
    * Scroll the selected node into view.
    */
   scrollIntoView: function () {
@@ -874,9 +891,11 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
     this.onMutations = this.onMutations.bind(this);
     this.onFrameLoad = this.onFrameLoad.bind(this);
     this.onFrameUnload = this.onFrameUnload.bind(this);
+    this._throttledEmitNewMutations = throttle(this._emitNewMutations.bind(this),
+      MUTATIONS_THROTTLING_DELAY);
 
-    events.on(tabActor, "will-navigate", this.onFrameUnload);
-    events.on(tabActor, "window-ready", this.onFrameLoad);
+    tabActor.on("will-navigate", this.onFrameUnload);
+    tabActor.on("window-ready", this.onFrameLoad);
 
     // Ensure that the root document node actor is ready and
     // managed.
@@ -966,8 +985,8 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
       this._retainedOrphans = null;
       this._refMap = null;
 
-      events.off(this.tabActor, "will-navigate", this.onFrameUnload);
-      events.off(this.tabActor, "window-ready", this.onFrameLoad);
+      this.tabActor.off("will-navigate", this.onFrameUnload);
+      this.tabActor.off("window-ready", this.onFrameLoad);
 
       this.onFrameLoad = null;
       this.onFrameUnload = null;
@@ -987,7 +1006,7 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
       this.layoutActor = null;
       this.tabActor = null;
 
-      events.emit(this, "destroyed");
+      this.emit("destroyed");
     } catch (e) {
       console.error(e);
     }
@@ -1062,7 +1081,7 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
     }
 
     if (changes.length) {
-      events.emit(this, "display-change", changes);
+      this.emit("display-change", changes);
     }
   },
 
@@ -1070,7 +1089,7 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
    * When the browser window gets resized, relay the event to the front.
    */
   _onResize: function () {
-    events.emit(this, "resize");
+    this.emit("resize");
   },
 
   /**
@@ -1863,26 +1882,12 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
     return true;
   },
 
-  _installHelperSheet: function (node) {
-    if (!this.installedHelpers) {
-      this.installedHelpers = new WeakMap();
-    }
-    let win = node.rawNode.ownerGlobal;
-    if (!this.installedHelpers.has(win)) {
-      let { Style } = require("sdk/stylesheet/style");
-      let { attach } = require("sdk/content/mod");
-      let style = Style({source: HELPER_SHEET, type: "agent" });
-      attach(style, win);
-      this.installedHelpers.set(win, style);
-    }
-  },
-
   hideNode: function (node) {
     if (isNodeDead(node)) {
       return;
     }
 
-    this._installHelperSheet(node);
+    loadSheet(node.rawNode.ownerGlobal, HELPER_SHEET);
     node.rawNode.classList.add(HIDDEN_CLASS);
   },
 
@@ -1997,6 +2002,7 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
     if (rawNode.nodeType !== rawNode.ownerDocument.ELEMENT_NODE) {
       throw new Error("Can only change innerHTML to element nodes");
     }
+    // eslint-disable-next-line no-unsanitized/property
     rawNode.innerHTML = value;
   },
 
@@ -2036,12 +2042,14 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
       if (parsedDOM.head.innerHTML === "") {
         parentNode.replaceChild(parsedDOM.body, rawNode);
       } else {
+      // eslint-disable-next-line no-unsanitized/property
         rawNode.outerHTML = value;
       }
     } else if (rawNode.tagName === "HEAD") {
       if (parsedDOM.body.innerHTML === "") {
         parentNode.replaceChild(parsedDOM.head, rawNode);
       } else {
+        // eslint-disable-next-line no-unsanitized/property
         rawNode.outerHTML = value;
       }
     } else if (node.isDocumentElement()) {
@@ -2065,6 +2073,7 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
       rawNode.replaceChild(parsedDOM.head, rawNode.querySelector("head"));
       rawNode.replaceChild(parsedDOM.body, rawNode.querySelector("body"));
     } else {
+      // eslint-disable-next-line no-unsanitized/property
       rawNode.outerHTML = value;
     }
   },
@@ -2303,6 +2312,7 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
   getMutations: function (options = {}) {
     let pending = this._pendingMutations || [];
     this._pendingMutations = [];
+    this._waitingForGetMutations = false;
 
     if (options.cleanup) {
       for (let node of this._orphaned) {
@@ -2321,15 +2331,42 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
       // We've been destroyed, don't bother queueing this mutation.
       return;
     }
-    // We only send the `new-mutations` notification once, until the client
-    // fetches mutations with the `getMutations` packet.
-    let needEvent = this._pendingMutations.length === 0;
 
+    // Add the mutation to the list of mutations to be retrieved next.
     this._pendingMutations.push(mutation);
 
-    if (needEvent) {
-      events.emit(this, "new-mutations");
+    // Bail out if we already emitted a new-mutations event and are waiting for a client
+    // to retrieve them.
+    if (this._waitingForGetMutations) {
+      return;
     }
+
+    if (IMMEDIATE_MUTATIONS.includes(mutation.type)) {
+      this._emitNewMutations();
+    } else {
+      /**
+       * If many mutations are fired at the same time, clients might sequentially request
+       * children/siblings for updated nodes, which can be costly. By throttling the calls
+       * to getMutations, duplicated mutations will be ignored.
+       */
+      this._throttledEmitNewMutations();
+    }
+  },
+
+  _emitNewMutations: function () {
+    if (!this.actorID || this._destroyed) {
+      // Bail out if the actor was destroyed after throttling this call.
+      return;
+    }
+
+    if (this._waitingForGetMutations || this._pendingMutations.length == 0) {
+      // Bail out if we already fired the new-mutation event or if no mutations are
+      // waiting to be retrieved.
+      return;
+    }
+
+    this._waitingForGetMutations = true;
+    this.emit("new-mutations");
   },
 
   /**
@@ -2342,7 +2379,7 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
     // Notify any observers that want *all* mutations (even on nodes that aren't
     // referenced).  This is not sent over the protocol so can only be used by
     // scripts running in the server process.
-    events.emit(this, "any-mutation");
+    this.emit("any-mutation");
 
     for (let change of mutations) {
       let targetActor = this.getNode(change.target);
@@ -2459,6 +2496,8 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
           this.rootDoc.defaultView) {
         this.onFrameUnload({ window: this.rootDoc.defaultView });
       }
+      // Update all DOM objects references to target the new document.
+      this.rootWin = window;
       this.rootDoc = window.document;
       this.rootNode = this.document();
       this.queueMutation({
@@ -2620,6 +2659,31 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
   },
 
   /**
+   * Given a windowID return the NodeActor for the corresponding frameElement,
+   * unless it's the root window
+   */
+  getNodeActorFromWindowID: function (windowID) {
+    let win;
+
+    try {
+      win = Services.wm.getOuterWindowWithId(windowID);
+    } catch (e) {
+      // ignore
+    }
+
+    if (!win) {
+      return { error: "noWindow",
+               message: "The related docshell is destroyed or not found" };
+    } else if (!win.frameElement) {
+      // the frame element of the root document is privileged & thus
+      // inaccessible, so return the document body/element instead
+      return this.attachElement(win.document.body || win.document.documentElement);
+    }
+
+    return this.attachElement(win.frameElement);
+  },
+
+  /**
    * Given a StyleSheetActor (identified by its ID), commonly used in the
    * style-editor, get its ownerNode and return the corresponding walker's
    * NodeActor.
@@ -2744,7 +2808,7 @@ exports.InspectorActor = protocol.ActorClassWithSpec(inspectorSpec, {
       return this._walkerPromise;
     }
 
-    let deferred = promise.defer();
+    let deferred = defer();
     this._walkerPromise = deferred.promise;
 
     let window = this.window;
@@ -2753,7 +2817,7 @@ exports.InspectorActor = protocol.ActorClassWithSpec(inspectorSpec, {
       window.removeEventListener("DOMContentLoaded", domReady, true);
       this.walker = WalkerActor(this.conn, tabActor, options);
       this.manage(this.walker);
-      events.once(this.walker, "destroyed", () => {
+      this.walker.once("destroyed", () => {
         this._walkerPromise = null;
         this._pageStylePromise = null;
       });
@@ -2906,7 +2970,7 @@ exports.InspectorActor = protocol.ActorClassWithSpec(inspectorSpec, {
     this._eyeDropper.show(this.window.document.documentElement, options);
     this._eyeDropper.once("selected", this._onColorPicked);
     this._eyeDropper.once("canceled", this._onColorPickCanceled);
-    events.once(this.tabActor, "will-navigate", this.destroyEyeDropper);
+    this.tabActor.once("will-navigate", this.destroyEyeDropper);
   },
 
   /**
@@ -2919,7 +2983,7 @@ exports.InspectorActor = protocol.ActorClassWithSpec(inspectorSpec, {
       this._eyeDropper.hide();
       this._eyeDropper.off("selected", this._onColorPicked);
       this._eyeDropper.off("canceled", this._onColorPickCanceled);
-      events.off(this.tabActor, "will-navigate", this.destroyEyeDropper);
+      this.tabActor.off("will-navigate", this.destroyEyeDropper);
     }
   },
 
@@ -2947,11 +3011,11 @@ exports.InspectorActor = protocol.ActorClassWithSpec(inspectorSpec, {
   },
 
   _onColorPicked: function (e, color) {
-    events.emit(this, "color-picked", color);
+    this.emit("color-picked", color);
   },
 
   _onColorPickCanceled: function () {
-    events.emit(this, "color-pick-canceled");
+    this.emit("color-pick-canceled");
   }
 });
 
@@ -3000,7 +3064,7 @@ function DocumentWalker(node, rootWin,
     whatToShow = nodeFilterConstants.SHOW_ALL,
     filter = standardTreeWalkerFilter,
     skipTo = SKIP_TO_PARENT) {
-  if (!rootWin.location) {
+  if (Cu.isDeadWrapper(rootWin) || !rootWin.location) {
     throw new Error("Got an invalid root window in DocumentWalker");
   }
 

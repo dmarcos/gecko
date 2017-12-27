@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,12 +13,11 @@ class nsAccessKeyInfo;
 class nsAsyncAccesskeyUpdate;
 class nsFontMetrics;
 
-class nsTextBoxFrame : public nsLeafBoxFrame
+class nsTextBoxFrame final : public nsLeafBoxFrame
 {
 public:
-  NS_DECL_QUERYFRAME_TARGET(nsTextBoxFrame)
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsTextBoxFrame)
 
   virtual nsSize GetXULPrefSize(nsBoxLayoutState& aBoxLayoutState) override;
   virtual nsSize GetXULMinSize(nsBoxLayoutState& aBoxLayoutState) override;
@@ -33,32 +33,31 @@ public:
                     nsContainerFrame* aParent,
                     nsIFrame*         asPrevInFlow) override;
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
   virtual nsresult AttributeChanged(int32_t         aNameSpaceID,
-                                    nsIAtom*        aAttribute,
+                                    nsAtom*        aAttribute,
                                     int32_t         aModType) override;
 
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override;
 #endif
 
-  void UpdateAttributes(nsIAtom*         aAttribute,
+  void UpdateAttributes(nsAtom*         aAttribute,
                         bool&          aResize,
                         bool&          aRedraw);
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual ~nsTextBoxFrame();
 
-  void PaintTitle(nsRenderingContext& aRenderingContext,
+  void PaintTitle(gfxContext&          aRenderingContext,
                   const nsRect&        aDirtyRect,
                   nsPoint              aPt,
                   const nscolor*       aOverrideColor);
 
-  nsRect GetComponentAlphaBounds();
+  nsRect GetComponentAlphaBounds() const;
 
   virtual bool ComputesOwnOverflowArea() override;
 
@@ -81,21 +80,21 @@ protected:
 
   // REVIEW: SORRY! Couldn't resist devirtualizing these
   void LayoutTitle(nsPresContext*      aPresContext,
-                   nsRenderingContext& aRenderingContext,
+                   gfxContext&          aRenderingContext,
                    const nsRect&        aRect);
 
   void CalculateUnderline(DrawTarget* aDrawTarget, nsFontMetrics& aFontMetrics);
 
   void CalcTextSize(nsBoxLayoutState& aBoxLayoutState);
 
-  void CalcDrawRect(nsRenderingContext &aRenderingContext);
+  void CalcDrawRect(gfxContext &aRenderingContext);
 
   explicit nsTextBoxFrame(nsStyleContext* aContext);
 
-  nscoord CalculateTitleForWidth(nsRenderingContext& aRenderingContext,
+  nscoord CalculateTitleForWidth(gfxContext&          aRenderingContext,
                                  nscoord              aWidth);
 
-  void GetTextSize(nsRenderingContext& aRenderingContext,
+  void GetTextSize(gfxContext&          aRenderingContext,
                    const nsString&      aString,
                    nsSize&              aSize,
                    nscoord&             aAscent);
@@ -107,7 +106,7 @@ private:
   bool AlwaysAppendAccessKey();
   bool InsertSeparatorBeforeAccessKey();
 
-  void DrawText(nsRenderingContext& aRenderingContext,
+  void DrawText(gfxContext&         aRenderingContext,
                 const nsRect&       aDirtyRect,
                 const nsRect&       aTextRect,
                 const nscolor*      aOverrideColor);

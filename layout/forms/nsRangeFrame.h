@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -16,8 +17,8 @@
 
 class nsDisplayRangeFocusRing;
 
-class nsRangeFrame : public nsContainerFrame,
-                     public nsIAnonymousContentCreator
+class nsRangeFrame final : public nsContainerFrame,
+                           public nsIAnonymousContentCreator
 {
   friend nsIFrame*
   NS_NewRangeFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
@@ -31,19 +32,17 @@ class nsRangeFrame : public nsContainerFrame,
   typedef mozilla::dom::Element Element;
 
 public:
-  NS_DECL_QUERYFRAME_TARGET(nsRangeFrame)
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsRangeFrame)
 
   // nsIFrame overrides
   virtual void Init(nsIContent*       aContent,
                     nsContainerFrame* aParent,
                     nsIFrame*         aPrevInFlow) override;
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
   void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                        const nsRect&           aDirtyRect,
                         const nsDisplayListSet& aLists) override;
 
   virtual void Reflow(nsPresContext*           aPresContext,
@@ -57,8 +56,6 @@ public:
   }
 #endif
 
-  virtual bool IsLeaf() const override { return true; }
-
 #ifdef ACCESSIBILITY
   virtual mozilla::a11y::AccType AccessibleType() override;
 #endif
@@ -69,11 +66,11 @@ public:
                                         uint32_t aFilter) override;
 
   virtual nsresult AttributeChanged(int32_t  aNameSpaceID,
-                                    nsIAtom* aAttribute,
+                                    nsAtom* aAttribute,
                                     int32_t  aModType) override;
 
   virtual mozilla::LogicalSize
-  ComputeAutoSize(nsRenderingContext*         aRenderingContext,
+  ComputeAutoSize(gfxContext*                 aRenderingContext,
                   mozilla::WritingMode        aWM,
                   const mozilla::LogicalSize& aCBSize,
                   nscoord                     aAvailableISize,
@@ -82,10 +79,8 @@ public:
                   const mozilla::LogicalSize& aPadding,
                   ComputeSizeFlags            aFlags) override;
 
-  virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
-  virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
-
-  virtual nsIAtom* GetType() const override;
+  virtual nscoord GetMinISize(gfxContext *aRenderingContext) override;
+  virtual nscoord GetPrefISize(gfxContext *aRenderingContext) override;
 
   virtual bool IsFrameOfType(uint32_t aFlags) const override
   {
@@ -124,12 +119,12 @@ public:
   double GetMax() const;
   double GetValue() const;
 
-  /** 
+  /**
    * Returns the input element's value as a fraction of the difference between
    * the input's minimum and its maximum (i.e. returns 0.0 when the value is
-   * the same as the minimum, and returns 1.0 when the value is the same as the 
+   * the same as the minimum, and returns 1.0 when the value is the same as the
    * maximum).
-   */  
+   */
   double GetValueAsFractionOfRange();
 
   /**

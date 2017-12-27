@@ -6,511 +6,93 @@
 
 <% data.new_style_struct("Background", inherited=False) %>
 
-${helpers.predefined_type("background-color", "CSSColor",
-    "::cssparser::Color::RGBA(::cssparser::RGBA::transparent())",
+${helpers.predefined_type(
+    "background-color",
+    "Color",
+    "computed_value::T::transparent()",
     initial_specified_value="SpecifiedValue::transparent()",
     spec="https://drafts.csswg.org/css-backgrounds/#background-color",
-    animation_type="normal", complex_color=True)}
+    animation_value_type="AnimatedColor",
+    ignored_when_colors_disabled=True,
+    allow_quirks=True,
+    flags="APPLIES_TO_FIRST_LETTER APPLIES_TO_FIRST_LINE APPLIES_TO_PLACEHOLDER",
+)}
 
-<%helpers:vector_longhand name="background-image" animation_type="none"
-                          spec="https://drafts.csswg.org/css-backgrounds/#the-background-image"
-                          has_uncacheable_values="${product == 'gecko'}">
-    use std::fmt;
-    use style_traits::ToCss;
-    use values::HasViewportPercentage;
-    use values::specified::Image;
+${helpers.predefined_type("background-image", "ImageLayer",
+    initial_value="Either::First(None_)",
+    initial_specified_value="Either::First(None_)",
+    spec="https://drafts.csswg.org/css-backgrounds/#the-background-image",
+    vector="True",
+    animation_value_type="discrete",
+    ignored_when_colors_disabled="True",
+    flags="APPLIES_TO_FIRST_LETTER APPLIES_TO_FIRST_LINE APPLIES_TO_PLACEHOLDER")}
 
-    pub mod computed_value {
-        use values::computed;
-        #[derive(Debug, Clone, PartialEq)]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub struct T(pub Option<computed::Image>);
-    }
+% for (axis, direction, initial) in [("x", "Horizontal", "left"), ("y", "Vertical", "top")]:
+    ${helpers.predefined_type(
+        "background-position-" + axis,
+        "position::" + direction + "Position",
+        initial_value="computed::LengthOrPercentage::zero()",
+        initial_specified_value="SpecifiedValue::initial_specified_value()",
+        spec="https://drafts.csswg.org/css-backgrounds-4/#propdef-background-position-" + axis,
+        animation_value_type="ComputedValue",
+        vector=True,
+        flags="APPLIES_TO_FIRST_LETTER APPLIES_TO_FIRST_LINE APPLIES_TO_PLACEHOLDER",
+    )}
+% endfor
 
-    impl ToCss for computed_value::T {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            match self.0 {
-                None => dest.write_str("none"),
-                Some(ref image) => image.to_css(dest),
-            }
-        }
-    }
-
-    no_viewport_percentage!(SpecifiedValue);
-
-    #[derive(Debug, Clone, PartialEq)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    pub struct SpecifiedValue(pub Option<Image>);
-
-    impl ToCss for SpecifiedValue {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            match *self {
-                SpecifiedValue(Some(ref image)) => image.to_css(dest),
-                SpecifiedValue(None) => dest.write_str("none"),
-            }
-        }
-    }
-
-    #[inline]
-    pub fn get_initial_value() -> computed_value::T {
-        computed_value::T(None)
-    }
-    #[inline]
-    pub fn get_initial_specified_value() -> SpecifiedValue {
-        SpecifiedValue(None)
-    }
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
-        if input.try(|input| input.expect_ident_matching("none")).is_ok() {
-            Ok(SpecifiedValue(None))
-        } else {
-            Ok(SpecifiedValue(Some(try!(Image::parse(context, input)))))
-        }
-    }
-    impl ToComputedValue for SpecifiedValue {
-        type ComputedValue = computed_value::T;
-
-        #[inline]
-        fn to_computed_value(&self, context: &Context) -> computed_value::T {
-            match *self {
-                SpecifiedValue(None) => computed_value::T(None),
-                SpecifiedValue(Some(ref image)) =>
-                    computed_value::T(Some(image.to_computed_value(context))),
-            }
-        }
-
-        #[inline]
-        fn from_computed_value(computed: &computed_value::T) -> Self {
-            match *computed {
-                computed_value::T(None) => SpecifiedValue(None),
-                computed_value::T(Some(ref image)) =>
-                    SpecifiedValue(Some(ToComputedValue::from_computed_value(image))),
-            }
-        }
-    }
-</%helpers:vector_longhand>
-
-<%helpers:vector_longhand name="background-position-x" animation_type="normal"
-                          spec="https://drafts.csswg.org/css-backgrounds-4/#propdef-background-position-x"
-                          delegate_animate="True">
-    use std::fmt;
-    use style_traits::ToCss;
-    use values::HasViewportPercentage;
-    use values::specified::position::HorizontalPosition;
-
-    #[allow(missing_docs)]
-    pub mod computed_value {
-        use values::computed::position::HorizontalPosition;
-        use properties::animated_properties::{Interpolate, RepeatableListInterpolate};
-
-        pub type T = HorizontalPosition;
-    }
-
-    #[allow(missing_docs)]
-    pub type SpecifiedValue = HorizontalPosition;
-
-    #[inline]
-    #[allow(missing_docs)]
-    pub fn get_initial_value() -> computed_value::T {
-        use values::computed::position::HorizontalPosition;
-        HorizontalPosition(computed::LengthOrPercentage::Percentage(0.0))
-    }
-    #[inline]
-    #[allow(missing_docs)]
-    pub fn get_initial_specified_value() -> SpecifiedValue {
-        use values::specified::position::Keyword;
-        HorizontalPosition {
-            keyword: Some(Keyword::Left),
-            position: None,
-        }
-    }
-    #[inline]
-    #[allow(missing_docs)]
-    pub fn get_initial_position_value() -> SpecifiedValue {
-        use values::specified::{LengthOrPercentage, Percentage};
-        HorizontalPosition {
-            keyword: None,
-            position: Some(LengthOrPercentage::Percentage(Percentage(0.0))),
-        }
-    }
-
-    #[allow(missing_docs)]
-    pub fn parse(context: &ParserContext, input: &mut Parser)
-                 -> Result<SpecifiedValue, ()> {
-        HorizontalPosition::parse(context, input)
-    }
-</%helpers:vector_longhand>
-
-<%helpers:vector_longhand name="background-position-y" animation_type="normal"
-                          spec="https://drafts.csswg.org/css-backgrounds-4/#propdef-background-position-y"
-                          delegate_animate="True">
-    use std::fmt;
-    use style_traits::ToCss;
-    use values::HasViewportPercentage;
-    use values::specified::position::VerticalPosition;
-
-    #[allow(missing_docs)]
-    pub mod computed_value {
-        use values::computed::position::VerticalPosition;
-        use properties::animated_properties::{Interpolate, RepeatableListInterpolate};
-
-        pub type T = VerticalPosition;
-    }
-
-    #[allow(missing_docs)]
-    pub type SpecifiedValue = VerticalPosition;
-
-    #[inline]
-    #[allow(missing_docs)]
-    pub fn get_initial_value() -> computed_value::T {
-        use values::computed::position::VerticalPosition;
-        VerticalPosition(computed::LengthOrPercentage::Percentage(0.0))
-    }
-    #[inline]
-    #[allow(missing_docs)]
-    pub fn get_initial_specified_value() -> SpecifiedValue {
-        use values::specified::position::Keyword;
-        VerticalPosition {
-            keyword: Some(Keyword::Top),
-            position: None,
-        }
-    }
-    #[inline]
-    #[allow(missing_docs)]
-    pub fn get_initial_position_value() -> SpecifiedValue {
-        use values::specified::{LengthOrPercentage, Percentage};
-        VerticalPosition {
-            keyword: None,
-            position: Some(LengthOrPercentage::Percentage(Percentage(0.0))),
-        }
-    }
-
-    #[inline]
-    #[allow(missing_docs)]
-    pub fn parse(context: &ParserContext, input: &mut Parser)
-                 -> Result<SpecifiedValue, ()> {
-        VerticalPosition::parse(context, input)
-    }
-</%helpers:vector_longhand>
-
-<%helpers:vector_longhand name="background-repeat" animation_type="none"
-                          spec="https://drafts.csswg.org/css-backgrounds/#the-background-repeat">
-    use std::fmt;
-    use style_traits::ToCss;
-    use values::HasViewportPercentage;
-
-    define_css_keyword_enum!(RepeatKeyword:
-                             "repeat" => Repeat,
-                             "space" => Space,
-                             "round" => Round,
-                             "no-repeat" => NoRepeat);
-
-    #[derive(Debug, Clone, PartialEq)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    pub enum SpecifiedValue {
-        RepeatX,
-        RepeatY,
-        Other(RepeatKeyword, Option<RepeatKeyword>),
-    }
-
-    pub mod computed_value {
-        pub use super::RepeatKeyword;
-
-        #[derive(Debug, Clone, PartialEq)]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub struct T(pub RepeatKeyword, pub RepeatKeyword);
-    }
-
-    no_viewport_percentage!(SpecifiedValue);
-
-    impl ToCss for computed_value::T {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            match (self.0, self.1) {
-                (RepeatKeyword::Repeat, RepeatKeyword::NoRepeat) => dest.write_str("repeat-x"),
-                (RepeatKeyword::NoRepeat, RepeatKeyword::Repeat) => dest.write_str("repeat-y"),
-                (horizontal, vertical) => {
-                    try!(horizontal.to_css(dest));
-                    if horizontal != vertical {
-                        try!(dest.write_str(" "));
-                        try!(vertical.to_css(dest));
-                    }
-                    Ok(())
-                },
-            }
-        }
-    }
-    impl ToCss for SpecifiedValue {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            match *self {
-                SpecifiedValue::RepeatX => dest.write_str("repeat-x"),
-                SpecifiedValue::RepeatY => dest.write_str("repeat-y"),
-                SpecifiedValue::Other(horizontal, vertical) => {
-                    try!(horizontal.to_css(dest));
-                    if let Some(vertical) = vertical {
-                        try!(dest.write_str(" "));
-                        try!(vertical.to_css(dest));
-                    }
-                    Ok(())
-                }
-            }
-        }
-    }
-
-    #[inline]
-    pub fn get_initial_value() -> computed_value::T {
-        computed_value::T(RepeatKeyword::Repeat, RepeatKeyword::Repeat)
-    }
-
-    #[inline]
-    pub fn get_initial_specified_value() -> SpecifiedValue {
-        SpecifiedValue::Other(RepeatKeyword::Repeat, None)
-    }
-
-    impl ToComputedValue for SpecifiedValue {
-        type ComputedValue = computed_value::T;
-
-        #[inline]
-        fn to_computed_value(&self, _context: &Context) -> computed_value::T {
-            match *self {
-                SpecifiedValue::RepeatX =>
-                    computed_value::T(RepeatKeyword::Repeat, RepeatKeyword::NoRepeat),
-                SpecifiedValue::RepeatY =>
-                    computed_value::T(RepeatKeyword::NoRepeat, RepeatKeyword::Repeat),
-                SpecifiedValue::Other(horizontal, vertical) =>
-                    computed_value::T(horizontal, vertical.unwrap_or(horizontal))
-            }
-        }
-
-        #[inline]
-        fn from_computed_value(computed: &computed_value::T) -> Self {
-            match (computed.0, computed.1) {
-                (RepeatKeyword::Repeat, RepeatKeyword::NoRepeat) => SpecifiedValue::RepeatX,
-                (RepeatKeyword::NoRepeat, RepeatKeyword::Repeat) => SpecifiedValue::RepeatY,
-                (horizontal, vertical) => SpecifiedValue::Other(horizontal, Some(vertical)),
-            }
-        }
-    }
-
-    pub fn parse(_context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
-        let ident = input.expect_ident()?;
-        match_ignore_ascii_case! { &ident,
-            "repeat-x" => Ok(SpecifiedValue::RepeatX),
-            "repeat-y" => Ok(SpecifiedValue::RepeatY),
-            _ => {
-                let horizontal = try!(RepeatKeyword::from_ident(&ident));
-                let vertical = input.try(RepeatKeyword::parse).ok();
-                Ok(SpecifiedValue::Other(horizontal, vertical))
-            }
-        }
-    }
-</%helpers:vector_longhand>
+${helpers.predefined_type(
+    "background-repeat",
+    "BackgroundRepeat",
+    "computed::BackgroundRepeat::repeat()",
+    initial_specified_value="specified::BackgroundRepeat::repeat()",
+    animation_value_type="discrete",
+    vector=True,
+    spec="https://drafts.csswg.org/css-backgrounds/#the-background-repeat",
+    flags="APPLIES_TO_FIRST_LETTER APPLIES_TO_FIRST_LINE APPLIES_TO_PLACEHOLDER",
+)}
 
 ${helpers.single_keyword("background-attachment",
                          "scroll fixed" + (" local" if product == "gecko" else ""),
                          vector=True,
+                         gecko_constant_prefix="NS_STYLE_IMAGELAYER_ATTACHMENT",
                          spec="https://drafts.csswg.org/css-backgrounds/#the-background-attachment",
-                         animation_type="none")}
+                         animation_value_type="discrete",
+                         flags="APPLIES_TO_FIRST_LETTER APPLIES_TO_FIRST_LINE APPLIES_TO_PLACEHOLDER")}
 
 ${helpers.single_keyword("background-clip",
                          "border-box padding-box content-box",
                          extra_gecko_values="text",
                          vector=True, extra_prefixes="webkit",
+                         gecko_enum_prefix="StyleGeometryBox",
                          spec="https://drafts.csswg.org/css-backgrounds/#the-background-clip",
-                         animation_type="none")}
+                         animation_value_type="discrete",
+                         flags="APPLIES_TO_FIRST_LETTER APPLIES_TO_FIRST_LINE APPLIES_TO_PLACEHOLDER")}
 
 ${helpers.single_keyword("background-origin",
                          "padding-box border-box content-box",
                          vector=True, extra_prefixes="webkit",
+                         gecko_enum_prefix="StyleGeometryBox",
                          spec="https://drafts.csswg.org/css-backgrounds/#the-background-origin",
-                         animation_type="none")}
+                         animation_value_type="discrete",
+                         flags="APPLIES_TO_FIRST_LETTER APPLIES_TO_FIRST_LINE APPLIES_TO_PLACEHOLDER")}
 
-<%helpers:vector_longhand name="background-size" animation_type="normal" extra_prefixes="webkit"
-                          spec="https://drafts.csswg.org/css-backgrounds/#the-background-size">
-    use cssparser::Token;
-    use std::ascii::AsciiExt;
-    use std::fmt;
-    use style_traits::ToCss;
-    use values::HasViewportPercentage;
-
-    #[allow(missing_docs)]
-    pub mod computed_value {
-        use values::computed::LengthOrPercentageOrAuto;
-        use properties::animated_properties::{Interpolate, RepeatableListInterpolate};
-
-        #[derive(PartialEq, Clone, Debug)]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub struct ExplicitSize {
-            pub width: LengthOrPercentageOrAuto,
-            pub height: LengthOrPercentageOrAuto,
-        }
-
-        #[derive(PartialEq, Clone, Debug)]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub enum T {
-            Explicit(ExplicitSize),
-            Cover,
-            Contain,
-        }
-
-        impl RepeatableListInterpolate for T {}
-
-        impl Interpolate for T {
-            fn interpolate(&self, other: &Self, time: f64) -> Result<Self, ()> {
-                use properties::longhands::background_size::single_value::computed_value::ExplicitSize;
-                match (self, other) {
-                    (&T::Explicit(ref me), &T::Explicit(ref other)) => {
-                        Ok(T::Explicit(ExplicitSize {
-                            width: try!(me.width.interpolate(&other.width, time)),
-                            height: try!(me.height.interpolate(&other.height, time)),
-                        }))
-                    }
-                    _ => Err(()),
-                }
-            }
-        }
-    }
-
-    impl ToCss for computed_value::T {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            match *self {
-                computed_value::T::Explicit(ref size) => size.to_css(dest),
-                computed_value::T::Cover => dest.write_str("cover"),
-                computed_value::T::Contain => dest.write_str("contain"),
-            }
-        }
-    }
-
-    impl HasViewportPercentage for ExplicitSize {
-        fn has_viewport_percentage(&self) -> bool {
-            return self.width.has_viewport_percentage() || self.height.has_viewport_percentage();
-        }
-    }
-
-    #[derive(Clone, PartialEq, Debug)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    #[allow(missing_docs)]
-    pub struct ExplicitSize {
-        pub width: specified::LengthOrPercentageOrAuto,
-        pub height: specified::LengthOrPercentageOrAuto,
-    }
-
-    impl ToCss for ExplicitSize {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            try!(self.width.to_css(dest));
-            try!(dest.write_str(" "));
-            self.height.to_css(dest)
-        }
-    }
-
-    impl ToCss for computed_value::ExplicitSize {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            try!(self.width.to_css(dest));
-            try!(dest.write_str(" "));
-            self.height.to_css(dest)
-        }
-    }
-
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            match *self {
-                SpecifiedValue::Explicit(ref explicit_size) => explicit_size.has_viewport_percentage(),
-                _ => false
-            }
-        }
-    }
-
-    #[derive(Clone, PartialEq, Debug)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    pub enum SpecifiedValue {
-        Explicit(ExplicitSize),
-        Cover,
-        Contain,
-    }
-
-    impl ToCss for SpecifiedValue {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            match *self {
-                SpecifiedValue::Explicit(ref size) => size.to_css(dest),
-                SpecifiedValue::Cover => dest.write_str("cover"),
-                SpecifiedValue::Contain => dest.write_str("contain"),
-            }
-        }
-    }
-
-    impl ToComputedValue for SpecifiedValue {
-        type ComputedValue = computed_value::T;
-
-        #[inline]
-        fn to_computed_value(&self, context: &Context) -> computed_value::T {
-            match *self {
-                SpecifiedValue::Explicit(ref size) => {
-                    computed_value::T::Explicit(computed_value::ExplicitSize {
-                        width: size.width.to_computed_value(context),
-                        height: size.height.to_computed_value(context),
-                    })
-                }
-                SpecifiedValue::Cover => computed_value::T::Cover,
-                SpecifiedValue::Contain => computed_value::T::Contain,
-            }
-        }
-        #[inline]
-        fn from_computed_value(computed: &computed_value::T) -> Self {
-            match *computed {
-                computed_value::T::Explicit(ref size) => {
-                    SpecifiedValue::Explicit(ExplicitSize {
-                        width: ToComputedValue::from_computed_value(&size.width),
-                        height: ToComputedValue::from_computed_value(&size.height),
-                    })
-                }
-                computed_value::T::Cover => SpecifiedValue::Cover,
-                computed_value::T::Contain => SpecifiedValue::Contain,
-            }
-        }
-    }
-
-    #[inline]
-    pub fn get_initial_value() -> computed_value::T {
-        computed_value::T::Explicit(computed_value::ExplicitSize {
-            width: computed::LengthOrPercentageOrAuto::Auto,
-            height: computed::LengthOrPercentageOrAuto::Auto,
-        })
-    }
-    #[inline]
-    pub fn get_initial_specified_value() -> SpecifiedValue {
-        SpecifiedValue::Explicit(ExplicitSize {
-            width: specified::LengthOrPercentageOrAuto::Auto,
-            height: specified::LengthOrPercentageOrAuto::Auto,
-        })
-    }
-
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue,()> {
-        if input.try(|input| input.expect_ident_matching("cover")).is_ok() {
-            return Ok(SpecifiedValue::Cover);
-        }
-
-        if input.try(|input| input.expect_ident_matching("contain")).is_ok() {
-            return Ok(SpecifiedValue::Contain);
-        }
-
-        let width =
-            try!(specified::LengthOrPercentageOrAuto::parse_non_negative(context, input));
-
-        let height = if input.is_exhausted() {
-            specified::LengthOrPercentageOrAuto::Auto
-        } else {
-            try!(specified::LengthOrPercentageOrAuto::parse_non_negative(context, input))
-        };
-
-        Ok(SpecifiedValue::Explicit(ExplicitSize {
-            width: width,
-            height: height,
-        }))
-    }
-</%helpers:vector_longhand>
+${helpers.predefined_type("background-size", "BackgroundSize",
+    initial_value="computed::BackgroundSize::auto()",
+    initial_specified_value="specified::BackgroundSize::auto()",
+    spec="https://drafts.csswg.org/css-backgrounds/#the-background-size",
+    vector=True,
+    animation_value_type="BackgroundSizeList",
+    need_animatable=True,
+    flags="APPLIES_TO_FIRST_LETTER APPLIES_TO_FIRST_LINE APPLIES_TO_PLACEHOLDER",
+    extra_prefixes="webkit")}
 
 // https://drafts.fxtf.org/compositing/#background-blend-mode
 ${helpers.single_keyword("background-blend-mode",
                          """normal multiply screen overlay darken lighten color-dodge
                             color-burn hard-light soft-light difference exclusion hue
                             saturation color luminosity""",
-                         vector=True, products="gecko", animation_type="none",
-                         spec="https://drafts.fxtf.org/compositing/#background-blend-mode")}
+                         gecko_constant_prefix="NS_STYLE_BLEND",
+                         gecko_pref="layout.css.background-blend-mode.enabled",
+                         vector=True, products="gecko", animation_value_type="discrete",
+                         spec="https://drafts.fxtf.org/compositing/#background-blend-mode",
+                         flags="APPLIES_TO_FIRST_LETTER APPLIES_TO_FIRST_LINE APPLIES_TO_PLACEHOLDER")}

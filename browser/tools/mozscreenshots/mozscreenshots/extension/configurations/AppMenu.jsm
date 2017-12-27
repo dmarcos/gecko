@@ -9,7 +9,6 @@ this.EXPORTED_SYMBOLS = ["AppMenu"];
 const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 
 this.AppMenu = {
 
@@ -17,13 +16,15 @@ this.AppMenu = {
 
   configurations: {
     appMenuClosed: {
-      applyConfig: Task.async(function*() {
+      selectors: ["#appMenu-popup"],
+      async applyConfig() {
         let browserWindow = Services.wm.getMostRecentWindow("navigator:browser");
         browserWindow.PanelUI.hide();
-      }),
+      },
     },
 
     appMenuMainView: {
+      selectors: ["#appMenu-popup"],
       applyConfig() {
         let browserWindow = Services.wm.getMostRecentWindow("navigator:browser");
         let promise = browserWindow.PanelUI.show();
@@ -33,6 +34,7 @@ this.AppMenu = {
     },
 
     appMenuHistorySubview: {
+      selectors: ["#appMenu-popup"],
       applyConfig() {
         // History has a footer
         if (isCustomizing()) {
@@ -50,6 +52,7 @@ this.AppMenu = {
     },
 
     appMenuHelpSubview: {
+      selectors: ["#appMenu-popup"],
       applyConfig() {
         if (isCustomizing()) {
           return Promise.reject("Can't show subviews while customizing");

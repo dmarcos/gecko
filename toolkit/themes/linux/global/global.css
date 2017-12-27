@@ -8,14 +8,11 @@
 
 /* all localizable skin settings shall live here */
 @import url("chrome://global/locale/intl.css");
+@import url("chrome://global/skin/menu.css");
 
 @namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
 
 /* ::::: XBL bindings ::::: */
-
-radio {
-  -moz-binding: url("chrome://global/skin/globalBindings.xml#radio-with-spacing");
-}
 
 menulist > menupopup {
   -moz-binding: url("chrome://global/content/bindings/popup.xml#popup-scrollbars");
@@ -25,8 +22,10 @@ progressmeter[mode="undetermined"] {
   -moz-binding: url("chrome://global/content/bindings/progressmeter.xml#progressmeter-undetermined");
 }
 
-toolbar[type="menubar"]:not([autohide="true"]):not(:-moz-lwtheme):-moz-system-metric(menubar-drag) {
-  -moz-binding: url("chrome://global/content/bindings/toolbar.xml#toolbar-drag");
+@media (-moz-menubar-drag) {
+  toolbar[type="menubar"]:not([autohide="true"]):not(:-moz-lwtheme) {
+    -moz-binding: url("chrome://global/content/bindings/toolbar.xml#toolbar-drag");
+  }
 }
 
 /* ::::: Variables ::::: */
@@ -64,7 +63,7 @@ window.dialog {
   list-style-image: url("moz-icon://stock/gtk-dialog-info?size=dialog");
 }
 
-.alert-dialog #info\.icon,
+.alert-dialog #infoIcon,
 .alert-icon {
   list-style-image: url("moz-icon://stock/gtk-dialog-warning?size=dialog");
 }
@@ -91,42 +90,11 @@ iframe {
   min-height: 10px;
 }
 
-/* ::::: statusbar ::::: */
-
-statusbar {
-  -moz-appearance: statusbar;
-  min-height: 22px;
-}
-
-statusbar:-moz-lwtheme {
-  -moz-appearance: none;
-}
-
-statusbarpanel {
-  -moz-appearance: statusbarpanel;
-  -moz-box-align: center;
-  -moz-box-pack: center;
-  padding: 0 4px;
-}
-
-.statusbar-resizerpanel {
-  -moz-box-align: end;
-  -moz-box-pack: end;
-  -moz-appearance: resizerpanel;
-  padding: 0;
-}
-
-.statusbarpanel-iconic,
-.statusbarpanel-iconic-text,
-.statusbarpanel-menu-iconic {
-  padding: 0 1px;
-}
-
 /* XXXBlake yeah, shoot me -- these don't belong here.  I'll move them later. */
 
 sidebarheader {
-  height: 25px;
-  background-color: -moz-Dialog;
+  min-height: 25px;
+  text-shadow: none;
 }
 
 sidebarheader > label {
@@ -144,13 +112,8 @@ toolbar[mode="text"] .toolbarbutton-text {
 
 /* ::::: miscellaneous formatting ::::: */
 
-:root:-moz-lwtheme,
-statusbarpanel:-moz-lwtheme {
+:root:-moz-lwtheme {
   -moz-appearance: none;
-}
-
-sidebarheader:-moz-lwtheme {
-  background: none;
 }
 
 :root:-moz-lwtheme-darktext {
@@ -167,7 +130,7 @@ sidebarheader:-moz-lwtheme {
   border-bottom-color: ThreeDHighlight;
   margin: 0 5px 5px;
 }
-  
+
 .outset {
   border: 1px solid ThreeDShadow;
   border-left-color: ThreeDHighlight;
@@ -183,7 +146,7 @@ separator[orient="vertical"] {
 
 separator.thin:not([orient="vertical"]) {
   height: 0.5em;
-}  
+}
 separator.thin[orient="vertical"] {
   width: 0.5em;
 }
@@ -206,7 +169,7 @@ separator.groove[orient="vertical"] {
 .small-margin {
   margin: 1px 2px;
 }
-    
+
 .plain {
   -moz-appearance: none;
   margin: 0 !important;
@@ -286,40 +249,23 @@ popupnotificationcontent {
 /* :::::: autoscroll popup ::::: */
 
 .autoscroller {
-  height: 28px;
-  width: 28px;
   border: none;
-  margin: -14px;
   padding: 0;
-  background-image: url("chrome://global/skin/icons/autoscroll.png");
+  background-image: url("chrome://global/skin/icons/autoscroll.svg");
+  background-size: contain;
   background-color: transparent;
-  background-position: right top;
+  background-repeat: no-repeat;
   -moz-appearance: none;
 }
 
 .autoscroller[scrolldir="NS"] {
-  background-position: right center;
+  background-image: url("chrome://global/skin/icons/autoscroll-vertical.svg");
 }
 
 .autoscroller[scrolldir="EW"] {
-  background-position: right bottom;
+  background-image: url("chrome://global/skin/icons/autoscroll-horizontal.svg");
 }
 
 /* :::::: Close button icons ::::: */
 
-.close-icon {
-  -moz-appearance: none;
-  height: 16px;
-  width: 16px;
-  background-image: -moz-image-rect(url("chrome://global/skin/icons/close.svg"), 0, 16, 16, 0);
-  background-position: center center;
-  background-repeat: no-repeat;
-}
-
-.close-icon:hover {
-  background-image: -moz-image-rect(url("chrome://global/skin/icons/close.svg"), 0, 32, 16, 16);
-}
-
-.close-icon:hover:active {
-  background-image: -moz-image-rect(url("chrome://global/skin/icons/close.svg"), 0, 48, 16, 32);
-}
+%include ../../shared/close-icon.inc.css

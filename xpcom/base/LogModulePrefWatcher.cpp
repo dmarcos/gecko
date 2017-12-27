@@ -8,6 +8,7 @@
 
 #include "mozilla/Logging.h"
 #include "mozilla/Preferences.h"
+#include "nsMemory.h"
 #include "nsString.h"
 #include "nsXULAppAPI.h"
 #include "base/process_util.h"
@@ -64,7 +65,7 @@ LoadPrefValue(const char* aName)
     nsAutoCString prefName(aName);
 
     if (prefName.EqualsLiteral(kLoggingPrefLogFile)) {
-      rv = Preferences::GetCString(aName, &prefValue);
+      rv = Preferences::GetCString(aName, prefValue);
       // The pref was reset. Clear the user file.
       if (NS_FAILED(rv) || prefValue.IsEmpty()) {
         LogModule::SetLogFile(nullptr);
@@ -73,7 +74,7 @@ LoadPrefValue(const char* aName)
 
       // If the pref value doesn't have a PID placeholder, append it to the end.
       if (!strstr(prefValue.get(), "%PID")) {
-        prefValue.Append("%PID");
+        prefValue.AppendLiteral("%PID");
       }
 
       LogModule::SetLogFile(prefValue.BeginReading());
@@ -89,7 +90,7 @@ LoadPrefValue(const char* aName)
 
   if (Preferences::GetInt(aName, &prefLevel) == NS_OK) {
     logLevel = ToLogLevel(prefLevel);
-  } else if (Preferences::GetCString(aName, &prefValue) == NS_OK) {
+  } else if (Preferences::GetCString(aName, prefValue) == NS_OK) {
     if (prefValue.LowerCaseEqualsLiteral("error")) {
       logLevel = LogLevel::Error;
     } else if (prefValue.LowerCaseEqualsLiteral("warning")) {

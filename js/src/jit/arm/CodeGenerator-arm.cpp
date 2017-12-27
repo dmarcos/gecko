@@ -138,8 +138,8 @@ CodeGeneratorARM::generateOutOfLineCode()
         // Push the frame size, so the handler can recover the IonScript.
         masm.ma_mov(Imm32(frameSize()), lr);
 
-        JitCode* handler = gen->jitRuntime()->getGenericBailoutHandler();
-        masm.branch(handler);
+        TrampolinePtr handler = gen->jitRuntime()->getGenericBailoutHandler();
+        masm.jump(handler);
     }
 
     return !masm.oom();
@@ -157,7 +157,7 @@ CodeGeneratorARM::bailoutIf(Assembler::Condition condition, LSnapshot* snapshot)
                   frameClass_.frameSize() == masm.framePushed());
 
     if (assignBailoutId(snapshot)) {
-        uint8_t* bailoutTable = Assembler::BailoutTableStart(deoptTable_->raw());
+        uint8_t* bailoutTable = Assembler::BailoutTableStart(deoptTable_->value);
         uint8_t* code = bailoutTable + snapshot->bailoutId() * BAILOUT_TABLE_ENTRY_SIZE;
         masm.ma_b(code, condition);
         return;
@@ -630,7 +630,8 @@ CodeGeneratorARM::visitSoftDivI(LSoftDivI* ins)
         masm.setupAlignedABICall();
         masm.passABIArg(lhs);
         masm.passABIArg(rhs);
-        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, __aeabi_idivmod));
+        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, __aeabi_idivmod), MoveOp::GENERAL,
+                         CheckUnsafeCallWithABI::DontCheckOther);
     }
 
     // idivmod returns the quotient in r0, and the remainder in r1.
@@ -781,7 +782,8 @@ CodeGeneratorARM::visitSoftModI(LSoftModI* ins)
     Label done;
 
     // Save the lhs in case we end up with a 0 that should be a -0.0 because lhs < 0.
-    MOZ_ASSERT(callTemp.code() > r3.code() && callTemp.code() < r12.code());
+    MOZ_ASSERT(callTemp != lhs);
+    MOZ_ASSERT(callTemp != rhs);
     masm.ma_mov(lhs, callTemp);
 
     // Prevent INT_MIN % -1;
@@ -818,8 +820,12 @@ CodeGeneratorARM::visitSoftModI(LSoftModI* ins)
         masm.setupAlignedABICall();
         masm.passABIArg(lhs);
         masm.passABIArg(rhs);
-        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, __aeabi_idivmod));
+        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, __aeabi_idivmod), MoveOp::GENERAL,
+                         CheckUnsafeCallWithABI::DontCheckOther);
     }
+
+    MOZ_ASSERT(r1 != output);
+    masm.move32(r1, output);
 
     // If X%Y == 0 and X < 0, then we *actually* wanted to return -0.0
     if (mir->canBeNegativeDividend()) {
@@ -828,12 +834,13 @@ CodeGeneratorARM::visitSoftModI(LSoftModI* ins)
         } else {
             MOZ_ASSERT(mir->fallible());
             // See if X < 0
-            masm.as_cmp(r1, Imm8(0));
+            masm.as_cmp(output, Imm8(0));
             masm.ma_b(&done, Assembler::NotEqual);
             masm.as_cmp(callTemp, Imm8(0));
             bailoutIf(Assembler::Signed, ins->snapshot());
         }
     }
+
     masm.bind(&done);
 }
 
@@ -1399,7 +1406,7 @@ CodeGeneratorARM::visitBox(LBox* box)
 
     MOZ_ASSERT(!box->getOperand(0)->isConstant());
 
-    // On x86, the input operand and the output payload have the same virtual
+    // On arm, the input operand and the output payload have the same virtual
     // register. All that needs to be written is the type tag for the type
     // definition.
     masm.ma_mov(Imm32(MIRTypeToTag(box->type())), ToRegister(type));
@@ -1408,18 +1415,10 @@ CodeGeneratorARM::visitBox(LBox* box)
 void
 CodeGeneratorARM::visitBoxFloatingPoint(LBoxFloatingPoint* box)
 {
-    const LDefinition* payload = box->getDef(PAYLOAD_INDEX);
-    const LDefinition* type = box->getDef(TYPE_INDEX);
-    const LAllocation* in = box->getOperand(0);
-    FloatRegister reg = ToFloatRegister(in);
+    const AnyRegister in = ToAnyRegister(box->getOperand(0));
+    const ValueOperand out = ToOutValue(box);
 
-    if (box->type() == MIRType::Float32) {
-        ScratchFloat32Scope scratch(masm);
-        masm.convertFloat32ToDouble(reg, scratch);
-        masm.ma_vxfer(VFPRegister(scratch), ToRegister(payload), ToRegister(type));
-    } else {
-        masm.ma_vxfer(VFPRegister(reg), ToRegister(payload), ToRegister(type));
-    }
+    masm.moveValue(TypedOrValueRegister(box->type(), in), out);
 }
 
 void
@@ -1787,9 +1786,9 @@ CodeGeneratorARM::generateInvalidateEpilogue()
 
     // Push the Ion script onto the stack (when we determine what that pointer is).
     invalidateEpilogueData_ = masm.pushWithPatch(ImmWord(uintptr_t(-1)));
-    JitCode* thunk = gen->jitRuntime()->getInvalidationThunk();
 
-    masm.branch(thunk);
+    TrampolinePtr thunk = gen->jitRuntime()->getInvalidationThunk();
+    masm.jump(thunk);
 
     // We should never reach this point in JIT code -- the invalidation thunk
     // should pop the invalidated JS frame and return directly to its caller.
@@ -2530,15 +2529,15 @@ CodeGeneratorARM::visitAsmJSStoreHeap(LAsmJSStoreHeap* ins)
 }
 
 void
-CodeGeneratorARM::visitAsmJSCompareExchangeHeap(LAsmJSCompareExchangeHeap* ins)
+CodeGeneratorARM::visitWasmCompareExchangeHeap(LWasmCompareExchangeHeap* ins)
 {
-    MAsmJSCompareExchangeHeap* mir = ins->mir();
-    MOZ_ASSERT(mir->access().offset() == 0);
+    MWasmCompareExchangeHeap* mir = ins->mir();
 
     Scalar::Type vt = mir->access().type();
     const LAllocation* ptr = ins->ptr();
     Register ptrReg = ToRegister(ptr);
-    BaseIndex srcAddr(HeapReg, ptrReg, TimesOne);
+    BaseIndex srcAddr(HeapReg, ptrReg, TimesOne, mir->access().offset());
+
     MOZ_ASSERT(ins->addrTemp()->isBogusTemp());
 
     Register oldval = ToRegister(ins->oldValue());
@@ -2550,42 +2549,14 @@ CodeGeneratorARM::visitAsmJSCompareExchangeHeap(LAsmJSCompareExchangeHeap* ins)
 }
 
 void
-CodeGeneratorARM::visitAsmJSCompareExchangeCallout(LAsmJSCompareExchangeCallout* ins)
+CodeGeneratorARM::visitWasmAtomicExchangeHeap(LWasmAtomicExchangeHeap* ins)
 {
-    const MAsmJSCompareExchangeHeap* mir = ins->mir();
-    MOZ_ASSERT(mir->access().offset() == 0);
-
-    Register ptr = ToRegister(ins->ptr());
-    Register oldval = ToRegister(ins->oldval());
-    Register newval = ToRegister(ins->newval());
-    Register tls = ToRegister(ins->tls());
-    Register instance = ToRegister(ins->getTemp(0));
-    Register viewType = ToRegister(ins->getTemp(1));
-
-    MOZ_ASSERT(ToRegister(ins->output()) == ReturnReg);
-
-    masm.loadPtr(Address(tls, offsetof(wasm::TlsData, instance)), instance);
-    masm.ma_mov(Imm32(mir->access().type()), viewType);
-
-    masm.setupWasmABICall();
-    masm.passABIArg(instance);
-    masm.passABIArg(viewType);
-    masm.passABIArg(ptr);
-    masm.passABIArg(oldval);
-    masm.passABIArg(newval);
-    masm.callWithABI(mir->bytecodeOffset(), wasm::SymbolicAddress::AtomicCmpXchg);
-}
-
-void
-CodeGeneratorARM::visitAsmJSAtomicExchangeHeap(LAsmJSAtomicExchangeHeap* ins)
-{
-    MAsmJSAtomicExchangeHeap* mir = ins->mir();
-    MOZ_ASSERT(mir->access().offset() == 0);
+    MWasmAtomicExchangeHeap* mir = ins->mir();
 
     Scalar::Type vt = mir->access().type();
     Register ptrReg = ToRegister(ins->ptr());
     Register value = ToRegister(ins->value());
-    BaseIndex srcAddr(HeapReg, ptrReg, TimesOne);
+    BaseIndex srcAddr(HeapReg, ptrReg, TimesOne, mir->access().offset());
     MOZ_ASSERT(ins->addrTemp()->isBogusTemp());
 
     masm.atomicExchangeToTypedIntArray(vt == Scalar::Uint32 ? Scalar::Int32 : vt,
@@ -2593,35 +2564,9 @@ CodeGeneratorARM::visitAsmJSAtomicExchangeHeap(LAsmJSAtomicExchangeHeap* ins)
 }
 
 void
-CodeGeneratorARM::visitAsmJSAtomicExchangeCallout(LAsmJSAtomicExchangeCallout* ins)
+CodeGeneratorARM::visitWasmAtomicBinopHeap(LWasmAtomicBinopHeap* ins)
 {
-    const MAsmJSAtomicExchangeHeap* mir = ins->mir();
-    MOZ_ASSERT(mir->access().offset() == 0);
-
-    Register ptr = ToRegister(ins->ptr());
-    Register value = ToRegister(ins->value());
-    Register tls = ToRegister(ins->tls());
-    Register instance = ToRegister(ins->getTemp(0));
-    Register viewType = ToRegister(ins->getTemp(1));
-
-    MOZ_ASSERT(ToRegister(ins->output()) == ReturnReg);
-
-    masm.loadPtr(Address(tls, offsetof(wasm::TlsData, instance)), instance);
-    masm.ma_mov(Imm32(mir->access().type()), viewType);
-
-    masm.setupWasmABICall();
-    masm.passABIArg(instance);
-    masm.passABIArg(viewType);
-    masm.passABIArg(ptr);
-    masm.passABIArg(value);
-    masm.callWithABI(mir->bytecodeOffset(), wasm::SymbolicAddress::AtomicXchg);
-}
-
-void
-CodeGeneratorARM::visitAsmJSAtomicBinopHeap(LAsmJSAtomicBinopHeap* ins)
-{
-    MAsmJSAtomicBinopHeap* mir = ins->mir();
-    MOZ_ASSERT(mir->access().offset() == 0);
+    MWasmAtomicBinopHeap* mir = ins->mir();
     MOZ_ASSERT(mir->hasUses());
 
     Scalar::Type vt = mir->access().type();
@@ -2631,7 +2576,7 @@ CodeGeneratorARM::visitAsmJSAtomicBinopHeap(LAsmJSAtomicBinopHeap* ins)
     AtomicOp op = mir->operation();
     MOZ_ASSERT(ins->addrTemp()->isBogusTemp());
 
-    BaseIndex srcAddr(HeapReg, ptrReg, TimesOne);
+    BaseIndex srcAddr(HeapReg, ptrReg, TimesOne, mir->access().offset());
 
     if (value->isConstant()) {
         atomicBinopToTypedIntArray(op, vt == Scalar::Uint32 ? Scalar::Int32 : vt,
@@ -2645,10 +2590,9 @@ CodeGeneratorARM::visitAsmJSAtomicBinopHeap(LAsmJSAtomicBinopHeap* ins)
 }
 
 void
-CodeGeneratorARM::visitAsmJSAtomicBinopHeapForEffect(LAsmJSAtomicBinopHeapForEffect* ins)
+CodeGeneratorARM::visitWasmAtomicBinopHeapForEffect(LWasmAtomicBinopHeapForEffect* ins)
 {
-    MAsmJSAtomicBinopHeap* mir = ins->mir();
-    MOZ_ASSERT(mir->access().offset() == 0);
+    MWasmAtomicBinopHeap* mir = ins->mir();
     MOZ_ASSERT(!mir->hasUses());
 
     Scalar::Type vt = mir->access().type();
@@ -2658,55 +2602,12 @@ CodeGeneratorARM::visitAsmJSAtomicBinopHeapForEffect(LAsmJSAtomicBinopHeapForEff
     AtomicOp op = mir->operation();
     MOZ_ASSERT(ins->addrTemp()->isBogusTemp());
 
-    BaseIndex srcAddr(HeapReg, ptrReg, TimesOne);
+    BaseIndex srcAddr(HeapReg, ptrReg, TimesOne, mir->access().offset());
 
     if (value->isConstant())
         atomicBinopToTypedIntArray(op, vt, Imm32(ToInt32(value)), srcAddr, flagTemp);
     else
         atomicBinopToTypedIntArray(op, vt, ToRegister(value), srcAddr, flagTemp);
-}
-
-void
-CodeGeneratorARM::visitAsmJSAtomicBinopCallout(LAsmJSAtomicBinopCallout* ins)
-{
-    const MAsmJSAtomicBinopHeap* mir = ins->mir();
-    MOZ_ASSERT(mir->access().offset() == 0);
-
-    Register ptr = ToRegister(ins->ptr());
-    Register value = ToRegister(ins->value());
-    Register tls = ToRegister(ins->tls());
-    Register instance = ToRegister(ins->getTemp(0));
-    Register viewType = ToRegister(ins->getTemp(1));
-
-    masm.loadPtr(Address(tls, offsetof(wasm::TlsData, instance)), instance);
-    masm.move32(Imm32(mir->access().type()), viewType);
-
-    masm.setupWasmABICall();
-    masm.passABIArg(instance);
-    masm.passABIArg(viewType);
-    masm.passABIArg(ptr);
-    masm.passABIArg(value);
-
-    wasm::BytecodeOffset bytecodeOffset = mir->bytecodeOffset();
-    switch (mir->operation()) {
-      case AtomicFetchAddOp:
-        masm.callWithABI(bytecodeOffset, wasm::SymbolicAddress::AtomicFetchAdd);
-        break;
-      case AtomicFetchSubOp:
-        masm.callWithABI(bytecodeOffset, wasm::SymbolicAddress::AtomicFetchSub);
-        break;
-      case AtomicFetchAndOp:
-        masm.callWithABI(bytecodeOffset, wasm::SymbolicAddress::AtomicFetchAnd);
-        break;
-      case AtomicFetchOrOp:
-        masm.callWithABI(bytecodeOffset, wasm::SymbolicAddress::AtomicFetchOr);
-        break;
-      case AtomicFetchXorOp:
-        masm.callWithABI(bytecodeOffset, wasm::SymbolicAddress::AtomicFetchXor);
-        break;
-      default:
-        MOZ_CRASH("Unknown op");
-    }
 }
 
 void
@@ -2825,9 +2726,7 @@ CodeGeneratorARM::visitSoftUDivOrMod(LSoftUDivOrMod* ins)
 
     MOZ_ASSERT(lhs == r0);
     MOZ_ASSERT(rhs == r1);
-    MOZ_ASSERT(ins->mirRaw()->isDiv() || ins->mirRaw()->isMod());
-    MOZ_ASSERT_IF(ins->mirRaw()->isDiv(), output == r0);
-    MOZ_ASSERT_IF(ins->mirRaw()->isMod(), output == r1);
+    MOZ_ASSERT(output == r0);
 
     Label done;
     MDiv* div = ins->mir()->isDiv() ? ins->mir()->toDiv() : nullptr;
@@ -2846,7 +2745,13 @@ CodeGeneratorARM::visitSoftUDivOrMod(LSoftUDivOrMod* ins)
         masm.setupAlignedABICall();
         masm.passABIArg(lhs);
         masm.passABIArg(rhs);
-        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, __aeabi_uidivmod));
+        masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, __aeabi_uidivmod), MoveOp::GENERAL,
+                         CheckUnsafeCallWithABI::DontCheckOther);
+    }
+
+    if (mod) {
+        MOZ_ASSERT(output == r0, "output should not be r1 for mod");
+        masm.move32(r1, output);
     }
 
     // uidivmod returns the quotient in r0, and the remainder in r1.
@@ -3089,6 +2994,25 @@ CodeGeneratorARM::visitExtendInt32ToInt64(LExtendInt32ToInt64* lir)
         masm.ma_mov(Imm32(0), output.high);
     else
         masm.ma_asr(Imm32(31), output.low, output.high);
+}
+
+void
+CodeGeneratorARM::visitSignExtendInt64(LSignExtendInt64* lir)
+{
+    Register64 input = ToRegister64(lir->getInt64Operand(0));
+    Register64 output = ToOutRegister64(lir);
+    switch (lir->mode()) {
+      case MSignExtendInt64::Byte:
+        masm.move8SignExtend(input.low, output.low);
+        break;
+      case MSignExtendInt64::Half:
+        masm.move16SignExtend(input.low, output.low);
+        break;
+      case MSignExtendInt64::Word:
+        masm.move32(input.low, output.low);
+        break;
+    }
+    masm.ma_asr(Imm32(31), output.low, output.high);
 }
 
 static Register
@@ -3450,4 +3374,68 @@ CodeGeneratorARM::visitTestI64AndBranch(LTestI64AndBranch* lir)
     jumpToBlock(lir->ifTrue(), Assembler::NonZero);
     masm.as_cmp(input.low, Imm8(0));
     emitBranch(Assembler::NonZero, lir->ifTrue(), lir->ifFalse());
+}
+
+void
+CodeGeneratorARM::visitWasmAtomicLoadI64(LWasmAtomicLoadI64* lir)
+{
+    Register ptr = ToRegister(lir->ptr());
+    Register64 output = ToOutRegister64(lir);
+    Register64 tmp(InvalidReg, InvalidReg);
+
+    BaseIndex addr(HeapReg, ptr, TimesOne, lir->mir()->access().offset());
+    masm.atomicLoad64(addr, tmp, output);
+}
+
+void
+CodeGeneratorARM::visitWasmAtomicStoreI64(LWasmAtomicStoreI64* lir)
+{
+    Register ptr = ToRegister(lir->ptr());
+    Register64 value = ToRegister64(lir->value());
+    Register64 tmp(ToRegister(lir->tmpHigh()), ToRegister(lir->tmpLow()));
+
+    BaseIndex addr(HeapReg, ptr, TimesOne, lir->mir()->access().offset());
+    masm.atomicExchange64(addr, value, tmp);
+}
+
+void
+CodeGeneratorARM::visitWasmCompareExchangeI64(LWasmCompareExchangeI64* lir)
+{
+    Register ptr = ToRegister(lir->ptr());
+    Register64 expected = ToRegister64(lir->expected());
+    Register64 replacement = ToRegister64(lir->replacement());
+    Register64 out = ToOutRegister64(lir);
+
+    BaseIndex addr(HeapReg, ptr, TimesOne, lir->mir()->access().offset());
+    masm.compareExchange64(addr, expected, replacement, out);
+}
+
+void
+CodeGeneratorARM::visitWasmAtomicBinopI64(LWasmAtomicBinopI64* lir)
+{
+    Register ptr = ToRegister(lir->ptr());
+    Register64 value = ToRegister64(lir->value());
+    Register64 out = ToOutRegister64(lir);
+
+    BaseIndex addr(HeapReg, ptr, TimesOne, lir->access().offset());
+    Register64 tmp(ToRegister(lir->tmpHigh()), ToRegister(lir->tmpLow()));
+    switch (lir->operation()) {
+      case AtomicFetchAddOp: masm.atomicFetchAdd64(value, addr, tmp, out); break;
+      case AtomicFetchSubOp: masm.atomicFetchSub64(value, addr, tmp, out); break;
+      case AtomicFetchAndOp: masm.atomicFetchAnd64(value, addr, tmp, out); break;
+      case AtomicFetchOrOp:  masm.atomicFetchOr64(value, addr, tmp, out); break;
+      case AtomicFetchXorOp: masm.atomicFetchXor64(value, addr, tmp, out); break;
+      default:               MOZ_CRASH();
+    }
+}
+
+void
+CodeGeneratorARM::visitWasmAtomicExchangeI64(LWasmAtomicExchangeI64* lir)
+{
+    Register ptr = ToRegister(lir->ptr());
+    Register64 value = ToRegister64(lir->value());
+    Register64 out = ToOutRegister64(lir);
+
+    BaseIndex addr(HeapReg, ptr, TimesOne, lir->access().offset());
+    masm.atomicExchange64(addr, value, out);
 }

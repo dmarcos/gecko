@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+from __future__ import absolute_import
+
 import os
 import proctest
 import mozinfo
@@ -93,6 +95,7 @@ class ProcTestWait(proctest.ProcTest):
                         'Negative returncode expected, got "%s"' % returncode2)
         self.assertEqual(returncode1, returncode2,
                          'Expected both returncodes of wait() to be equal')
+
 
 if __name__ == '__main__':
     mozunit.main()

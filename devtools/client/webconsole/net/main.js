@@ -5,8 +5,6 @@
 
 /* global BrowserLoader */
 
-var { utils: Cu } = Components;
-
 // Initialize module loader and load all modules of the new inline
 // preview feature. The entire code-base doesn't need any extra
 // privileges and runs entirely in content scope.
@@ -16,7 +14,7 @@ const require = BrowserLoader({
   window}).require;
 
 const NetRequest = require("./net-request");
-const { loadSheet } = require("sdk/stylesheet/utils");
+const { loadSheet } = require("devtools/shared/layout/utils");
 
 // Localization
 const {LocalizationHelper} = require("devtools/shared/l10n");
@@ -25,7 +23,7 @@ const L10N = new LocalizationHelper("devtools/client/locales/netmonitor.properti
 // Stylesheets
 var styleSheets = [
   "resource://devtools/client/jsonview/css/toolbar.css",
-  "resource://devtools/client/shared/components/tree/tree-view.css",
+  "resource://devtools/client/shared/components/tree/TreeView.css",
   "resource://devtools/client/shared/components/reps.css",
   "resource://devtools/client/webconsole/net/net-request.css",
   "resource://devtools/client/webconsole/net/components/size-limit.css",
@@ -40,7 +38,7 @@ var styleSheets = [
 // on the right CSS strategy FIXME.
 // It would also be nice to include them using @import.
 styleSheets.forEach(url => {
-  loadSheet(this, url, "author");
+  loadSheet(window, url, "author");
 });
 
 // Localization API used by React components
@@ -58,6 +56,7 @@ this.Locale = {
     } catch (err) {
       console.error(key + ": " + err);
     }
+    return key;
   }
 };
 
@@ -88,8 +87,6 @@ function onNetworkEvent(log) {
   if (log.update) {
     netRequest.updateBody(response);
   }
-
-  return;
 }
 
 // Make the 'onNetworkEvent' accessible from chrome (see webconsole.js)

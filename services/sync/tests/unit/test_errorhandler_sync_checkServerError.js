@@ -22,12 +22,12 @@ function CatapultEngine() {
 CatapultEngine.prototype = {
   __proto__: SyncEngine.prototype,
   exception: null, // tests fill this in
-  _sync: function _sync() {
+  async _sync() {
     throw this.exception;
   }
 };
 
-function sync_httpd_setup() {
+async function sync_httpd_setup() {
   let collectionsHelper = track_collections_helper();
   let upd = collectionsHelper.with_updated_collection;
 
@@ -57,20 +57,24 @@ async function setUp(server) {
   new FakeCryptoService();
 }
 
-function generateAndUploadKeys(server) {
-  generateNewKeys(Service.collectionKeys);
+async function generateAndUploadKeys(server) {
+  await generateNewKeys(Service.collectionKeys);
   let serverKeys = Service.collectionKeys.asWBO("crypto", "keys");
-  serverKeys.encrypt(Service.identity.syncKeyBundle);
+  await serverKeys.encrypt(Service.identity.syncKeyBundle);
   let res = Service.resource(server.baseURI + "/1.1/johndoe/storage/crypto/keys");
-  return serverKeys.upload(res).success;
+  return (await serverKeys.upload(res)).success;
 }
 
+add_task(async function run_test() {
+  validate_all_future_pings();
+  await engineManager.register(CatapultEngine);
+});
 
 add_task(async function test_backoff500() {
   enableValidationPrefs();
 
   _("Test: HTTP 500 sets backoff status.");
-  let server = sync_httpd_setup();
+  let server = await sync_httpd_setup();
   await setUp(server);
 
   let engine = engineManager.get("catapult");
@@ -78,19 +82,19 @@ add_task(async function test_backoff500() {
   engine.exception = {status: 500};
 
   try {
-    do_check_false(Status.enforceBackoff);
+    Assert.ok(!Status.enforceBackoff);
 
     // Forcibly create and upload keys here -- otherwise we don't get to the 500!
-    do_check_true(generateAndUploadKeys(server));
+    Assert.ok(await generateAndUploadKeys(server));
 
-    Service.login();
-    Service.sync();
-    do_check_true(Status.enforceBackoff);
-    do_check_eq(Status.sync, SYNC_SUCCEEDED);
-    do_check_eq(Status.service, SYNC_FAILED_PARTIAL);
+    await Service.login();
+    await Service.sync();
+    Assert.ok(Status.enforceBackoff);
+    Assert.equal(Status.sync, SYNC_SUCCEEDED);
+    Assert.equal(Status.service, SYNC_FAILED_PARTIAL);
   } finally {
     Status.resetBackoff();
-    Service.startOver();
+    await Service.startOver();
   }
   await promiseStopServer(server);
 });
@@ -99,7 +103,7 @@ add_task(async function test_backoff503() {
   enableValidationPrefs();
 
   _("Test: HTTP 503 with Retry-After header leads to backoff notification and sets backoff status.");
-  let server = sync_httpd_setup();
+  let server = await sync_httpd_setup();
   await setUp(server);
 
   const BACKOFF = 42;
@@ -114,21 +118,21 @@ add_task(async function test_backoff503() {
   });
 
   try {
-    do_check_false(Status.enforceBackoff);
+    Assert.ok(!Status.enforceBackoff);
 
-    do_check_true(generateAndUploadKeys(server));
+    Assert.ok(await generateAndUploadKeys(server));
 
-    Service.login();
-    Service.sync();
+    await Service.login();
+    await Service.sync();
 
-    do_check_true(Status.enforceBackoff);
-    do_check_eq(backoffInterval, BACKOFF);
-    do_check_eq(Status.service, SYNC_FAILED_PARTIAL);
-    do_check_eq(Status.sync, SERVER_MAINTENANCE);
+    Assert.ok(Status.enforceBackoff);
+    Assert.equal(backoffInterval, BACKOFF);
+    Assert.equal(Status.service, SYNC_FAILED_PARTIAL);
+    Assert.equal(Status.sync, SERVER_MAINTENANCE);
   } finally {
     Status.resetBackoff();
     Status.resetSync();
-    Service.startOver();
+    await Service.startOver();
   }
   await promiseStopServer(server);
 });
@@ -137,7 +141,7 @@ add_task(async function test_overQuota() {
   enableValidationPrefs();
 
   _("Test: HTTP 400 with body error code 14 means over quota.");
-  let server = sync_httpd_setup();
+  let server = await sync_httpd_setup();
   await setUp(server);
 
   let engine = engineManager.get("catapult");
@@ -148,18 +152,18 @@ add_task(async function test_overQuota() {
                       }};
 
   try {
-    do_check_eq(Status.sync, SYNC_SUCCEEDED);
+    Assert.equal(Status.sync, SYNC_SUCCEEDED);
 
-    do_check_true(generateAndUploadKeys(server));
+    Assert.ok(await generateAndUploadKeys(server));
 
-    Service.login();
-    Service.sync();
+    await Service.login();
+    await Service.sync();
 
-    do_check_eq(Status.sync, OVER_QUOTA);
-    do_check_eq(Status.service, SYNC_FAILED_PARTIAL);
+    Assert.equal(Status.sync, OVER_QUOTA);
+    Assert.equal(Status.service, SYNC_FAILED_PARTIAL);
   } finally {
     Status.resetSync();
-    Service.startOver();
+    await Service.startOver();
   }
   await promiseStopServer(server);
 });
@@ -168,23 +172,23 @@ add_task(async function test_service_networkError() {
   enableValidationPrefs();
 
   _("Test: Connection refused error from Service.sync() leads to the right status code.");
-  let server = sync_httpd_setup();
+  let server = await sync_httpd_setup();
   await setUp(server);
   await promiseStopServer(server);
   // Provoke connection refused.
   Service.clusterURL = "http://localhost:12345/";
 
   try {
-    do_check_eq(Status.sync, SYNC_SUCCEEDED);
+    Assert.equal(Status.sync, SYNC_SUCCEEDED);
 
     Service._loggedIn = true;
-    Service.sync();
+    await Service.sync();
 
-    do_check_eq(Status.sync, LOGIN_FAILED_NETWORK_ERROR);
-    do_check_eq(Status.service, SYNC_FAILED);
+    Assert.equal(Status.sync, LOGIN_FAILED_NETWORK_ERROR);
+    Assert.equal(Status.service, SYNC_FAILED);
   } finally {
     Status.resetSync();
-    Service.startOver();
+    await Service.startOver();
   }
 });
 
@@ -192,7 +196,7 @@ add_task(async function test_service_offline() {
   enableValidationPrefs();
 
   _("Test: Wanting to sync in offline mode leads to the right status code but does not increment the ignorable error count.");
-  let server = sync_httpd_setup();
+  let server = await sync_httpd_setup();
   await setUp(server);
 
   await promiseStopServer(server);
@@ -200,16 +204,16 @@ add_task(async function test_service_offline() {
   Services.prefs.setBoolPref("network.dns.offline-localhost", false);
 
   try {
-    do_check_eq(Status.sync, SYNC_SUCCEEDED);
+    Assert.equal(Status.sync, SYNC_SUCCEEDED);
 
     Service._loggedIn = true;
-    Service.sync();
+    await Service.sync();
 
-    do_check_eq(Status.sync, LOGIN_FAILED_NETWORK_ERROR);
-    do_check_eq(Status.service, SYNC_FAILED);
+    Assert.equal(Status.sync, LOGIN_FAILED_NETWORK_ERROR);
+    Assert.equal(Status.service, SYNC_FAILED);
   } finally {
     Status.resetSync();
-    Service.startOver();
+    await Service.startOver();
   }
   Services.io.offline = false;
   Services.prefs.clearUserPref("network.dns.offline-localhost");
@@ -219,7 +223,7 @@ add_task(async function test_engine_networkError() {
   enableValidationPrefs();
 
   _("Test: Network related exceptions from engine.sync() lead to the right status code.");
-  let server = sync_httpd_setup();
+  let server = await sync_httpd_setup();
   await setUp(server);
 
   let engine = engineManager.get("catapult");
@@ -228,18 +232,18 @@ add_task(async function test_engine_networkError() {
                                           Cr.NS_ERROR_UNKNOWN_HOST);
 
   try {
-    do_check_eq(Status.sync, SYNC_SUCCEEDED);
+    Assert.equal(Status.sync, SYNC_SUCCEEDED);
 
-    do_check_true(generateAndUploadKeys(server));
+    Assert.ok(await generateAndUploadKeys(server));
 
-    Service.login();
-    Service.sync();
+    await Service.login();
+    await Service.sync();
 
-    do_check_eq(Status.sync, LOGIN_FAILED_NETWORK_ERROR);
-    do_check_eq(Status.service, SYNC_FAILED_PARTIAL);
+    Assert.equal(Status.sync, LOGIN_FAILED_NETWORK_ERROR);
+    Assert.equal(Status.service, SYNC_FAILED_PARTIAL);
   } finally {
     Status.resetSync();
-    Service.startOver();
+    await Service.startOver();
   }
   await promiseStopServer(server);
 });
@@ -247,7 +251,7 @@ add_task(async function test_engine_networkError() {
 add_task(async function test_resource_timeout() {
   enableValidationPrefs();
 
-  let server = sync_httpd_setup();
+  let server = await sync_httpd_setup();
   await setUp(server);
 
   let engine = engineManager.get("catapult");
@@ -257,24 +261,18 @@ add_task(async function test_resource_timeout() {
                                           Cr.NS_ERROR_NET_TIMEOUT);
 
   try {
-    do_check_eq(Status.sync, SYNC_SUCCEEDED);
+    Assert.equal(Status.sync, SYNC_SUCCEEDED);
 
-    do_check_true(generateAndUploadKeys(server));
+    Assert.ok(await generateAndUploadKeys(server));
 
-    Service.login();
-    Service.sync();
+    await Service.login();
+    await Service.sync();
 
-    do_check_eq(Status.sync, LOGIN_FAILED_NETWORK_ERROR);
-    do_check_eq(Status.service, SYNC_FAILED_PARTIAL);
+    Assert.equal(Status.sync, LOGIN_FAILED_NETWORK_ERROR);
+    Assert.equal(Status.service, SYNC_FAILED_PARTIAL);
   } finally {
     Status.resetSync();
-    Service.startOver();
+    await Service.startOver();
   }
   await promiseStopServer(server);
 });
-
-function run_test() {
-  validate_all_future_pings();
-  engineManager.register(CatapultEngine);
-  run_next_test();
-}

@@ -27,7 +27,7 @@ extern "C" {
 
     @code
     nestegg * demux_ctx;
-    nestegg_init(&demux_ctx, io, NULL);
+    nestegg_init(&demux_ctx, io, NULL, -1);
 
     nestegg_packet * pkt;
     while ((r = nestegg_read_packet(demux_ctx, &pkt)) > 0) {
@@ -71,6 +71,7 @@ extern "C" {
 #define NESTEGG_CODEC_VORBIS  1       /**< Track uses Xiph Vorbis codec. */
 #define NESTEGG_CODEC_VP9     2       /**< Track uses Google On2 VP9 codec. */
 #define NESTEGG_CODEC_OPUS    3       /**< Track uses Xiph Opus codec. */
+#define NESTEGG_CODEC_AV1     4       /**< Track uses AOMedia AV1 codec. */
 #define NESTEGG_CODEC_UNKNOWN INT_MAX /**< Track uses unknown codec. */
 
 #define NESTEGG_VIDEO_MONO              0 /**< Track is mono video. */
@@ -248,6 +249,7 @@ int nestegg_track_type(nestegg * context, unsigned int track);
     @param track   Zero based track number.
     @retval #NESTEGG_CODEC_VP8     Track codec is VP8.
     @retval #NESTEGG_CODEC_VP9     Track codec is VP9.
+    @retval #NESTEGG_CODEC_AV1     Track codec is AV1.
     @retval #NESTEGG_CODEC_VORBIS  Track codec is Vorbis.
     @retval #NESTEGG_CODEC_OPUS    Track codec is Opus.
     @retval #NESTEGG_CODEC_UNKNOWN Track codec is unknown.

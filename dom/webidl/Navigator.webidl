@@ -133,12 +133,6 @@ partial interface Navigator {
   Promise<BatteryManager> getBattery();
 };
 
-partial interface Navigator {
-  [NewObject, Pref="dom.flyweb.enabled"]
-  Promise<FlyWebPublishedServer> publishServer(DOMString name,
-                                               optional FlyWebPublishOptions options);
-};
-
 // http://www.w3.org/TR/vibration/#vibration-interface
 partial interface Navigator {
     // We don't support sequences in unions yet
@@ -188,8 +182,6 @@ partial interface Navigator {
   readonly attribute boolean cookieEnabled;
   [Throws, Constant, Cached, NeedsCallerType]
   readonly attribute DOMString buildID;
-  [Throws, ChromeOnly, UnsafeInPrerendering]
-  readonly attribute MozPowerManager mozPower;
 
   // WebKit/Blink/Trident/Presto support this.
   [Throws, NeedsCallerType]
@@ -206,49 +198,6 @@ partial interface Navigator {
    */
   [Throws, ChromeOnly]
   void removeIdleObserver(MozIdleObserver aIdleObserver);
-
-  /**
-   * Request a wake lock for a resource.
-   *
-   * A page holds a wake lock to request that a resource not be turned
-   * off (or otherwise made unavailable).
-   *
-   * The topic is the name of a resource that might be made unavailable for
-   * various reasons. For example, on a mobile device the power manager might
-   * decide to turn off the screen after a period of idle time to save power.
-   *
-   * The resource manager checks the lock state of a topic before turning off
-   * the associated resource. For example, a page could hold a lock on the
-   * "screen" topic to prevent the screensaver from appearing or the screen
-   * from turning off.
-   *
-   * The resource manager defines what each topic means and sets policy.  For
-   * example, the resource manager might decide to ignore 'screen' wake locks
-   * held by pages which are not visible.
-   *
-   * One topic can be locked multiple times; it is considered released only when
-   * all locks on the topic have been released.
-   *
-   * The returned MozWakeLock object is a token of the lock.  You can
-   * unlock the lock via the object's |unlock| method.  The lock is released
-   * automatically when its associated window is unloaded.
-   *
-   * @param aTopic resource name
-   */
-  [Throws, Pref="dom.wakelock.enabled", Func="Navigator::HasWakeLockSupport", UnsafeInPrerendering]
-  MozWakeLock requestWakeLock(DOMString aTopic);
-
-  /**
-   * Make CPU instruction subset information available for UpdateUtils.
-   */
-  [ChromeOnly]
-  readonly attribute boolean cpuHasSSE2;
-};
-
-// nsIDOMNavigatorDesktopNotification
-partial interface Navigator {
-  [Throws, Pref="notification.feature.enabled", UnsafeInPrerendering]
-  readonly attribute DesktopNotificationCenter mozNotification;
 };
 
 // NetworkInformation
@@ -273,6 +222,12 @@ partial interface Navigator {
   // TODO: Use FrozenArray once available. (Bug 1236777)
   [Frozen, Cached, Pure, Pref="dom.vr.enabled"]
   readonly attribute sequence<VRDisplay> activeVRDisplays;
+  [ChromeOnly, Pref="dom.vr.enabled"]
+  readonly attribute boolean isWebVRContentDetected;
+  [ChromeOnly, Pref="dom.vr.enabled"]
+  readonly attribute boolean isWebVRContentPresenting;
+  [ChromeOnly, Pref="dom.vr.enabled"]
+  void requestVRPresentation(VRDisplay display);
 };
 partial interface Navigator {
   [Pref="dom.vr.test.enabled"]
@@ -286,14 +241,6 @@ partial interface Navigator {
   readonly attribute MozTimeManager mozTime;
 };
 #endif // MOZ_TIME_MANAGER
-
-#ifdef MOZ_AUDIO_CHANNEL_MANAGER
-// nsIMozNavigatorAudioChannelManager
-partial interface Navigator {
-  [Throws]
-  readonly attribute AudioChannelManager mozAudioChannelManager;
-};
-#endif // MOZ_AUDIO_CHANNEL_MANAGER
 
 callback NavigatorUserMediaSuccessCallback = void (MediaStream stream);
 callback NavigatorUserMediaErrorCallback = void (MediaStreamError error);
@@ -359,13 +306,6 @@ partial interface Navigator {
                               sequence<MediaKeySystemConfiguration> supportedConfigurations);
 };
 
-#ifdef NIGHTLY_BUILD
-partial interface Navigator {
-  [Func="Navigator::IsE10sEnabled"]
-  readonly attribute boolean mozE10sEnabled;
-};
-#endif
-
 [NoInterfaceObject, Exposed=(Window,Worker)]
 interface NavigatorConcurrentHardware {
   readonly attribute unsigned long long hardwareConcurrency;
@@ -373,5 +313,5 @@ interface NavigatorConcurrentHardware {
 
 partial interface Navigator {
   [Pref="security.webauth.webauthn", SameObject]
-  readonly attribute WebAuthentication authentication;
+  readonly attribute CredentialsContainer credentials;
 };

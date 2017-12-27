@@ -13,14 +13,14 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(JSON_LONG_URL);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   // Perform first batch of requests.
   let wait = waitForNetworkEvents(monitor, 1);
@@ -29,7 +29,7 @@ add_task(function* () {
   });
   yield wait;
 
-  verifyRequest(0);
+  yield verifyRequest(0);
 
   // Switch to the webconsole.
   let onWebConsole = monitor.toolbox.once("webconsole-selected");
@@ -53,15 +53,22 @@ add_task(function* () {
   });
   yield wait;
 
-  verifyRequest(1);
+  yield verifyRequest(1);
 
   return teardown(monitor);
 
-  function verifyRequest(index) {
+  function* verifyRequest(index) {
+    let requestItems = document.querySelectorAll(".request-list-item");
+    for (let requestItem of requestItems) {
+      requestItem.scrollIntoView();
+      let requestsListStatus = requestItem.querySelector(".requests-list-status");
+      EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+      yield waitUntil(() => requestsListStatus.title);
+    }
     verifyRequestItemTarget(
       document,
-      getDisplayedRequests(gStore.getState()),
-      getSortedRequests(gStore.getState()).get(index),
+      getDisplayedRequests(store.getState()),
+      getSortedRequests(store.getState()).get(index),
       "GET",
       CONTENT_TYPE_SJS + "?fmt=json-long",
       {

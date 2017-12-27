@@ -171,7 +171,7 @@ DataViewObject::getAndCheckConstructorArgs(JSContext* cx, HandleObject bufobj, c
 
     // Step 7.
     if (offset > bufferByteLength) {
-        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_ARG_INDEX_OUT_OF_RANGE, "1");
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_OFFSET_OUT_OF_BUFFER);
         return false;
     }
     MOZ_ASSERT(offset <= INT32_MAX);
@@ -190,7 +190,7 @@ DataViewObject::getAndCheckConstructorArgs(JSContext* cx, HandleObject bufobj, c
         // Step 9.b.
         if (offset + viewByteLength > bufferByteLength) {
             JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                                      JSMSG_ARG_INDEX_OUT_OF_RANGE, "2");
+                                      JSMSG_INVALID_DATA_VIEW_LENGTH);
             return false;
         }
     }
@@ -212,8 +212,7 @@ DataViewObject::constructSameCompartment(JSContext* cx, HandleObject bufobj, con
         return false;
 
     RootedObject proto(cx);
-    RootedObject newTarget(cx, &args.newTarget().toObject());
-    if (!GetPrototypeFromConstructor(cx, newTarget, &proto))
+    if (!GetPrototypeFromBuiltinConstructor(cx, args, &proto))
         return false;
 
     Rooted<ArrayBufferObjectMaybeShared*> buffer(cx, &AsArrayBufferMaybeShared(bufobj));
@@ -237,12 +236,6 @@ DataViewObject::constructSameCompartment(JSContext* cx, HandleObject bufobj, con
 // A's DataView.prototype. So even though we're creating the DataView in B,
 // its [[Prototype]] must be (a cross-compartment wrapper for) the
 // DataView.prototype in A.
-//
-// As if this were not confusing enough, the way we actually do this is also
-// tricky. We call compartment A's createDataViewForThis method, passing it
-// bufobj as `this`. That calls ArrayBufferObject::createDataViewForThis(),
-// which uses CallNonGenericMethod to switch to compartment B so that
-// the new DataView is created there.
 bool
 DataViewObject::constructWrapped(JSContext* cx, HandleObject bufobj, const CallArgs& args)
 {
@@ -263,8 +256,7 @@ DataViewObject::constructWrapped(JSContext* cx, HandleObject bufobj, const CallA
     // Make sure to get the [[Prototype]] for the created view from this
     // compartment.
     RootedObject proto(cx);
-    RootedObject newTarget(cx, &args.newTarget().toObject());
-    if (!GetPrototypeFromConstructor(cx, newTarget, &proto))
+    if (!GetPrototypeFromBuiltinConstructor(cx, args, &proto))
         return false;
 
     Rooted<GlobalObject*> global(cx, cx->compartment()->maybeGlobal());
@@ -321,8 +313,7 @@ DataViewObject::getDataPointer(JSContext* cx, Handle<DataViewObject*> obj, uint6
 {
     const size_t TypeSize = sizeof(NativeType);
     if (offset > UINT32_MAX - TypeSize || offset + TypeSize > obj->byteLength()) {
-        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_ARG_INDEX_OUT_OF_RANGE,
-                                  "1");
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_OFFSET_OUT_OF_DATAVIEW);
         return SharedMem<uint8_t*>::unshared(nullptr);
     }
 
@@ -895,6 +886,16 @@ bool
 DataViewObject::byteLengthGetterImpl(JSContext* cx, const CallArgs& args)
 {
     Rooted<DataViewObject*> thisView(cx, &args.thisv().toObject().as<DataViewObject>());
+
+#ifdef NIGHTLY_BUILD
+    // Step 6,
+    if (thisView->arrayBufferEither().isDetached()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_TYPED_ARRAY_DETACHED);
+        return false;
+    }
+#endif
+
+    // Step 7.
     args.rval().set(DataViewObject::byteLengthValue(thisView));
     return true;
 }
@@ -910,6 +911,16 @@ bool
 DataViewObject::byteOffsetGetterImpl(JSContext* cx, const CallArgs& args)
 {
     Rooted<DataViewObject*> thisView(cx, &args.thisv().toObject().as<DataViewObject>());
+
+#ifdef NIGHTLY_BUILD
+    // Step 6,
+    if (thisView->arrayBufferEither().isDetached()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_TYPED_ARRAY_DETACHED);
+        return false;
+    }
+#endif
+
+    // Step 7.
     args.rval().set(DataViewObject::byteOffsetValue(thisView));
     return true;
 }
@@ -937,9 +948,8 @@ DataViewObject::CreatePrototype(JSContext* cx, JSProtoKey key)
 static const ClassOps DataViewObjectClassOps = {
     nullptr, /* addProperty */
     nullptr, /* delProperty */
-    nullptr, /* getProperty */
-    nullptr, /* setProperty */
     nullptr, /* enumerate */
+    nullptr, /* newEnumerate */
     nullptr, /* resolve */
     nullptr, /* mayResolve */
     nullptr, /* finalize */
@@ -1020,7 +1030,7 @@ JS_GetDataViewByteOffset(JSObject* obj)
 }
 
 JS_FRIEND_API(void*)
-JS_GetDataViewData(JSObject* obj, bool* isSharedMemory, const JS::AutoCheckCannotGC&)
+JS_GetDataViewData(JSObject* obj, bool* isSharedMemory, const JS::AutoRequireNoGC&)
 {
     obj = CheckedUnwrap(obj);
     if (!obj)

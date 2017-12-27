@@ -5,6 +5,7 @@
 package org.mozilla.gecko.sync;
 
 import android.content.Context;
+import android.os.SystemClock;
 import android.support.annotation.VisibleForTesting;
 
 import org.json.simple.JSONArray;
@@ -26,9 +27,9 @@ import org.mozilla.gecko.sync.net.SyncStorageRecordRequest;
 import org.mozilla.gecko.sync.net.SyncStorageRequest;
 import org.mozilla.gecko.sync.net.SyncStorageRequestDelegate;
 import org.mozilla.gecko.sync.net.SyncStorageResponse;
-import org.mozilla.gecko.sync.stage.AndroidBrowserBookmarksServerSyncStage;
-import org.mozilla.gecko.sync.stage.AndroidBrowserHistoryServerSyncStage;
-import org.mozilla.gecko.sync.stage.AndroidBrowserRecentHistoryServerSyncStage;
+import org.mozilla.gecko.sync.stage.BookmarksServerSyncStage;
+import org.mozilla.gecko.sync.stage.HistoryServerSyncStage;
+import org.mozilla.gecko.sync.stage.RecentHistoryServerSyncStage;
 import org.mozilla.gecko.sync.stage.CheckPreconditionsStage;
 import org.mozilla.gecko.sync.stage.CompletedStage;
 import org.mozilla.gecko.sync.stage.EnsureCrypto5KeysStage;
@@ -43,6 +44,9 @@ import org.mozilla.gecko.sync.stage.NoSuchStageException;
 import org.mozilla.gecko.sync.stage.PasswordsServerSyncStage;
 import org.mozilla.gecko.sync.stage.SyncClientsEngineStage;
 import org.mozilla.gecko.sync.stage.UploadMetaGlobalStage;
+import org.mozilla.gecko.sync.stage.ValidateBookmarksSyncStage;
+import org.mozilla.gecko.sync.telemetry.TelemetryCollector;
+import org.mozilla.gecko.sync.telemetry.TelemetryStageCollector;
 
 import java.io.IOException;
 import java.net.URI;
@@ -84,6 +88,12 @@ public class GlobalSession implements HttpResponseObserver {
    */
   public final Map<String, EngineSettings> enginesToUpdate = new HashMap<String, EngineSettings>();
 
+  private final TelemetryCollector telemetryCollector;
+
+  public TelemetryCollector getTelemetryCollector() {
+    return telemetryCollector;
+  }
+
    /*
    * Key accessors.
    */
@@ -105,7 +115,8 @@ public class GlobalSession implements HttpResponseObserver {
   public GlobalSession(SyncConfiguration config,
                        GlobalSessionCallback callback,
                        Context context,
-                       ClientsDataDelegate clientsDelegate)
+                       ClientsDataDelegate clientsDelegate,
+                       TelemetryCollector telemetryCollector)
     throws SyncConfigurationException, IllegalArgumentException, IOException, NonObjectJSONException {
 
     if (callback == null) {
@@ -115,6 +126,7 @@ public class GlobalSession implements HttpResponseObserver {
     this.callback        = callback;
     this.context         = context;
     this.clientsDelegate = clientsDelegate;
+    this.telemetryCollector = telemetryCollector;
 
     this.config = config;
     registerCommands();
@@ -193,11 +205,12 @@ public class GlobalSession implements HttpResponseObserver {
 
     // Will only run if syncFullHistory stage never completed.
     // Bug 1316110 tracks follow up work to improve efficiency of this stage.
-    stages.put(Stage.syncRecentHistory,       new AndroidBrowserRecentHistoryServerSyncStage());
+    stages.put(Stage.syncRecentHistory,       new RecentHistoryServerSyncStage());
 
-    stages.put(Stage.syncBookmarks,           new AndroidBrowserBookmarksServerSyncStage());
+    stages.put(Stage.syncBookmarks,           new BookmarksServerSyncStage());
+    stages.put(Stage.validateBookmarks,       new ValidateBookmarksSyncStage());
     stages.put(Stage.syncFormHistory,         new FormHistoryServerSyncStage());
-    stages.put(Stage.syncFullHistory,         new AndroidBrowserHistoryServerSyncStage());
+    stages.put(Stage.syncFullHistory,         new HistoryServerSyncStage());
 
     stages.put(Stage.uploadMetaGlobal,        new UploadMetaGlobalStage());
     stages.put(Stage.completed,               new CompletedStage());
@@ -266,7 +279,7 @@ public class GlobalSession implements HttpResponseObserver {
     // If we have a backoff, request a backoff and don't advance to next stage.
     long existingBackoff = largestBackoffObserved.get();
     if (existingBackoff > 0) {
-      this.abort(null, "Aborting sync because of backoff of " + existingBackoff + " milliseconds.");
+      this.abort(new BackoffException(), "Aborting sync because of backoff of " + existingBackoff + " milliseconds.");
       return;
     }
 
@@ -281,12 +294,27 @@ public class GlobalSession implements HttpResponseObserver {
     }
     this.currentState = next;
     Logger.info(LOG_TAG, "Running next stage " + next + " (" + nextStage + ")...");
+
+    // For named stages, use the repository name.
+    String collectorName = currentState.getRepositoryName();
+    // For unnamed, non-repository stages use name of the stage itself.
+    if (collectorName == null) {
+      collectorName = currentState.name();
+    }
+    final TelemetryStageCollector stageCollector = telemetryCollector.collectorFor(collectorName);
+    // Stage is responsible for setting the 'finished' timestamp when appropriate.
+    stageCollector.started = SystemClock.elapsedRealtime();
+
     try {
-      nextStage.execute(this);
+      nextStage.execute(this, stageCollector);
     } catch (Exception ex) {
       Logger.warn(LOG_TAG, "Caught exception " + ex + " running stage " + next);
+      // We're not setting stageCollector's error since there's a chance the stage already set it
+      // and we'll lose a root cause error by overriding it here. Call to `abort` will end up calling
+      // GlobalSession's callback handler which is instrumented and records global errors, so this
+      // error won't get lost.
+      stageCollector.finished = SystemClock.elapsedRealtime();
       this.abort(ex, "Uncaught exception in stage.");
-      return;
     }
   }
 
@@ -323,6 +351,7 @@ public class GlobalSession implements HttpResponseObserver {
    * @throws AlreadySyncingException
    */
   protected void restart() throws AlreadySyncingException {
+    telemetryCollector.setRestarted();
     this.currentState = GlobalSyncStage.Stage.idle;
     if (callback.shouldBackOffStorage()) {
       this.callback.handleAborted(this, "Told to back off.");
@@ -485,7 +514,6 @@ public class GlobalSession implements HttpResponseObserver {
     };
   }
 
-
   public void abort(Exception e, String reason) {
     Logger.warn(LOG_TAG, "Aborting sync: " + reason, e);
     cleanUp();
@@ -499,7 +527,7 @@ public class GlobalSession implements HttpResponseObserver {
         this.uploadUpdatedMetaGlobal(); // Only logs errors; does not call abort.
       }
     }
-    this.callback.handleError(this, e);
+    this.callback.handleError(this, e, reason);
   }
 
   public void handleIncompleteStage() {
@@ -636,12 +664,13 @@ public class GlobalSession implements HttpResponseObserver {
   /*
    * meta/global callbacks.
    */
-  public void processMetaGlobal(MetaGlobal global) {
+  public void processMetaGlobal(MetaGlobal global, TelemetryStageCollector stageCollector) {
     config.metaGlobal = global;
 
     Long storageVersion = global.getStorageVersion();
     if (storageVersion == null) {
       Logger.warn(LOG_TAG, "Malformed remote meta/global: could not retrieve remote storage version.");
+      stageCollector.error = new TelemetryCollector.StageErrorBuilder("metaglobal", "noversion").build();
       freshStart();
       return;
     }
@@ -662,6 +691,7 @@ public class GlobalSession implements HttpResponseObserver {
     String remoteSyncID = global.getSyncID();
     if (remoteSyncID == null) {
       Logger.warn(LOG_TAG, "Malformed remote meta/global: could not retrieve remote syncID.");
+      stageCollector.error = new TelemetryCollector.StageErrorBuilder("metaglobal", "nosyncid").build();
       freshStart();
       return;
     }
@@ -972,7 +1002,7 @@ public class GlobalSession implements HttpResponseObserver {
     this.resetStagesByEnum(Stage.getNamedStages());
   }
 
-  public void resetStages(Collection<GlobalSyncStage> stages) {
+  private void resetStages(Collection<GlobalSyncStage> stages) {
     for (GlobalSyncStage stage : stages) {
       try {
         Logger.info(LOG_TAG, "Resetting " + stage);
@@ -1108,7 +1138,7 @@ public class GlobalSession implements HttpResponseObserver {
   public void requiresUpgrade() {
     Logger.info(LOG_TAG, "Client outdated storage version; requires update.");
     // TODO: notify UI.
-    this.abort(null, "Requires upgrade");
+    this.abort(new OutdatedStorageVersionException(), "Requires upgrade from " + STORAGE_VERSION);
   }
 
   /**

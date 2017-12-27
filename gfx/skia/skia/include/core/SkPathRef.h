@@ -16,7 +16,7 @@
 #include "SkRRect.h"
 #include "SkRect.h"
 #include "SkRefCnt.h"
-#include <stddef.h> // ptrdiff_t
+#include "../private/SkTemplates.h"
 
 class SkRBuffer;
 class SkWBuffer;
@@ -26,8 +26,8 @@ class SkWBuffer;
  * modify the contents. To modify or append to the verbs/points wrap the SkPathRef in an
  * SkPathRef::Editor object. Installing the editor resets the generation ID. It also performs
  * copy-on-write if the SkPathRef is shared by multiple SkPaths. The caller passes the Editor's
- * constructor a SkAutoTUnref, which may be updated to point to a new SkPathRef after the editor's
- * constructor returns.
+ * constructor a pointer to a sk_sp<SkPathRef>, which may be updated to point to a new SkPathRef
+ * after the editor's constructor returns.
  *
  * The points and verbs are stored in a single allocation. The points are at the begining of the
  * allocation while the verbs are stored at end of the allocation, in reverse order. Thus the points
@@ -40,7 +40,7 @@ class SK_API SkPathRef final : public SkNVRefCnt<SkPathRef> {
 public:
     class Editor {
     public:
-        Editor(SkAutoTUnref<SkPathRef>* pathRef,
+        Editor(sk_sp<SkPathRef>* pathRef,
                int incReserveVerbs = 0,
                int incReservePoints = 0);
 
@@ -230,7 +230,7 @@ public:
     /**
      * Transforms a path ref by a matrix, allocating a new one only if necessary.
      */
-    static void CreateTransformedCopy(SkAutoTUnref<SkPathRef>* dst,
+    static void CreateTransformedCopy(sk_sp<SkPathRef>* dst,
                                       const SkPathRef& src,
                                       const SkMatrix& matrix);
 
@@ -241,7 +241,7 @@ public:
      * repopulated with approximately the same number of verbs and points. A new path ref is created
      * only if necessary.
      */
-    static void Rewind(SkAutoTUnref<SkPathRef>* pathRef);
+    static void Rewind(sk_sp<SkPathRef>* pathRef);
 
     ~SkPathRef();
     int countPoints() const { SkDEBUGCODE(this->validate();) return fPointCnt; }
@@ -433,31 +433,35 @@ private:
      */
     void makeSpace(size_t size) {
         SkDEBUGCODE(this->validate();)
-        ptrdiff_t growSize = size - fFreeSpace;
-        if (growSize <= 0) {
+        if (size <= fFreeSpace) {
             return;
         }
+        size_t growSize = size - fFreeSpace;
         size_t oldSize = this->currSize();
         // round to next multiple of 8 bytes
         growSize = (growSize + 7) & ~static_cast<size_t>(7);
         // we always at least double the allocation
-        if (static_cast<size_t>(growSize) < oldSize) {
+        if (growSize < oldSize) {
             growSize = oldSize;
         }
         if (growSize < kMinSize) {
             growSize = kMinSize;
         }
-        size_t newSize = oldSize + growSize;
+        constexpr size_t maxSize = std::numeric_limits<size_t>::max();
+        size_t newSize;
+        if (growSize <= maxSize - oldSize) {
+            newSize = oldSize + growSize;
+        } else {
+            SK_ABORT("Path too big.");
+        }
         // Note that realloc could memcpy more than we need. It seems to be a win anyway. TODO:
         // encapsulate this.
         fPoints = reinterpret_cast<SkPoint*>(sk_realloc_throw(fPoints, newSize));
         size_t oldVerbSize = fVerbCnt * sizeof(uint8_t);
-        void* newVerbsDst = reinterpret_cast<void*>(
-                                reinterpret_cast<intptr_t>(fPoints) + newSize - oldVerbSize);
-        void* oldVerbsSrc = reinterpret_cast<void*>(
-                                reinterpret_cast<intptr_t>(fPoints) + oldSize - oldVerbSize);
+        void* newVerbsDst = SkTAddOffset<void>(fPoints, newSize - oldVerbSize);
+        void* oldVerbsSrc = SkTAddOffset<void>(fPoints, oldSize - oldVerbSize);
         memmove(newVerbsDst, oldVerbsSrc, oldVerbSize);
-        fVerbs = reinterpret_cast<uint8_t*>(reinterpret_cast<intptr_t>(fPoints) + newSize);
+        fVerbs = SkTAddOffset<uint8_t>(fPoints, newSize);
         fFreeSpace += growSize;
         SkDEBUGCODE(this->validate();)
     }

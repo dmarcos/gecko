@@ -1,10 +1,11 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* enum types for CSS properties and their values */
- 
+
 #ifndef nsCSSPropertyID_h___
 #define nsCSSPropertyID_h___
 
@@ -41,7 +42,7 @@ enum nsCSSPropertyID {
   // Make the count continue where it left off:
   eCSSProperty_COUNT_DUMMY2 = eCSSProperty_COUNT - 1,
 
-  #define CSS_PROP_ALIAS(aliasname_, id_, method_, pref_) \
+  #define CSS_PROP_ALIAS(aliasname_, aliasid_, id_, method_, pref_) \
     eCSSPropertyAlias_##method_,
   #include "nsCSSPropAliasList.h"
   #undef CSS_PROP_ALIAS

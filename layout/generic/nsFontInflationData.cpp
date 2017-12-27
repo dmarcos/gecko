@@ -1,4 +1,5 @@
-/* vim: set shiftwidth=2 tabstop=8 autoindent cindent expandtab: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -6,7 +7,7 @@
 /* Per-block-formatting-context manager of font size inflation for pan and zoom UI. */
 
 #include "nsFontInflationData.h"
-#include "FramePropertyTable.h"
+#include "FrameProperties.h"
 #include "nsTextControlFrame.h"
 #include "nsListControlFrame.h"
 #include "nsComboboxControlFrame.h"
@@ -27,7 +28,7 @@ nsFontInflationData::FindFontInflationDataFor(const nsIFrame *aFrame)
   NS_ASSERTION(bfc->GetStateBits() & NS_FRAME_FONT_INFLATION_FLOW_ROOT,
                "should have found a flow root");
 
-  return bfc->Properties().Get(FontInflationDataProperty());
+  return bfc->GetProperty(FontInflationDataProperty());
 }
 
 /* static */ bool
@@ -36,8 +37,7 @@ nsFontInflationData::UpdateFontInflationDataISizeFor(const ReflowInput& aReflowI
   nsIFrame *bfc = aReflowInput.mFrame;
   NS_ASSERTION(bfc->GetStateBits() & NS_FRAME_FONT_INFLATION_FLOW_ROOT,
                "should have been given a flow root");
-  FrameProperties bfcProps(bfc->Properties());
-  nsFontInflationData *data = bfcProps.Get(FontInflationDataProperty());
+  nsFontInflationData *data = bfc->GetProperty(FontInflationDataProperty());
   bool oldInflationEnabled;
   nscoord oldNCAISize;
   if (data) {
@@ -45,7 +45,7 @@ nsFontInflationData::UpdateFontInflationDataISizeFor(const ReflowInput& aReflowI
     oldInflationEnabled = data->mInflationEnabled;
   } else {
     data = new nsFontInflationData(bfc);
-    bfcProps.Set(FontInflationDataProperty(), data);
+    bfc->SetProperty(FontInflationDataProperty(), data);
     oldNCAISize = -1;
     oldInflationEnabled = true; /* not relevant */
   }
@@ -65,8 +65,7 @@ nsFontInflationData::MarkFontInflationDataTextDirty(nsIFrame *aBFCFrame)
   NS_ASSERTION(aBFCFrame->GetStateBits() & NS_FRAME_FONT_INFLATION_FLOW_ROOT,
                "should have been given a flow root");
 
-  FrameProperties bfcProps(aBFCFrame->Properties());
-  nsFontInflationData *data = bfcProps.Get(FontInflationDataProperty());
+  nsFontInflationData *data = aBFCFrame->GetProperty(FontInflationDataProperty());
   if (data) {
     data->MarkTextDirty();
   }
@@ -205,7 +204,7 @@ nsFontInflationData::UpdateISize(const ReflowInput &aReflowInput)
 
   // See comment above "font.size.inflation.lineThreshold" in
   // modules/libpref/src/init/all.js .
-  nsIPresShell* presShell = bfc->PresContext()->PresShell();
+  nsIPresShell* presShell = bfc->PresShell();
   uint32_t lineThreshold = presShell->FontSizeInflationLineThreshold();
   nscoord newTextThreshold = (newNCAISize * lineThreshold) / 100;
 
@@ -250,7 +249,7 @@ nsFontInflationData::FindEdgeInflatableFrameIn(nsIFrame* aFrame,
         continue;
       }
 
-      if (kid->GetType() == nsGkAtoms::textFrame) {
+      if (kid->IsTextFrame()) {
         nsIContent *content = kid->GetContent();
         if (content && kid == content->GetPrimaryFrame()) {
           uint32_t len = nsTextFrameUtils::
@@ -294,7 +293,7 @@ DoCharCountOfLargestOption(nsIFrame *aContainer)
       // REVIEW: Check the frame structure for this!
       optionResult = 0;
       for (nsIFrame* optionChild : option->PrincipalChildList()) {
-        if (optionChild->GetType() == nsGkAtoms::textFrame) {
+        if (optionChild->IsTextFrame()) {
           optionResult += nsTextFrameUtils::
             ComputeApproximateLengthWithWhitespaceCompression(
               optionChild->GetContent(), optionChild->StyleText());
@@ -333,8 +332,8 @@ nsFontInflationData::ScanTextIn(nsIFrame *aFrame)
         continue;
       }
 
-      nsIAtom *fType = kid->GetType();
-      if (fType == nsGkAtoms::textFrame) {
+      LayoutFrameType fType = kid->Type();
+      if (fType == LayoutFrameType::Text) {
         nsIContent *content = kid->GetContent();
         if (content && kid == content->GetPrimaryFrame()) {
           uint32_t len = nsTextFrameUtils::
@@ -347,13 +346,13 @@ nsFontInflationData::ScanTextIn(nsIFrame *aFrame)
             }
           }
         }
-      } else if (fType == nsGkAtoms::textInputFrame) {
+      } else if (fType == LayoutFrameType::TextInput) {
         // We don't want changes to the amount of text in a text input
         // to change what we count towards inflation.
         nscoord fontSize = kid->StyleFont()->mFont.size;
         int32_t charCount = static_cast<nsTextControlFrame*>(kid)->GetCols();
         mTextAmount += charCount * fontSize;
-      } else if (fType == nsGkAtoms::comboboxControlFrame) {
+      } else if (fType == LayoutFrameType::ComboboxControl) {
         // See textInputFrame above (with s/amount of text/selected option/).
         // Don't just recurse down to the list control inside, since we
         // need to exclude the display frame.
@@ -361,7 +360,7 @@ nsFontInflationData::ScanTextIn(nsIFrame *aFrame)
         int32_t charCount = CharCountOfLargestOption(
           static_cast<nsComboboxControlFrame*>(kid)->GetDropDown());
         mTextAmount += charCount * fontSize;
-      } else if (fType == nsGkAtoms::listControlFrame) {
+      } else if (fType == LayoutFrameType::ListControl) {
         // See textInputFrame above (with s/amount of text/selected option/).
         nscoord fontSize = kid->StyleFont()->mFont.size;
         int32_t charCount = CharCountOfLargestOption(kid);

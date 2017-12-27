@@ -10,18 +10,22 @@
                          gecko_name="Display") %>
 
 // TODO(SimonSapin): don't parse `inline-table`, since we don't support it
+//
+// We allow "display" to apply to placeholders because we need to make the
+// placeholder pseudo-element an inline-block in the UA stylesheet in Gecko.
 <%helpers:longhand name="display"
-                   need_clone="True"
-                   animation_type="none"
+                   animation_value_type="discrete"
                    custom_cascade="${product == 'servo'}"
+                   flags="APPLIES_TO_PLACEHOLDER"
                    spec="https://drafts.csswg.org/css-display/#propdef-display">
     <%
         values = """inline block inline-block
             table inline-table table-row-group table-header-group table-footer-group
             table-row table-column-group table-column table-cell table-caption
-            list-item flex inline-flex
-            none
+            list-item none
         """.split()
+        webkit_prefixed_values = "flex inline-flex".split()
+        values += webkit_prefixed_values
         if product == "gecko":
             values += """grid inline-grid ruby ruby-base ruby-base-container
                 ruby-text ruby-text-container contents flow-root -webkit-box
@@ -29,31 +33,168 @@
                 -moz-grid-group -moz-grid-line -moz-stack -moz-inline-stack -moz-deck
                 -moz-popup -moz-groupbox""".split()
     %>
-    use values::computed::ComputedValueAsSpecified;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
-    no_viewport_percentage!(SpecifiedValue);
 
     pub mod computed_value {
         pub use super::SpecifiedValue as T;
+        use super::SpecifiedValue as Display;
+
+        impl Display {
+            /// Returns whether this "display" value is the display of a flex or
+            /// grid container.
+            ///
+            /// This is used to implement various style fixups.
+            pub fn is_item_container(&self) -> bool {
+                matches!(*self,
+                         Display::Flex
+                         | Display::InlineFlex
+                         % if product == "gecko":
+                         | Display::Grid
+                         | Display::InlineGrid
+                         % endif
+                )
+            }
+
+            /// Returns whether an element with this display type is a line
+            /// participant, which means it may lay its children on the same
+            /// line as itself.
+            pub fn is_line_participant(&self) -> bool {
+                matches!(*self,
+                         Display::Inline
+                         % if product == "gecko":
+                         | Display::Contents
+                         | Display::Ruby
+                         | Display::RubyBaseContainer
+                         % endif
+                )
+            }
+
+            /// Whether `new_display` should be ignored, given a previous
+            /// `old_display` value.
+            ///
+            /// This is used to ignore `display: -moz-box` declarations after an
+            /// equivalent `display: -webkit-box` declaration, since the former
+            /// has a vastly different meaning. See bug 1107378 and bug 1407701.
+            ///
+            /// FIXME(emilio): This is a pretty decent hack, we should try to
+            /// remove it.
+            pub fn should_ignore_parsed_value(
+                _old_display: Self,
+                _new_display: Self,
+            ) -> bool {
+                #[cfg(feature = "gecko")]
+                {
+                    match (_old_display, _new_display) {
+                        (Display::WebkitBox, Display::MozBox) |
+                        (Display::WebkitInlineBox, Display::MozInlineBox) => {
+                            return true;
+                        }
+                        _ => {},
+                    }
+                }
+
+                return false;
+            }
+
+            /// Returns whether this "display" value is one of the types for
+            /// ruby.
+            #[cfg(feature = "gecko")]
+            pub fn is_ruby_type(&self) -> bool {
+                matches!(*self,
+                         Display::Ruby |
+                         Display::RubyBase |
+                         Display::RubyText |
+                         Display::RubyBaseContainer |
+                         Display::RubyTextContainer)
+            }
+
+            /// Returns whether this "display" value is a ruby level container.
+            #[cfg(feature = "gecko")]
+            pub fn is_ruby_level_container(&self) -> bool {
+                matches!(*self,
+                         Display::RubyBaseContainer |
+                         Display::RubyTextContainer)
+            }
+
+            /// Convert this display into an equivalent block display.
+            ///
+            /// Also used for style adjustments.
+            pub fn equivalent_block_display(&self, _is_root_element: bool) -> Self {
+                match *self {
+                    // Values that have a corresponding block-outside version.
+                    Display::InlineTable => Display::Table,
+                    Display::InlineFlex => Display::Flex,
+
+                    % if product == "gecko":
+                    Display::InlineGrid => Display::Grid,
+                    Display::WebkitInlineBox => Display::WebkitBox,
+                    % endif
+
+                    // Special handling for contents and list-item on the root
+                    // element for Gecko.
+                    % if product == "gecko":
+                    Display::Contents | Display::ListItem if _is_root_element => Display::Block,
+                    % endif
+
+                    // These are not changed by blockification.
+                    Display::None |
+                    Display::Block |
+                    Display::Flex |
+                    Display::ListItem |
+                    Display::Table => *self,
+
+                    % if product == "gecko":
+                    Display::Contents |
+                    Display::FlowRoot |
+                    Display::Grid |
+                    Display::WebkitBox => *self,
+                    % endif
+
+                    // Everything else becomes block.
+                    _ => Display::Block,
+                }
+
+            }
+
+            /// Convert this display into an inline-outside display.
+            ///
+            /// Ideally it should implement spec: https://drafts.csswg.org/css-display/#inlinify
+            /// but the spec isn't stable enough, so we copy what Gecko does for now.
+            #[cfg(feature = "gecko")]
+            pub fn inlinify(&self) -> Self {
+                match *self {
+                    Display::Block |
+                    Display::FlowRoot => Display::InlineBlock,
+                    Display::Table => Display::InlineTable,
+                    Display::Flex => Display::InlineFlex,
+                    Display::Grid => Display::InlineGrid,
+                    Display::MozBox => Display::MozInlineBox,
+                    Display::MozStack => Display::MozInlineStack,
+                    Display::WebkitBox => Display::WebkitInlineBox,
+                    other => other,
+                }
+            }
+        }
     }
 
+    // FIXME(emilio): Why does this reinvent the wheel, again?
     #[allow(non_camel_case_types)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf, Deserialize, Serialize))]
+    #[derive(Clone, Copy, Debug, Eq, Hash, MallocSizeOf, PartialEq, ToComputedValue)]
+    #[cfg_attr(feature = "servo", derive(Deserialize, Serialize))]
     pub enum SpecifiedValue {
         % for value in values:
-            ${to_rust_ident(value)},
+            ${to_camel_case(value)},
         % endfor
     }
 
+    // TODO(emilio): derive.
     impl ToCss for SpecifiedValue {
         fn to_css<W>(&self, dest: &mut W) -> ::std::fmt::Result
             where W: ::std::fmt::Write,
         {
             match *self {
                 % for value in values:
-                    SpecifiedValue::${to_rust_ident(value)} => dest.write_str("${value}"),
+                    SpecifiedValue::${to_camel_case(value)} => dest.write_str("${value}"),
                 % endfor
             }
         }
@@ -62,53 +203,50 @@
     /// The initial display value.
     #[inline]
     pub fn get_initial_value() -> computed_value::T {
-        computed_value::T::${to_rust_ident(values[0])}
+        computed_value::T::${to_camel_case(values[0])}
     }
 
     /// Parse a display value.
-    pub fn parse(_context: &ParserContext, input: &mut Parser)
-                 -> Result<SpecifiedValue, ()> {
-        match_ignore_ascii_case! { &try!(input.expect_ident()),
+    pub fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>)
+                         -> Result<SpecifiedValue, ParseError<'i>> {
+        try_match_ident_ignore_ascii_case! { input,
             % for value in values:
                 "${value}" => {
-                    Ok(computed_value::T::${to_rust_ident(value)})
+                    Ok(computed_value::T::${to_camel_case(value)})
                 },
             % endfor
-            _ => Err(())
+            % for value in webkit_prefixed_values:
+                "-webkit-${value}" => {
+                    Ok(computed_value::T::${to_camel_case(value)})
+                },
+            % endfor
         }
     }
 
-    impl ComputedValueAsSpecified for SpecifiedValue {}
-
     % if product == "servo":
         fn cascade_property_custom(_declaration: &PropertyDeclaration,
-                                   _inherited_style: &ComputedValues,
-                                   context: &mut computed::Context,
-                                   _cacheable: &mut bool,
-                                   _error_reporter: &ParseErrorReporter) {
+                                   context: &mut computed::Context) {
             longhands::_servo_display_for_hypothetical_box::derive_from_display(context);
             longhands::_servo_text_decorations_in_effect::derive_from_display(context);
-            longhands::_servo_under_display_none::derive_from_display(context);
         }
     % endif
 
     ${helpers.gecko_keyword_conversion(Keyword('display', ' '.join(values),
-                                               gecko_enum_prefix='StyleDisplay'))}
+                                               gecko_enum_prefix='StyleDisplay',
+                                               gecko_strip_moz_prefix=False))}
 
 </%helpers:longhand>
 
 ${helpers.single_keyword("-moz-top-layer", "none top",
                          gecko_constant_prefix="NS_STYLE_TOP_LAYER",
-                         gecko_ffi_name="mTopLayer", need_clone=True,
-                         products="gecko", animation_type="none", internal=True,
+                         gecko_ffi_name="mTopLayer",
+                         products="gecko", animation_value_type="none",
+                         enabled_in="ua",
                          spec="Internal (not web-exposed)")}
 
-${helpers.single_keyword("position", "static absolute relative fixed",
-                         need_clone="True",
-                         extra_gecko_values="sticky",
-                         animation_type="none",
-                         creates_stacking_context="True",
-                         abspos_cb="True",
+${helpers.single_keyword("position", "static absolute relative fixed sticky",
+                         animation_value_type="discrete",
+                         flags="CREATES_STACKING_CONTEXT ABSPOS_CB",
                          spec="https://drafts.csswg.org/css-position/#position-property")}
 
 <%helpers:single_keyword_computed name="float"
@@ -116,14 +254,12 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
                                   // https://drafts.csswg.org/css-logical-props/#float-clear
                                   extra_specified="inline-start inline-end"
                                   needs_conversion="True"
-                                  animation_type="none"
-                                  need_clone="True"
+                                  animation_value_type="discrete"
                                   gecko_enum_prefix="StyleFloat"
                                   gecko_inexhaustive="True"
                                   gecko_ffi_name="mFloat"
+                                  flags="APPLIES_TO_FIRST_LETTER"
                                   spec="https://drafts.csswg.org/css-box/#propdef-float">
-    use values::HasViewportPercentage;
-    no_viewport_percentage!(SpecifiedValue);
     impl ToComputedValue for SpecifiedValue {
         type ComputedValue = computed_value::T;
 
@@ -132,11 +268,25 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
             let ltr = context.style().writing_mode.is_bidi_ltr();
             // https://drafts.csswg.org/css-logical-props/#float-clear
             match *self {
-                SpecifiedValue::inline_start if ltr => computed_value::T::left,
-                SpecifiedValue::inline_start => computed_value::T::right,
-                SpecifiedValue::inline_end if ltr => computed_value::T::right,
-                SpecifiedValue::inline_end => computed_value::T::left,
-                % for value in "none left right".split():
+                SpecifiedValue::InlineStart => {
+                    context.rule_cache_conditions.borrow_mut()
+                        .set_writing_mode_dependency(context.builder.writing_mode);
+                    if ltr {
+                        computed_value::T::Left
+                    } else {
+                        computed_value::T::Right
+                    }
+                }
+                SpecifiedValue::InlineEnd => {
+                    context.rule_cache_conditions.borrow_mut()
+                        .set_writing_mode_dependency(context.builder.writing_mode);
+                    if ltr {
+                        computed_value::T::Right
+                    } else {
+                        computed_value::T::Left
+                    }
+                }
+                % for value in "None Left Right".split():
                     SpecifiedValue::${value} => computed_value::T::${value},
                 % endfor
             }
@@ -144,7 +294,7 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
         #[inline]
         fn from_computed_value(computed: &computed_value::T) -> SpecifiedValue {
             match *computed {
-                % for value in "none left right".split():
+                % for value in "None Left Right".split():
                     computed_value::T::${value} => SpecifiedValue::${value},
                 % endfor
             }
@@ -157,12 +307,11 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
                                   // https://drafts.csswg.org/css-logical-props/#float-clear
                                   extra_specified="inline-start inline-end"
                                   needs_conversion="True"
-                                  animation_type="none"
+                                  gecko_inexhaustive="True"
+                                  animation_value_type="discrete"
                                   gecko_enum_prefix="StyleClear"
                                   gecko_ffi_name="mBreakType"
                                   spec="https://www.w3.org/TR/CSS2/visuren.html#flow-control">
-    use values::HasViewportPercentage;
-    no_viewport_percentage!(SpecifiedValue);
     impl ToComputedValue for SpecifiedValue {
         type ComputedValue = computed_value::T;
 
@@ -171,11 +320,25 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
             let ltr = context.style().writing_mode.is_bidi_ltr();
             // https://drafts.csswg.org/css-logical-props/#float-clear
             match *self {
-                SpecifiedValue::inline_start if ltr => computed_value::T::left,
-                SpecifiedValue::inline_start => computed_value::T::right,
-                SpecifiedValue::inline_end if ltr => computed_value::T::right,
-                SpecifiedValue::inline_end => computed_value::T::left,
-                % for value in "none left right both".split():
+                SpecifiedValue::InlineStart => {
+                    context.rule_cache_conditions.borrow_mut()
+                        .set_writing_mode_dependency(context.builder.writing_mode);
+                    if ltr {
+                        computed_value::T::Left
+                    } else {
+                        computed_value::T::Right
+                    }
+                }
+                SpecifiedValue::InlineEnd => {
+                    context.rule_cache_conditions.borrow_mut()
+                        .set_writing_mode_dependency(context.builder.writing_mode);
+                    if ltr {
+                        computed_value::T::Right
+                    } else {
+                        computed_value::T::Left
+                    }
+                }
+                % for value in "None Left Right Both".split():
                     SpecifiedValue::${value} => computed_value::T::${value},
                 % endfor
             }
@@ -183,7 +346,7 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
         #[inline]
         fn from_computed_value(computed: &computed_value::T) -> SpecifiedValue {
             match *computed {
-                % for value in "none left right both".split():
+                % for value in "None Left Right Both".split():
                     computed_value::T::${value} => SpecifiedValue::${value},
                 % endfor
             }
@@ -192,7 +355,7 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
 </%helpers:single_keyword_computed>
 
 <%helpers:longhand name="-servo-display-for-hypothetical-box"
-                   animation_type="none"
+                   animation_value_type="none"
                    derived_from="display"
                    products="servo"
                    spec="Internal (not web-exposed)">
@@ -206,744 +369,165 @@ ${helpers.single_keyword("position", "static absolute relative fixed",
     #[inline]
     pub fn derive_from_display(context: &mut Context) {
         let d = context.style().get_box().clone_display();
-        context.mutate_style().mutate_box().set__servo_display_for_hypothetical_box(d);
+        context.builder.set__servo_display_for_hypothetical_box(d);
     }
 
 </%helpers:longhand>
 
-<%helpers:longhand name="vertical-align" animation_type="normal"
-                   spec="https://www.w3.org/TR/CSS2/visudet.html#propdef-vertical-align">
-    use std::fmt;
-    use style_traits::ToCss;
-    use values::HasViewportPercentage;
 
-    <% vertical_align = data.longhands_by_name["vertical-align"] %>
-    <% vertical_align.keyword = Keyword("vertical-align",
-                                        "baseline sub super top text-top middle bottom text-bottom",
-                                        extra_gecko_values="-moz-middle-with-baseline") %>
-    <% vertical_align_keywords = vertical_align.keyword.values_for(product) %>
-
-    ${helpers.gecko_keyword_conversion(vertical_align.keyword)}
-
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            match *self {
-                SpecifiedValue::LengthOrPercentage(ref length) => length.has_viewport_percentage(),
-                _ => false
-            }
-        }
-    }
-
-    /// The `vertical-align` value.
-    #[allow(non_camel_case_types)]
-    #[derive(Debug, Clone, PartialEq)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    pub enum SpecifiedValue {
-        % for keyword in vertical_align_keywords:
-            ${to_rust_ident(keyword)},
-        % endfor
-        LengthOrPercentage(specified::LengthOrPercentage),
-    }
-
-    impl ToCss for SpecifiedValue {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            match *self {
-                % for keyword in vertical_align_keywords:
-                    SpecifiedValue::${to_rust_ident(keyword)} => dest.write_str("${keyword}"),
-                % endfor
-                SpecifiedValue::LengthOrPercentage(ref value) => value.to_css(dest),
-            }
-        }
-    }
-    /// baseline | sub | super | top | text-top | middle | bottom | text-bottom
-    /// | <percentage> | <length>
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
-        input.try(|i| specified::LengthOrPercentage::parse(context, i))
-        .map(SpecifiedValue::LengthOrPercentage)
-        .or_else(|_| {
-            match_ignore_ascii_case! { &try!(input.expect_ident()),
-                % for keyword in vertical_align_keywords:
-                    "${keyword}" => Ok(SpecifiedValue::${to_rust_ident(keyword)}),
-                % endfor
-                _ => Err(())
-            }
-        })
-    }
-
-    /// The computed value for `vertical-align`.
-    pub mod computed_value {
-        use app_units::Au;
-        use std::fmt;
-        use style_traits::ToCss;
-        use values::{CSSFloat, computed};
-
-        /// The keywords are the same, and the `LengthOrPercentage` is computed
-        /// here.
-        #[allow(non_camel_case_types)]
-        #[derive(PartialEq, Copy, Clone, Debug)]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub enum T {
-            % for keyword in vertical_align_keywords:
-                ${to_rust_ident(keyword)},
-            % endfor
-            LengthOrPercentage(computed::LengthOrPercentage),
-        }
-        impl ToCss for T {
-            fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-                match *self {
-                    % for keyword in vertical_align_keywords:
-                        T::${to_rust_ident(keyword)} => dest.write_str("${keyword}"),
-                    % endfor
-                    T::LengthOrPercentage(ref value) => value.to_css(dest),
-                }
-            }
-        }
-    }
-
-    /// The initial computed value for `vertical-align`.
-    #[inline]
-    pub fn get_initial_value() -> computed_value::T {
-        computed_value::T::baseline
-    }
-
-    impl ToComputedValue for SpecifiedValue {
-        type ComputedValue = computed_value::T;
-
-        #[inline]
-        fn to_computed_value(&self, context: &Context) -> computed_value::T {
-            match *self {
-                % for keyword in vertical_align_keywords:
-                    SpecifiedValue::${to_rust_ident(keyword)} => {
-                        computed_value::T::${to_rust_ident(keyword)}
-                    }
-                % endfor
-                SpecifiedValue::LengthOrPercentage(ref value) =>
-                    computed_value::T::LengthOrPercentage(value.to_computed_value(context)),
-            }
-        }
-        #[inline]
-        fn from_computed_value(computed: &computed_value::T) -> Self {
-            match *computed {
-                % for keyword in vertical_align_keywords:
-                    computed_value::T::${to_rust_ident(keyword)} => {
-                        SpecifiedValue::${to_rust_ident(keyword)}
-                    }
-                % endfor
-                computed_value::T::LengthOrPercentage(value) =>
-                    SpecifiedValue::LengthOrPercentage(
-                      ToComputedValue::from_computed_value(&value)
-                    ),
-            }
-        }
-    }
-</%helpers:longhand>
-
+${helpers.predefined_type(
+    "vertical-align",
+    "VerticalAlign",
+    "computed::VerticalAlign::baseline()",
+    animation_value_type="ComputedValue",
+    flags="APPLIES_TO_FIRST_LETTER APPLIES_TO_FIRST_LINE APPLIES_TO_PLACEHOLDER",
+    spec="https://www.w3.org/TR/CSS2/visudet.html#propdef-vertical-align",
+)}
 
 // CSS 2.1, Section 11 - Visual effects
 
 ${helpers.single_keyword("-servo-overflow-clip-box", "padding-box content-box",
-    products="servo", animation_type="none", internal=True,
+    products="servo", animation_value_type="none", enabled_in="ua",
     spec="Internal, not web-exposed, \
           may be standardized in the future (https://developer.mozilla.org/en-US/docs/Web/CSS/overflow-clip-box)")}
 
-${helpers.single_keyword("overflow-clip-box", "padding-box content-box",
-    products="gecko", animation_type="none", internal=True,
-    spec="Internal, not web-exposed, \
-          may be standardized in the future (https://developer.mozilla.org/en-US/docs/Web/CSS/overflow-clip-box)")}
+% for direction in ["inline", "block"]:
+    ${helpers.predefined_type(
+        "overflow-clip-box-" + direction,
+        "OverflowClipBox",
+        "computed::OverflowClipBox::PaddingBox",
+        products="gecko",
+        enabled_in="ua",
+        needs_context=False,
+        flags="APPLIES_TO_PLACEHOLDER",
+        gecko_pref="layout.css.overscroll-behavior.enabled",
+        animation_value_type="discrete",
+        spec="Internal, may be standardized in the future: \
+              https://developer.mozilla.org/en-US/docs/Web/CSS/overflow-clip-box",
+    )}
+% endfor
+
+<%
+    overflow_custom_consts = { "-moz-hidden-unscrollable": "CLIP" }
+%>
 
 // FIXME(pcwalton, #2742): Implement scrolling for `scroll` and `auto`.
 ${helpers.single_keyword("overflow-x", "visible hidden scroll auto",
-                         need_clone=True, animation_type="none",
+                         animation_value_type="discrete",
+                         extra_gecko_values="-moz-hidden-unscrollable",
+                         custom_consts=overflow_custom_consts,
                          gecko_constant_prefix="NS_STYLE_OVERFLOW",
+                         flags="APPLIES_TO_PLACEHOLDER",
                          spec="https://drafts.csswg.org/css-overflow/#propdef-overflow-x")}
 
 // FIXME(pcwalton, #2742): Implement scrolling for `scroll` and `auto`.
-<%helpers:longhand name="overflow-y" need_clone="True" animation_type="none"
+<%helpers:longhand name="overflow-y" animation_value_type="discrete"
+                   flags="APPLIES_TO_PLACEHOLDER",
                    spec="https://drafts.csswg.org/css-overflow/#propdef-overflow-y">
-    use super::overflow_x;
-
-    use std::fmt;
-    use style_traits::ToCss;
-    use values::computed::ComputedValueAsSpecified;
-    use values::HasViewportPercentage;
-
-    no_viewport_percentage!(SpecifiedValue);
-
-    impl ToCss for SpecifiedValue {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            self.0.to_css(dest)
-        }
-    }
-
-    /// The specified and computed value for overflow-y is a wrapper on top of
-    /// `overflow-x`, so we re-use the logic, but prevent errors from mistakenly
-    /// assign one to other.
-    ///
-    /// TODO(Manishearth, emilio): We may want to just use the same value.
-    pub mod computed_value {
-        pub use super::SpecifiedValue as T;
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    pub struct SpecifiedValue(pub super::overflow_x::SpecifiedValue);
-
-    impl ComputedValueAsSpecified for SpecifiedValue {}
-
-    #[inline]
-    #[allow(missing_docs)]
-    pub fn get_initial_value() -> computed_value::T {
-        computed_value::T(overflow_x::get_initial_value())
-    }
-
-    #[inline]
-    #[allow(missing_docs)]
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue,()> {
-        overflow_x::parse(context, input).map(SpecifiedValue)
-    }
+    pub use super::overflow_x::{SpecifiedValue, parse, get_initial_value, computed_value};
 </%helpers:longhand>
 
-<%helpers:vector_longhand name="transition-duration"
-                          need_index="True"
-                          animation_type="none"
-                          extra_prefixes="moz webkit"
-                          spec="https://drafts.csswg.org/css-transitions/#propdef-transition-duration">
-    use values::specified::Time;
-
-    pub use values::specified::Time as SpecifiedValue;
-    use values::HasViewportPercentage;
-    no_viewport_percentage!(SpecifiedValue);
-
-    pub mod computed_value {
-        pub use values::computed::Time as T;
-    }
-
-    #[inline]
-    pub fn get_initial_value() -> computed_value::T {
-        computed_value::T::zero()
-    }
-
-    #[inline]
-    pub fn get_initial_specified_value() -> SpecifiedValue {
-        Time::zero()
-    }
-
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue,()> {
-        Time::parse(context, input)
-    }
-</%helpers:vector_longhand>
-
-// TODO(pcwalton): Lots more timing functions.
-<%helpers:vector_longhand name="transition-timing-function"
-                          need_index="True"
-                          animation_type="none"
-                          extra_prefixes="moz webkit"
-                          spec="https://drafts.csswg.org/css-transitions/#propdef-transition-timing-function">
-    use self::computed_value::StartEnd;
-    use values::specified::Number;
-    use euclid::point::{Point2D, TypedPoint2D};
-    use std::fmt;
-    use std::marker::PhantomData;
-    use style_traits::ToCss;
-
-    // FIXME: This could use static variables and const functions when they are available.
-    #[inline(always)]
-    fn ease() -> computed_value::T {
-        computed_value::T::CubicBezier(TypedPoint2D::new(0.25, 0.1),
-                                       TypedPoint2D::new(0.25, 1.0))
-    }
-
-    #[inline(always)]
-    fn linear() -> computed_value::T {
-        computed_value::T::CubicBezier(TypedPoint2D::new(0.0, 0.0),
-                                       TypedPoint2D::new(1.0, 1.0))
-    }
-
-    #[inline(always)]
-    fn ease_in() -> computed_value::T {
-        computed_value::T::CubicBezier(TypedPoint2D::new(0.42, 0.0),
-                                       TypedPoint2D::new(1.0, 1.0))
-    }
-
-    #[inline(always)]
-    fn ease_out() -> computed_value::T {
-        computed_value::T::CubicBezier(TypedPoint2D::new(0.0, 0.0),
-                                       TypedPoint2D::new(0.58, 1.0))
-    }
-
-    #[inline(always)]
-    fn ease_in_out() -> computed_value::T {
-        computed_value::T::CubicBezier(TypedPoint2D::new(0.42, 0.0),
-                                       TypedPoint2D::new(0.58, 1.0))
-    }
-
-    static STEP_START: computed_value::T =
-        computed_value::T::Steps(1, StartEnd::Start);
-    static STEP_END: computed_value::T =
-        computed_value::T::Steps(1, StartEnd::End);
-
-    pub mod computed_value {
-        use euclid::point::Point2D;
-        use parser::{Parse, ParserContext};
-        use std::fmt;
-        use style_traits::ToCss;
-        use values::specified;
-
-        pub use super::parse;
-
-        #[derive(Copy, Clone, Debug, PartialEq)]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub enum T {
-            CubicBezier(Point2D<f32>, Point2D<f32>),
-            Steps(u32, StartEnd),
-        }
-
-        impl ToCss for T {
-            fn to_css<W>(&self, dest: &mut W) -> fmt::Result
-                where W: fmt::Write,
-            {
-                match *self {
-                    T::CubicBezier(p1, p2) => {
-                        try!(dest.write_str("cubic-bezier("));
-                        try!(p1.x.to_css(dest));
-                        try!(dest.write_str(", "));
-                        try!(p1.y.to_css(dest));
-                        try!(dest.write_str(", "));
-                        try!(p2.x.to_css(dest));
-                        try!(dest.write_str(", "));
-                        try!(p2.y.to_css(dest));
-                        dest.write_str(")")
-                    }
-                    T::Steps(steps, start_end) => {
-                        super::serialize_steps(dest, specified::Integer::new(steps as i32), start_end)
-                    }
-                }
-            }
-        }
-
-        #[derive(Copy, Clone, Debug, PartialEq)]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub enum StartEnd {
-            Start,
-            End,
-        }
-
-        impl ToCss for StartEnd {
-            fn to_css<W>(&self, dest: &mut W) -> fmt::Result
-                where W: fmt::Write,
-            {
-                match *self {
-                    StartEnd::Start => dest.write_str("start"),
-                    StartEnd::End => dest.write_str("end"),
-                }
-            }
-        }
-    }
-
-    define_css_keyword_enum!(FunctionKeyword:
-                             "ease" => Ease,
-                             "linear" => Linear,
-                             "ease-in" => EaseIn,
-                             "ease-out" => EaseOut,
-                             "ease-in-out" => EaseInOut,
-                             "step-start" => StepStart,
-                             "step-end" => StepEnd);
-
-    #[derive(Copy, Clone, Debug, PartialEq)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    pub enum SpecifiedValue {
-        CubicBezier(Point2D<Number>, Point2D<Number>),
-        Steps(specified::Integer, StartEnd),
-        Keyword(FunctionKeyword),
-    }
-
-    impl Parse for SpecifiedValue {
-        fn parse(context: &ParserContext, input: &mut ::cssparser::Parser) -> Result<Self, ()> {
-            if let Ok(function_name) = input.try(|input| input.expect_function()) {
-                return match_ignore_ascii_case! { &function_name,
-                    "cubic-bezier" => {
-                        let (mut p1x, mut p1y, mut p2x, mut p2y) =
-                            (Number::new(0.0), Number::new(0.0), Number::new(0.0), Number::new(0.0));
-                        try!(input.parse_nested_block(|input| {
-                            p1x = try!(specified::parse_number(context, input));
-                            try!(input.expect_comma());
-                            p1y = try!(specified::parse_number(context, input));
-                            try!(input.expect_comma());
-                            p2x = try!(specified::parse_number(context, input));
-                            try!(input.expect_comma());
-                            p2y = try!(specified::parse_number(context, input));
-                            Ok(())
-                        }));
-                        if p1x.get() < 0.0 || p1x.get() > 1.0 ||
-                           p2x.get() < 0.0 || p2x.get() > 1.0 {
-                            return Err(())
-                        }
-
-                        let (p1, p2) = (Point2D::new(p1x, p1y), Point2D::new(p2x, p2y));
-                        Ok(SpecifiedValue::CubicBezier(p1, p2))
-                    },
-                    "steps" => {
-                        let (mut step_count, mut start_end) = (specified::Integer::new(0), StartEnd::End);
-                        try!(input.parse_nested_block(|input| {
-                            step_count = try!(specified::parse_integer(context, input));
-                            if step_count.value() < 1 {
-                                return Err(())
-                            }
-
-                            if input.try(|input| input.expect_comma()).is_ok() {
-                                start_end = try!(match_ignore_ascii_case! {
-                                    &try!(input.expect_ident()),
-                                    "start" => Ok(StartEnd::Start),
-                                    "end" => Ok(StartEnd::End),
-                                    _ => Err(())
-                                });
-                            }
-                            Ok(())
-                        }));
-                        Ok(SpecifiedValue::Steps(step_count, start_end))
-                    },
-                    _ => Err(())
-                }
-            }
-            Ok(SpecifiedValue::Keyword(try!(FunctionKeyword::parse(input))))
-        }
-    }
-
-    fn serialize_steps<W>(dest: &mut W,
-                          steps: specified::Integer,
-                          start_end: StartEnd) -> fmt::Result
-        where W: fmt::Write,
-    {
-        try!(dest.write_str("steps("));
-        try!(steps.to_css(dest));
-        if let StartEnd::Start = start_end {
-            try!(dest.write_str(", start"));
-        }
-        dest.write_str(")")
-    }
-
-    // https://drafts.csswg.org/css-transitions/#serializing-a-timing-function
-    impl ToCss for SpecifiedValue {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            match *self {
-                SpecifiedValue::CubicBezier(p1, p2) => {
-                    try!(dest.write_str("cubic-bezier("));
-                    try!(p1.x.to_css(dest));
-                    try!(dest.write_str(", "));
-                    try!(p1.y.to_css(dest));
-                    try!(dest.write_str(", "));
-                    try!(p2.x.to_css(dest));
-                    try!(dest.write_str(", "));
-                    try!(p2.y.to_css(dest));
-                    dest.write_str(")")
-                },
-                SpecifiedValue::Steps(steps, start_end) => {
-                    serialize_steps(dest, steps, start_end)
-                },
-                SpecifiedValue::Keyword(keyword) => {
-                    match keyword {
-                        FunctionKeyword::StepStart => {
-                            serialize_steps(dest, specified::Integer::new(1), StartEnd::Start)
-                        },
-                        FunctionKeyword::StepEnd => {
-                            serialize_steps(dest, specified::Integer::new(1), StartEnd::End)
-                        },
-                        _ => {
-                            keyword.to_css(dest)
-                        },
-                    }
-                },
-            }
-        }
-    }
-
-    impl ToComputedValue for SpecifiedValue {
-        type ComputedValue = computed_value::T;
-
-        #[inline]
-        fn to_computed_value(&self, context: &Context) -> computed_value::T {
-            match *self {
-                SpecifiedValue::CubicBezier(p1, p2) => {
-                    computed_value::T::CubicBezier(
-                        Point2D::new(p1.x.to_computed_value(context), p1.y.to_computed_value(context)),
-                        Point2D::new(p2.x.to_computed_value(context), p2.y.to_computed_value(context)))
-                },
-                SpecifiedValue::Steps(count, start_end) => {
-                    computed_value::T::Steps(count.to_computed_value(context) as u32, start_end)
-                },
-                SpecifiedValue::Keyword(keyword) => keyword.to_computed_value(),
-            }
-        }
-        #[inline]
-        fn from_computed_value(computed: &computed_value::T) -> Self {
-            match *computed {
-                computed_value::T::CubicBezier(p1, p2) => {
-                    SpecifiedValue::CubicBezier(
-                        Point2D::new(Number::from_computed_value(&p1.x),
-                                     Number::from_computed_value(&p1.y)),
-                        Point2D::new(Number::from_computed_value(&p2.x),
-                                     Number::from_computed_value(&p2.y)))
-                },
-                computed_value::T::Steps(count, start_end) => {
-                    let int_count = count as i32;
-                    SpecifiedValue::Steps(specified::Integer::from_computed_value(&int_count), start_end)
-                },
-            }
-        }
-    }
-
-    impl FunctionKeyword {
-        #[inline]
-        pub fn to_computed_value(&self) -> computed_value::T {
-            match *self {
-                FunctionKeyword::Ease => ease(),
-                FunctionKeyword::Linear => linear(),
-                FunctionKeyword::EaseIn => ease_in(),
-                FunctionKeyword::EaseOut => ease_out(),
-                FunctionKeyword::EaseInOut => ease_in_out(),
-                FunctionKeyword::StepStart => STEP_START,
-                FunctionKeyword::StepEnd => STEP_END,
-            }
-        }
-    }
-
-    use values::HasViewportPercentage;
-    no_viewport_percentage!(SpecifiedValue);
-
-    #[inline]
-    pub fn get_initial_value() -> computed_value::T {
-        ease()
-    }
-
-    #[inline]
-    pub fn get_initial_specified_value() -> SpecifiedValue {
-        SpecifiedValue::Keyword(FunctionKeyword::Ease)
-    }
-
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue,()> {
-        SpecifiedValue::parse(context, input)
-    }
-</%helpers:vector_longhand>
-
-<%helpers:vector_longhand name="transition-property"
-                          allow_empty="True"
-                          need_index="True"
-                          animation_type="none"
-                          extra_prefixes="moz webkit"
-                          spec="https://drafts.csswg.org/css-transitions/#propdef-transition-property">
-
-    use values::computed::ComputedValueAsSpecified;
-
-    pub use properties::animated_properties::TransitionProperty;
-    pub use properties::animated_properties::TransitionProperty as SpecifiedValue;
-
-    pub mod computed_value {
-        use std::fmt;
-        use style_traits::ToCss;
-        // NB: Can't generate the type here because it needs all the longhands
-        // generated beforehand.
-        pub use super::SpecifiedValue as T;
-    }
-
-    pub fn parse(_context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue,()> {
-        SpecifiedValue::parse(input)
-    }
-
-    use values::HasViewportPercentage;
-    no_viewport_percentage!(SpecifiedValue);
-
-    impl ComputedValueAsSpecified for SpecifiedValue { }
-</%helpers:vector_longhand>
-
-<%helpers:vector_longhand name="transition-delay"
-                          need_index="True"
-                          animation_type="none"
-                          extra_prefixes="moz webkit"
-                          spec="https://drafts.csswg.org/css-transitions/#propdef-transition-delay">
-    pub use properties::longhands::transition_duration::single_value::SpecifiedValue;
-    pub use properties::longhands::transition_duration::single_value::computed_value;
-    pub use properties::longhands::transition_duration::single_value::{get_initial_value, get_initial_specified_value};
-    pub use properties::longhands::transition_duration::single_value::parse;
-</%helpers:vector_longhand>
-
-<%helpers:vector_longhand name="animation-name"
-                          need_index="True"
-                          animation_type="none",
-                          extra_prefixes="moz webkit"
-                          allowed_in_keyframe_block="False"
-                          spec="https://drafts.csswg.org/css-animations/#propdef-animation-name">
-    use Atom;
-    use std::fmt;
-    use std::ops::Deref;
-    use style_traits::ToCss;
-    use values::computed::ComputedValueAsSpecified;
-    use values::HasViewportPercentage;
-
-    pub mod computed_value {
-        pub use super::SpecifiedValue as T;
-    }
-
-    #[derive(Clone, Debug, Hash, Eq, PartialEq)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    pub struct SpecifiedValue(pub Atom);
-
-    #[inline]
-    pub fn get_initial_value() -> computed_value::T {
-        get_initial_specified_value()
-    }
-
-    #[inline]
-    pub fn get_initial_specified_value() -> SpecifiedValue {
-        SpecifiedValue(atom!(""))
-    }
-
-    impl fmt::Display for SpecifiedValue {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            self.0.fmt(f)
-        }
-    }
-
-    impl ToCss for SpecifiedValue {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            if self.0 == atom!("") {
-                dest.write_str("none")
-            } else {
-                dest.write_str(&*self.0.to_string())
-            }
-        }
-    }
-
-    impl Parse for SpecifiedValue {
-        fn parse(_context: &ParserContext, input: &mut ::cssparser::Parser) -> Result<Self, ()> {
-            use cssparser::Token;
-            use properties::CSSWideKeyword;
-            use std::ascii::AsciiExt;
-
-            let atom = match input.next() {
-                Ok(Token::Ident(ref value)) => {
-                    if CSSWideKeyword::from_ident(value).is_some() {
-                        // We allow any ident for the animation-name except one
-                        // of the CSS-wide keywords.
-                        return Err(());
-                    } else if value.eq_ignore_ascii_case("none") {
-                        // FIXME We may want to support `@keyframes ""` at some point.
-                        atom!("")
-                    } else {
-                        Atom::from(&**value)
-                    }
-                }
-                Ok(Token::QuotedString(value)) => Atom::from(&*value),
-                _ => return Err(()),
-            };
-            Ok(SpecifiedValue(atom))
-        }
-    }
-    no_viewport_percentage!(SpecifiedValue);
-
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue,()> {
-        SpecifiedValue::parse(context, input)
-    }
-
-    impl ComputedValueAsSpecified for SpecifiedValue {}
-</%helpers:vector_longhand>
-
-<%helpers:vector_longhand name="animation-duration"
-                          need_index="True"
-                          animation_type="none",
-                          extra_prefixes="moz webkit"
-                          spec="https://drafts.csswg.org/css-animations/#propdef-animation-duration",
-                          allowed_in_keyframe_block="False">
-    pub use properties::longhands::transition_duration::single_value::computed_value;
-    pub use properties::longhands::transition_duration::single_value::get_initial_specified_value;
-    pub use properties::longhands::transition_duration::single_value::{get_initial_value, parse};
-    pub use properties::longhands::transition_duration::single_value::SpecifiedValue;
-</%helpers:vector_longhand>
-
-<%helpers:vector_longhand name="animation-timing-function"
-                          need_index="True"
-                          animation_type="none",
-                          extra_prefixes="moz webkit"
-                          spec="https://drafts.csswg.org/css-animations/#propdef-animation-timing-function",
-                          allowed_in_keyframe_block="True">
-    pub use properties::longhands::transition_timing_function::single_value::computed_value;
-    pub use properties::longhands::transition_timing_function::single_value::get_initial_value;
-    pub use properties::longhands::transition_timing_function::single_value::get_initial_specified_value;
-    pub use properties::longhands::transition_timing_function::single_value::parse;
-    pub use properties::longhands::transition_timing_function::single_value::SpecifiedValue;
-</%helpers:vector_longhand>
-
-<%helpers:vector_longhand name="animation-iteration-count"
-                          need_index="True"
-                          animation_type="none",
-                          extra_prefixes="moz webkit"
-                          spec="https://drafts.csswg.org/css-animations/#propdef-animation-iteration-count",
-                          allowed_in_keyframe_block="False">
-    use std::fmt;
-    use style_traits::ToCss;
-    use values::computed::ComputedValueAsSpecified;
-    use values::HasViewportPercentage;
-
-    pub mod computed_value {
-        pub use super::SpecifiedValue as T;
-    }
-
-    // https://drafts.csswg.org/css-animations/#animation-iteration-count
-    #[derive(Debug, Clone, PartialEq)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    pub enum SpecifiedValue {
-        Number(f32),
-        Infinite,
-    }
-
-    impl Parse for SpecifiedValue {
-        fn parse(_context: &ParserContext, input: &mut ::cssparser::Parser) -> Result<Self, ()> {
-            if input.try(|input| input.expect_ident_matching("infinite")).is_ok() {
-                return Ok(SpecifiedValue::Infinite)
-            }
-
-            let number = try!(input.expect_number());
-            if number < 0.0 {
-                return Err(());
-            }
-
-            Ok(SpecifiedValue::Number(number))
-        }
-    }
-
-    impl ToCss for SpecifiedValue {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            match *self {
-                SpecifiedValue::Number(n) => write!(dest, "{}", n),
-                SpecifiedValue::Infinite => dest.write_str("infinite"),
-            }
-        }
-    }
-
-    no_viewport_percentage!(SpecifiedValue);
-
-    #[inline]
-    pub fn get_initial_value() -> computed_value::T {
-        get_initial_specified_value()
-    }
-
-    #[inline]
-    pub fn get_initial_specified_value() -> SpecifiedValue {
-        SpecifiedValue::Number(1.0)
-    }
-
-    #[inline]
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
-        SpecifiedValue::parse(context, input)
-    }
-
-    impl ComputedValueAsSpecified for SpecifiedValue {}
-</%helpers:vector_longhand>
+${helpers.predefined_type("transition-duration",
+                          "Time",
+                          "computed::Time::zero()",
+                          initial_specified_value="specified::Time::zero()",
+                          parse_method="parse_non_negative",
+                          vector=True,
+                          need_index=True,
+                          animation_value_type="none",
+                          extra_prefixes="moz webkit",
+                          spec="https://drafts.csswg.org/css-transitions/#propdef-transition-duration")}
+
+${helpers.predefined_type("transition-timing-function",
+                          "TimingFunction",
+                          "computed::TimingFunction::ease()",
+                          initial_specified_value="specified::TimingFunction::ease()",
+                          vector=True,
+                          need_index=True,
+                          animation_value_type="none",
+                          extra_prefixes="moz webkit",
+                          spec="https://drafts.csswg.org/css-transitions/#propdef-transition-timing-function")}
+
+${helpers.predefined_type(
+    "transition-property",
+    "TransitionProperty",
+    "computed::TransitionProperty::All",
+    initial_specified_value="specified::TransitionProperty::All",
+    vector=True,
+    allow_empty="NotInitial",
+    need_index=True,
+    needs_context=False,
+    animation_value_type="none",
+    extra_prefixes="moz webkit",
+    spec="https://drafts.csswg.org/css-transitions/#propdef-transition-property",
+)}
+
+${helpers.predefined_type("transition-delay",
+                          "Time",
+                          "computed::Time::zero()",
+                          initial_specified_value="specified::Time::zero()",
+                          vector=True,
+                          need_index=True,
+                          animation_value_type="none",
+                          extra_prefixes="moz webkit",
+                          spec="https://drafts.csswg.org/css-transitions/#propdef-transition-delay")}
+
+
+${helpers.predefined_type(
+    "animation-name",
+    "AnimationName",
+    "computed::AnimationName::none()",
+    initial_specified_value="specified::AnimationName::none()",
+    vector=True,
+    need_index=True,
+    animation_value_type="none",
+    extra_prefixes="moz webkit",
+    allowed_in_keyframe_block=False,
+    spec="https://drafts.csswg.org/css-animations/#propdef-animation-name",
+)}
+
+${helpers.predefined_type("animation-duration",
+                          "Time",
+                          "computed::Time::zero()",
+                          initial_specified_value="specified::Time::zero()",
+                          parse_method="parse_non_negative",
+                          vector=True,
+                          need_index=True,
+                          animation_value_type="none",
+                          extra_prefixes="moz webkit",
+                          spec="https://drafts.csswg.org/css-transitions/#propdef-transition-duration")}
+
+// animation-timing-function is the exception to the rule for allowed_in_keyframe_block:
+// https://drafts.csswg.org/css-animations/#keyframes
+${helpers.predefined_type("animation-timing-function",
+                          "TimingFunction",
+                          "computed::TimingFunction::ease()",
+                          initial_specified_value="specified::TimingFunction::ease()",
+                          vector=True,
+                          need_index=True,
+                          animation_value_type="none",
+                          extra_prefixes="moz webkit",
+                          allowed_in_keyframe_block=True,
+                          spec="https://drafts.csswg.org/css-transitions/#propdef-animation-timing-function")}
+
+${helpers.predefined_type(
+    "animation-iteration-count",
+    "AnimationIterationCount",
+    "computed::AnimationIterationCount::one()",
+    initial_specified_value="specified::AnimationIterationCount::one()",
+    vector=True,
+    need_index=True,
+    animation_value_type="none",
+    extra_prefixes="moz webkit",
+    allowed_in_keyframe_block=False,
+    spec="https://drafts.csswg.org/css-animations/#propdef-animation-iteration-count",
+)}
 
 <% animation_direction_custom_consts = { "alternate-reverse": "Alternate_reverse" } %>
 ${helpers.single_keyword("animation-direction",
                          "normal reverse alternate alternate-reverse",
                          need_index=True,
-                         animation_type="none",
+                         animation_value_type="none",
                          vector=True,
                          gecko_enum_prefix="PlaybackDirection",
                          custom_consts=animation_direction_custom_consts,
@@ -951,910 +535,154 @@ ${helpers.single_keyword("animation-direction",
                          spec="https://drafts.csswg.org/css-animations/#propdef-animation-direction",
                          allowed_in_keyframe_block=False)}
 
-// animation-play-state is the exception to the rule for allowed_in_keyframe_block:
-// https://drafts.csswg.org/css-animations/#keyframes
 ${helpers.single_keyword("animation-play-state",
                          "running paused",
-                         need_clone=True,
                          need_index=True,
-                         animation_type="none",
+                         animation_value_type="none",
                          vector=True,
                          extra_prefixes="moz webkit",
                          spec="https://drafts.csswg.org/css-animations/#propdef-animation-play-state",
-                         allowed_in_keyframe_block=True)}
+                         allowed_in_keyframe_block=False)}
 
 ${helpers.single_keyword("animation-fill-mode",
                          "none forwards backwards both",
                          need_index=True,
-                         animation_type="none",
+                         animation_value_type="none",
                          vector=True,
                          gecko_enum_prefix="FillMode",
                          extra_prefixes="moz webkit",
                          spec="https://drafts.csswg.org/css-animations/#propdef-animation-fill-mode",
                          allowed_in_keyframe_block=False)}
 
-<%helpers:vector_longhand name="animation-delay"
-                          need_index="True"
-                          animation_type="none",
+${helpers.predefined_type("animation-delay",
+                          "Time",
+                          "computed::Time::zero()",
+                          initial_specified_value="specified::Time::zero()",
+                          vector=True,
+                          need_index=True,
+                          animation_value_type="none",
                           extra_prefixes="moz webkit",
                           spec="https://drafts.csswg.org/css-animations/#propdef-animation-delay",
-                          allowed_in_keyframe_block="False">
-    pub use properties::longhands::transition_duration::single_value::computed_value;
-    pub use properties::longhands::transition_duration::single_value::get_initial_specified_value;
-    pub use properties::longhands::transition_duration::single_value::{get_initial_value, parse};
-    pub use properties::longhands::transition_duration::single_value::SpecifiedValue;
-</%helpers:vector_longhand>
+                          allowed_in_keyframe_block=False)}
 
-<%helpers:longhand products="gecko" name="scroll-snap-points-y" animation_type="none"
-                   spec="Nonstandard (https://www.w3.org/TR/2015/WD-css-snappoints-1-20150326/#scroll-snap-points)">
-    use std::fmt;
-    use style_traits::ToCss;
-    use values::HasViewportPercentage;
-    use values::specified::LengthOrPercentage;
-
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            match *self {
-                SpecifiedValue::Repeat(ref length) => length.has_viewport_percentage(),
-                _ => false
-            }
-        }
-    }
-
-    pub mod computed_value {
-        use values::computed::LengthOrPercentage;
-
-        #[derive(Debug, Clone, PartialEq)]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub struct T(pub Option<LengthOrPercentage>);
-    }
-
-    #[derive(Debug, Clone, PartialEq)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    pub enum SpecifiedValue {
-        None,
-        Repeat(LengthOrPercentage),
-    }
-
-    impl ToCss for computed_value::T {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            match self.0 {
-                None => dest.write_str("none"),
-                Some(ref l) => {
-                    try!(dest.write_str("repeat("));
-                    try!(l.to_css(dest));
-                    dest.write_str(")")
-                },
-            }
-        }
-    }
-    impl ToCss for SpecifiedValue {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            match *self {
-                SpecifiedValue::None => dest.write_str("none"),
-                SpecifiedValue::Repeat(ref l) => {
-                    try!(dest.write_str("repeat("));
-                    try!(l.to_css(dest));
-                    dest.write_str(")")
-                },
-            }
-        }
-    }
-
-    #[inline]
-    pub fn get_initial_value() -> computed_value::T {
-        computed_value::T(None)
-    }
-
-    impl ToComputedValue for SpecifiedValue {
-        type ComputedValue = computed_value::T;
-
-        #[inline]
-        fn to_computed_value(&self, context: &Context) -> computed_value::T {
-            match *self {
-                SpecifiedValue::None => computed_value::T(None),
-                SpecifiedValue::Repeat(ref l) =>
-                    computed_value::T(Some(l.to_computed_value(context))),
-            }
-        }
-        #[inline]
-        fn from_computed_value(computed: &computed_value::T) -> Self {
-            match *computed {
-                computed_value::T(None) => SpecifiedValue::None,
-                computed_value::T(Some(l)) =>
-                    SpecifiedValue::Repeat(ToComputedValue::from_computed_value(&l))
-            }
-        }
-    }
-
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
-        if input.try(|input| input.expect_ident_matching("none")).is_ok() {
-            Ok(SpecifiedValue::None)
-        } else if input.try(|input| input.expect_function_matching("repeat")).is_ok() {
-            input.parse_nested_block(|input| {
-                LengthOrPercentage::parse_non_negative(context, input).map(SpecifiedValue::Repeat)
-            })
-        } else {
-            Err(())
-        }
-    }
-</%helpers:longhand>
-
-<%helpers:longhand products="gecko" name="scroll-snap-points-x" animation_type="none"
-                   spec="Nonstandard (https://www.w3.org/TR/2015/WD-css-snappoints-1-20150326/#scroll-snap-points)">
-    pub use super::scroll_snap_points_y::SpecifiedValue;
-    pub use super::scroll_snap_points_y::computed_value;
-    pub use super::scroll_snap_points_y::get_initial_value;
-    pub use super::scroll_snap_points_y::parse;
-</%helpers:longhand>
-
+% for axis in ["x", "y"]:
+    ${helpers.predefined_type(
+        "scroll-snap-points-" + axis,
+        "ScrollSnapPoint",
+        "computed::ScrollSnapPoint::none()",
+        animation_value_type="discrete",
+        gecko_pref="layout.css.scroll-snap.enabled",
+        products="gecko",
+        spec="Nonstandard (https://www.w3.org/TR/2015/WD-css-snappoints-1-20150326/#scroll-snap-points)",
+    )}
+% endfor
 
 ${helpers.predefined_type("scroll-snap-destination",
                           "Position",
                           "computed::Position::zero()",
                           products="gecko",
+                          gecko_pref="layout.css.scroll-snap.enabled",
                           boxed="True",
                           spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/scroll-snap-destination)",
-                          animation_type="normal")}
+                          animation_value_type="discrete")}
 
-${helpers.predefined_type("scroll-snap-coordinate",
-                          "Position",
-                          "computed::Position::zero()",
-                          vector=True,
-                          products="gecko",
-                          spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/scroll-snap-destination)",
-                          animation_type="normal",
-                          allow_empty=True,
-                          delegate_animate=True)}
+${helpers.predefined_type(
+    "scroll-snap-coordinate",
+    "Position",
+    "computed::Position::zero()",
+    vector=True,
+    products="gecko",
+    gecko_pref="layout.css.scroll-snap.enabled",
+    spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/scroll-snap-destination)",
+    animation_value_type="discrete",
+    allow_empty="NotInitial"
+)}
 
-
-
-<%helpers:longhand name="transform" products="gecko servo" extra_prefixes="webkit"
-                   animation_type="normal"
-                   creates_stacking_context="True"
-                   fixpos_cb="True"
-                   spec="https://drafts.csswg.org/css-transforms/#propdef-transform">
-    use app_units::Au;
-    use values::specified::{Angle, Length, LengthOrPercentage, Number};
-    use style_traits::ToCss;
-    use style_traits::values::Css;
-    use values::CSSFloat;
-    use values::HasViewportPercentage;
-
-    use std::fmt::{self, Display};
-
-    pub mod computed_value {
-        use values::CSSFloat;
-        use values::computed;
-
-        #[derive(Clone, Copy, Debug, PartialEq)]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub struct ComputedMatrix {
-            pub m11: CSSFloat, pub m12: CSSFloat, pub m13: CSSFloat, pub m14: CSSFloat,
-            pub m21: CSSFloat, pub m22: CSSFloat, pub m23: CSSFloat, pub m24: CSSFloat,
-            pub m31: CSSFloat, pub m32: CSSFloat, pub m33: CSSFloat, pub m34: CSSFloat,
-            pub m41: CSSFloat, pub m42: CSSFloat, pub m43: CSSFloat, pub m44: CSSFloat,
-        }
-
-        impl ComputedMatrix {
-            pub fn identity() -> ComputedMatrix {
-                ComputedMatrix {
-                    m11: 1.0, m12: 0.0, m13: 0.0, m14: 0.0,
-                    m21: 0.0, m22: 1.0, m23: 0.0, m24: 0.0,
-                    m31: 0.0, m32: 0.0, m33: 1.0, m34: 0.0,
-                    m41: 0.0, m42: 0.0, m43: 0.0, m44: 1.0
-                }
-            }
-        }
-
-        #[derive(Clone, Debug, PartialEq)]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub enum ComputedOperation {
-            Matrix(ComputedMatrix),
-            Skew(computed::Angle, computed::Angle),
-            Translate(computed::LengthOrPercentage,
-                      computed::LengthOrPercentage,
-                      computed::Length),
-            Scale(CSSFloat, CSSFloat, CSSFloat),
-            Rotate(CSSFloat, CSSFloat, CSSFloat, computed::Angle),
-            Perspective(computed::Length),
-        }
-
-        #[derive(Clone, Debug, PartialEq)]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub struct T(pub Option<Vec<ComputedOperation>>);
-    }
-
-    /// Describes a single parsed
-    /// [Transform Function](https://drafts.csswg.org/css-transforms/#typedef-transform-function).
-    ///
-    /// Multiple transform functions compose a transformation.
-    ///
-    /// Some transformations can be expressed by other more general functions.
-    #[derive(Clone, Debug, PartialEq)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    pub enum SpecifiedOperation {
-        /// Represents a 2D 2x3 matrix.
-        Matrix { a: Number, b: Number, c: Number, d: Number, e: Number, f: Number },
-        /// Represents a 3D 4x4 matrix.
-        Matrix3D {
-            m11: Number, m12: Number, m13: Number, m14: Number,
-            m21: Number, m22: Number, m23: Number, m24: Number,
-            m31: Number, m32: Number, m33: Number, m34: Number,
-            m41: Number, m42: Number, m43: Number, m44: Number,
-        },
-        /// A 2D skew.
-        ///
-        /// If the second angle is not provided it is assumed zero.
-        Skew(Angle, Option<Angle>),
-        SkewX(Angle),
-        SkewY(Angle),
-        Translate(LengthOrPercentage, Option<LengthOrPercentage>),
-        TranslateX(LengthOrPercentage),
-        TranslateY(LengthOrPercentage),
-        TranslateZ(Length),
-        Translate3D(LengthOrPercentage, LengthOrPercentage, Length),
-        /// A 2D scaling factor.
-        ///
-        /// `scale(2)` is parsed as `Scale(Number::new(2.0), None)` and is equivalent to
-        /// writing `scale(2, 2)` (`Scale(Number::new(2.0), Some(Number::new(2.0)))`).
-        ///
-        /// Negative values are allowed and flip the element.
-        Scale(Number, Option<Number>),
-        ScaleX(Number),
-        ScaleY(Number),
-        ScaleZ(Number),
-        Scale3D(Number, Number, Number),
-        /// Describes a 2D Rotation.
-        ///
-        /// In a 3D scene `rotate(angle)` is equivalent to `rotateZ(angle)`.
-        Rotate(Angle),
-        /// Rotation in 3D space around the x-axis.
-        RotateX(Angle),
-        /// Rotation in 3D space around the y-axis.
-        RotateY(Angle),
-        /// Rotation in 3D space around the z-axis.
-        RotateZ(Angle),
-        /// Rotation in 3D space.
-        ///
-        /// Generalization of rotateX, rotateY and rotateZ.
-        Rotate3D(Number, Number, Number, Angle),
-        /// Specifies a perspective projection matrix.
-        ///
-        /// Part of CSS Transform Module Level 2 and defined at
-        /// [§ 13.1. 3D Transform Function](https://drafts.csswg.org/css-transforms-2/#funcdef-perspective).
-        ///
-        /// The value must be greater than or equal to zero.
-        Perspective(specified::Length),
-    }
-
-    impl ToCss for computed_value::T {
-        fn to_css<W>(&self, _: &mut W) -> fmt::Result where W: fmt::Write {
-            // TODO(pcwalton)
-            Ok(())
-        }
-    }
-
-    impl HasViewportPercentage for SpecifiedOperation {
-        fn has_viewport_percentage(&self) -> bool {
-            match *self {
-                SpecifiedOperation::Translate(ref l1, None) |
-                SpecifiedOperation::TranslateX(ref l1) |
-                SpecifiedOperation::TranslateY(ref l1)  => {
-                    l1.has_viewport_percentage()
-                }
-                SpecifiedOperation::TranslateZ(ref l1) => {
-                    l1.has_viewport_percentage()
-                }
-                SpecifiedOperation::Translate(ref l1, Some(ref l2)) => {
-                    l1.has_viewport_percentage() ||
-                    l2.has_viewport_percentage()
-                }
-                SpecifiedOperation::Translate3D(ref l1, ref l2, ref l3) => {
-                    l1.has_viewport_percentage() ||
-                    l2.has_viewport_percentage() ||
-                    l3.has_viewport_percentage()
-                },
-                SpecifiedOperation::Perspective(ref length) => length.has_viewport_percentage(),
-                _ => false
-            }
-        }
-    }
-
-    impl ToCss for SpecifiedOperation {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            use self::SpecifiedOperation::*;
-            match *self {
-                Matrix { a, b, c, d, e, f} => write!(
-                    dest, "matrix({}, {}, {}, {}, {}, {})",
-                    Css(a), Css(b), Css(c), Css(d), Css(e), Css(f)),
-                Matrix3D {
-                    m11, m12, m13, m14,
-                    m21, m22, m23, m24,
-                    m31, m32, m33, m34,
-                    m41, m42, m43, m44 } => write!(
-                        dest, "matrix3d({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-                        Css(m11), Css(m12), Css(m13), Css(m14),
-                        Css(m21), Css(m22), Css(m23), Css(m24),
-                        Css(m31), Css(m32), Css(m33), Css(m34),
-                        Css(m41), Css(m42), Css(m43), Css(m44)),
-                Skew(ax, None) => write!(dest, "skew({})", Css(ax)),
-                Skew(ax, Some(ay)) => write!(dest, "skew({}, {})", Css(ax), Css(ay)),
-                SkewX(angle) => write!(dest, "skewX({})", Css(angle)),
-                SkewY(angle) => write!(dest, "skewY({})", Css(angle)),
-                Translate(ref tx, None) => write!(dest, "translate({})", Css(tx)),
-                Translate(ref tx, Some(ref ty)) => write!(dest, "translate({}, {})", Css(tx), Css(ty)),
-                TranslateX(ref tx) => write!(dest, "translateX({})", Css(tx)),
-                TranslateY(ref ty) => write!(dest, "translateY({})", Css(ty)),
-                TranslateZ(ref tz) => write!(dest, "translateZ({})", Css(tz)),
-                Translate3D(ref tx, ref ty, ref tz) => write!(
-                    dest, "translate3d({}, {}, {})", Css(tx), Css(ty), Css(tz)),
-                Scale(factor, None) => write!(dest, "scale({})", Css(factor)),
-                Scale(sx, Some(sy)) => write!(dest, "scale({}, {})", Css(sx), Css(sy)),
-                ScaleX(sx) => write!(dest, "scaleX({})", Css(sx)),
-                ScaleY(sy) => write!(dest, "scaleY({})", Css(sy)),
-                ScaleZ(sz) => write!(dest, "scaleZ({})", Css(sz)),
-                Scale3D(sx, sy, sz) => write!(dest, "scale3d({}, {}, {})", Css(sx), Css(sy), Css(sz)),
-                Rotate(theta) => write!(dest, "rotate({})", Css(theta)),
-                RotateX(theta) => write!(dest, "rotateX({})", Css(theta)),
-                RotateY(theta) => write!(dest, "rotateY({})", Css(theta)),
-                RotateZ(theta) => write!(dest, "rotateZ({})", Css(theta)),
-                Rotate3D(x, y, z, theta) => write!(
-                    dest, "rotate3d({}, {}, {}, {})",
-                    Css(x), Css(y), Css(z), Css(theta)),
-                Perspective(ref length) => write!(dest, "perspective({})", Css(length)),
-            }
-        }
-    }
-
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            let &SpecifiedValue(ref specified_ops) = self;
-            specified_ops.iter().any(|ref x| x.has_viewport_percentage())
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    pub struct SpecifiedValue(Vec<SpecifiedOperation>);
-
-    impl ToCss for SpecifiedValue {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-
-            if self.0.is_empty() {
-                return dest.write_str("none")
-            }
-
-            let mut first = true;
-            for operation in &self.0 {
-                if !first {
-                    try!(dest.write_str(" "));
-                }
-                first = false;
-                try!(operation.to_css(dest))
-            }
-            Ok(())
-        }
-    }
-
-    #[inline]
-    pub fn get_initial_value() -> computed_value::T {
-        computed_value::T(None)
-    }
-
-    // Allow unitless zero angle for rotate() and skew() to align with gecko
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue,()> {
-        if input.try(|input| input.expect_ident_matching("none")).is_ok() {
-            return Ok(SpecifiedValue(Vec::new()))
-        }
-
-        let mut result = Vec::new();
-        loop {
-            let name = match input.expect_function() {
-                Ok(name) => name,
-                Err(_) => break,
-            };
-            match_ignore_ascii_case! {
-                &name,
-                "matrix" => {
-                    try!(input.parse_nested_block(|input| {
-                        let values = try!(input.parse_comma_separated(|input| {
-                            specified::parse_number(context, input)
-                        }));
-                        if values.len() != 6 {
-                            return Err(())
-                        }
-                        result.push(SpecifiedOperation::Matrix {
-                            a: values[0],
-                            b: values[1],
-                            c: values[2],
-                            d: values[3],
-                            e: values[4],
-                            f: values[5]
-                        });
-                        Ok(())
-                    }))
-                },
-                "matrix3d" => {
-                    try!(input.parse_nested_block(|input| {
-                        let values = try!(input.parse_comma_separated(|i| specified::parse_number(context, i)));
-                        if values.len() != 16 {
-                            return Err(())
-                        }
-                        result.push(SpecifiedOperation::Matrix3D {
-                            m11: values[ 0], m12: values[ 1], m13: values[ 2], m14: values[ 3],
-                            m21: values[ 4], m22: values[ 5], m23: values[ 6], m24: values[ 7],
-                            m31: values[ 8], m32: values[ 9], m33: values[10], m34: values[11],
-                            m41: values[12], m42: values[13], m43: values[14], m44: values[15]
-                        });
-                        Ok(())
-                    }))
-                },
-                "translate" => {
-                    try!(input.parse_nested_block(|input| {
-                        let sx = try!(specified::LengthOrPercentage::parse(context, input));
-                        if input.try(|input| input.expect_comma()).is_ok() {
-                            let sy = try!(specified::LengthOrPercentage::parse(context, input));
-                            result.push(SpecifiedOperation::Translate(sx, Some(sy)));
-                        } else {
-                            result.push(SpecifiedOperation::Translate(sx, None));
-                        }
-                        Ok(())
-                    }))
-                },
-                "translatex" => {
-                    try!(input.parse_nested_block(|input| {
-                        let tx = try!(specified::LengthOrPercentage::parse(context, input));
-                        result.push(SpecifiedOperation::TranslateX(tx));
-                        Ok(())
-                    }))
-                },
-                "translatey" => {
-                    try!(input.parse_nested_block(|input| {
-                        let ty = try!(specified::LengthOrPercentage::parse(context, input));
-                        result.push(SpecifiedOperation::TranslateY(ty));
-                        Ok(())
-                    }))
-                },
-                "translatez" => {
-                    try!(input.parse_nested_block(|input| {
-                        let tz = try!(specified::Length::parse(context, input));
-                        result.push(SpecifiedOperation::TranslateZ(tz));
-                        Ok(())
-                    }))
-                },
-                "translate3d" => {
-                    try!(input.parse_nested_block(|input| {
-                        let tx = try!(specified::LengthOrPercentage::parse(context, input));
-                        try!(input.expect_comma());
-                        let ty = try!(specified::LengthOrPercentage::parse(context, input));
-                        try!(input.expect_comma());
-                        let tz = try!(specified::Length::parse(context, input));
-                        result.push(SpecifiedOperation::Translate3D(tx, ty, tz));
-                        Ok(())
-                    }))
-                },
-                "scale" => {
-                    try!(input.parse_nested_block(|input| {
-                        let sx = try!(specified::parse_number(context, input));
-                        if input.try(|input| input.expect_comma()).is_ok() {
-                            let sy = try!(specified::parse_number(context, input));
-                            result.push(SpecifiedOperation::Scale(sx, Some(sy)));
-                        } else {
-                            result.push(SpecifiedOperation::Scale(sx, None));
-                        }
-                        Ok(())
-                    }))
-                },
-                "scalex" => {
-                    try!(input.parse_nested_block(|input| {
-                        let sx = try!(specified::parse_number(context, input));
-                        result.push(SpecifiedOperation::ScaleX(sx));
-                        Ok(())
-                    }))
-                },
-                "scaley" => {
-                    try!(input.parse_nested_block(|input| {
-                        let sy = try!(specified::parse_number(context, input));
-                        result.push(SpecifiedOperation::ScaleY(sy));
-                        Ok(())
-                    }))
-                },
-                "scalez" => {
-                    try!(input.parse_nested_block(|input| {
-                        let sz = try!(specified::parse_number(context, input));
-                        result.push(SpecifiedOperation::ScaleZ(sz));
-                        Ok(())
-                    }))
-                },
-                "scale3d" => {
-                    try!(input.parse_nested_block(|input| {
-                        let sx = try!(specified::parse_number(context, input));
-                        try!(input.expect_comma());
-                        let sy = try!(specified::parse_number(context, input));
-                        try!(input.expect_comma());
-                        let sz = try!(specified::parse_number(context, input));
-                        result.push(SpecifiedOperation::Scale3D(sx, sy, sz));
-                        Ok(())
-                    }))
-                },
-                "rotate" => {
-                    try!(input.parse_nested_block(|input| {
-                        let theta = try!(specified::Angle::parse_with_unitless(context,input));
-                        result.push(SpecifiedOperation::Rotate(theta));
-                        Ok(())
-                    }))
-                },
-                "rotatex" => {
-                    try!(input.parse_nested_block(|input| {
-                        let theta = try!(specified::Angle::parse_with_unitless(context,input));
-                        result.push(SpecifiedOperation::RotateX(theta));
-                        Ok(())
-                    }))
-                },
-                "rotatey" => {
-                    try!(input.parse_nested_block(|input| {
-                        let theta = try!(specified::Angle::parse_with_unitless(context,input));
-                        result.push(SpecifiedOperation::RotateY(theta));
-                        Ok(())
-                    }))
-                },
-                "rotatez" => {
-                    try!(input.parse_nested_block(|input| {
-                        let theta = try!(specified::Angle::parse_with_unitless(context,input));
-                        result.push(SpecifiedOperation::RotateZ(theta));
-                        Ok(())
-                    }))
-                },
-                "rotate3d" => {
-                    try!(input.parse_nested_block(|input| {
-                        let ax = try!(specified::parse_number(context, input));
-                        try!(input.expect_comma());
-                        let ay = try!(specified::parse_number(context, input));
-                        try!(input.expect_comma());
-                        let az = try!(specified::parse_number(context, input));
-                        try!(input.expect_comma());
-                        let theta = try!(specified::Angle::parse_with_unitless(context,input));
-                        // TODO(gw): Check the axis can be normalized!!
-                        result.push(SpecifiedOperation::Rotate3D(ax, ay, az, theta));
-                        Ok(())
-                    }))
-                },
-                "skew" => {
-                    try!(input.parse_nested_block(|input| {
-                        let theta_x = try!(specified::Angle::parse_with_unitless(context, input));
-                        if input.try(|input| input.expect_comma()).is_ok() {
-                            let theta_y = try!(specified::Angle::parse_with_unitless(context, input));
-                            result.push(SpecifiedOperation::Skew(theta_x, Some(theta_y)));
-                        } else {
-                            result.push(SpecifiedOperation::Skew(theta_x, None));
-                        }
-                        Ok(())
-                    }))
-                },
-                "skewx" => {
-                    try!(input.parse_nested_block(|input| {
-                        let theta_x = try!(specified::Angle::parse_with_unitless(context,input));
-                        result.push(SpecifiedOperation::SkewX(theta_x));
-                        Ok(())
-                    }))
-                },
-                "skewy" => {
-                    try!(input.parse_nested_block(|input| {
-                        let theta_y = try!(specified::Angle::parse_with_unitless(context,input));
-                        result.push(SpecifiedOperation::SkewY(theta_y));
-                        Ok(())
-                    }))
-                },
-                "perspective" => {
-                    try!(input.parse_nested_block(|input| {
-                        let d = try!(specified::Length::parse_non_negative(context, input));
-                        result.push(SpecifiedOperation::Perspective(d));
-                        Ok(())
-                    }))
-                },
-                _ => return Err(())
-            }
-        }
-
-        if !result.is_empty() {
-            Ok(SpecifiedValue(result))
-        } else {
-            Err(())
-        }
-    }
-
-    impl ToComputedValue for SpecifiedValue {
-        type ComputedValue = computed_value::T;
-
-        #[inline]
-        fn to_computed_value(&self, context: &Context) -> computed_value::T {
-            use self::SpecifiedOperation::*;
-            if self.0.is_empty() {
-                return computed_value::T(None)
-            }
-
-            let mut result = vec!();
-            for operation in &self.0 {
-                match *operation {
-                    Matrix { a, b, c, d, e, f } => {
-                        let mut comp = computed_value::ComputedMatrix::identity();
-                        comp.m11 = a.to_computed_value(context);
-                        comp.m12 = b.to_computed_value(context);
-                        comp.m21 = c.to_computed_value(context);
-                        comp.m22 = d.to_computed_value(context);
-                        comp.m41 = e.to_computed_value(context);
-                        comp.m42 = f.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Matrix(comp));
-                    }
-                    Matrix3D {
-                        m11, m12, m13, m14,
-                        m21, m22, m23, m24,
-                        m31, m32, m33, m34,
-                        m41, m42, m43, m44 } => {
-                            let comp = computed_value::ComputedMatrix {
-                                m11: m11.to_computed_value(context),
-                                m12: m12.to_computed_value(context),
-                                m13: m13.to_computed_value(context),
-                                m14: m14.to_computed_value(context),
-                                m21: m21.to_computed_value(context),
-                                m22: m22.to_computed_value(context),
-                                m23: m23.to_computed_value(context),
-                                m24: m24.to_computed_value(context),
-                                m31: m31.to_computed_value(context),
-                                m32: m32.to_computed_value(context),
-                                m33: m33.to_computed_value(context),
-                                m34: m34.to_computed_value(context),
-                                m41: m41.to_computed_value(context),
-                                m42: m42.to_computed_value(context),
-                                m43: m43.to_computed_value(context),
-                                m44: m44.to_computed_value(context),
-                            };
-                        result.push(computed_value::ComputedOperation::Matrix(comp));
-                    }
-                    Translate(ref tx, None) => {
-                        let tx = tx.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Translate(
-                            tx,
-                            computed::length::LengthOrPercentage::zero(),
-                            computed::length::Length::new(0)));
-                    }
-                    Translate(ref tx, Some(ref ty)) => {
-                        let tx = tx.to_computed_value(context);
-                        let ty = ty.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Translate(
-                            tx,
-                            ty,
-                            computed::length::Length::new(0)));
-                    }
-                    TranslateX(ref tx) => {
-                        let tx = tx.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Translate(
-                            tx,
-                            computed::length::LengthOrPercentage::zero(),
-                            computed::length::Length::new(0)));
-                    }
-                    TranslateY(ref ty) => {
-                        let ty = ty.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Translate(
-                            computed::length::LengthOrPercentage::zero(),
-                            ty,
-                            computed::length::Length::new(0)));
-                    }
-                    TranslateZ(ref tz) => {
-                        let tz = tz.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Translate(
-                            computed::length::LengthOrPercentage::zero(),
-                            computed::length::LengthOrPercentage::zero(),
-                            tz));
-                    }
-                    Translate3D(ref tx, ref ty, ref tz) => {
-                        let tx = tx.to_computed_value(context);
-                        let ty = ty.to_computed_value(context);
-                        let tz = tz.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Translate(tx, ty, tz));
-                    }
-                    Scale(factor, None) => {
-                        let factor = factor.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Scale(factor, factor, 1.0));
-                    }
-                    Scale(sx, Some(sy)) => {
-                        let sx = sx.to_computed_value(context);
-                        let sy = sy.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Scale(sx, sy, 1.0));
-                    }
-                    ScaleX(sx) => {
-                        let sx = sx.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Scale(sx, 1.0, 1.0));
-                    }
-                    ScaleY(sy) => {
-                        let sy = sy.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Scale(1.0, sy, 1.0));
-                    }
-                    ScaleZ(sz) => {
-                        let sz = sz.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Scale(1.0, 1.0, sz));
-                    }
-                    Scale3D(sx, sy, sz) => {
-                        let sx = sx.to_computed_value(context);
-                        let sy = sy.to_computed_value(context);
-                        let sz = sz.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Scale(sx, sy, sz));
-                    }
-                    Rotate(theta) => {
-                        let theta = theta.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Rotate(0.0, 0.0, 1.0, theta));
-                    }
-                    RotateX(theta) => {
-                        let theta = theta.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Rotate(1.0, 0.0, 0.0, theta));
-                    }
-                    RotateY(theta) => {
-                        let theta = theta.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Rotate(0.0, 1.0, 0.0, theta));
-                    }
-                    RotateZ(theta) => {
-                        let theta = theta.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Rotate(0.0, 0.0, 1.0, theta));
-                    }
-                    Rotate3D(ax, ay, az, theta) => {
-                        let ax = ax.to_computed_value(context);
-                        let ay = ay.to_computed_value(context);
-                        let az = az.to_computed_value(context);
-                        let theta = theta.to_computed_value(context);
-                        let len = (ax * ax + ay * ay + az * az).sqrt();
-                        result.push(computed_value::ComputedOperation::Rotate(ax / len, ay / len, az / len, theta));
-                    }
-                    Skew(theta_x, None) => {
-                        let theta_x = theta_x.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Skew(theta_x, computed::Angle::zero()));
-                    }
-                    Skew(theta_x, Some(theta_y)) => {
-                        let theta_x = theta_x.to_computed_value(context);
-                        let theta_y = theta_y.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Skew(theta_x, theta_y));
-                    }
-                    SkewX(theta_x) => {
-                        let theta_x = theta_x.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Skew(theta_x, computed::Angle::zero()));
-                    }
-                    SkewY(theta_y) => {
-                        let theta_y = theta_y.to_computed_value(context);
-                        result.push(computed_value::ComputedOperation::Skew(computed::Angle::zero(), theta_y));
-                    }
-                    Perspective(ref d) => {
-                        result.push(computed_value::ComputedOperation::Perspective(d.to_computed_value(context)));
-                    }
-                };
-            }
-
-            computed_value::T(Some(result))
-        }
-
-        #[inline]
-        fn from_computed_value(computed: &computed_value::T) -> Self {
-            SpecifiedValue(computed.0.as_ref().map(|computed| {
-                let mut result = vec![];
-                for operation in computed {
-                    match *operation {
-                        computed_value::ComputedOperation::Matrix(ref computed) => {
-                            result.push(SpecifiedOperation::Matrix3D {
-                                m11: Number::from_computed_value(&computed.m11),
-                                m12: Number::from_computed_value(&computed.m12),
-                                m13: Number::from_computed_value(&computed.m13),
-                                m14: Number::from_computed_value(&computed.m14),
-                                m21: Number::from_computed_value(&computed.m21),
-                                m22: Number::from_computed_value(&computed.m22),
-                                m23: Number::from_computed_value(&computed.m23),
-                                m24: Number::from_computed_value(&computed.m24),
-                                m31: Number::from_computed_value(&computed.m31),
-                                m32: Number::from_computed_value(&computed.m32),
-                                m33: Number::from_computed_value(&computed.m33),
-                                m34: Number::from_computed_value(&computed.m34),
-                                m41: Number::from_computed_value(&computed.m41),
-                                m42: Number::from_computed_value(&computed.m42),
-                                m43: Number::from_computed_value(&computed.m43),
-                                m44: Number::from_computed_value(&computed.m44),
-                            });
-                        }
-                        computed_value::ComputedOperation::Translate(ref tx, ref ty, ref tz) => {
-                            // XXXManishearth we lose information here; perhaps we should try to
-                            // recover the original function? Not sure if this can be observed.
-                            result.push(SpecifiedOperation::Translate3D(
-                                              ToComputedValue::from_computed_value(tx),
-                                              ToComputedValue::from_computed_value(ty),
-                                              ToComputedValue::from_computed_value(tz)));
-                        }
-                        computed_value::ComputedOperation::Scale(ref sx, ref sy, ref sz) => {
-                            result.push(SpecifiedOperation::Scale3D(
-                                    Number::from_computed_value(sx),
-                                    Number::from_computed_value(sy),
-                                    Number::from_computed_value(sz)));
-                        }
-                        computed_value::ComputedOperation::Rotate(ref ax, ref ay, ref az, ref theta) => {
-                            result.push(SpecifiedOperation::Rotate3D(
-                                    Number::from_computed_value(ax),
-                                    Number::from_computed_value(ay),
-                                    Number::from_computed_value(az),
-                                    specified::Angle::from_computed_value(theta)));
-                        }
-                        computed_value::ComputedOperation::Skew(ref theta_x, ref theta_y) => {
-                            result.push(SpecifiedOperation::Skew(
-                                    specified::Angle::from_computed_value(theta_x),
-                                    Some(specified::Angle::from_computed_value(theta_y))))
-                        }
-                        computed_value::ComputedOperation::Perspective(ref d) => {
-                            result.push(SpecifiedOperation::Perspective(
-                                ToComputedValue::from_computed_value(d)
-                            ));
-                        }
-                    };
-                }
-                result
-            }).unwrap_or(Vec::new()))
-        }
-    }
-</%helpers:longhand>
+${helpers.predefined_type("transform", "Transform",
+                          "generics::transform::Transform::none()",
+                          extra_prefixes="webkit",
+                          animation_value_type="ComputedValue",
+                          gecko_ffi_name="mSpecifiedTransform",
+                          flags="CREATES_STACKING_CONTEXT FIXPOS_CB",
+                          spec="https://drafts.csswg.org/css-transforms/#propdef-transform")}
 
 // CSSOM View Module
 // https://www.w3.org/TR/cssom-view-1/
 ${helpers.single_keyword("scroll-behavior",
                          "auto smooth",
+                         gecko_pref="layout.css.scroll-behavior.property-enabled",
                          products="gecko",
                          spec="https://drafts.csswg.org/cssom-view/#propdef-scroll-behavior",
-                         animation_type="none")}
+                         animation_value_type="discrete")}
 
-${helpers.single_keyword("scroll-snap-type-x",
-                         "none mandatory proximity",
-                         products="gecko",
-                         gecko_constant_prefix="NS_STYLE_SCROLL_SNAP_TYPE",
-                         spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/scroll-snap-type-x)",
-                         animation_type="none")}
+% for axis in ["x", "y"]:
+    ${helpers.predefined_type(
+        "scroll-snap-type-" + axis,
+        "ScrollSnapType",
+        "computed::ScrollSnapType::None",
+        products="gecko",
+        needs_context=False,
+        gecko_pref="layout.css.scroll-snap.enabled",
+        spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/scroll-snap-type-x)",
+        animation_value_type="discrete"
+    )}
+% endfor
 
-<%helpers:longhand products="gecko" name="scroll-snap-type-y" animation_type="none"
-                   spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/scroll-snap-type-x)">
-    pub use super::scroll_snap_type_x::SpecifiedValue;
-    pub use super::scroll_snap_type_x::computed_value;
-    pub use super::scroll_snap_type_x::get_initial_value;
-    pub use super::scroll_snap_type_x::parse;
-</%helpers:longhand>
+% for axis in ["x", "y"]:
+    ${helpers.predefined_type(
+        "overscroll-behavior-" + axis,
+        "OverscrollBehavior",
+        "computed::OverscrollBehavior::Auto",
+        products="gecko",
+        needs_context=False,
+        gecko_pref="layout.css.overscroll-behavior.enabled",
+        spec="https://wicg.github.io/overscroll-behavior/#overscroll-behavior-properties",
+        animation_value_type="discrete"
+    )}
+% endfor
 
 // Compositing and Blending Level 1
 // http://www.w3.org/TR/compositing-1/
 ${helpers.single_keyword("isolation",
                          "auto isolate",
                          products="gecko",
+                         gecko_pref="layout.css.isolation.enabled",
                          spec="https://drafts.fxtf.org/compositing/#isolation",
-                         creates_stacking_context=True,
-                         animation_type="none")}
+                         flags="CREATES_STACKING_CONTEXT",
+                         animation_value_type="discrete")}
 
 // TODO add support for logical values recto and verso
 ${helpers.single_keyword("page-break-after",
                          "auto always avoid left right",
                          products="gecko",
                          spec="https://drafts.csswg.org/css2/page.html#propdef-page-break-after",
-                         animation_type="none")}
+                         animation_value_type="discrete")}
 ${helpers.single_keyword("page-break-before",
                          "auto always avoid left right",
                          products="gecko",
                          spec="https://drafts.csswg.org/css2/page.html#propdef-page-break-before",
-                         animation_type="none")}
+                         animation_value_type="discrete")}
 ${helpers.single_keyword("page-break-inside",
                          "auto avoid",
                          products="gecko",
                          gecko_ffi_name="mBreakInside",
                          gecko_constant_prefix="NS_STYLE_PAGE_BREAK",
                          spec="https://drafts.csswg.org/css2/page.html#propdef-page-break-inside",
-                         animation_type="none")}
+                         animation_value_type="discrete")}
 
 // CSS Basic User Interface Module Level 3
 // http://dev.w3.org/csswg/css-ui
 // FIXME support logical values `block` and `inline` (https://drafts.csswg.org/css-logical-props/#resize)
+//
+// This is APPLIES_TO_PLACEHOLDER so we can override, in the UA sheet, the
+// 'resize' property we'd inherit from textarea otherwise.  Basically, just
+// makes the UA rules easier to write.
 ${helpers.single_keyword("resize",
                          "none both horizontal vertical",
                          products="gecko",
                          spec="https://drafts.csswg.org/css-ui/#propdef-resize",
-                         animation_type="none")}
+                         flags="APPLIES_TO_PLACEHOLDER",
+                         animation_value_type="discrete")}
 
 
 ${helpers.predefined_type("perspective",
@@ -1864,98 +692,31 @@ ${helpers.predefined_type("perspective",
                           gecko_ffi_name="mChildPerspective",
                           spec="https://drafts.csswg.org/css-transforms/#perspective",
                           extra_prefixes="moz webkit",
-                          creates_stacking_context=True,
-                          fixpos_cb=True,
-                          animation_type="normal")}
+                          flags="CREATES_STACKING_CONTEXT FIXPOS_CB",
+                          animation_value_type="ComputedValue")}
 
-<%helpers:longhand name="perspective-origin" boxed="True" animation_type="normal" extra_prefixes="moz webkit"
-                   spec="https://drafts.csswg.org/css-transforms/#perspective-origin-property">
-    use std::fmt;
-    use style_traits::ToCss;
-    use values::HasViewportPercentage;
-    use values::specified::{LengthOrPercentage, Percentage};
-
-    pub mod computed_value {
-        use properties::animated_properties::Interpolate;
-        use values::computed::LengthOrPercentage;
-        use values::computed::Position;
-
-        pub type T = Position;
-    }
-
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            self.horizontal.has_viewport_percentage() || self.vertical.has_viewport_percentage()
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    pub struct SpecifiedValue {
-        horizontal: LengthOrPercentage,
-        vertical: LengthOrPercentage,
-    }
-
-    impl ToCss for SpecifiedValue {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            try!(self.horizontal.to_css(dest));
-            try!(dest.write_str(" "));
-            self.vertical.to_css(dest)
-        }
-    }
-
-    #[inline]
-    pub fn get_initial_value() -> computed_value::T {
-        computed_value::T {
-            horizontal: computed::LengthOrPercentage::Percentage(0.5),
-            vertical: computed::LengthOrPercentage::Percentage(0.5),
-        }
-    }
-
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue,()> {
-        let result = try!(super::parse_origin(context, input));
-        match result.depth {
-            Some(_) => Err(()),
-            None => Ok(SpecifiedValue {
-                horizontal: result.horizontal.unwrap_or(LengthOrPercentage::Percentage(Percentage(0.5))),
-                vertical: result.vertical.unwrap_or(LengthOrPercentage::Percentage(Percentage(0.5))),
-            })
-        }
-    }
-
-    impl ToComputedValue for SpecifiedValue {
-        type ComputedValue = computed_value::T;
-
-        #[inline]
-        fn to_computed_value(&self, context: &Context) -> computed_value::T {
-            computed_value::T {
-                horizontal: self.horizontal.to_computed_value(context),
-                vertical: self.vertical.to_computed_value(context),
-            }
-        }
-
-        #[inline]
-        fn from_computed_value(computed: &computed_value::T) -> Self {
-            SpecifiedValue {
-                horizontal: ToComputedValue::from_computed_value(&computed.horizontal),
-                vertical: ToComputedValue::from_computed_value(&computed.vertical),
-            }
-        }
-    }
-</%helpers:longhand>
+${helpers.predefined_type("perspective-origin",
+                          "position::Position",
+                          "computed::position::Position::center()",
+                          boxed="True",
+                          extra_prefixes="moz webkit",
+                          spec="https://drafts.csswg.org/css-transforms-2/#perspective-origin-property",
+                          animation_value_type="ComputedValue")}
 
 ${helpers.single_keyword("backface-visibility",
                          "visible hidden",
                          spec="https://drafts.csswg.org/css-transforms/#backface-visibility-property",
                          extra_prefixes="moz webkit",
-                         animation_type="none")}
+                         animation_value_type="discrete")}
 
 ${helpers.single_keyword("transform-box",
                          "border-box fill-box view-box",
                          gecko_enum_prefix="StyleGeometryBox",
                          products="gecko",
+                         gecko_pref="svg.transform-box.enabled",
                          spec="https://drafts.csswg.org/css-transforms/#transform-box",
-                         animation_type="none")}
+                         gecko_inexhaustive="True",
+                         animation_value_type="discrete")}
 
 // `auto` keyword is not supported in gecko yet.
 ${helpers.single_keyword("transform-style",
@@ -1963,141 +724,40 @@ ${helpers.single_keyword("transform-style",
                          "flat preserve-3d",
                          spec="https://drafts.csswg.org/css-transforms/#transform-style-property",
                          extra_prefixes="moz webkit",
-                         creates_stacking_context=True,
-                         fixpos_cb=True,
-                         animation_type="none")}
+                         flags="CREATES_STACKING_CONTEXT FIXPOS_CB",
+                         animation_value_type="discrete")}
 
-<%helpers:longhand name="transform-origin" animation_type="normal" extra_prefixes="moz webkit" boxed="True"
-                   spec="https://drafts.csswg.org/css-transforms/#transform-origin-property">
-    use app_units::Au;
-    use std::fmt;
-    use style_traits::ToCss;
-    use values::HasViewportPercentage;
-    use values::specified::{NoCalcLength, LengthOrPercentage, Percentage};
+${helpers.predefined_type("transform-origin",
+                          "TransformOrigin",
+                          "computed::TransformOrigin::initial_value()",
+                          animation_value_type="ComputedValue",
+                          extra_prefixes="moz webkit",
+                          gecko_ffi_name="mTransformOrigin",
+                          boxed=True,
+                          spec="https://drafts.csswg.org/css-transforms/#transform-origin-property")}
 
-    pub mod computed_value {
-        use properties::animated_properties::Interpolate;
-        use values::computed::{Length, LengthOrPercentage};
-
-        #[derive(Clone, Copy, Debug, PartialEq)]
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub struct T {
-            pub horizontal: LengthOrPercentage,
-            pub vertical: LengthOrPercentage,
-            pub depth: Length,
-        }
-
-        impl Interpolate for T {
-            fn interpolate(&self, other: &Self, time: f64) -> Result<Self, ()> {
-                Ok(T {
-                    horizontal: try!(self.horizontal.interpolate(&other.horizontal, time)),
-                    vertical: try!(self.vertical.interpolate(&other.vertical, time)),
-                    depth: try!(self.depth.interpolate(&other.depth, time)),
-                })
-            }
-        }
-    }
-
-    impl HasViewportPercentage for SpecifiedValue {
-        fn has_viewport_percentage(&self) -> bool {
-            self.horizontal.has_viewport_percentage() ||
-            self.vertical.has_viewport_percentage() ||
-            self.depth.has_viewport_percentage()
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    pub struct SpecifiedValue {
-        horizontal: LengthOrPercentage,
-        vertical: LengthOrPercentage,
-        depth: NoCalcLength,
-    }
-
-    impl ToCss for computed_value::T {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            try!(self.horizontal.to_css(dest));
-            try!(dest.write_str(" "));
-            try!(self.vertical.to_css(dest));
-            try!(dest.write_str(" "));
-            self.depth.to_css(dest)
-        }
-    }
-
-    impl ToCss for SpecifiedValue {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            try!(self.horizontal.to_css(dest));
-            try!(dest.write_str(" "));
-            try!(self.vertical.to_css(dest));
-            try!(dest.write_str(" "));
-            self.depth.to_css(dest)
-        }
-    }
-
-    #[inline]
-    pub fn get_initial_value() -> computed_value::T {
-        computed_value::T {
-            horizontal: computed::LengthOrPercentage::Percentage(0.5),
-            vertical: computed::LengthOrPercentage::Percentage(0.5),
-            depth: Au(0),
-        }
-    }
-
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue,()> {
-        let result = try!(super::parse_origin(context, input));
-        Ok(SpecifiedValue {
-            horizontal: result.horizontal.unwrap_or(LengthOrPercentage::Percentage(Percentage(0.5))),
-            vertical: result.vertical.unwrap_or(LengthOrPercentage::Percentage(Percentage(0.5))),
-            depth: result.depth.unwrap_or(NoCalcLength::zero()),
-        })
-    }
-
-    impl ToComputedValue for SpecifiedValue {
-        type ComputedValue = computed_value::T;
-
-        #[inline]
-        fn to_computed_value(&self, context: &Context) -> computed_value::T {
-            computed_value::T {
-                horizontal: self.horizontal.to_computed_value(context),
-                vertical: self.vertical.to_computed_value(context),
-                depth: self.depth.to_computed_value(context),
-            }
-        }
-
-        #[inline]
-        fn from_computed_value(computed: &computed_value::T) -> Self {
-            SpecifiedValue {
-                horizontal: ToComputedValue::from_computed_value(&computed.horizontal),
-                vertical: ToComputedValue::from_computed_value(&computed.vertical),
-                depth: ToComputedValue::from_computed_value(&computed.depth),
-            }
-        }
-    }
-</%helpers:longhand>
-
-<%helpers:longhand name="contain" animation_type="none" products="none"
+// FIXME: `size` and `content` values are not implemented and `strict` is implemented
+// like `content`(layout style paint) in gecko. We should implement `size` and `content`,
+// also update the glue once they are implemented in gecko.
+<%helpers:longhand name="contain" animation_value_type="discrete" products="gecko"
+                   flags="FIXPOS_CB"
+                   gecko_pref="layout.css.contain.enabled",
                    spec="https://drafts.csswg.org/css-contain/#contain-property">
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
-    use values::computed::ComputedValueAsSpecified;
-
-    impl ComputedValueAsSpecified for SpecifiedValue {}
-    no_viewport_percentage!(SpecifiedValue);
 
     pub mod computed_value {
         pub type T = super::SpecifiedValue;
     }
 
     bitflags! {
-        #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-        pub flags SpecifiedValue: u8 {
-            const SIZE = 0x01,
-            const LAYOUT = 0x02,
-            const STYLE = 0x04,
-            const PAINT = 0x08,
-            const STRICT = SIZE.bits | LAYOUT.bits | STYLE.bits | PAINT.bits,
-            const CONTENT = LAYOUT.bits | STYLE.bits | PAINT.bits,
+        #[derive(MallocSizeOf, ToComputedValue)]
+        pub struct SpecifiedValue: u8 {
+            const LAYOUT = 0x01;
+            const STYLE = 0x02;
+            const PAINT = 0x04;
+            const STRICT = 0x8;
+            const STRICT_BITS = SpecifiedValue::LAYOUT.bits | SpecifiedValue::STYLE.bits | SpecifiedValue::PAINT.bits;
         }
     }
 
@@ -2106,29 +766,25 @@ ${helpers.single_keyword("transform-style",
             if self.is_empty() {
                 return dest.write_str("none")
             }
-            if self.contains(STRICT) {
+            if self.contains(SpecifiedValue::STRICT) {
                 return dest.write_str("strict")
-            }
-            if self.contains(CONTENT) {
-                return dest.write_str("content")
             }
 
             let mut has_any = false;
             macro_rules! maybe_write_value {
-                ($ident:ident => $str:expr) => {
+                ($ident:path => $str:expr) => {
                     if self.contains($ident) {
                         if has_any {
-                            try!(dest.write_str(" "));
+                            dest.write_str(" ")?;
                         }
                         has_any = true;
-                        try!(dest.write_str($str));
+                        dest.write_str($str)?;
                     }
                 }
             }
-            maybe_write_value!(SIZE => "size");
-            maybe_write_value!(LAYOUT => "layout");
-            maybe_write_value!(STYLE => "style");
-            maybe_write_value!(PAINT => "paint");
+            maybe_write_value!(SpecifiedValue::LAYOUT => "layout");
+            maybe_write_value!(SpecifiedValue::STYLE => "style");
+            maybe_write_value!(SpecifiedValue::PAINT => "paint");
 
             debug_assert!(has_any);
             Ok(())
@@ -2141,88 +797,81 @@ ${helpers.single_keyword("transform-style",
     }
 
     /// none | strict | content | [ size || layout || style || paint ]
-    pub fn parse(_context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
+    pub fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>)
+                         -> Result<SpecifiedValue, ParseError<'i>> {
         let mut result = SpecifiedValue::empty();
 
         if input.try(|input| input.expect_ident_matching("none")).is_ok() {
             return Ok(result)
         }
         if input.try(|input| input.expect_ident_matching("strict")).is_ok() {
-            result.insert(STRICT);
-            return Ok(result)
-        }
-        if input.try(|input| input.expect_ident_matching("content")).is_ok() {
-            result.insert(CONTENT);
+            result.insert(SpecifiedValue::STRICT | SpecifiedValue::STRICT_BITS);
             return Ok(result)
         }
 
-        while let Ok(name) = input.try(|input| input.expect_ident()) {
+        while let Ok(name) = input.try(|i| i.expect_ident_cloned()) {
             let flag = match_ignore_ascii_case! { &name,
-                "size" => SIZE,
-                "layout" => LAYOUT,
-                "style" => STYLE,
-                "paint" => PAINT,
-                _ => return Err(())
+                "layout" => Some(SpecifiedValue::LAYOUT),
+                "style" => Some(SpecifiedValue::STYLE),
+                "paint" => Some(SpecifiedValue::PAINT),
+                _ => None
             };
-            if result.contains(flag) {
-                return Err(())
-            }
+            let flag = match flag {
+                Some(flag) if !result.contains(flag) => flag,
+                _ => return Err(input.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(name.clone())))
+            };
             result.insert(flag);
         }
 
         if !result.is_empty() {
             Ok(result)
         } else {
-            Err(())
+            Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
         }
     }
 </%helpers:longhand>
-
-${helpers.single_keyword("appearance",
-                         "auto none",
-                         gecko_ffi_name="mAppearance",
-                         gecko_constant_prefix="NS_THEME",
-                         products="gecko",
-                         spec="https://drafts.csswg.org/css-ui-4/#appearance-switching",
-                         alias="-webkit-appearance",
-                         animation_type="none")}
 
 // Non-standard
 ${helpers.single_keyword("-moz-appearance",
                          """none button button-arrow-down button-arrow-next button-arrow-previous button-arrow-up
                             button-bevel button-focus caret checkbox checkbox-container checkbox-label checkmenuitem
-                            dualbutton groupbox listbox listitem menuarrow menubar menucheckbox menuimage menuitem
-                            menuitemtext menulist menulist-button menulist-text menulist-textfield menupopup menuradio
-                            menuseparator meterbar meterchunk number-input progressbar progressbar-vertical
-                            progresschunk
-                            progresschunk-vertical radio radio-container radio-label radiomenuitem range range-thumb
-                            resizer resizerpanel scale-horizontal scalethumbend scalethumb-horizontal scalethumbstart
-                            scalethumbtick scalethumb-vertical scale-vertical scrollbarbutton-down scrollbarbutton-left
-                            scrollbarbutton-right scrollbarbutton-up scrollbarthumb-horizontal scrollbarthumb-vertical
-                            scrollbartrack-horizontal scrollbartrack-vertical searchfield separator spinner
-                            spinner-downbutton spinner-textfield spinner-upbutton splitter statusbar statusbarpanel tab
-                            tabpanel tabpanels tab-scroll-arrow-back tab-scroll-arrow-forward textfield
-                            textfield-multiline toolbar toolbarbutton toolbarbutton-dropdown toolbargripper toolbox
-                            tooltip treeheader treeheadercell treeheadersortarrow treeitem treeline treetwisty
-                            treetwistyopen treeview -moz-win-borderless-glass -moz-win-browsertabbar-toolbox
+                            dialog dualbutton groupbox inner-spin-button listbox listitem menuarrow menubar menucheckbox
+                            menuimage menuitem menuitemtext menulist menulist-button menulist-text menulist-textfield
+                            menupopup menuradio menuseparator meterbar meterchunk number-input progressbar
+                            progressbar-vertical progresschunk progresschunk-vertical radio radio-container radio-label
+                            radiomenuitem range range-thumb resizer resizerpanel scale-horizontal scalethumbend
+                            scalethumb-horizontal scalethumbstart scalethumbtick scalethumb-vertical scale-vertical
+                            scrollbar scrollbar-horizontal scrollbar-small scrollbar-vertical scrollbarbutton-down
+                            scrollbarbutton-left scrollbarbutton-right scrollbarbutton-up scrollbarthumb-horizontal
+                            scrollbarthumb-vertical scrollbartrack-horizontal scrollbartrack-vertical searchfield
+                            separator spinner spinner-downbutton spinner-textfield spinner-upbutton splitter statusbar
+                            statusbarpanel tab tabpanel tabpanels tab-scroll-arrow-back tab-scroll-arrow-forward
+                            textfield textfield-multiline toolbar toolbarbutton toolbarbutton-dropdown toolbargripper
+                            toolbox tooltip treeheader treeheadercell treeheadersortarrow treeitem treeline treetwisty
+                            treetwistyopen treeview window
+                            -moz-gtk-info-bar -moz-mac-active-source-list-selection -moz-mac-disclosure-button-closed
+                            -moz-mac-disclosure-button-open -moz-mac-fullscreen-button -moz-mac-help-button
+                            -moz-mac-source-list -moz-mac-source-list-selection -moz-mac-vibrancy-dark
+                            -moz-mac-vibrancy-light -moz-mac-vibrant-titlebar-light -moz-mac-vibrant-titlebar-dark
+                            -moz-win-borderless-glass -moz-win-browsertabbar-toolbox
                             -moz-win-communications-toolbox -moz-win-exclude-glass -moz-win-glass -moz-win-media-toolbox
                             -moz-window-button-box -moz-window-button-box-maximized -moz-window-button-close
                             -moz-window-button-maximize -moz-window-button-minimize -moz-window-button-restore
                             -moz-window-frame-bottom -moz-window-frame-left -moz-window-frame-right -moz-window-titlebar
                             -moz-window-titlebar-maximized
                          """,
-                         gecko_ffi_name="mMozAppearance",
-                         gecko_constant_prefix="NS_THEME",
+                         gecko_ffi_name="mAppearance",
+                         gecko_constant_prefix="ThemeWidgetType_NS_THEME",
                          products="gecko",
                          spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-appearance)",
-                         animation_type="none")}
+                         animation_value_type="discrete")}
 
 ${helpers.predefined_type("-moz-binding", "UrlOrNone", "Either::Second(None_)",
                           products="gecko",
-                          animation_type="none",
+                          boxed="True" if product == "gecko" else "False",
+                          animation_value_type="none",
                           gecko_ffi_name="mBinding",
-                          spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-binding)",
-                          disable_when_testing="True")}
+                          spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-binding)")}
 
 ${helpers.single_keyword("-moz-orient",
                           "inline block horizontal vertical",
@@ -2230,95 +879,112 @@ ${helpers.single_keyword("-moz-orient",
                           gecko_ffi_name="mOrient",
                           gecko_enum_prefix="StyleOrient",
                           spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-orient)",
-                          animation_type="none")}
+                          animation_value_type="discrete")}
 
-<%helpers:longhand name="will-change" products="gecko" animation_type="none"
-                   spec="https://drafts.csswg.org/css-will-change/#will-change">
-    use cssparser::serialize_identifier;
+${helpers.predefined_type(
+    "will-change",
+    "WillChange",
+    "computed::WillChange::auto()",
+    products="gecko",
+    animation_value_type="discrete",
+    spec="https://drafts.csswg.org/css-will-change/#will-change"
+)}
+
+${helpers.predefined_type(
+    "shape-image-threshold", "Opacity", "0.0",
+    products="gecko",
+    gecko_pref="layout.css.shape-outside.enabled",
+    animation_value_type="ComputedValue",
+    spec="https://drafts.csswg.org/css-shapes/#shape-image-threshold-property",
+)}
+
+${helpers.predefined_type(
+    "shape-outside",
+    "basic_shape::FloatAreaShape",
+    "generics::basic_shape::ShapeSource::None",
+    products="gecko",
+    boxed=True,
+    gecko_pref="layout.css.shape-outside.enabled",
+    animation_value_type="ComputedValue",
+    flags="APPLIES_TO_FIRST_LETTER",
+    spec="https://drafts.csswg.org/css-shapes/#shape-outside-property",
+)}
+
+<%helpers:longhand name="touch-action"
+                   products="gecko"
+                   animation_value_type="discrete"
+                   gecko_pref="layout.css.touch_action.enabled"
+                   spec="https://compat.spec.whatwg.org/#touch-action">
+    use gecko_bindings::structs;
     use std::fmt;
     use style_traits::ToCss;
-    use values::HasViewportPercentage;
-    use values::computed::ComputedValueAsSpecified;
-
-    impl ComputedValueAsSpecified for SpecifiedValue {}
-    no_viewport_percentage!(SpecifiedValue);
 
     pub mod computed_value {
         pub use super::SpecifiedValue as T;
     }
 
-    #[derive(Debug, Clone, PartialEq)]
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf))]
-    pub enum SpecifiedValue {
-        Auto,
-        AnimateableFeatures(Vec<Atom>),
+    bitflags! {
+        /// These constants match Gecko's `NS_STYLE_TOUCH_ACTION_*` constants.
+        #[cfg_attr(feature = "gecko", derive(MallocSizeOf))]
+        #[derive(ToComputedValue)]
+        pub struct SpecifiedValue: u8 {
+            const TOUCH_ACTION_NONE = structs::NS_STYLE_TOUCH_ACTION_NONE as u8;
+            const TOUCH_ACTION_AUTO = structs::NS_STYLE_TOUCH_ACTION_AUTO as u8;
+            const TOUCH_ACTION_PAN_X = structs::NS_STYLE_TOUCH_ACTION_PAN_X as u8;
+            const TOUCH_ACTION_PAN_Y = structs::NS_STYLE_TOUCH_ACTION_PAN_Y as u8;
+            const TOUCH_ACTION_MANIPULATION = structs::NS_STYLE_TOUCH_ACTION_MANIPULATION as u8;
+        }
     }
 
     impl ToCss for SpecifiedValue {
         fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
             match *self {
-                SpecifiedValue::Auto => dest.write_str("auto"),
-                SpecifiedValue::AnimateableFeatures(ref features) => {
-                    let (first, rest) = features.split_first().unwrap();
-                    // handle head element
-                    serialize_identifier(&*first.to_string(), dest)?;
-                    // handle tail, precede each with a delimiter
-                    for feature in rest {
-                        dest.write_str(", ")?;
-                        serialize_identifier(&*feature.to_string(), dest)?;
-                    }
-                    Ok(())
-                }
+                SpecifiedValue::TOUCH_ACTION_NONE => dest.write_str("none"),
+                SpecifiedValue::TOUCH_ACTION_AUTO => dest.write_str("auto"),
+                SpecifiedValue::TOUCH_ACTION_MANIPULATION => dest.write_str("manipulation"),
+                _ if self.contains(SpecifiedValue::TOUCH_ACTION_PAN_X | SpecifiedValue::TOUCH_ACTION_PAN_Y) => {
+                    dest.write_str("pan-x pan-y")
+                },
+                _ if self.contains(SpecifiedValue::TOUCH_ACTION_PAN_X) => {
+                    dest.write_str("pan-x")
+                },
+                _ if self.contains(SpecifiedValue::TOUCH_ACTION_PAN_Y) => {
+                    dest.write_str("pan-y")
+                },
+                _ => panic!("invalid touch-action value"),
             }
         }
     }
 
     #[inline]
     pub fn get_initial_value() -> computed_value::T {
-        computed_value::T::Auto
+        SpecifiedValue::TOUCH_ACTION_AUTO
     }
 
-    /// auto | <animateable-feature>#
-    pub fn parse(_context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
-        if input.try(|input| input.expect_ident_matching("auto")).is_ok() {
-            Ok(computed_value::T::Auto)
-        } else {
-            input.parse_comma_separated(|i| {
-                let ident = i.expect_ident()?;
-                match_ignore_ascii_case! { &ident,
-                    "will-change" | "none" | "all" | "auto" |
-                    "initial" | "inherit" | "unset" | "default" => return Err(()),
-                    _ => {},
+    pub fn parse<'i, 't>(_context: &ParserContext, input: &mut Parser<'i, 't>)
+                         -> Result<SpecifiedValue, ParseError<'i>> {
+        // FIXME: remove clone() when lifetimes are non-lexical
+        try_match_ident_ignore_ascii_case! { input,
+            "auto" => Ok(SpecifiedValue::TOUCH_ACTION_AUTO),
+            "none" => Ok(SpecifiedValue::TOUCH_ACTION_NONE),
+            "manipulation" => Ok(SpecifiedValue::TOUCH_ACTION_MANIPULATION),
+            "pan-x" => {
+                if input.try(|i| i.expect_ident_matching("pan-y")).is_ok() {
+                    Ok(SpecifiedValue::TOUCH_ACTION_PAN_X | SpecifiedValue::TOUCH_ACTION_PAN_Y)
+                } else {
+                    Ok(SpecifiedValue::TOUCH_ACTION_PAN_X)
                 }
-                Ok((Atom::from(ident)))
-            }).map(SpecifiedValue::AnimateableFeatures)
+            },
+            "pan-y" => {
+                if input.try(|i| i.expect_ident_matching("pan-x")).is_ok() {
+                    Ok(SpecifiedValue::TOUCH_ACTION_PAN_X | SpecifiedValue::TOUCH_ACTION_PAN_Y)
+                } else {
+                    Ok(SpecifiedValue::TOUCH_ACTION_PAN_Y)
+                }
+            },
         }
     }
-</%helpers:longhand>
 
-<%helpers:longhand name="shape-outside" products="gecko" animation_type="none" boxed="True"
-                   spec="https://drafts.csswg.org/css-shapes/#shape-outside-property">
-    use std::fmt;
-    use style_traits::ToCss;
-    use values::specified::basic_shape::{ShapeBox, ShapeSource};
-    use values::HasViewportPercentage;
-
-    no_viewport_percentage!(SpecifiedValue);
-
-    pub mod computed_value {
-        use values::computed::basic_shape::{ShapeBox, ShapeSource};
-
-        pub type T = ShapeSource<ShapeBox>;
-    }
-
-    pub type SpecifiedValue = ShapeSource<ShapeBox>;
-
-    #[inline]
-    pub fn get_initial_value() -> computed_value::T {
-        Default::default()
-    }
-
-    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<SpecifiedValue, ()> {
-        ShapeSource::parse(context, input)
-    }
+    #[cfg(feature = "gecko")]
+    impl_bitflags_conversions!(SpecifiedValue);
 </%helpers:longhand>

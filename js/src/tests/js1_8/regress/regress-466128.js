@@ -16,16 +16,13 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
 
   for (let a = 0; a < 3; ++a) { 
-    for each (let b in [1, 2, "three", 4, 5, 6, 7, 8]) {
+    for (let b of [1, 2, "three", 4, 5, 6, 7, 8]) {
       }
   }
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

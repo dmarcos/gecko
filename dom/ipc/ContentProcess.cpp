@@ -8,6 +8,7 @@
 
 #include "ContentProcess.h"
 #include "ContentPrefs.h"
+#include "mozilla/Scheduler.h"
 
 #if defined(XP_MACOSX) && defined(MOZ_CONTENT_SANDBOX)
 #include <stdlib.h>
@@ -15,6 +16,7 @@
 
 #if (defined(XP_WIN) || defined(XP_MACOSX)) && defined(MOZ_CONTENT_SANDBOX)
 #include "mozilla/Preferences.h"
+#include "mozilla/SandboxSettings.h"
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsDirectoryService.h"
 #include "nsDirectoryServiceDefs.h"
@@ -26,14 +28,6 @@ namespace mozilla {
 namespace dom {
 
 #if defined(XP_WIN) && defined(MOZ_CONTENT_SANDBOX)
-static bool
-IsSandboxTempDirRequired()
-{
-  // On Windows, a sandbox-writable temp directory is only used
-  // when sandbox pref level >= 1.
-  return Preferences::GetInt("security.sandbox.content.level") >= 1;
-}
-
 static void
 SetTmpEnvironmentVariable(nsIFile* aValue)
 {
@@ -53,13 +47,6 @@ SetTmpEnvironmentVariable(nsIFile* aValue)
 #endif
 
 #if defined(XP_MACOSX) && defined(MOZ_CONTENT_SANDBOX)
-static bool
-IsSandboxTempDirRequired()
-{
-  // On OSX, use the sandbox-writable temp when the pref level >= 1.
-  return (Preferences::GetInt("security.sandbox.content.level") >= 1);
-}
-
 static void
 SetTmpEnvironmentVariable(nsIFile* aValue)
 {
@@ -79,7 +66,9 @@ SetUpSandboxEnvironment()
   MOZ_ASSERT(nsDirectoryService::gService,
     "SetUpSandboxEnvironment relies on nsDirectoryService being initialized");
 
-  if (!IsSandboxTempDirRequired()) {
+  // On macOS and Windows, a sandbox-writable temp directory is used whenever
+  // the sandbox is enabled.
+  if (!IsContentSandboxEnabled()) {
     return;
   }
 
@@ -114,6 +103,7 @@ ContentProcess::Init(int aArgc, char* aArgv[])
   bool foundIntPrefs = false;
   bool foundBoolPrefs = false;
   bool foundStringPrefs = false;
+  bool foundSchedulerPrefs = false;
 
   uint64_t childID;
   bool isForBrowser;
@@ -124,7 +114,8 @@ ContentProcess::Init(int aArgc, char* aArgv[])
   nsCOMPtr<nsIFile> profileDir;
 #endif
 
-  InfallibleTArray<PrefSetting> prefsArray;
+  char* schedulerPrefs = nullptr;
+  InfallibleTArray<Pref> prefsArray;
   for (int idx = aArgc; idx > 0; idx--) {
     if (!aArgv[idx]) {
       continue;
@@ -156,7 +147,6 @@ ContentProcess::Init(int aArgc, char* aArgv[])
       isForBrowser = strcmp(aArgv[idx], "-notForBrowser");
       foundIsForBrowser = true;
     } else if (!strcmp(aArgv[idx], "-intPrefs")) {
-      SET_PREF_PHASE(BEGIN_INIT_PREFS);
       char* str = aArgv[idx + 1];
       while (*str) {
         int32_t index = strtol(str, &str, 10);
@@ -165,13 +155,15 @@ ContentProcess::Init(int aArgc, char* aArgv[])
         MaybePrefValue value(PrefValue(static_cast<int32_t>(strtol(str, &str, 10))));
         MOZ_ASSERT(str[0] == '|');
         str++;
-        PrefSetting pref(nsCString(ContentPrefs::GetContentPref(index)), value, MaybePrefValue());
+        // XXX: we assume these values as default values, which may not be
+        // true. We also assume they are unlocked. Fortunately, these prefs
+        // get reset properly by the first IPC message.
+        Pref pref(nsCString(ContentPrefs::GetEarlyPref(index)),
+                  /* isLocked */ false, value, MaybePrefValue());
         prefsArray.AppendElement(pref);
       }
-      SET_PREF_PHASE(END_INIT_PREFS);
       foundIntPrefs = true;
     } else if (!strcmp(aArgv[idx], "-boolPrefs")) {
-      SET_PREF_PHASE(BEGIN_INIT_PREFS);
       char* str = aArgv[idx + 1];
       while (*str) {
         int32_t index = strtol(str, &str, 10);
@@ -180,13 +172,12 @@ ContentProcess::Init(int aArgc, char* aArgv[])
         MaybePrefValue value(PrefValue(!!strtol(str, &str, 10)));
         MOZ_ASSERT(str[0] == '|');
         str++;
-        PrefSetting pref(nsCString(ContentPrefs::GetContentPref(index)), value, MaybePrefValue());
+        Pref pref(nsCString(ContentPrefs::GetEarlyPref(index)),
+                  /* isLocked */ false, value, MaybePrefValue());
         prefsArray.AppendElement(pref);
       }
-      SET_PREF_PHASE(END_INIT_PREFS);
       foundBoolPrefs = true;
     } else if (!strcmp(aArgv[idx], "-stringPrefs")) {
-      SET_PREF_PHASE(BEGIN_INIT_PREFS);
       char* str = aArgv[idx + 1];
       while (*str) {
         int32_t index = strtol(str, &str, 10);
@@ -196,15 +187,17 @@ ContentProcess::Init(int aArgc, char* aArgv[])
         MOZ_ASSERT(str[0] == ';');
         str++;
         MaybePrefValue value(PrefValue(nsCString(str, length)));
-        PrefSetting pref(nsCString(ContentPrefs::GetContentPref(index)), value, MaybePrefValue());
+        Pref pref(nsCString(ContentPrefs::GetEarlyPref(index)),
+                  /* isLocked */ false, value, MaybePrefValue());
         prefsArray.AppendElement(pref);
         str += length + 1;
         MOZ_ASSERT(*(str - 1) == '|');
       }
-      SET_PREF_PHASE(END_INIT_PREFS);
       foundStringPrefs = true;
-    }
-    else if (!strcmp(aArgv[idx], "-safeMode")) {
+    } else if (!strcmp(aArgv[idx], "-schedulerPrefs")) {
+      schedulerPrefs = aArgv[idx + 1];
+      foundSchedulerPrefs = true;
+    } else if (!strcmp(aArgv[idx], "-safeMode")) {
       gSafeMode = true;
     }
 
@@ -225,7 +218,13 @@ ContentProcess::Init(int aArgc, char* aArgv[])
     }
 #endif /* XP_MACOSX && MOZ_CONTENT_SANDBOX */
 
-    bool allFound = foundAppdir && foundChildID && foundIsForBrowser && foundIntPrefs && foundBoolPrefs && foundStringPrefs;
+    bool allFound = foundAppdir
+                 && foundChildID
+                 && foundIsForBrowser
+                 && foundIntPrefs
+                 && foundBoolPrefs
+                 && foundStringPrefs
+                 && foundSchedulerPrefs;
 
 #if defined(XP_MACOSX) && defined(MOZ_CONTENT_SANDBOX)
     allFound &= foundProfile;
@@ -235,7 +234,9 @@ ContentProcess::Init(int aArgc, char* aArgv[])
       break;
     }
   }
-  Preferences::SetInitPreferences(&prefsArray);
+
+  Preferences::SetEarlyPreferences(&prefsArray);
+  Scheduler::SetPrefs(schedulerPrefs);
   mContent.Init(IOThreadChild::message_loop(),
                 ParentPid(),
                 IOThreadChild::channel(),

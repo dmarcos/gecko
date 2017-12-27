@@ -21,10 +21,10 @@
 #include "nsDebug.h"                    // for NS_NOTREACHED, NS_ASSERTION, etc
 #include "nsFont.h"                     // for nsFont
 #include "nsFontMetrics.h"              // for nsFontMetrics
-#include "nsIAtom.h"                    // for nsIAtom, NS_Atomize
+#include "nsAtom.h"                    // for nsAtom, NS_Atomize
 #include "nsID.h"
 #include "nsIDeviceContextSpec.h"       // for nsIDeviceContextSpec
-#include "nsILanguageAtomService.h"     // for nsILanguageAtomService, etc
+#include "nsLanguageAtomService.h"      // for nsLanguageAtomService
 #include "nsIObserver.h"                // for nsIObserver, etc
 #include "nsIObserverService.h"         // for nsIObserverService
 #include "nsIScreen.h"                  // for nsIScreen
@@ -62,11 +62,13 @@ public:
     void Compact();
     void Flush();
 
+    void UpdateUserFonts(gfxUserFontSet* aUserFontSet);
+
 protected:
     ~nsFontCache() {}
 
     nsDeviceContext*          mContext; // owner
-    nsCOMPtr<nsIAtom>         mLocaleLanguage;
+    RefPtr<nsAtom>         mLocaleLanguage;
     nsTArray<nsFontMetrics*>  mFontMetrics;
 };
 
@@ -85,11 +87,7 @@ nsFontCache::Init(nsDeviceContext* aContext)
     if (obs)
         obs->AddObserver(this, "memory-pressure", false);
 
-    nsCOMPtr<nsILanguageAtomService> langService;
-    langService = do_GetService(NS_LANGUAGEATOMSERVICE_CONTRACTID);
-    if (langService) {
-        mLocaleLanguage = langService->GetLocaleLanguage();
-    }
+    mLocaleLanguage = nsLanguageAtomService::GetService()->GetLocaleLanguage();
     if (!mLocaleLanguage) {
         mLocaleLanguage = NS_Atomize("x-western");
     }
@@ -116,7 +114,7 @@ already_AddRefed<nsFontMetrics>
 nsFontCache::GetMetricsFor(const nsFont& aFont,
                            const nsFontMetrics::Params& aParams)
 {
-    nsIAtom* language = aParams.language ? aParams.language
+    nsAtom* language = aParams.language ? aParams.language
                                          : mLocaleLanguage.get();
 
     // First check our cache
@@ -146,8 +144,19 @@ nsFontCache::GetMetricsFor(const nsFont& aFont,
     RefPtr<nsFontMetrics> fm = new nsFontMetrics(aFont, params, mContext);
     // the mFontMetrics list has the "head" at the end, because append
     // is cheaper than insert
-    mFontMetrics.AppendElement(do_AddRef(fm.get()).take());
+    mFontMetrics.AppendElement(do_AddRef(fm).take());
     return fm.forget();
+}
+
+void
+nsFontCache::UpdateUserFonts(gfxUserFontSet* aUserFontSet)
+{
+    for (nsFontMetrics* fm : mFontMetrics) {
+        gfxFontGroup* fg = fm->GetThebesFontGroup();
+        if (fg->GetUserFontSet() == aUserFontSet) {
+            fg->UpdateUserFonts();
+        }
+    }
 }
 
 void
@@ -194,7 +203,8 @@ nsDeviceContext::nsDeviceContext()
     : mWidth(0), mHeight(0),
       mAppUnitsPerDevPixel(-1), mAppUnitsPerDevPixelAtUnitFullZoom(-1),
       mAppUnitsPerPhysicalInch(-1),
-      mFullZoom(1.0f), mPrintingScale(1.0f)
+      mFullZoom(1.0f), mPrintingScale(1.0f),
+      mIsCurrentlyPrintingDoc(false)
 #ifdef DEBUG
     , mIsInitialized(false)
 #endif
@@ -215,6 +225,14 @@ nsDeviceContext::InitFontCache()
     if (!mFontCache) {
         mFontCache = new nsFontCache();
         mFontCache->Init(this);
+    }
+}
+
+void
+nsDeviceContext::UpdateFontCacheUserFonts(gfxUserFontSet* aUserFontSet)
+{
+    if (mFontCache) {
+        mFontCache->UpdateUserFonts(aUserFontSet);
     }
 }
 
@@ -261,6 +279,11 @@ nsDeviceContext::SetDPI(double* aScale)
         mAppUnitsPerDevPixelAtUnitFullZoom =
             NS_lround((AppUnitsPerCSSPixel() * 96) / dpi);
     } else {
+        nsCOMPtr<nsIScreen> primaryScreen;
+        ScreenManager& screenManager = ScreenManager::GetSingleton();
+        screenManager.GetPrimaryScreen(getter_AddRefs(primaryScreen));
+        MOZ_ASSERT(primaryScreen);
+
         // A value of -1 means use the maximum of 96 and the system DPI.
         // A value of 0 means use the system DPI. A positive value is used as the DPI.
         // This sets the physical size of a device pixel and thus controls the
@@ -270,8 +293,13 @@ nsDeviceContext::SetDPI(double* aScale)
         if (prefDPI > 0) {
             dpi = prefDPI;
         } else if (mWidget) {
+            // PuppetWidget could return -1 if the value's not available yet.
             dpi = mWidget->GetDPI();
-
+            // In case that the widget returns -1, use the primary screen's
+            // value as default.
+            if (dpi < 0) {
+                primaryScreen->GetDpi(&dpi);
+            }
             if (prefDPI < 0) {
                 dpi = std::max(96.0f, dpi);
             }
@@ -290,6 +318,11 @@ nsDeviceContext::SetDPI(double* aScale)
                 mWidget ? mWidget->GetDefaultScale()
                         : CSSToLayoutDeviceScale(1.0);
             devPixelsPerCSSPixel = scale.scale;
+            // In case that the widget returns -1, use the primary screen's
+            // value as default.
+            if (devPixelsPerCSSPixel < 0) {
+                primaryScreen->GetDefaultCSSScaleFactor(&devPixelsPerCSSPixel);
+            }
             if (aScale) {
                 *aScale = devPixelsPerCSSPixel;
             }
@@ -385,15 +418,15 @@ nsDeviceContext::CreateRenderingContextCommon(bool aWantReferenceContext)
     if (mPrintTarget->RotateNeededForLandscape()) {
       // Rotate page 90 degrees to draw landscape page on portrait paper
       IntSize size = mPrintTarget->GetSize();
-      transform.Translate(gfxPoint(0, size.width));
+      transform.PreTranslate(gfxPoint(0, size.width));
       gfxMatrix rotate(0, -1,
                        1,  0,
                        0,  0);
       transform = rotate * transform;
     }
-    transform.Scale(mPrintingScale, mPrintingScale);
+    transform.PreScale(mPrintingScale, mPrintingScale);
 
-    pContext->SetMatrix(transform);
+    pContext->SetMatrixDouble(transform);
     return pContext.forget();
 }
 
@@ -421,8 +454,8 @@ nsDeviceContext::GetDeviceSurfaceDimensions(nscoord &aWidth, nscoord &aHeight)
     } else {
         nsRect area;
         ComputeFullAreaUsingScreen(&area);
-        aWidth = area.width;
-        aHeight = area.height;
+        aWidth = area.Width();
+        aHeight = area.Height();
     }
 
     return NS_OK;
@@ -432,10 +465,7 @@ nsresult
 nsDeviceContext::GetRect(nsRect &aRect)
 {
     if (IsPrinterContext()) {
-        aRect.x = 0;
-        aRect.y = 0;
-        aRect.width = mWidth;
-        aRect.height = mHeight;
+        aRect.SetRect(0, 0, mWidth, mHeight);
     } else
         ComputeFullAreaUsingScreen ( &aRect );
 
@@ -446,10 +476,7 @@ nsresult
 nsDeviceContext::GetClientRect(nsRect &aRect)
 {
     if (IsPrinterContext()) {
-        aRect.x = 0;
-        aRect.y = 0;
-        aRect.width = mWidth;
-        aRect.height = mHeight;
+        aRect.SetRect(0, 0, mWidth, mHeight);
     }
     else
         ComputeClientRectUsingScreen(&aRect);
@@ -489,12 +516,18 @@ nsDeviceContext::BeginDocument(const nsAString& aTitle,
                                int32_t          aStartPage,
                                int32_t          aEndPage)
 {
+    MOZ_ASSERT(!mIsCurrentlyPrintingDoc,
+               "Mismatched BeginDocument/EndDocument calls");
+
     nsresult rv = mPrintTarget->BeginPrinting(aTitle, aPrintToFileName,
                                               aStartPage, aEndPage);
 
-    if (NS_SUCCEEDED(rv) && mDeviceContextSpec) {
-      rv = mDeviceContextSpec->BeginDocument(aTitle, aPrintToFileName,
-                                             aStartPage, aEndPage);
+    if (NS_SUCCEEDED(rv)) {
+        if (mDeviceContextSpec) {
+           rv = mDeviceContextSpec->BeginDocument(aTitle, aPrintToFileName,
+                                                  aStartPage, aEndPage);
+        }
+        mIsCurrentlyPrintingDoc = true;
     }
 
     return rv;
@@ -504,7 +537,12 @@ nsDeviceContext::BeginDocument(const nsAString& aTitle,
 nsresult
 nsDeviceContext::EndDocument(void)
 {
+    MOZ_ASSERT(mIsCurrentlyPrintingDoc,
+               "Mismatched BeginDocument/EndDocument calls");
+
     nsresult rv = NS_OK;
+
+    mIsCurrentlyPrintingDoc = false;
 
     rv = mPrintTarget->EndPrinting();
     if (NS_SUCCEEDED(rv)) {
@@ -523,7 +561,12 @@ nsDeviceContext::EndDocument(void)
 nsresult
 nsDeviceContext::AbortDocument(void)
 {
+    MOZ_ASSERT(mIsCurrentlyPrintingDoc,
+               "Mismatched BeginDocument/EndDocument calls");
+
     nsresult rv = mPrintTarget->AbortPrinting();
+
+    mIsCurrentlyPrintingDoc = false;
 
     if (mDeviceContextSpec)
         mDeviceContextSpec->EndDocument();
@@ -572,10 +615,10 @@ nsDeviceContext::ComputeClientRectUsingScreen(nsRect* outRect)
         screen->GetAvailRect(&x, &y, &width, &height);
 
         // convert to device units
-        outRect->y = NSIntPixelsToAppUnits(y, AppUnitsPerDevPixel());
-        outRect->x = NSIntPixelsToAppUnits(x, AppUnitsPerDevPixel());
-        outRect->width = NSIntPixelsToAppUnits(width, AppUnitsPerDevPixel());
-        outRect->height = NSIntPixelsToAppUnits(height, AppUnitsPerDevPixel());
+        outRect->SetRect(NSIntPixelsToAppUnits(x, AppUnitsPerDevPixel()),
+                         NSIntPixelsToAppUnits(y, AppUnitsPerDevPixel()),
+                         NSIntPixelsToAppUnits(width, AppUnitsPerDevPixel()),
+                         NSIntPixelsToAppUnits(height, AppUnitsPerDevPixel()));
     }
 }
 
@@ -593,13 +636,12 @@ nsDeviceContext::ComputeFullAreaUsingScreen(nsRect* outRect)
         screen->GetRect ( &x, &y, &width, &height );
 
         // convert to device units
-        outRect->y = NSIntPixelsToAppUnits(y, AppUnitsPerDevPixel());
-        outRect->x = NSIntPixelsToAppUnits(x, AppUnitsPerDevPixel());
-        outRect->width = NSIntPixelsToAppUnits(width, AppUnitsPerDevPixel());
-        outRect->height = NSIntPixelsToAppUnits(height, AppUnitsPerDevPixel());
-
-        mWidth = outRect->width;
-        mHeight = outRect->height;
+        outRect->SetRect(NSIntPixelsToAppUnits(x, AppUnitsPerDevPixel()),
+                         NSIntPixelsToAppUnits(y, AppUnitsPerDevPixel()),
+                         NSIntPixelsToAppUnits(width, AppUnitsPerDevPixel()),
+                         NSIntPixelsToAppUnits(height, AppUnitsPerDevPixel()));
+        mWidth = outRect->Width();
+        mHeight = outRect->Height();
     }
 }
 
@@ -628,7 +670,7 @@ nsDeviceContext::FindScreen(nsIScreen** outScreen)
 bool
 nsDeviceContext::CalcPrintingSize()
 {
-    gfxSize size = mPrintTarget->GetSize();
+    gfxSize size(mPrintTarget->GetSize());
     // For printing, CSS inches and physical inches are identical
     // so it doesn't matter which we use here
     mWidth = NSToCoordRound(size.width * AppUnitsPerPhysicalInch()
@@ -685,4 +727,25 @@ nsDeviceContext::GetDesktopToDeviceScale()
     }
 
     return DesktopToLayoutDeviceScale(1.0);
+}
+
+bool
+nsDeviceContext::IsSyncPagePrinting() const
+{
+  MOZ_ASSERT(mPrintTarget);
+  return mPrintTarget->IsSyncPagePrinting();
+}
+
+void
+nsDeviceContext::RegisterPageDoneCallback(PrintTarget::PageDoneCallback&& aCallback)
+{
+  MOZ_ASSERT(mPrintTarget && aCallback && !IsSyncPagePrinting());
+  mPrintTarget->RegisterPageDoneCallback(Move(aCallback));
+}
+void
+nsDeviceContext::UnregisterPageDoneCallback()
+{
+  if (mPrintTarget) {
+    mPrintTarget->UnregisterPageDoneCallback();
+  }
 }

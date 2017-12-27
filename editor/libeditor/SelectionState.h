@@ -6,6 +6,7 @@
 #ifndef mozilla_SelectionState_h
 #define mozilla_SelectionState_h
 
+#include "mozilla/EditorDOMPoint.h"
 #include "nsCOMPtr.h"
 #include "nsIDOMNode.h"
 #include "nsINode.h"
@@ -37,13 +38,13 @@ public:
   void StoreRange(nsRange* aRange);
   already_AddRefed<nsRange> GetRange();
 
-  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(RangeItem)
+  NS_INLINE_DECL_MAIN_THREAD_ONLY_CYCLE_COLLECTING_NATIVE_REFCOUNTING(RangeItem)
   NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(RangeItem)
 
-  nsCOMPtr<nsINode> startNode;
-  int32_t startOffset;
-  nsCOMPtr<nsINode> endNode;
-  int32_t endOffset;
+  nsCOMPtr<nsINode> mStartContainer;
+  int32_t mStartOffset;
+  nsCOMPtr<nsINode> mEndContainer;
+  int32_t mEndOffset;
 };
 
 /**
@@ -67,7 +68,7 @@ public:
   void MakeEmpty();
   bool IsEmpty();
 private:
-  nsTArray<RefPtr<RangeItem>> mArray;
+  AutoTArray<RefPtr<RangeItem>, 1> mArray;
 
   friend class RangeUpdater;
   friend void ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback&,
@@ -109,13 +110,9 @@ public:
   // DOM Range gravity will promote the selection out of the node on deletion,
   // which is not what you want if you know you are reinserting it.
   nsresult SelAdjCreateNode(nsINode* aParent, int32_t aPosition);
-  nsresult SelAdjCreateNode(nsIDOMNode* aParent, int32_t aPosition);
   nsresult SelAdjInsertNode(nsINode* aParent, int32_t aPosition);
-  nsresult SelAdjInsertNode(nsIDOMNode* aParent, int32_t aPosition);
   void SelAdjDeleteNode(nsINode* aNode);
-  void SelAdjDeleteNode(nsIDOMNode* aNode);
-  nsresult SelAdjSplitNode(nsIContent& aOldRightNode, int32_t aOffset,
-                           nsIContent* aNewLeftNode);
+  nsresult SelAdjSplitNode(nsIContent& aRightNode, nsIContent* aNewLeftNode);
   nsresult SelAdjJoinNodes(nsINode& aLeftNode,
                            nsINode& aRightNode,
                            nsINode& aParent,
@@ -183,6 +180,7 @@ private:
   nsCOMPtr<nsINode>* mNode;
   nsCOMPtr<nsIDOMNode>* mDOMNode;
   int32_t* mOffset;
+  EditorDOMPoint* mPoint;
   RefPtr<RangeItem> mRangeItem;
 
 public:
@@ -192,12 +190,13 @@ public:
     , mNode(aNode)
     , mDOMNode(nullptr)
     , mOffset(aOffset)
+    , mPoint(nullptr)
   {
     mRangeItem = new RangeItem();
-    mRangeItem->startNode = *mNode;
-    mRangeItem->endNode = *mNode;
-    mRangeItem->startOffset = *mOffset;
-    mRangeItem->endOffset = *mOffset;
+    mRangeItem->mStartContainer = *mNode;
+    mRangeItem->mEndContainer = *mNode;
+    mRangeItem->mStartOffset = *mOffset;
+    mRangeItem->mEndOffset = *mOffset;
     mRangeUpdater.RegisterRangeItem(mRangeItem);
   }
 
@@ -207,24 +206,45 @@ public:
     , mNode(nullptr)
     , mDOMNode(aNode)
     , mOffset(aOffset)
+    , mPoint(nullptr)
   {
     mRangeItem = new RangeItem();
-    mRangeItem->startNode = do_QueryInterface(*mDOMNode);
-    mRangeItem->endNode = do_QueryInterface(*mDOMNode);
-    mRangeItem->startOffset = *mOffset;
-    mRangeItem->endOffset = *mOffset;
+    mRangeItem->mStartContainer = do_QueryInterface(*mDOMNode);
+    mRangeItem->mEndContainer = do_QueryInterface(*mDOMNode);
+    mRangeItem->mStartOffset = *mOffset;
+    mRangeItem->mEndOffset = *mOffset;
+    mRangeUpdater.RegisterRangeItem(mRangeItem);
+  }
+
+  AutoTrackDOMPoint(RangeUpdater& aRangeUpdater,
+                    EditorDOMPoint* aPoint)
+    : mRangeUpdater(aRangeUpdater)
+    , mNode(nullptr)
+    , mDOMNode(nullptr)
+    , mOffset(nullptr)
+    , mPoint(aPoint)
+  {
+    mRangeItem = new RangeItem();
+    mRangeItem->mStartContainer = mPoint->GetContainer();
+    mRangeItem->mEndContainer = mPoint->GetContainer();
+    mRangeItem->mStartOffset = mPoint->Offset();
+    mRangeItem->mEndOffset = mPoint->Offset();
     mRangeUpdater.RegisterRangeItem(mRangeItem);
   }
 
   ~AutoTrackDOMPoint()
   {
     mRangeUpdater.DropRangeItem(mRangeItem);
-    if (mNode) {
-      *mNode = mRangeItem->startNode;
-    } else {
-      *mDOMNode = GetAsDOMNode(mRangeItem->startNode);
+    if (mPoint) {
+      mPoint->Set(mRangeItem->mStartContainer, mRangeItem->mStartOffset);
+      return;
     }
-    *mOffset = mRangeItem->startOffset;
+    if (mNode) {
+      *mNode = mRangeItem->mStartContainer;
+    } else {
+      *mDOMNode = GetAsDOMNode(mRangeItem->mStartContainer);
+    }
+    *mOffset = mRangeItem->mStartOffset;
   }
 };
 

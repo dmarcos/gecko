@@ -7,7 +7,7 @@ var gBrowserGlue = Cc["@mozilla.org/browser/browserglue;1"]
 
 Services.prefs.setIntPref("browser.migration.version", UI_VERSION - 1);
 
-add_task(function* test_check_cleanup_loop_prefs() {
+add_task(async function test_check_cleanup_loop_prefs() {
   Services.prefs.setBoolPref("loop.createdRoom", true);
   Services.prefs.setBoolPref("loop1.createdRoom", true);
   Services.prefs.setBoolPref("loo.createdRoom", true);
@@ -24,7 +24,7 @@ add_task(function* test_check_cleanup_loop_prefs() {
             "should have left non-loop pref 'loo.createdRoom' untouched");
 });
 
-do_register_cleanup(() => {
+registerCleanupFunction(() => {
   Services.prefs.clearUserPref("browser.migration.version");
   Services.prefs.clearUserPref("loop.createdRoom");
   Services.prefs.clearUserPref("loop1.createdRoom");

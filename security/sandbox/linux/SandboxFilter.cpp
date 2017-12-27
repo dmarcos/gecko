@@ -11,18 +11,26 @@
 #include "SandboxInfo.h"
 #include "SandboxInternal.h"
 #include "SandboxLogging.h"
+#ifdef MOZ_GMP_SANDBOX
+#include "SandboxOpenedFiles.h"
+#endif
+#include "mozilla/PodOperations.h"
+#include "mozilla/TemplateLib.h"
 #include "mozilla/UniquePtr.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/ioctl.h>
 #include <linux/ipc.h>
 #include <linux/net.h>
 #include <linux/prctl.h>
 #include <linux/sched.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
+#include <sys/utsname.h>
 #include <time.h>
 #include <unistd.h>
 #include <vector>
@@ -37,6 +45,9 @@ using namespace sandbox::bpf_dsl;
 
 // Fill in defines in case of old headers.
 // (Warning: these are wrong on PA-RISC.)
+#ifndef MADV_HUGEPAGE
+#define MADV_HUGEPAGE 14
+#endif
 #ifndef MADV_NOHUGEPAGE
 #define MADV_NOHUGEPAGE 15
 #endif
@@ -52,6 +63,10 @@ using namespace sandbox::bpf_dsl;
 #ifndef PR_SET_PTRACER
 #define PR_SET_PTRACER 0x59616d61
 #endif
+
+// The headers define O_LARGEFILE as 0 on x86_64, but we need the
+// actual value because it shows up in file flags.
+#define O_LARGEFILE_REAL 00100000
 
 // To avoid visual confusion between "ifdef ANDROID" and "ifndef ANDROID":
 #ifndef ANDROID
@@ -83,16 +98,29 @@ protected:
     return -ENOSYS;
   }
 
+  // Convert Unix-style "return -1 and set errno" APIs back into the
+  // Linux ABI "return -err" style.
+  static intptr_t ConvertError(long rv) {
+    return rv < 0 ? -errno : rv;
+  }
+
+  template<typename... Args>
+  static intptr_t DoSyscall(long nr, Args... args) {
+    static_assert(tl::And<(sizeof(Args) <= sizeof(void*))...>::value,
+                  "each syscall arg is at most one word");
+    return ConvertError(syscall(nr, args...));
+  }
+
 private:
-#if defined(ANDROID) && ANDROID_VERSION < 16
   // Bug 1093893: Translate tkill to tgkill for pthread_kill; fixed in
   // bionic commit 10c8ce59a (in JB and up; API level 16 = Android 4.1).
-  static intptr_t TKillCompatTrap(const sandbox::arch_seccomp_data& aArgs,
-                                  void *aux)
+  // Bug 1376653: musl also needs this, and security-wise it's harmless.
+  static intptr_t TKillCompatTrap(ArgsRef aArgs, void *aux)
   {
-    return syscall(__NR_tgkill, getpid(), aArgs.args[0], aArgs.args[1]);
+    auto tid = static_cast<pid_t>(aArgs.args[0]);
+    auto sig = static_cast<int>(aArgs.args[1]);
+    return DoSyscall(__NR_tgkill, getpid(), tid, sig);
   }
-#endif
 
   static intptr_t SetNoNewPrivsTrap(ArgsRef& aArgs, void* aux) {
     if (gSetSandboxFilter == nullptr) {
@@ -105,7 +133,7 @@ private:
   }
 
 public:
-  virtual ResultExpr InvalidSyscall() const override {
+  ResultExpr InvalidSyscall() const override {
     return Trap(BlockedSyscallTrap, nullptr);
   }
 
@@ -117,25 +145,19 @@ public:
     // don't support seccomp-bpf on those archs yet.
     Arg<int> flags(0);
 
-    // The glibc source hasn't changed the thread creation clone flags
-    // since 2004, so this *should* be safe to hard-code.  Bionic's
-    // value has changed a few times, and has converged on the same one
-    // as glibc; allow any of them.
-    static const int flags_common = CLONE_VM | CLONE_FS | CLONE_FILES |
-      CLONE_SIGHAND | CLONE_THREAD | CLONE_SYSVSEM;
-    static const int flags_modern = flags_common | CLONE_SETTLS |
+    // The exact flags used can vary.  CLONE_DETACHED is used by musl
+    // and by old versions of Android (<= JB 4.2), but it's been
+    // ignored by the kernel since the beginning of the Git history.
+    //
+    // If we ever need to support Android <= KK 4.4 again, SETTLS
+    // and the *TID flags will need to be made optional.
+    static const int flags_required = CLONE_VM | CLONE_FS | CLONE_FILES |
+      CLONE_SIGHAND | CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS |
       CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID;
+    static const int flags_optional = CLONE_DETACHED;
 
-    // Can't use CASES here because its decltype magic infers const
-    // int instead of regular int and bizarre voluminous errors issue
-    // forth from the depths of the standard library implementation.
-    return Switch(flags)
-#ifdef ANDROID
-      .Case(flags_common | CLONE_DETACHED, Allow()) // <= JB 4.2
-      .Case(flags_common, Allow()) // JB 4.3 or KK 4.4
-#endif
-      .Case(flags_modern, Allow()) // Android L or glibc
-      .Default(failPolicy);
+    return If((flags & ~flags_optional) == flags_required, Allow())
+      .Else(failPolicy);
   }
 
   virtual ResultExpr PrctlPolicy() const {
@@ -152,7 +174,7 @@ public:
       .Default(InvalidSyscall());
   }
 
-  virtual Maybe<ResultExpr> EvaluateSocketCall(int aCall) const override {
+  Maybe<ResultExpr> EvaluateSocketCall(int aCall) const override {
     switch (aCall) {
     case SYS_RECVMSG:
     case SYS_SENDMSG:
@@ -162,7 +184,7 @@ public:
     }
   }
 
-  virtual ResultExpr EvaluateSyscall(int sysno) const override {
+  ResultExpr EvaluateSyscall(int sysno) const override {
     switch (sysno) {
       // Timekeeping
     case __NR_clock_gettime: {
@@ -193,6 +215,8 @@ public:
       return Allow();
 
       // Asynchronous I/O
+    case __NR_epoll_create1:
+    case __NR_epoll_create:
     case __NR_epoll_wait:
     case __NR_epoll_pwait:
     case __NR_epoll_ctl:
@@ -237,11 +261,9 @@ public:
         .Else(InvalidSyscall());
     }
 
-#if defined(ANDROID) && ANDROID_VERSION < 16
       // Polyfill with tgkill; see above.
     case __NR_tkill:
       return Trap(TKillCompatTrap, nullptr);
-#endif
 
       // Yield
     case __NR_sched_yield:
@@ -318,7 +340,7 @@ public:
       // ASAN's error reporter wants to know if stderr is a tty.
     case __NR_ioctl: {
       Arg<int> fd(0);
-      return If(fd == STDERR_FILENO, Allow())
+      return If(fd == STDERR_FILENO, Error(ENOTTY))
         .Else(InvalidSyscall());
     }
 
@@ -493,6 +515,20 @@ private:
     return broker->Readlink(path, buf, size);
   }
 
+  static intptr_t ReadlinkAtTrap(ArgsRef aArgs, void* aux) {
+    auto broker = static_cast<SandboxBrokerClient*>(aux);
+    auto fd = static_cast<int>(aArgs.args[0]);
+    auto path = reinterpret_cast<const char*>(aArgs.args[1]);
+    auto buf = reinterpret_cast<char*>(aArgs.args[2]);
+    auto size = static_cast<size_t>(aArgs.args[3]);
+    if (fd != AT_FDCWD && path[0] != '/') {
+      SANDBOX_LOG_ERROR("unsupported fd-relative readlinkat(%d, %s, %p, %u)",
+                        fd, path, buf, size);
+      return BlockedSyscallTrap(aArgs, nullptr);
+    }
+    return broker->Readlink(path, buf, size);
+  }
+
   static intptr_t GetPPidTrap(ArgsRef aArgs, void* aux) {
     // In a pid namespace, getppid() will return 0. We will return 0 instead
     // of the real parent pid to see what breaks when we introduce the
@@ -500,21 +536,58 @@ private:
     return 0;
   }
 
+  static intptr_t SocketpairDatagramTrap(ArgsRef aArgs, void* aux) {
+    auto fds = reinterpret_cast<int*>(aArgs.args[3]);
+    // Return sequential packet sockets instead of the expected
+    // datagram sockets; see bug 1355274 for details.
+    return ConvertError(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fds));
+  }
+
+  static intptr_t StatFsTrap(ArgsRef aArgs, void* aux) {
+    // Warning: the kernel interface is not the C interface.  The
+    // structs are different (<asm/statfs.h> vs. <sys/statfs.h>), and
+    // the statfs64 version takes an additional size parameter.
+    auto path = reinterpret_cast<const char*>(aArgs.args[0]);
+    int fd = open(path, O_RDONLY | O_LARGEFILE);
+    if (fd < 0) {
+      return -errno;
+    }
+
+    intptr_t rv;
+    switch (aArgs.nr) {
+    case __NR_statfs: {
+      auto buf = reinterpret_cast<void*>(aArgs.args[1]);
+      rv = DoSyscall(__NR_fstatfs, fd, buf);
+      break;
+    }
+#ifdef __NR_statfs64
+    case __NR_statfs64: {
+      auto sz = static_cast<size_t>(aArgs.args[1]);
+      auto buf = reinterpret_cast<void*>(aArgs.args[2]);
+      rv = DoSyscall(__NR_fstatfs64, fd, sz, buf);
+      break;
+    }
+#endif
+    default:
+      MOZ_ASSERT(false);
+      rv = -ENOSYS;
+    }
+
+    close(fd);
+    return rv;
+  }
+
 public:
   explicit ContentSandboxPolicy(SandboxBrokerClient* aBroker,
                                 const std::vector<int>& aSyscallWhitelist)
     : mBroker(aBroker),
       mSyscallWhitelist(aSyscallWhitelist) {}
-  virtual ~ContentSandboxPolicy() { }
-  virtual ResultExpr PrctlPolicy() const override {
-    // Ideally this should be restricted to a whitelist, but content
-    // uses enough things that it's not trivial to determine it.
-    return Allow();
-  }
-  virtual Maybe<ResultExpr> EvaluateSocketCall(int aCall) const override {
+  ~ContentSandboxPolicy() override = default;
+  Maybe<ResultExpr> EvaluateSocketCall(int aCall) const override {
     switch(aCall) {
     case SYS_RECVFROM:
     case SYS_SENDTO:
+    case SYS_SENDMMSG: // libresolv via libasyncns; see bug 1355274
       return Some(Allow());
 
     case SYS_SOCKETPAIR: {
@@ -524,9 +597,12 @@ public:
         return Some(Allow());
       }
       Arg<int> domain(0), type(1);
-      return Some(If(AllOf(domain == AF_UNIX,
-                           AnyOf(type == SOCK_STREAM, type == SOCK_SEQPACKET)),
-                     Allow())
+      return Some(If(domain == AF_UNIX,
+                     Switch(type & ~SOCK_CLOEXEC)
+                     .Case(SOCK_STREAM, Allow())
+                     .Case(SOCK_SEQPACKET, Allow())
+                     .Case(SOCK_DGRAM, Trap(SocketpairDatagramTrap, nullptr))
+                     .Default(InvalidSyscall()))
                   .Else(InvalidSyscall()));
     }
 
@@ -538,10 +614,6 @@ public:
     case SYS_SEND:
     case SYS_SOCKET: // DANGEROUS
     case SYS_CONNECT: // DANGEROUS
-    case SYS_ACCEPT:
-    case SYS_ACCEPT4:
-    case SYS_BIND:
-    case SYS_LISTEN:
     case SYS_GETSOCKOPT:
     case SYS_SETSOCKOPT:
     case SYS_GETSOCKNAME:
@@ -555,7 +627,7 @@ public:
   }
 
 #ifdef DESKTOP
-  virtual Maybe<ResultExpr> EvaluateIpcCall(int aCall) const override {
+  Maybe<ResultExpr> EvaluateIpcCall(int aCall) const override {
     switch(aCall) {
       // These are a problem: SysV shared memory follows the Unix
       // "same uid policy" and can't be restricted/brokered like file
@@ -576,7 +648,15 @@ public:
   }
 #endif
 
-  virtual ResultExpr EvaluateSyscall(int sysno) const override {
+#ifdef MOZ_PULSEAUDIO
+  ResultExpr PrctlPolicy() const override {
+    Arg<int> op(0);
+    return If(op == PR_GET_NAME, Allow())
+      .Else(SandboxPolicyCommon::PrctlPolicy());
+  }
+#endif
+
+  ResultExpr EvaluateSyscall(int sysno) const override {
     // Straight allow for anything that got overriden via prefs
     if (std::find(mSyscallWhitelist.begin(), mSyscallWhitelist.end(), sysno)
         != mSyscallWhitelist.end()) {
@@ -618,6 +698,8 @@ public:
         return Trap(UnlinkTrap, mBroker);
       case __NR_readlink:
         return Trap(ReadlinkTrap, mBroker);
+      case __NR_readlinkat:
+        return Trap(ReadlinkAtTrap, mBroker);
       }
     } else {
       // No broker; allow the syscalls directly.  )-:
@@ -637,6 +719,7 @@ public:
       case __NR_rmdir:
       case __NR_unlink:
       case __NR_readlink:
+      case __NR_readlinkat:
         return Allow();
       }
     }
@@ -646,15 +729,18 @@ public:
     case __NR_getppid:
       return Trap(GetPPidTrap, nullptr);
 
-      // Filesystem syscalls that need more work to determine who's
-      // using them, if they need to be, and what we intend to about it.
-    case __NR_getcwd:
     CASES_FOR_statfs:
-    CASES_FOR_fstatfs:
-    case __NR_quotactl:
-    CASES_FOR_fchown:
-    case __NR_fchmod:
-    case __NR_flock:
+      return Trap(StatFsTrap, nullptr);
+
+      // GTK's theme parsing tries to getcwd() while sandboxed, but
+      // only during Talos runs.
+    case __NR_getcwd:
+      return Error(ENOENT);
+
+    CASES_FOR_fstatfs: // fontconfig, pulseaudio, GIO (see also statfs)
+    CASES_FOR_fchown: // pulseaudio
+    case __NR_fchmod: // pulseaudio
+    case __NR_flock: // graphics
       return Allow();
 
       // Bug 1354731: proprietary GL drivers try to mknod() their devices
@@ -663,15 +749,11 @@ public:
       return If((mode & S_IFMT) == S_IFCHR, Error(EPERM))
         .Else(InvalidSyscall());
     }
-#endif
 
-    case __NR_readlinkat:
-#ifdef DESKTOP
-      // Bug 1290896
-      return Allow();
-#else
-      // Workaround for bug 964455:
-      return Error(EINVAL);
+      // For ORBit called by GConf (on some systems) to get proxy
+      // settings.  Can remove when bug 1325242 happens in some form.
+    case __NR_utime:
+      return Error(EPERM);
 #endif
 
     CASES_FOR_select:
@@ -688,17 +770,73 @@ public:
 #endif
       return Allow();
 
+#ifdef MOZ_ALSA
     case __NR_ioctl:
-      // ioctl() is for GL. Remove when GL proxy is implemented.
-      // Additionally ioctl() might be a place where we want to have
-      // argument filtering
       return Allow();
+#else
+    case __NR_ioctl: {
+      static const unsigned long kTypeMask = _IOC_TYPEMASK << _IOC_TYPESHIFT;
+      static const unsigned long kTtyIoctls = TIOCSTI & kTypeMask;
+      // On some older architectures (but not x86 or ARM), ioctls are
+      // assigned type fields differently, and the TIOC/TC/FIO group
+      // isn't all the same type.  If/when we support those archs,
+      // this would need to be revised (but really this should be a
+      // default-deny policy; see below).
+      static_assert(kTtyIoctls == (TCSETA & kTypeMask) &&
+                    kTtyIoctls == (FIOASYNC & kTypeMask),
+                    "tty-related ioctls use the same type");
 
-    CASES_FOR_fcntl:
-      // Some fcntls have significant side effects like sending
-      // arbitrary signals, and there's probably nontrivial kernel
-      // attack surface; this should be locked down more if possible.
-      return Allow();
+      Arg<unsigned long> request(1);
+      auto shifted_type = request & kTypeMask;
+
+      // Rust's stdlib seems to use FIOCLEX instead of equivalent fcntls.
+      return If(request == FIOCLEX, Allow())
+        // Rust's stdlib also uses FIONBIO instead of equivalent fcntls.
+        .ElseIf(request == FIONBIO, Allow())
+        // ffmpeg, and anything else that calls isatty(), will be told
+        // that nothing is a typewriter:
+        .ElseIf(request == TCGETS, Error(ENOTTY))
+        // Allow anything that isn't a tty ioctl, for now; bug 1302711
+        // will cover changing this to a default-deny policy.
+        .ElseIf(shifted_type != kTtyIoctls, Allow())
+        .Else(SandboxPolicyCommon::EvaluateSyscall(sysno));
+    }
+#endif // !MOZ_ALSA
+
+    CASES_FOR_fcntl: {
+      Arg<int> cmd(1);
+      Arg<int> flags(2);
+      // Typical use of F_SETFL is to modify the flags returned by
+      // F_GETFL and write them back, including some flags that
+      // F_SETFL ignores.  This is a default-deny policy in case any
+      // new SETFL-able flags are added.  (In particular we want to
+      // forbid O_ASYNC; see bug 1328896, but also see bug 1408438.)
+      static const int ignored_flags = O_ACCMODE | O_LARGEFILE_REAL | O_CLOEXEC;
+      static const int allowed_flags = ignored_flags | O_APPEND | O_NONBLOCK;
+      return Switch(cmd)
+        // Close-on-exec is meaningless when execve isn't allowed, but
+        // NSPR reads the bit and asserts that it has the expected value.
+        .Case(F_GETFD, Allow())
+        .Case(F_SETFD,
+              If((flags & ~FD_CLOEXEC) == 0, Allow())
+              .Else(InvalidSyscall()))
+        .Case(F_GETFL, Allow())
+        .Case(F_SETFL,
+              If((flags & ~allowed_flags) == 0, Allow())
+              .Else(InvalidSyscall()))
+        .Case(F_DUPFD_CLOEXEC, Allow())
+        // Nvidia GL and fontconfig (newer versions) use fcntl file locking.
+        .Case(F_SETLK, Allow())
+#ifdef F_SETLK64
+        .Case(F_SETLK64, Allow())
+#endif
+        // Pulseaudio uses F_SETLKW, as does fontconfig.
+        .Case(F_SETLKW, Allow())
+#ifdef F_SETLKW64
+        .Case(F_SETLKW64, Allow())
+#endif
+        .Default(SandboxPolicyCommon::EvaluateSyscall(sysno));
+    }
 
     case __NR_mprotect:
     case __NR_brk:
@@ -767,22 +905,31 @@ public:
         .Else(InvalidSyscall());
     }
 
+      // PulseAudio calls umask, even though it's unsafe in
+      // multithreaded applications.  But, allowing it here doesn't
+      // really do anything one way or the other, now that file
+      // accesses are brokered to another process.
     case __NR_umask:
-    case __NR_kill:
+      return Allow();
+
+    case __NR_kill: {
+      Arg<int> sig(1);
+      // PulseAudio uses kill(pid, 0) to check if purported owners of
+      // shared memory files are still alive; see bug 1397753 for more
+      // details.
+      return If(sig == 0, Error(EPERM))
+        .Else(InvalidSyscall());
+    }
+
     case __NR_wait4:
 #ifdef __NR_waitpid
     case __NR_waitpid:
 #endif
-#ifdef __NR_arch_prctl
-    case __NR_arch_prctl:
-#endif
-      return Allow();
+      // NSPR will start a thread to wait for child processes even if
+      // fork() fails; see bug 227246 and bug 1299581.
+      return Error(ECHILD);
 
     case __NR_eventfd2:
-    case __NR_inotify_init:
-    case __NR_inotify_init1:
-    case __NR_inotify_add_watch:
-    case __NR_inotify_rm_watch:
       return Allow();
 
 #ifdef __NR_memfd_create
@@ -873,7 +1020,7 @@ class GMPSandboxPolicy : public SandboxPolicyCommon {
   static intptr_t OpenTrap(const sandbox::arch_seccomp_data& aArgs,
                            void* aux)
   {
-    auto plugin = static_cast<SandboxOpenedFile*>(aux);
+    const auto files = static_cast<const SandboxOpenedFiles*>(aux);
     const char* path;
     int flags;
 
@@ -894,59 +1041,79 @@ class GMPSandboxPolicy : public SandboxPolicyCommon {
       MOZ_CRASH("unexpected syscall number");
     }
 
-    if (strcmp(path, plugin->mPath) != 0) {
-      SANDBOX_LOG_ERROR("attempt to open file %s (flags=0%o) which is not the"
-                        " media plugin %s", path, flags, plugin->mPath);
-      return -EPERM;
-    }
     if ((flags & O_ACCMODE) != O_RDONLY) {
       SANDBOX_LOG_ERROR("non-read-only open of file %s attempted (flags=0%o)",
                         path, flags);
-      return -EPERM;
+      return -EROFS;
     }
-    int fd = plugin->mFd.exchange(-1);
+    int fd = files->GetDesc(path);
     if (fd < 0) {
-      SANDBOX_LOG_ERROR("multiple opens of media plugin file unimplemented");
-      return -ENOSYS;
+      // SandboxOpenedFile::GetDesc already logged about this, if appropriate.
+      return -ENOENT;
     }
     return fd;
   }
 
-  static intptr_t SchedTrap(const sandbox::arch_seccomp_data& aArgs,
-                            void* aux)
+  static intptr_t SchedTrap(ArgsRef aArgs, void* aux)
   {
     const pid_t tid = syscall(__NR_gettid);
     if (aArgs.args[0] == static_cast<uint64_t>(tid)) {
-      return syscall(aArgs.nr,
-                     0,
-                     aArgs.args[1],
-                     aArgs.args[2],
-                     aArgs.args[3],
-                     aArgs.args[4],
-                     aArgs.args[5]);
+      return DoSyscall(aArgs.nr,
+                       0,
+                       static_cast<uintptr_t>(aArgs.args[1]),
+                       static_cast<uintptr_t>(aArgs.args[2]),
+                       static_cast<uintptr_t>(aArgs.args[3]),
+                       static_cast<uintptr_t>(aArgs.args[4]),
+                       static_cast<uintptr_t>(aArgs.args[5]));
     }
     SANDBOX_LOG_ERROR("unsupported tid in SchedTrap");
     return BlockedSyscallTrap(aArgs, nullptr);
   }
 
-  SandboxOpenedFile* mPlugin;
-public:
-  explicit GMPSandboxPolicy(SandboxOpenedFile* aPlugin)
-  : mPlugin(aPlugin)
+  static intptr_t UnameTrap(const sandbox::arch_seccomp_data& aArgs,
+                            void* aux)
   {
-    MOZ_ASSERT(aPlugin->mPath[0] == '/', "plugin path should be absolute");
+    const auto buf = reinterpret_cast<struct utsname*>(aArgs.args[0]);
+    PodZero(buf);
+    // The real uname() increases fingerprinting risk for no benefit.
+    // This is close enough.
+    strcpy(buf->sysname, "Linux");
+    strcpy(buf->version, "3");
+    return 0;
+  };
+
+  static intptr_t FcntlTrap(const sandbox::arch_seccomp_data& aArgs,
+                            void* aux)
+  {
+    const auto cmd = static_cast<int>(aArgs.args[1]);
+    switch (cmd) {
+      // This process can't exec, so the actual close-on-exec flag
+      // doesn't matter; have it always read as true and ignore writes.
+    case F_GETFD:
+      return O_CLOEXEC;
+    case F_SETFD:
+      return 0;
+    default:
+      return -ENOSYS;
+    }
   }
 
-  virtual ~GMPSandboxPolicy() { }
+  const SandboxOpenedFiles* mFiles;
+public:
+  explicit GMPSandboxPolicy(const SandboxOpenedFiles* aFiles)
+  : mFiles(aFiles)
+  { }
 
-  virtual ResultExpr EvaluateSyscall(int sysno) const override {
+  ~GMPSandboxPolicy() override = default;
+
+  ResultExpr EvaluateSyscall(int sysno) const override {
     switch (sysno) {
       // Simulate opening the plugin file.
 #ifdef __NR_open
     case __NR_open:
 #endif
     case __NR_openat:
-      return Trap(OpenTrap, mPlugin);
+      return Trap(OpenTrap, mFiles);
 
       // ipc::Shmem
     case __NR_mprotect:
@@ -955,8 +1122,9 @@ public:
       Arg<int> advice(2);
       return If(advice == MADV_DONTNEED, Allow())
         .ElseIf(advice == MADV_FREE, Allow())
-#ifdef MOZ_ASAN
+        .ElseIf(advice == MADV_HUGEPAGE, Allow())
         .ElseIf(advice == MADV_NOHUGEPAGE, Allow())
+#ifdef MOZ_ASAN
         .ElseIf(advice == MADV_DONTDUMP, Allow())
 #endif
         .Else(InvalidSyscall());
@@ -964,10 +1132,11 @@ public:
     case __NR_brk:
     CASES_FOR_geteuid:
       return Allow();
-    case __NR_sched_getparam:
-    case __NR_sched_getscheduler:
     case __NR_sched_get_priority_min:
     case __NR_sched_get_priority_max:
+      return Allow();
+    case __NR_sched_getparam:
+    case __NR_sched_getscheduler:
     case __NR_sched_setscheduler: {
       Arg<pid_t> pid(0);
       return If(pid == 0, Allow())
@@ -978,6 +1147,15 @@ public:
     case __NR_times:
       return Allow();
 
+    // Bug 1372428
+    case __NR_uname:
+      return Trap(UnameTrap, nullptr);
+    CASES_FOR_fcntl:
+      return Trap(FcntlTrap, nullptr);
+
+    case __NR_dup:
+      return Allow();
+
     default:
       return SandboxPolicyCommon::EvaluateSyscall(sysno);
     }
@@ -985,11 +1163,11 @@ public:
 };
 
 UniquePtr<sandbox::bpf_dsl::Policy>
-GetMediaSandboxPolicy(SandboxOpenedFile* aPlugin)
+GetMediaSandboxPolicy(const SandboxOpenedFiles* aFiles)
 {
-  return UniquePtr<sandbox::bpf_dsl::Policy>(new GMPSandboxPolicy(aPlugin));
+  return UniquePtr<sandbox::bpf_dsl::Policy>(new GMPSandboxPolicy(aFiles));
 }
 
 #endif // MOZ_GMP_SANDBOX
 
-}
+} // namespace mozilla

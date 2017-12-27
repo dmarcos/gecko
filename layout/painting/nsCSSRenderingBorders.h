@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim:cindent:ts=2:et:sw=2:
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -30,7 +30,7 @@ namespace gfx {
 class GradientStops;
 } // namespace gfx
 namespace layers {
-class WebRenderDisplayItemLayer;
+class StackingContextHelper;
 } // namespace layers
 } // namespace mozilla
 
@@ -99,16 +99,19 @@ public:
                       const Float* aBorderWidths,
                       RectCornerRadii& aBorderRadii,
                       const nscolor* aBorderColors,
-                      nsBorderColors* const* aCompositeColors,
-                      nscolor aBackgroundColor);
+                      const nsBorderColors* aCompositeColors,
+                      nscolor aBackgroundColor,
+                      bool aBackfaceIsVisible,
+                      const mozilla::Maybe<Rect>& aClipRect);
 
   // draw the entire border
   void DrawBorders();
 
   bool CanCreateWebRenderCommands();
-  void CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
-                               mozilla::layers::WebRenderDisplayItemLayer* aLayer,
-                               Rect aClipRect = Rect(0, 0, 0, 0));
+  void CreateWebRenderCommands(nsDisplayItem* aItem,
+                               mozilla::wr::DisplayListBuilder& aBuilder,
+                               mozilla::wr::IpcResourceUpdateQueue& aResources,
+                               const mozilla::layers::StackingContextHelper& aSc);
 
   // utility function used for background painting as well as borders
   static void ComputeInnerRadii(const RectCornerRadii& aRadii,
@@ -146,17 +149,25 @@ private:
   Float mBorderWidths[4];
   RectCornerRadii mBorderRadii;
 
-  // colors
+  // the colors for 'border-top-color' et. al.
   nscolor mBorderColors[4];
-  nsBorderColors* mCompositeColors[4];
+
+  // the lists of colors for '-moz-border-top-colors' et. al.
+  // the pointers here are either nullptr, or referring to a non-empty
+  // nsTArray, so no additional empty check is needed.
+  const nsTArray<nscolor>* mCompositeColors[4];
 
   // the background color
   nscolor mBackgroundColor;
 
   // calculated values
+  bool mAllBordersSameStyle;
+  bool mAllBordersSameWidth;
   bool mOneUnitBorder;
   bool mNoBorderRadius;
   bool mAvoidStroke;
+  bool mBackfaceIsVisible;
+  mozilla::Maybe<Rect> mLocalClip;
 
   // For all the sides in the bitmask, would they be rendered
   // in an identical color and style?
@@ -230,7 +241,8 @@ private:
   void DrawBorderSides (int aSides);
 
   // function used by the above to handle -moz-border-colors
-  void DrawBorderSidesCompositeColors(int aSides, const nsBorderColors *compositeColors);
+  void DrawBorderSidesCompositeColors(
+    int aSides, const nsTArray<nscolor>& compositeColors);
 
   // Setup the stroke options for the given dashed/dotted side
   void SetupDashedOptions(StrokeOptions* aStrokeOptions,
@@ -291,13 +303,21 @@ public:
                             const nsRect& aDirtyRect,
                             nsIFrame::Sides aSkipSides,
                             uint32_t aFlags,
-                            mozilla::image::DrawResult* aDrawResult);
+                            mozilla::image::ImgDrawResult* aDrawResult);
 
-  mozilla::image::DrawResult
+  mozilla::image::ImgDrawResult
   DrawBorderImage(nsPresContext* aPresContext,
-                  nsRenderingContext& aRenderingContext,
+                  gfxContext& aRenderingContext,
                   nsIFrame* aForFrame,
                   const nsRect& aDirtyRect);
+  void
+  CreateWebRenderCommands(nsDisplayItem* aItem,
+                          nsIFrame* aForFrame,
+                          mozilla::wr::DisplayListBuilder& aBuilder,
+                          mozilla::wr::IpcResourceUpdateQueue& aResources,
+                          const mozilla::layers::StackingContextHelper& aSc,
+                          mozilla::layers::WebRenderLayerManager* aManager,
+                          nsDisplayListBuilder* aDisplayListBuilder);
 
   nsCSSBorderImageRenderer(const nsCSSBorderImageRenderer& aRhs);
   nsCSSBorderImageRenderer& operator=(const nsCSSBorderImageRenderer& aRhs);
@@ -321,6 +341,7 @@ private:
   uint8_t mFill;
 
   friend class nsDisplayBorder;
+  friend struct nsCSSRendering;
 };
 
 namespace mozilla {
@@ -354,7 +375,7 @@ static inline void PrintAsStringNewline(const char *s = nullptr) {
   fflush (stderr);
 }
 
-static inline void PrintAsFormatString(const char *fmt, ...) {
+static inline MOZ_FORMAT_PRINTF(1, 2) void PrintAsFormatString(const char *fmt, ...) {
   va_list vl;
   va_start(vl, fmt);
   vfprintf (stderr, fmt, vl);
@@ -368,7 +389,7 @@ static inline void PrintAsString(const mozilla::gfx::Rect& r) {}
 static inline void PrintAsString(const mozilla::gfx::Float f) {}
 static inline void PrintAsString(const char *s) {}
 static inline void PrintAsStringNewline(const char *s = nullptr) {}
-static inline void PrintAsFormatString(const char *fmt, ...) {}
+static inline MOZ_FORMAT_PRINTF(1, 2) void PrintAsFormatString(const char *fmt, ...) {}
 #endif
 
 } // namespace mozilla

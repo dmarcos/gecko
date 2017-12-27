@@ -13,7 +13,6 @@
 namespace mozilla {
 namespace gmp {
 
-class GMPDecryptorParent;
 class GMPParent;
 class GMPVideoDecoderParent;
 class GMPVideoEncoderParent;
@@ -34,13 +33,10 @@ public:
   nsresult GetGMPVideoEncoder(GMPVideoEncoderParent** aGMPVE);
   void VideoEncoderDestroyed(GMPVideoEncoderParent* aEncoder);
 
-  nsresult GetGMPDecryptor(GMPDecryptorParent** aGMPKS);
-  void DecryptorDestroyed(GMPDecryptorParent* aSession);
-
   already_AddRefed<ChromiumCDMParent> GetChromiumCDM();
   void ChromiumCDMDestroyed(ChromiumCDMParent* aCDM);
 
-  nsCOMPtr<nsIThread> GMPThread();
+  nsCOMPtr<nsISerialEventTarget> GMPEventTarget();
 
   // GMPSharedMem
   void CheckThread() override;
@@ -93,9 +89,6 @@ private:
   PGMPVideoEncoderParent* AllocPGMPVideoEncoderParent() override;
   bool DeallocPGMPVideoEncoderParent(PGMPVideoEncoderParent* aActor) override;
 
-  PGMPDecryptorParent* AllocPGMPDecryptorParent() override;
-  bool DeallocPGMPDecryptorParent(PGMPDecryptorParent* aActor) override;
-
   PChromiumCDMParent* AllocPChromiumCDMParent() override;
   bool DeallocPChromiumCDMParent(PChromiumCDMParent* aActor) override;
 
@@ -109,9 +102,8 @@ private:
 
   nsTArray<RefPtr<GMPVideoDecoderParent>> mVideoDecoders;
   nsTArray<RefPtr<GMPVideoEncoderParent>> mVideoEncoders;
-  nsTArray<RefPtr<GMPDecryptorParent>> mDecryptors;
   nsTArray<RefPtr<ChromiumCDMParent>> mChromiumCDMs;
-  nsCOMPtr<nsIThread> mGMPThread;
+  nsCOMPtr<nsISerialEventTarget> mGMPEventTarget;
   RefPtr<GMPParent> mParent;
   nsCString mDisplayName;
   uint32_t mPluginId;

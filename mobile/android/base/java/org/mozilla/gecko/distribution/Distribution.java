@@ -41,12 +41,13 @@ import org.mozilla.gecko.annotation.RobocopTarget;
 import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.EventDispatcher;
 import org.mozilla.gecko.GeckoAppShell;
+import org.mozilla.gecko.GeckoApplication;
 import org.mozilla.gecko.GeckoSharedPrefs;
 import org.mozilla.gecko.Telemetry;
-import org.mozilla.gecko.annotation.JNITarget;
 import org.mozilla.gecko.util.FileUtils;
 import org.mozilla.gecko.util.GeckoBundle;
 import org.mozilla.gecko.util.HardwareUtils;
+import org.mozilla.gecko.util.ProxySelector;
 import org.mozilla.gecko.util.ThreadUtils;
 
 import android.app.Activity;
@@ -542,19 +543,11 @@ public class Distribution {
         Log.v(LOGTAG, "Downloading referred distribution: " + uri);
 
         try {
-            final HttpURLConnection connection = (HttpURLConnection) uri.toURL().openConnection();
+            final HttpURLConnection connection = (HttpURLConnection) ProxySelector.openConnectionWithProxy(uri);
 
             // If the Search Activity starts, and we handle the referrer intent, this'll return
             // null. Recover gracefully in this case.
-            final GeckoAppShell.GeckoInterface geckoInterface = GeckoAppShell.getGeckoInterface();
-            final String ua;
-            if (geckoInterface == null) {
-                // Fall back to GeckoApp's default implementation.
-                ua = HardwareUtils.isTablet() ? AppConstants.USER_AGENT_FENNEC_TABLET :
-                                                AppConstants.USER_AGENT_FENNEC_MOBILE;
-            } else {
-                ua = geckoInterface.getDefaultUAString();
-            }
+            final String ua = GeckoApplication.getDefaultUAString();
 
             connection.setRequestProperty(HTTP.USER_AGENT, ua);
             connection.setRequestProperty("Accept", EXPECTED_CONTENT_TYPE);
@@ -649,7 +642,16 @@ public class Distribution {
             return null;
         }
 
-        return new JarInputStream(new BufferedInputStream(connection.getInputStream()), true);
+        final BufferedInputStream bufferedInputStream = new BufferedInputStream(connection.getInputStream());
+        try {
+            return new JarInputStream(bufferedInputStream, true);
+        } catch (IOException e) {
+            // Thrown e.g. if JarInputStream can't parse the input as a valid Zip.
+            // In that case we need to ensure the bufferedInputStream gets closed since it won't
+            // be used anywhere (while still passing the Exception up the stack).
+            bufferedInputStream.close();
+            throw e;
+        }
     }
 
     private static void recordFetchTelemetry(final Exception exception) {
@@ -878,7 +880,7 @@ public class Distribution {
 
         // We restrict here to avoid injection attacks. After all,
         // we're downloading a distribution payload based on intent input.
-        if (!content.matches("^[a-zA-Z0-9]+$")) {
+        if (!content.matches("^[a-zA-Z0-9_-]+$")) {
             Log.e(LOGTAG, "Invalid referrer content: " + content);
             Telemetry.addToHistogram(HISTOGRAM_REFERRER_INVALID, 1);
             return null;
@@ -923,7 +925,6 @@ public class Distribution {
         return context.getApplicationInfo().dataDir;
     }
 
-    @JNITarget
     public static String[] getDistributionDirectories() {
         final Context context = GeckoAppShell.getApplicationContext();
 

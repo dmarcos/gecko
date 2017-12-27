@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,24 +16,23 @@ namespace mozilla {
 enum class CSSPseudoElementType : uint8_t;
 } // namespace mozilla
 
-class nsProgressFrame : public nsContainerFrame,
-                        public nsIAnonymousContentCreator
+class nsProgressFrame final
+  : public nsContainerFrame
+  , public nsIAnonymousContentCreator
 {
   typedef mozilla::CSSPseudoElementType CSSPseudoElementType;
   typedef mozilla::dom::Element Element;
 
 public:
-  NS_DECL_QUERYFRAME_TARGET(nsProgressFrame)
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsProgressFrame)
 
   explicit nsProgressFrame(nsStyleContext* aContext);
   virtual ~nsProgressFrame();
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual void Reflow(nsPresContext*           aCX,
@@ -40,15 +40,11 @@ public:
                       const ReflowInput& aReflowInput,
                       nsReflowStatus&          aStatus) override;
 
-  virtual nsIAtom* GetType() const override;
-
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override {
     return MakeFrameName(NS_LITERAL_STRING("Progress"), aResult);
   }
 #endif
-
-  virtual bool IsLeaf() const override { return true; }
 
   // nsIAnonymousContentCreator
   virtual nsresult CreateAnonymousContent(nsTArray<ContentInfo>& aElements) override;
@@ -56,11 +52,11 @@ public:
                                         uint32_t aFilter) override;
 
   virtual nsresult AttributeChanged(int32_t  aNameSpaceID,
-                                    nsIAtom* aAttribute,
+                                    nsAtom* aAttribute,
                                     int32_t  aModType) override;
 
   virtual mozilla::LogicalSize
-  ComputeAutoSize(nsRenderingContext*         aRenderingContext,
+  ComputeAutoSize(gfxContext*                 aRenderingContext,
                   mozilla::WritingMode        aWM,
                   const mozilla::LogicalSize& aCBSize,
                   nscoord                     aAvailableISize,
@@ -69,8 +65,8 @@ public:
                   const mozilla::LogicalSize& aPadding,
                   ComputeSizeFlags            aFlags) override;
 
-  virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
-  virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
+  virtual nscoord GetMinISize(gfxContext *aRenderingContext) override;
+  virtual nscoord GetPrefISize(gfxContext *aRenderingContext) override;
 
   virtual bool IsFrameOfType(uint32_t aFlags) const override
   {

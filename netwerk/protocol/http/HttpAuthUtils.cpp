@@ -16,8 +16,8 @@ namespace auth {
 namespace detail {
 
 bool
-MatchesBaseURI(const nsCSubstring &matchScheme,
-               const nsCSubstring &matchHost,
+MatchesBaseURI(const nsACString& matchScheme,
+               const nsACString& matchHost,
                int32_t             matchPort,
                nsDependentCSubstring const& url)
 {
@@ -137,14 +137,10 @@ URIMatchesPrefPattern(nsIURI *uri, const char *pref)
     return false;
   }
 
-  char *hostList;
-  if (NS_FAILED(prefs->GetCharPref(pref, &hostList)) || !hostList) {
+  nsAutoCString hostList;
+  if (NS_FAILED(prefs->GetCharPref(pref, hostList))) {
     return false;
   }
-
-  struct FreePolicy { void operator()(void* p) { free(p); } };
-  mozilla::UniquePtr<char[], FreePolicy> hostListScope;
-  hostListScope.reset(hostList);
 
   // pseudo-BNF
   // ----------

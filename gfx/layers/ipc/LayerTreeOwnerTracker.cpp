@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=99: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -71,7 +71,7 @@ LayerTreeOwnerTracker::IsMapped(uint64_t aLayersId, base::ProcessId aProcessId)
 }
 
 void
-LayerTreeOwnerTracker::Iterate(std::function<void(uint64_t aLayersId, base::ProcessId aProcessId)> aCallback)
+LayerTreeOwnerTracker::Iterate(const std::function<void(uint64_t aLayersId, base::ProcessId aProcessId)>& aCallback)
 {
   MutexAutoLock lock(mLayerIdsLock);
 

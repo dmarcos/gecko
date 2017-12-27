@@ -214,10 +214,8 @@ public:
   nsresult
   AppendItem(JSContext* aCx, bool aFirstOfArray, JS::Handle<JS::Value> aVal);
 
-#ifdef ENABLE_INTL_API
   nsresult
   ToLocaleBasedKey(Key& aTarget, const nsCString& aLocale) const;
-#endif
 
   void
   FinishArray()
@@ -287,27 +285,25 @@ private:
   nsresult
   EncodeJSVal(JSContext* aCx, JS::Handle<JS::Value> aVal, uint8_t aTypeOffset);
 
-  void
+  nsresult
   EncodeString(const nsAString& aString, uint8_t aTypeOffset);
 
   template <typename T>
-  void
+  nsresult
   EncodeString(const T* aStart, const T* aEnd, uint8_t aTypeOffset);
 
   template <typename T>
-  void
+  nsresult
   EncodeAsString(const T* aStart, const T* aEnd, uint8_t aType);
 
-#ifdef ENABLE_INTL_API
   nsresult
   EncodeLocaleString(const nsDependentString& aString, uint8_t aTypeOffset,
                      const nsCString& aLocale);
-#endif
 
   void
   EncodeNumber(double aFloat, uint8_t aType);
 
-  void
+  nsresult
   EncodeBinary(JSObject* aObject, bool aIsViewObject, uint8_t aTypeOffset);
 
   // Decoding functions. aPos points into mBuffer and is adjusted to point

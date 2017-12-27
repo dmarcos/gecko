@@ -43,7 +43,14 @@ class TlsHandshakeSkipFilter : public TlsRecordFilter {
       size_t start = parser.consumed();
       TlsHandshakeFilter::HandshakeHeader header;
       DataBuffer ignored;
-      if (!header.Parse(&parser, record_header, &ignored)) {
+      bool complete = false;
+      if (!header.Parse(&parser, record_header, DataBuffer(), &ignored,
+                        &complete)) {
+        ADD_FAILURE() << "Error parsing handshake header";
+        return KEEP;
+      }
+      if (!complete) {
+        ADD_FAILURE() << "Don't want to deal with fragmented input";
         return KEEP;
       }
 
@@ -78,9 +85,9 @@ class TlsHandshakeSkipFilter : public TlsRecordFilter {
   bool skipped_;
 };
 
-class TlsSkipTest
-    : public TlsConnectTestBase,
-      public ::testing::WithParamInterface<std::tuple<std::string, uint16_t>> {
+class TlsSkipTest : public TlsConnectTestBase,
+                    public ::testing::WithParamInterface<
+                        std::tuple<SSLProtocolVariant, uint16_t>> {
  protected:
   TlsSkipTest()
       : TlsConnectTestBase(std::get<0>(GetParam()), std::get<1>(GetParam())) {}
@@ -93,7 +100,7 @@ class TlsSkipTest
 };
 
 class Tls13SkipTest : public TlsConnectTestBase,
-                      public ::testing::WithParamInterface<std::string> {
+                      public ::testing::WithParamInterface<SSLProtocolVariant> {
  protected:
   Tls13SkipTest()
       : TlsConnectTestBase(GetParam(), SSL_LIBRARY_VERSION_TLS_1_3) {}
@@ -101,26 +108,15 @@ class Tls13SkipTest : public TlsConnectTestBase,
   void ServerSkipTest(std::shared_ptr<TlsRecordFilter> filter, int32_t error) {
     EnsureTlsSetup();
     server_->SetTlsRecordFilter(filter);
-    filter->EnableDecryption();
-    client_->ExpectSendAlert(kTlsAlertUnexpectedMessage);
-    if (mode_ == STREAM) {
-      server_->ExpectSendAlert(kTlsAlertBadRecordMac);
-      ConnectExpectFail();
-    } else {
-      ConnectExpectFailOneSide(TlsAgent::CLIENT);
-    }
+    ExpectAlert(client_, kTlsAlertUnexpectedMessage);
+    ConnectExpectFail();
     client_->CheckErrorCode(error);
-    if (mode_ == STREAM) {
-      server_->CheckErrorCode(SSL_ERROR_BAD_MAC_READ);
-    } else {
-      ASSERT_EQ(TlsAgent::STATE_CONNECTING, server_->state());
-    }
+    server_->CheckErrorCode(SSL_ERROR_HANDSHAKE_UNEXPECTED_ALERT);
   }
 
   void ClientSkipTest(std::shared_ptr<TlsRecordFilter> filter, int32_t error) {
     EnsureTlsSetup();
     client_->SetTlsRecordFilter(filter);
-    filter->EnableDecryption();
     server_->ExpectSendAlert(kTlsAlertUnexpectedMessage);
     ConnectExpectFailOneSide(TlsAgent::SERVER);
 
@@ -171,11 +167,10 @@ TEST_P(TlsSkipTest, SkipServerKeyExchangeEcdsa) {
 }
 
 TEST_P(TlsSkipTest, SkipCertAndKeyExch) {
-  auto chain = std::make_shared<ChainedPacketFilter>();
-  chain->Add(
-      std::make_shared<TlsHandshakeSkipFilter>(kTlsHandshakeCertificate));
-  chain->Add(
-      std::make_shared<TlsHandshakeSkipFilter>(kTlsHandshakeServerKeyExchange));
+  auto chain = std::make_shared<ChainedPacketFilter>(ChainedPacketFilterInit{
+      std::make_shared<TlsHandshakeSkipFilter>(kTlsHandshakeCertificate),
+      std::make_shared<TlsHandshakeSkipFilter>(
+          kTlsHandshakeServerKeyExchange)});
   ServerSkipTest(chain);
   client_->CheckErrorCode(SSL_ERROR_RX_UNEXPECTED_HELLO_DONE);
 }
@@ -227,12 +222,13 @@ TEST_P(Tls13SkipTest, SkipClientCertificateVerify) {
       SSL_ERROR_RX_UNEXPECTED_FINISHED);
 }
 
-INSTANTIATE_TEST_CASE_P(SkipTls10, TlsSkipTest,
-                        ::testing::Combine(TlsConnectTestBase::kTlsModesStream,
-                                           TlsConnectTestBase::kTlsV10));
+INSTANTIATE_TEST_CASE_P(
+    SkipTls10, TlsSkipTest,
+    ::testing::Combine(TlsConnectTestBase::kTlsVariantsStream,
+                       TlsConnectTestBase::kTlsV10));
 INSTANTIATE_TEST_CASE_P(SkipVariants, TlsSkipTest,
-                        ::testing::Combine(TlsConnectTestBase::kTlsModesAll,
+                        ::testing::Combine(TlsConnectTestBase::kTlsVariantsAll,
                                            TlsConnectTestBase::kTlsV11V12));
 INSTANTIATE_TEST_CASE_P(Skip13Variants, Tls13SkipTest,
-                        TlsConnectTestBase::kTlsModesAll);
+                        TlsConnectTestBase::kTlsVariantsAll);
 }  // namespace nss_test

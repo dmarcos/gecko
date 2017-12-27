@@ -3,7 +3,7 @@
     "message": "Web sayfalarının ekran görüntülerini alın, ister geçici ister kalıcı olarak kaydedin."
   },
   "addonAuthorsList": {
-    "message": "Mozilla <screenshots-feedback@mozilla.org>"
+    "message": "Mozilla <screenshots-feedback@mozilla.com>"
   },
   "contextMenuLabel": {
     "message": "Ekran görüntüsü al"
@@ -29,6 +29,21 @@
   "downloadScreenshot": {
     "message": "İndir"
   },
+  "downloadOnlyNotice": {
+    "message": "Şu anda Yalnızca İndirme modundasınız."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots şu durumlarda kendiliğinden Yalnızca İndirme moduna geçer:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "Gizli Gezinti penceresindeyken"
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Üçüncü taraf çerezleri devre dışıyken"
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "“Geçmişi asla hatırlama” devredeyken"
+  },
   "notificationLinkCopiedTitle": {
     "message": "Bağlantı kopyalandı"
   },
@@ -36,6 +51,28 @@
     "message": "Ekran görüntünüzün bağlantısı panoya kopyalandı. Yapıştırmak için $META_KEY$-V tuşlarına basabilirsiniz.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Kopyala"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Görüntü kopyalandı"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Ekran görüntünüz panoya kopyalandı. Yapıştırmak için $META_KEY$-V tuşlarına basabilirsiniz.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Resim $PIXELS$ piksele kırpıldı.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -64,32 +101,47 @@
   "selfScreenshotErrorTitle": {
     "message": "Firefox Screenshots sayfalarının ekran görüntüsünü alamazsınz."
   },
+  "emptySelectionErrorTitle": {
+    "message": "Seçiminiz çok küçük"
+  },
+  "privateWindowErrorTitle": {
+    "message": "Gizli Gezinti modunda Screenshosts özelliği kullanılamaz"
+  },
+  "privateWindowErrorDetails": {
+    "message": "Aksaklıktan dolayı özür dileriz. Gelecek sürümlerde bu özelliği devreye almak için çalışıyoruz."
+  },
   "genericErrorTitle": {
     "message": "Firefox Screenshosts kafayı yedi!"
   },
   "genericErrorDetails": {
     "message": "Ne olduğunu biz de anlamadık. Bir daha denemeye veya başka bir sayfanın ekran görüntüsünü almaya ne dersiniz?"
   },
-  "tourBodyOne": {
+  "tourBodyIntro": {
     "message": "Firefox'tan çıkmadan ekran görüntüleri alın, kaydedin ve paylaşın."
   },
-  "tourHeaderTwo": {
+  "tourHeaderPageAction": {
+    "message": "Kaydetmenin yeni yolu"
+  },
+  "tourBodyPageAction": {
+    "message": "Ekran görüntüsü almak istediğiniz zaman adres çubuğundaki sayfa eylemleri menüsünü açabilirsiniz."
+  },
+  "tourHeaderClickAndDrag": {
     "message": "İstediğini yakala"
   },
-  "tourBodyTwo": {
+  "tourBodyClickAndDrag": {
     "message": "Sayfanın belli bir kısmını yakalamak için işaretçiyi tıklayıp sürükleyin. Seçiminizi vurgulamak için fareyle üzerine gelebilirsiniz."
   },
-  "tourHeaderThree": {
-    "message": "İstediğin gibi yakala"
-  },
-  "tourBodyThree": {
-    "message": "Ekran görüntülerinizi daha kolay paylşamak veya bilgisayarınıza indirmek için web'e kaydedin. Kaydettiğiniz tüm görüntüleri bulmak için \"Ekran görüntülerim\" düğmesine tıklayabilirsiniz."
-  },
-  "tourHeaderFour": {
+  "tourHeaderFullPage": {
     "message": "Pencereleri veya sayfaların tamamını yakala"
   },
-  "tourBodyFour": {
-    "message": "Yalnızda pencerede gördüğünüz alanı veya sayfanın tamamını yakalamak için sağ üstteki düğmelerden uygun olanı seçin."
+  "tourBodyFullPage": {
+    "message": "Yalnızca pencerede gördüğünüz alanı veya sayfanın tamamını yakalamak için sağ üstteki düğmelerden uygun olanı seçin."
+  },
+  "tourHeaderDownloadUpload": {
+    "message": "İstediğin gibi yakala"
+  },
+  "tourBodyDownloadUpload": {
+    "message": "Ekran görüntülerinizi daha kolay paylaşmak veya bilgisayarınıza indirmek için web’e kaydedin. Kaydettiğiniz tüm görüntüleri bulmak için \"Ekran görüntülerim\" düğmesine tıklayabilirsiniz."
   },
   "tourSkip": {
     "message": "GEÇ"
@@ -103,8 +155,8 @@
   "tourDone": {
     "message": "Tamam"
   },
-  "termsAndPrivacyNotice": {
-    "message": "Firefox Screenshots'ı kullandığınızda Screenshosts $TERMSANDPRIVACYNOTICETERMSLINK$ ve $TERMSANDPRIVACYNOTICEPRIVACYLINK$ kabul etmiş sayılırsınız.",
+  "termsAndPrivacyNotice2": {
+    "message": "Firefox Screenshots'ı kullandığınızda $TERMSANDPRIVACYNOTICETERMSLINK$ ve $TERMSANDPRIVACYNOTICEPRIVACYLINK$ kabul etmiş sayılırsınız.",
     "placeholders": {
       "termsandprivacynoticetermslink": {
         "content": "$1"
@@ -115,9 +167,12 @@
     }
   },
   "termsAndPrivacyNoticeTermsLink": {
-    "message": "Koşullarını"
+    "message": "Koşullarımızı"
   },
   "termsAndPrivacyNoticyPrivacyLink": {
-    "message": "Gizlilik Bildirimini"
+    "message": "Gizlilik Bildirimimizi"
+  },
+  "libraryLabel": {
+    "message": "Ekran görüntüleri"
   }
 }

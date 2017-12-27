@@ -21,13 +21,13 @@
 #include "nsCOMArray.h"
 #include "nsIURI.h"
 #include "nsIXULDocument.h"
-#include "nsScriptLoader.h"
 #include "nsIStreamListener.h"
 #include "nsIStreamLoader.h"
 #include "nsICSSLoaderObserver.h"
 #include "nsIXULStore.h"
 
 #include "mozilla/Attributes.h"
+#include "mozilla/dom/ScriptLoader.h"
 
 #include "js/TracingAPI.h"
 #include "js/TypeDecls.h"
@@ -64,7 +64,7 @@ public:
   }
 
   mozilla::dom::Element* GetFirstElement();
-  void AppendAll(nsCOMArray<nsIContent>* aElements);
+  void AppendAll(nsCOMArray<mozilla::dom::Element>* aElements);
   /**
    * @return true if aElement was added, false if we failed due to OOM
    */
@@ -126,7 +126,7 @@ public:
 
     // nsIXULDocument interface
     virtual void GetElementsForID(const nsAString& aID,
-                                  nsCOMArray<nsIContent>& aElements) override;
+                                  nsCOMArray<mozilla::dom::Element>& aElements) override;
 
     NS_IMETHOD AddSubtreeToDocument(nsIContent* aContent) override;
     NS_IMETHOD RemoveSubtreeFromDocument(nsIContent* aContent) override;
@@ -138,7 +138,8 @@ public:
     bool OnDocumentParserError() override;
 
     // nsINode interface overrides
-    virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
+    virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+                           bool aPreallocateChildren) const override;
 
     // nsIDOMNode interface
     NS_FORWARD_NSIDOMNODE_TO_NSINODE
@@ -172,7 +173,8 @@ public:
 
     virtual void ResetDocumentDirection() override;
 
-    virtual int GetDocumentLWTheme() override;
+    virtual nsIDocument::DocumentTheme GetDocumentLWTheme() override;
+    virtual nsIDocument::DocumentTheme ThreadSafeGetDocumentLWTheme() const override;
 
     virtual void ResetDocumentLWTheme() override { mDocLWTheme = Doc_Theme_Uninitialized; }
 
@@ -181,12 +183,12 @@ public:
     static bool
     MatchAttribute(Element* aContent,
                    int32_t aNameSpaceID,
-                   nsIAtom* aAttrName,
+                   nsAtom* aAttrName,
                    void* aData);
 
     NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(XULDocument, XMLDocument)
 
-    void TraceProtos(JSTracer* aTrc, uint32_t aGCNumber);
+    void TraceProtos(JSTracer* aTrc);
 
     // WebIDL API
     already_AddRefed<nsINode> GetPopupNode();
@@ -253,14 +255,14 @@ protected:
                            nsIPrincipal* aDocumentPrincipal,
                            nsIParser** aResult);
 
-    nsresult 
+    nsresult
     LoadOverlayInternal(nsIURI* aURI, bool aIsDynamic, bool* aShouldReturn,
                         bool* aFailureFromContent);
 
     nsresult ApplyPersistentAttributes();
     nsresult ApplyPersistentAttributesInternal();
     nsresult ApplyPersistentAttributesToElements(const nsAString &aID,
-                                                 nsCOMArray<nsIContent>& aElements);
+                                                 nsCOMArray<Element>& aElements);
 
     nsresult
     AddElementToDocumentPre(Element* aElement);
@@ -271,13 +273,13 @@ protected:
     nsresult
     ExecuteOnBroadcastHandlerFor(Element* aBroadcaster,
                                  Element* aListener,
-                                 nsIAtom* aAttr);
+                                 nsAtom* aAttr);
 
     nsresult
     BroadcastAttributeChangeFromOverlay(nsIContent* aNode,
                                         int32_t aNameSpaceID,
-                                        nsIAtom* aAttribute,
-                                        nsIAtom* aPrefix,
+                                        nsAtom* aAttribute,
+                                        nsAtom* aPrefix,
                                         const nsAString& aValue);
 
     already_AddRefed<nsPIWindowRoot> GetWindowRoot();
@@ -287,8 +289,6 @@ protected:
     // pseudo constants
     static int32_t gRefCnt;
 
-    static nsIAtom** kIdentityAttrs[];
-
     static nsIRDFService* gRDFService;
     static nsIRDFResource* kNC_persist;
     static nsIRDFResource* kNC_attribute;
@@ -297,10 +297,10 @@ protected:
     static LazyLogModule gXULLog;
 
     nsresult
-    Persist(nsIContent* aElement, int32_t aNameSpaceID, nsIAtom* aAttribute);
+    Persist(nsIContent* aElement, int32_t aNameSpaceID, nsAtom* aAttribute);
     // Just like Persist but ignores the return value so we can use it
     // as a runnable method.
-    void DoPersist(nsIContent* aElement, int32_t aNameSpaceID, nsIAtom* aAttribute)
+    void DoPersist(nsIContent* aElement, int32_t aNameSpaceID, nsAtom* aAttribute)
     {
         Persist(aElement, aNameSpaceID, aAttribute);
     }
@@ -440,7 +440,7 @@ protected:
     /**
      * Add attributes from the prototype to the element.
      */
-    nsresult AddAttributes(nsXULPrototypeElement* aPrototype, nsIContent* aElement);
+    nsresult AddAttributes(nsXULPrototypeElement* aPrototype, Element* aElement);
 
     /**
      * The prototype-script of the current transcluded script that is being
@@ -473,7 +473,7 @@ protected:
      * Create a XUL template builder on the specified node.
      */
     static nsresult
-    CreateTemplateBuilder(nsIContent* aElement);
+    CreateTemplateBuilder(Element* aElement);
 
     /**
      * Add the current prototype's style sheets (currently it's just
@@ -483,7 +483,7 @@ protected:
 
 
 protected:
-    /* Declarations related to forward references. 
+    /* Declarations related to forward references.
      *
      * Forward references are declarations which are added to the temporary
      * list (mForwardReferences) during the document (or overlay) load and
@@ -545,13 +545,13 @@ protected:
     {
     protected:
         XULDocument* mDocument;      // [WEAK]
-        nsCOMPtr<nsIContent> mOverlay; // [OWNER]
+        nsCOMPtr<Element> mOverlay; // [OWNER]
         bool mResolved;
 
-        nsresult Merge(nsIContent* aTargetNode, nsIContent* aOverlayNode, bool aNotify);
+        nsresult Merge(Element* aTargetNode, Element* aOverlayNode, bool aNotify);
 
     public:
-        OverlayForwardReference(XULDocument* aDocument, nsIContent* aOverlay)
+        OverlayForwardReference(XULDocument* aDocument, Element* aOverlay)
             : mDocument(aDocument), mOverlay(aOverlay), mResolved(false) {}
 
         virtual ~OverlayForwardReference();
@@ -565,10 +565,10 @@ protected:
     class TemplateBuilderHookup : public nsForwardReference
     {
     protected:
-        nsCOMPtr<nsIContent> mElement; // [OWNER]
+        nsCOMPtr<Element> mElement; // [OWNER]
 
     public:
-        explicit TemplateBuilderHookup(nsIContent* aElement)
+        explicit TemplateBuilderHookup(Element* aElement)
             : mElement(aElement) {}
 
         virtual Phase GetPhase() override { return eHookup; }
@@ -598,11 +598,13 @@ protected:
                                  Element *aListener,
                                  const nsAString &aAttr);
 
+    // FIXME: This should probably be renamed, there's nothing guaranteeing that
+    // aChild is an Element as far as I can tell!
     static
     nsresult
     InsertElement(nsINode* aParent, nsIContent* aChild, bool aNotify);
 
-    static 
+    static
     nsresult
     RemoveElement(nsINode* aParent, nsINode* aChild);
 
@@ -743,7 +745,7 @@ protected:
 
       nsDelayedBroadcastUpdate(Element* aBroadcaster,
                                Element* aListener,
-                               nsIAtom* aAttrName,
+                               nsAtom* aAttrName,
                                const nsAString &aAttr,
                                bool aSetAttr,
                                bool aNeedsAttrChange)
@@ -761,7 +763,7 @@ protected:
       // Note if mAttrName isn't used, this is the name of the attr, otherwise
       // this is the value of the attribute.
       nsString                mAttr;
-      nsCOMPtr<nsIAtom>       mAttrName;
+      RefPtr<nsAtom>       mAttrName;
       bool                    mSetAttr;
       bool                    mNeedsAttrChange;
 

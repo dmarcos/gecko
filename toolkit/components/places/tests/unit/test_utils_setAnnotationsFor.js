@@ -8,17 +8,20 @@
   * Check for correct functionality of PlacesUtils.setAnnotationsForItem/URI
   */
 
-var hs = PlacesUtils.history;
-var bs = PlacesUtils.bookmarks;
 var as = PlacesUtils.annotations;
 
 const TEST_URL = "http://test.mozilla.org/";
 
-function run_test() {
-  var testURI = uri(TEST_URL);
+add_task(async function test_setAnnotationsFor() {
+  let testURI = uri(TEST_URL);
   // add a bookmark
-  var itemId = bs.insertBookmark(bs.unfiledBookmarksFolder, testURI,
-                                 bs.DEFAULT_INDEX, "test");
+  let bookmark = await PlacesUtils.bookmarks.insert({
+    parentGuid: PlacesUtils.bookmarks.unfiledGuid,
+    title: "test",
+    url: testURI,
+  });
+
+  let itemId = await PlacesUtils.promiseItemId(bookmark.guid);
 
   // create annotations array
   var testAnnos = [{ name: "testAnno/test0",
@@ -42,16 +45,16 @@ function run_test() {
   PlacesUtils.setAnnotationsForItem(itemId, testAnnos);
   // Check for correct addition
   testAnnos.forEach(function(anno) {
-    do_check_true(as.itemHasAnnotation(itemId, anno.name));
-    do_check_eq(as.getItemAnnotation(itemId, anno.name), anno.value);
+    Assert.ok(as.itemHasAnnotation(itemId, anno.name));
+    Assert.equal(as.getItemAnnotation(itemId, anno.name), anno.value);
   });
 
   // Add page annotations
   PlacesUtils.setAnnotationsForURI(testURI, testAnnos);
   // Check for correct addition
   testAnnos.forEach(function(anno) {
-    do_check_true(as.pageHasAnnotation(testURI, anno.name));
-    do_check_eq(as.getPageAnnotation(testURI, anno.name), anno.value);
+    Assert.ok(as.pageHasAnnotation(testURI, anno.name));
+    Assert.equal(as.getPageAnnotation(testURI, anno.name), anno.value);
   });
 
   // To unset annotations we unset their values or set them to
@@ -65,15 +68,15 @@ function run_test() {
   PlacesUtils.setAnnotationsForItem(itemId, testAnnos);
   // Check for correct removal
   testAnnos.forEach(function(anno) {
-    do_check_false(as.itemHasAnnotation(itemId, anno.name));
+    Assert.ok(!as.itemHasAnnotation(itemId, anno.name));
     // sanity: page annotations should not be removed here
-    do_check_true(as.pageHasAnnotation(testURI, anno.name));
+    Assert.ok(as.pageHasAnnotation(testURI, anno.name));
   });
 
   // Unset all page annotations
   PlacesUtils.setAnnotationsForURI(testURI, testAnnos);
   // Check for correct removal
   testAnnos.forEach(function(anno) {
-    do_check_false(as.pageHasAnnotation(testURI, anno.name));
+    Assert.ok(!as.pageHasAnnotation(testURI, anno.name));
   });
-}
+});

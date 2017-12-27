@@ -19,7 +19,7 @@ var EnableListener = {
     if (aAddon.id == gAddon.id)
       window.close();
   }
-}
+};
 AddonManager.addAddonListener(EnableListener);
 
 function initialize() {
@@ -124,9 +124,7 @@ function restartClicked() {
 
   window.close();
 
-  let appStartup = Components.classes["@mozilla.org/toolkit/app-startup;1"].
-                   getService(Components.interfaces.nsIAppStartup);
-  appStartup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
+  Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
 }
 
 function cancelClicked() {

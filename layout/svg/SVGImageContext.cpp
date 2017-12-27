@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -10,30 +11,33 @@
 // Keep others in (case-insensitive) order:
 #include "gfxUtils.h"
 #include "mozilla/Preferences.h"
+#include "nsContentUtils.h"
 #include "nsIFrame.h"
 #include "nsPresContext.h"
+#include "nsStyleStruct.h"
 
 namespace mozilla {
 
 /* static */ void
-SVGImageContext::MaybeInitAndStoreContextPaint(Maybe<SVGImageContext>& aContext,
-                                               nsIFrame* aFromFrame,
-                                               imgIContainer* aImgContainer)
+SVGImageContext::MaybeStoreContextPaint(Maybe<SVGImageContext>& aContext,
+                                        nsIFrame* aFromFrame,
+                                        imgIContainer* aImgContainer)
 {
-  static bool sEnabledForContent = false;
-  static bool sEnabledForContentCached = false;
+  return MaybeStoreContextPaint(aContext,
+                                aFromFrame->StyleContext(),
+                                aImgContainer);
+}
 
-  MOZ_ASSERT(!aContext, "The emplace() call below with overwrite this object");
+/* static */ void
+SVGImageContext::MaybeStoreContextPaint(Maybe<SVGImageContext>& aContext,
+                                        nsStyleContext* aFromStyleContext,
+                                        imgIContainer* aImgContainer)
+{
+  const nsStyleSVG* style = aFromStyleContext->StyleSVG();
 
-  if (!sEnabledForContentCached) {
-    Preferences::AddBoolVarCache(&sEnabledForContent,
-                                 "svg.context-properties.content.enabled", false);
-    sEnabledForContentCached = true;
-  }
-
-  if (!sEnabledForContent &&
-      !aFromFrame->PresContext()->IsChrome()) {
-    // Context paint is pref'ed off for content and this is a content doc.
+  if (!style->ExposesContextProperties()) {
+    // Content must have '-moz-context-properties' set to the names of the
+    // properties it wants to expose to images it links to.
     return;
   }
 
@@ -42,27 +46,33 @@ SVGImageContext::MaybeInitAndStoreContextPaint(Maybe<SVGImageContext>& aContext,
     return;
   }
 
-  // XXX return early if the 'context-properties' property is not set.
-
   bool haveContextPaint = false;
 
   RefPtr<SVGEmbeddingContextPaint> contextPaint = new SVGEmbeddingContextPaint();
 
-  const nsStyleSVG* style = aFromFrame->StyleSVG();
-
-  // XXX don't set values for properties not listed in 'context-properties'.
-
-  if (style->mFill.Type() == eStyleSVGPaintType_Color) {
+  if ((style->mContextPropsBits & NS_STYLE_CONTEXT_PROPERTY_FILL) &&
+      style->mFill.Type() == eStyleSVGPaintType_Color) {
     haveContextPaint = true;
     contextPaint->SetFill(style->mFill.GetColor());
   }
-  if (style->mStroke.Type() == eStyleSVGPaintType_Color) {
+  if ((style->mContextPropsBits & NS_STYLE_CONTEXT_PROPERTY_STROKE) &&
+      style->mStroke.Type() == eStyleSVGPaintType_Color) {
     haveContextPaint = true;
     contextPaint->SetStroke(style->mStroke.GetColor());
   }
+  if (style->mContextPropsBits & NS_STYLE_CONTEXT_PROPERTY_FILL_OPACITY) {
+    haveContextPaint = true;
+    contextPaint->SetFillOpacity(style->mFillOpacity);
+  }
+  if (style->mContextPropsBits & NS_STYLE_CONTEXT_PROPERTY_STROKE_OPACITY) {
+    haveContextPaint = true;
+    contextPaint->SetStrokeOpacity(style->mStrokeOpacity);
+  }
 
   if (haveContextPaint) {
-    aContext.emplace();
+    if (!aContext) {
+      aContext.emplace();
+    }
     aContext->mContextPaint = contextPaint.forget();
   }
 }

@@ -4,28 +4,26 @@
 
 "use strict";
 
-const Services = require("Services");
-
 const { createFactory, createElement } = require("devtools/client/shared/vendor/react");
 const { Provider } = require("devtools/client/shared/vendor/react-redux");
 
-const App = createFactory(require("./components/App"));
+const LayoutApp = createFactory(require("./components/LayoutApp"));
 
 const { LocalizationHelper } = require("devtools/shared/l10n");
 const INSPECTOR_L10N =
   new LocalizationHelper("devtools/client/locales/inspector.properties");
 
-const SHOW_GRID_OUTLINE_PREF = "devtools.gridinspector.showGridOutline";
+loader.lazyRequireGetter(this, "FlexboxInspector", "devtools/client/inspector/flexbox/flexbox");
+loader.lazyRequireGetter(this, "GridInspector", "devtools/client/inspector/grids/grid-inspector");
 
-function LayoutView(inspector, window) {
-  this.document = window.document;
-  this.inspector = inspector;
-  this.store = inspector.store;
+class LayoutView {
+  constructor(inspector, window) {
+    this.document = window.document;
+    this.inspector = inspector;
+    this.store = inspector.store;
 
-  this.init();
-}
-
-LayoutView.prototype = {
+    this.init();
+  }
 
   init() {
     if (!this.inspector) {
@@ -44,6 +42,7 @@ LayoutView.prototype = {
       onToggleGeometryEditor,
     } = this.inspector.getPanel("boxmodel").getComponentProps();
 
+    this.gridInspector = new GridInspector(this.inspector, this.inspector.panelWin);
     let {
       getSwatchColorPickerTooltip,
       onSetGridOverlayColor,
@@ -51,11 +50,12 @@ LayoutView.prototype = {
       onShowGridCellHighlight,
       onShowGridLineNamesHighlight,
       onToggleGridHighlighter,
+      onToggleShowGridAreas,
       onToggleShowGridLineNumbers,
       onToggleShowInfiniteLines,
-    } = this.inspector.gridInspector.getComponentProps();
+    } = this.gridInspector.getComponentProps();
 
-    let app = App({
+    let layoutApp = LayoutApp({
       getSwatchColorPickerTooltip,
       setSelectedNode,
       /**
@@ -63,13 +63,6 @@ LayoutView.prototype = {
        * default.
        */
       showBoxModelProperties: true,
-
-      /**
-       * Shows the grid outline if user preferences are set to true, otherwise, hidden by
-       * default.
-       */
-      showGridOutline: Services.prefs.getBoolPref(SHOW_GRID_OUTLINE_PREF),
-
       onHideBoxModelHighlighter,
       onSetGridOverlayColor,
       onShowBoxModelEditor,
@@ -80,36 +73,32 @@ LayoutView.prototype = {
       onShowGridLineNamesHighlight,
       onToggleGeometryEditor,
       onToggleGridHighlighter,
+      onToggleShowGridAreas,
       onToggleShowGridLineNumbers,
       onToggleShowInfiniteLines,
     });
 
     let provider = createElement(Provider, {
-      store: this.store,
       id: "layoutview",
-      title: INSPECTOR_L10N.getStr("inspector.sidebar.layoutViewTitle2"),
       key: "layoutview",
-    }, app);
+      store: this.store,
+      title: INSPECTOR_L10N.getStr("inspector.sidebar.layoutViewTitle2"),
+    }, layoutApp);
 
-    let defaultTab = Services.prefs.getCharPref("devtools.inspector.activeSidebar");
-
-    this.inspector.addSidebarTab(
-      "layoutview",
-      INSPECTOR_L10N.getStr("inspector.sidebar.layoutViewTitle2"),
-      provider,
-      defaultTab == "layoutview"
-    );
-  },
+    // Expose the provider to let inspector.js use it in setupSidebar.
+    this.provider = provider;
+  }
 
   /**
    * Destruction function called when the inspector is destroyed. Cleans up references.
    */
   destroy() {
+    this.gridInspector.destroy();
+
     this.document = null;
     this.inspector = null;
     this.store = null;
-  },
-
-};
+  }
+}
 
 module.exports = LayoutView;

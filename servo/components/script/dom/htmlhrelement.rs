@@ -5,7 +5,7 @@
 use cssparser::RGBA;
 use dom::bindings::codegen::Bindings::HTMLHRElementBinding::{self, HTMLHRElementMethods};
 use dom::bindings::inheritance::Castable;
-use dom::bindings::js::{LayoutJS, Root};
+use dom::bindings::root::{DomRoot, LayoutDom};
 use dom::bindings::str::DOMString;
 use dom::document::Document;
 use dom::element::{Element, RawLayoutElementHelpers};
@@ -13,7 +13,7 @@ use dom::htmlelement::HTMLElement;
 use dom::node::Node;
 use dom::virtualmethods::VirtualMethods;
 use dom_struct::dom_struct;
-use html5ever_atoms::LocalName;
+use html5ever::{LocalName, Prefix};
 use style::attr::{AttrValue, LengthOrPercentageOrAuto};
 
 #[dom_struct]
@@ -22,7 +22,7 @@ pub struct HTMLHRElement {
 }
 
 impl HTMLHRElement {
-    fn new_inherited(local_name: LocalName, prefix: Option<DOMString>, document: &Document) -> HTMLHRElement {
+    fn new_inherited(local_name: LocalName, prefix: Option<Prefix>, document: &Document) -> HTMLHRElement {
         HTMLHRElement {
             htmlelement: HTMLElement::new_inherited(local_name, prefix, document)
         }
@@ -30,9 +30,9 @@ impl HTMLHRElement {
 
     #[allow(unrooted_must_root)]
     pub fn new(local_name: LocalName,
-               prefix: Option<DOMString>,
-               document: &Document) -> Root<HTMLHRElement> {
-        Node::reflect_node(box HTMLHRElement::new_inherited(local_name, prefix, document),
+               prefix: Option<Prefix>,
+               document: &Document) -> DomRoot<HTMLHRElement> {
+        Node::reflect_node(Box::new(HTMLHRElement::new_inherited(local_name, prefix, document)),
                            document,
                            HTMLHRElementBinding::Wrap)
     }
@@ -63,7 +63,7 @@ pub trait HTMLHRLayoutHelpers {
     fn get_width(&self) -> LengthOrPercentageOrAuto;
 }
 
-impl HTMLHRLayoutHelpers for LayoutJS<HTMLHRElement> {
+impl HTMLHRLayoutHelpers for LayoutDom<HTMLHRElement> {
     #[allow(unsafe_code)]
     fn get_color(&self) -> Option<RGBA> {
         unsafe {

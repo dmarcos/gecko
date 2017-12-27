@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,18 +15,18 @@
 
 using namespace mozilla;
 
-class nsAutoRepeatBoxFrame : public nsButtonBoxFrame
+class nsAutoRepeatBoxFrame final : public nsButtonBoxFrame
 {
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsAutoRepeatBoxFrame)
 
   friend nsIFrame* NS_NewAutoRepeatBoxFrame(nsIPresShell* aPresShell,
                                             nsStyleContext* aContext);
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
   virtual nsresult AttributeChanged(int32_t aNameSpaceID,
-                                    nsIAtom* aAttribute,
+                                    nsAtom* aAttribute,
                                     int32_t aModType) override;
 
   virtual nsresult HandleEvent(nsPresContext* aPresContext,
@@ -42,8 +43,8 @@ public:
 
 protected:
   explicit nsAutoRepeatBoxFrame(nsStyleContext* aContext):
-    nsButtonBoxFrame(aContext) {}
-  
+    nsButtonBoxFrame(aContext, kClassID) {}
+
   void StartRepeat() {
     if (IsActivatedOnHover()) {
       // No initial delay on hover.
@@ -66,7 +67,7 @@ protected:
   }
 
   bool mTrustedEvent;
-  
+
   bool IsActivatedOnHover();
 };
 
@@ -82,7 +83,7 @@ nsresult
 nsAutoRepeatBoxFrame::HandleEvent(nsPresContext* aPresContext,
                                   WidgetGUIEvent* aEvent,
                                   nsEventStatus* aEventStatus)
-{  
+{
   NS_ENSURE_ARG_POINTER(aEventStatus);
   if (nsEventStatus_eConsumeNoDefault == *aEventStatus) {
     return NS_OK;
@@ -120,7 +121,7 @@ nsAutoRepeatBoxFrame::HandleEvent(nsPresContext* aPresContext,
     default:
       break;
   }
-     
+
   return nsButtonBoxFrame::HandleEvent(aPresContext, aEvent, aEventStatus);
 }
 
@@ -138,7 +139,7 @@ nsAutoRepeatBoxFrame::HandlePress(nsPresContext* aPresContext,
   return NS_OK;
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsAutoRepeatBoxFrame::HandleRelease(nsPresContext* aPresContext,
                                     WidgetGUIEvent* aEvent,
                                     nsEventStatus* aEventStatus)
@@ -151,7 +152,7 @@ nsAutoRepeatBoxFrame::HandleRelease(nsPresContext* aPresContext,
 
 nsresult
 nsAutoRepeatBoxFrame::AttributeChanged(int32_t aNameSpaceID,
-                                       nsIAtom* aAttribute,
+                                       nsAtom* aAttribute,
                                        int32_t aModType)
 {
   if (aAttribute == nsGkAtoms::type) {
@@ -167,12 +168,12 @@ nsAutoRepeatBoxFrame::Notify()
 }
 
 void
-nsAutoRepeatBoxFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsAutoRepeatBoxFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   // Ensure our repeat service isn't going... it's possible that a scrollbar can disappear out
   // from under you while you're in the process of scrolling.
   StopRepeat();
-  nsButtonBoxFrame::DestroyFrom(aDestructRoot);
+  nsButtonBoxFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 bool

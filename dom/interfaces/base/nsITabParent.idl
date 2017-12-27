@@ -7,6 +7,8 @@
 
 interface nsIPrincipal;
 
+typedef unsigned long long nsViewID;
+
 [builtinclass, scriptable, uuid(8e49f7b0-1f98-4939-bf91-e9c39cd56434)]
 interface nsITabParent : nsISupports
 {
@@ -69,4 +71,30 @@ interface nsITabParent : nsISupports
    * permissions required to load a document with the given principal.
    */
   void transmitPermissionsForPrincipal(in nsIPrincipal aPrincipal);
+
+  /**
+   * True if any of the frames loaded in the TabChild have registered
+   * an onbeforeunload event handler.
+   */
+  readonly attribute boolean hasBeforeUnload;
+
+  /**
+   * Notify APZ to start autoscrolling.
+   * (aAnchorX, aAnchorY) are the coordinates of the autoscroll anchor,
+   * in CSS coordinates relative to the screen. aScrollId and 
+   * aPresShellId identify the scroll frame that content chose to scroll.
+   * Returns whether we were successfully able to notify APZ.
+   * If this function returns true, APZ (which may live in another process)
+   * may still reject the autoscroll, but it's then APZ's reponsibility
+   * to notify content via an "autoscroll-rejected-by-apz" message.
+   */
+  boolean startApzAutoscroll(in float aAnchorX, in float aAnchorY,
+                             in nsViewID aScrollId, in uint32_t aPresShellId);
+
+  /**
+   * Notify APZ to stop autoscrolling.
+   * aScrollId and aPresShellId identify the scroll frame that is being
+   * autoscrolled.
+   */
+  void stopApzAutoscroll(in nsViewID aScrollId, in uint32_t aPresShellId);
 };

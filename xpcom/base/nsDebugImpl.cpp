@@ -10,11 +10,10 @@
 #include "mozilla/Atomics.h"
 #include "mozilla/Printf.h"
 
+#include "MainThreadUtils.h"
 #include "nsDebugImpl.h"
 #include "nsDebug.h"
-#ifdef MOZ_CRASHREPORTER
-# include "nsExceptionHandler.h"
-#endif
+#include "nsExceptionHandler.h"
 #include "nsString.h"
 #include "nsXULAppAPI.h"
 #include "prprf.h"
@@ -352,8 +351,17 @@ NS_DebugBreak(uint32_t aSeverity, const char* aStr, const char* aExpr,
   if (sMultiprocessDescription) {
     buf.print("%s ", sMultiprocessDescription);
   }
-  buf.print("%d] %s", base::GetCurrentProcId(), nonPIDBuf.buffer);
 
+  bool isMainthread = (NS_IsMainThreadTLSInitialized() && NS_IsMainThread());
+  PRThread *currentThread = PR_GetCurrentThread();
+  const char *currentThreadName = isMainthread
+    ? "Main Thread"
+    : PR_GetThreadName(currentThread);
+  if(currentThreadName) {
+    buf.print("%d, %s] %s", base::GetCurrentProcId(), currentThreadName , nonPIDBuf.buffer);
+  } else {
+    buf.print("%d, Unnamed thread %p] %s", base::GetCurrentProcId(), currentThread, nonPIDBuf.buffer);
+  }
 
   // errors on platforms without a debugdlg ring a bell on stderr
 #if !defined(XP_WIN)
@@ -382,7 +390,6 @@ NS_DebugBreak(uint32_t aSeverity, const char* aStr, const char* aExpr,
       return;
 
     case NS_DEBUG_ABORT: {
-#if defined(MOZ_CRASHREPORTER)
       // Updating crash annotations in the child causes us to do IPC. This can
       // really cause trouble if we're asserting from within IPC code. So we
       // have to do without the annotations in that case.
@@ -396,7 +403,6 @@ NS_DebugBreak(uint32_t aSeverity, const char* aStr, const char* aExpr,
         CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("AbortMessage"),
                                            nsDependentCString(nonPIDBuf.buffer));
       }
-#endif  // MOZ_CRASHREPORTER
 
 #if defined(DEBUG) && defined(_WIN32)
       RealBreak();
@@ -471,6 +477,8 @@ RealBreak()
     ".object_arch armv4t\n"
 #endif
     "BKPT #0");
+#elif defined(__aarch64__)
+  asm("brk #0");
 #elif defined(SOLARIS)
 #if defined(__i386__) || defined(__i386) || defined(__x86_64__)
   asm("int $3");
@@ -549,7 +557,7 @@ Break(const char* aMsg)
   RealBreak();
 #elif defined(__GNUC__) && (defined(__i386__) || defined(__i386) || defined(__x86_64__))
   RealBreak();
-#elif defined(__arm__)
+#elif defined(__arm__) || defined(__aarch64__)
   RealBreak();
 #elif defined(SOLARIS)
   RealBreak();
@@ -602,8 +610,6 @@ NS_ErrorAccordingToNSPR()
 void
 NS_ABORT_OOM(size_t aSize)
 {
-#if defined(MOZ_CRASHREPORTER)
   CrashReporter::AnnotateOOMAllocationSize(aSize);
-#endif
   MOZ_CRASH("OOM");
 }

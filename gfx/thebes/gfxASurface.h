@@ -9,6 +9,8 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/UniquePtr.h"
 
+#include "gfxPoint.h"
+#include "gfxRect.h"
 #include "gfxTypes.h"
 #include "nscore.h"
 #include "nsSize.h"
@@ -17,8 +19,6 @@
 #include "nsStringFwd.h"
 
 class gfxImageSurface;
-struct gfxRect;
-struct gfxPoint;
 
 template <typename T>
 struct already_AddRefed;
@@ -96,11 +96,6 @@ public:
     already_AddRefed<gfxImageSurface> CopyToARGB32ImageSurface();
 
     int CairoStatus();
-
-    /* Provide a stride value that will respect all alignment requirements of
-     * the accelerated image-rendering code.
-     */
-    static int32_t FormatStrideForWidth(gfxImageFormat format, int32_t width);
 
     static gfxContentType ContentFromFormat(gfxImageFormat format);
 

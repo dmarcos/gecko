@@ -8,6 +8,7 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/CSSEditUtils.h"
+#include "mozilla/ManualNAC.h"
 #include "mozilla/StyleSheet.h"
 #include "mozilla/TextEditor.h"
 #include "mozilla/UniquePtr.h"
@@ -16,12 +17,10 @@
 
 #include "nsAttrName.h"
 #include "nsCOMPtr.h"
-#include "nsIContentFilter.h"
 #include "nsICSSLoaderObserver.h"
 #include "nsIDocumentObserver.h"
 #include "nsIDOMElement.h"
 #include "nsIDOMEventListener.h"
-#include "nsIEditor.h"
 #include "nsIEditorMailSupport.h"
 #include "nsIEditorStyleSheets.h"
 #include "nsIEditorUtils.h"
@@ -39,13 +38,14 @@
 class nsDocumentFragment;
 class nsITransferable;
 class nsIClipboard;
+class nsIDOMMouseEvent;
 class nsILinkHandler;
 class nsTableWrapperFrame;
 class nsIDOMRange;
 class nsRange;
 
 namespace mozilla {
-
+class AutoSelectionSetterAfterTableEdit;
 class HTMLEditorEventListener;
 class HTMLEditRules;
 class TextEditRules;
@@ -100,9 +100,6 @@ public:
 
   HTMLEditor();
 
-  virtual HTMLEditor* AsHTMLEditor() override { return this; }
-  virtual const HTMLEditor* AsHTMLEditor() const override { return this; }
-
   bool GetReturnInParagraphCreatesNewParagraph();
   Element* GetSelectionContainer();
 
@@ -122,18 +119,19 @@ public:
                                          nsINode *aNode) override;
   virtual bool IsAcceptableInputEvent(WidgetGUIEvent* aGUIEvent) override;
   virtual already_AddRefed<nsIContent> GetInputEventTargetContent() override;
-  virtual bool IsEditable(nsINode* aNode) override;
   using EditorBase::IsEditable;
   virtual nsresult RemoveAttributeOrEquivalent(
                      Element* aElement,
-                     nsIAtom* aAttribute,
+                     nsAtom* aAttribute,
                      bool aSuppressTransaction) override;
   virtual nsresult SetAttributeOrEquivalent(Element* aElement,
-                                            nsIAtom* aAttribute,
+                                            nsAtom* aAttribute,
                                             const nsAString& aValue,
                                             bool aSuppressTransaction) override;
   using EditorBase::RemoveAttributeOrEquivalent;
   using EditorBase::SetAttributeOrEquivalent;
+
+  nsresult MouseMove(nsIDOMMouseEvent* aMouseEvent);
 
   // nsStubMutationObserver overrides
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTAPPENDED
@@ -153,8 +151,8 @@ public:
   NS_DECL_NSIHTMLINLINETABLEEDITOR
 
   // XXX Following methods are not overriding but defined here...
-  nsresult CopyLastEditableChildStyles(nsIDOMNode* aPreviousBlock,
-                                       nsIDOMNode* aNewBlock,
+  nsresult CopyLastEditableChildStyles(nsINode* aPreviousBlock,
+                                       nsINode* aNewBlock,
                                        Element** aOutBrNode);
 
   nsresult LoadHTML(const nsAString& aInputString);
@@ -186,10 +184,20 @@ public:
   nsresult SetCSSBackgroundColor(const nsAString& aColor);
   nsresult SetHTMLBackgroundColor(const nsAString& aColor);
 
-  // Block methods moved from EditorBase
-  static Element* GetBlockNodeParent(nsINode* aNode);
-  static nsIDOMNode* GetBlockNodeParent(nsIDOMNode* aNode);
-  static Element* GetBlock(nsINode& aNode);
+  /**
+   * GetBlockNodeParent() returns parent or nearest ancestor of aNode if
+   * there is a block parent.  If aAncestorLimiter is not nullptr,
+   * this stops looking for the result.
+   */
+  static Element* GetBlockNodeParent(nsINode* aNode,
+                                     nsINode* aAncestorLimiter = nullptr);
+  /**
+   * GetBlock() returns aNode itself, or parent or nearest ancestor of aNode
+   * if there is a block parent.  If aAncestorLimiter is not nullptr,
+   * this stops looking for the result.
+   */
+  static Element* GetBlock(nsINode& aNode,
+                           nsINode* aAncestorLimiter = nullptr);
 
   void IsNextCharInNodeWhitespace(nsIContent* aContent,
                                   int32_t aOffset,
@@ -218,6 +226,36 @@ public:
   static bool NodeIsBlockStatic(const nsINode* aElement);
   static nsresult NodeIsBlockStatic(nsIDOMNode *aNode, bool *aIsBlock);
 
+  // non-virtual methods of interface methods
+  bool AbsolutePositioningEnabled() const
+  {
+    return mIsAbsolutelyPositioningEnabled;
+  }
+  nsresult GetAbsolutelyPositionedSelectionContainer(nsINode** aContainer);
+  Element* GetPositionedElement() const
+  {
+    return mAbsolutelyPositionedObject;
+  }
+  nsresult GetElementZIndex(Element* aElement, int32_t* aZindex);
+
+  nsresult SetInlineProperty(nsAtom* aProperty,
+                             const nsAString& aAttribute,
+                             const nsAString& aValue);
+  nsresult GetInlineProperty(nsAtom* aProperty,
+                             const nsAString& aAttribute,
+                             const nsAString& aValue,
+                             bool* aFirst,
+                             bool* aAny,
+                             bool* aAll);
+  nsresult GetInlinePropertyWithAttrValue(nsAtom* aProperty,
+                                          const nsAString& aAttr,
+                                          const nsAString& aValue,
+                                          bool* aFirst,
+                                          bool* aAny,
+                                          bool* aAll,
+                                          nsAString& outValue);
+  nsresult RemoveInlineProperty(nsAtom* aProperty,
+                                const nsAString& aAttribute);
 protected:
   virtual ~HTMLEditor();
 
@@ -254,8 +292,8 @@ public:
   /**
    * returns true if aParentTag can contain a child of type aChildTag.
    */
-  virtual bool TagCanContainTag(nsIAtom& aParentTag,
-                                nsIAtom& aChildTag) override;
+  virtual bool TagCanContainTag(nsAtom& aParentTag,
+                                nsAtom& aChildTag) const override;
 
   /**
    * Returns true if aNode is a container.
@@ -282,18 +320,16 @@ public:
   NS_IMETHOD DeleteNode(nsIDOMNode* aNode) override;
   nsresult DeleteText(nsGenericDOMDataNode& aTextNode, uint32_t aOffset,
                       uint32_t aLength);
-  virtual nsresult InsertTextImpl(const nsAString& aStringToInsert,
-                                  nsCOMPtr<nsINode>* aInOutNode,
-                                  int32_t* aInOutOffset,
-                                  nsIDocument* aDoc) override;
+  virtual nsresult
+  InsertTextImpl(nsIDocument& aDocument,
+                 const nsAString& aStringToInsert,
+                 const EditorRawDOMPoint& aPointToInsert,
+                 EditorRawDOMPoint* aPointAfterInsertedString =
+                   nullptr) override;
   NS_IMETHOD_(bool) IsModifiableNode(nsIDOMNode* aNode) override;
   virtual bool IsModifiableNode(nsINode* aNode) override;
 
-  NS_IMETHOD GetIsSelectionEditable(bool* aIsSelectionEditable) override;
-
   NS_IMETHOD SelectAll() override;
-
-  NS_IMETHOD GetRootElement(nsIDOMElement** aRootElement) override;
 
   // nsICSSLoaderObserver
   NS_IMETHOD StyleSheetLoaded(StyleSheet* aSheet,
@@ -302,10 +338,28 @@ public:
   // Utility Routines, not part of public API
   NS_IMETHOD TypedText(const nsAString& aString,
                        ETypingAction aAction) override;
-  nsresult InsertNodeAtPoint(nsIDOMNode* aNode,
-                             nsCOMPtr<nsIDOMNode>* ioParent,
-                             int32_t* ioOffset,
-                             bool aNoEmptyNodes);
+
+  /**
+   * InsertNodeIntoProperAncestor() attempts to insert aNode into the document,
+   * at aPointToInsert.  Checks with strict dtd to see if containment is
+   * allowed.  If not allowed, will attempt to find a parent in the parent
+   * hierarchy of aPointToInsert.GetContainer() that will accept aNode as a
+   * child.  If such a parent is found, will split the document tree from
+   * aPointToInsert up to parent, and then insert aNode. aPointToInsert is then
+   * adjusted to point to the actual location that aNode was inserted at.
+   * aSplitAtEdges specifies if the splitting process is allowed to result in
+   * empty nodes.
+   *
+   * @param aNode             Node to insert.
+   * @param aPointToInsert    Insertion point.
+   * @param aSplitAtEdges     Splitting can result in empty nodes?
+   * @return                  Returns inserted point if succeeded.
+   *                          Otherwise, the result is not set.
+   */
+  EditorDOMPoint
+  InsertNodeIntoProperAncestor(nsIContent& aNode,
+                               const EditorRawDOMPoint& aPointToInsert,
+                               SplitAtEdges aSplitAtEdges);
 
   /**
    * Use this to assure that selection is set after attribute nodes when
@@ -416,7 +470,7 @@ protected:
   virtual void RemoveEventListeners() override;
 
   bool ShouldReplaceRootElement();
-  void ResetRootElementAndEventTarget();
+  void NotifyRootChanged();
   nsresult GetBodyElement(nsIDOMHTMLElement** aBody);
 
   /**
@@ -431,15 +485,13 @@ protected:
    */
   bool SetCaretInTableCell(nsIDOMElement* aElement);
 
-  NS_IMETHOD TabInTable(bool inIsShift, bool* outHandled);
-  already_AddRefed<Element> CreateBR(nsINode* aNode, int32_t aOffset,
-                                     EDirection aSelect = eNone);
-  NS_IMETHOD CreateBR(
-               nsIDOMNode* aNode, int32_t aOffset,
-               nsCOMPtr<nsIDOMNode>* outBRNode,
-               nsIEditor::EDirection aSelect = nsIEditor::eNone) override;
+  nsresult TabInTable(bool inIsShift, bool* outHandled);
 
-  nsresult InsertBR(nsCOMPtr<nsIDOMNode>* outBRNode);
+  /**
+   * InsertBR() inserts a new <br> element at selection.  If there is
+   * non-collapsed selection ranges, the selected ranges is deleted first.
+   */
+  nsresult InsertBR();
 
   // Table Editing (implemented in nsTableEditor.cpp)
 
@@ -537,6 +589,9 @@ protected:
    */
   nsresult SetSelectionAtDocumentStart(Selection* aSelection);
 
+  nsresult GetTableSize(Element* aTable,
+                        int32_t* aRowCount, int32_t* aColCount);
+
   // End of Table Editing utilities
 
   static Element* GetEnclosingTable(nsINode* aNode);
@@ -555,23 +610,16 @@ protected:
    * @param aValue     The value of aAttribute, example: blue in
    *                   <FONT color="blue"> May be null.  Ignored if aAttribute
    *                   is null.
-   * @param aIsSet     [OUT] true if <aProperty aAttribute=aValue> effects
-   *                         aNode.
    * @param outValue   [OUT] the value of the attribute, if aIsSet is true
+   * @return           true if <aProperty aAttribute=aValue> effects
+   *                   aNode.
    *
    * The nsIContent variant returns aIsSet instead of using an out parameter.
    */
   bool IsTextPropertySetByContent(nsINode* aNode,
-                                  nsIAtom* aProperty,
+                                  nsAtom* aProperty,
                                   const nsAString* aAttribute,
                                   const nsAString* aValue,
-                                  nsAString* outValue = nullptr);
-
-  void IsTextPropertySetByContent(nsIDOMNode* aNode,
-                                  nsIAtom* aProperty,
-                                  const nsAString* aAttribute,
-                                  const nsAString* aValue,
-                                  bool& aIsSet,
                                   nsAString* outValue = nullptr);
 
   // Methods for handling plaintext quotations
@@ -618,17 +666,6 @@ protected:
   bool HavePrivateHTMLFlavor(nsIClipboard* clipboard );
   nsresult ParseCFHTML(nsCString& aCfhtml, char16_t** aStuffToPaste,
                        char16_t** aCfcontext);
-  nsresult DoContentFilterCallback(const nsAString& aFlavor,
-                                   nsIDOMDocument* aSourceDoc,
-                                   bool aWillDeleteSelection,
-                                   nsIDOMNode** aFragmentAsNode,
-                                   nsIDOMNode** aFragStartNode,
-                                   int32_t* aFragStartOffset,
-                                   nsIDOMNode** aFragEndNode,
-                                   int32_t* aFragEndOffset,
-                                   nsIDOMNode** aTargetNode,
-                                   int32_t* aTargetOffset,
-                                   bool* aDoContinue);
 
   bool IsInLink(nsIDOMNode* aNode, nsCOMPtr<nsIDOMNode>* outLink = nullptr);
   nsresult StripFormattingNodes(nsIContent& aNode, bool aOnlyList = false);
@@ -641,14 +678,14 @@ protected:
                                       int32_t* outStartOffset,
                                       int32_t* outEndOffset,
                                       bool aTrustedInput);
-  nsresult ParseFragment(const nsAString& aStr, nsIAtom* aContextLocalName,
+  nsresult ParseFragment(const nsAString& aStr, nsAtom* aContextLocalName,
                          nsIDocument* aTargetDoc,
                          dom::DocumentFragment** aFragment, bool aTrustedInput);
   void CreateListOfNodesToPaste(dom::DocumentFragment& aFragment,
                                 nsTArray<OwningNonNull<nsINode>>& outNodeList,
-                                nsINode* aStartNode,
+                                nsINode* aStartContainer,
                                 int32_t aStartOffset,
-                                nsINode* aEndNode,
+                                nsINode* aEndContainer,
                                 int32_t aEndOffset);
   nsresult CreateTagStack(nsTArray<nsString>& aTagStack,
                           nsIDOMNode* aNode);
@@ -672,15 +709,22 @@ protected:
   /**
    * Small utility routine to test if a break node is visible to user.
    */
-  bool IsVisBreak(nsINode* aNode);
+  bool IsVisibleBRElement(nsINode* aNode);
 
   /**
-   * Utility routine to possibly adjust the insertion position when
-   * inserting a block level element.
+   * GetBetterInsertionPointFor() returns better insertion point to insert
+   * aNodeToInsert.
+   *
+   * @param aNodeToInsert       The node to insert.
+   * @param aPointToInsert      A candidate point to insert the node.
+   * @return                    Better insertion point if next visible node
+   *                            is a <br> element and previous visible node
+   *                            is neither none, another <br> element nor
+   *                            different block level element.
    */
-  void NormalizeEOLInsertPosition(nsINode* firstNodeToInsert,
-                                  nsCOMPtr<nsIDOMNode>* insertParentNode,
-                                  int32_t* insertOffset);
+  EditorRawDOMPoint
+  GetBetterInsertionPointFor(nsINode& aNodeToInsert,
+                             const EditorRawDOMPoint& aPointToInsert);
 
   /**
    * Helpers for block transformations.
@@ -710,70 +754,112 @@ protected:
   nsresult SetInlinePropertyOnTextNode(Text& aData,
                                        int32_t aStartOffset,
                                        int32_t aEndOffset,
-                                       nsIAtom& aProperty,
+                                       nsAtom& aProperty,
                                        const nsAString* aAttribute,
                                        const nsAString& aValue);
   nsresult SetInlinePropertyOnNode(nsIContent& aNode,
-                                   nsIAtom& aProperty,
+                                   nsAtom& aProperty,
                                    const nsAString* aAttribute,
                                    const nsAString& aValue);
 
   nsresult PromoteInlineRange(nsRange& aRange);
   nsresult PromoteRangeIfStartsOrEndsInNamedAnchor(nsRange& aRange);
   nsresult SplitStyleAboveRange(nsRange* aRange,
-                                nsIAtom* aProperty,
+                                nsAtom* aProperty,
                                 const nsAString* aAttribute);
   nsresult SplitStyleAbovePoint(nsCOMPtr<nsINode>* aNode, int32_t* aOffset,
-                                nsIAtom* aProperty,
+                                nsAtom* aProperty,
                                 const nsAString* aAttribute,
                                 nsIContent** aOutLeftNode = nullptr,
                                 nsIContent** aOutRightNode = nullptr);
-  nsresult ApplyDefaultProperties();
   nsresult RemoveStyleInside(nsIContent& aNode,
-                             nsIAtom* aProperty,
+                             nsAtom* aProperty,
                              const nsAString* aAttribute,
                              const bool aChildrenOnly = false);
-  nsresult RemoveInlinePropertyImpl(nsIAtom* aProperty,
+  nsresult RemoveInlinePropertyImpl(nsAtom* aProperty,
                                     const nsAString* aAttribute);
 
   bool NodeIsProperty(nsINode& aNode);
   bool IsAtFrontOfNode(nsINode& aNode, int32_t aOffset);
   bool IsAtEndOfNode(nsINode& aNode, int32_t aOffset);
-  bool IsOnlyAttribute(const nsIContent* aElement, const nsAString& aAttribute);
+  bool IsOnlyAttribute(const Element* aElement, const nsAString& aAttribute);
 
   nsresult RemoveBlockContainer(nsIContent& aNode);
 
   nsIContent* GetPriorHTMLSibling(nsINode* aNode);
-  nsresult GetPriorHTMLSibling(nsIDOMNode*inNode,
-                               nsCOMPtr<nsIDOMNode>* outNode);
-  nsIContent* GetPriorHTMLSibling(nsINode* aParent, int32_t aOffset);
-  nsresult GetPriorHTMLSibling(nsIDOMNode* inParent, int32_t inOffset,
-                               nsCOMPtr<nsIDOMNode>* outNode);
 
   nsIContent* GetNextHTMLSibling(nsINode* aNode);
-  nsresult GetNextHTMLSibling(nsIDOMNode* inNode,
-                              nsCOMPtr<nsIDOMNode>* outNode);
-  nsIContent* GetNextHTMLSibling(nsINode* aParent, int32_t aOffset);
-  nsresult GetNextHTMLSibling(nsIDOMNode* inParent, int32_t inOffset,
-                              nsCOMPtr<nsIDOMNode>* outNode);
 
-  nsIContent* GetPriorHTMLNode(nsINode* aNode, bool aNoBlockCrossing = false);
-  nsresult GetPriorHTMLNode(nsIDOMNode* inNode, nsCOMPtr<nsIDOMNode>* outNode,
-                            bool bNoBlockCrossing = false);
-  nsIContent* GetPriorHTMLNode(nsINode* aParent, int32_t aOffset,
-                               bool aNoBlockCrossing = false);
-  nsresult GetPriorHTMLNode(nsIDOMNode* inParent, int32_t inOffset,
-                            nsCOMPtr<nsIDOMNode>* outNode,
-                            bool bNoBlockCrossing = false);
+  /**
+   * GetPreviousEditableHTMLNode*() methods are similar to
+   * EditorBase::GetPreviousEditableNode() but this won't return nodes outside
+   * active editing host.
+   */
+  nsIContent* GetPreviousEditableHTMLNode(nsINode& aNode)
+  {
+    return GetPreviousEditableHTMLNodeInternal(aNode, false);
+  }
+  nsIContent* GetPreviousEditableHTMLNodeInBlock(nsINode& aNode)
+  {
+    return GetPreviousEditableHTMLNodeInternal(aNode, true);
+  }
+  nsIContent* GetPreviousEditableHTMLNode(const EditorRawDOMPoint& aPoint)
+  {
+    return GetPreviousEditableHTMLNodeInternal(aPoint, false);
+  }
+  nsIContent* GetPreviousEditableHTMLNodeInBlock(
+                const EditorRawDOMPoint& aPoint)
+  {
+    return GetPreviousEditableHTMLNodeInternal(aPoint, true);
+  }
 
-  nsIContent* GetNextHTMLNode(nsINode* aNode, bool aNoBlockCrossing = false);
-  nsresult GetNextHTMLNode(nsIDOMNode* inNode, nsCOMPtr<nsIDOMNode>* outNode,
-                           bool bNoBlockCrossing = false);
-  nsIContent* GetNextHTMLNode(nsINode* aParent, int32_t aOffset,
-                              bool aNoBlockCrossing = false);
-  nsresult GetNextHTMLNode(nsIDOMNode* inParent, int32_t inOffset,
-                           nsCOMPtr<nsIDOMNode>* outNode,
-                           bool bNoBlockCrossing = false);
+  /**
+   * GetPreviousEditableHTMLNodeInternal() methods are common implementation
+   * of above methods.  Please don't use this method directly.
+   */
+  nsIContent* GetPreviousEditableHTMLNodeInternal(nsINode& aNode,
+                                                  bool aNoBlockCrossing);
+  nsIContent* GetPreviousEditableHTMLNodeInternal(
+                const EditorRawDOMPoint& aPoint,
+                bool aNoBlockCrossing);
+
+  /**
+   * GetNextEditableHTMLNode*() methods are similar to
+   * EditorBase::GetNextEditableNode() but this won't return nodes outside
+   * active editing host.
+   *
+   * Note that same as EditorBaseGetTextEditableNode(), methods which take
+   * |const EditorRawDOMPoint&| start to search from the node pointed by it.
+   * On the other hand, methods which take |nsINode&| start to search from
+   * next node of aNode.
+   */
+  nsIContent* GetNextEditableHTMLNode(nsINode& aNode)
+  {
+    return GetNextEditableHTMLNodeInternal(aNode, false);
+  }
+  nsIContent* GetNextEditableHTMLNodeInBlock(nsINode& aNode)
+  {
+    return GetNextEditableHTMLNodeInternal(aNode, true);
+  }
+  nsIContent* GetNextEditableHTMLNode(const EditorRawDOMPoint& aPoint)
+  {
+    return GetNextEditableHTMLNodeInternal(aPoint, false);
+  }
+  nsIContent* GetNextEditableHTMLNodeInBlock(
+                const EditorRawDOMPoint& aPoint)
+  {
+    return GetNextEditableHTMLNodeInternal(aPoint, true);
+  }
+
+  /**
+   * GetNextEditableHTMLNodeInternal() methods are common implementation
+   * of above methods.  Please don't use this method directly.
+   */
+  nsIContent* GetNextEditableHTMLNodeInternal(nsINode& aNode,
+                                                  bool aNoBlockCrossing);
+  nsIContent* GetNextEditableHTMLNodeInternal(
+                const EditorRawDOMPoint& aPoint,
+                bool aNoBlockCrossing);
 
   bool IsFirstEditableChild(nsINode* aNode);
   bool IsLastEditableChild(nsINode* aNode);
@@ -783,14 +869,13 @@ protected:
   nsIContent* GetFirstEditableLeaf(nsINode& aNode);
   nsIContent* GetLastEditableLeaf(nsINode& aNode);
 
-  nsresult GetInlinePropertyBase(nsIAtom& aProperty,
+  nsresult GetInlinePropertyBase(nsAtom& aProperty,
                                  const nsAString* aAttribute,
                                  const nsAString* aValue,
                                  bool* aFirst,
                                  bool* aAny,
                                  bool* aAll,
-                                 nsAString* outValue,
-                                 bool aCheckDefaults = true);
+                                 nsAString* outValue);
   bool HasStyleOrIdOrClass(Element* aElement);
   nsresult RemoveElementIfNoStyleOrIdOrClass(Element& aElement);
 
@@ -823,13 +908,35 @@ protected:
                                    bool aClearStyle = true);
 
   nsresult ClearStyle(nsCOMPtr<nsINode>* aNode, int32_t* aOffset,
-                      nsIAtom* aProperty, const nsAString* aAttribute);
+                      nsAtom* aProperty, const nsAString* aAttribute);
 
   void SetElementPosition(Element& aElement, int32_t aX, int32_t aY);
 
-protected:
-  nsTArray<OwningNonNull<nsIContentFilter>> mContentFilters;
+  /**
+   * Reset a selected cell or collapsed selection (the caret) after table
+   * editing.
+   *
+   * @param aTable      A table in the document.
+   * @param aRow        The row ...
+   * @param aCol        ... and column defining the cell where we will try to
+   *                    place the caret.
+   * @param aSelected   If true, we select the whole cell instead of setting
+   *                    caret.
+   * @param aDirection  If cell at (aCol, aRow) is not found, search for
+   *                    previous cell in the same column (aPreviousColumn) or
+   *                    row (ePreviousRow) or don't search for another cell
+   *                    (aNoSearch).  If no cell is found, caret is place just
+   *                    before table; and if that fails, at beginning of
+   *                    document.  Thus we generally don't worry about the
+   *                    return value and can use the
+   *                    AutoSelectionSetterAfterTableEdit stack-based object to
+   *                    insure we reset the caret in a table-editing method.
+   */
+  void SetSelectionAfterTableEdit(nsIDOMElement* aTable,
+                                  int32_t aRow, int32_t aCol,
+                                  int32_t aDirection, bool aSelected);
 
+protected:
   RefPtr<TypeInState> mTypeInState;
 
   bool mCRInParagraphCreatesParagraph;
@@ -847,29 +954,24 @@ protected:
   nsTArray<nsString> mStyleSheetURLs;
   nsTArray<RefPtr<StyleSheet>> mStyleSheets;
 
-  // an array for holding default style settings
-  nsTArray<PropItem*> mDefaultStyles;
-
 protected:
   // ANONYMOUS UTILS
   void RemoveListenerAndDeleteRef(const nsAString& aEvent,
                                   nsIDOMEventListener* aListener,
                                   bool aUseCapture,
-                                  Element* aElement,
-                                  nsIContent* aParentContent,
+                                  ManualNACPtr aElement,
                                   nsIPresShell* aShell);
-  void DeleteRefToAnonymousNode(nsIContent* aContent,
-                                nsIContent* aParentContent,
+  void DeleteRefToAnonymousNode(ManualNACPtr aContent,
                                 nsIPresShell* aShell);
 
-  nsresult ShowResizersInner(nsIDOMElement *aResizedElement);
+  nsresult ShowResizersInner(Element& aResizedElement);
 
   /**
    * Returns the offset of an element's frame to its absolute containing block.
    */
-  nsresult GetElementOrigin(nsIDOMElement* aElement,
+  nsresult GetElementOrigin(Element& aElement,
                             int32_t& aX, int32_t& aY);
-  nsresult GetPositionAndDimensions(nsIDOMElement* aElement,
+  nsresult GetPositionAndDimensions(Element& aElement,
                                     int32_t& aX, int32_t& aY,
                                     int32_t& aW, int32_t& aH,
                                     int32_t& aBorderLeft,
@@ -880,6 +982,8 @@ protected:
   bool IsInObservedSubtree(nsIDocument* aDocument,
                            nsIContent* aContainer,
                            nsIContent* aChild);
+
+  void UpdateRootElement();
 
   // resizing
   bool mIsObjectResizingEnabled;
@@ -900,19 +1004,19 @@ protected:
   bool mIsInlineTableEditingEnabled;
 
   // resizing
-  nsCOMPtr<Element> mTopLeftHandle;
-  nsCOMPtr<Element> mTopHandle;
-  nsCOMPtr<Element> mTopRightHandle;
-  nsCOMPtr<Element> mLeftHandle;
-  nsCOMPtr<Element> mRightHandle;
-  nsCOMPtr<Element> mBottomLeftHandle;
-  nsCOMPtr<Element> mBottomHandle;
-  nsCOMPtr<Element> mBottomRightHandle;
+  ManualNACPtr mTopLeftHandle;
+  ManualNACPtr mTopHandle;
+  ManualNACPtr mTopRightHandle;
+  ManualNACPtr mLeftHandle;
+  ManualNACPtr mRightHandle;
+  ManualNACPtr mBottomLeftHandle;
+  ManualNACPtr mBottomHandle;
+  ManualNACPtr mBottomRightHandle;
 
   nsCOMPtr<Element> mActivatedHandle;
 
-  nsCOMPtr<Element> mResizingShadow;
-  nsCOMPtr<Element> mResizingInfo;
+  ManualNACPtr mResizingShadow;
+  ManualNACPtr mResizingInfo;
 
   nsCOMPtr<Element> mResizedObject;
 
@@ -943,18 +1047,17 @@ protected:
 
   nsresult SetAllResizersPosition();
 
-  already_AddRefed<Element> CreateResizer(int16_t aLocation,
-                                          nsIDOMNode* aParentNode);
+  ManualNACPtr CreateResizer(int16_t aLocation, nsIContent& aParentContent);
   void SetAnonymousElementPosition(int32_t aX, int32_t aY,
                                    Element* aResizer);
 
-  already_AddRefed<Element> CreateShadow(nsIDOMNode* aParentNode,
-                                         nsIDOMElement* aOriginalObject);
+  ManualNACPtr CreateShadow(nsIContent& aParentContent,
+                            Element& aOriginalObject);
   nsresult SetShadowPosition(Element* aShadow, Element* aOriginalObject,
                              int32_t aOriginalObjectX,
                              int32_t aOriginalObjectY);
 
-  already_AddRefed<Element> CreateResizingInfo(nsIDOMNode* aParentNode);
+  ManualNACPtr CreateResizingInfo(nsIContent& aParentContent);
   nsresult SetResizingInfoPosition(int32_t aX, int32_t aY,
                                    int32_t aW, int32_t aH);
 
@@ -966,7 +1069,6 @@ protected:
   int32_t GetNewResizingHeight(int32_t aX, int32_t aY);
   void HideShadowAndInfo();
   void SetFinalSize(int32_t aX, int32_t aY);
-  void DeleteRefToAnonymousNode(nsIDOMNode* aNode);
   void SetResizeIncrements(int32_t aX, int32_t aY, int32_t aW, int32_t aH,
                            bool aPreserveRatio);
   void HideAnonymousEditingUIs();
@@ -983,12 +1085,12 @@ protected:
   int32_t mPositionedObjectBorderTop;
 
   nsCOMPtr<Element> mAbsolutelyPositionedObject;
-  nsCOMPtr<Element> mGrabber;
-  nsCOMPtr<Element> mPositioningShadow;
+  ManualNACPtr mGrabber;
+  ManualNACPtr mPositioningShadow;
 
   int32_t mGridSize;
 
-  already_AddRefed<Element> CreateGrabber(nsINode* aParentNode);
+  ManualNACPtr CreateGrabber(nsIContent& aParentContent);
   nsresult StartMoving(nsIDOMElement* aHandle);
   nsresult SetFinalPosition(int32_t aX, int32_t aY);
   void AddPositioningOffset(int32_t& aX, int32_t& aY);
@@ -999,15 +1101,17 @@ protected:
                                          nsAString& aReturn);
 
   // inline table editing
-  nsCOMPtr<nsIDOMElement> mInlineEditedCell;
+  RefPtr<Element> mInlineEditedCell;
 
-  RefPtr<Element> mAddColumnBeforeButton;
-  RefPtr<Element> mRemoveColumnButton;
-  RefPtr<Element> mAddColumnAfterButton;
+  ManualNACPtr mAddColumnBeforeButton;
+  ManualNACPtr mRemoveColumnButton;
+  ManualNACPtr mAddColumnAfterButton;
 
-  RefPtr<Element> mAddRowBeforeButton;
-  RefPtr<Element> mRemoveRowButton;
-  RefPtr<Element> mAddRowAfterButton;
+  ManualNACPtr mAddRowBeforeButton;
+  ManualNACPtr mRemoveRowButton;
+  ManualNACPtr mAddRowAfterButton;
+
+  nsresult ShowInlineTableEditingUI(Element* aCell);
 
   void AddMouseClickListener(Element* aElement);
   void RemoveMouseClickListener(Element* aElement);
@@ -1017,6 +1121,7 @@ protected:
   ParagraphSeparator mDefaultParagraphSeparator;
 
 public:
+  friend class AutoSelectionSetterAfterTableEdit;
   friend class HTMLEditorEventListener;
   friend class HTMLEditRules;
   friend class TextEditRules;
@@ -1024,16 +1129,16 @@ public:
 
 private:
   bool IsSimpleModifiableNode(nsIContent* aContent,
-                              nsIAtom* aProperty,
+                              nsAtom* aProperty,
                               const nsAString* aAttribute,
                               const nsAString* aValue);
   nsresult SetInlinePropertyOnNodeImpl(nsIContent& aNode,
-                                       nsIAtom& aProperty,
+                                       nsAtom& aProperty,
                                        const nsAString* aAttribute,
                                        const nsAString& aValue);
   typedef enum { eInserted, eAppended } InsertedOrAppended;
   void DoContentInserted(nsIDocument* aDocument, nsIContent* aContainer,
-                         nsIContent* aChild, int32_t aIndexInContainer,
+                         nsIContent* aChild,
                          InsertedOrAppended aInsertedOrAppended);
   already_AddRefed<Element> GetElementOrParentByTagName(
                               const nsAString& aTagName, nsINode* aNode);
@@ -1041,25 +1146,38 @@ private:
                               const nsAString& aTagName);
   /**
    * Returns an anonymous Element of type aTag,
-   * child of aParentNode. If aIsCreatedHidden is true, the class
+   * child of aParentContent. If aIsCreatedHidden is true, the class
    * "hidden" is added to the created element. If aAnonClass is not
    * the empty string, it becomes the value of the attribute "_moz_anonclass"
    * @return a Element
    * @param aTag             [IN] desired type of the element to create
-   * @param aParentNode      [IN] the parent node of the created anonymous
+   * @param aParentContent   [IN] the parent node of the created anonymous
    *                              element
    * @param aAnonClass       [IN] contents of the _moz_anonclass attribute
    * @param aIsCreatedHidden [IN] a boolean specifying if the class "hidden"
    *                              is to be added to the created anonymous
    *                              element
    */
-  already_AddRefed<Element> CreateAnonymousElement(
-                              nsIAtom* aTag,
-                              nsIDOMNode* aParentNode,
-                              const nsAString& aAnonClass,
-                              bool aIsCreatedHidden);
+  ManualNACPtr CreateAnonymousElement(nsAtom* aTag,
+                                      nsIContent& aParentContent,
+                                      const nsAString& aAnonClass,
+                                      bool aIsCreatedHidden);
 };
 
 } // namespace mozilla
+
+mozilla::HTMLEditor*
+nsIEditor::AsHTMLEditor()
+{
+  return static_cast<mozilla::EditorBase*>(this)->mIsHTMLEditorClass ?
+           static_cast<mozilla::HTMLEditor*>(this) : nullptr;
+}
+
+const mozilla::HTMLEditor*
+nsIEditor::AsHTMLEditor() const
+{
+  return static_cast<const mozilla::EditorBase*>(this)->mIsHTMLEditorClass ?
+           static_cast<const mozilla::HTMLEditor*>(this) : nullptr;
+}
 
 #endif // #ifndef mozilla_HTMLEditor_h

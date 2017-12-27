@@ -30,10 +30,11 @@ function createInput(type) {
   return input;
 }
 
-function doTest([untested, tested]) {
+function doTest([html, dom, cssom, uievents, touchevents]) {
   var idlArray = new IdlArray();
-  idlArray.add_untested_idls(untested);
-  idlArray.add_idls(tested);
+  var svg = "interface SVGElement : Element {};";
+  idlArray.add_untested_idls(dom + svg + cssom + uievents + touchevents);
+  idlArray.add_idls(html);
 
   idlArray.add_objects({
     NodeList: ['document.getElementsByName("name")'],
@@ -204,7 +205,6 @@ function doTest([untested, tested]) {
     MessageEvent: ['new MessageEvent("message", { data: 5 })'],
     MessageChannel: [],
     MessagePort: [],
-    HTMLAppletElement: ['document.createElement("applet")'],
     HTMLMarqueeElement: ['document.createElement("marquee")'],
     HTMLFrameSetElement: ['document.createElement("frameset")'],
     HTMLFrameElement: ['document.createElement("frame")'],
@@ -227,8 +227,11 @@ function waitForLoad() {
 
 promise_test(function() {
   // Have to wait for onload
-  return Promise.all([fetchData("resources/untested-interfaces.idl"),
-                      fetchData("resources/interfaces.idl"),
+  return Promise.all([fetchData("/interfaces/html.idl"),
+                      fetchData("/interfaces/dom.idl"),
+                      fetchData("/interfaces/cssom.idl"),
+                      fetchData("/interfaces/touchevents.idl"),
+                      fetchData("/interfaces/uievents.idl"),
                       waitForLoad()])
                 .then(doTest);
 }, "Test driver");

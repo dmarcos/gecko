@@ -9,6 +9,7 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/BufferList.h"
+#include "mozilla/MemoryReporting.h"
 
 #include <stdint.h>
 
@@ -221,9 +222,9 @@ class MOZ_NON_MEMMOVABLE JS_PUBLIC_API(JSStructuredCloneData) :
     static const size_t kInitialCapacity = 4096;
     static const size_t kStandardCapacity = 4096;
 
-    const JSStructuredCloneCallbacks* callbacks_;
-    void* closure_;
-    OwnTransferablePolicy ownTransferables_;
+    const JSStructuredCloneCallbacks* callbacks_ = nullptr;
+    void* closure_ = nullptr;
+    OwnTransferablePolicy ownTransferables_ = OwnTransferablePolicy::NoTransferables;
     js::SharedArrayRawBufferRefs refsHeld_;
 
     void setOptionalCallbacks(const JSStructuredCloneCallbacks* callbacks,
@@ -339,6 +340,16 @@ class JS_PUBLIC_API(JSAutoStructuredCloneBuffer) {
                JS::CloneDataPolicy cloneDataPolicy,
                const JSStructuredCloneCallbacks* optionalCallbacks=nullptr, void* closure=nullptr);
 
+    size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf)
+    {
+        return data_.SizeOfExcludingThis(mallocSizeOf);
+    }
+
+    size_t sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf)
+    {
+        return mallocSizeOf(this) + sizeOfExcludingThis(mallocSizeOf);
+    }
+
   private:
     // Copy and assignment are not supported.
     JSAutoStructuredCloneBuffer(const JSAutoStructuredCloneBuffer& other) = delete;
@@ -353,7 +364,7 @@ class JS_PUBLIC_API(JSAutoStructuredCloneBuffer) {
 #define JS_SCERR_TRANSFERABLE 1
 #define JS_SCERR_DUP_TRANSFERABLE 2
 #define JS_SCERR_UNSUPPORTED_TYPE 3
-#define JS_SCERR_SAB_TRANSFERABLE 4
+#define JS_SCERR_SHMEM_TRANSFERABLE 4
 
 JS_PUBLIC_API(bool)
 JS_ReadUint32Pair(JSStructuredCloneReader* r, uint32_t* p1, uint32_t* p2);

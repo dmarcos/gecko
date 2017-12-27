@@ -19,7 +19,7 @@
 
 #include "jsatominlines.h"
 #include "jscntxtinlines.h"
-#include "jsgcinlines.h"
+#include "gc/Marking-inl.h"
 
 namespace js {
 
@@ -38,7 +38,7 @@ AutoKeepShapeTables::~AutoKeepShapeTables()
 }
 
 inline
-StackBaseShape::StackBaseShape(JSContext* cx, const Class* clasp, uint32_t objectFlags)
+StackBaseShape::StackBaseShape(const Class* clasp, uint32_t objectFlags)
   : flags(objectFlags),
     clasp(clasp)
 {}
@@ -69,17 +69,19 @@ Shape::maybeCreateTableForLookup(JSContext* cx)
 template<MaybeAdding Adding>
 /* static */ inline bool
 Shape::search(JSContext* cx, Shape* start, jsid id, const AutoKeepShapeTables& keep,
-              Shape** pshape, ShapeTable::Entry** pentry)
+              Shape** pshape, ShapeTable** ptable, ShapeTable::Entry** pentry)
 {
     if (start->inDictionary()) {
         ShapeTable* table = start->ensureTableForDictionary(cx, keep);
         if (!table)
             return false;
+        *ptable = table;
         *pentry = &table->search<Adding>(id, keep);
         *pshape = (*pentry)->shape();
         return true;
     }
 
+    *ptable = nullptr;
     *pentry = nullptr;
     *pshape = Shape::search<Adding>(cx, start, id);
     return true;
@@ -128,6 +130,63 @@ Shape::updateBaseShapeAfterMovingGC()
     BaseShape* base = base_;
     if (IsForwarded(base))
         base_.unsafeSet(Forwarded(base));
+}
+
+static inline void
+GetterSetterWriteBarrierPost(AccessorShape* shape)
+{
+    // If the shape contains any nursery pointers then add it to a vector on the
+    // zone that we fixup on minor GC. Prevent this vector growing too large
+    // since we don't tolerate OOM here.
+
+    static const size_t MaxShapeVectorLength = 5000;
+
+    MOZ_ASSERT(shape);
+
+    if (!(shape->hasGetterObject() && IsInsideNursery(shape->getterObject())) &&
+        !(shape->hasSetterObject() && IsInsideNursery(shape->setterObject())))
+    {
+        return;
+    }
+
+    auto& nurseryShapes = shape->zone()->nurseryShapes();
+
+    {
+        AutoEnterOOMUnsafeRegion oomUnsafe;
+        if (!nurseryShapes.append(shape))
+            oomUnsafe.crash("GetterSetterWriteBarrierPost");
+    }
+
+    auto& storeBuffer = shape->runtimeFromActiveCooperatingThread()->gc.storeBuffer();
+    if (nurseryShapes.length() == 1) {
+        storeBuffer.putGeneric(NurseryShapesRef(shape->zone()));
+    } else if (nurseryShapes.length() == MaxShapeVectorLength) {
+        storeBuffer.setAboutToOverflow(JS::gcreason::FULL_SHAPE_BUFFER);
+    }
+}
+
+inline
+AccessorShape::AccessorShape(const StackShape& other, uint32_t nfixed)
+  : Shape(other, nfixed),
+    rawGetter(other.rawGetter),
+    rawSetter(other.rawSetter)
+{
+    MOZ_ASSERT(getAllocKind() == gc::AllocKind::ACCESSOR_SHAPE);
+    GetterSetterWriteBarrierPost(this);
+}
+
+inline void
+Shape::initDictionaryShape(const StackShape& child, uint32_t nfixed, GCPtrShape* dictp)
+{
+    if (child.isAccessorShape())
+        new (this) AccessorShape(child, nfixed);
+    else
+        new (this) Shape(child, nfixed);
+    this->flags |= IN_DICTIONARY;
+
+    this->listp = nullptr;
+    if (dictp)
+        insertIntoDictionary(dictp);
 }
 
 template<class ObjectSubclass>
@@ -331,6 +390,48 @@ Shape::searchNoHashify(Shape* start, jsid id)
     }
 
     return start->searchLinear(id);
+}
+
+/* static */ MOZ_ALWAYS_INLINE Shape*
+NativeObject::addDataProperty(JSContext* cx, HandleNativeObject obj, HandleId id,
+                              uint32_t slot, unsigned attrs)
+{
+    MOZ_ASSERT(!JSID_IS_VOID(id));
+    MOZ_ASSERT(obj->uninlinedNonProxyIsExtensible());
+    MOZ_ASSERT(!obj->containsPure(id));
+
+    AutoKeepShapeTables keep(cx);
+    ShapeTable* table = nullptr;
+    ShapeTable::Entry* entry = nullptr;
+    if (obj->inDictionaryMode()) {
+        table = obj->lastProperty()->ensureTableForDictionary(cx, keep);
+        if (!table)
+            return nullptr;
+        entry = &table->search<MaybeAdding::Adding>(id, keep);
+    }
+
+    return addDataPropertyInternal(cx, obj, id, slot, attrs, table, entry, keep);
+}
+
+/* static */ MOZ_ALWAYS_INLINE Shape*
+NativeObject::addAccessorProperty(JSContext* cx, HandleNativeObject obj, HandleId id,
+                                  GetterOp getter, SetterOp setter, unsigned attrs)
+{
+    MOZ_ASSERT(!JSID_IS_VOID(id));
+    MOZ_ASSERT(obj->uninlinedNonProxyIsExtensible());
+    MOZ_ASSERT(!obj->containsPure(id));
+
+    AutoKeepShapeTables keep(cx);
+    ShapeTable* table = nullptr;
+    ShapeTable::Entry* entry = nullptr;
+    if (obj->inDictionaryMode()) {
+        table = obj->lastProperty()->ensureTableForDictionary(cx, keep);
+        if (!table)
+            return nullptr;
+        entry = &table->search<MaybeAdding::Adding>(id, keep);
+    }
+
+    return addAccessorPropertyInternal(cx, obj, id, getter, setter, attrs, table, entry, keep);
 }
 
 } /* namespace js */

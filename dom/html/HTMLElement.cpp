@@ -18,7 +18,8 @@ public:
   virtual ~HTMLElement();
 
   virtual nsresult Clone(mozilla::dom::NodeInfo* aNodeInfo,
-                         nsINode** aResult) const override;
+                         nsINode** aResult,
+                         bool aPreallocateChildren) const override;
 
 protected:
   virtual JSObject* WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
@@ -49,6 +50,15 @@ HTMLElement::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto)
 nsGenericHTMLElement*
 NS_NewHTMLElement(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
                   mozilla::dom::FromParser aFromParser)
+{
+  return new mozilla::dom::HTMLElement(aNodeInfo);
+}
+
+// Distinct from the above in order to have function pointer that compared unequal
+// to a function pointer to the above.
+nsGenericHTMLElement*
+NS_NewCustomElement(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
+                    mozilla::dom::FromParser aFromParser)
 {
   return new mozilla::dom::HTMLElement(aNodeInfo);
 }

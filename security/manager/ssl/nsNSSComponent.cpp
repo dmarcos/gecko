@@ -8,6 +8,7 @@
 
 #include "ExtendedValidation.h"
 #include "NSSCertDBTrustDomain.h"
+#include "PKCS11ModuleDB.h"
 #include "ScopedNSSTypes.h"
 #include "SharedSSLState.h"
 #include "cert.h"
@@ -24,6 +25,7 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Unused.h"
+#include "mozilla/Vector.h"
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsCRT.h"
 #include "nsClientAuthRemember.h"
@@ -54,10 +56,7 @@
 #include "ssl.h"
 #include "sslerr.h"
 #include "sslproto.h"
-
-#ifndef MOZ_NO_SMART_CARDS
-#include "nsSmartCardMonitor.h"
-#endif
+#include "prmem.h"
 
 #ifdef XP_WIN
 #include "mozilla/WindowsVersion.h"
@@ -81,16 +80,15 @@ int nsNSSComponent::mInstanceCount = 0;
 // to ensure that NSS is initialized.
 bool EnsureNSSInitializedChromeOrContent()
 {
+  static Atomic<bool> initialized(false);
+
+  if (initialized) {
+    return true;
+  }
+
   // If this is not the main thread (i.e. probably a worker) then forward this
   // call to the main thread.
   if (!NS_IsMainThread()) {
-    static Atomic<bool> initialized(false);
-
-    // Cache the result to dispatch to the main thread only once per worker.
-    if (initialized) {
-      return true;
-    }
-
     nsCOMPtr<nsIThread> mainThread;
     nsresult rv = NS_GetMainThread(getter_AddRefs(mainThread));
     if (NS_FAILED(rv)) {
@@ -98,11 +96,12 @@ bool EnsureNSSInitializedChromeOrContent()
     }
 
     // Forward to the main thread synchronously.
-    mozilla::SyncRunnable::DispatchToThread(mainThread,
-      new SyncRunnable(NS_NewRunnableFunction([]() {
-        initialized = EnsureNSSInitializedChromeOrContent();
-      }))
-    );
+    mozilla::SyncRunnable::DispatchToThread(
+      mainThread,
+      new SyncRunnable(
+        NS_NewRunnableFunction("EnsureNSSInitializedChromeOrContent", []() {
+          EnsureNSSInitializedChromeOrContent();
+        })));
 
     return initialized;
   }
@@ -112,10 +111,12 @@ bool EnsureNSSInitializedChromeOrContent()
     if (!nss) {
       return false;
     }
+    initialized = true;
     return true;
   }
 
   if (NSS_IsInitialized()) {
+    initialized = true;
     return true;
   }
 
@@ -128,6 +129,7 @@ bool EnsureNSSInitializedChromeOrContent()
   }
 
   mozilla::psm::DisableMD5();
+  initialized = true;
   return true;
 }
 
@@ -195,11 +197,11 @@ GetRevocationBehaviorFromPrefs(/*out*/ CertVerifier::OcspDownloadConfig* odc,
 }
 
 nsNSSComponent::nsNSSComponent()
-  : mutex("nsNSSComponent.mutex")
+  : mLoadableRootsLoadedMonitor("nsNSSComponent.mLoadableRootsLoadedMonitor")
+  , mLoadableRootsLoaded(false)
+  , mLoadableRootsLoadedResult(NS_ERROR_FAILURE)
+  , mMutex("nsNSSComponent.mMutex")
   , mNSSInitialized(false)
-#ifndef MOZ_NO_SMART_CARDS
-  , mThreadList(nullptr)
-#endif
 {
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("nsNSSComponent::ctor\n"));
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
@@ -230,13 +232,12 @@ nsNSSComponent::PIPBundleFormatStringFromName(const char* name,
                                               uint32_t numParams,
                                               nsAString& outString)
 {
+  MutexAutoLock lock(mMutex);
   nsresult rv = NS_ERROR_FAILURE;
 
   if (mPIPNSSBundle && name) {
-    nsXPIDLString result;
-    rv = mPIPNSSBundle->FormatStringFromName(NS_ConvertASCIItoUTF16(name).get(),
-                                             params, numParams,
-                                             getter_Copies(result));
+    nsAutoString result;
+    rv = mPIPNSSBundle->FormatStringFromName(name, params, numParams, result);
     if (NS_SUCCEEDED(rv)) {
       outString = result;
     }
@@ -247,13 +248,13 @@ nsNSSComponent::PIPBundleFormatStringFromName(const char* name,
 NS_IMETHODIMP
 nsNSSComponent::GetPIPNSSBundleString(const char* name, nsAString& outString)
 {
+  MutexAutoLock lock(mMutex);
   nsresult rv = NS_ERROR_FAILURE;
 
   outString.SetLength(0);
   if (mPIPNSSBundle && name) {
-    nsXPIDLString result;
-    rv = mPIPNSSBundle->GetStringFromName(NS_ConvertASCIItoUTF16(name).get(),
-                                          getter_Copies(result));
+    nsAutoString result;
+    rv = mPIPNSSBundle->GetStringFromName(name, result);
     if (NS_SUCCEEDED(rv)) {
       outString = result;
       rv = NS_OK;
@@ -266,13 +267,13 @@ nsNSSComponent::GetPIPNSSBundleString(const char* name, nsAString& outString)
 NS_IMETHODIMP
 nsNSSComponent::GetNSSBundleString(const char* name, nsAString& outString)
 {
+  MutexAutoLock lock(mMutex);
   nsresult rv = NS_ERROR_FAILURE;
 
   outString.SetLength(0);
   if (mNSSErrorsBundle && name) {
-    nsXPIDLString result;
-    rv = mNSSErrorsBundle->GetStringFromName(NS_ConvertASCIItoUTF16(name).get(),
-                                             getter_Copies(result));
+    nsAutoString result;
+    rv = mNSSErrorsBundle->GetStringFromName(name, result);
     if (NS_SUCCEEDED(rv)) {
       outString = result;
       rv = NS_OK;
@@ -281,64 +282,6 @@ nsNSSComponent::GetNSSBundleString(const char* name, nsAString& outString)
 
   return rv;
 }
-
-#ifndef MOZ_NO_SMART_CARDS
-void
-nsNSSComponent::LaunchSmartCardThreads()
-{
-  nsNSSShutDownPreventionLock locker;
-  {
-    SECMODModuleList* list;
-    SECMODListLock* lock = SECMOD_GetDefaultModuleListLock();
-    if (!lock) {
-        MOZ_LOG(gPIPNSSLog, LogLevel::Error,
-               ("Couldn't get the module list lock, can't launch smart card threads\n"));
-        return;
-    }
-    SECMOD_GetReadLock(lock);
-    list = SECMOD_GetDefaultModuleList();
-
-    while (list) {
-      SECMODModule* module = list->module;
-      LaunchSmartCardThread(module);
-      list = list->next;
-    }
-    SECMOD_ReleaseReadLock(lock);
-  }
-}
-
-NS_IMETHODIMP
-nsNSSComponent::LaunchSmartCardThread(SECMODModule* module)
-{
-  SmartCardMonitoringThread* newThread;
-  if (SECMOD_HasRemovableSlots(module)) {
-    if (!mThreadList) {
-      mThreadList = new SmartCardThreadList();
-    }
-    newThread = new SmartCardMonitoringThread(module);
-    // newThread is adopted by the add.
-    return mThreadList->Add(newThread);
-  }
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsNSSComponent::ShutdownSmartCardThread(SECMODModule* module)
-{
-  if (!mThreadList) {
-    return NS_OK;
-  }
-  mThreadList->Remove(module);
-  return NS_OK;
-}
-
-void
-nsNSSComponent::ShutdownSmartCardThreads()
-{
-  delete mThreadList;
-  mThreadList = nullptr;
-}
-#endif // MOZ_NO_SMART_CARDS
 
 #ifdef XP_WIN
 static bool
@@ -601,6 +544,7 @@ nsresult
 nsNSSComponent::MaybeImportFamilySafetyRoot(PCCERT_CONTEXT certificate,
                                             bool& wasFamilySafetyRoot)
 {
+  MutexAutoLock lock(mMutex);
   MOZ_ASSERT(NS_IsMainThread());
   if (!NS_IsMainThread()) {
     return NS_ERROR_NOT_SAME_THREAD;
@@ -625,8 +569,8 @@ nsNSSComponent::MaybeImportFamilySafetyRoot(PCCERT_CONTEXT certificate,
       0,
       0
     };
-    if (CERT_ChangeCertTrust(nullptr, nssCertificate.get(), &trust)
-          != SECSuccess) {
+    if (ChangeCertTrustWithPossibleAuthentication(nssCertificate, trust,
+                                                  nullptr) != SECSuccess) {
       MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
               ("couldn't trust certificate for TLS server auth"));
       return NS_ERROR_FAILURE;
@@ -695,6 +639,7 @@ nsNSSComponent::LoadFamilySafetyRoot()
 void
 nsNSSComponent::UnloadFamilySafetyRoot()
 {
+  MutexAutoLock lock(mMutex);
   MOZ_ASSERT(NS_IsMainThread());
   if (!NS_IsMainThread()) {
     return;
@@ -712,8 +657,8 @@ nsNSSComponent::UnloadFamilySafetyRoot()
   // they're the same. To work around this, we set a non-zero flag to ensure
   // that the trust will get updated.
   CERTCertTrust trust = { CERTDB_USER, 0, 0 };
-  if (CERT_ChangeCertTrust(nullptr, mFamilySafetyRoot.get(), &trust)
-        != SECSuccess) {
+  if (ChangeCertTrustWithPossibleAuthentication(mFamilySafetyRoot, trust,
+                                                nullptr) != SECSuccess) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
             ("couldn't untrust certificate for TLS server auth"));
   }
@@ -829,7 +774,7 @@ CertIsTrustAnchorForTLSServerAuth(PCCERT_CONTEXT certificate)
 }
 
 void
-nsNSSComponent::UnloadEnterpriseRoots()
+nsNSSComponent::UnloadEnterpriseRoots(const MutexAutoLock& /*proof of lock*/)
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (!NS_IsMainThread()) {
@@ -855,7 +800,9 @@ nsNSSComponent::UnloadEnterpriseRoots()
               ("library failure: CERTCertListNode null or lacks cert"));
       continue;
     }
-    if (CERT_ChangeCertTrust(nullptr, n->cert, &trust) != SECSuccess) {
+    UniqueCERTCertificate cert(CERT_DupCertificate(n->cert));
+    if (ChangeCertTrustWithPossibleAuthentication(cert, trust, nullptr)
+          != SECSuccess) {
       MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
               ("couldn't untrust certificate for TLS server auth"));
     }
@@ -867,13 +814,14 @@ nsNSSComponent::UnloadEnterpriseRoots()
 NS_IMETHODIMP
 nsNSSComponent::GetEnterpriseRoots(nsIX509CertList** enterpriseRoots)
 {
+  nsNSSShutDownPreventionLock lock;
+  MutexAutoLock nsNSSComponentLock(mMutex);
   MOZ_ASSERT(NS_IsMainThread());
   if (!NS_IsMainThread()) {
     return NS_ERROR_NOT_SAME_THREAD;
   }
   NS_ENSURE_ARG_POINTER(enterpriseRoots);
 
-  nsNSSShutDownPreventionLock lock;
   // nsNSSComponent isn't a nsNSSShutDownObject, so we can't check
   // isAlreadyShutDown(). However, since mEnterpriseRoots is cleared when NSS
   // shuts down, we can use that as a proxy for checking for NSS shutdown.
@@ -904,11 +852,12 @@ void
 nsNSSComponent::MaybeImportEnterpriseRoots()
 {
 #ifdef XP_WIN
+  MutexAutoLock lock(mMutex);
   MOZ_ASSERT(NS_IsMainThread());
   if (!NS_IsMainThread()) {
     return;
   }
-  UnloadEnterpriseRoots();
+  UnloadEnterpriseRoots(lock);
   bool importEnterpriseRoots = Preferences::GetBool(kEnterpriseRootModePref,
                                                     false);
   if (!importEnterpriseRoots) {
@@ -923,9 +872,11 @@ nsNSSComponent::MaybeImportEnterpriseRoots()
     return;
   }
 
-  ImportEnterpriseRootsForLocation(CERT_SYSTEM_STORE_LOCAL_MACHINE);
-  ImportEnterpriseRootsForLocation(CERT_SYSTEM_STORE_LOCAL_MACHINE_GROUP_POLICY);
-  ImportEnterpriseRootsForLocation(CERT_SYSTEM_STORE_LOCAL_MACHINE_ENTERPRISE);
+  ImportEnterpriseRootsForLocation(CERT_SYSTEM_STORE_LOCAL_MACHINE, lock);
+  ImportEnterpriseRootsForLocation(CERT_SYSTEM_STORE_LOCAL_MACHINE_GROUP_POLICY,
+                                   lock);
+  ImportEnterpriseRootsForLocation(CERT_SYSTEM_STORE_LOCAL_MACHINE_ENTERPRISE,
+                                   lock);
 #endif // XP_WIN
 }
 
@@ -940,7 +891,8 @@ nsNSSComponent::MaybeImportEnterpriseRoots()
 //   CERT_SYSTEM_STORE_LOCAL_MACHINE_ENTERPRISE
 //     (for HKLM\SOFTWARE\Microsoft\EnterpriseCertificates\Root\Certificates)
 void
-nsNSSComponent::ImportEnterpriseRootsForLocation(DWORD locationFlag)
+nsNSSComponent::ImportEnterpriseRootsForLocation(
+  DWORD locationFlag, const MutexAutoLock& /*proof of lock*/)
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (!NS_IsMainThread()) {
@@ -1011,8 +963,8 @@ nsNSSComponent::ImportEnterpriseRootsForLocation(DWORD locationFlag)
       MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("couldn't add cert to list"));
       continue;
     }
-    if (CERT_ChangeCertTrust(nullptr, nssCertificate.get(), &trust)
-          != SECSuccess) {
+    if (ChangeCertTrustWithPossibleAuthentication(nssCertificate, trust,
+                                                  nullptr) != SECSuccess) {
       MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
               ("couldn't trust certificate for TLS server auth"));
     }
@@ -1025,63 +977,276 @@ nsNSSComponent::ImportEnterpriseRootsForLocation(DWORD locationFlag)
 }
 #endif // XP_WIN
 
-void
-nsNSSComponent::LoadLoadableRoots()
+class LoadLoadableRootsTask final : public Runnable
+                                  , public nsNSSShutDownObject
 {
-  nsNSSShutDownPreventionLock locker;
-  SECMODModule* RootsModule = nullptr;
-
-  // In the past we used SECMOD_AddNewModule to load our module containing
-  // root CA certificates. This caused problems, refer to bug 176501.
-  // On startup, we fix our database and clean any stored module reference,
-  // and will use SECMOD_LoadUserModule to temporarily load it
-  // for the session. (This approach requires to clean up
-  // using SECMOD_UnloadUserModule at the end of the session.)
-
+public:
+  explicit LoadLoadableRootsTask(nsNSSComponent* nssComponent)
+    : Runnable("LoadLoadableRootsTask")
+    , mNSSComponent(nssComponent)
   {
-    // Find module containing root certs
+    MOZ_ASSERT(nssComponent);
+  }
 
-    SECMODModuleList* list;
-    SECMODListLock* lock = SECMOD_GetDefaultModuleListLock();
-    if (!lock) {
-        MOZ_LOG(gPIPNSSLog, LogLevel::Error,
-               ("Couldn't get the module list lock, can't install loadable roots\n"));
-        return;
+  ~LoadLoadableRootsTask();
+
+  nsresult Dispatch();
+
+  void virtualDestroyNSSReference() override {} // nothing to release
+
+private:
+  NS_IMETHOD Run() override;
+  nsresult LoadLoadableRoots(const nsNSSShutDownPreventionLock& proofOfLock);
+  RefPtr<nsNSSComponent> mNSSComponent;
+  nsCOMPtr<nsIThread> mThread;
+};
+
+LoadLoadableRootsTask::~LoadLoadableRootsTask()
+{
+  nsNSSShutDownPreventionLock lock;
+  if (isAlreadyShutDown()) {
+    return;
+  }
+  shutdown(ShutdownCalledFrom::Object);
+}
+
+nsresult
+LoadLoadableRootsTask::Dispatch()
+{
+  // Can't add 'this' as the event to run, since mThread may not be set yet
+  nsresult rv = NS_NewNamedThread("LoadRoots", getter_AddRefs(mThread),
+                                  nullptr,
+                                  nsIThreadManager::DEFAULT_STACK_SIZE);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  // Note: event must not null out mThread!
+  return mThread->Dispatch(this, NS_DISPATCH_NORMAL);
+}
+
+NS_IMETHODIMP
+LoadLoadableRootsTask::Run()
+{
+  nsNSSShutDownPreventionLock lock;
+  if (isAlreadyShutDown()) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  nsresult rv = LoadLoadableRoots(lock);
+  if (NS_FAILED(rv)) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("LoadLoadableRoots failed"));
+    // We don't return rv here because then BlockUntilLoadableRootsLoaded will
+    // just wait forever. Instead we'll save its value (below) so we can inform
+    // code that relies on the roots module being present that loading it
+    // failed.
+  }
+
+  if (NS_SUCCEEDED(rv)) {
+    if (NS_FAILED(LoadExtendedValidationInfo(lock))) {
+      // This isn't a show-stopper in the same way that failing to load the
+      // roots module is.
+      MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("failed to load EV info"));
     }
-    SECMOD_GetReadLock(lock);
-    list = SECMOD_GetDefaultModuleList();
+  }
+  {
+    MonitorAutoLock rootsLoadedLock(mNSSComponent->mLoadableRootsLoadedMonitor);
+    mNSSComponent->mLoadableRootsLoaded = true;
+    // Cache the result of LoadLoadableRoots so BlockUntilLoadableRootsLoaded
+    // can return it to all callers later.
+    mNSSComponent->mLoadableRootsLoadedResult = rv;
+    rv = mNSSComponent->mLoadableRootsLoadedMonitor.NotifyAll();
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+  }
+  return NS_OK;
+}
 
-    while (!RootsModule && list) {
-      SECMODModule* module = list->module;
+nsresult
+nsNSSComponent::HasActiveSmartCards(bool& result)
+{
+  MOZ_ASSERT(NS_IsMainThread(), "Main thread only");
+  if (!NS_IsMainThread()) {
+    return NS_ERROR_NOT_SAME_THREAD;
+  }
 
-      for (int i=0; i < module->slotCount; i++) {
-        PK11SlotInfo* slot = module->slots[i];
-        if (PK11_IsPresent(slot)) {
-          if (PK11_HasRootCerts(slot)) {
-            RootsModule = SECMOD_ReferenceModule(module);
-            break;
-          }
+#ifndef MOZ_NO_SMART_CARDS
+  nsNSSShutDownPreventionLock lock;
+  MutexAutoLock nsNSSComponentLock(mMutex);
+
+  AutoSECMODListReadLock secmodLock;
+  SECMODModuleList* list = SECMOD_GetDefaultModuleList();
+  while (list) {
+    if (SECMOD_HasRemovableSlots(list->module)) {
+      result = true;
+      return NS_OK;
+    }
+    list = list->next;
+  }
+#endif
+  result = false;
+  return NS_OK;
+}
+
+nsresult
+nsNSSComponent::HasUserCertsInstalled(bool& result)
+{
+  MOZ_ASSERT(NS_IsMainThread(), "Main thread only");
+  if (!NS_IsMainThread()) {
+    return NS_ERROR_NOT_SAME_THREAD;
+  }
+
+  nsNSSShutDownPreventionLock lock;
+  MutexAutoLock nsNSSComponentLock(mMutex);
+
+  if (!mNSSInitialized) {
+    return NS_ERROR_NOT_INITIALIZED;
+  }
+
+  result = false;
+  UniqueCERTCertList certList(
+    CERT_FindUserCertsByUsage(CERT_GetDefaultCertDB(), certUsageSSLClient,
+                              false, true, nullptr));
+  if (!certList) {
+    return NS_OK;
+  }
+
+  // check if the list is empty
+  if (CERT_LIST_END(CERT_LIST_HEAD(certList), certList)) {
+    return NS_OK;
+  }
+
+  // The list is not empty, meaning at least one cert is installed
+  result = true;
+  return NS_OK;
+}
+
+nsresult
+nsNSSComponent::BlockUntilLoadableRootsLoaded()
+{
+  MonitorAutoLock rootsLoadedLock(mLoadableRootsLoadedMonitor);
+  while (!mLoadableRootsLoaded) {
+    nsresult rv = rootsLoadedLock.Wait();
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+  }
+  MOZ_ASSERT(mLoadableRootsLoaded);
+
+  return mLoadableRootsLoadedResult;
+}
+
+nsresult
+nsNSSComponent::CheckForSmartCardChanges()
+{
+#ifndef MOZ_NO_SMART_CARDS
+  nsNSSShutDownPreventionLock lock;
+  MutexAutoLock nsNSSComponentLock(mMutex);
+
+  if (!mNSSInitialized) {
+    return NS_ERROR_NOT_INITIALIZED;
+  }
+
+  // SECMOD_UpdateSlotList attempts to acquire the list lock as well,
+  // so we have to do this in two steps. The lock protects the list itself, so
+  // if we get our own owned references to the modules we're interested in,
+  // there's no thread safety concern here.
+  Vector<UniqueSECMODModule> modulesWithRemovableSlots;
+  {
+    AutoSECMODListReadLock secmodLock;
+    SECMODModuleList* list = SECMOD_GetDefaultModuleList();
+    while (list) {
+      if (SECMOD_HasRemovableSlots(list->module)) {
+        UniqueSECMODModule module(SECMOD_ReferenceModule(list->module));
+        if (!modulesWithRemovableSlots.append(Move(module))) {
+          return NS_ERROR_OUT_OF_MEMORY;
         }
       }
-
       list = list->next;
     }
-    SECMOD_ReleaseReadLock(lock);
   }
-
-  if (RootsModule) {
-    int32_t modType;
-    SECMOD_DeleteModule(RootsModule->commonName, &modType);
-    SECMOD_DestroyModule(RootsModule);
-    RootsModule = nullptr;
+  for (auto& module : modulesWithRemovableSlots) {
+    // Best-effort.
+    Unused << SECMOD_UpdateSlotList(module.get());
+    for (int i = 0; i < module->slotCount; i++) {
+      // We actually don't care about the return value here - we just need to
+      // call this to get NSS to update its view of this slot.
+      Unused << PK11_IsPresent(module->slots[i]);
+    }
   }
+#endif
 
+  return NS_OK;
+}
+
+// Returns by reference the path to the directory containing the file that has
+// been loaded as DLL_PREFIX nss3 DLL_SUFFIX.
+static nsresult
+GetNSS3Directory(nsCString& result)
+{
+  UniquePRString nss3Path(
+    PR_GetLibraryFilePathname(DLL_PREFIX "nss3" DLL_SUFFIX,
+                              reinterpret_cast<PRFuncPtr>(NSS_Initialize)));
+  if (!nss3Path) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("nss not loaded?"));
+    return NS_ERROR_FAILURE;
+  }
+  nsCOMPtr<nsIFile> nss3File(do_CreateInstance(NS_LOCAL_FILE_CONTRACTID));
+  if (!nss3File) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("couldn't create a file?"));
+    return NS_ERROR_FAILURE;
+  }
+  nsAutoCString nss3PathAsString(nss3Path.get());
+  nsresult rv = nss3File->InitWithNativePath(nss3PathAsString);
+  if (NS_FAILED(rv)) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+            ("couldn't initialize file with path '%s'", nss3Path.get()));
+    return rv;
+  }
+  nsCOMPtr<nsIFile> nss3Directory;
+  rv = nss3File->GetParent(getter_AddRefs(nss3Directory));
+  if (NS_FAILED(rv)) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("couldn't get parent directory?"));
+    return rv;
+  }
+  return nss3Directory->GetNativePath(result);
+}
+
+// Returns by reference the path to the desired directory, based on the current
+// settings in the directory service.
+static nsresult
+GetDirectoryPath(const char* directoryKey, nsCString& result)
+{
+  nsCOMPtr<nsIProperties> directoryService(
+    do_GetService(NS_DIRECTORY_SERVICE_CONTRACTID));
+  if (!directoryService) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("could not get directory service"));
+    return NS_ERROR_FAILURE;
+  }
+  nsCOMPtr<nsIFile> directory;
+  nsresult rv = directoryService->Get(directoryKey, NS_GET_IID(nsIFile),
+                                      getter_AddRefs(directory));
+  if (NS_FAILED(rv)) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+            ("could not get '%s' from directory service", directoryKey));
+    return rv;
+  }
+  return directory->GetNativePath(result);
+}
+
+
+nsresult
+LoadLoadableRootsTask::LoadLoadableRoots(
+  const nsNSSShutDownPreventionLock& /*proofOfLock*/)
+{
   // Find the best Roots module for our purposes.
   // Prefer the application's installation directory,
   // but also ensure the library is at least the version we expect.
 
   nsAutoString modName;
-  nsresult rv = GetPIPNSSBundleString("RootCertModuleName", modName);
+  nsresult rv = mNSSComponent->GetPIPNSSBundleString("RootCertModuleName",
+                                                     modName);
   if (NS_FAILED(rv)) {
     // When running Cpp unit tests on Android, this will fail because string
     // bundles aren't available (see bug 1311077, bug 1228175 comment 12, and
@@ -1092,66 +1257,58 @@ nsNSSComponent::LoadLoadableRoots()
     // user, so this is a step in that direction anyway.
     modName.AssignLiteral("Builtin Roots Module");
   }
+  NS_ConvertUTF16toUTF8 modNameUTF8(modName);
 
-  nsCOMPtr<nsIProperties> directoryService(do_GetService(NS_DIRECTORY_SERVICE_CONTRACTID));
-  if (!directoryService)
-    return;
-
-  static const char nss_lib[] = "nss3";
-  const char* possible_ckbi_locations[] = {
-    nss_lib, // This special value means: search for ckbi in the directory
-             // where nss3 is.
-    NS_XPCOM_CURRENT_PROCESS_DIR,
-    NS_GRE_DIR,
-    0 // This special value means:
-      //   search for ckbi in the directories on the shared
-      //   library/DLL search path
-  };
-
-  for (size_t il = 0; il < sizeof(possible_ckbi_locations)/sizeof(const char*); ++il) {
-    nsAutoCString libDir;
-
-    if (possible_ckbi_locations[il]) {
-      nsCOMPtr<nsIFile> mozFile;
-      if (possible_ckbi_locations[il] == nss_lib) {
-        // Get the location of the nss3 library.
-        char* nss_path = PR_GetLibraryFilePathname(DLL_PREFIX "nss3" DLL_SUFFIX,
-                                                   (PRFuncPtr) NSS_Initialize);
-        if (!nss_path) {
-          continue;
-        }
-        // Get the directory containing the nss3 library.
-        nsCOMPtr<nsIFile> nssLib(do_CreateInstance(NS_LOCAL_FILE_CONTRACTID, &rv));
-        if (NS_SUCCEEDED(rv)) {
-          rv = nssLib->InitWithNativePath(nsDependentCString(nss_path));
-        }
-        PR_Free(nss_path);
-        if (NS_SUCCEEDED(rv)) {
-          nsCOMPtr<nsIFile> file;
-          if (NS_SUCCEEDED(nssLib->GetParent(getter_AddRefs(file)))) {
-            mozFile = do_QueryInterface(file);
-          }
-        }
-      } else {
-        directoryService->Get( possible_ckbi_locations[il],
-                               NS_GET_IID(nsIFile),
-                               getter_AddRefs(mozFile));
-      }
-
-      if (!mozFile) {
-        continue;
-      }
-
-      if (NS_FAILED(mozFile->GetNativePath(libDir))) {
-        continue;
-      }
+  Vector<nsCString> possibleCKBILocations;
+  // First try in the directory where we've already loaded
+  // DLL_PREFIX nss3 DLL_SUFFIX, since that's likely to be correct.
+  nsAutoCString nss3Dir;
+  rv = GetNSS3Directory(nss3Dir);
+  if (NS_SUCCEEDED(rv)) {
+    if (!possibleCKBILocations.append(Move(nss3Dir))) {
+      return NS_ERROR_OUT_OF_MEMORY;
     }
+  } else {
+    // For some reason this fails on android. In any case, we should try with
+    // the other potential locations we have.
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+            ("could not determine where nss was loaded from"));
+  }
+  nsAutoCString currentProcessDir;
+  rv = GetDirectoryPath(NS_XPCOM_CURRENT_PROCESS_DIR, currentProcessDir);
+  if (NS_SUCCEEDED(rv)) {
+    if (!possibleCKBILocations.append(Move(currentProcessDir))) {
+      return NS_ERROR_OUT_OF_MEMORY;
+    }
+  } else {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+            ("could not get current process directory"));
+  }
+  nsAutoCString greDir;
+  rv = GetDirectoryPath(NS_GRE_DIR, greDir);
+  if (NS_SUCCEEDED(rv)) {
+    if (!possibleCKBILocations.append(Move(greDir))) {
+      return NS_ERROR_OUT_OF_MEMORY;
+    }
+  } else {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("could not get gre directory"));
+  }
+  // As a last resort, this will cause the library loading code to use the OS'
+  // default library search path.
+  nsAutoCString emptyString;
+  if (!possibleCKBILocations.append(Move(emptyString))) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
 
-    NS_ConvertUTF16toUTF8 modNameUTF8(modName);
-    if (mozilla::psm::LoadLoadableRoots(libDir, modNameUTF8)) {
-      break;
+  for (const auto& possibleCKBILocation : possibleCKBILocations) {
+    if (mozilla::psm::LoadLoadableRoots(possibleCKBILocation, modNameUTF8)) {
+      MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("loaded CKBI from %s",
+                                            possibleCKBILocation.get()));
+      return NS_OK;
     }
   }
+  MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("could not load loadable roots"));
+  return NS_ERROR_FAILURE;
 }
 
 void
@@ -1169,7 +1326,6 @@ nsNSSComponent::UnloadLoadableRoots()
 nsresult
 nsNSSComponent::ConfigureInternalPKCS11Token()
 {
-  nsNSSShutDownPreventionLock locker;
   nsAutoString manufacturerID;
   nsAutoString libraryDescription;
   nsAutoString tokenDescription;
@@ -1219,8 +1375,7 @@ nsNSSComponent::ConfigureInternalPKCS11Token()
 nsresult
 nsNSSComponent::InitializePIPNSSBundle()
 {
-  // Called during init only, no mutex required.
-
+  MutexAutoLock lock(mMutex);
   nsresult rv;
   nsCOMPtr<nsIStringBundleService> bundleService(do_GetService(NS_STRINGBUNDLE_CONTRACTID, &rv));
   if (NS_FAILED(rv) || !bundleService)
@@ -1433,10 +1588,9 @@ CipherSuiteChangeObserver::Observe(nsISupports* /*aSubject*/,
 
 } // namespace
 
-// Caller must hold a lock on nsNSSComponent::mutex when calling this function
-void nsNSSComponent::setValidationOptions(bool isInitialSetting,
-                                          const MutexAutoLock& lock)
+void nsNSSComponent::setValidationOptions(bool isInitialSetting)
 {
+  MutexAutoLock lock(mMutex);
   // This preference controls whether we do OCSP fetching and does not affect
   // OCSP stapling.
   // 0 = disabled, 1 = enabled
@@ -1593,15 +1747,6 @@ static nsresult
 GetNSSProfilePath(nsAutoCString& aProfilePath)
 {
   aProfilePath.Truncate();
-  const char* dbDirOverride = getenv("MOZPSM_NSSDBDIR_OVERRIDE");
-  if (dbDirOverride && strlen(dbDirOverride) > 0) {
-    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
-           ("Using specified MOZPSM_NSSDBDIR_OVERRIDE as NSS DB dir: %s\n",
-            dbDirOverride));
-    aProfilePath.Assign(dbDirOverride);
-    return NS_OK;
-  }
-
   nsCOMPtr<nsIFile> profileFile;
   nsresult rv = NS_GetSpecialDirectory(NS_APP_USER_PROFILE_50_DIR,
                                        getter_AddRefs(profileFile));
@@ -1635,6 +1780,200 @@ GetNSSProfilePath(nsAutoCString& aProfilePath)
   return NS_OK;
 }
 
+#ifndef ANDROID
+// Given a profile path, attempt to rename the PKCS#11 module DB to
+// "<original name>.fips". In the case of a catastrophic failure (e.g. out of
+// memory), returns a failing nsresult. If execution could conceivably proceed,
+// returns NS_OK even if renaming the file didn't work. This simplifies the
+// logic of the calling code.
+static nsresult
+AttemptToRenamePKCS11ModuleDB(const nsACString& profilePath,
+                              const nsACString& moduleDBFilename)
+{
+  nsAutoCString destModuleDBFilename(moduleDBFilename);
+  destModuleDBFilename.Append(".fips");
+  nsCOMPtr<nsIFile> dbFile = do_CreateInstance("@mozilla.org/file/local;1");
+  if (!dbFile) {
+    return NS_ERROR_FAILURE;
+  }
+  nsresult rv = dbFile->InitWithNativePath(profilePath);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  rv = dbFile->AppendNative(moduleDBFilename);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  // If the PKCS#11 module DB doesn't exist, renaming it won't help.
+  bool exists;
+  rv = dbFile->Exists(&exists);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  // This is strange, but not a catastrophic failure.
+  if (!exists) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+            ("%s doesn't exist?", PromiseFlatCString(moduleDBFilename).get()));
+    return NS_OK;
+  }
+  nsCOMPtr<nsIFile> destDBFile = do_CreateInstance("@mozilla.org/file/local;1");
+  if (!destDBFile) {
+    return NS_ERROR_FAILURE;
+  }
+  rv = destDBFile->InitWithNativePath(profilePath);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  rv = destDBFile->AppendNative(destModuleDBFilename);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  // If the destination exists, presumably we've already tried this. Doing it
+  // again won't help.
+  rv = destDBFile->Exists(&exists);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  // Unfortunate, but not a catastrophic failure.
+  if (exists) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+            ("%s already exists - not overwriting",
+             destModuleDBFilename.get()));
+    return NS_OK;
+  }
+  // Now do the actual move.
+  nsCOMPtr<nsIFile> profileDir = do_CreateInstance("@mozilla.org/file/local;1");
+  if (!profileDir) {
+    return NS_ERROR_FAILURE;
+  }
+  rv = profileDir->InitWithNativePath(profilePath);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  // This may fail on, e.g., a read-only file system. This would be unfortunate,
+  // but again it isn't catastropic and we would want to fall back to
+  // initializing NSS in no-DB mode.
+  Unused << dbFile->MoveToNative(profileDir, destModuleDBFilename);
+  return NS_OK;
+}
+
+// The platform now only uses the sqlite-backed databases, so we'll try to
+// rename "pkcs11.txt". However, if we're upgrading from a version that used the
+// old format, we need to try to rename the old "secmod.db" as well (if we were
+// to only rename "pkcs11.txt", initializing NSS will still fail due to the old
+// database being in FIPS mode).
+static nsresult
+AttemptToRenameBothPKCS11ModuleDBVersions(const nsACString& profilePath)
+{
+  NS_NAMED_LITERAL_CSTRING(legacyModuleDBFilename, "secmod.db");
+  NS_NAMED_LITERAL_CSTRING(sqlModuleDBFilename, "pkcs11.txt");
+  nsresult rv = AttemptToRenamePKCS11ModuleDB(profilePath,
+                                              legacyModuleDBFilename);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  return AttemptToRenamePKCS11ModuleDB(profilePath, sqlModuleDBFilename);
+}
+#endif // ifndef ANDROID
+
+// Given a profile directory, attempt to initialize NSS. If nocertdb is true,
+// (or if we don't have a profile directory) simply initialize NSS in no DB mode
+// and return. Otherwise, first attempt to initialize in read/write mode, and
+// then read-only mode if that fails. If both attempts fail, we may be failing
+// to initialize an NSS DB collection that has FIPS mode enabled. Attempt to
+// ascertain if this is the case, and if so, rename the offending PKCS#11 module
+// DB so we can (hopefully) initialize NSS in read-write mode. Again attempt
+// read-only mode if that fails. Finally, fall back to no DB mode. On Android
+// we can skip the FIPS workaround since it was never possible to enable FIPS
+// there anyway.
+static nsresult
+InitializeNSSWithFallbacks(const nsACString& profilePath, bool nocertdb,
+                           bool safeMode)
+{
+  if (nocertdb || profilePath.IsEmpty()) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+            ("nocertdb mode or empty profile path -> NSS_NoDB_Init"));
+    SECStatus srv = NSS_NoDB_Init(nullptr);
+    return srv == SECSuccess ? NS_OK : NS_ERROR_FAILURE;
+  }
+
+
+  // Try read/write mode. If we're in safeMode, we won't load PKCS#11 modules.
+#ifndef ANDROID
+  PRErrorCode savedPRErrorCode1;
+#endif // ifndef ANDROID
+  SECStatus srv = ::mozilla::psm::InitializeNSS(profilePath, false, !safeMode);
+  if (srv == SECSuccess) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("initialized NSS in r/w mode"));
+    return NS_OK;
+  }
+#ifndef ANDROID
+  savedPRErrorCode1 = PR_GetError();
+  PRErrorCode savedPRErrorCode2;
+#endif // ifndef ANDROID
+  // That failed. Try read-only mode.
+  srv = ::mozilla::psm::InitializeNSS(profilePath, true, !safeMode);
+  if (srv == SECSuccess) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("initialized NSS in r-o mode"));
+    return NS_OK;
+  }
+#ifndef ANDROID
+  savedPRErrorCode2 = PR_GetError();
+
+  MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+          ("failed to initialize NSS with codes %d %d", savedPRErrorCode1,
+           savedPRErrorCode2));
+#endif // ifndef ANDROID
+
+#ifndef ANDROID
+  // That failed as well. Maybe we're trying to load a PKCS#11 module DB that is
+  // in FIPS mode, but we don't support FIPS? Test load NSS without PKCS#11
+  // modules. If that succeeds, that's probably what's going on.
+  if (!safeMode && (savedPRErrorCode1 == SEC_ERROR_LEGACY_DATABASE ||
+                    savedPRErrorCode2 == SEC_ERROR_LEGACY_DATABASE ||
+                    savedPRErrorCode1 == SEC_ERROR_PKCS11_DEVICE_ERROR ||
+                    savedPRErrorCode2 == SEC_ERROR_PKCS11_DEVICE_ERROR)) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("attempting no-module db init"));
+    // It would make sense to initialize NSS in read-only mode here since this
+    // is just a test to see if the PKCS#11 module DB being in FIPS mode is the
+    // problem, but for some reason the combination of read-only and no-moddb
+    // flags causes NSS initialization to fail, so unfortunately we have to use
+    // read-write mode.
+    srv = ::mozilla::psm::InitializeNSS(profilePath, false, false);
+    if (srv == SECSuccess) {
+      MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("FIPS may be the problem"));
+      // Unload NSS so we can attempt to fix this situation for the user.
+      srv = NSS_Shutdown();
+      if (srv != SECSuccess) {
+        return NS_ERROR_FAILURE;
+      }
+      MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("trying to rename module db"));
+      // If this fails non-catastrophically, we'll attempt to initialize NSS
+      // again in r/w then r-o mode (both of which will fail), and then we'll
+      // fall back to NSS_NoDB_Init, which is the behavior we want.
+      nsresult rv = AttemptToRenameBothPKCS11ModuleDBVersions(profilePath);
+      if (NS_FAILED(rv)) {
+        return rv;
+      }
+      srv = ::mozilla::psm::InitializeNSS(profilePath, false, true);
+      if (srv == SECSuccess) {
+        MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("initialized in r/w mode"));
+        return NS_OK;
+      }
+      srv = ::mozilla::psm::InitializeNSS(profilePath, true, true);
+      if (srv == SECSuccess) {
+        MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("initialized in r-o mode"));
+        return NS_OK;
+      }
+    }
+  }
+#endif
+
+  MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("last-resort NSS_NoDB_Init"));
+  srv = NSS_NoDB_Init(nullptr);
+  return srv == SECSuccess ? NS_OK : NS_ERROR_FAILURE;
+}
+
 nsresult
 nsNSSComponent::InitializeNSS()
 {
@@ -1645,8 +1984,6 @@ nsNSSComponent::InitializeNSS()
                 nsINSSErrorsService::NSS_SSL_ERROR_BASE == SSL_ERROR_BASE &&
                 nsINSSErrorsService::NSS_SSL_ERROR_LIMIT == SSL_ERROR_LIMIT,
                 "You must update the values in nsINSSErrorsService.idl");
-
-  MutexAutoLock lock(mutex);
 
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("NSS Initialization beginning\n"));
 
@@ -1664,7 +2001,6 @@ nsNSSComponent::InitializeNSS()
     return NS_ERROR_NOT_AVAILABLE;
   }
 
-  SECStatus init_rv = SECFailure;
   bool nocertdb = Preferences::GetBool("security.nocertdb", false);
   bool inSafeMode = true;
   nsCOMPtr<nsIXULRuntime> runtime(do_GetService("@mozilla.org/xre/runtime;1"));
@@ -1679,44 +2015,11 @@ nsNSSComponent::InitializeNSS()
   }
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("inSafeMode: %u\n", inSafeMode));
 
-  PRErrorCode savedPRErrorCode1 = 0;
-  PRErrorCode savedPRErrorCode2 = 0;
-
-  if (!nocertdb && !profileStr.IsEmpty()) {
-    // First try to initialize the NSS DB in read/write mode.
-    // Only load PKCS11 modules if we're not in safe mode.
-    init_rv = ::mozilla::psm::InitializeNSS(profileStr.get(), false, !inSafeMode);
-    // If that fails, attempt read-only mode.
-    if (init_rv != SECSuccess) {
-      savedPRErrorCode1 = PR_GetError();
-      MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("could not init NSS r/w in %s\n", profileStr.get()));
-      init_rv = ::mozilla::psm::InitializeNSS(profileStr.get(), true, !inSafeMode);
-    }
-    if (init_rv != SECSuccess) {
-      savedPRErrorCode2 = PR_GetError();
-      MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("could not init in r/o either\n"));
-    }
+  rv = InitializeNSSWithFallbacks(profileStr, nocertdb, inSafeMode);
+  if (NS_FAILED(rv)) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("failed to initialize NSS"));
+    return rv;
   }
-  // If we haven't succeeded in initializing the DB in our profile
-  // directory or we don't have a profile at all, or the "security.nocertdb"
-  // pref has been set to "true", attempt to initialize with no DB.
-  if (nocertdb || init_rv != SECSuccess) {
-    init_rv = NSS_NoDB_Init(nullptr);
-    if (init_rv != SECSuccess) {
-      PRErrorCode savedPRErrorCode3 = PR_GetError();
-      MOZ_CRASH_UNSAFE_PRINTF("NSS initialization failed PRErrorCodes %d %d %d",
-                              savedPRErrorCode1, savedPRErrorCode2,
-                              savedPRErrorCode3);
-    }
-  }
-  if (init_rv != SECSuccess) {
-    MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("could not initialize NSS - panicking\n"));
-    return NS_ERROR_NOT_AVAILABLE;
-  }
-
-  // ensure we have an initial value for the content signer root
-  mContentSigningRootHash =
-    Preferences::GetString("security.content.signature.root_hash");
 
   PK11_SetPasswordFunc(PK11PasswordPrompt);
 
@@ -1734,13 +2037,6 @@ nsNSSComponent::InitializeNSS()
   }
 
   DisableMD5();
-  LoadLoadableRoots();
-
-  rv = LoadExtendedValidationInfo();
-  if (NS_FAILED(rv)) {
-    MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("failed to load EV info"));
-    return rv;
-  }
 
   MaybeEnableFamilySafetyCompatibility();
   MaybeImportEnterpriseRoots();
@@ -1789,21 +2085,56 @@ nsNSSComponent::InitializeNSS()
   }
 
   // dynamic options from prefs
-  setValidationOptions(true, lock);
-
-#ifndef MOZ_NO_SMART_CARDS
-  LaunchSmartCardThreads();
-#endif
+  setValidationOptions(true);
 
   mozilla::pkix::RegisterErrorTable();
 
   if (PK11_IsFIPS()) {
     Telemetry::Accumulate(Telemetry::FIPS_ENABLED, true);
   }
-  MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("NSS Initialization done\n"));
-  mNSSInitialized = true;
 
-  return NS_OK;
+  // Gather telemetry on any PKCS#11 modules we have loaded. Note that because
+  // we load the built-in root module asynchronously after this, the telemetry
+  // will not include it.
+  { // Introduce scope for the AutoSECMODListReadLock.
+    AutoSECMODListReadLock lock;
+    for (SECMODModuleList* list = SECMOD_GetDefaultModuleList(); list;
+         list = list->next) {
+      nsAutoString scalarKey;
+      GetModuleNameForTelemetry(list->module, scalarKey);
+      // Scalar keys must be between 0 and 70 characters (exclusive).
+      // GetModuleNameForTelemetry takes care of keys that are too long. If for
+      // some reason it couldn't come up with an appropriate name and returned
+      // an empty result, however, we need to not attempt to record this (it
+      // wouldn't give us anything useful anyway).
+      if (scalarKey.Length() > 0) {
+        Telemetry::ScalarSet(
+          Telemetry::ScalarID::SECURITY_PKCS11_MODULES_LOADED, scalarKey, true);
+      }
+    }
+  }
+
+  MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("NSS Initialization done\n"));
+
+  {
+    MutexAutoLock lock(mMutex);
+
+    // ensure we have initial values for various root hashes
+#ifdef DEBUG
+    mTestBuiltInRootHash.Truncate();
+    Preferences::GetString("security.test.built_in_root_hash",
+                           mTestBuiltInRootHash);
+#endif
+    mContentSigningRootHash.Truncate();
+    Preferences::GetString("security.content.signature.root_hash",
+                           mContentSigningRootHash);
+
+    mNSSInitialized = true;
+  }
+
+  RefPtr<LoadLoadableRootsTask> loadLoadableRootsTask(
+    new LoadLoadableRootsTask(this));
+  return loadLoadableRootsTask->Dispatch();
 }
 
 void
@@ -1812,39 +2143,55 @@ nsNSSComponent::ShutdownNSS()
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("nsNSSComponent::ShutdownNSS\n"));
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
-  MutexAutoLock lock(mutex);
+  // This is idempotent and can happen as a result of observing
+  // profile-before-change and being called from nsNSSComponent's destructor.
+  // We need to do this before other cleanup because we must avoid acquiring
+  // mMutex and then preventing threads holding nsNSSShutDownPreventionLocks
+  // from continuing (which is what evaporateAllNSSResourcesAndShutDown does).
+  MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("evaporating psm resources"));
+  if (NS_FAILED(nsNSSShutDownList::evaporateAllNSSResourcesAndShutDown())) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("failed to evaporate resources"));
+    return;
+  }
 
-  if (mNSSInitialized) {
-    mNSSInitialized = false;
+  // This currently calls GetPIPNSSBundleString, which acquires mMutex, so we
+  // can't call it while already holding mMutex. This is fine as mMutex doesn't
+  // actually protect anything that UnloadLoadableRoots is modifying. Also,
+  // UnloadLoadableRoots is idempotent.
+  UnloadLoadableRoots();
 
-    PK11_SetPasswordFunc((PK11PasswordFunc)nullptr);
+  MutexAutoLock lock(mMutex);
 
-    Preferences::RemoveObserver(this, "security.");
+  // Other shutdown tasks are not guaranteed to be idempotent and we should
+  // avoid performing them more than once.
+  if (!mNSSInitialized) {
+    return;
+  }
+  mNSSInitialized = false;
 
 #ifdef XP_WIN
-    mFamilySafetyRoot = nullptr;
-    mEnterpriseRoots = nullptr;
+  mFamilySafetyRoot = nullptr;
+  mEnterpriseRoots = nullptr;
 #endif
 
-#ifndef MOZ_NO_SMART_CARDS
-    ShutdownSmartCardThreads();
-#endif
-    SSL_ClearSessionCache();
-    // TLSServerSocket may be run with the session cache enabled. This ensures
-    // those resources are cleaned up.
-    Unused << SSL_ShutdownServerSessionIDCache();
+  PK11_SetPasswordFunc((PK11PasswordFunc)nullptr);
 
-    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("evaporating psm resources"));
-    if (NS_FAILED(nsNSSShutDownList::evaporateAllNSSResourcesAndShutDown())) {
-      MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("failed to evaporate resources"));
-      return;
-    }
-    UnloadLoadableRoots();
-    if (SECSuccess != ::NSS_Shutdown()) {
-      MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("NSS SHUTDOWN FAILURE"));
-    } else {
-      MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("NSS shutdown =====>> OK <<====="));
-    }
+  Preferences::RemoveObserver(this, "security.");
+
+  SSL_ClearSessionCache();
+  // TLSServerSocket may be run with the session cache enabled. This ensures
+  // those resources are cleaned up.
+  Unused << SSL_ShutdownServerSessionIDCache();
+
+  // Release the default CertVerifier. This will cause any held NSS resources
+  // to be released (it's not an nsNSSShutDownObject, so we have to do this
+  // manually).
+  mDefaultCertVerifier = nullptr;
+
+  if (NSS_Shutdown() != SECSuccess) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("NSS SHUTDOWN FAILURE"));
+  } else {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("NSS shutdown =====>> OK <<====="));
   }
 }
 
@@ -1869,18 +2216,6 @@ nsNSSComponent::Init()
     return rv;
   }
 
-  // Access our string bundles now, this prevents assertions from I/O
-  // - nsStandardURL not thread-safe
-  // - wrong thread: 'NS_IsMainThread()' in nsIOService.cpp
-  // when loading error strings on the SSL threads.
-  {
-    const char16_t* dummy = u"dummy";
-    nsXPIDLString result;
-    mPIPNSSBundle->GetStringFromName(dummy, getter_Copies(result));
-    mNSSErrorsBundle->GetStringFromName(dummy, getter_Copies(result));
-  }
-
-
   rv = InitializeNSS();
   if (NS_FAILED(rv)) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Error,
@@ -1904,8 +2239,14 @@ NS_IMETHODIMP
 nsNSSComponent::Observe(nsISupports* aSubject, const char* aTopic,
                         const char16_t* someData)
 {
-  if (nsCRT::strcmp(aTopic, PROFILE_BEFORE_CHANGE_TOPIC) == 0) {
-    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("receiving profile change topic\n"));
+  // In some tests, we don't receive a "profile-before-change" topic. However,
+  // we still have to shut down before the storage service shuts down, because
+  // closing the sql-backed softoken requires sqlite still be available. Thus,
+  // we observe "xpcom-shutdown" just in case.
+  if (nsCRT::strcmp(aTopic, PROFILE_BEFORE_CHANGE_TOPIC) == 0 ||
+      nsCRT::strcmp(aTopic, NS_XPCOM_SHUTDOWN_OBSERVER_ID) == 0) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+            ("receiving profile change or XPCOM shutdown notification"));
     ShutdownNSS();
   } else if (nsCRT::strcmp(aTopic, NS_PREFBRANCH_PREFCHANGE_TOPIC_ID) == 0) {
     nsNSSShutDownPreventionLock locker;
@@ -1932,7 +2273,7 @@ nsNSSComponent::Observe(nsISupports* aSubject, const char* aTopic,
       SSL_OptionSetDefault(SSL_ENABLE_0RTT_DATA,
                            Preferences::GetBool("security.tls.enable_0rtt_data",
                                                 ENABLED_0RTT_DATA_DEFAULT));
-    } else if (prefName.Equals("security.ssl.disable_session_identifiers")) {
+    } else if (prefName.EqualsLiteral("security.ssl.disable_session_identifiers")) {
       ConfigureTLSSessionIdentifiers();
     } else if (prefName.EqualsLiteral("security.OCSP.enabled") ||
                prefName.EqualsLiteral("security.OCSP.require") ||
@@ -1947,19 +2288,21 @@ nsNSSComponent::Observe(nsISupports* aSubject, const char* aTopic,
                prefName.EqualsLiteral("security.pki.netscape_step_up_policy") ||
                prefName.EqualsLiteral("security.OCSP.timeoutMilliseconds.soft") ||
                prefName.EqualsLiteral("security.OCSP.timeoutMilliseconds.hard")) {
-      MutexAutoLock lock(mutex);
-      setValidationOptions(false, lock);
+      setValidationOptions(false);
 #ifdef DEBUG
     } else if (prefName.EqualsLiteral("security.test.built_in_root_hash")) {
-      MutexAutoLock lock(mutex);
-      mTestBuiltInRootHash = Preferences::GetString("security.test.built_in_root_hash");
+      MutexAutoLock lock(mMutex);
+      mTestBuiltInRootHash.Truncate();
+      Preferences::GetString("security.test.built_in_root_hash",
+                             mTestBuiltInRootHash);
 #endif // DEBUG
     } else if (prefName.Equals(kFamilySafetyModePref)) {
       MaybeEnableFamilySafetyCompatibility();
     } else if (prefName.EqualsLiteral("security.content.signature.root_hash")) {
-      MutexAutoLock lock(mutex);
-      mContentSigningRootHash =
-        Preferences::GetString("security.content.signature.root_hash");
+      MutexAutoLock lock(mMutex);
+      mContentSigningRootHash.Truncate();
+      Preferences::GetString("security.content.signature.root_hash",
+                             mContentSigningRootHash);
     } else if (prefName.Equals(kEnterpriseRootModePref)) {
       MaybeImportEnterpriseRoots();
     } else {
@@ -2005,14 +2348,17 @@ nsresult nsNSSComponent::LogoutAuthenticatedPK11()
 
   nsClientAuthRememberService::ClearAllRememberedDecisions();
 
-  return nsNSSShutDownList::doPK11Logout();
+  nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
+  if (os) {
+    os->NotifyObservers(nullptr, "net:cancel-all-connections", nullptr);
+  }
+
+  return NS_OK;
 }
 
 nsresult
 nsNSSComponent::RegisterObservers()
 {
-  // Happens once during init only, no mutex protection.
-
   nsCOMPtr<nsIObserverService> observerService(
     do_GetService("@mozilla.org/observer-service;1"));
   if (!observerService) {
@@ -2026,6 +2372,7 @@ nsNSSComponent::RegisterObservers()
   // keep a strong reference to this component. As a result, this will live at
   // least as long as the observer service.
   observerService->AddObserver(this, PROFILE_BEFORE_CHANGE_TOPIC, false);
+  observerService->AddObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID, false);
 
   return NS_OK;
 }
@@ -2034,15 +2381,11 @@ nsNSSComponent::RegisterObservers()
 NS_IMETHODIMP
 nsNSSComponent::IsCertTestBuiltInRoot(CERTCertificate* cert, bool& result)
 {
-  MutexAutoLock lock(mutex);
-  MOZ_ASSERT(mNSSInitialized);
-
   result = false;
 
-  if (mTestBuiltInRootHash.IsEmpty()) {
-    return NS_OK;
-  }
-
+  // Create the nsNSSCertificate and get its hash before acquiring mMutex (we
+  // must avoid acquiring mMutex and then creating an
+  // nsNSSShutDownPreventionLock).
   RefPtr<nsNSSCertificate> nsc = nsNSSCertificate::Create(cert);
   if (!nsc) {
     return NS_ERROR_FAILURE;
@@ -2053,6 +2396,12 @@ nsNSSComponent::IsCertTestBuiltInRoot(CERTCertificate* cert, bool& result)
     return rv;
   }
 
+  MutexAutoLock lock(mMutex);
+  MOZ_ASSERT(mNSSInitialized);
+  if (mTestBuiltInRootHash.IsEmpty()) {
+    return NS_OK;
+  }
+
   result = mTestBuiltInRootHash.Equals(certHash);
   return NS_OK;
 }
@@ -2061,16 +2410,11 @@ nsNSSComponent::IsCertTestBuiltInRoot(CERTCertificate* cert, bool& result)
 NS_IMETHODIMP
 nsNSSComponent::IsCertContentSigningRoot(CERTCertificate* cert, bool& result)
 {
-  MutexAutoLock lock(mutex);
-  MOZ_ASSERT(mNSSInitialized);
-
   result = false;
 
-  if (mContentSigningRootHash.IsEmpty()) {
-    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("mContentSigningRootHash is empty"));
-    return NS_ERROR_FAILURE;
-  }
-
+  // Create the nsNSSCertificate and get its hash before acquiring mMutex (we
+  // must avoid acquiring mMutex and then creating an
+  // nsNSSShutDownPreventionLock).
   RefPtr<nsNSSCertificate> nsc = nsNSSCertificate::Create(cert);
   if (!nsc) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("creating nsNSSCertificate failed"));
@@ -2083,6 +2427,14 @@ nsNSSComponent::IsCertContentSigningRoot(CERTCertificate* cert, bool& result)
     return rv;
   }
 
+  MutexAutoLock lock(mMutex);
+  MOZ_ASSERT(mNSSInitialized);
+
+  if (mContentSigningRootHash.IsEmpty()) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("mContentSigningRootHash is empty"));
+    return NS_ERROR_FAILURE;
+  }
+
   result = mContentSigningRootHash.Equals(certHash);
   return NS_OK;
 }
@@ -2092,7 +2444,7 @@ SharedCertVerifier::~SharedCertVerifier() { }
 already_AddRefed<SharedCertVerifier>
 nsNSSComponent::GetDefaultCertVerifier()
 {
-  MutexAutoLock lock(mutex);
+  MutexAutoLock lock(mMutex);
   MOZ_ASSERT(mNSSInitialized);
   RefPtr<SharedCertVerifier> certVerifier(mDefaultCertVerifier);
   return certVerifier.forget();

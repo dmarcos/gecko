@@ -7,18 +7,20 @@
 #include "ActorsChild.h"
 
 #include "BackgroundChildImpl.h"
+#include "FileSnapshot.h"
 #include "IDBDatabase.h"
 #include "IDBEvents.h"
 #include "IDBFactory.h"
+#include "IDBFileHandle.h"
 #include "IDBIndex.h"
 #include "IDBMutableFile.h"
 #include "IDBObjectStore.h"
-#include "IDBMutableFile.h"
 #include "IDBRequest.h"
 #include "IDBTransaction.h"
 #include "IndexedDatabase.h"
 #include "IndexedDatabaseInlines.h"
 #include "mozilla/BasicEvents.h"
+#include "mozilla/CycleCollectedJSRuntime.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/TypeTraits.h"
 #include "mozilla/dom/Element.h"
@@ -26,10 +28,14 @@
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/indexedDB/PBackgroundIDBDatabaseFileChild.h"
 #include "mozilla/dom/indexedDB/PIndexedDBPermissionRequestChild.h"
-#include "mozilla/dom/ipc/BlobChild.h"
+#include "mozilla/dom/ipc/PendingIPCBlobChild.h"
+#include "mozilla/dom/IPCBlobUtils.h"
+#include "mozilla/Encoding.h"
 #include "mozilla/ipc/BackgroundUtils.h"
+#include "mozilla/TaskQueue.h"
 #include "nsCOMPtr.h"
 #include "nsContentUtils.h"
+#include "nsIAsyncInputStream.h"
 #include "nsIBFCacheEntry.h"
 #include "nsIDocument.h"
 #include "nsIDOMEvent.h"
@@ -77,12 +83,7 @@ namespace indexedDB {
 ThreadLocal::ThreadLocal(const nsID& aBackgroundChildLoggingId)
   : mLoggingInfo(aBackgroundChildLoggingId, 1, -1, 1)
   , mCurrentTransaction(0)
-#ifdef DEBUG
-  , mOwningThread(PR_GetCurrentThread())
-#endif
 {
-  MOZ_ASSERT(mOwningThread);
-
   MOZ_COUNT_CTOR(mozilla::dom::indexedDB::ThreadLocal);
 
   // NSID_LENGTH counts the null terminator, SetLength() does not.
@@ -96,16 +97,6 @@ ThreadLocal::~ThreadLocal()
 {
   MOZ_COUNT_DTOR(mozilla::dom::indexedDB::ThreadLocal);
 }
-
-#ifdef DEBUG
-
-void
-ThreadLocal::AssertIsOnOwningThread() const
-{
-  MOZ_ASSERT(PR_GetCurrentThread() == mOwningThread);
-}
-
-#endif // DEBUG
 
 /*******************************************************************************
  * Helpers
@@ -614,17 +605,14 @@ DeserializeStructuredCloneFiles(
 
       switch (serializedFile.type()) {
         case StructuredCloneFile::eBlob: {
-          MOZ_ASSERT(blobOrMutableFile.type() == BlobOrMutableFile::TPBlobChild);
+          MOZ_ASSERT(blobOrMutableFile.type() == BlobOrMutableFile::TIPCBlob);
 
-          auto* actor =
-            static_cast<BlobChild*>(blobOrMutableFile.get_PBlobChild());
+          const IPCBlob& ipcBlob = blobOrMutableFile.get_IPCBlob();
 
-          RefPtr<BlobImpl> blobImpl = actor->GetBlobImpl();
+          RefPtr<BlobImpl> blobImpl = IPCBlobUtils::Deserialize(ipcBlob);
           MOZ_ASSERT(blobImpl);
 
           RefPtr<Blob> blob = Blob::Create(aDatabase->GetOwner(), blobImpl);
-
-          aDatabase->NoteReceivedBlob(blob);
 
           StructuredCloneFile* file = aFiles.AppendElement();
           MOZ_ASSERT(file);
@@ -709,18 +697,14 @@ DeserializeStructuredCloneFiles(
             break;
           }
 
-          MOZ_ASSERT(blobOrMutableFile.type() ==
-                       BlobOrMutableFile::TPBlobChild);
+          MOZ_ASSERT(blobOrMutableFile.type() == BlobOrMutableFile::TIPCBlob);
 
-          auto* actor =
-            static_cast<BlobChild*>(blobOrMutableFile.get_PBlobChild());
+          const IPCBlob& ipcBlob = blobOrMutableFile.get_IPCBlob();
 
-          RefPtr<BlobImpl> blobImpl = actor->GetBlobImpl();
+          RefPtr<BlobImpl> blobImpl = IPCBlobUtils::Deserialize(ipcBlob);
           MOZ_ASSERT(blobImpl);
 
           RefPtr<Blob> blob = Blob::Create(aDatabase->GetOwner(), blobImpl);
-
-          aDatabase->NoteReceivedBlob(blob);
 
           StructuredCloneFile* file = aFiles.AppendElement();
           MOZ_ASSERT(file);
@@ -749,9 +733,7 @@ DispatchErrorEvent(IDBRequest* aRequest,
   MOZ_ASSERT(NS_FAILED(aErrorCode));
   MOZ_ASSERT(NS_ERROR_GET_MODULE(aErrorCode) == NS_ERROR_MODULE_DOM_INDEXEDDB);
 
-  PROFILER_LABEL("IndexedDB",
-                 "DispatchErrorEvent",
-                 js::ProfileEntry::Category::STORAGE);
+  AUTO_PROFILER_LABEL("IndexedDB:DispatchErrorEvent", STORAGE);
 
   RefPtr<IDBRequest> request = aRequest;
   RefPtr<IDBTransaction> transaction = aTransaction;
@@ -824,9 +806,7 @@ DispatchSuccessEvent(ResultHelper* aResultHelper,
 {
   MOZ_ASSERT(aResultHelper);
 
-  PROFILER_LABEL("IndexedDB",
-                 "DispatchSuccessEvent",
-                 js::ProfileEntry::Category::STORAGE);
+  AUTO_PROFILER_LABEL("IndexedDB:DispatchSuccessEvent", STORAGE);
 
   RefPtr<IDBRequest> request = aResultHelper->Request();
   MOZ_ASSERT(request);
@@ -1145,6 +1125,348 @@ WorkerPermissionRequestChildProcessActor::Recv__delete__(
   return IPC_OK();
 }
 
+class MOZ_STACK_CLASS AutoSetCurrentFileHandle final
+{
+  typedef mozilla::ipc::BackgroundChildImpl BackgroundChildImpl;
+
+  IDBFileHandle* const mFileHandle;
+  IDBFileHandle* mPreviousFileHandle;
+  IDBFileHandle** mThreadLocalSlot;
+
+public:
+  explicit AutoSetCurrentFileHandle(IDBFileHandle* aFileHandle)
+    : mFileHandle(aFileHandle)
+    , mPreviousFileHandle(nullptr)
+    , mThreadLocalSlot(nullptr)
+  {
+    if (aFileHandle) {
+      BackgroundChildImpl::ThreadLocal* threadLocal =
+        BackgroundChildImpl::GetThreadLocalForCurrentThread();
+      MOZ_ASSERT(threadLocal);
+
+      // Hang onto this location for resetting later.
+      mThreadLocalSlot = &threadLocal->mCurrentFileHandle;
+
+      // Save the current value.
+      mPreviousFileHandle = *mThreadLocalSlot;
+
+      // Set the new value.
+      *mThreadLocalSlot = aFileHandle;
+    }
+  }
+
+  ~AutoSetCurrentFileHandle()
+  {
+    MOZ_ASSERT_IF(mThreadLocalSlot, mFileHandle);
+    MOZ_ASSERT_IF(mThreadLocalSlot, *mThreadLocalSlot == mFileHandle);
+
+    if (mThreadLocalSlot) {
+      // Reset old value.
+      *mThreadLocalSlot = mPreviousFileHandle;
+    }
+  }
+
+  IDBFileHandle*
+  FileHandle() const
+  {
+    return mFileHandle;
+  }
+};
+
+class MOZ_STACK_CLASS FileHandleResultHelper final
+  : public IDBFileRequest::ResultCallback
+{
+  IDBFileRequest* mFileRequest;
+  AutoSetCurrentFileHandle mAutoFileHandle;
+
+  union
+  {
+    File* mFile;
+    const nsCString* mString;
+    const FileRequestMetadata* mMetadata;
+    const JS::Handle<JS::Value>* mJSValHandle;
+  } mResult;
+
+  enum
+  {
+    ResultTypeFile,
+    ResultTypeString,
+    ResultTypeMetadata,
+    ResultTypeJSValHandle,
+  } mResultType;
+
+public:
+  FileHandleResultHelper(IDBFileRequest* aFileRequest,
+                         IDBFileHandle* aFileHandle,
+                         File* aResult)
+    : mFileRequest(aFileRequest)
+    , mAutoFileHandle(aFileHandle)
+    , mResultType(ResultTypeFile)
+  {
+    MOZ_ASSERT(aFileRequest);
+    MOZ_ASSERT(aFileHandle);
+    MOZ_ASSERT(aResult);
+
+    mResult.mFile = aResult;
+  }
+
+  FileHandleResultHelper(IDBFileRequest* aFileRequest,
+                         IDBFileHandle* aFileHandle,
+                         const nsCString* aResult)
+    : mFileRequest(aFileRequest)
+    , mAutoFileHandle(aFileHandle)
+    , mResultType(ResultTypeString)
+  {
+    MOZ_ASSERT(aFileRequest);
+    MOZ_ASSERT(aFileHandle);
+    MOZ_ASSERT(aResult);
+
+    mResult.mString = aResult;
+  }
+
+  FileHandleResultHelper(IDBFileRequest* aFileRequest,
+                         IDBFileHandle* aFileHandle,
+                         const FileRequestMetadata* aResult)
+    : mFileRequest(aFileRequest)
+    , mAutoFileHandle(aFileHandle)
+    , mResultType(ResultTypeMetadata)
+  {
+    MOZ_ASSERT(aFileRequest);
+    MOZ_ASSERT(aFileHandle);
+    MOZ_ASSERT(aResult);
+
+    mResult.mMetadata = aResult;
+  }
+
+
+  FileHandleResultHelper(IDBFileRequest* aFileRequest,
+                         IDBFileHandle* aFileHandle,
+                         const JS::Handle<JS::Value>* aResult)
+    : mFileRequest(aFileRequest)
+    , mAutoFileHandle(aFileHandle)
+    , mResultType(ResultTypeJSValHandle)
+  {
+    MOZ_ASSERT(aFileRequest);
+    MOZ_ASSERT(aFileHandle);
+    MOZ_ASSERT(aResult);
+
+    mResult.mJSValHandle = aResult;
+  }
+
+  IDBFileRequest*
+  FileRequest() const
+  {
+    return mFileRequest;
+  }
+
+  IDBFileHandle*
+  FileHandle() const
+  {
+    return mAutoFileHandle.FileHandle();
+  }
+
+  virtual nsresult
+  GetResult(JSContext* aCx, JS::MutableHandle<JS::Value> aResult) override
+  {
+    MOZ_ASSERT(aCx);
+    MOZ_ASSERT(mFileRequest);
+
+    switch (mResultType) {
+      case ResultTypeFile:
+        return GetResult(aCx, mResult.mFile, aResult);
+
+      case ResultTypeString:
+        return GetResult(aCx, mResult.mString, aResult);
+
+      case ResultTypeMetadata:
+        return GetResult(aCx, mResult.mMetadata, aResult);
+
+      case ResultTypeJSValHandle:
+        aResult.set(*mResult.mJSValHandle);
+        return NS_OK;
+
+      default:
+        MOZ_CRASH("Unknown result type!");
+    }
+
+    MOZ_CRASH("Should never get here!");
+  }
+
+private:
+  nsresult
+  GetResult(JSContext* aCx,
+            File* aFile,
+            JS::MutableHandle<JS::Value> aResult)
+  {
+    bool ok = GetOrCreateDOMReflector(aCx, aFile, aResult);
+    if (NS_WARN_IF(!ok)) {
+      return NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR;
+    }
+
+    return NS_OK;
+  }
+
+  nsresult
+  GetResult(JSContext* aCx,
+            const nsCString* aString,
+            JS::MutableHandle<JS::Value> aResult)
+  {
+    const nsCString& data = *aString;
+
+    nsresult rv;
+
+    if (!mFileRequest->HasEncoding()) {
+      JS::Rooted<JSObject*> arrayBuffer(aCx);
+      rv = nsContentUtils::CreateArrayBuffer(aCx, data, arrayBuffer.address());
+      if (NS_WARN_IF(NS_FAILED(rv))) {
+        return NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR;
+      }
+
+      aResult.setObject(*arrayBuffer);
+      return NS_OK;
+    }
+
+    // Try the API argument.
+    const Encoding* encoding =
+      Encoding::ForLabel(mFileRequest->GetEncoding());
+    if (!encoding) {
+      // API argument failed. Since we are dealing with a file system file,
+      // we don't have a meaningful type attribute for the blob available,
+      // so proceeding to the next step, which is defaulting to UTF-8.
+      encoding = UTF_8_ENCODING;
+    }
+
+    nsString tmpString;
+    Tie(rv, encoding) = encoding->Decode(data, tmpString);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR;
+    }
+    rv = NS_OK;
+
+    if (NS_WARN_IF(!xpc::StringToJsval(aCx, tmpString, aResult))) {
+      return NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR;
+    }
+
+    return NS_OK;
+  }
+
+  nsresult
+  GetResult(JSContext* aCx,
+            const FileRequestMetadata* aMetadata,
+            JS::MutableHandle<JS::Value> aResult)
+  {
+    JS::Rooted<JSObject*> obj(aCx, JS_NewPlainObject(aCx));
+    if (NS_WARN_IF(!obj)) {
+      return NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR;
+    }
+
+    const FileRequestSize& size = aMetadata->size();
+    if (size.type() != FileRequestSize::Tvoid_t) {
+      MOZ_ASSERT(size.type() == FileRequestSize::Tuint64_t);
+
+      JS::Rooted<JS::Value> number(aCx, JS_NumberValue(size.get_uint64_t()));
+
+      if (NS_WARN_IF(!JS_DefineProperty(aCx, obj, "size", number, 0))) {
+        return NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR;
+      }
+    }
+
+    const FileRequestLastModified& lastModified = aMetadata->lastModified();
+    if (lastModified.type() != FileRequestLastModified::Tvoid_t) {
+      MOZ_ASSERT(lastModified.type() == FileRequestLastModified::Tint64_t);
+
+      JS::Rooted<JSObject*> date(aCx,
+        JS::NewDateObject(aCx, JS::TimeClip(lastModified.get_int64_t())));
+      if (NS_WARN_IF(!date)) {
+        return NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR;
+      }
+
+      if (NS_WARN_IF(!JS_DefineProperty(aCx, obj, "lastModified", date, 0))) {
+        return NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR;
+      }
+    }
+
+    aResult.setObject(*obj);
+    return NS_OK;
+  }
+};
+
+already_AddRefed<File>
+ConvertActorToFile(IDBFileHandle* aFileHandle,
+                   const FileRequestGetFileResponse& aResponse)
+{
+  auto* actor = static_cast<PendingIPCBlobChild*>(aResponse.fileChild());
+
+  IDBMutableFile* mutableFile = aFileHandle->GetMutableFile();
+  MOZ_ASSERT(mutableFile);
+
+  const FileRequestMetadata& metadata = aResponse.metadata();
+
+  const FileRequestSize& size = metadata.size();
+  MOZ_ASSERT(size.type() == FileRequestSize::Tuint64_t);
+
+  const FileRequestLastModified& lastModified = metadata.lastModified();
+  MOZ_ASSERT(lastModified.type() == FileRequestLastModified::Tint64_t);
+
+  RefPtr<BlobImpl> blobImpl =
+    actor->SetPendingInfoAndDeleteActor(mutableFile->Name(),
+                                        mutableFile->Type(),
+                                        size.get_uint64_t(),
+                                        lastModified.get_int64_t());
+  MOZ_ASSERT(blobImpl);
+
+  RefPtr<BlobImpl> blobImplSnapshot =
+    new BlobImplSnapshot(blobImpl, static_cast<IDBFileHandle*>(aFileHandle));
+
+  RefPtr<File> file = File::Create(mutableFile->GetOwner(), blobImplSnapshot);
+  return file.forget();
+}
+
+void
+DispatchFileHandleErrorEvent(IDBFileRequest* aFileRequest,
+                             nsresult aErrorCode,
+                             IDBFileHandle* aFileHandle)
+{
+  MOZ_ASSERT(aFileRequest);
+  aFileRequest->AssertIsOnOwningThread();
+  MOZ_ASSERT(NS_FAILED(aErrorCode));
+  MOZ_ASSERT(NS_ERROR_GET_MODULE(aErrorCode) == NS_ERROR_MODULE_DOM_FILEHANDLE);
+  MOZ_ASSERT(aFileHandle);
+
+  RefPtr<IDBFileRequest> fileRequest = aFileRequest;
+  RefPtr<IDBFileHandle> fileHandle = aFileHandle;
+
+  AutoSetCurrentFileHandle ascfh(aFileHandle);
+
+  fileRequest->FireError(aErrorCode);
+
+  MOZ_ASSERT(fileHandle->IsOpen() || fileHandle->IsAborted());
+}
+
+void
+DispatchFileHandleSuccessEvent(FileHandleResultHelper* aResultHelper)
+{
+  MOZ_ASSERT(aResultHelper);
+
+  RefPtr<IDBFileRequest> fileRequest = aResultHelper->FileRequest();
+  MOZ_ASSERT(fileRequest);
+  fileRequest->AssertIsOnOwningThread();
+
+  RefPtr<IDBFileHandle> fileHandle = aResultHelper->FileHandle();
+  MOZ_ASSERT(fileHandle);
+
+  if (fileHandle->IsAborted()) {
+    fileRequest->FireError(NS_ERROR_DOM_FILEHANDLE_ABORT_ERR);
+    return;
+  }
+
+  MOZ_ASSERT(fileHandle->IsOpen());
+
+  fileRequest->SetResultCallback(aResultHelper);
+
+  MOZ_ASSERT(fileHandle->IsOpen() || fileHandle->IsAborted());
+}
+
 } // namespace
 
 /*******************************************************************************
@@ -1154,22 +1476,34 @@ WorkerPermissionRequestChildProcessActor::Recv__delete__(
 // CancelableRunnable is used to make workers happy.
 class BackgroundRequestChild::PreprocessHelper final
   : public CancelableRunnable
+  , public nsIInputStreamCallback
+  , public nsIFileMetadataCallback
 {
   typedef std::pair<nsCOMPtr<nsIInputStream>,
                     nsCOMPtr<nsIInputStream>> StreamPair;
 
-  nsCOMPtr<nsIEventTarget> mOwningThread;
+  nsCOMPtr<nsIEventTarget> mOwningEventTarget;
   nsTArray<StreamPair> mStreamPairs;
   nsTArray<RefPtr<JS::WasmModule>> mModuleSet;
   BackgroundRequestChild* mActor;
+
+  // These 2 are populated when the processing of the stream pairs runs.
+  PRFileDesc* mCurrentBytecodeFileDesc;
+  PRFileDesc* mCurrentCompiledFileDesc;
+
+  RefPtr<TaskQueue> mTaskQueue;
+  nsCOMPtr<nsIEventTarget> mTaskQueueEventTarget;
+
   uint32_t mModuleSetIndex;
   nsresult mResultCode;
 
 public:
   PreprocessHelper(uint32_t aModuleSetIndex, BackgroundRequestChild* aActor)
     : CancelableRunnable("indexedDB::BackgroundRequestChild::PreprocessHelper")
-    , mOwningThread(aActor->GetActorEventTarget())
+    , mOwningEventTarget(aActor->GetActorEventTarget())
     , mActor(aActor)
+    , mCurrentBytecodeFileDesc(nullptr)
+    , mCurrentCompiledFileDesc(nullptr)
     , mModuleSetIndex(aModuleSetIndex)
     , mResultCode(NS_OK)
   {
@@ -1181,10 +1515,10 @@ public:
   bool
   IsOnOwningThread() const
   {
-    MOZ_ASSERT(mOwningThread);
+    MOZ_ASSERT(mOwningEventTarget);
 
     bool current;
-    return NS_SUCCEEDED(mOwningThread->IsOnCurrentThread(&current)) && current;
+    return NS_SUCCEEDED(mOwningEventTarget->IsOnCurrentThread(&current)) && current;
   }
 
   void
@@ -1209,15 +1543,31 @@ public:
 
 private:
   ~PreprocessHelper()
-  { }
+  {
+    if (mTaskQueue) {
+      mTaskQueue->BeginShutdown();
+    }
+  }
 
   void
   RunOnOwningThread();
 
-  nsresult
-  RunOnStreamTransportThread();
+  void
+  ProcessCurrentStreamPair();
 
+  nsresult
+  WaitForStreamReady(nsIInputStream* aInputStream);
+
+  void
+  ContinueWithStatus(nsresult aStatus);
+
+  nsresult
+  DataIsReady(nsIInputStream* aInputStream);
+
+  NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSIRUNNABLE
+  NS_DECL_NSIINPUTSTREAMCALLBACK
+  NS_DECL_NSIFILEMETADATACALLBACK
 
   virtual nsresult
   Cancel() override;
@@ -1298,9 +1648,6 @@ BackgroundRequestChildBase::AssertIsOnOwningThread() const
 
 BackgroundFactoryChild::BackgroundFactoryChild(IDBFactory* aFactory)
   : mFactory(aFactory)
-#ifdef DEBUG
-  , mOwningThread(NS_GetCurrentThread())
-#endif
 {
   AssertIsOnOwningThread();
   MOZ_ASSERT(aFactory);
@@ -1313,27 +1660,6 @@ BackgroundFactoryChild::~BackgroundFactoryChild()
 {
   MOZ_COUNT_DTOR(indexedDB::BackgroundFactoryChild);
 }
-
-#ifdef DEBUG
-
-void
-BackgroundFactoryChild::AssertIsOnOwningThread() const
-{
-  MOZ_ASSERT(mOwningThread);
-
-  bool current;
-  MOZ_ASSERT(NS_SUCCEEDED(mOwningThread->IsOnCurrentThread(&current)));
-  MOZ_ASSERT(current);
-}
-
-nsIEventTarget*
-BackgroundFactoryChild::OwningThread() const
-{
-  MOZ_ASSERT(mOwningThread);
-  return mOwningThread;
-}
-
-#endif // DEBUG
 
 void
 BackgroundFactoryChild::SendDeleteMeInternal()
@@ -1429,6 +1755,7 @@ BackgroundFactoryRequestChild::BackgroundFactoryRequestChild(
                                                uint64_t aRequestedVersion)
   : BackgroundRequestChildBase(aOpenRequest)
   , mFactory(aFactory)
+  , mDatabaseActor(nullptr)
   , mRequestedVersion(aRequestedVersion)
   , mIsDeleteOp(aIsDeleteOp)
 {
@@ -1453,6 +1780,15 @@ BackgroundFactoryRequestChild::GetOpenDBRequest() const
   return static_cast<IDBOpenDBRequest*>(mRequest.get());
 }
 
+void
+BackgroundFactoryRequestChild::SetDatabaseActor(BackgroundDatabaseChild* aActor)
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(!aActor || !mDatabaseActor);
+
+  mDatabaseActor = aActor;
+}
+
 bool
 BackgroundFactoryRequestChild::HandleResponse(nsresult aResponse)
 {
@@ -1463,6 +1799,11 @@ BackgroundFactoryRequestChild::HandleResponse(nsresult aResponse)
   mRequest->Reset();
 
   DispatchErrorEvent(mRequest, aResponse);
+
+  if (mDatabaseActor) {
+    mDatabaseActor->ReleaseDOMObject();
+    MOZ_ASSERT(!mDatabaseActor);
+  }
 
   return true;
 }
@@ -1482,12 +1823,15 @@ BackgroundFactoryRequestChild::HandleResponse(
   IDBDatabase* database = databaseActor->GetDOMObject();
   if (!database) {
     databaseActor->EnsureDOMObject();
+    MOZ_ASSERT(mDatabaseActor);
 
     database = databaseActor->GetDOMObject();
     MOZ_ASSERT(database);
 
     MOZ_ASSERT(!database->IsClosed());
   }
+
+  MOZ_ASSERT(mDatabaseActor == databaseActor);
 
   if (database->IsClosed()) {
     // If the database was closed already, which is only possible if we fired an
@@ -1501,6 +1845,7 @@ BackgroundFactoryRequestChild::HandleResponse(
   }
 
   databaseActor->ReleaseDOMObject();
+  MOZ_ASSERT(!mDatabaseActor);
 
   return true;
 }
@@ -1520,6 +1865,8 @@ BackgroundFactoryRequestChild::HandleResponse(
   MOZ_ASSERT(successEvent);
 
   DispatchSuccessEvent(&helper, successEvent);
+
+  MOZ_ASSERT(!mDatabaseActor);
 
   return true;
 }
@@ -1716,6 +2063,16 @@ BackgroundDatabaseChild::~BackgroundDatabaseChild()
   MOZ_COUNT_DTOR(indexedDB::BackgroundDatabaseChild);
 }
 
+#ifdef DEBUG
+
+void
+BackgroundDatabaseChild::AssertIsOnOwningThread() const
+{
+  static_cast<BackgroundFactoryChild*>(Manager())->AssertIsOnOwningThread();
+}
+
+#endif // DEBUG
+
 void
 BackgroundDatabaseChild::SendDeleteMeInternal()
 {
@@ -1759,6 +2116,8 @@ BackgroundDatabaseChild::EnsureDOMObject()
 
   mDatabase = mTemporaryStrongDatabase;
   mSpec.forget();
+
+  mOpenRequestActor->SetDatabaseActor(this);
 }
 
 void
@@ -1769,6 +2128,8 @@ BackgroundDatabaseChild::ReleaseDOMObject()
   mTemporaryStrongDatabase->AssertIsOnOwningThread();
   MOZ_ASSERT(mOpenRequestActor);
   MOZ_ASSERT(mDatabase == mTemporaryStrongDatabase);
+
+  mOpenRequestActor->SetDatabaseActor(nullptr);
 
   mOpenRequestActor = nullptr;
 
@@ -1795,7 +2156,7 @@ BackgroundDatabaseChild::ActorDestroy(ActorDestroyReason aWhy)
 
 PBackgroundIDBDatabaseFileChild*
 BackgroundDatabaseChild::AllocPBackgroundIDBDatabaseFileChild(
-                                                         PBlobChild* aBlobChild)
+                                                        const IPCBlob& aIPCBlob)
 {
   MOZ_CRASH("PBackgroundIDBFileChild actors should be manually constructed!");
 }
@@ -1892,17 +2253,7 @@ BackgroundDatabaseChild::RecvPBackgroundIDBVersionChangeTransactionConstructor(
                                         request,
                                         aNextObjectStoreId,
                                         aNextIndexId);
-  if (NS_WARN_IF(!transaction)) {
-    // This can happen if we receive events after a worker has begun its
-    // shutdown process.
-    MOZ_ASSERT(!NS_IsMainThread());
-
-    // Report this to the console.
-    IDB_REPORT_INTERNAL_ERR();
-
-    MOZ_ALWAYS_TRUE(aActor->SendDeleteMe());
-    return IPC_OK();
-  }
+  MOZ_ASSERT(transaction);
 
   transaction->AssertIsOnOwningThread();
 
@@ -1942,16 +2293,7 @@ BackgroundDatabaseChild::AllocPBackgroundMutableFileChild(const nsString& aName,
 {
   AssertIsOnOwningThread();
 
-#ifdef DEBUG
-  nsCOMPtr<nsIThread> owningThread = do_QueryInterface(OwningThread());
-
-  PRThread* owningPRThread;
-  owningThread->GetPRThread(&owningPRThread);
-#endif
-
-  return new BackgroundMutableFileChild(DEBUGONLY(owningPRThread,)
-                                        aName,
-                                        aType);
+  return new BackgroundMutableFileChild(aName, aType);
 }
 
 bool
@@ -2469,11 +2811,9 @@ BackgroundVersionChangeTransactionChild::DeallocPBackgroundIDBCursorChild(
  * BackgroundMutableFileChild
  ******************************************************************************/
 
-BackgroundMutableFileChild::BackgroundMutableFileChild(
-                                             DEBUGONLY(PRThread* aOwningThread,)
-                                             const nsAString& aName,
-                                             const nsAString& aType)
-  : BackgroundMutableFileChildBase(DEBUGONLY(aOwningThread))
+BackgroundMutableFileChild::BackgroundMutableFileChild(const nsAString& aName,
+                                                       const nsAString& aType)
+  : mMutableFile(nullptr)
   , mName(aName)
   , mType(aType)
 {
@@ -2486,17 +2826,93 @@ BackgroundMutableFileChild::~BackgroundMutableFileChild()
   MOZ_COUNT_DTOR(indexedDB::BackgroundMutableFileChild);
 }
 
-already_AddRefed<MutableFileBase>
-BackgroundMutableFileChild::CreateMutableFile()
+#ifdef DEBUG
+
+void
+BackgroundMutableFileChild::AssertIsOnOwningThread() const
 {
+  static_cast<BackgroundDatabaseChild*>(Manager())->AssertIsOnOwningThread();
+}
+
+#endif // DEBUG
+
+void
+BackgroundMutableFileChild::EnsureDOMObject()
+{
+  AssertIsOnOwningThread();
+
+  if (mTemporaryStrongMutableFile) {
+    return;
+  }
+
   auto database =
     static_cast<BackgroundDatabaseChild*>(Manager())->GetDOMObject();
   MOZ_ASSERT(database);
 
-  RefPtr<IDBMutableFile> mutableFile =
+  mTemporaryStrongMutableFile =
     new IDBMutableFile(database, this, mName, mType);
 
-  return mutableFile.forget();
+  MOZ_ASSERT(mTemporaryStrongMutableFile);
+  mTemporaryStrongMutableFile->AssertIsOnOwningThread();
+
+  mMutableFile = mTemporaryStrongMutableFile;
+}
+
+void
+BackgroundMutableFileChild::ReleaseDOMObject()
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mTemporaryStrongMutableFile);
+  mTemporaryStrongMutableFile->AssertIsOnOwningThread();
+  MOZ_ASSERT(mMutableFile == mTemporaryStrongMutableFile);
+
+  mTemporaryStrongMutableFile = nullptr;
+}
+
+void
+BackgroundMutableFileChild::SendDeleteMeInternal()
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(!mTemporaryStrongMutableFile);
+
+  if (mMutableFile) {
+    mMutableFile->ClearBackgroundActor();
+    mMutableFile = nullptr;
+
+    MOZ_ALWAYS_TRUE(PBackgroundMutableFileChild::SendDeleteMe());
+  }
+}
+
+void
+BackgroundMutableFileChild::ActorDestroy(ActorDestroyReason aWhy)
+{
+  AssertIsOnOwningThread();
+
+  if (mMutableFile) {
+    mMutableFile->ClearBackgroundActor();
+#ifdef DEBUG
+    mMutableFile = nullptr;
+#endif
+  }
+}
+
+PBackgroundFileHandleChild*
+BackgroundMutableFileChild::AllocPBackgroundFileHandleChild(
+                                                          const FileMode& aMode)
+{
+  MOZ_CRASH("PBackgroundFileHandleChild actors should be manually "
+            "constructed!");
+}
+
+bool
+BackgroundMutableFileChild::DeallocPBackgroundFileHandleChild(
+                                             PBackgroundFileHandleChild* aActor)
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(aActor);
+
+  delete static_cast<BackgroundFileHandleChild*>(aActor);
+  return true;
 }
 
 /*******************************************************************************
@@ -2991,14 +3407,14 @@ PreprocessHelper::Init(const nsTArray<StructuredCloneFile>& aFiles)
     ErrorResult errorResult;
 
     nsCOMPtr<nsIInputStream> bytecodeStream;
-    bytecodeFile.mBlob->GetInternalStream(getter_AddRefs(bytecodeStream),
+    bytecodeFile.mBlob->CreateInputStream(getter_AddRefs(bytecodeStream),
                                           errorResult);
     if (NS_WARN_IF(errorResult.Failed())) {
       return errorResult.StealNSResult();
     }
 
     nsCOMPtr<nsIInputStream> compiledStream;
-    compiledFile.mBlob->GetInternalStream(getter_AddRefs(compiledStream),
+    compiledFile.mBlob->CreateInputStream(getter_AddRefs(compiledStream),
                                           errorResult);
     if (NS_WARN_IF(errorResult.Failed())) {
       return errorResult.StealNSResult();
@@ -3018,14 +3434,22 @@ PreprocessHelper::Dispatch()
 {
   AssertIsOnOwningThread();
 
-  // The stream transport service is used for asynchronous processing. It has
-  // a threadpool with a high cap of 25 threads. Fortunately, the service can
-  // be used on workers too.
-  nsCOMPtr<nsIEventTarget> target =
-    do_GetService(NS_STREAMTRANSPORTSERVICE_CONTRACTID);
-  MOZ_ASSERT(target);
+  if (!mTaskQueue) {
+    // The stream transport service is used for asynchronous processing. It has
+    // a threadpool with a high cap of 25 threads. Fortunately, the service can
+    // be used on workers too.
+    nsCOMPtr<nsIEventTarget> target =
+      do_GetService(NS_STREAMTRANSPORTSERVICE_CONTRACTID);
+    MOZ_ASSERT(target);
 
-  nsresult rv = target->Dispatch(this, NS_DISPATCH_NORMAL);
+    // We use a TaskQueue here in order to be sure that the events are
+    // dispatched in the correct order. This is not guaranteed in case we use
+    // the I/O thread directly.
+    mTaskQueue = new TaskQueue(target.forget());
+    mTaskQueueEventTarget = mTaskQueue->WrapAsEventTarget();
+  }
+
+  nsresult rv = mTaskQueueEventTarget->Dispatch(this, NS_DISPATCH_NORMAL);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
@@ -3050,60 +3474,139 @@ PreprocessHelper::RunOnOwningThread()
   }
 }
 
-nsresult
+void
 BackgroundRequestChild::
-PreprocessHelper::RunOnStreamTransportThread()
+PreprocessHelper::ProcessCurrentStreamPair()
 {
   MOZ_ASSERT(!IsOnOwningThread());
   MOZ_ASSERT(!mStreamPairs.IsEmpty());
-  MOZ_ASSERT(mModuleSet.IsEmpty());
 
-  const uint32_t count = mStreamPairs.Length();
+  nsresult rv;
 
-  for (uint32_t index = 0; index < count; index++) {
-    const StreamPair& streamPair = mStreamPairs[index];
+  const StreamPair& streamPair = mStreamPairs[0];
 
+  // We still don't have the current bytecode FileDesc.
+  if (!mCurrentBytecodeFileDesc) {
     const nsCOMPtr<nsIInputStream>& bytecodeStream = streamPair.first;
-
     MOZ_ASSERT(bytecodeStream);
 
-    PRFileDesc* bytecodeFileDesc = GetFileDescriptorFromStream(bytecodeStream);
-    if (NS_WARN_IF(!bytecodeFileDesc)) {
-      return NS_ERROR_FAILURE;
+    mCurrentBytecodeFileDesc = GetFileDescriptorFromStream(bytecodeStream);
+    if (!mCurrentBytecodeFileDesc) {
+      rv = WaitForStreamReady(bytecodeStream);
+      if (NS_WARN_IF(NS_FAILED(rv))) {
+        ContinueWithStatus(rv);
+      }
+      return;
     }
-
-    const nsCOMPtr<nsIInputStream>& compiledStream = streamPair.second;
-
-    MOZ_ASSERT(compiledStream);
-
-    PRFileDesc* compiledFileDesc = GetFileDescriptorFromStream(compiledStream);
-    if (NS_WARN_IF(!compiledFileDesc)) {
-      return NS_ERROR_FAILURE;
-    }
-
-    JS::BuildIdCharVector buildId;
-    bool ok = GetBuildId(&buildId);
-    if (NS_WARN_IF(!ok)) {
-      return NS_ERROR_FAILURE;
-    }
-
-    RefPtr<JS::WasmModule> module = JS::DeserializeWasmModule(bytecodeFileDesc,
-                                                              compiledFileDesc,
-                                                              Move(buildId),
-                                                              nullptr,
-                                                              0,
-                                                              0);
-    if (NS_WARN_IF(!module)) {
-      return NS_ERROR_FAILURE;
-    }
-
-    mModuleSet.AppendElement(module);
   }
 
-  mStreamPairs.Clear();
+  if (!mCurrentCompiledFileDesc) {
+    const nsCOMPtr<nsIInputStream>& compiledStream = streamPair.second;
+    MOZ_ASSERT(compiledStream);
+
+    mCurrentCompiledFileDesc = GetFileDescriptorFromStream(compiledStream);
+    if (!mCurrentCompiledFileDesc) {
+      rv = WaitForStreamReady(compiledStream);
+      if (NS_WARN_IF(NS_FAILED(rv))) {
+        ContinueWithStatus(rv);
+      }
+      return;
+    }
+  }
+
+  MOZ_ASSERT(mCurrentBytecodeFileDesc && mCurrentCompiledFileDesc);
+
+  JS::BuildIdCharVector buildId;
+  bool ok = GetBuildId(&buildId);
+  if (NS_WARN_IF(!ok)) {
+    ContinueWithStatus(NS_ERROR_FAILURE);
+    return;
+  }
+
+  RefPtr<JS::WasmModule> module =
+    JS::DeserializeWasmModule(mCurrentBytecodeFileDesc,
+                              mCurrentCompiledFileDesc,
+                              Move(buildId),
+                              nullptr,
+                              0,
+                              0);
+  if (NS_WARN_IF(!module)) {
+    ContinueWithStatus(NS_ERROR_FAILURE);
+    return;
+  }
+
+  mModuleSet.AppendElement(module);
+  mStreamPairs.RemoveElementAt(0);
+
+  ContinueWithStatus(NS_OK);
+}
+
+nsresult
+BackgroundRequestChild::
+PreprocessHelper::WaitForStreamReady(nsIInputStream* aInputStream)
+{
+  MOZ_ASSERT(!IsOnOwningThread());
+  MOZ_ASSERT(aInputStream);
+
+  nsCOMPtr<nsIAsyncFileMetadata> asyncFileMetadata =
+    do_QueryInterface(aInputStream);
+  if (asyncFileMetadata) {
+    nsresult rv = asyncFileMetadata->AsyncWait(this, mTaskQueueEventTarget);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+
+    return NS_OK;
+  }
+
+  nsCOMPtr<nsIAsyncInputStream> asyncStream = do_QueryInterface(aInputStream);
+  if (!asyncStream) {
+    return NS_ERROR_NO_INTERFACE;
+  }
+
+  nsresult rv = asyncStream->AsyncWait(this, 0, 0, mTaskQueueEventTarget);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
 
   return NS_OK;
 }
+
+void
+BackgroundRequestChild::
+PreprocessHelper::ContinueWithStatus(nsresult aStatus)
+{
+  MOZ_ASSERT(!IsOnOwningThread());
+
+  // Let's reset the value for the next operation.
+  mCurrentBytecodeFileDesc = nullptr;
+  mCurrentCompiledFileDesc = nullptr;
+
+  nsCOMPtr<nsIEventTarget> eventTarget;
+
+  if (NS_WARN_IF(NS_FAILED(aStatus))) {
+    // If the previous operation failed, we don't continue the processing of the
+    // other stream pairs.
+    MOZ_ASSERT(mResultCode == NS_OK);
+    mResultCode = aStatus;
+
+    eventTarget = mOwningEventTarget;
+  } else if (mStreamPairs.IsEmpty()) {
+    // If all the streams have been processed, we can go back to the owning
+    // thread.
+    eventTarget = mOwningEventTarget;
+  } else {
+    // Continue the processing.
+    eventTarget = mTaskQueueEventTarget;
+  }
+
+  nsresult rv = eventTarget->Dispatch(this, NS_DISPATCH_NORMAL);
+  Unused <<  NS_WARN_IF(NS_FAILED(rv));
+}
+
+NS_IMPL_ISUPPORTS_INHERITED(BackgroundRequestChild::PreprocessHelper,
+                            CancelableRunnable, nsIInputStreamCallback,
+                            nsIFileMetadataCallback)
 
 NS_IMETHODIMP
 BackgroundRequestChild::
@@ -3112,16 +3615,63 @@ PreprocessHelper::Run()
   if (IsOnOwningThread()) {
     RunOnOwningThread();
   } else {
-    nsresult rv = RunOnStreamTransportThread();
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      MOZ_ASSERT(mResultCode == NS_OK);
-      mResultCode = rv;
-    }
-
-    MOZ_ALWAYS_SUCCEEDS(mOwningThread->Dispatch(this, NS_DISPATCH_NORMAL));
+    ProcessCurrentStreamPair();
   }
 
   return NS_OK;
+}
+
+NS_IMETHODIMP
+BackgroundRequestChild::
+PreprocessHelper::OnInputStreamReady(nsIAsyncInputStream* aStream)
+{
+  return DataIsReady(aStream);
+}
+
+NS_IMETHODIMP
+BackgroundRequestChild::
+PreprocessHelper::OnFileMetadataReady(nsIAsyncFileMetadata* aObject)
+{
+  nsCOMPtr<nsIInputStream> stream = do_QueryInterface(aObject);
+  MOZ_ASSERT(stream, "It was a stream before!");
+
+  return DataIsReady(stream);
+}
+
+nsresult
+BackgroundRequestChild::
+PreprocessHelper::DataIsReady(nsIInputStream* aStream)
+{
+  MOZ_ASSERT(!IsOnOwningThread());
+  MOZ_ASSERT(aStream);
+  MOZ_ASSERT(!mStreamPairs.IsEmpty());
+
+  // We still don't have the current bytecode FileDesc.
+  if (!mCurrentBytecodeFileDesc) {
+    mCurrentBytecodeFileDesc = GetFileDescriptorFromStream(aStream);
+    if (!mCurrentBytecodeFileDesc) {
+      ContinueWithStatus(NS_ERROR_FAILURE);
+      return NS_OK;
+    }
+
+    // Let's continue with the processing of the current pair.
+    ProcessCurrentStreamPair();
+    return NS_OK;
+  }
+
+  if (!mCurrentCompiledFileDesc) {
+    mCurrentCompiledFileDesc = GetFileDescriptorFromStream(aStream);
+    if (!mCurrentCompiledFileDesc) {
+      ContinueWithStatus(NS_ERROR_FAILURE);
+      return NS_OK;
+    }
+
+    // Let's continue with the processing of the current pair.
+    ProcessCurrentStreamPair();
+    return NS_OK;
+  }
+
+  MOZ_CRASH("If we have both fileDescs why are we here?");
 }
 
 nsresult
@@ -3184,11 +3734,6 @@ BackgroundCursorChild::BackgroundCursorChild(IDBRequest* aRequest,
   MOZ_ASSERT(mTransaction);
 
   MOZ_COUNT_CTOR(indexedDB::BackgroundCursorChild);
-
-#ifdef DEBUG
-  mOwningThread = PR_GetCurrentThread();
-  MOZ_ASSERT(mOwningThread);
-#endif
 }
 
 BackgroundCursorChild::BackgroundCursorChild(IDBRequest* aRequest,
@@ -3207,27 +3752,12 @@ BackgroundCursorChild::BackgroundCursorChild(IDBRequest* aRequest,
   MOZ_ASSERT(mTransaction);
 
   MOZ_COUNT_CTOR(indexedDB::BackgroundCursorChild);
-
-#ifdef DEBUG
-  mOwningThread = PR_GetCurrentThread();
-  MOZ_ASSERT(mOwningThread);
-#endif
 }
 
 BackgroundCursorChild::~BackgroundCursorChild()
 {
   MOZ_COUNT_DTOR(indexedDB::BackgroundCursorChild);
 }
-
-#ifdef DEBUG
-
-void
-BackgroundCursorChild::AssertIsOnOwningThread() const
-{
-  MOZ_ASSERT(mOwningThread == PR_GetCurrentThread());
-}
-
-#endif // DEBUG
 
 void
 BackgroundCursorChild::SendContinueInternal(const CursorRequestParams& aParams)
@@ -3562,14 +4092,298 @@ DelayedActionRunnable::Cancel()
 }
 
 /*******************************************************************************
+ * BackgroundFileHandleChild
+ ******************************************************************************/
+
+BackgroundFileHandleChild::BackgroundFileHandleChild(IDBFileHandle* aFileHandle)
+  : mTemporaryStrongFileHandle(aFileHandle)
+  , mFileHandle(aFileHandle)
+{
+  MOZ_ASSERT(aFileHandle);
+  aFileHandle->AssertIsOnOwningThread();
+
+  MOZ_COUNT_CTOR(BackgroundFileHandleChild);
+}
+
+BackgroundFileHandleChild::~BackgroundFileHandleChild()
+{
+  AssertIsOnOwningThread();
+
+  MOZ_COUNT_DTOR(BackgroundFileHandleChild);
+}
+
+#ifdef DEBUG
+
+void
+BackgroundFileHandleChild::AssertIsOnOwningThread() const
+{
+  static_cast<BackgroundMutableFileChild*>(Manager())->AssertIsOnOwningThread();
+}
+
+#endif // DEBUG
+
+void
+BackgroundFileHandleChild::SendDeleteMeInternal()
+{
+  AssertIsOnOwningThread();
+
+  if (mFileHandle) {
+    NoteActorDestroyed();
+
+    MOZ_ALWAYS_TRUE(PBackgroundFileHandleChild::SendDeleteMe());
+  }
+}
+
+void
+BackgroundFileHandleChild::NoteActorDestroyed()
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT_IF(mTemporaryStrongFileHandle, mFileHandle);
+
+  if (mFileHandle) {
+    mFileHandle->ClearBackgroundActor();
+
+    // Normally this would be DEBUG-only but NoteActorDestroyed is also called
+    // from SendDeleteMeInternal. In that case we're going to receive an actual
+    // ActorDestroy call later and we don't want to touch a dead object.
+    mTemporaryStrongFileHandle = nullptr;
+    mFileHandle = nullptr;
+  }
+}
+
+void
+BackgroundFileHandleChild::NoteComplete()
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT_IF(mFileHandle, mTemporaryStrongFileHandle);
+
+  mTemporaryStrongFileHandle = nullptr;
+}
+
+void
+BackgroundFileHandleChild::ActorDestroy(ActorDestroyReason aWhy)
+{
+  AssertIsOnOwningThread();
+
+  NoteActorDestroyed();
+}
+
+mozilla::ipc::IPCResult
+BackgroundFileHandleChild::RecvComplete(const bool& aAborted)
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mFileHandle);
+
+  mFileHandle->FireCompleteOrAbortEvents(aAborted);
+
+  NoteComplete();
+  return IPC_OK();
+}
+
+PBackgroundFileRequestChild*
+BackgroundFileHandleChild::AllocPBackgroundFileRequestChild(
+                                               const FileRequestParams& aParams)
+{
+  MOZ_CRASH("PBackgroundFileRequestChild actors should be manually "
+            "constructed!");
+}
+
+bool
+BackgroundFileHandleChild::DeallocPBackgroundFileRequestChild(
+                                            PBackgroundFileRequestChild* aActor)
+{
+  MOZ_ASSERT(aActor);
+
+  delete static_cast<BackgroundFileRequestChild*>(aActor);
+  return true;
+}
+
+/*******************************************************************************
+ * BackgroundFileRequestChild
+ ******************************************************************************/
+
+BackgroundFileRequestChild::BackgroundFileRequestChild(
+                                                   IDBFileRequest* aFileRequest)
+  : mFileRequest(aFileRequest)
+  , mFileHandle(aFileRequest->GetFileHandle())
+  , mActorDestroyed(false)
+{
+  MOZ_ASSERT(aFileRequest);
+  aFileRequest->AssertIsOnOwningThread();
+  MOZ_ASSERT(mFileHandle);
+  mFileHandle->AssertIsOnOwningThread();
+
+  MOZ_COUNT_CTOR(BackgroundFileRequestChild);
+}
+
+BackgroundFileRequestChild::~BackgroundFileRequestChild()
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(!mFileHandle);
+
+  MOZ_COUNT_DTOR(BackgroundFileRequestChild);
+}
+
+#ifdef DEBUG
+
+void
+BackgroundFileRequestChild::AssertIsOnOwningThread() const
+{
+  MOZ_ASSERT(mFileRequest);
+  mFileRequest->AssertIsOnOwningThread();
+}
+
+#endif // DEBUG
+
+void
+BackgroundFileRequestChild::HandleResponse(nsresult aResponse)
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(NS_FAILED(aResponse));
+  MOZ_ASSERT(NS_ERROR_GET_MODULE(aResponse) == NS_ERROR_MODULE_DOM_FILEHANDLE);
+  MOZ_ASSERT(mFileHandle);
+
+  DispatchFileHandleErrorEvent(mFileRequest, aResponse, mFileHandle);
+}
+
+void
+BackgroundFileRequestChild::HandleResponse(
+                                    const FileRequestGetFileResponse& aResponse)
+{
+  AssertIsOnOwningThread();
+
+  RefPtr<File> file = ConvertActorToFile(mFileHandle, aResponse);
+
+  FileHandleResultHelper helper(mFileRequest, mFileHandle, file);
+
+  DispatchFileHandleSuccessEvent(&helper);
+}
+
+void
+BackgroundFileRequestChild::HandleResponse(const nsCString& aResponse)
+{
+  AssertIsOnOwningThread();
+
+  FileHandleResultHelper helper(mFileRequest, mFileHandle, &aResponse);
+
+  DispatchFileHandleSuccessEvent(&helper);
+}
+
+void
+BackgroundFileRequestChild::HandleResponse(const FileRequestMetadata& aResponse)
+{
+  AssertIsOnOwningThread();
+
+  FileHandleResultHelper helper(mFileRequest, mFileHandle, &aResponse);
+
+  DispatchFileHandleSuccessEvent(&helper);
+}
+
+void
+BackgroundFileRequestChild::HandleResponse(JS::Handle<JS::Value> aResponse)
+{
+  AssertIsOnOwningThread();
+
+  FileHandleResultHelper helper(mFileRequest, mFileHandle, &aResponse);
+
+  DispatchFileHandleSuccessEvent(&helper);
+}
+
+void
+BackgroundFileRequestChild::ActorDestroy(ActorDestroyReason aWhy)
+{
+  AssertIsOnOwningThread();
+
+  MOZ_ASSERT(!mActorDestroyed);
+
+  mActorDestroyed = true;
+
+  if (mFileHandle) {
+    mFileHandle->AssertIsOnOwningThread();
+
+    mFileHandle->OnRequestFinished(/* aActorDestroyedNormally */
+                                   aWhy == Deletion);
+
+#ifdef DEBUG
+    mFileHandle = nullptr;
+#endif
+  }
+}
+
+mozilla::ipc::IPCResult
+BackgroundFileRequestChild::Recv__delete__(const FileRequestResponse& aResponse)
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mFileRequest);
+  MOZ_ASSERT(mFileHandle);
+
+  if (mFileHandle->IsAborted()) {
+    // Always handle an "error" with ABORT_ERR if the file handle was aborted,
+    // even if the request succeeded or failed with another error.
+    HandleResponse(NS_ERROR_DOM_FILEHANDLE_ABORT_ERR);
+  } else {
+    switch (aResponse.type()) {
+      case FileRequestResponse::Tnsresult:
+        HandleResponse(aResponse.get_nsresult());
+        break;
+
+      case FileRequestResponse::TFileRequestGetFileResponse:
+        HandleResponse(aResponse.get_FileRequestGetFileResponse());
+        break;
+
+      case FileRequestResponse::TFileRequestReadResponse:
+        HandleResponse(aResponse.get_FileRequestReadResponse().data());
+        break;
+
+      case FileRequestResponse::TFileRequestWriteResponse:
+        HandleResponse(JS::UndefinedHandleValue);
+        break;
+
+      case FileRequestResponse::TFileRequestTruncateResponse:
+        HandleResponse(JS::UndefinedHandleValue);
+        break;
+
+      case FileRequestResponse::TFileRequestFlushResponse:
+        HandleResponse(JS::UndefinedHandleValue);
+        break;
+
+      case FileRequestResponse::TFileRequestGetMetadataResponse:
+        HandleResponse(aResponse.get_FileRequestGetMetadataResponse()
+                                .metadata());
+        break;
+
+      default:
+        MOZ_CRASH("Unknown response type!");
+    }
+  }
+
+  mFileHandle->OnRequestFinished(/* aActorDestroyedNormally */ true);
+
+  // Null this out so that we don't try to call OnRequestFinished() again in
+  // ActorDestroy.
+  mFileHandle = nullptr;
+
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+BackgroundFileRequestChild::RecvProgress(const uint64_t& aProgress,
+                                         const uint64_t& aProgressMax)
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mFileRequest);
+
+  mFileRequest->FireProgressEvent(aProgress, aProgressMax);
+
+  return IPC_OK();
+}
+
+/*******************************************************************************
  * BackgroundUtilsChild
  ******************************************************************************/
 
 BackgroundUtilsChild::BackgroundUtilsChild(IndexedDatabaseManager* aManager)
   : mManager(aManager)
-#ifdef DEBUG
-  , mOwningThread(NS_GetCurrentThread())
-#endif
 {
   AssertIsOnOwningThread();
   MOZ_ASSERT(aManager);
@@ -3581,20 +4395,6 @@ BackgroundUtilsChild::~BackgroundUtilsChild()
 {
   MOZ_COUNT_DTOR(indexedDB::BackgroundUtilsChild);
 }
-
-#ifdef DEBUG
-
-void
-BackgroundUtilsChild::AssertIsOnOwningThread() const
-{
-  MOZ_ASSERT(mOwningThread);
-
-  bool current;
-  MOZ_ASSERT(NS_SUCCEEDED(mOwningThread->IsOnCurrentThread(&current)));
-  MOZ_ASSERT(current);
-}
-
-#endif // DEBUG
 
 void
 BackgroundUtilsChild::SendDeleteMeInternal()

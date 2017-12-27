@@ -2,17 +2,20 @@
 
 [![Join the chat at https://gitter.im/rayon-rs/Lobby](https://badges.gitter.im/rayon-rs/Lobby.svg)](https://gitter.im/rayon-rs/Lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
-[![Build Status](https://travis-ci.org/nikomatsakis/rayon.svg?branch=master)](https://travis-ci.org/nikomatsakis/rayon)
+[![Travis Status](https://travis-ci.org/nikomatsakis/rayon.svg?branch=master)](https://travis-ci.org/nikomatsakis/rayon)
+
+[![Appveyor status](https://ci.appveyor.com/api/projects/status/6oft3iwgr6f2o4d4?svg=true)](https://ci.appveyor.com/project/nikomatsakis/rayon)
 
 Rayon is a data-parallelism library for Rust. It is extremely
 lightweight and makes it easy to convert a sequential computation into
 a parallel one. It also guarantees data-race freedom. (You may also
 enjoy [this blog post][blog] about Rayon, which gives more background
-and details about how it works.) Rayon is
+and details about how it works, or [this video][video], from the Rust Belt Rust conference.) Rayon is
 [available on crates.io](https://crates.io/crates/rayon), and
 [API Documentation is available on docs.rs](https://docs.rs/rayon/).
 
 [blog]: http://smallcultfollowing.com/babysteps/blog/2015/12/18/rayon-data-parallelism-in-rust/
+[video]: https://www.youtube.com/watch?v=gof_OEv71Aw
 
 You can use Rayon in two ways. Which way you will want will depend on
 what you are doing:
@@ -29,6 +32,33 @@ integers, please see the [notes on atomicity](#atomicity).
 
 Rayon currently requires `rustc 1.12.0` or greater.
 
+### Using Rayon
+
+[Rayon is available on crates.io](https://crates.io/crates/rayon). The
+recommended way to use it is to add a line into your Cargo.toml such
+as:
+
+```rust
+[dependencies]
+rayon = "0.8.2"
+```
+
+and then add the following to to your `lib.rs`:
+
+```rust
+extern crate rayon;
+```
+
+To use the Parallel Iterator APIs, a number of traits have to be in
+scope. The easiest way to bring those things into scope is to use the
+[Rayon prelude](https://docs.rs/rayon/*/rayon/prelude/index.html).
+In each module where you would like to use the parallel iterator APIs,
+just add:
+
+```rust
+use rayon::prelude::*;
+```
+
 ### Contribution
 
 Rayon is an open source project! If you'd like to contribute to Rayon, check out [the list of "help wanted" issues](https://github.com/nikomatsakis/rayon/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22). These are all (or should be) issues that are suitable for getting started, and they generally include a detailed set of instructions for what to do. Please ask questions if anything is unclear! Also, check out the [Guide to Development](https://github.com/nikomatsakis/rayon/wiki/Guide-to-Development) page on the wiki. Note that all code submitted in PRs to Rayon is assumed to [be licensed under Rayon's dual MIT/Apache2 licensing](https://github.com/nikomatsakis/rayon/blob/master/README.md#license).
@@ -43,15 +73,17 @@ parallel.
 
 ```
 > cd rayon-demo
-> cargo run --release -- nbody visualize
+> cargo +nightly run --release -- nbody visualize
 ```
 
 For more information on demos, try:
 
 ```
 > cd rayon-demo
-> cargo run --release -- --help
+> cargo +nightly run --release -- --help
 ```
+
+**Note:** While Rayon is usable as a library with the stable compiler, running demos or executing tests requires nightly Rust.
 
 ### Parallel Iterators
 
@@ -88,7 +120,7 @@ computation and then executing it. See the
 more details. (Sorry, proper documentation is still somewhat lacking.)
 
 [regular iterator]: http://doc.rust-lang.org/std/iter/trait.Iterator.html
-[pt]: https://github.com/nikomatsakis/rayon/blob/master/src/par_iter/mod.rs
+[pt]: https://github.com/nikomatsakis/rayon/blob/master/src/iter/mod.rs
 
 ### Using join for recursive, divide-and-conquer problems
 
@@ -187,15 +219,15 @@ and dynamically ascertain how much parallelism is available and
 exploit it. The idea is very simple: we always have a pool of worker
 threads available, waiting for some work to do. When you call `join`
 the first time, we shift over into that pool of threads. But if you
-call `join(a, b)` from a worker thread W, then W will place `b` into a
-central queue, advertising that this is work that other worker threads
-might help out with. W will then start executing `a`. While W is busy
-with `a`, other threads might come along and take `b` from the
-queue. That is called *stealing* `b`. Once `a` is done, W checks
-whether `b` was stolen by another thread and, if not, executes `b`
-itself. If `b` *was* stolen, then W can just wait for the other thread
-to finish.  (In fact, it can do even better: it can go try to find
-other work to steal in the meantime.)
+call `join(a, b)` from a worker thread W, then W will place `b` into
+its work queue, advertising that this is work that other worker
+threads might help out with. W will then start executing `a`.
+
+While W is busy with `a`, other threads might come along and take `b`
+from its queue. That is called *stealing* `b`. Once `a` is done, W
+checks whether `b` was stolen by another thread and, if not, executes
+`b` itself. If W runs out of jobs in its own queue, it will look
+through the other threads' queues and try to steal work from them.
 
 This technique is not new. It was first introduced by the
 [Cilk project][cilk], done at MIT in the late nineties. The name Rayon
@@ -220,7 +252,7 @@ serve a common purpose:
 2. A `RefCell` is kind of like a "single-threaded read-write lock"; it
    can be used with any sort of type `T`. To gain access to the data
    inside, you call `borrow` or `borrow_mut`. Dynamic checks are done
-   to ensure that you have either readers or writers but not both.
+   to ensure that you have either readers or one writer but not both.
 
 While there are threadsafe types that offer similar APIs, caution is
 warranted because, in a threadsafe setting, other threads may
@@ -390,9 +422,37 @@ fn search(path: &Path, cost_so_far: usize, best_cost: &Arc<AtomicUsize>) {
 Now in this case, we really WANT to see results from other threads
 interjected into our execution!
 
+## Semver policy, the rayon-core crate, and unstable features
+
+Rayon follows semver versioning. However, we also have APIs that are
+still in the process of development and which may break from release
+to release -- those APIs are not subject to semver. To use them,
+you have to set the cfg flag `rayon_unstable`. The easiest way to do this
+is to use the `RUSTFLAGS` environment variable:
+
+```
+RUSTFLAGS='--cfg rayon_unstable' cargo build
+```
+
+Note that this must not only be done for your crate, but for any crate
+that depends on your crate. This infectious nature is intentional, as
+it serves as a reminder that you are outside of the normal semver
+guarantees. **If you see unstable APIs that you would like to use,
+please request stabilization on the correspond tracking issue!**
+
+Rayon itself is internally split into two crates. The `rayon` crate is
+intended to be the main, user-facing crate, and hence all the
+documentation refers to `rayon`. This crate is still evolving and
+regularly goes through (minor) breaking changes. The `rayon-core`
+crate contains the global thread-pool and defines the core APIs: we no
+longer permit breaking changes in this crate (except to unstable
+features). The intention is that multiple semver-incompatible versions
+of the rayon crate can peacefully coexist; they will all share one
+global thread-pool through the `rayon-core` crate.
+
 ## License
 
 Rayon is distributed under the terms of both the MIT license and the
-Apache License (Version 2.0). See [LICENSE-APACHE](LICENSE-APACHE) for
+Apache License (Version 2.0). See [LICENSE-APACHE](LICENSE-APACHE) and
 [LICENSE-MIT](LICENSE-MIT) for details. Opening a pull requests is
 assumed to signal agreement with these licensing terms.

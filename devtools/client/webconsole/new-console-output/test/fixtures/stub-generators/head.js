@@ -18,6 +18,7 @@ Services.prefs.setBoolPref("devtools.webconsole.new-frontend-enabled", true);
 registerCleanupFunction(() => {
   Services.prefs.clearUserPref("devtools.webconsole.new-frontend-enabled");
 });
+const { PREFS } = require("devtools/client/webconsole/new-console-output/constants");
 
 const { prepareMessage } = require("devtools/client/webconsole/new-console-output/utils/messages");
 const { stubPackets } = require("devtools/client/webconsole/new-console-output/test/fixtures/stubs/index.js");
@@ -86,19 +87,24 @@ function getCleanedPacket(key, packet) {
       }
 
       if (Array.isArray(res.message.arguments)) {
-        res.message.arguments.forEach((argument, i) => {
-          let existingArgument = existingPacket.message.arguments[i];
+        res.message.arguments = res.message.arguments.map((argument, i) => {
+          if (!argument || typeof argument !== "object") {
+            return argument;
+          }
 
+          let newArgument = Object.assign({}, argument);
+          let existingArgument = existingPacket.message.arguments[i];
           // Clean actor ids on each message.arguments item.
-          if (argument && argument.actor) {
-            argument.actor = existingArgument.actor;
+          if (newArgument.actor) {
+            newArgument.actor = existingArgument.actor;
           }
 
           // `window`'s properties count can vary from OS to OS, so we
           // clean the `ownPropertyLength` property from the grip.
-          if (argument && argument.class === "Window") {
-            argument.ownPropertyLength = existingArgument.ownPropertyLength;
+          if (newArgument.class === "Window") {
+            newArgument.ownPropertyLength = existingArgument.ownPropertyLength;
           }
+          return newArgument;
         });
       }
     }
@@ -122,6 +128,22 @@ function getCleanedPacket(key, packet) {
           // Clean timestamp there too.
           res.exception.preview.timestamp = existingPacket.exception.preview.timestamp;
         }
+
+        if (
+          typeof res.exception.preview.message === "object"
+          && res.exception.preview.message.type === "longString"
+        ) {
+          res.exception.preview.message.actor =
+            existingPacket.exception.preview.message.actor;
+        }
+      }
+
+      if (
+        typeof res.exceptionMessage === "object"
+        && res.exceptionMessage.type === "longString"
+      ) {
+        res.exceptionMessage.actor =
+          existingPacket.exceptionMessage.actor;
       }
     }
 
@@ -135,15 +157,24 @@ function getCleanedPacket(key, packet) {
     if (res.pageError) {
       // Clean timeStamp on pageError messages.
       res.pageError.timeStamp = existingPacket.pageError.timeStamp;
+
+      if (
+        typeof res.pageError.errorMessage === "object"
+        && res.pageError.errorMessage.type === "longString"
+      ) {
+        res.pageError.errorMessage.actor = existingPacket.pageError.errorMessage.actor;
+      }
     }
 
     if (res.packet) {
-      if (res.packet.totalTime) {
-        // res.packet.totalTime is read-only so we use assign to override it.
-        res.packet = Object.assign({}, existingPacket.packet, {
-          totalTime: existingPacket.packet.totalTime
-        });
-      }
+      let override = {};
+      let keys = ["totalTime", "from", "contentSize", "transferredSize"];
+      keys.forEach(x => {
+        if (res.packet[x] !== undefined) {
+          override[x] = existingPacket.packet[key];
+        }
+      });
+      res.packet = Object.assign({}, res.packet, override);
     }
 
     if (res.networkInfo) {
@@ -168,9 +199,29 @@ function getCleanedPacket(key, packet) {
           existingPacket.networkInfo.request.headersSize;
       }
 
-      if (res.networkInfo.response && res.networkInfo.response.headersSize) {
+      if (
+        res.networkInfo.response
+        && res.networkInfo.response.headersSize !== undefined
+      ) {
         res.networkInfo.response.headersSize =
           existingPacket.networkInfo.response.headersSize;
+      }
+      if (res.networkInfo.response && res.networkInfo.response.bodySize !== undefined) {
+        res.networkInfo.response.bodySize =
+          existingPacket.networkInfo.response.bodySize;
+      }
+      if (
+        res.networkInfo.response
+        && res.networkInfo.response.transferredSize !== undefined
+      ) {
+        res.networkInfo.response.transferredSize =
+          existingPacket.networkInfo.response.transferredSize;
+      }
+    }
+
+    if (res.helperResult) {
+      if (res.helperResult.object) {
+        res.helperResult.object.actor = existingPacket.helperResult.object.actor;
       }
     }
   } else {
@@ -238,22 +289,27 @@ module.exports = {
 function* generateConsoleApiStubs() {
   const TEST_URI = "http://example.com/browser/devtools/client/webconsole/new-console-output/test/fixtures/stub-generators/test-console-api.html";
 
+  // Hiding log messages so we don't get unwanted client/server communication.
+  Services.prefs.setBoolPref(PREFS.FILTER.LOG, false);
+
   let stubs = {
     preparedMessages: [],
     packets: [],
   };
 
   let toolbox = yield openNewTabAndToolbox(TEST_URI, "webconsole");
-  let {ui} = toolbox.getCurrentPanel().hud;
+  const hud = toolbox.getCurrentPanel().hud;
+  let {ui} = hud;
   ok(ui.jsterm, "jsterm exists");
   ok(ui.newConsoleOutput, "newConsoleOutput exists");
 
   for (let [key, {keys, code}] of consoleApi) {
     let received = new Promise(resolve => {
       let i = 0;
-      let listener = (type, res) => {
-        stubs.packets.push(formatPacket(keys[i], res));
-        stubs.preparedMessages.push(formatStub(keys[i], res));
+      let listener = async (type, res) => {
+        const callKey = keys[i];
+        stubs.packets.push(formatPacket(callKey, res));
+        stubs.preparedMessages.push(formatStub(callKey, res));
         if (++i === keys.length) {
           toolbox.target.client.removeListener("consoleAPICall", listener);
           resolve();
@@ -267,6 +323,7 @@ function* generateConsoleApiStubs() {
       [key, code],
       function ([subKey, subCode]) {
         let script = content.document.createElement("script");
+        // eslint-disable-next-line no-unsanitized/property
         script.innerHTML = `function triggerPacket() {${subCode}}`;
         content.document.body.appendChild(script);
         content.wrappedJSObject.triggerPacket();
@@ -276,6 +333,8 @@ function* generateConsoleApiStubs() {
 
     yield received;
   }
+
+  Services.prefs.clearUserPref(PREFS.FILTER.LOG);
 
   yield closeTabAndToolbox();
   return formatFile(stubs, "ConsoleMessage");
@@ -310,6 +369,7 @@ function* generateCssMessageStubs() {
       [key, code],
       function ([subKey, subCode]) {
         let style = content.document.createElement("style");
+        // eslint-disable-next-line no-unsanitized/property
         style.innerHTML = subCode;
         content.document.body.appendChild(style);
       }
@@ -332,7 +392,7 @@ function* generateEvaluationResultStubs() {
 
   let toolbox = yield openNewTabAndToolbox(TEST_URI, "webconsole");
 
-  for (let [code, key] of evaluationResult) {
+  for (let [key, code] of evaluationResult) {
     const packet = yield new Promise(resolve => {
       toolbox.target.activeConsole.evaluateJS(code, resolve);
     });
@@ -371,8 +431,21 @@ function* generateNetworkEventStubs() {
     let onNetworkUpdate = new Promise(resolve => {
       let i = 0;
       ui.jsterm.hud.on("network-message-updated", function onNetworkUpdated(event, res) {
-        let updateKey = `${keys[i++]} ${res.packet.updateType}`;
-        stubs.packets.push(formatPacket(updateKey, res));
+        let updateKey = `${keys[i++]} update`;
+        // We cannot ensure the form of the network update packet, some properties
+        // might be in another order than in the original packet.
+        // Hand-picking only what we need should prevent this.
+        const packet = {
+          networkInfo: {
+            _type: res.networkInfo._type,
+            actor: res.networkInfo.actor,
+            request: res.networkInfo.request,
+            response: res.networkInfo.response,
+            totalTime: res.networkInfo.totalTime,
+          }
+        };
+
+        stubs.packets.push(formatPacket(updateKey, packet));
         stubs.preparedMessages.push(formatNetworkEventStub(updateKey, res));
         if (i === keys.length) {
           ui.jsterm.hud.off("network-message-updated", onNetworkUpdated);
@@ -386,6 +459,7 @@ function* generateNetworkEventStubs() {
       [key, code],
       function ([subKey, subCode]) {
         let script = content.document.createElement("script");
+        // eslint-disable-next-line no-unsanitized/property
         script.innerHTML = `function triggerPacket() {${subCode}}`;
         content.document.body.appendChild(script);
         content.wrappedJSObject.triggerPacket();
@@ -414,9 +488,8 @@ function* generatePageErrorStubs() {
     let received = new Promise(resolve => {
       toolbox.target.client.addListener("pageError", function onPacket(e, packet) {
         toolbox.target.client.removeListener("pageError", onPacket);
-        let message = prepareMessage(packet, {getNextId: () => 1});
-        stubs.packets.push(formatPacket(message.messageText, packet));
-        stubs.preparedMessages.push(formatStub(message.messageText, packet));
+        stubs.packets.push(formatPacket(key, packet));
+        stubs.preparedMessages.push(formatStub(key, packet));
         resolve();
       });
     });
@@ -433,6 +506,7 @@ function* generatePageErrorStubs() {
       [key, code],
       function ([subKey, subCode]) {
         let script = content.document.createElement("script");
+        // eslint-disable-next-line no-unsanitized/property
         script.innerHTML = subCode;
         content.document.body.appendChild(script);
         script.remove();

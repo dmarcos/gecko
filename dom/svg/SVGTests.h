@@ -12,8 +12,8 @@
 #include "nsCOMPtr.h"
 
 class nsAttrValue;
-class nsIAtom;
-class nsString;
+class nsAtom;
+class nsStaticAtom;
 
 namespace mozilla {
 class DOMSVGStringList;
@@ -46,7 +46,7 @@ public:
    * or -1 if no indices match.
    * XXX This algorithm is O(M*N).
    */
-  int32_t GetBestLanguagePreferenceRank(const nsSubstring& aAcceptLangs) const;
+  int32_t GetBestLanguagePreferenceRank(const nsAString& aAcceptLangs) const;
 
   /**
    * Special value to pass to PassesConditionalProcessingTests to ignore systemLanguage
@@ -72,19 +72,19 @@ public:
    * Returns true if the attribute is one of the conditional processing
    * attributes.
    */
-  bool IsConditionalProcessingAttribute(const nsIAtom* aAttribute) const;
+  bool IsConditionalProcessingAttribute(const nsAtom* aAttribute) const;
 
   bool ParseConditionalProcessingAttribute(
-         nsIAtom* aAttribute,
+         nsAtom* aAttribute,
          const nsAString& aValue,
          nsAttrValue& aResult);
 
   /**
    * Unsets a conditional processing attribute.
    */
-  void UnsetAttr(const nsIAtom* aAttribute);
+  void UnsetAttr(const nsAtom* aAttribute);
 
-  nsIAtom* GetAttrName(uint8_t aAttrEnum) const;
+  nsAtom* GetAttrName(uint8_t aAttrEnum) const;
   void GetAttrValue(uint8_t aAttrEnum, nsAttrValue &aValue) const;
 
   void MaybeInvalidate();
@@ -103,7 +103,7 @@ protected:
 private:
   enum { FEATURES, EXTENSIONS, LANGUAGE };
   SVGStringList mStringListAttributes[3];
-  static nsIAtom** sStringListNames[3];
+  static nsStaticAtom** sStringListNames[3];
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(SVGTests, MOZILLA_DOMSVGTESTS_IID)

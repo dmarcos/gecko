@@ -100,6 +100,11 @@ class TargetPolicy {
   // Returns the lockdown token level.
   virtual TokenLevel GetLockdownTokenLevel() const = 0;
 
+  // Sets that we should not use restricting SIDs in the access tokens. We need
+  // to do this in some circumstances even though it weakens the sandbox.
+  // The default is to use them.
+  virtual void SetDoNotUseRestrictingSIDs() = 0;
+
   // Sets the security level of the Job Object to which the target process will
   // belong. This setting is permanent and cannot be changed once the target
   // process is spawned. The job controls the global security settings which
@@ -201,7 +206,7 @@ class TargetPolicy {
 
   // Disconnect the target from CSRSS when TargetServices::LowerToken() is
   // called inside the target.
-  virtual void SetDisconnectCsrss() = 0;
+  virtual ResultCode SetDisconnectCsrss() = 0;
 
   // Sets the interceptions to operate in strict mode. By default, interceptions
   // are performed in "relaxed" mode, where if something inside NTDLL.DLL is

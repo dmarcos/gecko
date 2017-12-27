@@ -50,8 +50,7 @@ using mozilla::gfx::SourceSurface;
 static const uint32_t kIconWidth = 16;
 static const uint32_t kIconHeight = 16;
 
-typedef NS_STDCALL_FUNCPROTO(nsresult, GetRectSideMethod, nsIDOMRect,
-                             GetBottom, (nsIDOMCSSPrimitiveValue**));
+typedef decltype(&nsIDOMRect::GetBottom) GetRectSideMethod;
 
 NS_IMPL_ISUPPORTS(nsMenuItemIconX, imgINotificationObserver)
 
@@ -59,7 +58,7 @@ nsMenuItemIconX::nsMenuItemIconX(nsMenuObjectX* aMenuItem,
                                  nsIContent*    aContent,
                                  NSMenuItem*    aNativeMenuItem)
 : mContent(aContent)
-, mLoadingPrincipal(aContent->NodePrincipal())
+, mTriggeringPrincipal(aContent->NodePrincipal())
 , mContentType(nsIContentPolicy::TYPE_INTERNAL_IMAGE)
 , mMenuObject(aMenuItem)
 , mLoadedIcon(false)
@@ -212,9 +211,11 @@ nsMenuItemIconX::GetIconURI(nsIURI** aIconURI)
     rv = primitiveValue->GetStringValue(imageURIString);
     if (NS_FAILED(rv)) return rv;
   } else {
+    uint64_t dummy = 0;
     nsContentUtils::GetContentPolicyTypeForUIImageLoading(mContent,
-                                                          getter_AddRefs(mLoadingPrincipal),
-                                                          mContentType);
+                                                          getter_AddRefs(mTriggeringPrincipal),
+                                                          mContentType,
+                                                          &dummy);
   }
 
   // Empty the mImageRegionRect initially as the image region CSS could
@@ -317,9 +318,10 @@ nsMenuItemIconX::LoadIcon(nsIURI* aIconURI)
 
   nsresult rv = loader->LoadImage(aIconURI, nullptr, nullptr,
                                   mozilla::net::RP_Unset,
-                                  mLoadingPrincipal, loadGroup, this,
+                                  mTriggeringPrincipal, 0, loadGroup, this,
                                   mContent, document, nsIRequest::LOAD_NORMAL, nullptr,
                                   mContentType, EmptyString(),
+                                  /* aUseUrgentStartForChannel */ false,
                                   getter_AddRefs(mIconRequest));
   if (NS_FAILED(rv)) return rv;
 

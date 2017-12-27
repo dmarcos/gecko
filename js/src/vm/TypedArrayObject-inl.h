@@ -19,6 +19,8 @@
 #include "jscntxt.h"
 #include "jsnum.h"
 
+#include "gc/Zone.h"
+
 #include "jit/AtomicOperations.h"
 
 #include "js/Conversions.h"
@@ -26,39 +28,9 @@
 
 #include "vm/NativeObject.h"
 
+#include "gc/ObjectKind-inl.h"
+
 namespace js {
-
-// ValueIsLength happens not to be according to ES6, which mandates
-// the use of ToLength, which in turn includes ToNumber, ToInteger,
-// and clamping.  ValueIsLength is used in the current TypedArray code
-// but will disappear when that code is made spec-compliant.
-
-inline bool
-ValueIsLength(const Value& v, uint32_t* len)
-{
-    if (v.isInt32()) {
-        int32_t i = v.toInt32();
-        if (i < 0)
-            return false;
-        *len = i;
-        return true;
-    }
-
-    if (v.isDouble()) {
-        double d = v.toDouble();
-        if (mozilla::IsNaN(d))
-            return false;
-
-        uint32_t length = uint32_t(d);
-        if (d != double(length))
-            return false;
-
-        *len = length;
-        return true;
-    }
-
-    return false;
-}
 
 template<typename To, typename From>
 inline To
@@ -269,8 +241,7 @@ class ElementSpecific
      * case the two memory ranges overlap.
      */
     static bool
-    setFromTypedArray(JSContext* cx,
-                      Handle<TypedArrayObject*> target, Handle<TypedArrayObject*> source,
+    setFromTypedArray(Handle<TypedArrayObject*> target, Handle<TypedArrayObject*> source,
                       uint32_t offset)
     {
         // WARNING: |source| may be an unwrapped typed array from a different
@@ -285,7 +256,7 @@ class ElementSpecific
         MOZ_ASSERT(source->length() <= target->length() - offset);
 
         if (TypedArrayObject::sameBuffer(target, source))
-            return setFromOverlappingTypedArray(cx, target, source, offset);
+            return setFromOverlappingTypedArray(target, source, offset);
 
         SharedMem<T*> dest = target->viewDataEither().template cast<T*>() + offset;
         uint32_t count = source->length();
@@ -296,7 +267,7 @@ class ElementSpecific
         }
 
         // Inhibit unaligned accesses on ARM (bug 1097253, a compiler bug).
-#ifdef __arm__
+#if defined(__arm__) && defined(__GNUC__) && !defined(__clang__)
 #  define JS_VOLATILE_ARM volatile
 #else
 #  define JS_VOLATILE_ARM
@@ -480,8 +451,7 @@ class ElementSpecific
 
   private:
     static bool
-    setFromOverlappingTypedArray(JSContext* cx,
-                                 Handle<TypedArrayObject*> target,
+    setFromOverlappingTypedArray(Handle<TypedArrayObject*> target,
                                  Handle<TypedArrayObject*> source,
                                  uint32_t offset)
     {
@@ -639,6 +609,18 @@ class ElementSpecific
         return T(JS::ToInt32(d));
     }
 };
+
+
+/* static */ gc::AllocKind
+js::TypedArrayObject::AllocKindForLazyBuffer(size_t nbytes)
+{
+    MOZ_ASSERT(nbytes <= INLINE_BUFFER_LIMIT);
+    if (nbytes == 0)
+        nbytes += sizeof(uint8_t);
+    size_t dataSlots = AlignBytes(nbytes, sizeof(Value)) / sizeof(Value);
+    MOZ_ASSERT(nbytes <= dataSlots * sizeof(Value));
+    return gc::GetGCObjectKind(FIXED_DATA_START + dataSlots);
+}
 
 } // namespace js
 

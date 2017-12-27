@@ -12,6 +12,7 @@
 #include "mozilla/ServoBindings.h"
 #include "mozilla/ServoDeclarationBlock.h"
 #include "mozilla/dom/CSSStyleRuleBinding.h"
+#include "nsCSSPseudoClasses.h"
 
 #include "mozAutoDocUpdate.h"
 
@@ -27,6 +28,7 @@ ServoStyleRuleDeclaration::ServoStyleRuleDeclaration(
 
 ServoStyleRuleDeclaration::~ServoStyleRuleDeclaration()
 {
+  mDecls->SetOwningRule(nullptr);
 }
 
 // QueryInterface implementation for ServoStyleRuleDeclaration
@@ -59,6 +61,13 @@ ServoStyleRuleDeclaration::GetParentObject()
   return Rule()->GetDocument();
 }
 
+DocGroup*
+ServoStyleRuleDeclaration::GetDocGroup() const
+{
+  nsIDocument* document = Rule()->GetDocument();
+  return document ? document->GetDocGroup() : nullptr;
+}
+
 DeclarationBlock*
 ServoStyleRuleDeclaration::GetCSSDeclaration(Operation aOperation)
 {
@@ -79,9 +88,7 @@ ServoStyleRuleDeclaration::SetCSSDeclaration(DeclarationBlock* aDecl)
       mDecls = decls.forget();
       mDecls->SetOwningRule(rule);
     }
-    if (doc) {
-      doc->StyleRuleChanged(sheet, rule);
-    }
+    sheet->RuleChanged(rule);
   }
   return NS_OK;
 }
@@ -94,30 +101,34 @@ ServoStyleRuleDeclaration::DocToUpdate()
 
 void
 ServoStyleRuleDeclaration::GetCSSParsingEnvironment(
-  CSSParsingEnvironment& aCSSParseEnv)
+  CSSParsingEnvironment& aCSSParseEnv,
+  nsIPrincipal* aSubjectPrincipal)
 {
   MOZ_ASSERT_UNREACHABLE("GetCSSParsingEnvironment "
                          "shouldn't be calling for a Servo rule");
   GetCSSParsingEnvironmentForRule(Rule(), aCSSParseEnv);
 }
 
-URLExtraData*
-ServoStyleRuleDeclaration::GetURLData() const
+nsDOMCSSDeclaration::ServoCSSParsingEnvironment
+ServoStyleRuleDeclaration::GetServoCSSParsingEnvironment(
+  nsIPrincipal* aSubjectPrincipal) const
 {
-  return GetURLDataForRule(Rule());
+  return GetServoCSSParsingEnvironmentForRule(Rule());
 }
 
 // -- ServoStyleRule --------------------------------------------------
 
-ServoStyleRule::ServoStyleRule(already_AddRefed<RawServoStyleRule> aRawRule)
-  : BindingStyleRule(0, 0)
+ServoStyleRule::ServoStyleRule(already_AddRefed<RawServoStyleRule> aRawRule,
+                               uint32_t aLine, uint32_t aColumn)
+  : BindingStyleRule(aLine, aColumn)
   , mRawRule(aRawRule)
   , mDecls(Servo_StyleRule_GetStyle(mRawRule).Consume())
 {
 }
 
 // QueryInterface implementation for ServoStyleRule
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ServoStyleRule)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ServoStyleRule)
+  NS_INTERFACE_MAP_ENTRY(nsICSSStyleRuleDOMWrapper)
   NS_INTERFACE_MAP_ENTRY(nsIDOMCSSStyleRule)
 NS_INTERFACE_MAP_END_INHERITING(css::Rule)
 
@@ -194,6 +205,15 @@ ServoStyleRule::List(FILE* out, int32_t aIndent) const
 }
 #endif
 
+/* nsICSSStyleRuleDOMWrapper implementation */
+
+NS_IMETHODIMP
+ServoStyleRule::GetCSSStyleRule(BindingStyleRule **aResult)
+{
+  NS_ADDREF(*aResult = this);
+  return NS_OK;
+}
+
 /* CSSRule implementation */
 
 uint16_t
@@ -237,6 +257,59 @@ ServoStyleRule::GetStyle(nsIDOMCSSStyleDeclaration** aStyle)
 {
   *aStyle = do_AddRef(&mDecls).take();
   return NS_OK;
+}
+
+uint32_t
+ServoStyleRule::GetSelectorCount()
+{
+  uint32_t aCount;
+  Servo_StyleRule_GetSelectorCount(mRawRule, &aCount);
+
+  return aCount;
+}
+
+nsresult
+ServoStyleRule::GetSelectorText(uint32_t aSelectorIndex, nsAString& aText)
+{
+  Servo_StyleRule_GetSelectorTextAtIndex(mRawRule, aSelectorIndex, &aText);
+  return NS_OK;
+}
+
+nsresult
+ServoStyleRule::GetSpecificity(uint32_t aSelectorIndex, uint64_t* aSpecificity)
+{
+  Servo_StyleRule_GetSpecificityAtIndex(mRawRule, aSelectorIndex, aSpecificity);
+  return NS_OK;
+}
+
+nsresult
+ServoStyleRule::SelectorMatchesElement(Element* aElement,
+                                       uint32_t aSelectorIndex,
+                                       const nsAString& aPseudo,
+                                       bool* aMatches)
+{
+  CSSPseudoElementType pseudoType = CSSPseudoElementType::NotPseudo;
+  if (!aPseudo.IsEmpty()) {
+    RefPtr<nsAtom> pseudoElt = NS_Atomize(aPseudo);
+    pseudoType = nsCSSPseudoElements::GetPseudoType(
+        pseudoElt, CSSEnabledState::eIgnoreEnabledState);
+
+    if (pseudoType == CSSPseudoElementType::NotPseudo) {
+      *aMatches = false;
+      return NS_OK;
+    }
+  }
+
+  *aMatches = Servo_StyleRule_SelectorMatchesElement(mRawRule, aElement,
+                                                     aSelectorIndex, pseudoType);
+
+  return NS_OK;
+}
+
+NotNull<DeclarationBlock*>
+ServoStyleRule::GetDeclarationBlock() const
+{
+  return WrapNotNull(mDecls.mDecls);
 }
 
 } // namespace mozilla

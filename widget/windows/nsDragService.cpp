@@ -34,17 +34,18 @@
 #include "nsCRT.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsUnicharUtils.h"
-#include "gfxContext.h"
 #include "nsRect.h"
 #include "nsMathUtils.h"
 #include "WinUtils.h"
 #include "KeyboardLayout.h"
+#include "gfxContext.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/DataSurfaceHelpers.h"
 #include "mozilla/gfx/Tools.h"
 
 using namespace mozilla;
 using namespace mozilla::gfx;
+using namespace mozilla::widget;
 
 //-------------------------------------------------------------------------
 //

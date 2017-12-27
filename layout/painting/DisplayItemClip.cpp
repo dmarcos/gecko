@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -9,6 +10,8 @@
 #include "gfxUtils.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/PathHelpers.h"
+#include "mozilla/layers/StackingContextHelper.h"
+#include "mozilla/webrender/WebRenderTypes.h"
 #include "nsPresContext.h"
 #include "nsCSSRendering.h"
 #include "nsLayoutUtils.h"
@@ -88,10 +91,9 @@ DisplayItemClip::IntersectWith(const DisplayItemClip& aOther)
 
 void
 DisplayItemClip::ApplyTo(gfxContext* aContext,
-                         nsPresContext* aPresContext,
+                         int32_t A2D,
                          uint32_t aBegin, uint32_t aEnd)
 {
-  int32_t A2D = aPresContext->AppUnitsPerDevPixel();
   ApplyRectTo(aContext, A2D);
   ApplyRoundedRectClipsTo(aContext, A2D, aBegin, aEnd);
 }
@@ -427,7 +429,7 @@ DisplayItemClip::ComputeRegionInClips(DisplayItemClip* aOldClip,
 }
 
 void
-DisplayItemClip::MoveBy(nsPoint aPoint)
+DisplayItemClip::MoveBy(const nsPoint& aPoint)
 {
   if (!mHaveClipRect)
     return;
@@ -471,6 +473,25 @@ DisplayItemClip::ToString() const
     }
   }
   return str;
+}
+
+void
+DisplayItemClip::ToComplexClipRegions(int32_t aAppUnitsPerDevPixel,
+                                      const layers::StackingContextHelper& aSc,
+                                      nsTArray<wr::ComplexClipRegion>& aOutArray) const
+{
+  for (uint32_t i = 0; i < mRoundedClipRects.Length(); i++) {
+    wr::ComplexClipRegion* region = aOutArray.AppendElement();
+    region->rect = aSc.ToRelativeLayoutRect(LayoutDeviceRect::FromAppUnits(
+        mRoundedClipRects[i].mRect, aAppUnitsPerDevPixel));
+    const nscoord* radii = mRoundedClipRects[i].mRadii;
+    region->radii = wr::ToBorderRadius(
+        LayoutDeviceSize::FromAppUnits(nsSize(radii[eCornerTopLeftX], radii[eCornerTopLeftY]), aAppUnitsPerDevPixel),
+        LayoutDeviceSize::FromAppUnits(nsSize(radii[eCornerTopRightX], radii[eCornerTopRightY]), aAppUnitsPerDevPixel),
+        LayoutDeviceSize::FromAppUnits(nsSize(radii[eCornerBottomLeftX], radii[eCornerBottomLeftY]), aAppUnitsPerDevPixel),
+        LayoutDeviceSize::FromAppUnits(nsSize(radii[eCornerBottomRightX], radii[eCornerBottomRightY]), aAppUnitsPerDevPixel));
+    region->mode = wr::ClipMode::Clip;
+  }
 }
 
 } // namespace mozilla

@@ -10,6 +10,7 @@ const {parseDeclarations} = require("devtools/shared/css/parsing-utils");
 const promise = require("promise");
 const {getCSSLexer} = require("devtools/shared/css/lexer");
 const {KeyCodes} = require("devtools/client/shared/keycodes");
+const {throttle} = require("devtools/shared/throttle");
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 
@@ -100,35 +101,6 @@ function advanceValidate(keyCode, value, insertionPoint) {
 exports.advanceValidate = advanceValidate;
 
 /**
- * Create a throttling function wrapper to regulate its frequency.
- *
- * @param {Function} func
- *         The function to throttle
- * @param {number} wait
- *         The throttling period
- * @param {Object} scope
- *         The scope to use for func
- * @return {Function} The throttled function
- */
-function throttle(func, wait, scope) {
-  let timer = null;
-
-  return function () {
-    if (timer) {
-      clearTimeout(timer);
-    }
-
-    let args = arguments;
-    timer = setTimeout(function () {
-      timer = null;
-      func.apply(scope, args);
-    }, wait);
-  };
-}
-
-exports.throttle = throttle;
-
-/**
  * Event handler that causes a blur on the target if the input has
  * multiple CSS properties as the value.
  */
@@ -159,3 +131,4 @@ function promiseWarn(error) {
 }
 
 exports.promiseWarn = promiseWarn;
+exports.throttle = throttle;

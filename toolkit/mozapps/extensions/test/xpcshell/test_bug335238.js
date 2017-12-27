@@ -3,9 +3,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-const PREF_MATCH_OS_LOCALE = "intl.locale.matchOS";
-const PREF_SELECTED_LOCALE = "general.useragent.locale";
-
 // Disables security checking our updates which haven't been signed
 Services.prefs.setBoolPref("extensions.checkUpdateSecurity", false);
 
@@ -88,6 +85,17 @@ var BlocklistService = {
     return Ci.nsIBlocklistService.STATE_NOT_BLOCKED;
   },
 
+  getAddonBlocklistEntry(aAddon, aAppVersion, aToolkitVersion) {
+    let state = this.getAddonBlocklistState(aAddon, aAppVersion, aToolkitVersion);
+    if (state != Ci.nsIBlocklistService.STATE_NOT_BLOCKED) {
+      return {
+        state,
+        url: "http://example.com/",
+      };
+    }
+    return null;
+  },
+
   getPluginBlocklistState(aPlugin, aVersion, aAppVersion, aToolkitVersion) {
     return Ci.nsIBlocklistService.STATE_NOT_BLOCKED;
   },
@@ -121,22 +129,22 @@ var updateListener = {
     if (--this.pendingCount == 0)
       server.stop(do_test_finished);
   }
-}
+};
 
 var requestHandler = {
   handle(metadata, response) {
     var expected = EXPECTED[metadata.path.substring(1)];
     var params = metadata.queryString.split("&");
-    do_check_eq(params.length, 10);
+    Assert.equal(params.length, 10);
     for (var k in params) {
       var pair = params[k].split("=");
       var name = decodeURIComponent(pair[0]);
       var value = decodeURIComponent(pair[1]);
-      do_check_eq(expected[name], value);
+      Assert.equal(expected[name], value);
     }
     response.setStatusLine(metadata.httpVersion, 404, "Not Found");
   }
-}
+};
 
 function run_test() {
   do_test_pending();
@@ -149,15 +157,14 @@ function run_test() {
   server.registerPathHandler("/3", requestHandler);
   server.start(4444);
 
-  Services.prefs.setBoolPref(PREF_MATCH_OS_LOCALE, false);
-  Services.prefs.setCharPref(PREF_SELECTED_LOCALE, "en-US");
+  Services.locale.setRequestedLocales(["en-US"]);
 
   startupManager();
   installAllFiles(ADDONS.map(a => do_get_addon(a.addon)), function() {
 
     restartManager();
     AddonManager.getAddonByID(ADDONS[1].id, callback_soon(function(addon) {
-      do_check_true(!(!addon));
+      Assert.ok(!(!addon));
       addon.userDisabled = true;
       restartManager();
 

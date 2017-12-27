@@ -13,6 +13,8 @@ import org.mozilla.gecko.util.EventCallback;
 import org.mozilla.gecko.util.GeckoBundle;
 import org.mozilla.gecko.util.ThreadUtils;
 
+import android.os.Parcel;
+
 /**
  * Tests the proper operation of EventDispatcher,
  */
@@ -28,7 +30,7 @@ public class testEventDispatcher extends JavascriptBridgeTest implements BundleE
     private static final String JS_EVENT = "Robocop:TestJSEvent";
     private static final String JS_RESPONSE_EVENT = "Robocop:TestJSResponse";
 
-    private static final long WAIT_FOR_BUNDLE_EVENT_TIMEOUT_MILLIS = 20000; // 20 seconds
+    private static final long WAIT_FOR_BUNDLE_EVENT_TIMEOUT_MILLIS = 40000; // 40 seconds
 
     private boolean handledAsyncEvent;
 
@@ -65,12 +67,12 @@ public class testEventDispatcher extends JavascriptBridgeTest implements BundleE
         getJS().syncCall("finish_test");
     }
 
-    private static EventDispatcher getDispatcher(final String scope) {
+    private EventDispatcher getDispatcher(final String scope) {
         if ("global".equals(scope)) {
             return EventDispatcher.getInstance();
         }
         if ("window".equals(scope)) {
-            return GeckoApp.getEventDispatcher();
+            return ((GeckoApp) getActivity()).getAppEventDispatcher();
         }
         fFail("scope argument should be valid string");
         return null;
@@ -370,6 +372,19 @@ public class testEventDispatcher extends JavascriptBridgeTest implements BundleE
         fAssertEquals("Bundle mixed double array has correct length", 2, mixedDoubleArray.length);
         fAssertEquals("Bundle mixed double array index 0 has correct value", 1.0, mixedDoubleArray[0]);
         fAssertEquals("Bundle mixed double array index 1 has correct value", 1.5, mixedDoubleArray[1]);
+
+        final Parcel parcel = Parcel.obtain();
+        bundle.writeToParcel(parcel, 0);
+        bundle.writeToParcel(parcel, 0);
+        parcel.setDataPosition(0);
+
+        final GeckoBundle unparceled = GeckoBundle.CREATOR.createFromParcel(parcel);
+        fAssertEquals("Bundle created from Parcel equals original", bundle, unparceled);
+        unparceled.clear();
+        fAssertEquals("Cleared Bundle is empty", 0, unparceled.size());
+        unparceled.readFromParcel(parcel);
+        fAssertEquals("Bundle read from Parcel equals original", bundle, unparceled);
+        parcel.recycle();
     }
 
     private static GeckoBundle createInnerBundle() {
@@ -441,7 +456,7 @@ public class testEventDispatcher extends JavascriptBridgeTest implements BundleE
                 continue;
             }
 
-            dispatchMessageForResponse(scope, responseEvent, "success", key, refBundle);
+            dispatchMessageForResponse(scope, responseEvent, mode, key, refBundle);
             count++;
 
             if (wait) {

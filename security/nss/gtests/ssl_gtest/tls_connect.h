@@ -25,9 +25,12 @@ extern std::string VersionString(uint16_t version);
 // A generic TLS connection test base.
 class TlsConnectTestBase : public ::testing::Test {
  public:
-  static ::testing::internal::ParamGenerator<std::string> kTlsModesStream;
-  static ::testing::internal::ParamGenerator<std::string> kTlsModesDatagram;
-  static ::testing::internal::ParamGenerator<std::string> kTlsModesAll;
+  static ::testing::internal::ParamGenerator<SSLProtocolVariant>
+      kTlsVariantsStream;
+  static ::testing::internal::ParamGenerator<SSLProtocolVariant>
+      kTlsVariantsDatagram;
+  static ::testing::internal::ParamGenerator<SSLProtocolVariant>
+      kTlsVariantsAll;
   static ::testing::internal::ParamGenerator<uint16_t> kTlsV10;
   static ::testing::internal::ParamGenerator<uint16_t> kTlsV11;
   static ::testing::internal::ParamGenerator<uint16_t> kTlsV12;
@@ -39,8 +42,7 @@ class TlsConnectTestBase : public ::testing::Test {
   static ::testing::internal::ParamGenerator<uint16_t> kTlsV12Plus;
   static ::testing::internal::ParamGenerator<uint16_t> kTlsVAll;
 
-  TlsConnectTestBase(Mode mode, uint16_t version);
-  TlsConnectTestBase(const std::string& mode, uint16_t version);
+  TlsConnectTestBase(SSLProtocolVariant variant, uint16_t version);
   virtual ~TlsConnectTestBase();
 
   void SetUp();
@@ -59,7 +61,11 @@ class TlsConnectTestBase : public ::testing::Test {
   // Reset, and update the certificate names on both peers
   void Reset(const std::string& server_name,
              const std::string& client_name = "client");
+  // Replace the server.
+  void MakeNewServer();
 
+  // Set up
+  void StartConnect();
   // Run the handshake.
   void Handshake();
   // Connect and check that it works.
@@ -79,20 +85,28 @@ class TlsConnectTestBase : public ::testing::Test {
   void CheckKeys(SSLKEAType kea_type, SSLAuthType auth_type) const;
   // This version assumes defaults.
   void CheckKeys() const;
+  // Check that keys on resumed sessions.
+  void CheckKeysResumption(SSLKEAType kea_type, SSLNamedGroup kea_group,
+                           SSLNamedGroup original_kea_group,
+                           SSLAuthType auth_type,
+                           SSLSignatureScheme sig_scheme);
   void CheckGroups(const DataBuffer& groups,
                    std::function<void(SSLNamedGroup)> check_group);
   void CheckShares(const DataBuffer& shares,
                    std::function<void(SSLNamedGroup)> check_group);
+  void CheckEpochs(uint16_t client_epoch, uint16_t server_epoch) const;
 
   void ConfigureVersion(uint16_t version);
   void SetExpectedVersion(uint16_t version);
   // Expect resumption of a particular type.
-  void ExpectResumption(SessionResumptionMode expected);
+  void ExpectResumption(SessionResumptionMode expected,
+                        uint8_t num_resumed = 1);
   void DisableAllCiphers();
   void EnableOnlyStaticRsaCiphers();
   void EnableOnlyDheCiphers();
   void EnableSomeEcdhCiphers();
   void EnableExtendedMasterSecret();
+  void ConfigureSelfEncrypt();
   void ConfigureSessionCache(SessionResumptionMode client,
                              SessionResumptionMode server);
   void EnableAlpn();
@@ -101,7 +115,7 @@ class TlsConnectTestBase : public ::testing::Test {
   void CheckAlpn(const std::string& val);
   void EnableSrtp();
   void CheckSrtp() const;
-  void SendReceive();
+  void SendReceive(size_t total = 50);
   void SetupForZeroRtt();
   void SetupForResume();
   void ZeroRttSendReceive(
@@ -111,15 +125,20 @@ class TlsConnectTestBase : public ::testing::Test {
   void ExpectExtendedMasterSecret(bool expected);
   void ExpectEarlyDataAccepted(bool expected);
   void DisableECDHEServerKeyReuse();
+  void SkipVersionChecks();
+
+  // Move the DTLS timers for both endpoints to pop the next timer.
+  void ShiftDtlsTimers();
 
  protected:
-  Mode mode_;
+  SSLProtocolVariant variant_;
   std::shared_ptr<TlsAgent> client_;
   std::shared_ptr<TlsAgent> server_;
   std::unique_ptr<TlsAgent> client_model_;
   std::unique_ptr<TlsAgent> server_model_;
   uint16_t version_;
   SessionResumptionMode expected_resumption_mode_;
+  uint8_t expected_resumptions_;
   std::vector<std::vector<uint8_t>> session_ids_;
 
   // A simple value of "a", "b".  Note that the preferred value of "a" is placed
@@ -129,16 +148,13 @@ class TlsConnectTestBase : public ::testing::Test {
   const uint8_t alpn_dummy_val_[4] = {0x01, 0x62, 0x01, 0x61};
 
  private:
-  static inline Mode ToMode(const std::string& str) {
-    return str == "TLS" ? STREAM : DGRAM;
-  }
-
   void CheckResumption(SessionResumptionMode expected);
   void CheckExtendedMasterSecret();
   void CheckEarlyDataAccepted();
 
   bool expect_extended_master_secret_;
   bool expect_early_data_accepted_;
+  bool skip_version_checks_;
 
   // Track groups and make sure that there are no duplicates.
   class DuplicateGroupChecker {
@@ -157,20 +173,20 @@ class TlsConnectTestBase : public ::testing::Test {
 // A non-parametrized TLS test base.
 class TlsConnectTest : public TlsConnectTestBase {
  public:
-  TlsConnectTest() : TlsConnectTestBase(STREAM, 0) {}
+  TlsConnectTest() : TlsConnectTestBase(ssl_variant_stream, 0) {}
 };
 
 // A non-parametrized DTLS-only test base.
 class DtlsConnectTest : public TlsConnectTestBase {
  public:
-  DtlsConnectTest() : TlsConnectTestBase(DGRAM, 0) {}
+  DtlsConnectTest() : TlsConnectTestBase(ssl_variant_datagram, 0) {}
 };
 
 // A TLS-only test base.
 class TlsConnectStream : public TlsConnectTestBase,
                          public ::testing::WithParamInterface<uint16_t> {
  public:
-  TlsConnectStream() : TlsConnectTestBase(STREAM, GetParam()) {}
+  TlsConnectStream() : TlsConnectTestBase(ssl_variant_stream, GetParam()) {}
 };
 
 // A TLS-only test base for tests before 1.3
@@ -180,30 +196,30 @@ class TlsConnectStreamPre13 : public TlsConnectStream {};
 class TlsConnectDatagram : public TlsConnectTestBase,
                            public ::testing::WithParamInterface<uint16_t> {
  public:
-  TlsConnectDatagram() : TlsConnectTestBase(DGRAM, GetParam()) {}
+  TlsConnectDatagram() : TlsConnectTestBase(ssl_variant_datagram, GetParam()) {}
 };
 
-// A generic test class that can be either STREAM or DGRAM and a single version
-// of TLS.  This is configured in ssl_loopback_unittest.cc.  All uses of this
-// should use TEST_P().
-class TlsConnectGeneric
-    : public TlsConnectTestBase,
-      public ::testing::WithParamInterface<std::tuple<std::string, uint16_t>> {
+// A generic test class that can be either stream or datagram and a single
+// version of TLS.  This is configured in ssl_loopback_unittest.cc.
+class TlsConnectGeneric : public TlsConnectTestBase,
+                          public ::testing::WithParamInterface<
+                              std::tuple<SSLProtocolVariant, uint16_t>> {
  public:
   TlsConnectGeneric();
 };
 
 // A Pre TLS 1.2 generic test.
-class TlsConnectPre12
-    : public TlsConnectTestBase,
-      public ::testing::WithParamInterface<std::tuple<std::string, uint16_t>> {
+class TlsConnectPre12 : public TlsConnectTestBase,
+                        public ::testing::WithParamInterface<
+                            std::tuple<SSLProtocolVariant, uint16_t>> {
  public:
   TlsConnectPre12();
 };
 
 // A TLS 1.2 only generic test.
-class TlsConnectTls12 : public TlsConnectTestBase,
-                        public ::testing::WithParamInterface<std::string> {
+class TlsConnectTls12
+    : public TlsConnectTestBase,
+      public ::testing::WithParamInterface<SSLProtocolVariant> {
  public:
   TlsConnectTls12();
 };
@@ -212,20 +228,21 @@ class TlsConnectTls12 : public TlsConnectTestBase,
 class TlsConnectStreamTls12 : public TlsConnectTestBase {
  public:
   TlsConnectStreamTls12()
-      : TlsConnectTestBase(STREAM, SSL_LIBRARY_VERSION_TLS_1_2) {}
+      : TlsConnectTestBase(ssl_variant_stream, SSL_LIBRARY_VERSION_TLS_1_2) {}
 };
 
 // A TLS 1.2+ generic test.
-class TlsConnectTls12Plus
-    : public TlsConnectTestBase,
-      public ::testing::WithParamInterface<std::tuple<std::string, uint16_t>> {
+class TlsConnectTls12Plus : public TlsConnectTestBase,
+                            public ::testing::WithParamInterface<
+                                std::tuple<SSLProtocolVariant, uint16_t>> {
  public:
   TlsConnectTls12Plus();
 };
 
 // A TLS 1.3 only generic test.
-class TlsConnectTls13 : public TlsConnectTestBase,
-                        public ::testing::WithParamInterface<std::string> {
+class TlsConnectTls13
+    : public TlsConnectTestBase,
+      public ::testing::WithParamInterface<SSLProtocolVariant> {
  public:
   TlsConnectTls13();
 };
@@ -234,13 +251,18 @@ class TlsConnectTls13 : public TlsConnectTestBase,
 class TlsConnectStreamTls13 : public TlsConnectTestBase {
  public:
   TlsConnectStreamTls13()
-      : TlsConnectTestBase(STREAM, SSL_LIBRARY_VERSION_TLS_1_3) {}
+      : TlsConnectTestBase(ssl_variant_stream, SSL_LIBRARY_VERSION_TLS_1_3) {}
 };
 
 class TlsConnectDatagram13 : public TlsConnectTestBase {
  public:
   TlsConnectDatagram13()
-      : TlsConnectTestBase(DGRAM, SSL_LIBRARY_VERSION_TLS_1_3) {}
+      : TlsConnectTestBase(ssl_variant_datagram, SSL_LIBRARY_VERSION_TLS_1_3) {}
+};
+
+class TlsConnectDatagramPre13 : public TlsConnectDatagram {
+ public:
+  TlsConnectDatagramPre13() {}
 };
 
 // A variant that is used only with Pre13.
@@ -255,8 +277,10 @@ class TlsKeyExchangeTest : public TlsConnectGeneric {
 
   void EnsureKeyShareSetup();
   void ConfigNamedGroups(const std::vector<SSLNamedGroup>& groups);
-  std::vector<SSLNamedGroup> GetGroupDetails(const DataBuffer& ext);
-  std::vector<SSLNamedGroup> GetShareDetails(const DataBuffer& ext);
+  std::vector<SSLNamedGroup> GetGroupDetails(
+      const std::shared_ptr<TlsExtensionCapture>& capture);
+  std::vector<SSLNamedGroup> GetShareDetails(
+      const std::shared_ptr<TlsExtensionCapture>& capture);
   void CheckKEXDetails(const std::vector<SSLNamedGroup>& expectedGroups,
                        const std::vector<SSLNamedGroup>& expectedShares);
   void CheckKEXDetails(const std::vector<SSLNamedGroup>& expectedGroups,

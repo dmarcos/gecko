@@ -7,33 +7,45 @@
 //! perform checkpoints at appropriate times, as well as enqueue microtasks as required.
 
 use dom::bindings::callback::ExceptionHandling;
-use dom::bindings::cell::DOMRefCell;
+use dom::bindings::cell::DomRefCell;
 use dom::bindings::codegen::Bindings::PromiseBinding::PromiseJobCallback;
-use dom::bindings::js::Root;
+use dom::bindings::root::DomRoot;
 use dom::globalscope::GlobalScope;
+use dom::htmlimageelement::ImageElementMicrotask;
+use dom::htmlmediaelement::MediaElementMicrotask;
+use dom::mutationobserver::MutationObserver;
 use msg::constellation_msg::PipelineId;
+use script_thread::ScriptThread;
 use std::cell::Cell;
 use std::mem;
 use std::rc::Rc;
 
 /// A collection of microtasks in FIFO order.
-#[derive(JSTraceable, HeapSizeOf, Default)]
+#[derive(Default, JSTraceable, MallocSizeOf)]
 pub struct MicrotaskQueue {
     /// The list of enqueued microtasks that will be invoked at the next microtask checkpoint.
-    microtask_queue: DOMRefCell<Vec<Microtask>>,
-    /// https://html.spec.whatwg.org/multipage/#performing-a-microtask-checkpoint
+    microtask_queue: DomRefCell<Vec<Microtask>>,
+    /// <https://html.spec.whatwg.org/multipage/#performing-a-microtask-checkpoint>
     performing_a_microtask_checkpoint: Cell<bool>,
 }
 
-#[derive(JSTraceable, HeapSizeOf)]
+#[derive(JSTraceable, MallocSizeOf)]
 pub enum Microtask {
     Promise(EnqueuedPromiseCallback),
+    MediaElement(MediaElementMicrotask),
+    ImageElement(ImageElementMicrotask),
+    CustomElementReaction,
+    NotifyMutationObservers,
+}
+
+pub trait MicrotaskRunnable {
+    fn handler(&self) {}
 }
 
 /// A promise callback scheduled to run during the next microtask checkpoint (#4283).
-#[derive(JSTraceable, HeapSizeOf)]
+#[derive(JSTraceable, MallocSizeOf)]
 pub struct EnqueuedPromiseCallback {
-    #[ignore_heap_size_of = "Rc has unclear ownership"]
+    #[ignore_malloc_size_of = "Rc has unclear ownership"]
     pub callback: Rc<PromiseJobCallback>,
     pub pipeline: PipelineId,
 }
@@ -45,10 +57,10 @@ impl MicrotaskQueue {
         self.microtask_queue.borrow_mut().push(job);
     }
 
-    /// https://html.spec.whatwg.org/multipage/#perform-a-microtask-checkpoint
+    /// <https://html.spec.whatwg.org/multipage/#perform-a-microtask-checkpoint>
     /// Perform a microtask checkpoint, executing all queued microtasks until the queue is empty.
     pub fn checkpoint<F>(&self, target_provider: F)
-        where F: Fn(PipelineId) -> Option<Root<GlobalScope>>
+        where F: Fn(PipelineId) -> Option<DomRoot<GlobalScope>>
     {
         if self.performing_a_microtask_checkpoint.get() {
             return;
@@ -70,6 +82,18 @@ impl MicrotaskQueue {
                         if let Some(target) = target_provider(job.pipeline) {
                             let _ = job.callback.Call_(&*target, ExceptionHandling::Report);
                         }
+                    },
+                    Microtask::MediaElement(ref task) => {
+                        task.handler();
+                    },
+                    Microtask::ImageElement(ref task) => {
+                        task.handler();
+                    },
+                    Microtask::CustomElementReaction => {
+                        ScriptThread::invoke_backup_element_queue();
+                    },
+                    Microtask::NotifyMutationObservers => {
+                        MutationObserver::notify_mutation_observers();
                     }
                 }
             }

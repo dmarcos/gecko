@@ -41,6 +41,7 @@
 #include "AudioChannelService.h"
 #include "AudioDestinationNode.h"
 #include "AudioListener.h"
+#include "AudioNodeStream.h"
 #include "AudioStream.h"
 #include "BiquadFilterNode.h"
 #include "ChannelMergerNode.h"
@@ -60,6 +61,7 @@
 #include "nsNetUtil.h"
 #include "nsPIDOMWindow.h"
 #include "nsPrintfCString.h"
+#include "nsRFPService.h"
 #include "OscillatorNode.h"
 #include "PannerNode.h"
 #include "PeriodicWave.h"
@@ -112,7 +114,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 NS_IMPL_ADDREF_INHERITED(AudioContext, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(AudioContext, DOMEventTargetHelper)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(AudioContext)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(AudioContext)
   NS_INTERFACE_MAP_ENTRY(nsIMemoryReporter)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
@@ -127,7 +129,6 @@ static float GetSampleRateForAudioContext(bool aIsOffline, float aSampleRate)
 
 AudioContext::AudioContext(nsPIDOMWindowInner* aWindow,
                            bool aIsOffline,
-                           AudioChannel aChannel,
                            uint32_t aNumberOfChannels,
                            uint32_t aLength,
                            float aSampleRate)
@@ -147,7 +148,7 @@ AudioContext::AudioContext(nsPIDOMWindowInner* aWindow,
 
   // Note: AudioDestinationNode needs an AudioContext that must already be
   // bound to the window.
-  mDestination = new AudioDestinationNode(this, aIsOffline, aChannel,
+  mDestination = new AudioDestinationNode(this, aIsOffline,
                                           aNumberOfChannels, aLength, aSampleRate);
 
   // The context can't be muted until it has a destination.
@@ -198,23 +199,16 @@ AudioContext::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 AudioContext::Constructor(const GlobalObject& aGlobal,
                           ErrorResult& aRv)
 {
-  return AudioContext::Constructor(aGlobal,
-                                   AudioChannelService::GetDefaultAudioChannel(),
-                                   aRv);
-}
-
-/* static */ already_AddRefed<AudioContext>
-AudioContext::Constructor(const GlobalObject& aGlobal,
-                          AudioChannel aChannel,
-                          ErrorResult& aRv)
-{
   nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aGlobal.GetAsSupports());
   if (!window) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
   }
 
-  RefPtr<AudioContext> object = new AudioContext(window, false, aChannel);
+  uint32_t maxChannelCount = std::min<uint32_t>(WebAudioUtils::MaxChannelCount,
+      CubebUtils::MaxNumberOfChannels());
+  RefPtr<AudioContext> object =
+    new AudioContext(window, false,maxChannelCount);
   aRv = object->Init();
   if (NS_WARN_IF(aRv.Failed())) {
      return nullptr;
@@ -223,6 +217,18 @@ AudioContext::Constructor(const GlobalObject& aGlobal,
   RegisterWeakMemoryReporter(object);
 
   return object.forget();
+}
+
+/* static */ already_AddRefed<AudioContext>
+AudioContext::Constructor(const GlobalObject& aGlobal,
+                          const OfflineAudioContextOptions& aOptions,
+                          ErrorResult& aRv)
+{
+  return Constructor(aGlobal,
+                     aOptions.mNumberOfChannels,
+                     aOptions.mLength,
+                     aOptions.mSampleRate,
+                     aRv);
 }
 
 /* static */ already_AddRefed<AudioContext>
@@ -250,7 +256,6 @@ AudioContext::Constructor(const GlobalObject& aGlobal,
 
   RefPtr<AudioContext> object = new AudioContext(window,
                                                    true,
-                                                   AudioChannel::Normal,
                                                    aNumberOfChannels,
                                                    aLength,
                                                    aSampleRate);
@@ -499,6 +504,12 @@ AudioContext::Listener()
   return mListener;
 }
 
+bool
+AudioContext::IsRunning() const
+{
+  return mAudioContextState == AudioContextState::Running;
+}
+
 already_AddRefed<Promise>
 AudioContext::DecodeAudioData(const ArrayBuffer& aBuffer,
                               const Optional<OwningNonNull<DecodeSuccessCallback> >& aSuccessCallback,
@@ -551,7 +562,7 @@ AudioContext::DecodeAudioData(const ArrayBuffer& aBuffer,
     successCallback = &aSuccessCallback.Value();
   }
   UniquePtr<WebAudioDecodeJob> job(
-    new WebAudioDecodeJob(contentType, this,
+    new WebAudioDecodeJob(this,
                           promise, successCallback, failureCallback));
   AsyncDecodeWebAudio(contentType.get(), data, length, *job);
   // Transfer the ownership to mDecodeJobs
@@ -613,7 +624,8 @@ AudioContext::UpdatePannerSource()
 uint32_t
 AudioContext::MaxChannelCount() const
 {
-  return mIsOffline ? mNumberOfChannels : CubebUtils::MaxNumberOfChannels();
+  return std::min<uint32_t>(WebAudioUtils::MaxChannelCount,
+      mIsOffline ? mNumberOfChannels : CubebUtils::MaxNumberOfChannels());
 }
 
 uint32_t
@@ -641,7 +653,8 @@ double
 AudioContext::CurrentTime() const
 {
   MediaStream* stream = Destination()->Stream();
-  return stream->StreamTimeToSeconds(stream->GetCurrentTime());
+  return nsRFPService::ReduceTimePrecisionAsSecs(
+    stream->StreamTimeToSeconds(stream->GetCurrentTime()));
 }
 
 void AudioContext::DisconnectFromOwner()
@@ -684,7 +697,8 @@ AudioContext::Shutdown()
 StateChangeTask::StateChangeTask(AudioContext* aAudioContext,
                                  void* aPromise,
                                  AudioContextState aNewState)
-  : mAudioContext(aAudioContext)
+  : Runnable("dom::StateChangeTask")
+  , mAudioContext(aAudioContext)
   , mPromise(aPromise)
   , mAudioNodeStream(nullptr)
   , mNewState(aNewState)
@@ -696,7 +710,8 @@ StateChangeTask::StateChangeTask(AudioContext* aAudioContext,
 StateChangeTask::StateChangeTask(AudioNodeStream* aStream,
                                  void* aPromise,
                                  AudioContextState aNewState)
-  : mAudioContext(nullptr)
+  : Runnable("dom::StateChangeTask")
+  , mAudioContext(nullptr)
   , mPromise(aPromise)
   , mAudioNodeStream(aStream)
   , mNewState(aNewState)
@@ -737,7 +752,8 @@ class OnStateChangeTask final : public Runnable
 {
 public:
   explicit OnStateChangeTask(AudioContext* aAudioContext)
-    : mAudioContext(aAudioContext)
+    : Runnable("dom::OnStateChangeTask")
+    , mAudioContext(aAudioContext)
   {}
 
   NS_IMETHODIMP
@@ -1064,21 +1080,6 @@ AudioContext::Unmute() const
   if (mDestination) {
     mDestination->Unmute();
   }
-}
-
-AudioChannel
-AudioContext::MozAudioChannelType() const
-{
-  return mDestination->MozAudioChannelType();
-}
-
-AudioChannel
-AudioContext::TestAudioChannelInAudioNodeStream()
-{
-  MediaStream* stream = mDestination->Stream();
-  MOZ_ASSERT(stream);
-
-  return stream->AudioChannelType();
 }
 
 size_t

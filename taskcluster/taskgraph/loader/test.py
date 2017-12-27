@@ -7,6 +7,7 @@ from __future__ import absolute_import, print_function, unicode_literals
 import copy
 import logging
 
+from .transform import loader as transform_loader
 from ..util.yaml import load_yaml
 
 logger = logging.getLogger(__name__)
@@ -18,24 +19,29 @@ def loader(kind, path, config, params, loaded_tasks):
     """
 
     # the kind on which this one depends
-    if len(config.get('kind-dependencies', [])) != 1:
+    if len(config.get('kind-dependencies', [])) != 2:
         raise Exception(
-            "Test kinds must have exactly one item in kind-dependencies")
-    dep_kind = config['kind-dependencies'][0]
+            'Test kinds must have exactly 2 items in kind-dependencies'
+        )
 
-    # get build tasks, keyed by build platform
-    builds_by_platform = get_builds_by_platform(dep_kind, loaded_tasks)
+    builds_by_platform = get_builds_by_platform(dep_kind='build', loaded_tasks=loaded_tasks)
+    signed_builds_by_platform = get_builds_by_platform(
+        dep_kind='build-signing', loaded_tasks=loaded_tasks
+    )
 
     # get the test platforms for those build tasks
     test_platforms_cfg = load_yaml(path, 'test-platforms.yml')
-    test_platforms = get_test_platforms(test_platforms_cfg, builds_by_platform)
+    test_platforms = get_test_platforms(
+        test_platforms_cfg, builds_by_platform, signed_builds_by_platform
+    )
 
     # expand the test sets for each of those platforms
     test_sets_cfg = load_yaml(path, 'test-sets.yml')
     test_platforms = expand_tests(test_sets_cfg, test_platforms)
 
     # load the test descriptions
-    test_descriptions = load_yaml(path, 'tests.yml')
+    tests = transform_loader(kind, path, config, params, loaded_tasks)
+    test_descriptions = {t.pop('name'): t for t in tests}
 
     # generate all tests for all test platforms
     for test_platform_name, test_platform in test_platforms.iteritems():
@@ -44,8 +50,12 @@ def loader(kind, path, config, params, loaded_tasks):
             test['build-platform'] = test_platform['build-platform']
             test['test-platform'] = test_platform_name
             test['build-label'] = test_platform['build-label']
+            if test_platform.get('build-signing-label', None):
+                test['build-signing-label'] = test_platform['build-signing-label']
+
+            test['build-attributes'] = test_platform['build-attributes']
             test['test-name'] = test_name
-            if test_platform['nightly']:
+            if test_platform.get('nightly'):
                 test.setdefault('attributes', {})['nightly'] = True
 
             logger.debug("Generating tasks for test {} on platform {}".format(
@@ -72,7 +82,7 @@ def get_builds_by_platform(dep_kind, loaded_tasks):
     return builds_by_platform
 
 
-def get_test_platforms(test_platforms_cfg, builds_by_platform):
+def get_test_platforms(test_platforms_cfg, builds_by_platform, signed_builds_by_platform={}):
     """Get the test platforms for which test tasks should be generated,
     based on the available build platforms.  Returns a dictionary mapping
     test platform to {test-set, build-platform, build-label}."""
@@ -85,11 +95,22 @@ def get_test_platforms(test_platforms_cfg, builds_by_platform):
                     build_platform, test_platform))
             continue
         test_platforms[test_platform] = {
-            'nightly': builds_by_platform[build_platform].attributes.get('nightly', False),
             'build-platform': build_platform,
             'build-label': builds_by_platform[build_platform].label,
+            'build-attributes': builds_by_platform[build_platform].attributes,
         }
+
+        if builds_by_platform[build_platform].attributes.get('nightly'):
+            test_platforms[test_platform]['nightly'] = \
+                builds_by_platform[build_platform].attributes['nightly']
+
         test_platforms[test_platform].update(cfg)
+
+        if build_platform in signed_builds_by_platform:
+            # Context: Signed builds are only used by Windows
+            test_platforms[test_platform]['build-signing-label'] = \
+                signed_builds_by_platform[build_platform].label
+
     return test_platforms
 
 
@@ -101,7 +122,7 @@ def expand_tests(test_sets_cfg, test_platforms):
     rv = {}
     for test_platform, cfg in test_platforms.iteritems():
         test_sets = cfg['test-sets']
-        if not set(test_sets) < set(test_sets_cfg):
+        if not set(test_sets) <= set(test_sets_cfg):
             raise Exception(
                 "Test sets {} for test platform {} are not defined".format(
                     ', '.join(test_sets), test_platform))

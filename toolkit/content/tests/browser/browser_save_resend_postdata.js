@@ -27,6 +27,7 @@ function test() {
     // Submit the form in the outer page, then wait for both the outer
     // document and the inner frame to be loaded again.
     gBrowser.addEventListener("DOMContentLoaded", handleOuterSubmit);
+    // eslint-disable-next-line mozilla/no-cpows-in-tests
     gBrowser.contentDocument.getElementById("postForm").submit();
   });
 
@@ -39,6 +40,7 @@ function test() {
 
     gBrowser.removeEventListener("DOMContentLoaded", handleOuterSubmit);
 
+    // eslint-disable-next-line mozilla/no-cpows-in-tests
     innerFrame = gBrowser.contentDocument.getElementById("innerFrame");
 
     // Submit the form in the inner page.
@@ -96,15 +98,11 @@ function test() {
 }
 
 /* import-globals-from common/mockTransfer.js */
-Cc["@mozilla.org/moz/jssubscript-loader;1"]
-  .getService(Ci.mozIJSSubScriptLoader)
-  .loadSubScript("chrome://mochitests/content/browser/toolkit/content/tests/browser/common/mockTransfer.js",
+Services.scriptloader.loadSubScript("chrome://mochitests/content/browser/toolkit/content/tests/browser/common/mockTransfer.js",
                  this);
 
 function createTemporarySaveDirectory() {
-  var saveDir = Cc["@mozilla.org/file/directory_service;1"]
-                  .getService(Ci.nsIProperties)
-                  .get("TmpD", Ci.nsIFile);
+  var saveDir = Services.dirsvc.get("TmpD", Ci.nsIFile);
   saveDir.append("testsavedir");
   if (!saveDir.exists())
     saveDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o755);

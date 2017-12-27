@@ -9,16 +9,18 @@ const {FileUtils} = Cu.import("resource://gre/modules/FileUtils.jsm", {});
 const {console} = Cu.import("resource://gre/modules/Console.jsm", {});
 const {ScratchpadManager} = Cu.import("resource://devtools/client/scratchpad/scratchpad-manager.jsm", {});
 const {require} = Cu.import("resource://devtools/shared/Loader.jsm", {});
+const {gDevTools} = require("devtools/client/framework/devtools");
 const Services = require("Services");
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
 const flags = require("devtools/shared/flags");
 const promise = require("promise");
+const defer = require("devtools/shared/defer");
 
 
 var gScratchpadWindow; // Reference to the Scratchpad chrome window object
 
 flags.testing = true;
-SimpleTest.registerCleanupFunction(() => {
+registerCleanupFunction(() => {
   flags.testing = false;
 });
 
@@ -89,12 +91,12 @@ function openTabAndScratchpad(aOptions = {})
 {
   waitForExplicitFinish();
   return new promise(resolve => {
-    gBrowser.selectedTab = gBrowser.addTab();
+    gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
     let {selectedBrowser} = gBrowser;
-    selectedBrowser.addEventListener("load", function () {
+    BrowserTestUtils.browserLoaded(selectedBrowser).then(function () {
       openScratchpad((win, sp) => resolve([win, sp]), aOptions);
-    }, {capture: true, once: true});
-    content.location = "data:text/html;charset=utf8," + (aOptions.tabContent || "");
+    });
+    gBrowser.loadURI("data:text/html;charset=utf8," + (aOptions.tabContent || ""));
   });
 }
 
@@ -120,7 +122,7 @@ function createTempFile(aName, aContent, aCallback = function () {})
   // Write the temporary file.
   let fout = Cc["@mozilla.org/network/file-output-stream;1"].
              createInstance(Ci.nsIFileOutputStream);
-  fout.init(file.QueryInterface(Ci.nsILocalFile), 0x02 | 0x08 | 0x20,
+  fout.init(file.QueryInterface(Ci.nsIFile), 0x02 | 0x08 | 0x20,
             parseInt("644", 8), fout.DEFER_OPEN);
 
   let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"].
@@ -153,7 +155,7 @@ function createTempFile(aName, aContent, aCallback = function () {})
  */
 function runAsyncTests(aScratchpad, aTests)
 {
-  let deferred = promise.defer();
+  let deferred = defer();
 
   (function runTest() {
     if (aTests.length) {

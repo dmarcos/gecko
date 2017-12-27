@@ -6,11 +6,10 @@
 
 const promise = require("promise");
 const Services = require("Services");
-const defer = require("devtools/shared/defer");
 const {Task} = require("devtools/shared/task");
 const nodeConstants = require("devtools/shared/dom-node-constants");
 const nodeFilterConstants = require("devtools/shared/dom-node-filter-constants");
-const EventEmitter = require("devtools/shared/event-emitter");
+const EventEmitter = require("devtools/shared/old-event-emitter");
 const {LocalizationHelper} = require("devtools/shared/l10n");
 const {PluralForm} = require("devtools/shared/plural-form");
 const AutocompletePopup = require("devtools/client/shared/autocomplete-popup");
@@ -185,7 +184,7 @@ MarkupView.prototype = {
   _onToolboxPickerHover: function (event, nodeFront) {
     this.showNode(nodeFront).then(() => {
       this._showContainerAsHovered(nodeFront);
-    }, e => console.error(e));
+    }, console.error);
   },
 
   /**
@@ -199,10 +198,14 @@ MarkupView.prototype = {
   },
 
   isDragging: false,
+  _draggedContainer: null,
 
   _onMouseMove: function (event) {
     let target = event.target;
 
+    if (this._draggedContainer) {
+      this._draggedContainer.onMouseMove(event);
+    }
     // Auto-scroll if we're dragging.
     if (this.isDragging) {
       event.preventDefault();
@@ -330,7 +333,11 @@ MarkupView.prototype = {
     }
   },
 
-  _onMouseUp: function () {
+  _onMouseUp: function (event) {
+    if (this._draggedContainer) {
+      this._draggedContainer.onMouseUp(event);
+    }
+
     this.indicateDropTarget(null);
     this.indicateDragTarget(null);
     if (this._autoScrollAnimationFrame) {
@@ -453,15 +460,17 @@ MarkupView.prototype = {
   _brieflyShowBoxModel: function (nodeFront) {
     this._clearBriefBoxModelTimer();
     let onShown = this._showBoxModel(nodeFront);
-    this._briefBoxModelPromise = defer();
 
-    this._briefBoxModelTimer = setTimeout(() => {
-      this._hideBoxModel()
-          .then(this._briefBoxModelPromise.resolve,
-                this._briefBoxModelPromise.resolve);
-    }, NEW_SELECTION_HIGHLIGHTER_TIMER);
+    let _resolve;
+    this._briefBoxModelPromise = new Promise(resolve => {
+      _resolve = resolve;
+      this._briefBoxModelTimer = setTimeout(() => {
+        this._hideBoxModel().then(resolve, resolve);
+      }, NEW_SELECTION_HIGHLIGHTER_TIMER);
+    });
+    this._briefBoxModelPromise.resolve = _resolve;
 
-    return promise.all([onShown, this._briefBoxModelPromise.promise]);
+    return promise.all([onShown, this._briefBoxModelPromise]);
   },
 
   /**
@@ -511,7 +520,7 @@ MarkupView.prototype = {
     }
 
     let parent = target, container;
-    while (parent !== this.doc.body) {
+    while (parent) {
       if (parent.container) {
         container = parent.container;
         break;
@@ -858,9 +867,7 @@ MarkupView.prototype = {
    *         If set to true, focus the previous sibling, otherwise the next one.
    */
   deleteNode: function (node, moveBackward) {
-    if (node.isDocumentElement ||
-        node.nodeType == nodeConstants.DOCUMENT_TYPE_NODE ||
-        node.isAnonymous) {
+    if (!this.inspector.isDeletable(node)) {
       return;
     }
 
@@ -904,7 +911,7 @@ MarkupView.prototype = {
         nextSibling = isValidSibling ? nextSibling : null;
         this.walker.insertBefore(node, parent, nextSibling);
       });
-    }).then(null, console.error);
+    }).catch(console.error);
   },
 
   /**
@@ -1154,7 +1161,7 @@ MarkupView.prototype = {
    */
   expandNode: function (node) {
     let container = this.getContainer(node);
-    this._expandContainer(container);
+    return this._expandContainer(container);
   },
 
   /**
@@ -1172,7 +1179,7 @@ MarkupView.prototype = {
         child = child.nextSibling;
       }
       return promise.all(promises);
-    }).then(null, console.error);
+    }).catch(console.error);
   },
 
   /**
@@ -1192,6 +1199,19 @@ MarkupView.prototype = {
   collapseNode: function (node) {
     let container = this.getContainer(node);
     container.setExpanded(false);
+  },
+
+  _collapseAll: function (container) {
+    container.setExpanded(false);
+    let children = container.getChildContainers() || [];
+    children.forEach(child => this._collapseAll(child));
+  },
+
+  /**
+   * Collapse the entire tree beneath a node.
+   */
+  collapseAll: function (node) {
+    this._collapseAll(this.getContainer(node));
   },
 
   /**
@@ -1215,7 +1235,7 @@ MarkupView.prototype = {
 
     return walkerPromise.then(longstr => {
       return longstr.string().then(html => {
-        longstr.release().then(null, console.error);
+        longstr.release().catch(console.error);
         return html;
       });
     });
@@ -1332,7 +1352,7 @@ MarkupView.prototype = {
     // Changing the outerHTML removes the node which outerHTML was changed.
     // Listen to this removal to reselect the right node afterwards.
     this.reselectOnRemoved(node, "outerhtml");
-    return this.walker.setOuterHTML(node, newValue).then(null, () => {
+    return this.walker.setOuterHTML(node, newValue).catch(() => {
       this.cancelReselectOnRemoved();
     });
   },
@@ -1354,15 +1374,13 @@ MarkupView.prototype = {
       return promise.reject();
     }
 
-    let def = defer();
-
-    container.undo.do(() => {
-      this.walker.setInnerHTML(node, newValue).then(def.resolve, def.reject);
-    }, () => {
-      this.walker.setInnerHTML(node, oldValue);
+    return new Promise((resolve, reject) => {
+      container.undo.do(() => {
+        this.walker.setInnerHTML(node, newValue).then(resolve, reject);
+      }, () => {
+        this.walker.setInnerHTML(node, oldValue);
+      });
     });
-
-    return def.promise;
   },
 
   /**
@@ -1384,19 +1402,22 @@ MarkupView.prototype = {
       return promise.reject();
     }
 
-    let def = defer();
-
     let injectedNodes = [];
-    container.undo.do(() => {
-      this.walker.insertAdjacentHTML(node, position, value).then(nodeArray => {
-        injectedNodes = nodeArray.nodes;
-        return nodeArray;
-      }).then(def.resolve, def.reject);
-    }, () => {
-      this.walker.removeNodes(injectedNodes);
-    });
 
-    return def.promise;
+    return new Promise((resolve, reject) => {
+      container.undo.do(() => {
+        // eslint-disable-next-line no-unsanitized/method
+        this.walker
+            .insertAdjacentHTML(node, position, value)
+            .then(nodeArray => {
+              injectedNodes = nodeArray.nodes;
+              return nodeArray;
+            })
+            .then(resolve, reject);
+      }, () => {
+        this.walker.removeNodes(injectedNodes);
+      });
+    });
   },
 
   /**
@@ -1432,22 +1453,24 @@ MarkupView.prototype = {
   },
 
   /**
-   * Mark the given node expanded.
+   * Expand or collapse the given node.
    *
    * @param  {NodeFront} node
-   *         The NodeFront to mark as expanded.
+   *         The NodeFront to update.
    * @param  {Boolean} expanded
-   *         Whether the expand or collapse.
-   * @param  {Boolean} expandDescendants
-   *         Whether to expand all descendants too
+   *         Whether the node should be expanded/collapsed.
+   * @param  {Boolean} applyToDescendants
+   *         Whether all descendants should also be expanded/collapsed
    */
-  setNodeExpanded: function (node, expanded, expandDescendants) {
+  setNodeExpanded: function (node, expanded, applyToDescendants) {
     if (expanded) {
-      if (expandDescendants) {
+      if (applyToDescendants) {
         this.expandAll(node);
       } else {
         this.expandNode(node);
       }
+    } else if (applyToDescendants) {
+      this.collapseAll(node);
     } else {
       this.collapseNode(node);
     }
@@ -1646,7 +1669,7 @@ MarkupView.prototype = {
         // If children are dirty, we got a change notification for this node
         // while the request was in progress, we need to do it again.
         if (container.childrenDirty) {
-          return this._updateChildren(container, {expand: centered});
+          return this._updateChildren(container, {expand: centered || expand});
         }
 
         let fragment = this.doc.createDocumentFragment();

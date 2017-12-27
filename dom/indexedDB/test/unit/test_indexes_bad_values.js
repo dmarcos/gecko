@@ -57,7 +57,7 @@ function* testSteps()
       if (++addedData == objectStoreData.length) {
         testGenerator.next(event);
       }
-    }
+    };
   }
   event = yield undefined;
 
@@ -73,9 +73,9 @@ function* testSteps()
     request.onerror = errorHandler;
     request.onsuccess = function(event) {
       if (++addedData == badObjectStoreData.length) {
-        executeSoon(function() { testGenerator.next() });
+        executeSoon(function() { testGenerator.next(); });
       }
-    }
+    };
   }
   yield undefined;
   yield undefined;
@@ -87,7 +87,7 @@ function* testSteps()
 
   request = objectStore.index("weight").openKeyCursor();
   request.onerror = errorHandler;
-  request.onsuccess = function (event) {
+  request.onsuccess = function(event) {
     let cursor = event.target.result;
     if (cursor) {
       is(cursor.key, objectStoreDataWeightSort[keyIndex].value.weight,
@@ -101,7 +101,7 @@ function* testSteps()
     else {
       testGenerator.next();
     }
-  }
+  };
   yield undefined;
 
   is(keyIndex, objectStoreDataWeightSort.length, "Saw all weights");
@@ -110,7 +110,7 @@ function* testSteps()
 
   request = objectStore.openCursor();
   request.onerror = errorHandler;
-  request.onsuccess = function (event) {
+  request.onsuccess = function(event) {
     let cursor = event.target.result;
     if (cursor) {
       keyIndex++;
@@ -119,7 +119,7 @@ function* testSteps()
     else {
       testGenerator.next();
     }
-  }
+  };
   yield undefined;
 
   is(keyIndex, objectStoreData.length + badObjectStoreData.length,

@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsString.h"
 #include "jsapi.h"
 #include "nsIContent.h"
@@ -192,8 +192,7 @@ nsXBLProtoImplMethod::CompileMember(AutoJSAPI& jsapi, const nsString& aClassStr,
   JSAutoCompartment ac(cx, aClassObject);
   JS::CompileOptions options(cx);
   options.setFileAndLine(functionUri.get(),
-                         uncompiledMethod->mBodyText.GetLineNumber())
-         .setVersion(JSVERSION_LATEST);
+                         uncompiledMethod->mBodyText.GetLineNumber());
   JS::Rooted<JSObject*> methodObject(cx);
   JS::AutoObjectVector emptyVector(cx);
   nsresult rv = nsJSUtils::CompileFunction(jsapi, emptyVector, options, cname,
@@ -285,15 +284,24 @@ nsXBLProtoImplAnonymousMethod::Execute(nsIContent* aBoundElement, JSAddonId* aAd
 
   // We are going to run script via JS::Call, so we need a script entry point,
   // but as this is XBL related it does not appear in the HTML spec.
-  dom::AutoEntryScript aes(global, "XBL <constructor>/<destructor> invocation");
-  JSContext* cx = aes.cx();
+  // We need an actual JSContext to do GetScopeForXBLExecution, and it needs to
+  // be in the compartment of globalObject.  But we want our XBL execution scope
+  // to be our entry global.
+  AutoJSAPI jsapi;
+  if (!jsapi.Init(global)) {
+    return NS_ERROR_UNEXPECTED;
+  }
 
-  JS::Rooted<JSObject*> globalObject(cx, global->GetGlobalJSObject());
+  JS::Rooted<JSObject*> globalObject(jsapi.cx(), global->GetGlobalJSObject());
 
-  JS::Rooted<JSObject*> scopeObject(cx, xpc::GetScopeForXBLExecution(cx, globalObject, aAddonId));
+  JS::Rooted<JSObject*> scopeObject(jsapi.cx(),
+    xpc::GetScopeForXBLExecution(jsapi.cx(), globalObject, aAddonId));
   NS_ENSURE_TRUE(scopeObject, NS_ERROR_OUT_OF_MEMORY);
 
-  JSAutoCompartment ac(cx, scopeObject);
+  dom::AutoEntryScript aes(scopeObject,
+                           "XBL <constructor>/<destructor> invocation",
+                           true);
+  JSContext* cx = aes.cx();
   JS::AutoObjectVector scopeChain(cx);
   if (!nsJSUtils::GetScopeChainForElement(cx, aBoundElement->AsElement(),
                                           scopeChain)) {

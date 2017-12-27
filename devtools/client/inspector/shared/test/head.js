@@ -102,19 +102,17 @@ addTab = function (url) {
  * if the timeout is reached
  */
 function waitForSuccess(validatorFn, name = "untitled") {
-  let def = defer();
-
-  function wait(validator) {
-    if (validator()) {
-      ok(true, "Validator function " + name + " returned true");
-      def.resolve();
-    } else {
-      setTimeout(() => wait(validator), 200);
+  return new Promise(resolve => {
+    function wait(validator) {
+      if (validator()) {
+        ok(true, "Validator function " + name + " returned true");
+        resolve();
+      } else {
+        setTimeout(() => wait(validator), 200);
+      }
     }
-  }
-  wait(validatorFn);
-
-  return def.promise;
+    wait(validatorFn);
+  });
 }
 
 /**
@@ -199,12 +197,12 @@ var simulateColorPickerChange = Task.async(function* (ruleView, colorPicker,
  */
 function getComputedViewProperty(view, name) {
   let prop;
-  for (let property of view.styleDocument.querySelectorAll(".property-view")) {
-    let nameSpan = property.querySelector(".property-name");
-    let valueSpan = property.querySelector(".property-value");
+  for (let property of view.styleDocument.querySelectorAll(".computed-property-view")) {
+    let nameSpan = property.querySelector(".computed-property-name");
+    let valueSpan = property.querySelector(".computed-property-value");
 
-    if (nameSpan.textContent === name) {
-      prop = {nameSpan: nameSpan, valueSpan: valueSpan};
+    if (nameSpan.firstChild.textContent === name) {
+      prop = {nameSpan, valueSpan};
       break;
     }
   }
@@ -222,6 +220,5 @@ function getComputedViewProperty(view, name) {
  * @return {String} The property value
  */
 function getComputedViewPropertyValue(view, name, propertyName) {
-  return getComputedViewProperty(view, name, propertyName)
-    .valueSpan.textContent;
+  return getComputedViewProperty(view, name, propertyName).valueSpan.textContent;
 }

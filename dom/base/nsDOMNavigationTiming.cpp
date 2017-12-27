@@ -9,6 +9,9 @@
 #include "GeckoProfiler.h"
 #include "nsCOMPtr.h"
 #include "nsContentUtils.h"
+#include "nsDocShell.h"
+#include "nsHttp.h"
+#include "nsIDocShellTreeItem.h"
 #include "nsIScriptSecurityManager.h"
 #include "prtime.h"
 #include "nsIURI.h"
@@ -19,9 +22,11 @@
 
 using namespace mozilla;
 
-nsDOMNavigationTiming::nsDOMNavigationTiming()
+nsDOMNavigationTiming::nsDOMNavigationTiming(nsDocShell* aDocShell)
 {
   Clear();
+
+  mDocShell = aDocShell;
 }
 
 nsDOMNavigationTiming::~nsDOMNavigationTiming()
@@ -33,24 +38,18 @@ nsDOMNavigationTiming::Clear()
 {
   mNavigationType = TYPE_RESERVED;
   mNavigationStartHighRes = 0;
-  mBeforeUnloadStart = 0;
-  mUnloadStart = 0;
-  mUnloadEnd = 0;
-  mLoadEventStart = 0;
-  mLoadEventEnd = 0;
-  mDOMLoading = 0;
-  mDOMInteractive = 0;
-  mDOMContentLoadedEventStart = 0;
-  mDOMContentLoadedEventEnd = 0;
-  mDOMComplete = 0;
 
-  mLoadEventStartSet = false;
-  mLoadEventEndSet = false;
-  mDOMLoadingSet = false;
-  mDOMInteractiveSet = false;
-  mDOMContentLoadedEventStartSet = false;
-  mDOMContentLoadedEventEndSet = false;
-  mDOMCompleteSet = false;
+  mBeforeUnloadStart = TimeStamp();
+  mUnloadStart = TimeStamp();
+  mUnloadEnd = TimeStamp();
+  mLoadEventStart = TimeStamp();
+  mLoadEventEnd = TimeStamp();
+  mDOMLoading = TimeStamp();
+  mDOMInteractive = TimeStamp();
+  mDOMContentLoadedEventStart = TimeStamp();
+  mDOMContentLoadedEventEnd = TimeStamp();
+  mDOMComplete = TimeStamp();
+
   mDocShellHasBeenActiveSinceNavigationStart = false;
 }
 
@@ -61,21 +60,17 @@ nsDOMNavigationTiming::TimeStampToDOM(TimeStamp aStamp) const
     return 0;
   }
 
-  TimeDuration duration = aStamp - mNavigationStartTimeStamp;
+  TimeDuration duration = aStamp - mNavigationStart;
   return GetNavigationStart() + static_cast<int64_t>(duration.ToMilliseconds());
-}
-
-DOMTimeMilliSec nsDOMNavigationTiming::DurationFromStart()
-{
-  return TimeStampToDOM(TimeStamp::Now());
 }
 
 void
 nsDOMNavigationTiming::NotifyNavigationStart(DocShellState aDocShellState)
 {
   mNavigationStartHighRes = (double)PR_Now() / PR_USEC_PER_MSEC;
-  mNavigationStartTimeStamp = TimeStamp::Now();
+  mNavigationStart = TimeStamp::Now();
   mDocShellHasBeenActiveSinceNavigationStart = (aDocShellState == DocShellState::eActive);
+  PROFILER_ADD_MARKER("Navigation::Start");
 }
 
 void
@@ -90,7 +85,7 @@ nsDOMNavigationTiming::NotifyFetchStart(nsIURI* aURI, Type aNavigationType)
 void
 nsDOMNavigationTiming::NotifyBeforeUnload()
 {
-  mBeforeUnloadStart = DurationFromStart();
+  mBeforeUnloadStart = TimeStamp::Now();
 }
 
 void
@@ -103,90 +98,158 @@ nsDOMNavigationTiming::NotifyUnloadAccepted(nsIURI* aOldURI)
 void
 nsDOMNavigationTiming::NotifyUnloadEventStart()
 {
-  mUnloadStart = DurationFromStart();
+  mUnloadStart = TimeStamp::Now();
+  PROFILER_TRACING("Navigation", "Unload", TRACING_INTERVAL_START);
 }
 
 void
 nsDOMNavigationTiming::NotifyUnloadEventEnd()
 {
-  mUnloadEnd = DurationFromStart();
+  mUnloadEnd = TimeStamp::Now();
+  PROFILER_TRACING("Navigation", "Unload", TRACING_INTERVAL_END);
 }
 
 void
 nsDOMNavigationTiming::NotifyLoadEventStart()
 {
-  if (!mLoadEventStartSet) {
-    mLoadEventStart = DurationFromStart();
-    mLoadEventStartSet = true;
+  if (!mLoadEventStart.IsNull()) {
+    return;
+  }
+  mLoadEventStart = TimeStamp::Now();
+
+  PROFILER_TRACING("Navigation", "Load", TRACING_INTERVAL_START);
+
+  if (IsTopLevelContentDocumentInContentProcess()) {
+    TimeStamp now = TimeStamp::Now();
+
+    Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_LOAD_EVENT_START_MS,
+                                   mNavigationStart,
+                                   now);
+
+    if (mDocShellHasBeenActiveSinceNavigationStart) {
+      if (net::nsHttp::IsBeforeLastActiveTabLoadOptimization(mNavigationStart)) {
+        Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_LOAD_EVENT_START_ACTIVE_NETOPT_MS,
+                                       mNavigationStart,
+                                       now);
+      } else {
+        Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_LOAD_EVENT_START_ACTIVE_MS,
+                                       mNavigationStart,
+                                       now);
+      }
+    }
   }
 }
 
 void
 nsDOMNavigationTiming::NotifyLoadEventEnd()
 {
-  if (!mLoadEventEndSet) {
-    mLoadEventEnd = DurationFromStart();
-    mLoadEventEndSet = true;
+  if (!mLoadEventEnd.IsNull()) {
+    return;
+  }
+  mLoadEventEnd = TimeStamp::Now();
+
+  PROFILER_TRACING("Navigation", "Load", TRACING_INTERVAL_END);
+
+  if (IsTopLevelContentDocumentInContentProcess()) {
+    Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_LOAD_EVENT_END_MS,
+                                   mNavigationStart);
   }
 }
 
 void
 nsDOMNavigationTiming::SetDOMLoadingTimeStamp(nsIURI* aURI, TimeStamp aValue)
 {
-  if (!mDOMLoadingSet) {
-    mLoadedURI = aURI;
-    mDOMLoading = TimeStampToDOM(aValue);
-    mDOMLoadingSet = true;
+  if (!mDOMLoading.IsNull()) {
+    return;
   }
+  mLoadedURI = aURI;
+  mDOMLoading = aValue;
 }
 
 void
 nsDOMNavigationTiming::NotifyDOMLoading(nsIURI* aURI)
 {
-  if (!mDOMLoadingSet) {
-    mLoadedURI = aURI;
-    mDOMLoading = DurationFromStart();
-    mDOMLoadingSet = true;
+  if (!mDOMLoading.IsNull()) {
+    return;
   }
+  mLoadedURI = aURI;
+  mDOMLoading = TimeStamp::Now();
+
+  PROFILER_ADD_MARKER("Navigation::DOMLoading");
 }
 
 void
 nsDOMNavigationTiming::NotifyDOMInteractive(nsIURI* aURI)
 {
-  if (!mDOMInteractiveSet) {
-    mLoadedURI = aURI;
-    mDOMInteractive = DurationFromStart();
-    mDOMInteractiveSet = true;
+  if (!mDOMInteractive.IsNull()) {
+    return;
   }
+  mLoadedURI = aURI;
+  mDOMInteractive = TimeStamp::Now();
+
+  PROFILER_ADD_MARKER("Navigation::DOMInteractive");
 }
 
 void
 nsDOMNavigationTiming::NotifyDOMComplete(nsIURI* aURI)
 {
-  if (!mDOMCompleteSet) {
-    mLoadedURI = aURI;
-    mDOMComplete = DurationFromStart();
-    mDOMCompleteSet = true;
+  if (!mDOMComplete.IsNull()) {
+    return;
   }
+  mLoadedURI = aURI;
+  mDOMComplete = TimeStamp::Now();
+
+  PROFILER_ADD_MARKER("Navigation::DOMComplete");
 }
 
 void
 nsDOMNavigationTiming::NotifyDOMContentLoadedStart(nsIURI* aURI)
 {
-  if (!mDOMContentLoadedEventStartSet) {
-    mLoadedURI = aURI;
-    mDOMContentLoadedEventStart = DurationFromStart();
-    mDOMContentLoadedEventStartSet = true;
+  if (!mDOMContentLoadedEventStart.IsNull()) {
+    return;
+  }
+
+  mLoadedURI = aURI;
+  mDOMContentLoadedEventStart = TimeStamp::Now();
+
+  PROFILER_TRACING("Navigation", "DOMContentLoaded", TRACING_INTERVAL_START);
+
+  if (IsTopLevelContentDocumentInContentProcess()) {
+    TimeStamp now = TimeStamp::Now();
+
+    Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_DOM_CONTENT_LOADED_START_MS,
+                                   mNavigationStart,
+                                   now);
+
+    if (mDocShellHasBeenActiveSinceNavigationStart) {
+      if (net::nsHttp::IsBeforeLastActiveTabLoadOptimization(mNavigationStart)) {
+        Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_DOM_CONTENT_LOADED_START_ACTIVE_NETOPT_MS,
+                                       mNavigationStart,
+                                       now);
+      } else {
+        Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_DOM_CONTENT_LOADED_START_ACTIVE_MS,
+                                       mNavigationStart,
+                                       now);
+      }
+    }
   }
 }
 
 void
 nsDOMNavigationTiming::NotifyDOMContentLoadedEnd(nsIURI* aURI)
 {
-  if (!mDOMContentLoadedEventEndSet) {
-    mLoadedURI = aURI;
-    mDOMContentLoadedEventEnd = DurationFromStart();
-    mDOMContentLoadedEventEndSet = true;
+  if (!mDOMContentLoadedEventEnd.IsNull()) {
+    return;
+  }
+
+  mLoadedURI = aURI;
+  mDOMContentLoadedEventEnd = TimeStamp::Now();
+
+  PROFILER_TRACING("Navigation", "DOMContentLoaded", TRACING_INTERVAL_END);
+
+  if (IsTopLevelContentDocumentInContentProcess()) {
+    Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_DOM_CONTENT_LOADED_END_MS,
+                                   mNavigationStart);
   }
 }
 
@@ -194,16 +257,17 @@ void
 nsDOMNavigationTiming::NotifyNonBlankPaintForRootContentDocument()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(!mNavigationStartTimeStamp.IsNull());
+  MOZ_ASSERT(!mNavigationStart.IsNull());
 
-  if (!mNonBlankPaintTimeStamp.IsNull()) {
+  if (!mNonBlankPaint.IsNull()) {
     return;
   }
 
-  mNonBlankPaintTimeStamp = TimeStamp::Now();
-  TimeDuration elapsed = mNonBlankPaintTimeStamp - mNavigationStartTimeStamp;
+  mNonBlankPaint = TimeStamp::Now();
 
+#ifdef MOZ_GECKO_PROFILER
   if (profiler_is_active()) {
+    TimeDuration elapsed = mNonBlankPaint - mNavigationStart;
     nsAutoCString spec;
     if (mLoadedURI) {
       mLoadedURI->GetSpec(spec);
@@ -211,13 +275,24 @@ nsDOMNavigationTiming::NotifyNonBlankPaintForRootContentDocument()
     nsPrintfCString marker("Non-blank paint after %dms for URL %s, %s",
                            int(elapsed.ToMilliseconds()), spec.get(),
                            mDocShellHasBeenActiveSinceNavigationStart ? "foreground tab" : "this tab was inactive some of the time between navigation start and first non-blank paint");
-    PROFILER_MARKER(marker.get());
+    profiler_add_marker(marker.get());
   }
+#endif
 
   if (mDocShellHasBeenActiveSinceNavigationStart) {
+    if (net::nsHttp::IsBeforeLastActiveTabLoadOptimization(mNavigationStart)) {
+      Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_NON_BLANK_PAINT_NETOPT_MS,
+                                     mNavigationStart,
+                                     mNonBlankPaint);
+    } else {
+      Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_NON_BLANK_PAINT_NO_NETOPT_MS,
+                                     mNavigationStart,
+                                     mNonBlankPaint);
+    }
+
     Telemetry::AccumulateTimeDelta(Telemetry::TIME_TO_NON_BLANK_PAINT_MS,
-                                   mNavigationStartTimeStamp,
-                                   mNonBlankPaintTimeStamp);
+                                   mNavigationStart,
+                                   mNonBlankPaint);
   }
 }
 
@@ -228,24 +303,41 @@ nsDOMNavigationTiming::NotifyDocShellStateChanged(DocShellState aDocShellState)
     (aDocShellState == DocShellState::eActive);
 }
 
-DOMTimeMilliSec
-nsDOMNavigationTiming::GetUnloadEventStart()
+mozilla::TimeStamp
+nsDOMNavigationTiming::GetUnloadEventStartTimeStamp() const
 {
   nsIScriptSecurityManager* ssm = nsContentUtils::GetSecurityManager();
   nsresult rv = ssm->CheckSameOriginURI(mLoadedURI, mUnloadedURI, false);
   if (NS_SUCCEEDED(rv)) {
     return mUnloadStart;
   }
-  return 0;
+  return mozilla::TimeStamp();
 }
 
-DOMTimeMilliSec
-nsDOMNavigationTiming::GetUnloadEventEnd()
+mozilla::TimeStamp
+nsDOMNavigationTiming::GetUnloadEventEndTimeStamp() const
 {
   nsIScriptSecurityManager* ssm = nsContentUtils::GetSecurityManager();
   nsresult rv = ssm->CheckSameOriginURI(mLoadedURI, mUnloadedURI, false);
   if (NS_SUCCEEDED(rv)) {
     return mUnloadEnd;
   }
-  return 0;
+  return mozilla::TimeStamp();
+}
+
+bool
+nsDOMNavigationTiming::IsTopLevelContentDocumentInContentProcess() const
+{
+  if (!mDocShell) {
+    return false;
+  }
+  if (!XRE_IsContentProcess()) {
+    return false;
+  }
+  nsCOMPtr<nsIDocShellTreeItem> rootItem;
+  Unused << mDocShell->GetSameTypeRootTreeItem(getter_AddRefs(rootItem));
+  if (rootItem.get() != static_cast<nsIDocShellTreeItem*>(mDocShell.get())) {
+    return false;
+  }
+  return rootItem->ItemType() == nsIDocShellTreeItem::typeContent;
 }

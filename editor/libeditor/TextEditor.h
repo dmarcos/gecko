@@ -56,11 +56,6 @@ public:
 
   TextEditor();
 
-  virtual TextEditor* AsTextEditor() override { return this; }
-  virtual const TextEditor* AsTextEditor() const override { return this; }
-  virtual HTMLEditor* AsHTMLEditor() override;
-  virtual const HTMLEditor* AsHTMLEditor() const override;
-
   // nsIPlaintextEditor methods
   NS_DECL_NSIPLAINTEXTEDITOR
 
@@ -70,10 +65,10 @@ public:
   // Overrides of EditorBase
   virtual nsresult RemoveAttributeOrEquivalent(
                      Element* aElement,
-                     nsIAtom* aAttribute,
+                     nsAtom* aAttribute,
                      bool aSuppressTransaction) override;
   virtual nsresult SetAttributeOrEquivalent(Element* aElement,
-                                            nsIAtom* aAttribute,
+                                            nsAtom* aAttribute,
                                             const nsAString& aValue,
                                             bool aSuppressTransaction) override;
   using EditorBase::RemoveAttributeOrEquivalent;
@@ -83,6 +78,7 @@ public:
                   nsISelectionController* aSelCon, uint32_t aFlags,
                   const nsAString& aValue) override;
 
+  nsresult DocumentIsEmpty(bool* aIsEmpty);
   NS_IMETHOD GetDocumentIsEmpty(bool* aDocumentIsEmpty) override;
 
   NS_IMETHOD DeleteSelection(EDirection aAction,
@@ -177,6 +173,8 @@ public:
   static void GetDefaultEditorPrefs(int32_t& aNewLineHandling,
                                     int32_t& aCaretStyle);
 
+  int32_t MaxTextLength() const { return mMaxTextLength; }
+
 protected:
   virtual ~TextEditor();
 
@@ -189,16 +187,43 @@ protected:
                                          uint32_t aFlags,
                                          const nsACString& aCharset);
 
-  NS_IMETHOD CreateBR(nsIDOMNode* aNode, int32_t aOffset,
-                      nsCOMPtr<nsIDOMNode>* outBRNode,
-                      EDirection aSelect = eNone);
-  already_AddRefed<Element> CreateBRImpl(nsCOMPtr<nsINode>* aInOutParent,
-                                         int32_t* aInOutOffset,
-                                         EDirection aSelect);
-  nsresult CreateBRImpl(nsCOMPtr<nsIDOMNode>* aInOutParent,
-                        int32_t* aInOutOffset,
-                        nsCOMPtr<nsIDOMNode>* outBRNode,
-                        EDirection aSelect);
+  /**
+   * CreateBR() creates new <br> element and inserts it before aPointToInsert,
+   * and collapse selection if it's necessary.
+   *
+   * @param aPointToInsert  The point to insert new <br> element.
+   * @param aSelect         If eNone, this won't change selection.
+   *                        If eNext, selection will be collapsed after the
+   *                        <br> element.
+   *                        If ePrevious, selection will be collapsed at the
+   *                        <br> element.
+   * @return                The new <br> node.  If failed to create new <br>
+   *                        node, returns nullptr.
+   */
+  already_AddRefed<Element> CreateBR(const EditorRawDOMPoint& aPointToInsert,
+                                     EDirection aSelect = eNone);
+
+  /**
+   * CreateBRImpl() creates a <br> element and inserts it before aPointToInsert.
+   * Then, tries to collapse selection at or after the new <br> node if
+   * aSelect is not eNone.
+   * XXX Perhaps, this should be merged with CreateBR().
+   *
+   * @param aSelection          The selection of this editor.
+   * @param aPointToInsert      The DOM point where should be <br> node inserted
+   *                            before.
+   * @param aSelect             If eNone, this won't change selection.
+   *                            If eNext, selection will be collapsed after
+   *                            the <br> element.
+   *                            If ePrevious, selection will be collapsed at
+   *                            the <br> element.
+   * @return                    The new <br> node.  If failed to create new
+   *                            <br> node, returns nullptr.
+   */
+  already_AddRefed<Element>
+  CreateBRImpl(Selection& aSelection,
+               const EditorRawDOMPoint& aPointToInsert,
+               EDirection aSelect);
 
   /**
    * Factored methods for handling insertion of data from transferables
@@ -246,5 +271,17 @@ protected:
 };
 
 } // namespace mozilla
+
+mozilla::TextEditor*
+nsIEditor::AsTextEditor()
+{
+  return static_cast<mozilla::TextEditor*>(this);
+}
+
+const mozilla::TextEditor*
+nsIEditor::AsTextEditor() const
+{
+  return static_cast<const mozilla::TextEditor*>(this);
+}
 
 #endif // #ifndef mozilla_TextEditor_h

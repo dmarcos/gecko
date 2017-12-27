@@ -308,7 +308,7 @@ txFormatNumberFunctionCall::evaluate(txIEvalContext* aContext,
         else {
             digit = buf[i] - '0';
         }
-        
+
         if (carry) {
             digit = (digit + 1) % 10;
             carry = digit == 0;
@@ -341,7 +341,7 @@ txFormatNumberFunctionCall::evaluate(txIEvalContext* aContext,
         else {
             digit = buf[bufIntDigits-i-1] - '0';
         }
-        
+
         if (carry) {
             digit = (digit + 1) % 10;
             carry = digit == 0;
@@ -389,7 +389,7 @@ txFormatNumberFunctionCall::isSensitiveTo(ContextSensitivity aContext)
 
 #ifdef TX_TO_STRING
 nsresult
-txFormatNumberFunctionCall::getNameAtom(nsIAtom** aAtom)
+txFormatNumberFunctionCall::getNameAtom(nsAtom** aAtom)
 {
     *aAtom = nsGkAtoms::formatNumber;
     NS_ADDREF(*aAtom);

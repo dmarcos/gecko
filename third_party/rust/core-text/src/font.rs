@@ -12,19 +12,26 @@
 use font_descriptor::{CTFontDescriptor, CTFontDescriptorRef, CTFontOrientation};
 use font_descriptor::{CTFontSymbolicTraits, CTFontTraits, SymbolicTraitAccessors, TraitAccessors};
 
+use core_foundation::array::{CFArray, CFArrayRef};
 use core_foundation::base::{CFIndex, CFOptionFlags, CFTypeID, CFRelease, CFRetain, CFTypeRef, TCFType};
 use core_foundation::data::{CFData, CFDataRef};
 use core_foundation::dictionary::CFDictionaryRef;
 use core_foundation::string::{CFString, CFStringRef, UniChar};
 use core_foundation::url::{CFURL, CFURLRef};
-use core_graphics::base::{CGAffineTransform, CGFloat};
-use core_graphics::context::{CGContext, CGContextRef};
-use core_graphics::font::{CGGlyph, CGFont, CGFontRef};
-use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+use core_graphics::base::CGFloat;
+use core_graphics::context::CGContext;
+use core_graphics::font::{CGGlyph, CGFont};
+use core_graphics::geometry::{CGAffineTransform, CGPoint, CGRect, CGSize};
+use core_graphics::path::CGPath;
 
-use libc::{self, size_t};
+use foreign_types::ForeignType;
+use libc::{self, size_t, c_void};
 use std::mem;
 use std::ptr;
+
+type CGContextRef = *mut <CGContext as ForeignType>::CType;
+type CGFontRef = *mut <CGFont as ForeignType>::CType;
+type CGPathRef = *mut <CGPath as ForeignType>::CType;
 
 pub type CTFontUIFontType = u32;
 // kCTFontNoFontType: CTFontUIFontType = -1;
@@ -69,7 +76,7 @@ pub const kCTFontOptionsPreventAutoActivation: CTFontOptions = (1 << 0);
 pub const kCTFontOptionsPreferSystemFont: CTFontOptions = (1 << 2);
 
 #[repr(C)]
-struct __CTFont;
+pub struct __CTFont(c_void);
 
 pub type CTFontRef = *const __CTFont;
 
@@ -131,7 +138,7 @@ impl TCFType<CTFontRef> for CTFont {
 
 pub fn new_from_CGFont(cgfont: &CGFont, pt_size: f64) -> CTFont {
     unsafe {
-        let font_ref = CTFontCreateWithGraphicsFont(cgfont.as_concrete_TypeRef(),
+        let font_ref = CTFontCreateWithGraphicsFont(cgfont.as_ptr() as *mut _,
                                                     pt_size as CGFloat,
                                                     ptr::null(),
                                                     ptr::null());
@@ -176,7 +183,7 @@ impl CTFont {
     pub fn copy_to_CGFont(&self) -> CGFont {
         unsafe {
             let cgfont_ref = CTFontCopyGraphicsFont(self.obj, ptr::null_mut());
-            TCFType::wrap_under_create_rule(cgfont_ref)
+            CGFont::from_ptr(cgfont_ref as *mut _)
         }
     }
 
@@ -192,23 +199,31 @@ impl CTFont {
 
     // Names
     pub fn family_name(&self) -> String {
-        let value = get_string_by_name_key(self, kCTFontFamilyNameKey);
-        value.expect("Fonts should always have a family name.")
+        unsafe {
+            let value = get_string_by_name_key(self, kCTFontFamilyNameKey);
+            value.expect("Fonts should always have a family name.")
+        }
     }
 
     pub fn face_name(&self) -> String {
-        let value = get_string_by_name_key(self, kCTFontSubFamilyNameKey);
-        value.expect("Fonts should always have a face name.")
+        unsafe {
+            let value = get_string_by_name_key(self, kCTFontSubFamilyNameKey);
+            value.expect("Fonts should always have a face name.")
+        }
     }
 
     pub fn unique_name(&self) -> String {
-        let value = get_string_by_name_key(self, kCTFontUniqueNameKey);
-        value.expect("Fonts should always have a unique name.")
+        unsafe {
+            let value = get_string_by_name_key(self, kCTFontUniqueNameKey);
+            value.expect("Fonts should always have a unique name.")
+        }
     }
 
     pub fn postscript_name(&self) -> String {
-        let value = get_string_by_name_key(self, kCTFontPostScriptNameKey);
-        value.expect("Fonts should always have a PostScript name.")
+        unsafe {
+            let value = get_string_by_name_key(self, kCTFontPostScriptNameKey);
+            value.expect("Fonts should always have a PostScript name.")
+        }
     }
 
     pub fn all_traits(&self) -> CTFontTraits {
@@ -306,11 +321,11 @@ impl CTFont {
     pub fn get_bounding_rects_for_glyphs(&self, orientation: CTFontOrientation, glyphs: &[CGGlyph])
                                          -> CGRect {
         unsafe {
-            let mut result = CTFontGetBoundingRectsForGlyphs(self.as_concrete_TypeRef(),
-                                                             orientation,
-                                                             glyphs.as_ptr(),
-                                                             ptr::null_mut(),
-                                                             glyphs.len() as CFIndex);
+            let result = CTFontGetBoundingRectsForGlyphs(self.as_concrete_TypeRef(),
+                                                         orientation,
+                                                         glyphs.as_ptr(),
+                                                         ptr::null_mut(),
+                                                         glyphs.len() as CFIndex);
             result
         }
     }
@@ -322,7 +337,7 @@ impl CTFont {
                              glyphs.as_ptr(),
                              positions.as_ptr(),
                              glyphs.len() as size_t,
-                             context.as_concrete_TypeRef())
+                             context.as_ptr())
         }
     }
 
@@ -333,6 +348,18 @@ impl CTFont {
                 None
             } else {
                 Some(TCFType::wrap_under_create_rule(result as CFURLRef))
+            }
+        }
+    }
+
+    pub fn create_path_for_glyph(&self, glyph: CGGlyph, matrix: &CGAffineTransform)
+                                 -> Result<CGPath, ()> {
+        unsafe {
+            let path = CTFontCreatePathForGlyph(self.obj, glyph, matrix);
+            if path.is_null() {
+                Err(())
+            } else {
+                Ok(CGPath::from_ptr(path))
             }
         }
     }
@@ -356,12 +383,14 @@ pub fn debug_font_names(font: &CTFont) {
         get_string_by_name_key(font, key).unwrap()
     }
 
-    println!("kCTFontFamilyNameKey: {}", get_key(font, kCTFontFamilyNameKey));
-    println!("kCTFontSubFamilyNameKey: {}", get_key(font, kCTFontSubFamilyNameKey));
-    println!("kCTFontStyleNameKey: {}", get_key(font, kCTFontStyleNameKey));
-    println!("kCTFontUniqueNameKey: {}", get_key(font, kCTFontUniqueNameKey));
-    println!("kCTFontFullNameKey: {}", get_key(font, kCTFontFullNameKey));
-    println!("kCTFontPostScriptNameKey: {}", get_key(font, kCTFontPostScriptNameKey));
+    unsafe {
+        println!("kCTFontFamilyNameKey: {}", get_key(font, kCTFontFamilyNameKey));
+        println!("kCTFontSubFamilyNameKey: {}", get_key(font, kCTFontSubFamilyNameKey));
+        println!("kCTFontStyleNameKey: {}", get_key(font, kCTFontStyleNameKey));
+        println!("kCTFontUniqueNameKey: {}", get_key(font, kCTFontUniqueNameKey));
+        println!("kCTFontFullNameKey: {}", get_key(font, kCTFontFullNameKey));
+        println!("kCTFontPostScriptNameKey: {}", get_key(font, kCTFontPostScriptNameKey));
+    }
 }
 
 pub fn debug_font_traits(font: &CTFont) {
@@ -378,7 +407,17 @@ pub fn debug_font_traits(font: &CTFont) {
 //    println!("kCTFontSlantTrait: {}", traits.normalized_slant());
 }
 
-#[link(name = "ApplicationServices", kind = "framework")]
+#[cfg(feature = "mountainlion")]
+pub fn cascade_list_for_languages(font: &CTFont, language_pref_list: &CFArray) -> CFArray {
+    unsafe {
+        let font_collection_ref =
+            CTFontCopyDefaultCascadeListForLanguages(font.as_concrete_TypeRef(),
+                                                     language_pref_list.as_concrete_TypeRef());
+        TCFType::wrap_under_create_rule(font_collection_ref)
+    }
+}
+
+#[link(name = "CoreText", kind = "framework")]
 extern {
     /*
      * CTFont.h
@@ -453,6 +492,9 @@ extern {
     fn CTFontCopyName(font: CTFontRef, nameKey: CFStringRef) -> CFStringRef;
     //fn CTFontCopyLocalizedName(font: CTFontRef, nameKey: CFStringRef, 
     //                           language: *CFStringRef) -> CFStringRef;
+    #[cfg(feature = "mountainlion")]
+    fn CTFontCopyDefaultCascadeListForLanguages(font: CTFontRef, languagePrefList: CFArrayRef) -> CFArrayRef;
+
 
     /* Working With Encoding */
     //fn CTFontCopyCharacterSet
@@ -473,7 +515,8 @@ extern {
     fn CTFontGetXHeight(font: CTFontRef) -> CGFloat;
 
     /* Getting Glyph Data */
-    //fn CTFontCreatePathForGlyph
+    fn CTFontCreatePathForGlyph(font: CTFontRef, glyph: CGGlyph, matrix: *const CGAffineTransform)
+                                -> CGPathRef;
     //fn CTFontGetGlyphWithName
     fn CTFontGetBoundingRectsForGlyphs(font: CTFontRef,
                                        orientation: CTFontOrientation,
@@ -502,7 +545,8 @@ extern {
     //fn CTFontGetLigatureCaretPositions
 
     /* Converting Fonts */
-    fn CTFontCopyGraphicsFont(font: CTFontRef, attributes: *mut CTFontDescriptorRef) -> CGFontRef;
+    fn CTFontCopyGraphicsFont(font: CTFontRef, attributes: *mut CTFontDescriptorRef)
+                              -> CGFontRef;
     fn CTFontCreateWithGraphicsFont(graphicsFont: CGFontRef, size: CGFloat, 
                                     matrix: *const CGAffineTransform, 
                                     attributes: CTFontDescriptorRef) -> CTFontRef;

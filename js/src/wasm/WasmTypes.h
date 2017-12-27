@@ -20,6 +20,7 @@
 #define wasm_types_h
 
 #include "mozilla/Alignment.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/EnumeratedArray.h"
 #include "mozilla/HashFunctions.h"
 #include "mozilla/Maybe.h"
@@ -41,7 +42,6 @@
 namespace js {
 
 class PropertyName;
-class WasmActivation;
 class WasmFunctionCallObject;
 namespace jit {
     struct BaselineScript;
@@ -74,6 +74,7 @@ typedef MutableHandle<WasmTableObject*> MutableHandleWasmTableObject;
 
 namespace wasm {
 
+using mozilla::Atomic;
 using mozilla::DebugOnly;
 using mozilla::EnumeratedArray;
 using mozilla::Maybe;
@@ -89,6 +90,7 @@ using mozilla::Unused;
 typedef Vector<uint32_t, 0, SystemAllocPolicy> Uint32Vector;
 typedef Vector<uint8_t, 0, SystemAllocPolicy> Bytes;
 typedef UniquePtr<Bytes> UniqueBytes;
+typedef UniquePtr<const Bytes> UniqueConstBytes;
 typedef Vector<char, 0, SystemAllocPolicy> UTF8Bytes;
 
 typedef int8_t I8x16[16];
@@ -97,6 +99,8 @@ typedef int32_t I32x4[4];
 typedef float F32x4[4];
 
 class Code;
+class DebugState;
+class GeneratedSourceMap;
 class GlobalSegment;
 class Memory;
 class Module;
@@ -142,7 +146,7 @@ typedef Vector<Type, 0, SystemAllocPolicy> VectorName;
 // about:memory stats.
 
 template <class T>
-struct ShareableBase : RefCounted<T>
+struct ShareableBase : AtomicRefCounted<T>
 {
     using SeenSet = HashSet<const T*, DefaultHasher<const T*>, SystemAllocPolicy>;
 
@@ -158,6 +162,29 @@ struct ShareableBase : RefCounted<T>
 };
 
 // ValType utilities
+
+static inline unsigned
+SizeOf(ValType vt)
+{
+    switch (vt) {
+      case ValType::I32:
+      case ValType::F32:
+        return 4;
+      case ValType::I64:
+      case ValType::F64:
+        return 8;
+      case ValType::I8x16:
+      case ValType::I16x8:
+      case ValType::I32x4:
+      case ValType::F32x4:
+      case ValType::B8x16:
+      case ValType::B16x8:
+      case ValType::B32x4:
+        return 16;
+      default:
+        MOZ_CRASH("Invalid ValType");
+    }
+}
 
 static inline bool
 IsSimdType(ValType vt)
@@ -344,6 +371,69 @@ ToCString(ValType type)
     return ToCString(ToExprType(type));
 }
 
+// Code can be compiled either with the Baseline compiler or the Ion compiler,
+// and tier-variant data are tagged with the Tier value.
+//
+// A tier value is used to request tier-variant aspects of code, metadata, or
+// linkdata.  The tiers are normally explicit (Baseline and Ion); implicit tiers
+// can be obtained through accessors on Code objects (eg, stableTier).
+
+enum class Tier
+{
+    Baseline,
+    Debug = Baseline,
+    Ion,
+    Serialized = Ion
+};
+
+// The CompileMode controls how compilation of a module is performed (notably,
+// how many times we compile it).
+
+enum class CompileMode
+{
+    Once,
+    Tier1,
+    Tier2
+};
+
+// Typed enum for whether debugging is enabled.
+
+enum class DebugEnabled
+{
+    False,
+    True
+};
+
+// Iterator over tiers present in a tiered data structure.
+
+class Tiers
+{
+    Tier t_[2];
+    uint32_t n_;
+
+  public:
+    explicit Tiers() {
+        n_ = 0;
+    }
+    explicit Tiers(Tier t) {
+        t_[0] = t;
+        n_ = 1;
+    }
+    explicit Tiers(Tier t, Tier u) {
+        MOZ_ASSERT(t != u);
+        t_[0] = t;
+        t_[1] = u;
+        n_ = 2;
+    }
+
+    Tier* begin() {
+        return t_;
+    }
+    Tier* end() {
+        return t_ + n_;
+    }
+};
+
 // The Val class represents a single WebAssembly value of a given value type,
 // mostly for the purpose of numeric literals and initializers. A Val does not
 // directly map to a JS value since there is not (currently) a precise
@@ -458,6 +548,16 @@ class Sig
     }
     bool operator!=(const Sig& rhs) const {
         return !(*this == rhs);
+    }
+
+    bool hasI64ArgOrRet() const {
+        if (ret() == ExprType::I64)
+            return true;
+        for (ValType a : args()) {
+            if (a == ValType::I64)
+                return true;
+        }
+        return false;
     }
 
     WASM_DECLARE_SERIALIZABLE(Sig)
@@ -678,21 +778,54 @@ typedef Vector<GlobalDesc, 0, SystemAllocPolicy> GlobalDescVector;
 
 // ElemSegment represents an element segment in the module where each element
 // describes both its function index and its code range.
+//
+// The codeRangeIndices are laid out in a nondeterminstic order as a result of
+// parallel compilation.
 
 struct ElemSegment
 {
     uint32_t tableIndex;
     InitExpr offset;
     Uint32Vector elemFuncIndices;
-    Uint32Vector elemCodeRangeIndices;
+    Uint32Vector elemCodeRangeIndices1_;
+    mutable Uint32Vector elemCodeRangeIndices2_;
 
     ElemSegment() = default;
     ElemSegment(uint32_t tableIndex, InitExpr offset, Uint32Vector&& elemFuncIndices)
       : tableIndex(tableIndex), offset(offset), elemFuncIndices(Move(elemFuncIndices))
     {}
 
+    Uint32Vector& elemCodeRangeIndices(Tier t) {
+        switch (t) {
+          case Tier::Baseline:
+            return elemCodeRangeIndices1_;
+          case Tier::Ion:
+            return elemCodeRangeIndices2_;
+          default:
+            MOZ_CRASH("No such tier");
+        }
+    }
+
+    const Uint32Vector& elemCodeRangeIndices(Tier t) const {
+        switch (t) {
+          case Tier::Baseline:
+            return elemCodeRangeIndices1_;
+          case Tier::Ion:
+            return elemCodeRangeIndices2_;
+          default:
+            MOZ_CRASH("No such tier");
+        }
+    }
+
+    void setTier2(Uint32Vector&& elemCodeRangeIndices) const {
+        MOZ_ASSERT(elemCodeRangeIndices2_.length() == 0);
+        elemCodeRangeIndices2_ = Move(elemCodeRangeIndices);
+    }
+
     WASM_DECLARE_SERIALIZABLE(ElemSegment)
 };
+
+// The ElemSegmentVector is laid out in a deterministic order.
 
 typedef Vector<ElemSegment, 0, SystemAllocPolicy> ElemSegmentVector;
 
@@ -754,7 +887,8 @@ struct SigWithId : Sig
     SigIdDesc id;
 
     SigWithId() = default;
-    explicit SigWithId(Sig&& sig, SigIdDesc id) : Sig(Move(sig)), id(id) {}
+    explicit SigWithId(Sig&& sig) : Sig(Move(sig)), id() {}
+    SigWithId(Sig&& sig, SigIdDesc id) : Sig(Move(sig)), id(id) {}
     void operator=(Sig&& rhs) { Sig::operator=(Move(rhs)); }
 
     WASM_DECLARE_SERIALIZABLE(SigWithId)
@@ -762,6 +896,46 @@ struct SigWithId : Sig
 
 typedef Vector<SigWithId, 0, SystemAllocPolicy> SigWithIdVector;
 typedef Vector<const SigWithId*, 0, SystemAllocPolicy> SigWithIdPtrVector;
+
+// A wasm::Trap represents a wasm-defined trap that can occur during execution
+// which triggers a WebAssembly.RuntimeError. Generated code may jump to a Trap
+// symbolically, passing the bytecode offset to report as the trap offset. The
+// generated jump will be bound to a tiny stub which fills the offset and
+// then jumps to a per-Trap shared stub at the end of the module.
+
+enum class Trap
+{
+    // The Unreachable opcode has been executed.
+    Unreachable,
+    // An integer arithmetic operation led to an overflow.
+    IntegerOverflow,
+    // Trying to coerce NaN to an integer.
+    InvalidConversionToInteger,
+    // Integer division by zero.
+    IntegerDivideByZero,
+    // Out of bounds on wasm memory accesses and asm.js SIMD/atomic accesses.
+    OutOfBounds,
+    // Unaligned on wasm atomic accesses; also used for non-standard ARM
+    // unaligned access faults.
+    UnalignedAccess,
+    // call_indirect to null.
+    IndirectCallToNull,
+    // call_indirect signature mismatch.
+    IndirectCallBadSig,
+
+    // (asm.js only) SIMD float to int conversion failed because the input
+    // wasn't in bounds.
+    ImpreciseSimdConversion,
+
+    // The internal stack space was exhausted. For compatibility, this throws
+    // the same over-recursed error as JS.
+    StackOverflow,
+
+    // Signal an error that was reported in C++ code.
+    ThrowReported,
+
+    Limit
+};
 
 // The (,Callable,Func)Offsets classes are used to record the offsets of
 // different key points in a CodeRange during compilation.
@@ -776,11 +950,6 @@ struct Offsets
     // into a CodeRange.
     uint32_t begin;
     uint32_t end;
-
-    void offsetBy(uint32_t offset) {
-        begin += offset;
-        end += offset;
-    }
 };
 
 struct CallableOffsets : Offsets
@@ -792,18 +961,27 @@ struct CallableOffsets : Offsets
     // The offset of the return instruction precedes 'end' by a variable number
     // of instructions due to out-of-line codegen.
     uint32_t ret;
+};
 
-    void offsetBy(uint32_t offset) {
-        Offsets::offsetBy(offset);
-        ret += offset;
-    }
+struct JitExitOffsets : CallableOffsets
+{
+    MOZ_IMPLICIT JitExitOffsets()
+      : CallableOffsets(), untrustedFPStart(0), untrustedFPEnd(0)
+    {}
+
+    // There are a few instructions in the Jit exit where FP may be trash
+    // (because it may have been clobbered by the JS Jit), known as the
+    // untrusted FP zone.
+    uint32_t untrustedFPStart;
+    uint32_t untrustedFPEnd;
 };
 
 struct FuncOffsets : CallableOffsets
 {
     MOZ_IMPLICIT FuncOffsets()
       : CallableOffsets(),
-        normalEntry(0)
+        normalEntry(0),
+        tierEntry(0)
     {}
 
     // Function CodeRanges have a table entry which takes an extra signature
@@ -813,11 +991,14 @@ struct FuncOffsets : CallableOffsets
     // entry.
     uint32_t normalEntry;
 
-    void offsetBy(uint32_t offset) {
-        CallableOffsets::offsetBy(offset);
-        normalEntry += offset;
-    }
+    // The tierEntry is the point within a function to which the patching code
+    // within a Tier-1 function jumps.  It could be the instruction following
+    // the jump in the Tier-1 function, or the point following the standard
+    // prologue within a Tier-2 function.
+    uint32_t tierEntry;
 };
+
+typedef Vector<FuncOffsets, 0, SystemAllocPolicy> FuncOffsetsVector;
 
 // A CodeRange describes a single contiguous range of code within a wasm
 // module's code segment. A CodeRange describes what the code does and, for
@@ -828,16 +1009,18 @@ class CodeRange
   public:
     enum Kind {
         Function,          // function definition
-        Entry,             // calls into wasm from C++
+        InterpEntry,       // calls into wasm from C++
         ImportJitExit,     // fast-path calling from wasm into JIT code
         ImportInterpExit,  // slow-path calling from wasm into C++ interp
-        BuiltinNativeExit, // fast-path calling from wasm into a C++ native
+        BuiltinThunk,      // fast-path calling from wasm into a C++ native
         TrapExit,          // calls C++ to report and jumps to throw stub
         DebugTrap,         // calls C++ to handle debug event
         FarJumpIsland,     // inserted to connect otherwise out-of-range insns
-        Inline,            // stub that is jumped-to within prologue/epilogue
-        Throw,             // special stack-unwinding stub
-        Interrupt          // stub executes asynchronously to interrupt wasm
+        OutOfBoundsExit,   // stub jumped to by non-standard asm.js SIMD/Atomics
+        UnalignedExit,     // stub jumped to by wasm Atomics and non-standard
+                           // ARM unaligned trap
+        Interrupt,         // stub executes asynchronously to interrupt wasm
+        Throw              // special stack-unwinding stub jumped to by other stubs
     };
 
   private:
@@ -845,16 +1028,41 @@ class CodeRange
     uint32_t begin_;
     uint32_t ret_;
     uint32_t end_;
-    uint32_t funcIndex_;
-    uint32_t funcLineOrBytecode_;
-    uint8_t funcBeginToNormalEntry_;
+    union {
+        struct {
+            uint32_t funcIndex_;
+            union {
+                struct {
+                    uint32_t lineOrBytecode_;
+                    uint8_t beginToNormalEntry_;
+                    uint8_t beginToTierEntry_;
+                } func;
+                struct {
+                    uint16_t beginToUntrustedFPStart_;
+                    uint16_t beginToUntrustedFPEnd_;
+                } jitExit;
+            };
+        };
+        Trap trap_;
+    } u;
     Kind kind_ : 8;
 
   public:
     CodeRange() = default;
     CodeRange(Kind kind, Offsets offsets);
+    CodeRange(Kind kind, uint32_t funcIndex, Offsets offsets);
     CodeRange(Kind kind, CallableOffsets offsets);
+    CodeRange(Kind kind, uint32_t funcIndex, CallableOffsets);
+    CodeRange(uint32_t funcIndex, JitExitOffsets offsets);
+    CodeRange(Trap trap, CallableOffsets offsets);
     CodeRange(uint32_t funcIndex, uint32_t lineOrBytecode, FuncOffsets offsets);
+
+    void offsetBy(uint32_t offset) {
+        begin_ += offset;
+        end_ += offset;
+        if (hasReturn())
+            ret_ += offset;
+    }
 
     // All CodeRanges have a begin and end.
 
@@ -875,25 +1083,49 @@ class CodeRange
         return kind() == Function;
     }
     bool isImportExit() const {
-        return kind() == ImportJitExit || kind() == ImportInterpExit || kind() == BuiltinNativeExit;
+        return kind() == ImportJitExit || kind() == ImportInterpExit || kind() == BuiltinThunk;
+    }
+    bool isImportJitExit() const {
+        return kind() == ImportJitExit;
     }
     bool isTrapExit() const {
         return kind() == TrapExit;
     }
-    bool isInline() const {
-        return kind() == Inline;
+    bool isDebugTrap() const {
+        return kind() == DebugTrap;
     }
     bool isThunk() const {
         return kind() == FarJumpIsland;
     }
 
-    // Every CodeRange except entry and inline stubs are callable and have a
-    // return statement. Asynchronous frame iteration needs to know the offset
-    // of the return instruction to calculate the frame pointer.
+    // Function, import exits and trap exits have standard callable prologues
+    // and epilogues. Asynchronous frame iteration needs to know the offset of
+    // the return instruction to calculate the frame pointer.
 
+    bool hasReturn() const {
+        return isFunction() || isImportExit() || isTrapExit() || isDebugTrap();
+    }
     uint32_t ret() const {
-        MOZ_ASSERT(isFunction() || isImportExit() || isTrapExit());
+        MOZ_ASSERT(hasReturn());
         return ret_;
+    }
+
+    // Functions, export stubs and import stubs all have an associated function
+    // index.
+
+    bool hasFuncIndex() const {
+        return isFunction() || isImportExit() || kind() == InterpEntry;
+    }
+    uint32_t funcIndex() const {
+        MOZ_ASSERT(hasFuncIndex());
+        return u.funcIndex_;
+    }
+
+    // TrapExit CodeRanges have a Trap field.
+
+    Trap trap() const {
+        MOZ_ASSERT(isTrapExit());
+        return u.trap_;
     }
 
     // Function CodeRanges have two entry points: one for normal calls (with a
@@ -906,22 +1138,35 @@ class CodeRange
     }
     uint32_t funcNormalEntry() const {
         MOZ_ASSERT(isFunction());
-        return begin_ + funcBeginToNormalEntry_;
+        return begin_ + u.func.beginToNormalEntry_;
     }
-    uint32_t funcIndex() const {
+    uint32_t funcTierEntry() const {
         MOZ_ASSERT(isFunction());
-        return funcIndex_;
+        return begin_ + u.func.beginToTierEntry_;
     }
     uint32_t funcLineOrBytecode() const {
         MOZ_ASSERT(isFunction());
-        return funcLineOrBytecode_;
+        return u.func.lineOrBytecode_;
     }
 
-    // A sorted array of CodeRanges can be looked up via BinarySearch and PC.
+    // ImportJitExit have a particular range where the value of FP can't be
+    // trusted for profiling and thus must be ignored.
 
-    struct PC {
+    uint32_t jitExitUntrustedFPStart() const {
+        MOZ_ASSERT(isImportJitExit());
+        return begin_ + u.jitExit.beginToUntrustedFPStart_;
+    }
+    uint32_t jitExitUntrustedFPEnd() const {
+        MOZ_ASSERT(isImportJitExit());
+        return begin_ + u.jitExit.beginToUntrustedFPEnd_;
+    }
+
+    // A sorted array of CodeRanges can be looked up via BinarySearch and
+    // OffsetInCode.
+
+    struct OffsetInCode {
         size_t offset;
-        explicit PC(size_t offset) : offset(offset) {}
+        explicit OffsetInCode(size_t offset) : offset(offset) {}
         bool operator==(const CodeRange& rhs) const {
             return offset >= rhs.begin() && offset < rhs.end();
         }
@@ -933,39 +1178,8 @@ class CodeRange
 
 WASM_DECLARE_POD_VECTOR(CodeRange, CodeRangeVector)
 
-// A wasm::Trap represents a wasm-defined trap that can occur during execution
-// which triggers a WebAssembly.RuntimeError. Generated code may jump to a Trap
-// symbolically, passing the bytecode offset to report as the trap offset. The
-// generated jump will be bound to a tiny stub which fills the offset and
-// then jumps to a per-Trap shared stub at the end of the module.
-
-enum class Trap
-{
-    // The Unreachable opcode has been executed.
-    Unreachable,
-    // An integer arithmetic operation led to an overflow.
-    IntegerOverflow,
-    // Trying to coerce NaN to an integer.
-    InvalidConversionToInteger,
-    // Integer division by zero.
-    IntegerDivideByZero,
-    // Out of bounds on wasm memory accesses and asm.js SIMD/atomic accesses.
-    OutOfBounds,
-    // call_indirect to null.
-    IndirectCallToNull,
-    // call_indirect signature mismatch.
-    IndirectCallBadSig,
-
-    // (asm.js only) SIMD float to int conversion failed because the input
-    // wasn't in bounds.
-    ImpreciseSimdConversion,
-
-    // The internal stack space was exhausted. For compatibility, this throws
-    // the same over-recursed error as JS.
-    StackOverflow,
-
-    Limit
-};
+extern const CodeRange*
+LookupInSorted(const CodeRangeVector& codeRanges, CodeRange::OffsetInCode target);
 
 // A wrapper around the bytecode offset of a wasm instruction within a whole
 // module, used for trap offsets or call offsets. These offsets should refer to
@@ -1031,40 +1245,59 @@ class CallSite : public CallSiteDesc
         returnAddressOffset_(returnAddressOffset)
     { }
 
-    void setReturnAddressOffset(uint32_t r) { returnAddressOffset_ = r; }
-    void offsetReturnAddressBy(int32_t o) { returnAddressOffset_ += o; }
+    void offsetBy(int32_t delta) { returnAddressOffset_ += delta; }
     uint32_t returnAddressOffset() const { return returnAddressOffset_; }
 };
 
 WASM_DECLARE_POD_VECTOR(CallSite, CallSiteVector)
 
-class CallSiteAndTarget : public CallSite
+// A CallSiteTarget describes the callee of a CallSite, either a function or a
+// trap exit. Although checked in debug builds, a CallSiteTarget doesn't
+// officially know whether it targets a function or trap, relying on the Kind of
+// the CallSite to discriminate.
+
+class CallSiteTarget
 {
-    uint32_t index_;
+    uint32_t packed_;
+#ifdef DEBUG
+    enum Kind { None, FuncIndex, TrapExit } kind_;
+#endif
 
   public:
-    explicit CallSiteAndTarget(CallSite cs)
-      : CallSite(cs)
-    {
-        MOZ_ASSERT(cs.kind() != Func);
-    }
-    CallSiteAndTarget(CallSite cs, uint32_t funcIndex)
-      : CallSite(cs), index_(funcIndex)
-    {
-        MOZ_ASSERT(cs.kind() == Func);
-    }
-    CallSiteAndTarget(CallSite cs, Trap trap)
-      : CallSite(cs),
-        index_(uint32_t(trap))
-    {
-        MOZ_ASSERT(cs.kind() == TrapExit);
+    explicit CallSiteTarget()
+      : packed_(UINT32_MAX)
+#ifdef DEBUG
+      , kind_(None)
+#endif
+    {}
+
+    explicit CallSiteTarget(uint32_t funcIndex)
+      : packed_(funcIndex)
+#ifdef DEBUG
+      , kind_(FuncIndex)
+#endif
+    {}
+
+    explicit CallSiteTarget(Trap trap)
+      : packed_(uint32_t(trap))
+#ifdef DEBUG
+      , kind_(TrapExit)
+#endif
+    {}
+
+    uint32_t funcIndex() const {
+        MOZ_ASSERT(kind_ == FuncIndex);
+        return packed_;
     }
 
-    uint32_t funcIndex() const { MOZ_ASSERT(kind() == Func); return index_; }
-    Trap trap() const { MOZ_ASSERT(kind() == TrapExit); return Trap(index_); }
+    Trap trap() const {
+        MOZ_ASSERT(kind_ == TrapExit);
+        MOZ_ASSERT(packed_ < uint32_t(Trap::Limit));
+        return Trap(packed_);
+    }
 };
 
-typedef Vector<CallSiteAndTarget, 0, SystemAllocPolicy> CallSiteAndTargetVector;
+typedef Vector<CallSiteTarget, 0, SystemAllocPolicy> CallSiteTargetVector;
 
 // A wasm::SymbolicAddress represents a pointer to a well-known function that is
 // embedded in wasm code. Since wasm code is serialized and later deserialized
@@ -1079,13 +1312,6 @@ enum class SymbolicAddress
 #if defined(JS_CODEGEN_ARM)
     aeabi_idivmod,
     aeabi_uidivmod,
-    AtomicCmpXchg,
-    AtomicXchg,
-    AtomicFetchAdd,
-    AtomicFetchSub,
-    AtomicFetchAnd,
-    AtomicFetchOr,
-    AtomicFetchXor,
 #endif
     ModD,
     SinD,
@@ -1130,6 +1356,9 @@ enum class SymbolicAddress
     Int64ToDouble,
     GrowMemory,
     CurrentMemory,
+    WaitI32,
+    WaitI64,
+    Wake,
     Limit
 };
 
@@ -1171,12 +1400,28 @@ enum ModuleKind
     AsmJS
 };
 
+enum class Shareable
+{
+    False,
+    True
+};
+
 // Represents the resizable limits of memories and tables.
 
 struct Limits
 {
     uint32_t initial;
     Maybe<uint32_t> maximum;
+
+    // `shared` is Shareable::False for tables but may be Shareable::True for
+    // memories.
+    Shareable shared;
+
+    Limits() = default;
+    explicit Limits(uint32_t initial, const Maybe<uint32_t>& maximum = Nothing(),
+                    Shareable shared = Shareable::False)
+      : initial(initial), maximum(maximum), shared(shared)
+    {}
 };
 
 // TableDesc describes a table as well as the offset of the table's base pointer
@@ -1230,15 +1475,6 @@ struct ExportArg
 
 struct TlsData
 {
-    // Pointer to the JSContext that contains this TLS data.
-    JSContext* cx;
-
-    // Pointer to the Instance that contains this TLS data.
-    Instance* instance;
-
-    // Pointer to the global data for this Instance.
-    uint8_t* globalData;
-
     // Pointer to the base of the default memory (or null if there is none).
     uint8_t* memoryBase;
 
@@ -1247,16 +1483,23 @@ struct TlsData
     uint32_t boundsCheckLimit;
 #endif
 
-    // Stack limit for the current thread. This limit is checked against the
-    // stack pointer in the prologue of functions that allocate stack space. See
-    // `CodeGenerator::generateWasm`.
-    void* stackLimit;
+    // Pointer to the Instance that contains this TLS data.
+    Instance* instance;
+
+    // Shortcut to instance->zone->group->addressOfOwnerContext
+    JSContext** addressOfContext;
+
+    // Pointer that should be freed (due to padding before the TlsData).
+    void* allocatedBase;
+
+    // When compiling with tiering, the jumpTable has one entry for each
+    // baseline-compiled function.
+    void** jumpTable;
 
     // The globalArea must be the last field.  Globals for the module start here
     // and are inline in this structure.  16-byte alignment is required for SIMD
     // data.
     MOZ_ALIGNED_DECL(char globalArea, 16);
-
 };
 
 static_assert(offsetof(TlsData, globalArea) % 16 == 0, "aligned");
@@ -1350,7 +1593,8 @@ class CalleeDesc
     };
 
   private:
-    Which which_;
+    // which_ shall be initialized in the static constructors
+    MOZ_INIT_OUTSIDE_CTOR Which which_;
     union U {
         U() {}
         uint32_t funcIndex_;
@@ -1470,12 +1714,7 @@ static const unsigned PageSize = 64 * 1024;
 
 static const unsigned MaxMemoryAccessSize = sizeof(Val);
 
-#ifdef JS_CODEGEN_X64
-
-// All other code should use WASM_HUGE_MEMORY instead of JS_CODEGEN_X64 so that
-// it is easy to use the huge-mapping optimization for other 64-bit platforms in
-// the future.
-# define WASM_HUGE_MEMORY
+#ifdef WASM_HUGE_MEMORY
 
 // On WASM_HUGE_MEMORY platforms, every asm.js or WebAssembly memory
 // unconditionally allocates a huge region of virtual memory of size
@@ -1576,7 +1815,7 @@ struct Frame
 {
     // The caller's Frame*. See GenerateCallableEpilogue for why this must be
     // the first field of wasm::Frame (in a downward-growing stack).
-    uint8_t* callerFP;
+    Frame* callerFP;
 
     // The saved value of WasmTlsReg on entry to the function. This is
     // effectively the callee's instance.
@@ -1631,13 +1870,13 @@ class DebugFrame
         void* flagsWord_;
     };
 
-    // Padding so that DebugFrame has Alignment.
+    // Avoid -Wunused-private-field warnings.
+  protected:
 #if JS_BITS_PER_WORD == 32
-  protected: // suppress clang's -Wunused-private-field warning-as-error
-    void* padding_;
-  private:
+    uint32_t padding_;  // See alignmentStaticAsserts().
 #endif
 
+  private:
     // The Frame goes at the end since the stack grows down.
     Frame frame_;
 

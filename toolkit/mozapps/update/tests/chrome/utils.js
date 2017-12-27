@@ -84,18 +84,18 @@ const IS_WIN = ("@mozilla.org/windows-registry-key;1" in Cc);
 
 // The tests have to use the pageid instead of the pageIndex due to the
 // app update wizard's access method being random.
-const PAGEID_DUMMY            = "dummy";                 // Done
-const PAGEID_CHECKING         = "checking";              // Done
-const PAGEID_NO_UPDATES_FOUND = "noupdatesfound";        // Done
-const PAGEID_MANUAL_UPDATE    = "manualUpdate";          // Done
-const PAGEID_UNSUPPORTED      = "unsupported";           // Done
-const PAGEID_FOUND_BASIC      = "updatesfoundbasic";     // Done
-const PAGEID_DOWNLOADING      = "downloading";           // Done
-const PAGEID_ERRORS           = "errors";                // Done
-const PAGEID_ERROR_EXTRA      = "errorextra";            // Done
-const PAGEID_ERROR_PATCHING   = "errorpatching";         // Done
-const PAGEID_FINISHED         = "finished";              // Done
-const PAGEID_FINISHED_BKGRD   = "finishedBackground";    // Done
+const PAGEID_DUMMY            = "dummy";
+const PAGEID_CHECKING         = "checking";
+const PAGEID_NO_UPDATES_FOUND = "noupdatesfound";
+const PAGEID_MANUAL_UPDATE    = "manualUpdate";
+const PAGEID_UNSUPPORTED      = "unsupported";
+const PAGEID_FOUND_BASIC      = "updatesfoundbasic";
+const PAGEID_DOWNLOADING      = "downloading";
+const PAGEID_ERRORS           = "errors";
+const PAGEID_ERROR_EXTRA      = "errorextra";
+const PAGEID_ERROR_PATCHING   = "errorpatching";
+const PAGEID_FINISHED         = "finished";
+const PAGEID_FINISHED_BKGRD   = "finishedBackground";
 
 const UPDATE_WINDOW_NAME = "Update:Wizard";
 
@@ -129,10 +129,10 @@ var gCloseWindowTimeoutCounter = 0;
 
 // The following vars are for restoring previous preference values (if present)
 // when the test finishes.
-var gAppUpdateEnabled;            // app.update.enabled
-var gAppUpdateServiceEnabled;     // app.update.service.enabled
-var gAppUpdateStagingEnabled;     // app.update.staging.enabled
-var gAppUpdateURLDefault;         // app.update.url (default prefbranch)
+var gAppUpdateEnabled; // app.update.enabled
+var gAppUpdateServiceEnabled; // app.update.service.enabled
+var gAppUpdateStagingEnabled; // app.update.staging.enabled
+var gAppUpdateURLDefault; // app.update.url (default prefbranch)
 
 var gTestCounter = -1;
 var gWin;
@@ -222,11 +222,6 @@ const gWindowObserver = {
  */
 function runTestDefault() {
   debugDump("entering");
-
-  if (!("@mozilla.org/zipwriter;1" in Cc)) {
-    ok(false, "nsIZipWriter is required to run these tests");
-    return;
-  }
 
   SimpleTest.waitForExplicitFinish();
 
@@ -482,12 +477,10 @@ function delayedDefaultCallback() {
  * Gets the continue file used to signal the mock http server to continue
  * downloading for slow download mar file tests without creating it.
  *
- * @return nsILocalFile for the continue file.
+ * @return nsIFile for the continue file.
  */
 function getContinueFile() {
-  let continueFile = Cc["@mozilla.org/file/directory_service;1"].
-                     getService(Ci.nsIProperties).
-                     get("CurWorkD", Ci.nsILocalFile);
+  let continueFile = Services.dirsvc.get("CurWorkD", Ci.nsIFile);
   let continuePath = REL_PATH_DATA + "continue";
   let continuePathParts = continuePath.split("/");
   for (let i = 0; i < continuePathParts.length; ++i) {
@@ -734,7 +727,7 @@ function copyTestUpdater() {
   try {
     // Copy the test updater
     let baseAppDir = getAppBaseDir();
-    let testUpdaterDir = Services.dirsvc.get("CurWorkD", Ci.nsILocalFile);
+    let testUpdaterDir = Services.dirsvc.get("CurWorkD", Ci.nsIFile);
     let relPath = REL_PATH_DATA;
     let pathParts = relPath.split("/");
     for (let i = 0; i < pathParts.length; ++i) {
@@ -799,6 +792,10 @@ function setupPrefs() {
   }
   Services.prefs.setBoolPref(PREF_APP_UPDATE_ENABLED, true);
 
+  if (!Services.prefs.getBoolPref(PREF_APP_UPDATE_AUTO), false) {
+    Services.prefs.setBoolPref(PREF_APP_UPDATE_AUTO, true);
+  }
+
   if (Services.prefs.prefHasUserValue(PREF_APP_UPDATE_SERVICE_ENABLED)) {
     gAppUpdateServiceEnabled = Services.prefs.getBoolPref(PREF_APP_UPDATE_SERVICE_ENABLED);
   }
@@ -862,6 +859,10 @@ function resetPrefs() {
     Services.prefs.clearUserPref(PREF_APP_UPDATE_ENABLED);
   }
 
+  if (Services.prefs.prefHasUserValue(PREF_APP_UPDATE_AUTO)) {
+    Services.prefs.clearUserPref(PREF_APP_UPDATE_AUTO);
+  }
+
   if (gAppUpdateServiceEnabled !== undefined) {
     Services.prefs.setBoolPref(PREF_APP_UPDATE_SERVICE_ENABLED, gAppUpdateServiceEnabled);
   } else if (Services.prefs.prefHasUserValue(PREF_APP_UPDATE_SERVICE_ENABLED)) {
@@ -908,11 +909,6 @@ function resetPrefs() {
 
   if (Services.prefs.prefHasUserValue(PREF_APP_UPDATE_DOORHANGER)) {
     Services.prefs.clearUserPref(PREF_APP_UPDATE_DOORHANGER);
-  }
-
-  try {
-    Services.prefs.deleteBranch(PREFBRANCH_APP_UPDATE_NEVER);
-  } catch (e) {
   }
 }
 

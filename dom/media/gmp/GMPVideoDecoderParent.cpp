@@ -5,7 +5,6 @@
 
 #include "GMPVideoDecoderParent.h"
 #include "mozilla/Logging.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Unused.h"
 #include "nsAutoRef.h"
 #include "nsThreadUtils.h"
@@ -73,7 +72,7 @@ void
 GMPVideoDecoderParent::Close()
 {
   LOGD(("GMPVideoDecoderParent[%p]::Close()", this));
-  MOZ_ASSERT(!mPlugin || mPlugin->GMPThread() == NS_GetCurrentThread());
+  MOZ_ASSERT(!mPlugin || mPlugin->GMPEventTarget()->IsOnCurrentThread());
 
   // Ensure if we've received a Close while waiting for a ResetComplete
   // or DrainComplete notification, we'll unblock the caller before processing
@@ -108,7 +107,7 @@ GMPVideoDecoderParent::InitDecode(const GMPVideoCodec& aCodecSettings,
     return NS_ERROR_FAILURE;
   }
 
-  MOZ_ASSERT(mPlugin->GMPThread() == NS_GetCurrentThread());
+  MOZ_ASSERT(mPlugin->GMPEventTarget()->IsOnCurrentThread());
 
   if (!aCallback) {
     return NS_ERROR_FAILURE;
@@ -124,27 +123,15 @@ GMPVideoDecoderParent::InitDecode(const GMPVideoCodec& aCodecSettings,
   return NS_OK;
 }
 
-static nsCString
-CryptoInfo(const GMPUniquePtr<GMPVideoEncodedFrame>& aInputFrame)
-{
-  const GMPEncryptedBufferMetadata* crypto = aInputFrame->GetDecryptionData();
-  if (!crypto) {
-    return EmptyCString();
-  }
-  return nsPrintfCString(" kid=%s",
-                         ToHexString(crypto->KeyId(), crypto->KeyIdSize()).get());
-}
-
 nsresult
 GMPVideoDecoderParent::Decode(GMPUniquePtr<GMPVideoEncodedFrame> aInputFrame,
                               bool aMissingFrames,
                               const nsTArray<uint8_t>& aCodecSpecificInfo,
                               int64_t aRenderTimeMs)
 {
-  LOGV(("GMPVideoDecoderParent[%p]::Decode() timestamp=%" PRId64 " keyframe=%d%s",
+  LOGV(("GMPVideoDecoderParent[%p]::Decode() timestamp=%" PRId64 " keyframe=%d",
         this, aInputFrame->TimeStamp(),
-        aInputFrame->FrameType() == kGMPKeyFrame,
-        CryptoInfo(aInputFrame).get()));
+        aInputFrame->FrameType() == kGMPKeyFrame));
 
   if (!mIsOpen) {
     LOGE(("GMPVideoDecoderParent[%p]::Decode() ERROR; dead GMPVideoDecoder", this));
@@ -152,7 +139,7 @@ GMPVideoDecoderParent::Decode(GMPUniquePtr<GMPVideoEncodedFrame> aInputFrame,
     return NS_ERROR_FAILURE;
   }
 
-  MOZ_ASSERT(mPlugin->GMPThread() == NS_GetCurrentThread());
+  MOZ_ASSERT(mPlugin->GMPEventTarget()->IsOnCurrentThread());
 
   GMPUniquePtr<GMPVideoEncodedFrameImpl> inputFrameImpl(
     static_cast<GMPVideoEncodedFrameImpl*>(aInputFrame.release()));
@@ -193,7 +180,7 @@ GMPVideoDecoderParent::Reset()
     return NS_ERROR_FAILURE;
   }
 
-  MOZ_ASSERT(mPlugin->GMPThread() == NS_GetCurrentThread());
+  MOZ_ASSERT(mPlugin->GMPEventTarget()->IsOnCurrentThread());
 
   if (!SendReset()) {
     return NS_ERROR_FAILURE;
@@ -202,15 +189,18 @@ GMPVideoDecoderParent::Reset()
   mIsAwaitingResetComplete = true;
 
   RefPtr<GMPVideoDecoderParent> self(this);
-  nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction([self]() -> void
-  {
-    LOGD(("GMPVideoDecoderParent[%p]::ResetCompleteTimeout() timed out waiting for ResetComplete", self.get()));
-    self->mResetCompleteTimeout = nullptr;
-    LogToBrowserConsole(NS_LITERAL_STRING("GMPVideoDecoderParent timed out waiting for ResetComplete()"));
-  });
+  nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction(
+    "gmp::GMPVideoDecoderParent::Reset", [self]() -> void {
+      LOGD(("GMPVideoDecoderParent[%p]::ResetCompleteTimeout() timed out "
+            "waiting for ResetComplete",
+            self.get()));
+      self->mResetCompleteTimeout = nullptr;
+      LogToBrowserConsole(NS_LITERAL_STRING(
+        "GMPVideoDecoderParent timed out waiting for ResetComplete()"));
+    });
   CancelResetCompleteTimeout();
-  nsCOMPtr<nsIThread> thread = mPlugin->GMPThread();
-  mResetCompleteTimeout = SimpleTimer::Create(task, 5000, thread);
+  nsCOMPtr<nsISerialEventTarget> target = mPlugin->GMPEventTarget();
+  mResetCompleteTimeout = SimpleTimer::Create(task, 5000, target);
 
   // Async IPC, we don't have access to a return value.
   return NS_OK;
@@ -235,7 +225,7 @@ GMPVideoDecoderParent::Drain()
     return NS_ERROR_FAILURE;
   }
 
-  MOZ_ASSERT(mPlugin->GMPThread() == NS_GetCurrentThread());
+  MOZ_ASSERT(mPlugin->GMPEventTarget()->IsOnCurrentThread());
 
   if (!SendDrain()) {
     return NS_ERROR_FAILURE;
@@ -254,7 +244,7 @@ GMPVideoDecoderParent::GetDisplayName() const
     NS_WARNING("Trying to use an dead GMP video decoder");
   }
 
-  MOZ_ASSERT(mPlugin->GMPThread() == NS_GetCurrentThread());
+  MOZ_ASSERT(mPlugin->GMPEventTarget()->IsOnCurrentThread());
 
   return mPlugin->GetDisplayName();
 }
@@ -264,7 +254,7 @@ nsresult
 GMPVideoDecoderParent::Shutdown()
 {
   LOGD(("GMPVideoDecoderParent[%p]::Shutdown()", this));
-  MOZ_ASSERT(!mPlugin || mPlugin->GMPThread() == NS_GetCurrentThread());
+  MOZ_ASSERT(!mPlugin || mPlugin->GMPEventTarget()->IsOnCurrentThread());
 
   if (mShuttingDown) {
     return NS_OK;

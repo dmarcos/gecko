@@ -7,6 +7,7 @@
 
 #include "MediaEngine.h"
 #include "mozilla/media/DeviceChangeCallback.h"
+#include "mozilla/dom/GetUserMediaRequest.h"
 #include "mozilla/Services.h"
 #include "mozilla/Unused.h"
 #include "nsAutoPtr.h"
@@ -55,12 +56,10 @@ namespace ipc {
 class PrincipalInfo;
 }
 
-class MediaManager;
-class GetUserMediaCallbackMediaStreamListener;
 class GetUserMediaTask;
-
-extern LogModule* GetMediaManagerLog();
-#define MM_LOG(msg) MOZ_LOG(GetMediaManagerLog(), mozilla::LogLevel::Debug, msg)
+class GetUserMediaWindowListener;
+class MediaManager;
+class SourceListener;
 
 class MediaDevice : public nsIMediaDevice
 {
@@ -136,34 +135,29 @@ class GetUserMediaNotificationEvent: public Runnable
     enum GetUserMediaStatus {
       STARTING,
       STOPPING,
-      STOPPED_TRACK,
     };
-    GetUserMediaNotificationEvent(GetUserMediaCallbackMediaStreamListener* aListener,
-                                  GetUserMediaStatus aStatus,
-                                  bool aIsAudio, bool aIsVideo, uint64_t aWindowID);
+    GetUserMediaNotificationEvent(GetUserMediaStatus aStatus,
+                                  uint64_t aWindowID);
 
     GetUserMediaNotificationEvent(GetUserMediaStatus aStatus,
                                   already_AddRefed<DOMMediaStream> aStream,
-                                  OnTracksAvailableCallback* aOnTracksAvailableCallback,
-                                  bool aIsAudio, bool aIsVideo, uint64_t aWindowID,
+                                  already_AddRefed<media::Refcountable<UniquePtr<OnTracksAvailableCallback>>> aOnTracksAvailableCallback,
+                                  uint64_t aWindowID,
                                   already_AddRefed<nsIDOMGetUserMediaErrorCallback> aError);
     virtual ~GetUserMediaNotificationEvent();
 
     NS_IMETHOD Run() override;
 
   protected:
-    RefPtr<GetUserMediaCallbackMediaStreamListener> mListener; // threadsafe
+    RefPtr<GetUserMediaWindowListener> mListener; // threadsafe
     RefPtr<DOMMediaStream> mStream;
-    nsAutoPtr<OnTracksAvailableCallback> mOnTracksAvailableCallback;
+    RefPtr<media::Refcountable<UniquePtr<OnTracksAvailableCallback>>> mOnTracksAvailableCallback;
     GetUserMediaStatus mStatus;
-    bool mIsAudio;
-    bool mIsVideo;
     uint64_t mWindowID;
     RefPtr<nsIDOMGetUserMediaErrorCallback> mOnFailure;
 };
 
 typedef enum {
-  MEDIA_START,
   MEDIA_STOP,
   MEDIA_STOP_TRACK,
   MEDIA_DIRECT_LISTENERS,
@@ -172,30 +166,34 @@ typedef enum {
 class ReleaseMediaOperationResource : public Runnable
 {
 public:
-  ReleaseMediaOperationResource(already_AddRefed<DOMMediaStream> aStream,
-    OnTracksAvailableCallback* aOnTracksAvailableCallback):
-    mStream(aStream),
-    mOnTracksAvailableCallback(aOnTracksAvailableCallback) {}
+  ReleaseMediaOperationResource(
+    already_AddRefed<DOMMediaStream> aStream,
+    already_AddRefed<media::Refcountable<UniquePtr<OnTracksAvailableCallback>>>
+      aOnTracksAvailableCallback)
+    : Runnable("ReleaseMediaOperationResource")
+    , mStream(aStream)
+    , mOnTracksAvailableCallback(aOnTracksAvailableCallback)
+  {
+  }
   NS_IMETHOD Run() override {return NS_OK;}
 private:
   RefPtr<DOMMediaStream> mStream;
-  nsAutoPtr<OnTracksAvailableCallback> mOnTracksAvailableCallback;
+  RefPtr<media::Refcountable<UniquePtr<OnTracksAvailableCallback>>> mOnTracksAvailableCallback;
 };
 
-typedef nsTArray<RefPtr<GetUserMediaCallbackMediaStreamListener> > StreamListeners;
-typedef nsClassHashtable<nsUint64HashKey, StreamListeners> WindowTable;
+typedef nsRefPtrHashtable<nsUint64HashKey, GetUserMediaWindowListener> WindowTable;
 
 // we could add MediaManager if needed
 typedef void (*WindowListenerCallback)(MediaManager *aThis,
                                        uint64_t aWindowID,
-                                       StreamListeners *aListeners,
+                                       GetUserMediaWindowListener *aListener,
                                        void *aData);
 
 class MediaManager final : public nsIMediaManagerService,
                            public nsIObserver
                           ,public DeviceChangeCallback
 {
-  friend GetUserMediaCallbackMediaStreamListener;
+  friend SourceListener;
 public:
   static already_AddRefed<MediaManager> GetInstance();
 
@@ -216,9 +214,7 @@ public:
   }
 
   static nsresult NotifyRecordingStatusChange(nsPIDOMWindowInner* aWindow,
-                                              const nsString& aMsg,
-                                              const bool& aIsAudio,
-                                              const bool& aIsVideo);
+                                              const nsString& aMsg);
 
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIOBSERVER
@@ -226,17 +222,24 @@ public:
 
   media::Parent<media::NonE10s>* GetNonE10sParent();
   MediaEngine* GetBackend(uint64_t aWindowId = 0);
-  StreamListeners *GetWindowListeners(uint64_t aWindowId) {
+
+  WindowTable *GetActiveWindows() {
     MOZ_ASSERT(NS_IsMainThread());
-    return mActiveWindows.Get(aWindowId);
+    return &mActiveWindows;
   }
+  GetUserMediaWindowListener *GetWindowListener(uint64_t aWindowId) {
+    MOZ_ASSERT(NS_IsMainThread());
+    return mActiveWindows.GetWeak(aWindowId);
+  }
+  void AddWindowID(uint64_t aWindowId, GetUserMediaWindowListener *aListener);
   void RemoveWindowID(uint64_t aWindowId);
+  void SendPendingGUMRequest();
   bool IsWindowStillActive(uint64_t aWindowId) {
-    return !!GetWindowListeners(aWindowId);
+    return !!GetWindowListener(aWindowId);
   }
   // Note: also calls aListener->Remove(), even if inactive
   void RemoveFromWindowList(uint64_t aWindowID,
-    GetUserMediaCallbackMediaStreamListener *aListener);
+    GetUserMediaWindowListener *aListener);
 
   nsresult GetUserMedia(
     nsPIDOMWindowInner* aWindow,
@@ -254,7 +257,8 @@ public:
 
   nsresult EnumerateDevices(nsPIDOMWindowInner* aWindow,
                             nsIGetUserMediaDevicesSuccessCallback* aOnSuccess,
-                            nsIDOMGetUserMediaErrorCallback* aOnFailure);
+                            nsIDOMGetUserMediaErrorCallback* aOnFailure,
+                            dom::CallerType aCallerType);
 
   nsresult EnumerateDevices(nsPIDOMWindowInner* aWindow, dom::Promise& aPromise);
   void OnNavigation(uint64_t aWindowID);
@@ -293,12 +297,6 @@ private:
       bool aIsChrome,
       RefPtr<media::Refcountable<UniquePtr<SourceSet>>>& aSources);
 
-  StreamListeners* AddWindowID(uint64_t aWindowId);
-  WindowTable *GetActiveWindows() {
-    MOZ_ASSERT(NS_IsMainThread());
-    return &mActiveWindows;
-  }
-
   void GetPref(nsIPrefBranch *aBranch, const char *aPref,
                const char *aData, int32_t *aVal);
   void GetPrefBool(nsIPrefBranch *aBranch, const char *aPref,
@@ -323,6 +321,7 @@ private:
   WindowTable mActiveWindows;
   nsRefPtrHashtable<nsStringHashKey, GetUserMediaTask> mActiveCallbacks;
   nsClassHashtable<nsUint64HashKey, nsTArray<nsString>> mCallIds;
+  nsTArray<RefPtr<dom::GetUserMediaRequest>> mPendingGUMRequest;
 
   // Always exists
   nsAutoPtr<base::Thread> mMediaThread;
@@ -336,6 +335,7 @@ private:
   media::CoatCheck<PledgeSourceSet> mOutstandingPledges;
   media::CoatCheck<PledgeChar> mOutstandingCharPledges;
   media::CoatCheck<PledgeVoid> mOutstandingVoidPledges;
+  nsTArray<nsString> mDeviceIDs;
 public:
   media::CoatCheck<media::Pledge<nsCString>> mGetPrincipalKeyPledges;
   RefPtr<media::Parent<media::NonE10s>> mNonE10sParent;

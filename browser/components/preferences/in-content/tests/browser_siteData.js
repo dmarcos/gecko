@@ -6,18 +6,24 @@
 const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-/* import-globals-from ../../../../../testing/modules/sinon-1.16.1.js */
-Services.scriptloader.loadSubScript("resource://testing-common/sinon-1.16.1.js");
+/* global sinon */
+Services.scriptloader.loadSubScript("resource://testing-common/sinon-2.3.2.js");
 
-const TEST_HOST = "example.com";
-const TEST_ORIGIN = "http://" + TEST_HOST;
-const TEST_BASE_URL = TEST_ORIGIN + "/browser/browser/components/preferences/in-content/tests/";
+const TEST_QUOTA_USAGE_HOST = "example.com";
+const TEST_QUOTA_USAGE_ORIGIN = "https://" + TEST_QUOTA_USAGE_HOST;
+const TEST_QUOTA_USAGE_URL = TEST_QUOTA_USAGE_ORIGIN + "/browser/browser/components/preferences/in-content/tests/site_data_test.html";
+const TEST_OFFLINE_HOST = "example.org";
+const TEST_OFFLINE_ORIGIN = "https://" + TEST_OFFLINE_HOST;
+const TEST_OFFLINE_URL = TEST_OFFLINE_ORIGIN + "/browser/browser/components/preferences/in-content/tests/offline/offline.html";
+const TEST_SERVICE_WORKER_URL = TEST_OFFLINE_ORIGIN + "/browser/browser/components/preferences/in-content/tests/service_worker_test.html";
 const REMOVE_DIALOG_URL = "chrome://browser/content/preferences/siteDataRemoveSelected.xul";
 
 const { NetUtil } = Cu.import("resource://gre/modules/NetUtil.jsm", {});
 const { DownloadUtils } = Cu.import("resource://gre/modules/DownloadUtils.jsm", {});
 const { SiteDataManager } = Cu.import("resource:///modules/SiteDataManager.jsm", {});
 const { OfflineAppCacheHelper } = Cu.import("resource:///modules/offlineAppCache.jsm", {});
+
+XPCOMUtils.defineLazyServiceGetter(this, "serviceWorkerManager", "@mozilla.org/serviceworkers/manager;1", "nsIServiceWorkerManager");
 
 const mockOfflineAppCacheHelper = {
   clear: null,
@@ -32,82 +38,6 @@ const mockOfflineAppCacheHelper = {
 
   unregister() {
     OfflineAppCacheHelper.clear = this.originalClear;
-  }
-};
-
-const mockSiteDataManager = {
-  sites: new Map([
-    [
-      "https://account.xyz.com/",
-      {
-        usage: 1024 * 200,
-        host: "account.xyz.com",
-        status: Ci.nsIPermissionManager.ALLOW_ACTION
-      }
-    ],
-    [
-      "https://shopping.xyz.com/",
-      {
-        usage: 1024 * 100,
-        host: "shopping.xyz.com",
-        status: Ci.nsIPermissionManager.DENY_ACTION
-      }
-    ],
-    [
-      "https://video.bar.com/",
-      {
-        usage: 1024 * 20,
-        host: "video.bar.com",
-        status: Ci.nsIPermissionManager.ALLOW_ACTION
-      }
-    ],
-    [
-      "https://music.bar.com/",
-      {
-        usage: 1024 * 10,
-        host: "music.bar.com",
-        status: Ci.nsIPermissionManager.DENY_ACTION
-      }
-    ],
-    [
-      "https://books.foo.com/",
-      {
-        usage: 1024 * 2,
-        host: "books.foo.com",
-        status: Ci.nsIPermissionManager.ALLOW_ACTION
-      }
-    ],
-    [
-      "https://news.foo.com/",
-      {
-        usage: 1024,
-        host: "news.foo.com",
-        status: Ci.nsIPermissionManager.DENY_ACTION
-      }
-    ]
-  ]),
-
-  _originalGetSites: null,
-
-  getSites() {
-    let list = [];
-    this.sites.forEach((data, origin) => {
-      list.push({
-        usage: data.usage,
-        status: data.status,
-        uri: NetUtil.newURI(origin)
-      });
-    });
-    return Promise.resolve(list);
-  },
-
-  register() {
-    this._originalGetSites = SiteDataManager.getSites;
-    SiteDataManager.getSites = this.getSites.bind(this);
-  },
-
-  unregister() {
-    SiteDataManager.getSites = this._originalGetSites;
   }
 };
 
@@ -160,19 +90,94 @@ function promiseCookiesCleared() {
   });
 }
 
+async function loadServiceWorkerTestPage(url) {
+  let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, url);
+  await BrowserTestUtils.waitForCondition(() => {
+    return ContentTask.spawn(tab.linkedBrowser, {}, () =>
+      content.document.body.getAttribute("data-test-service-worker-registered") === "true");
+  }, `Fail to load service worker test ${url}`);
+  await BrowserTestUtils.removeTab(tab);
+}
+
+function promiseServiceWorkerRegisteredFor(url) {
+  return BrowserTestUtils.waitForCondition(() => {
+    try {
+      let principal = Services.scriptSecurityManager.createCodebasePrincipalFromOrigin(url);
+      let sw = serviceWorkerManager.getRegistrationByPrincipal(principal, principal.URI.spec);
+      if (sw) {
+        ok(true, `Found the service worker registered for ${url}`);
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }, `Should register service worker for ${url}`);
+}
+
+function promiseServiceWorkersCleared() {
+  return BrowserTestUtils.waitForCondition(() => {
+    let serviceWorkers = serviceWorkerManager.getAllRegistrations();
+    if (serviceWorkers.length == 0) {
+      ok(true, "Cleared all service workers");
+      return true;
+    }
+    return false;
+  }, "Should clear all service workers");
+}
+
 registerCleanupFunction(function() {
   delete window.sinon;
-  delete window.setImmediate;
-  delete window.clearImmediate;
   mockOfflineAppCacheHelper.unregister();
 });
 
-// Test buttons are disabled and loading message shown while updating sites
-add_task(function *() {
-  yield SpecialPowers.pushPrefEnv({set: [["browser.storageManager.enabled", true]]});
+// Test listing site using quota usage or site using appcache
+add_task(async function() {
+  await SpecialPowers.pushPrefEnv({set: [["browser.storageManager.enabled", true]]});
+
+  // Open a test site which would save into appcache
+  await BrowserTestUtils.openNewForegroundTab(gBrowser, TEST_OFFLINE_URL);
+  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
+
+  // Open a test site which would save into quota manager
+  await BrowserTestUtils.openNewForegroundTab(gBrowser, TEST_QUOTA_USAGE_URL);
+  // eslint-disable-next-line mozilla/no-cpows-in-tests
+  await waitForEvent(gBrowser.selectedBrowser.contentWindowAsCPOW, "test-indexedDB-done");
+  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
+
   let updatedPromise = promiseSiteDataManagerSitesUpdated();
-  yield openPreferencesViaOpenPreferencesAPI("privacy", { leaveOpen: true });
-  yield updatedPromise;
+  await openPreferencesViaOpenPreferencesAPI("privacy", { leaveOpen: true });
+  await updatedPromise;
+  await openSiteDataSettingsDialog();
+  // eslint-disable-next-line mozilla/no-cpows-in-tests
+  let dialog = content.gSubDialog._topDialog;
+  let dialogFrame = dialog._frame;
+  let frameDoc = dialogFrame.contentDocument;
+
+  let siteItems = frameDoc.getElementsByTagName("richlistitem");
+  is(siteItems.length, 2, "Should list sites using quota usage or appcache");
+
+  let appcacheSite = frameDoc.querySelector(`richlistitem[host="${TEST_OFFLINE_HOST}"]`);
+  ok(appcacheSite, "Should list site using appcache");
+
+  let qoutaUsageSite = frameDoc.querySelector(`richlistitem[host="${TEST_QUOTA_USAGE_HOST}"]`);
+  ok(qoutaUsageSite, "Should list site using quota usage");
+
+  // Always remember to clean up
+  OfflineAppCacheHelper.clear();
+  await new Promise(resolve => {
+    let principal = Services.scriptSecurityManager
+                            .createCodebasePrincipalFromOrigin(TEST_QUOTA_USAGE_ORIGIN);
+    let request = Services.qms.clearStoragesForPrincipal(principal, null, true);
+    request.callback = resolve;
+  });
+  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
+});
+
+// Test buttons are disabled and loading message shown while updating sites
+add_task(async function() {
+  await SpecialPowers.pushPrefEnv({set: [["browser.storageManager.enabled", true]]});
+  let updatedPromise = promiseSiteDataManagerSitesUpdated();
+  await openPreferencesViaOpenPreferencesAPI("privacy", { leaveOpen: true });
+  await updatedPromise;
 
   let actual = null;
   let expected = null;
@@ -183,7 +188,7 @@ add_task(function *() {
   let totalSiteDataSizeLabel = doc.getElementById("totalSiteDataSize");
   is(clearBtn.disabled, false, "Should enable clear button after sites updated");
   is(settingsButton.disabled, false, "Should enable settings button after sites updated");
-  yield SiteDataManager.getTotalUsage()
+  await SiteDataManager.getTotalUsage()
                        .then(usage => {
                          actual = totalSiteDataSizeLabel.textContent;
                          expected = prefStrBundle.getFormattedString(
@@ -201,7 +206,7 @@ add_task(function *() {
   Services.obs.notifyObservers(null, "sitedatamanager:sites-updated");
   is(clearBtn.disabled, false, "Should enable clear button after sites updated");
   is(settingsButton.disabled, false, "Should enable settings button after sites updated");
-  yield SiteDataManager.getTotalUsage()
+  await SiteDataManager.getTotalUsage()
                        .then(usage => {
                          actual = totalSiteDataSizeLabel.textContent;
                          expected = prefStrBundle.getFormattedString(
@@ -209,23 +214,25 @@ add_task(function *() {
                           is(actual, expected, "Should show the right total site data size");
                        });
 
-  yield BrowserTestUtils.removeTab(gBrowser.selectedTab);
+  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
 });
 
-add_task(function* () {
-  yield SpecialPowers.pushPrefEnv({set: [["browser.storageManager.enabled", true]]});
-  addPersistentStoragePerm(TEST_ORIGIN);
+// Test the function of the "Clear All Data" button
+add_task(async function() {
+  await SpecialPowers.pushPrefEnv({set: [["browser.storageManager.enabled", true]]});
+  addPersistentStoragePerm(TEST_QUOTA_USAGE_ORIGIN);
 
-  yield BrowserTestUtils.openNewForegroundTab(gBrowser, TEST_BASE_URL + "site_data_test.html");
-  yield waitForEvent(gBrowser.selectedBrowser.contentWindow, "test-indexedDB-done");
-  yield BrowserTestUtils.removeTab(gBrowser.selectedTab);
+  await BrowserTestUtils.openNewForegroundTab(gBrowser, TEST_QUOTA_USAGE_URL);
+  // eslint-disable-next-line mozilla/no-cpows-in-tests
+  await waitForEvent(gBrowser.selectedBrowser.contentWindowAsCPOW, "test-indexedDB-done");
+  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
 
-  yield openPreferencesViaOpenPreferencesAPI("privacy", { leaveOpen: true });
+  await openPreferencesViaOpenPreferencesAPI("privacy", { leaveOpen: true });
 
   // Test the initial states
-  let cacheUsage = yield cacheUsageGetter.get();
-  let quotaUsage = yield getQuotaUsage(TEST_ORIGIN);
-  let totalUsage = yield SiteDataManager.getTotalUsage();
+  let cacheUsage = await cacheUsageGetter.get();
+  let quotaUsage = await getQuotaUsage(TEST_QUOTA_USAGE_ORIGIN);
+  let totalUsage = await SiteDataManager.getTotalUsage();
   Assert.greater(cacheUsage, 0, "The cache usage should not be 0");
   Assert.greater(quotaUsage, 0, "The quota usage should not be 0");
   Assert.greater(totalUsage, 0, "The total usage should not be 0");
@@ -236,15 +243,15 @@ add_task(function* () {
   let cancelPromise = promiseAlertDialogOpen("cancel");
   let clearBtn = doc.getElementById("clearSiteDataButton");
   clearBtn.doCommand();
-  yield cancelPromise;
+  await cancelPromise;
 
   // Test the items are not removed
-  let status = getPersistentStoragePermStatus(TEST_ORIGIN);
+  let status = getPersistentStoragePermStatus(TEST_QUOTA_USAGE_ORIGIN);
   is(status, Ci.nsIPermissionManager.ALLOW_ACTION, "Should not remove permission");
 
-  cacheUsage = yield cacheUsageGetter.get();
-  quotaUsage = yield getQuotaUsage(TEST_ORIGIN);
-  totalUsage = yield SiteDataManager.getTotalUsage();
+  cacheUsage = await cacheUsageGetter.get();
+  quotaUsage = await getQuotaUsage(TEST_QUOTA_USAGE_ORIGIN);
+  totalUsage = await SiteDataManager.getTotalUsage();
   Assert.greater(cacheUsage, 0, "The cache usage should not be 0");
   Assert.greater(quotaUsage, 0, "The quota usage should not be 0");
   Assert.greater(totalUsage, 0, "The total usage should not be 0");
@@ -258,146 +265,78 @@ add_task(function* () {
 
   mockOfflineAppCacheHelper.register();
   clearBtn.doCommand();
-  yield acceptPromise;
-  yield updatePromise;
+  await acceptPromise;
+  await updatePromise;
   mockOfflineAppCacheHelper.unregister();
 
   // Test all the items are removed
-  yield cookiesClearedPromise;
+  await cookiesClearedPromise;
 
   ok(mockOfflineAppCacheHelper.clear.calledOnce, "Should clear app cache");
 
-  status = getPersistentStoragePermStatus(TEST_ORIGIN);
+  status = getPersistentStoragePermStatus(TEST_QUOTA_USAGE_ORIGIN);
   is(status, Ci.nsIPermissionManager.UNKNOWN_ACTION, "Should remove permission");
 
-  cacheUsage = yield cacheUsageGetter.get();
-  quotaUsage = yield getQuotaUsage(TEST_ORIGIN);
-  totalUsage = yield SiteDataManager.getTotalUsage();
-  is(cacheUsage, 0, "The cahce usage should be removed");
+  cacheUsage = await cacheUsageGetter.get();
+  quotaUsage = await getQuotaUsage(TEST_QUOTA_USAGE_ORIGIN);
+  totalUsage = await SiteDataManager.getTotalUsage();
+  is(cacheUsage, 0, "The cache usage should be removed");
   is(quotaUsage, 0, "The quota usage should be removed");
   is(totalUsage, 0, "The total usage should be removed");
   // Test accepting "Clear All Data" ends
 
-  yield BrowserTestUtils.removeTab(gBrowser.selectedTab);
+  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
 });
 
-add_task(function* () {
-  yield SpecialPowers.pushPrefEnv({set: [["browser.storageManager.enabled", true]]});
-
-  mockSiteDataManager.register();
-  let updatePromise = promiseSiteDataManagerSitesUpdated();
-  yield openPreferencesViaOpenPreferencesAPI("privacy", { leaveOpen: true });
-  yield updatePromise;
-  yield openSiteDataSettingsDialog();
-
+// Test clearing service wroker through the "Clear All" button
+add_task(async function() {
+  await SpecialPowers.pushPrefEnv({set: [["browser.storageManager.enabled", true]]});
+  // Register a test service
+  await loadServiceWorkerTestPage(TEST_SERVICE_WORKER_URL);
+  await openPreferencesViaOpenPreferencesAPI("privacy", { leaveOpen: true });
+  // Test the initial states
+  await promiseServiceWorkerRegisteredFor(TEST_SERVICE_WORKER_URL);
+  // Click the "Clear All" button
   let doc = gBrowser.selectedBrowser.contentDocument;
-  let dialogFrame = doc.getElementById("dialogFrame");
-  let frameDoc = dialogFrame.contentDocument;
-  let hostCol = frameDoc.getElementById("hostCol");
-  let usageCol = frameDoc.getElementById("usageCol");
-  let statusCol = frameDoc.getElementById("statusCol");
-  let sitesList = frameDoc.getElementById("sitesList");
-  let mockSites = mockSiteDataManager.sites;
-
-  // Test default sorting
-  assertSortByHost("ascending");
-
-  // Test sorting on the host column
-  hostCol.click();
-  assertSortByHost("descending");
-  hostCol.click();
-  assertSortByHost("ascending");
-
-  // Test sorting on the permission status column
-  statusCol.click();
-  assertSortByStatus("ascending");
-  statusCol.click();
-  assertSortByStatus("descending");
-
-  // Test sorting on the usage column
-  usageCol.click();
-  assertSortByUsage("ascending");
-  usageCol.click();
-  assertSortByUsage("descending");
-
-  mockSiteDataManager.unregister();
-  yield BrowserTestUtils.removeTab(gBrowser.selectedTab);
-
-  function assertSortByHost(order) {
-    let siteItems = sitesList.getElementsByTagName("richlistitem");
-    for (let i = 0; i < siteItems.length - 1; ++i) {
-      let aOrigin = siteItems[i].getAttribute("data-origin");
-      let bOrigin = siteItems[i + 1].getAttribute("data-origin");
-      let a = mockSites.get(aOrigin);
-      let b = mockSites.get(bOrigin);
-      let result = a.host.localeCompare(b.host);
-      if (order == "ascending") {
-        Assert.lessOrEqual(result, 0, "Should sort sites in the ascending order by host");
-      } else {
-        Assert.greaterOrEqual(result, 0, "Should sort sites in the descending order by host");
-      }
-    }
-  }
-
-  function assertSortByStatus(order) {
-    let siteItems = sitesList.getElementsByTagName("richlistitem");
-    for (let i = 0; i < siteItems.length - 1; ++i) {
-      let aOrigin = siteItems[i].getAttribute("data-origin");
-      let bOrigin = siteItems[i + 1].getAttribute("data-origin");
-      let a = mockSites.get(aOrigin);
-      let b = mockSites.get(bOrigin);
-      let result = a.status - b.status;
-      if (order == "ascending") {
-        Assert.lessOrEqual(result, 0, "Should sort sites in the ascending order by permission status");
-      } else {
-        Assert.greaterOrEqual(result, 0, "Should sort sites in the descending order by permission status");
-      }
-    }
-  }
-
-  function assertSortByUsage(order) {
-    let siteItems = sitesList.getElementsByTagName("richlistitem");
-    for (let i = 0; i < siteItems.length - 1; ++i) {
-      let aOrigin = siteItems[i].getAttribute("data-origin");
-      let bOrigin = siteItems[i + 1].getAttribute("data-origin");
-      let a = mockSites.get(aOrigin);
-      let b = mockSites.get(bOrigin);
-      let result = a.usage - b.usage;
-      if (order == "ascending") {
-        Assert.lessOrEqual(result, 0, "Should sort sites in the ascending order by usage");
-      } else {
-        Assert.greaterOrEqual(result, 0, "Should sort sites in the descending order by usage");
-      }
-    }
-  }
+  let clearBtn = doc.getElementById("clearSiteDataButton");
+  let acceptPromise = promiseAlertDialogOpen("accept");
+  let updatePromise = promiseSiteDataManagerSitesUpdated();
+  clearBtn.doCommand();
+  await acceptPromise;
+  await updatePromise;
+  await promiseServiceWorkersCleared();
+  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
 });
 
-add_task(function* () {
-  yield SpecialPowers.pushPrefEnv({set: [["browser.storageManager.enabled", true]]});
-
-  mockSiteDataManager.register();
+// Test clearing service wroker through the settings panel
+add_task(async function() {
+  await SpecialPowers.pushPrefEnv({set: [["browser.storageManager.enabled", true]]});
+  // Register a test service worker
+  await loadServiceWorkerTestPage(TEST_SERVICE_WORKER_URL);
+  await openPreferencesViaOpenPreferencesAPI("privacy", { leaveOpen: true });
+  // Test the initial states
+  await promiseServiceWorkerRegisteredFor(TEST_SERVICE_WORKER_URL);
+  // Open the Site Data Settings panel and remove the site
+  await openSiteDataSettingsDialog();
+  let acceptRemovePromise = promiseAlertDialogOpen("accept");
   let updatePromise = promiseSiteDataManagerSitesUpdated();
-  yield openPreferencesViaOpenPreferencesAPI("privacy", { leaveOpen: true });
-  yield updatePromise;
-  yield openSiteDataSettingsDialog();
-
-  let doc = gBrowser.selectedBrowser.contentDocument;
-  let frameDoc = doc.getElementById("dialogFrame").contentDocument;
-  let searchBox = frameDoc.getElementById("searchBox");
-  let mockOrigins = Array.from(mockSiteDataManager.sites.keys());
-
-  searchBox.value = "xyz";
-  searchBox.doCommand();
-  assertSitesListed(doc, mockOrigins.filter(o => o.includes("xyz")));
-
-  searchBox.value = "bar";
-  searchBox.doCommand();
-  assertSitesListed(doc, mockOrigins.filter(o => o.includes("bar")));
-
-  searchBox.value = "";
-  searchBox.doCommand();
-  assertSitesListed(doc, mockOrigins);
-
-  mockSiteDataManager.unregister();
-  yield BrowserTestUtils.removeTab(gBrowser.selectedTab);
+  ContentTask.spawn(gBrowser.selectedBrowser, { TEST_OFFLINE_HOST }, args => {
+    let host = args.TEST_OFFLINE_HOST;
+    let frameDoc = content.gSubDialog._topDialog._frame.contentDocument;
+    let sitesList = frameDoc.getElementById("sitesList");
+    let site = sitesList.querySelector(`richlistitem[host="${host}"]`);
+    if (site) {
+      let removeBtn = frameDoc.getElementById("removeSelected");
+      let saveBtn = frameDoc.getElementById("save");
+      site.click();
+      removeBtn.doCommand();
+      saveBtn.doCommand();
+    } else {
+      ok(false, `Should have one site of ${host}`);
+    }
+  });
+  await acceptRemovePromise;
+  await updatePromise;
+  await promiseServiceWorkersCleared();
+  await BrowserTestUtils.removeTab(gBrowser.selectedTab);
 });

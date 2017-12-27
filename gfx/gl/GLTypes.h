@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#if !defined(GLTYPES_H_)
+#ifndef GLTYPES_H_
 #define GLTYPES_H_
 
 #include <stddef.h>
@@ -74,14 +74,17 @@ typedef void* EGLImage;
 typedef int EGLint;
 typedef unsigned int EGLBoolean;
 typedef unsigned int EGLenum;
+typedef intptr_t EGLAttrib;
 typedef void* EGLConfig;
 typedef void* EGLContext;
 typedef void* EGLDisplay;
+typedef void* EGLDeviceEXT;
 typedef void* EGLSurface;
 typedef void* EGLClientBuffer;
 typedef void* EGLCastToRelevantPtr;
 typedef void* EGLImage;
 typedef void* EGLSync;
+typedef void* EGLStreamKHR;
 typedef uint64_t EGLTime;
 
 #define EGL_NO_CONTEXT       ((EGLContext)0)
@@ -91,4 +94,21 @@ typedef uint64_t EGLTime;
 #define EGL_NO_SYNC          ((EGLSync)0)
 #define EGL_NO_IMAGE         ((EGLImage)0)
 
+
+#ifdef XP_WIN
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN 1
+    #endif
+
+    #include <windef.h>
+
+    typedef HDC EGLNativeDisplayType;
+    typedef HBITMAP EGLNativePixmapType;
+    typedef HWND EGLNativeWindowType;
+#else
+    typedef void* EGLNativeDisplayType;
+    typedef void* EGLNativePixmapType;
+    typedef void* EGLNativeWindowType;
 #endif
+
+#endif // GLTYPES_H_

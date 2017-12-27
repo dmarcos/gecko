@@ -9,25 +9,32 @@
 use app_units::Au;
 use block::{BlockFlow, ISizeAndMarginsComputer, MarginsMayCollapseFlag};
 use context::LayoutContext;
-use cssparser::Color;
-use display_list_builder::{BlockFlowDisplayListBuilding, BorderPaintingMode, DisplayListBuildState};
+use display_list_builder::{BlockFlowDisplayListBuilding, BorderPaintingMode};
+use display_list_builder::{DisplayListBuildState, StackingContextCollectionFlags};
+use display_list_builder::StackingContextCollectionState;
 use euclid::{Point2D, Rect, SideOffsets2D, Size2D};
-use flow::{self, Flow, FlowClass, IS_ABSOLUTELY_POSITIONED, OpaqueFlow};
+use flow::{Flow, FlowClass, FlowFlags, GetBaseFlow, OpaqueFlow};
 use fragment::{Fragment, FragmentBorderBoxIterator, Overflow};
 use gfx_traits::print_tree::PrintTree;
 use layout_debug;
 use model::MaybeAuto;
 use script_layout_interface::wrapper_traits::ThreadSafeLayoutNode;
 use std::fmt;
-use std::sync::Arc;
-use style::computed_values::{border_collapse, border_top_style, vertical_align};
+use style::computed_values::border_collapse::T as BorderCollapse;
 use style::logical_geometry::{LogicalMargin, LogicalRect, LogicalSize, WritingMode};
-use style::properties::ServoComputedValues;
+use style::properties::ComputedValues;
+use style::values::computed::Color;
+use style::values::generics::box_::VerticalAlign;
+use style::values::specified::BorderStyle;
 use table::InternalTable;
 use table_row::{CollapsedBorder, CollapsedBorderProvenance};
 
+#[allow(unsafe_code)]
+unsafe impl ::flow::HasBaseFlow for TableCellFlow {}
+
 /// A table formatting context.
 #[derive(Serialize)]
+#[repr(C)]
 pub struct TableCellFlow {
     /// Data common to all block flows.
     pub block_flow: BlockFlow,
@@ -94,9 +101,9 @@ impl TableCellFlow {
         // Note to the reader: this code has been tested with negative margins.
         // We end up with a "end" that's before the "start," but the math still works out.
         let mut extents = None;
-        for kid in flow::base(self).children.iter() {
-            let kid_base = flow::base(kid);
-            if kid_base.flags.contains(IS_ABSOLUTELY_POSITIONED) {
+        for kid in self.base().children.iter() {
+            let kid_base = kid.base();
+            if kid_base.flags.contains(FlowFlags::IS_ABSOLUTELY_POSITIONED) {
                 continue
             }
             let start = kid_base.position.start.b -
@@ -121,24 +128,24 @@ impl TableCellFlow {
         };
 
         let kids_size = last_end - first_start;
-        let self_size = flow::base(self).position.size.block -
+        let self_size = self.base().position.size.block -
             self.block_flow.fragment.border_padding.block_start_end();
         let kids_self_gap = self_size - kids_size;
 
-        // This offset should also account for vertical_align::T::baseline.
+        // This offset should also account for VerticalAlign::Baseline.
         // Need max cell ascent from the first row of this cell.
         let offset = match self.block_flow.fragment.style().get_box().vertical_align {
-            vertical_align::T::middle => kids_self_gap / 2,
-            vertical_align::T::bottom => kids_self_gap,
+            VerticalAlign::Middle => kids_self_gap / 2,
+            VerticalAlign::Bottom => kids_self_gap,
             _ => Au(0),
         };
         if offset == Au(0) {
             return
         }
 
-        for kid in flow::mut_base(self).children.iter_mut() {
-            let mut kid_base = flow::mut_base(kid);
-            if !kid_base.flags.contains(IS_ABSOLUTELY_POSITIONED) {
+        for kid in self.mut_base().children.iter_mut() {
+            let kid_base = kid.mut_base();
+            if !kid_base.flags.contains(FlowFlags::IS_ABSOLUTELY_POSITIONED) {
                 kid_base.position.start.b += offset
             }
         }
@@ -201,9 +208,7 @@ impl Flow for TableCellFlow {
         // The position was set to the column inline-size by the parent flow, table row flow.
         let containing_block_inline_size = self.block_flow.base.block_container_inline_size;
 
-        let inline_size_computer = InternalTable {
-            border_collapse: self.block_flow.fragment.style.get_inheritedtable().border_collapse,
-        };
+        let inline_size_computer = InternalTable;
         inline_size_computer.compute_used_inline_size(&mut self.block_flow,
                                                       shared_context,
                                                       containing_block_inline_size);
@@ -231,8 +236,8 @@ impl Flow for TableCellFlow {
         self.assign_block_size_table_cell_base(layout_context);
     }
 
-    fn compute_absolute_position(&mut self, layout_context: &LayoutContext) {
-        self.block_flow.compute_absolute_position(layout_context)
+    fn compute_stacking_relative_position(&mut self, layout_context: &LayoutContext) {
+        self.block_flow.compute_stacking_relative_position(layout_context)
     }
 
     fn update_late_computed_inline_position_if_necessary(&mut self, inline_position: Au) {
@@ -253,23 +258,32 @@ impl Flow for TableCellFlow {
                                              .style
                                              .get_inheritedtable()
                                              .border_collapse {
-            border_collapse::T::separate => BorderPaintingMode::Separate,
-            border_collapse::T::collapse => BorderPaintingMode::Collapse(&self.collapsed_borders),
+            BorderCollapse::Separate => BorderPaintingMode::Separate,
+            BorderCollapse::Collapse => BorderPaintingMode::Collapse(&self.collapsed_borders),
         };
 
         self.block_flow.build_display_list_for_block(state, border_painting_mode)
     }
 
-    fn collect_stacking_contexts(&mut self, state: &mut DisplayListBuildState) {
-        self.block_flow.collect_stacking_contexts(state);
+    fn collect_stacking_contexts(&mut self, state: &mut StackingContextCollectionState) {
+        self.block_flow.collect_stacking_contexts_for_block(state,
+                                                            StackingContextCollectionFlags::empty());
     }
 
-    fn repair_style(&mut self, new_style: &Arc<ServoComputedValues>) {
+    fn repair_style(&mut self, new_style: &::ServoArc<ComputedValues>) {
         self.block_flow.repair_style(new_style)
     }
 
     fn compute_overflow(&self) -> Overflow {
         self.block_flow.compute_overflow()
+    }
+
+    fn contains_roots_of_absolute_flow_tree(&self) -> bool {
+        self.block_flow.contains_roots_of_absolute_flow_tree()
+    }
+
+    fn is_absolute_containing_block(&self) -> bool {
+        self.block_flow.is_absolute_containing_block()
     }
 
     fn generated_containing_block_size(&self, flow: OpaqueFlow) -> LogicalSize<Au> {
@@ -298,7 +312,7 @@ impl fmt::Debug for TableCellFlow {
     }
 }
 
-#[derive(Copy, Clone, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub struct CollapsedBordersForCell {
     pub inline_start_border: CollapsedBorder,
     pub inline_end_border: CollapsedBorder,
@@ -410,7 +424,7 @@ impl CollapsedBordersForCell {
     pub fn adjust_border_colors_and_styles_for_painting(
             &self,
             border_colors: &mut SideOffsets2D<Color>,
-            border_styles: &mut SideOffsets2D<border_top_style::T>,
+            border_styles: &mut SideOffsets2D<BorderStyle>,
             writing_mode: WritingMode) {
         let logical_border_colors = LogicalMargin::new(writing_mode,
                                                        self.block_start_border.color,

@@ -16,7 +16,6 @@
 #include "nsDataHashtable.h"
 #include "nsIDocument.h"
 #include "nsIDocumentObserver.h"
-#include "nsIEditor.h"
 #include "nsIObserver.h"
 #include "nsIScrollPositionListener.h"
 #include "nsITimer.h"
@@ -27,6 +26,9 @@ class nsAccessiblePivot;
 const uint32_t kDefaultCacheLength = 128;
 
 namespace mozilla {
+
+class TextEditor;
+
 namespace a11y {
 
 class DocManager;
@@ -86,7 +88,7 @@ public:
   virtual nsRect RelativeBounds(nsIFrame** aRelativeFrame) const override;
 
   // HyperTextAccessible
-  virtual already_AddRefed<nsIEditor> GetEditor() const override;
+  virtual already_AddRefed<TextEditor> GetEditor() const override;
 
   // DocAccessible
 
@@ -137,6 +139,11 @@ public:
       (mDocumentNode->IsShowing() || HasLoadState(eDOMLoaded));
   }
 
+  bool IsHidden() const
+  {
+    return mDocumentNode->Hidden();
+  }
+
   /**
    * Document load states.
    */
@@ -157,7 +164,7 @@ public:
    * Return true if the document has given document state.
    */
   bool HasLoadState(LoadState aState) const
-    { return (mLoadState & static_cast<uint32_t>(aState)) == 
+    { return (mLoadState & static_cast<uint32_t>(aState)) ==
         static_cast<uint32_t>(aState); }
 
   /**
@@ -342,18 +349,10 @@ public:
                        nsIContent* aEndChildNode);
 
   /**
-   * Notify the document accessible that content was removed.
+   * Update the tree on content removal.
    */
-  void ContentRemoved(Accessible* aContainer, nsIContent* aChildNode)
-  {
-    // Update the whole tree of this document accessible when the container is
-    // null (document element is removed).
-    UpdateTreeOnRemoval((aContainer ? aContainer : this), aChildNode);
-  }
-  void ContentRemoved(nsIContent* aContainerNode, nsIContent* aChildNode)
-  {
-    ContentRemoved(AccessibleOrTrueContainer(aContainerNode), aChildNode);
-  }
+  void ContentRemoved(Accessible* aAccessible);
+  void ContentRemoved(nsIContent* aContentNode);
 
   /**
    * Updates accessible tree when rendered text is changed.
@@ -449,7 +448,7 @@ protected:
    * @param aRelAttr     [in, optional] relation attribute
    */
   void AddDependentIDsFor(Accessible* aRelProvider,
-                          nsIAtom* aRelAttr = nullptr);
+                          nsAtom* aRelAttr = nullptr);
 
   /**
    * Remove dependent IDs pointed by accessible element by relation attribute
@@ -460,7 +459,7 @@ protected:
    * @param aRelAttr     [in, optional] relation attribute
    */
   void RemoveDependentIDsFor(Accessible* aRelProvider,
-                             nsIAtom* aRelAttr = nullptr);
+                             nsAtom* aRelAttr = nullptr);
 
   /**
    * Update or recreate an accessible depending on a changed attribute.
@@ -470,7 +469,7 @@ protected:
    * @return            true if an action was taken on the attribute change
    */
   bool UpdateAccessibleOnAttrChange(mozilla::dom::Element* aElement,
-                                    nsIAtom* aAttribute);
+                                    nsAtom* aAttribute);
 
   /**
    * Fire accessible events when attribute is changed.
@@ -480,7 +479,7 @@ protected:
    * @param aAttribute    [in] changed attribute
    */
   void AttributeChangedImpl(Accessible* aAccessible,
-                            int32_t aNameSpaceID, nsIAtom* aAttribute);
+                            int32_t aNameSpaceID, nsAtom* aAttribute);
 
   /**
    * Fire accessible events when ARIA attribute is changed.
@@ -488,7 +487,7 @@ protected:
    * @param aAccessible  [in] accesislbe the DOM attribute is changed for
    * @param aAttribute   [in] changed attribute
    */
-  void ARIAAttributeChanged(Accessible* aAccessible, nsIAtom* aAttribute);
+  void ARIAAttributeChanged(Accessible* aAccessible, nsAtom* aAttribute);
 
   /**
    * Process ARIA active-descendant attribute change.
@@ -511,16 +510,6 @@ protected:
    * invalidate their containers later.
    */
   void ProcessInvalidationList();
-
-  /**
-   * Update the accessible tree for content removal.
-   */
-  void UpdateTreeOnRemoval(Accessible* aContainer, nsIContent* aChildNode);
-
-  /**
-   * Validates all aria-owns connections and updates the tree accordingly.
-   */
-  void ValidateARIAOwned();
 
   /**
    * Steals or puts back accessible subtrees.
@@ -637,7 +626,7 @@ protected:
    */
   union {
     // ARIA attribute value
-    nsIAtom* mARIAAttrOldValue;
+    nsAtom* mARIAAttrOldValue;
 
     // True if the accessible state bit was on
     bool mStateBitWasOn;
@@ -656,10 +645,10 @@ protected:
   class AttrRelProvider
   {
   public:
-    AttrRelProvider(nsIAtom* aRelAttr, nsIContent* aContent) :
+    AttrRelProvider(nsAtom* aRelAttr, nsIContent* aContent) :
       mRelAttr(aRelAttr), mContent(aContent) { }
 
-    nsIAtom* mRelAttr;
+    nsAtom* mRelAttr;
     nsCOMPtr<nsIContent> mContent;
 
   private:

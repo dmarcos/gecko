@@ -7,6 +7,7 @@
 #define HTMLEditRules_h
 
 #include "TypeInState.h"
+#include "mozilla/EditorDOMPoint.h" // for EditorDOMPoint
 #include "mozilla/SelectionState.h"
 #include "mozilla/TextEditRules.h"
 #include "nsCOMPtr.h"
@@ -17,7 +18,7 @@
 #include "nsTArray.h"
 #include "nscore.h"
 
-class nsIAtom;
+class nsAtom;
 class nsIDOMCharacterData;
 class nsIDOMDocument;
 class nsIDOMElement;
@@ -31,8 +32,8 @@ namespace mozilla {
 class EditActionResult;
 class HTMLEditor;
 class RulesInfo;
+class SplitNodeResult;
 class TextEditor;
-struct EditorDOMPoint;
 namespace dom {
 class Element;
 class Selection;
@@ -49,7 +50,7 @@ struct StyleCache final : public PropItem
     MOZ_COUNT_CTOR(StyleCache);
   }
 
-  StyleCache(nsIAtom* aTag,
+  StyleCache(nsAtom* aTag,
              const nsAString& aAttr,
              const nsAString& aValue)
     : PropItem(aTag, aAttr, aValue)
@@ -58,7 +59,7 @@ struct StyleCache final : public PropItem
     MOZ_COUNT_CTOR(StyleCache);
   }
 
-  StyleCache(nsIAtom* aTag,
+  StyleCache(nsAtom* aTag,
              const nsAString& aAttr)
     : PropItem(aTag, aAttr, EmptyString())
     , mPresent(false)
@@ -94,6 +95,7 @@ public:
                           bool* aCancel, bool* aHandled) override;
   NS_IMETHOD DidDoAction(Selection* aSelection, RulesInfo* aInfo,
                          nsresult aResult) override;
+  NS_IMETHOD_(bool) DocumentIsEmpty() override;
   NS_IMETHOD DocumentModified() override;
 
   nsresult GetListState(bool* aMixed, bool* aOL, bool* aUL, bool* aDL);
@@ -105,21 +107,19 @@ public:
 
   // nsIEditActionListener methods
 
-  NS_IMETHOD WillCreateNode(const nsAString& aTag, nsIDOMNode* aParent,
-                            int32_t aPosition) override;
-  NS_IMETHOD DidCreateNode(const nsAString& aTag, nsIDOMNode* aNode,
-                           nsIDOMNode* aParent, int32_t aPosition,
+  NS_IMETHOD WillCreateNode(const nsAString& aTag,
+                            nsIDOMNode* aNextSiblingOfNewNode) override;
+  NS_IMETHOD DidCreateNode(const nsAString& aTag, nsIDOMNode* aNewNode,
                            nsresult aResult) override;
-  NS_IMETHOD WillInsertNode(nsIDOMNode* aNode, nsIDOMNode* aParent,
-                            int32_t aPosition) override;
-  NS_IMETHOD DidInsertNode(nsIDOMNode* aNode, nsIDOMNode* aParent,
-                           int32_t aPosition, nsresult aResult) override;
+  NS_IMETHOD WillInsertNode(nsIDOMNode* aNode,
+                            nsIDOMNode* aNextSiblingOfNewNode) override;
+  NS_IMETHOD DidInsertNode(nsIDOMNode* aNode, nsresult aResult) override;
   NS_IMETHOD WillDeleteNode(nsIDOMNode* aChild) override;
   NS_IMETHOD DidDeleteNode(nsIDOMNode* aChild, nsresult aResult) override;
   NS_IMETHOD WillSplitNode(nsIDOMNode* aExistingRightNode,
                            int32_t aOffset) override;
-  NS_IMETHOD DidSplitNode(nsIDOMNode* aExistingRightNode, int32_t aOffset,
-                          nsIDOMNode* aNewLeftNode, nsresult aResult) override;
+  NS_IMETHOD DidSplitNode(nsIDOMNode* aExistingRightNode,
+                          nsIDOMNode* aNewLeftNode) override;
   NS_IMETHOD WillJoinNodes(nsIDOMNode* aLeftNode, nsIDOMNode* aRightNode,
                            nsIDOMNode* aParent) override;
   NS_IMETHOD DidJoinNodes(nsIDOMNode* aLeftNode, nsIDOMNode* aRightNode,
@@ -158,8 +158,17 @@ protected:
   nsresult WillLoadHTML(Selection* aSelection, bool* aCancel);
   nsresult WillInsertBreak(Selection& aSelection, bool* aCancel,
                            bool* aHandled);
-  nsresult StandardBreakImpl(nsINode& aNode, int32_t aOffset,
-                             Selection& aSelection);
+
+  /**
+   * InsertBRElement() inserts a <br> element into aInsertToBreak.
+   *
+   * @param aSelection          The selection.
+   * @param aInsertToBreak      The point where new <br> element will be
+   *                            inserted before.
+   */
+  nsresult InsertBRElement(Selection& aSelection,
+                           const EditorDOMPoint& aInsertToBreak);
+
   nsresult DidInsertBreak(Selection* aSelection, nsresult aResult);
   nsresult SplitMailCites(Selection* aSelection, bool* aHandled);
   nsresult WillDeleteSelection(Selection* aSelection,
@@ -170,8 +179,26 @@ protected:
                               nsIEditor::EDirection aDir,
                               nsresult aResult);
   nsresult InsertBRIfNeeded(Selection* aSelection);
-  mozilla::EditorDOMPoint GetGoodSelPointForNode(nsINode& aNode,
-                                                 nsIEditor::EDirection aAction);
+
+  /**
+   * CanContainParagraph() returns true if aElement can have a <p> element as
+   * its child or its descendant.
+   */
+  bool CanContainParagraph(Element& aElement) const;
+
+  /**
+   * Insert a normal <br> element or a moz-<br> element to aNode when
+   * aNode is a block and it has no children.
+   *
+   * @param aNode           Reference to a block parent.
+   * @param aInsertMozBR    true if this should insert a moz-<br> element.
+   *                        Otherwise, i.e., this should insert a normal <br>
+   *                        element, false.
+   */
+  nsresult InsertBRIfNeededInternal(nsINode& aNode, bool aInsertMozBR);
+
+  EditorDOMPoint GetGoodSelPointForNode(nsINode& aNode,
+                                        nsIEditor::EDirection aAction);
 
   /**
    * TryToJoinBlocks() tries to join two block elements.  The right element is
@@ -257,7 +284,7 @@ protected:
   nsresult WillMakeBasicBlock(Selection& aSelection,
                               const nsAString& aBlockType,
                               bool* aCancel, bool* aHandled);
-  nsresult MakeBasicBlock(Selection& aSelection, nsIAtom& aBlockType);
+  nsresult MakeBasicBlock(Selection& aSelection, nsAtom& aBlockType);
   nsresult DidMakeBasicBlock(Selection* aSelection, RulesInfo* aInfo,
                              nsresult aResult);
   nsresult DidAbsolutePosition();
@@ -273,17 +300,44 @@ protected:
                        int32_t* aIndex, Lists aLists = Lists::yes,
                        Tables aTables = Tables::yes);
   Element* IsInListItem(nsINode* aNode);
-  nsIAtom& DefaultParagraphSeparator();
+  nsAtom& DefaultParagraphSeparator();
   nsresult ReturnInHeader(Selection& aSelection, Element& aHeader,
                           nsINode& aNode, int32_t aOffset);
-  nsresult ReturnInParagraph(Selection* aSelection, nsIDOMNode* aHeader,
-                             nsIDOMNode* aTextNode, int32_t aOffset,
-                             bool* aCancel, bool* aHandled);
-  nsresult SplitParagraph(nsIDOMNode* aPara,
-                          nsIContent* aBRNode,
-                          Selection* aSelection,
-                          nsCOMPtr<nsIDOMNode>* aSelNode,
-                          int32_t* aOffset);
+
+  /**
+   * ReturnInParagraph() does the right thing for Enter key press or
+   * 'insertParagraph' command in aParentDivOrP.  aParentDivOrP will be
+   * split at start of first selection range.
+   *
+   * @param aSelection      The selection.  aParentDivOrP will be split at
+   *                        start of the first selection range.
+   * @param aParentDivOrP   The parent block.  This must be <p> or <div>
+   *                        element.
+   * @return                Returns with NS_OK if this doesn't meat any
+   *                        unexpected situation.  If this method tries to
+   *                        split the paragraph, marked as handled.
+   */
+  EditActionResult ReturnInParagraph(Selection& aSelection,
+                                     Element& aParentDivOrP);
+
+  /**
+   * SplitParagraph() splits the parent block, aPara, at aSelNode - aOffset.
+   *
+   * @param aSelection          The selection.
+   * @param aParentDivOrP       The parent block to be split.  This must be <p>
+   *                            or <div> element.
+   * @param aStartOfRightNode   The point to be start of right node after
+   *                            split.  This must be descendant of
+   *                            aParentDivOrP.
+   * @param aNextBRNode         Next <br> node if there is.  Otherwise, nullptr.
+   *                            If this is not nullptr, the <br> node may be
+   *                            removed.
+   */
+  nsresult SplitParagraph(Selection& aSelection,
+                          Element& aParentDivOrP,
+                          const EditorRawDOMPoint& aStartOfRightNode,
+                          nsIContent* aBRNode);
+
   nsresult ReturnInListItem(Selection& aSelection, Element& aHeader,
                             nsINode& aNode, int32_t aOffset);
   nsresult AfterEditInner(EditAction action,
@@ -303,8 +357,8 @@ protected:
                               nsIContent** aOutLeftNode,
                               nsIContent** aOutRightNode);
 
-  nsresult ConvertListType(Element* aList, Element** aOutList,
-                           nsIAtom* aListType, nsIAtom* aItemType);
+  already_AddRefed<Element> ConvertListType(Element* aList, nsAtom* aListType,
+                                            nsAtom* aItemType);
 
   nsresult CreateStyleForInsertText(Selection& aSelection, nsIDocument& aDoc);
   enum class MozBRCounts { yes, no };
@@ -320,9 +374,8 @@ protected:
   bool IsFirstNode(nsIDOMNode* aNode);
   bool IsLastNode(nsIDOMNode* aNode);
   nsresult NormalizeSelection(Selection* aSelection);
-  void GetPromotedPoint(RulesEndpoint aWhere, nsIDOMNode* aNode,
-                        int32_t aOffset, EditAction actionID,
-                        nsCOMPtr<nsIDOMNode>* outNode, int32_t* outOffset);
+  EditorDOMPoint GetPromotedPoint(RulesEndpoint aWhere, nsINode& aNode,
+                                  int32_t aOffset, EditAction actionID);
   void GetPromotedRanges(Selection& aSelection,
                          nsTArray<RefPtr<nsRange>>& outArrayOfRanges,
                          EditAction inOperationType);
@@ -336,7 +389,7 @@ protected:
   void GetChildNodesForOperation(
          nsINode& aNode,
          nsTArray<OwningNonNull<nsINode>>& outArrayOfNodes);
-  nsresult GetNodesFromPoint(EditorDOMPoint aPoint,
+  nsresult GetNodesFromPoint(const EditorDOMPoint& aPoint,
                              EditAction aOperation,
                              nsTArray<OwningNonNull<nsINode>>& outArrayOfNodes,
                              TouchContent aTouchContent);
@@ -359,24 +412,47 @@ protected:
   nsresult BustUpInlinesAtBRs(
              nsIContent& aNode,
              nsTArray<OwningNonNull<nsINode>>& aOutArrayOfNodes);
+  /**
+   * GetHiestInlineParent() returns the highest inline node parent between
+   * aNode and the editing host.  Even if the editing host is an inline
+   * element, this method never returns the editing host as the result.
+   */
   nsIContent* GetHighestInlineParent(nsINode& aNode);
   void MakeTransitionList(nsTArray<OwningNonNull<nsINode>>& aNodeArray,
                           nsTArray<bool>& aTransitionArray);
   nsresult RemoveBlockStyle(nsTArray<OwningNonNull<nsINode>>& aNodeArray);
   nsresult ApplyBlockStyle(nsTArray<OwningNonNull<nsINode>>& aNodeArray,
-                           nsIAtom& aBlockTag);
+                           nsAtom& aBlockTag);
   nsresult MakeBlockquote(nsTArray<OwningNonNull<nsINode>>& aNodeArray);
-  nsresult SplitAsNeeded(nsIAtom& aTag, OwningNonNull<nsINode>& inOutParent,
-                         int32_t& inOutOffset);
-  nsresult SplitAsNeeded(nsIAtom& aTag, nsCOMPtr<nsINode>& inOutParent,
-                         int32_t& inOutOffset);
+
+  /**
+   * MaybeSplitAncestorsForInsert() does nothing if container of
+   * aStartOfDeepestRightNode can have an element whose tag name is aTag.
+   * Otherwise, looks for an ancestor node which is or is in active editing
+   * host and can have an element whose name is aTag.  If there is such
+   * ancestor, its descendants are split.
+   *
+   * Note that this may create empty elements while splitting ancestors.
+   *
+   * @param aTag                        The name of element to be inserted
+   *                                    after calling this method.
+   * @param aStartOfDeepestRightNode    The start point of deepest right node.
+   *                                    This point must be descendant of
+   *                                    active editing host.
+   * @return                            When succeeded, SplitPoint() returns
+   *                                    the point to insert the element.
+   */
+  SplitNodeResult MaybeSplitAncestorsForInsert(
+                    nsAtom& aTag,
+                    const EditorRawDOMPoint& aStartOfDeepestRightNode);
+
   nsresult AddTerminatingBR(nsIDOMNode *aBlock);
   EditorDOMPoint JoinNodesSmart(nsIContent& aNodeLeft,
                                 nsIContent& aNodeRight);
   Element* GetTopEnclosingMailCite(nsINode& aNode);
   nsresult PopListItem(nsIContent& aListItem, bool* aOutOfList = nullptr);
   nsresult RemoveListStructure(Element& aList);
-  nsresult CacheInlineStyles(nsIDOMNode* aNode);
+  nsresult CacheInlineStyles(nsINode* aNode);
   nsresult ReapplyCachedStyles();
   void ClearCachedStyles();
   void AdjustSpecialBreaks();
@@ -385,10 +461,22 @@ protected:
   void CheckInterlinePosition(Selection& aSelection);
   nsresult AdjustSelection(Selection* aSelection,
                            nsIEditor::EDirection aAction);
-  nsresult FindNearSelectableNode(nsIDOMNode* aSelNode,
-                                  int32_t aSelOffset,
-                                  nsIEditor::EDirection& aDirection,
-                                  nsCOMPtr<nsIDOMNode>* outSelectableNode);
+
+  /**
+   * FindNearEditableNode() tries to find an editable node near aPoint.
+   *
+   * @param aPoint      The DOM point where to start to search from.
+   * @param aDirection  If nsIEditor::ePrevious is set, this searches an
+   *                    editable node from next nodes.  Otherwise, from
+   *                    previous nodes.
+   * @return            If found, returns non-nullptr.  Otherwise, nullptr.
+   *                    Note that if found node is in different table element,
+   *                    this returns nullptr.
+   *                    And also if aDirection is not nsIEditor::ePrevious,
+   *                    the result may be the node pointed by aPoint.
+   */
+  nsIContent* FindNearEditableNode(const EditorRawDOMPoint& aPoint,
+                                   nsIEditor::EDirection aDirection);
   /**
    * Returns true if aNode1 or aNode2 or both is the descendant of some type of
    * table element, but their nearest table element ancestors differ.  "Table
@@ -402,7 +490,25 @@ protected:
   nsresult SelectionEndpointInNode(nsINode* aNode, bool* aResult);
   nsresult UpdateDocChangeRange(nsRange* aRange);
   nsresult ConfirmSelectionInBody();
-  nsresult InsertMozBRIfNeeded(nsINode& aNode);
+
+  /**
+   * Insert normal <br> element into aNode when aNode is a block and it has
+   * no children.
+   */
+  nsresult InsertBRIfNeeded(nsINode& aNode)
+  {
+    return InsertBRIfNeededInternal(aNode, false);
+  }
+
+  /**
+   * Insert moz-<br> element (<br type="_moz">) into aNode when aNode is a
+   * block and it has no children.
+   */
+  nsresult InsertMozBRIfNeeded(nsINode& aNode)
+  {
+    return InsertBRIfNeededInternal(aNode, true);
+  }
+
   bool IsEmptyInline(nsINode& aNode);
   bool ListIsEmptyLine(nsTArray<OwningNonNull<nsINode>>& arrayOfNodes);
   nsresult RemoveAlignment(nsINode& aNode, const nsAString& aAlignType,
@@ -425,7 +531,7 @@ protected:
    * GetInlineStyles() retrieves the style of aNode and modifies each item of
    * aStyleCache.
    */
-  nsresult GetInlineStyles(nsIDOMNode* aNode,
+  nsresult GetInlineStyles(nsINode* aNode,
                            StyleCache aStyleCache[SIZE_STYLE_TABLE]);
 
 protected:

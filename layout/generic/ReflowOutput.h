@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -294,7 +295,7 @@ public:
   enum { ASK_FOR_BASELINE = nscoord_MAX };
 
   // Metrics that _exactly_ enclose the text to allow precise MathML placements.
-  // If the NS_REFLOW_CALC_BOUNDING_METRICS flag is set, then the caller is 
+  // If the NS_REFLOW_CALC_BOUNDING_METRICS flag is set, then the caller is
   // requesting that you also compute additional details about your inner
   // bounding box and italic correction. For example, the bounding box of
   // msup is the smallest rectangle that _exactly_ encloses both the text

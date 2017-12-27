@@ -72,20 +72,29 @@
 #![cfg_attr(target_os = "dragonfly", doc(
     html_root_url = "https://doc.rust-lang.org/libc/x86_64-unknown-dragonfly"
 ))]
+#![cfg_attr(all(target_os = "emscripten", target_arch = "asmjs"), doc(
+    html_root_url = "https://doc.rust-lang.org/libc/asmjs-unknown-emscripten"
+))]
+#![cfg_attr(all(target_os = "emscripten", target_arch = "wasm32"), doc(
+    html_root_url = "https://doc.rust-lang.org/libc/wasm32-unknown-emscripten"
+))]
+#![cfg_attr(all(target_os = "linux", target_arch = "xparc64"), doc(
+    html_root_url = "https://doc.rust-lang.org/libc/sparc64-unknown-linux-gnu"
+))]
 
 // Attributes needed when building as part of the standard library
-#![cfg_attr(stdbuild, feature(no_std, core, core_slice_ext, staged_api, custom_attribute, cfg_target_vendor))]
-#![cfg_attr(stdbuild, feature(link_cfg))]
-#![cfg_attr(stdbuild, no_std)]
-#![cfg_attr(stdbuild, staged_api)]
-#![cfg_attr(stdbuild, allow(warnings))]
-#![cfg_attr(stdbuild, unstable(feature = "libc",
+#![cfg_attr(feature = "stdbuild", feature(no_std, staged_api, custom_attribute, cfg_target_vendor))]
+#![cfg_attr(feature = "stdbuild", feature(link_cfg))]
+#![cfg_attr(feature = "stdbuild", no_std)]
+#![cfg_attr(feature = "stdbuild", staged_api)]
+#![cfg_attr(feature = "stdbuild", allow(warnings))]
+#![cfg_attr(feature = "stdbuild", unstable(feature = "libc",
                                reason = "use `libc` from crates.io",
                                issue = "27783"))]
 
 #![cfg_attr(not(feature = "use_std"), no_std)]
 
-#[cfg(all(not(stdbuild), not(dox), feature = "use_std"))]
+#[cfg(all(not(dox), feature = "use_std"))]
 extern crate std as core;
 
 #[macro_use] mod macros;
@@ -243,6 +252,7 @@ extern {
     pub fn strtok(s: *mut c_char, t: *const c_char) -> *mut c_char;
     pub fn strxfrm(s: *mut c_char, ct: *const c_char, n: size_t) -> size_t;
     pub fn wcslen(buf: *const wchar_t) -> size_t;
+    pub fn wcstombs(dest: *mut c_char, src: *const wchar_t, n: size_t) -> ::size_t;
 
     pub fn memchr(cx: *const c_void, c: c_int, n: size_t) -> *mut c_void;
     pub fn memcmp(cx: *const c_void, ct: *const c_void, n: size_t) -> c_int;

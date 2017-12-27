@@ -38,6 +38,8 @@ test(() => {
     assert_equals(propDesc.configurable, true, 'method should be configurable');
     assert_equals(propDesc.writable, true, 'method should be writable');
     assert_equals(typeof rsReader[m], 'function', 'should have be a method');
+    const expectedName = m === 'constructor' ? 'ReadableStreamDefaultReader' : m;
+    assert_equals(rsReader[m].name, expectedName, 'method should have the correct name');
   }
 
   const closedPropDesc = Object.getOwnPropertyDescriptor(proto, 'closed');
@@ -350,8 +352,8 @@ promise_test(t => {
     }
   );
 
-}, 'ReadableStreamDefaultReader: if start rejects with no parameter, it should error the stream with an undefined '
-    + 'error');
+}, 'ReadableStreamDefaultReader: if start rejects with no parameter, it should error the stream with an undefined ' +
+    'error');
 
 promise_test(t => {
 

@@ -48,6 +48,13 @@ public:
   }
 
   IPCResult
+  RecvStartReading() override
+  {
+    Start();
+    return IPC_OK();
+  }
+
+  IPCResult
   RecvRequestClose(const nsresult& aRv) override
   {
     OnEnd(aRv);
@@ -62,7 +69,7 @@ public:
   }
 
   void
-  SendData(const nsCString& aBuffer) override
+  SendData(const wr::ByteBuffer& aBuffer) override
   {
     Unused << SendBuffer(aBuffer);
   }
@@ -152,7 +159,7 @@ private:
   }
 
   IPCResult
-  RecvBuffer(const nsCString& aBuffer) override
+  RecvBuffer(const wr::ByteBuffer& aBuffer) override
   {
     BufferReceived(aBuffer);
     return IPC_OK();
@@ -166,6 +173,13 @@ private:
   }
 
   // IPCStreamDestination methods
+
+  void
+  StartReading() override
+  {
+    MOZ_ASSERT(HasDelayedStart());
+    Unused << SendStartReading();
+  }
 
   void
   RequestClose(nsresult aRv) override

@@ -6,7 +6,6 @@
 package org.mozilla.gecko.customtabs;
 
 import android.content.res.Resources;
-import android.content.res.TypedArray;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
@@ -29,11 +28,13 @@ import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import org.mozilla.gecko.GeckoView;
+import org.mozilla.gecko.GeckoSession.ProgressListener.SecurityInformation;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.SiteIdentity;
 import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.toolbar.SecurityModeUtil;
-import org.mozilla.gecko.toolbar.SiteIdentityPopup;
+import org.mozilla.gecko.toolbar.CustomTabsSecurityPopup;
 import org.mozilla.gecko.util.ColorUtil;
 
 /**
@@ -47,7 +48,7 @@ public class ActionBarPresenter {
     private static final long CUSTOM_VIEW_UPDATE_DELAY = 1000;
 
     private final ActionBar mActionBar;
-    private final SiteIdentityPopup mIdentityPopup;
+    private final CustomTabsSecurityPopup mIdentityPopup;
     private final ImageButton mIconView;
     private final TextView mTitleView;
     private final TextView mUrlView;
@@ -58,7 +59,8 @@ public class ActionBarPresenter {
     @ColorInt
     private int mTextPrimaryColor = DEFAULT_TEXT_PRIMARY_COLOR;
 
-    ActionBarPresenter(@NonNull final ActionBar actionBar) {
+    ActionBarPresenter(@NonNull final ActionBar actionBar, @ColorInt final int textColor) {
+        mTextPrimaryColor = textColor;
         mActionBar = actionBar;
         mActionBar.setDisplayShowCustomEnabled(true);
         mActionBar.setDisplayShowTitleEnabled(false);
@@ -69,9 +71,10 @@ public class ActionBarPresenter {
         mTitleView = (TextView) customView.findViewById(R.id.custom_tabs_action_bar_title);
         mUrlView = (TextView) customView.findViewById(R.id.custom_tabs_action_bar_url);
 
-        onThemeChanged(mActionBar.getThemedContext().getTheme());
+        mTitleView.setTextColor(mTextPrimaryColor);
+        mUrlView.setTextColor(mTextPrimaryColor);
 
-        mIdentityPopup = new SiteIdentityPopup(mActionBar.getThemedContext());
+        mIdentityPopup = new CustomTabsSecurityPopup(mActionBar.getThemedContext());
         mIdentityPopup.setAnchor(customView);
         mIconView.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -89,25 +92,24 @@ public class ActionBarPresenter {
      * @param url Url String to display
      */
     public void displayUrlOnly(@NonNull final String url) {
-        updateCustomView(null, null, url);
+        updateCustomView(null, url, /* security */ null);
     }
 
     /**
-     * Update appearance of CustomView of ActionBar.
+     * Update appearance of CustomView of ActionBar
      *
-     * @param tab a Tab instance of current web page to provide information to render ActionBar.
+     * @param title          Title for current website. Could be null if don't want to show title.
+     * @param url            URL for current website. At least Custom will show this url.
+     * @param security       A SecurityInformation object giving the current security information
      */
-    public void update(@NonNull final Tab tab) {
-        final String title = tab.getTitle();
-        final String url = tab.getBaseDomain();
-
+    public void update(final String title, final String url, final SecurityInformation security) {
         // Do not update CustomView immediately. If this method be invoked rapidly several times,
         // only apply last one.
         mHandler.removeCallbacks(mUpdateAction);
         mUpdateAction = new Runnable() {
             @Override
             public void run() {
-                updateCustomView(tab.getSiteIdentity(), title, url);
+                updateCustomView(title, url, security);
             }
         };
         mHandler.postDelayed(mUpdateAction, CUSTOM_VIEW_UPDATE_DELAY);
@@ -137,9 +139,12 @@ public class ActionBarPresenter {
         btn.setScaleType(ImageView.ScaleType.FIT_CENTER);
 
         if (tint) {
-            DrawableCompat.setTint(icon, mTextPrimaryColor);
+            Drawable wrapped = DrawableCompat.wrap(icon);
+            DrawableCompat.setTint(wrapped, mTextPrimaryColor);
+            btn.setImageDrawable(wrapped);
+        } else {
+            btn.setImageDrawable(icon);
         }
-        btn.setImageDrawable(icon);
 
         // menu id does not matter here. We can directly bind callback to the returned-view.
         final MenuItem item = menu.add(Menu.NONE, -1, Menu.NONE, "");
@@ -179,36 +184,49 @@ public class ActionBarPresenter {
 
     private void initIndicator() {
         mActionBar.setDisplayHomeAsUpEnabled(true);
-        final Drawable icon = mActionBar.getThemedContext().getDrawable(R.drawable.ic_close_light);
-        DrawableCompat.setTint(icon, mTextPrimaryColor);
-        mActionBar.setHomeAsUpIndicator(icon);
+
+        @SuppressWarnings("deprecation")
+        final Drawable icon = mActionBar.getThemedContext()
+                .getResources()
+                .getDrawable(R.drawable.ic_close_light);
+
+        Drawable wrapped = DrawableCompat.wrap(icon);
+        DrawableCompat.setTint(wrapped, mTextPrimaryColor);
+        mActionBar.setHomeAsUpIndicator(wrapped);
     }
 
     /**
      * To update appearance of CustomView of ActionBar, includes its icon, title and url text.
      *
-     * @param identity SiteIdentity for current website. Could be null if don't want to show icon.
      * @param title    Title for current website. Could be null if don't want to show title.
      * @param url      URL for current website. At least Custom will show this url.
+     * @param security A SecurityInformation object giving the current security information
      */
     @UiThread
-    private void updateCustomView(@Nullable SiteIdentity identity,
-                                  @Nullable String title,
-                                  @NonNull String url) {
-        // update site-info icon
-        if (identity == null) {
+    private void updateCustomView(final String title, final String url, final SecurityInformation security) {
+        if (security == null) {
             mIconView.setVisibility(View.INVISIBLE);
         } else {
-            final SecurityModeUtil.Mode mode = SecurityModeUtil.resolve(identity);
-            mIconView.setVisibility(View.VISIBLE);
-            mIconView.setImageLevel(mode.ordinal());
-            mIdentityPopup.setSiteIdentity(identity);
+            SecurityModeUtil.IconType icon;
+            if (SecurityInformation.SECURITY_MODE_UNKNOWN == security.securityMode) {
+                icon = SecurityModeUtil.IconType.UNKNOWN;
+            } else {
+                icon = SecurityModeUtil.IconType.LOCK_SECURE;
+            }
 
-            if (mode == SecurityModeUtil.Mode.LOCK_SECURE) {
-                // Lock-Secure is special case. Keep its original green color.
+            if (SecurityInformation.CONTENT_LOADED == security.mixedModePassive) {
+                icon = SecurityModeUtil.IconType.WARNING;
+            }
+
+            mIconView.setVisibility(View.VISIBLE);
+            mIconView.setImageLevel(icon.getImageLevel());
+            mIdentityPopup.setSecurityInformation(security);
+
+            if (icon == SecurityModeUtil.IconType.LOCK_SECURE) {
+                // Lock-Secure is a special case. Keep its original green color.
                 DrawableCompat.setTintList(mIconView.getDrawable(), null);
             } else {
-                // Icon use same color as TextView.
+                // Icon uses same color as TextView.
                 DrawableCompat.setTint(mIconView.getDrawable(), mTextPrimaryColor);
             }
         }
@@ -223,14 +241,5 @@ public class ActionBarPresenter {
             mUrlView.setText(url);
             mUrlView.setVisibility(View.VISIBLE);
         }
-    }
-
-    private void onThemeChanged(@NonNull final Resources.Theme currentTheme) {
-        // Theme might be light or dark. To get text color for custom-view.
-        final TypedArray themeArray = currentTheme.obtainStyledAttributes(
-                new int[]{android.R.attr.textColorPrimary});
-
-        mTextPrimaryColor = themeArray.getColor(0, DEFAULT_TEXT_PRIMARY_COLOR);
-        themeArray.recycle();
     }
 }

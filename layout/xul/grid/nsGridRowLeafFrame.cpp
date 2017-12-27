@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -41,11 +42,11 @@ nsGridRowLeafFrame::GetXULBorderAndPadding(nsMargin& aBorderAndPadding)
   nsIGridPart* part = nsGrid::GetPartFromBox(this);
   if (!part)
     return rv;
-    
+
   int32_t index = 0;
   nsGrid* grid = part->GetGrid(this, &index);
 
-  if (!grid) 
+  if (!grid)
     return rv;
 
   bool isHorizontal = IsXULHorizontal();
@@ -58,7 +59,7 @@ nsGridRowLeafFrame::GetXULBorderAndPadding(nsMargin& aBorderAndPadding)
 
   // only the first and last rows can be affected.
   if (firstRow && firstRow->GetBox() == this) {
-    
+
     nscoord top = 0;
     nscoord bottom = 0;
     grid->GetRowOffsets(firstIndex, top, bottom, isHorizontal);
@@ -69,11 +70,11 @@ nsGridRowLeafFrame::GetXULBorderAndPadding(nsMargin& aBorderAndPadding)
     } else {
       if (top > aBorderAndPadding.left)
         aBorderAndPadding.left = top;
-    } 
+    }
   }
 
   if (lastRow && lastRow->GetBox() == this) {
-    
+
     nscoord top = 0;
     nscoord bottom = 0;
     grid->GetRowOffsets(lastIndex, top, bottom, isHorizontal);
@@ -85,9 +86,9 @@ nsGridRowLeafFrame::GetXULBorderAndPadding(nsMargin& aBorderAndPadding)
       if (bottom > aBorderAndPadding.right)
         aBorderAndPadding.right = bottom;
     }
-    
-  }  
-  
+
+  }
+
   return rv;
 }
 

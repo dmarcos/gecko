@@ -119,7 +119,7 @@ ProxyAccessible::IsSearchbox() const
   return retVal;
 }
 
-nsIAtom*
+nsAtom*
 ProxyAccessible::LandmarkRole() const
 {
   nsString landmark;
@@ -127,7 +127,7 @@ ProxyAccessible::LandmarkRole() const
   return NS_GetStaticAtom(landmark);
 }
 
-nsIAtom*
+nsAtom*
 ProxyAccessible::ARIARoleAtom() const
 {
   nsString role;
@@ -839,7 +839,7 @@ ProxyAccessible::IsItemSelected(uint32_t aIndex)
   Unused << mDoc->SendIsItemSelected(mID, aIndex, &selected);
   return selected;
 }
- 
+
 bool
 ProxyAccessible::AddItemToSelection(uint32_t aIndex)
 {

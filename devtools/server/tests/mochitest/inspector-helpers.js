@@ -7,12 +7,14 @@
 var Cu = Components.utils;
 
 const {require} = Cu.import("resource://devtools/shared/Loader.jsm", {});
-const {DebuggerClient} = require("devtools/shared/client/main");
+const {DebuggerClient} = require("devtools/shared/client/debugger-client");
 const {DebuggerServer} = require("devtools/server/main");
 const { Task } = require("devtools/shared/task");
 
 const Services = require("Services");
-const promise = require("promise");
+// promise is still used in tests using this helper
+const promise = require("promise"); // eslint-disable-line no-unused-vars
+const defer = require("devtools/shared/defer");
 const {_documentWalker} = require("devtools/server/actors/inspector");
 
 // Always log packets when running tests.
@@ -23,7 +25,7 @@ SimpleTest.registerCleanupFunction(function () {
 
 if (!DebuggerServer.initialized) {
   DebuggerServer.init();
-  DebuggerServer.addBrowserActors();
+  DebuggerServer.registerAllActors();
   SimpleTest.registerCleanupFunction(function () {
     DebuggerServer.destroy();
   });
@@ -89,7 +91,7 @@ function attachURL(url, callback) {
 }
 
 function promiseOnce(target, event) {
-  let deferred = promise.defer();
+  let deferred = defer();
   target.on(event, (...args) => {
     if (args.length === 1) {
       deferred.resolve(args[0]);
@@ -127,7 +129,7 @@ function serverOwnershipSubtree(walker, node) {
 }
 
 function serverOwnershipTree(walker) {
-  let serverWalker = DebuggerServer._searchAllConnectionsForActor(walker.actorID);
+  let serverWalker = DebuggerServer.searchAllConnectionsForActor(walker.actorID);
 
   return {
     root: serverOwnershipSubtree(serverWalker, serverWalker.rootDoc),
@@ -173,11 +175,11 @@ function assertOwnershipTrees(walker) {
 
 // Verify that an actorID is inaccessible both from the client library and the server.
 function checkMissing(client, actorID) {
-  let deferred = promise.defer();
+  let deferred = defer();
   let front = client.getActor(actorID);
   ok(!front, "Front shouldn't be accessible from the client for actorID: " + actorID);
 
-  deferred = promise.defer();
+  deferred = defer();
   client.request({
     to: actorID,
     type: "request",
@@ -190,11 +192,11 @@ function checkMissing(client, actorID) {
 
 // Verify that an actorID is accessible both from the client library and the server.
 function checkAvailable(client, actorID) {
-  let deferred = promise.defer();
+  let deferred = defer();
   let front = client.getActor(actorID);
   ok(front, "Front should be accessible from the client for actorID: " + actorID);
 
-  deferred = promise.defer();
+  deferred = defer();
   client.request({
     to: actorID,
     type: "garbageAvailableTest",
@@ -207,7 +209,7 @@ function checkAvailable(client, actorID) {
 }
 
 function promiseDone(currentPromise) {
-  currentPromise.then(null, err => {
+  currentPromise.catch(err => {
     ok(false, "Promise failed: " + err);
     if (err.stack) {
       dump(err.stack);
@@ -277,7 +279,7 @@ function assertChildList(mutations) {
 // Load mutations aren't predictable, so keep accumulating mutations until
 // the one we're looking for shows up.
 function waitForMutation(walker, test, mutations = []) {
-  let deferred = promise.defer();
+  let deferred = defer();
   for (let change of mutations) {
     if (test(change)) {
       deferred.resolve(mutations);
@@ -299,7 +301,7 @@ function addTest(test) {
 }
 
 function addAsyncTest(generator) {
-  _tests.push(() => Task.spawn(generator).then(null, ok.bind(null, false)));
+  _tests.push(() => Task.spawn(generator).catch(ok.bind(null, false)));
 }
 
 function runNextTest() {

@@ -7,13 +7,27 @@
  * Tests if requests render correct information in the menu UI.
  */
 
+// The following intermittent rejections should not be left uncaught. This test
+// has been whitelisted until the issue is fixed.
+//
+// NOTE: Whitelisting a class of rejections should be limited. Normally you
+//       should use "expectUncaughtRejection" to flag individual failures.
+Cu.import("resource://testing-common/PromiseTestUtils.jsm", this);
+PromiseTestUtils.whitelistRejectionsGlobally(/cookies is undefined/);
+PromiseTestUtils.whitelistRejectionsGlobally(/requestItem is undefined/);
+
 function test() {
+  // Disable tcp fast open, because it is setting a response header indicator
+  // (bug 1352274). TCP Fast Open is not present on all platforms therefore the
+  // number of response headers will vary depending on the platform.
+  Services.prefs.setBoolPref("network.tcp.tcp_fastopen_enable", false);
+
   let { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
 
-  initNetMonitor(SIMPLE_SJS).then(({ tab, monitor }) => {
+  initNetMonitor(SIMPLE_SJS).then(async ({ tab, monitor }) => {
     info("Starting test... ");
 
-    let { document, gStore, windowRequire } = monitor.panelWin;
+    let { document, store, windowRequire, connector } = monitor.panelWin;
     let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
     let { EVENTS } = windowRequire("devtools/client/netmonitor/src/constants");
     let {
@@ -22,21 +36,28 @@ function test() {
       getSortedRequests,
     } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-    gStore.dispatch(Actions.batchEnable(false));
+    store.dispatch(Actions.batchEnable(false));
 
-    waitForNetworkEvents(monitor, 1)
-      .then(() => teardown(monitor))
-      .then(finish);
+    let promiseList = [];
+    promiseList.push(waitForNetworkEvents(monitor, 1));
 
-    monitor.panelWin.once(EVENTS.NETWORK_EVENT, () => {
-      is(getSelectedRequest(gStore.getState()), null,
+    function expectEvent(evt, cb) {
+      promiseList.push(new Promise((resolve, reject) => {
+        monitor.panelWin.once(evt, _ => {
+          cb().then(resolve, reject);
+        });
+      }));
+    }
+
+    expectEvent(EVENTS.NETWORK_EVENT, async () => {
+      is(getSelectedRequest(store.getState()), null,
         "There shouldn't be any selected item in the requests menu.");
-      is(gStore.getState().requests.requests.size, 1,
+      is(store.getState().requests.requests.size, 1,
         "The requests menu should not be empty after the first request.");
       is(!!document.querySelector(".network-details-panel"), false,
         "The network details panel should still be hidden after first request.");
 
-      let requestItem = getSortedRequests(gStore.getState()).get(0);
+      let requestItem = getSortedRequests(store.getState()).get(0);
 
       is(typeof requestItem.id, "string",
         "The attached request id is incorrect.");
@@ -84,15 +105,21 @@ function test() {
 
       verifyRequestItemTarget(
         document,
-        getDisplayedRequests(gStore.getState()),
+        getDisplayedRequests(store.getState()),
         requestItem,
         "GET",
         SIMPLE_SJS
       );
     });
 
-    monitor.panelWin.once(EVENTS.RECEIVED_REQUEST_HEADERS, () => {
-      let requestItem = getSortedRequests(gStore.getState()).get(0);
+    expectEvent(EVENTS.RECEIVED_REQUEST_HEADERS, async () => {
+      await waitUntil(() => {
+        let requestItem = getSortedRequests(store.getState()).get(0);
+        return requestItem && requestItem.requestHeaders;
+      });
+
+      let requestItem = getSortedRequests(store.getState()).get(0);
+
       ok(requestItem.requestHeaders,
         "There should be a requestHeaders data available.");
       is(requestItem.requestHeaders.headers.length, 10,
@@ -104,24 +131,29 @@ function test() {
 
       verifyRequestItemTarget(
         document,
-        getDisplayedRequests(gStore.getState()),
+        getDisplayedRequests(store.getState()),
         requestItem,
         "GET",
         SIMPLE_SJS
       );
     });
 
-    monitor.panelWin.once(EVENTS.RECEIVED_REQUEST_COOKIES, () => {
-      let requestItem = getSortedRequests(gStore.getState()).get(0);
+    expectEvent(EVENTS.RECEIVED_REQUEST_COOKIES, async () => {
+      await waitUntil(() => {
+        let requestItem = getSortedRequests(store.getState()).get(0);
+        return requestItem && requestItem.requestCookies;
+      });
+
+      let requestItem = getSortedRequests(store.getState()).get(0);
 
       ok(requestItem.requestCookies,
         "There should be a requestCookies data available.");
-      is(requestItem.requestCookies.cookies.length, 2,
+      is(requestItem.requestCookies.length, 2,
         "The requestCookies data has an incorrect |cookies| property.");
 
       verifyRequestItemTarget(
         document,
-        getDisplayedRequests(gStore.getState()),
+        getDisplayedRequests(store.getState()),
         requestItem,
         "GET",
         SIMPLE_SJS
@@ -132,8 +164,13 @@ function test() {
       ok(false, "Trap listener: this request doesn't have any post data.");
     });
 
-    monitor.panelWin.once(EVENTS.RECEIVED_RESPONSE_HEADERS, () => {
-      let requestItem = getSortedRequests(gStore.getState()).get(0);
+    expectEvent(EVENTS.RECEIVED_RESPONSE_HEADERS, async () => {
+      await waitUntil(() => {
+        let requestItem = getSortedRequests(store.getState()).get(0);
+        return requestItem && requestItem.responseHeaders;
+      });
+
+      let requestItem = getSortedRequests(store.getState()).get(0);
 
       ok(requestItem.responseHeaders,
         "There should be a responseHeaders data available.");
@@ -144,32 +181,46 @@ function test() {
 
       verifyRequestItemTarget(
         document,
-        getDisplayedRequests(gStore.getState()),
+        getDisplayedRequests(store.getState()),
         requestItem,
         "GET",
         SIMPLE_SJS
       );
     });
 
-    monitor.panelWin.once(EVENTS.RECEIVED_RESPONSE_COOKIES, () => {
-      let requestItem = getSortedRequests(gStore.getState()).get(0);
+    expectEvent(EVENTS.RECEIVED_RESPONSE_COOKIES, async () => {
+      await waitUntil(() => {
+        let requestItem = getSortedRequests(store.getState()).get(0);
+        return requestItem && requestItem.responseCookies;
+      });
+
+      let requestItem = getSortedRequests(store.getState()).get(0);
 
       ok(requestItem.responseCookies,
         "There should be a responseCookies data available.");
-      is(requestItem.responseCookies.cookies.length, 2,
+      is(requestItem.responseCookies.length, 2,
         "The responseCookies data has an incorrect |cookies| property.");
 
       verifyRequestItemTarget(
         document,
-        getDisplayedRequests(gStore.getState()),
+        getDisplayedRequests(store.getState()),
         requestItem,
         "GET",
         SIMPLE_SJS
       );
     });
 
-    monitor.panelWin.once(EVENTS.STARTED_RECEIVING_RESPONSE, () => {
-      let requestItem = getSortedRequests(gStore.getState()).get(0);
+    expectEvent(EVENTS.STARTED_RECEIVING_RESPONSE, async () => {
+      await waitUntil(() => {
+        let requestItem = getSortedRequests(store.getState()).get(0);
+        return requestItem &&
+               requestItem.httpVersion &&
+               requestItem.status &&
+               requestItem.statusText &&
+               requestItem.headersSize;
+      });
+
+      let requestItem = getSortedRequests(store.getState()).get(0);
 
       is(requestItem.httpVersion, "HTTP/1.1",
         "The httpVersion data has an incorrect value.");
@@ -180,9 +231,15 @@ function test() {
       is(requestItem.headersSize, 330,
         "The headersSize data has an incorrect value.");
 
+      let requestListItem = document.querySelector(".request-list-item");
+      requestListItem.scrollIntoView();
+      let requestsListStatus = requestListItem.querySelector(".requests-list-status");
+      EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+      await waitUntil(() => requestsListStatus.title);
+
       verifyRequestItemTarget(
         document,
-        getDisplayedRequests(gStore.getState()),
+        getDisplayedRequests(store.getState()),
         requestItem,
         "GET",
         SIMPLE_SJS,
@@ -193,10 +250,18 @@ function test() {
       );
     });
 
-    monitor.panelWin.once(EVENTS.UPDATING_RESPONSE_CONTENT, () => {
-      let requestItem = getSortedRequests(gStore.getState()).get(0);
+    expectEvent(EVENTS.PAYLOAD_READY, async () => {
+      await waitUntil(() => {
+        let requestItem = getSortedRequests(store.getState()).get(0);
+        return requestItem &&
+               requestItem.transferredSize &&
+               requestItem.contentSize &&
+               requestItem.mimeType;
+      });
 
-      is(requestItem.transferredSize, "12",
+      let requestItem = getSortedRequests(store.getState()).get(0);
+
+      is(requestItem.transferredSize, "342",
         "The transferredSize data has an incorrect value.");
       is(requestItem.contentSize, "12",
         "The contentSize data has an incorrect value.");
@@ -205,54 +270,26 @@ function test() {
 
       verifyRequestItemTarget(
         document,
-        getDisplayedRequests(gStore.getState()),
+        getDisplayedRequests(store.getState()),
         requestItem,
         "GET",
         SIMPLE_SJS,
         {
           type: "plain",
           fullMimeType: "text/plain; charset=utf-8",
-          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 12),
+          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 342),
           size: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 12),
         }
       );
     });
 
-    monitor.panelWin.once(EVENTS.RECEIVED_RESPONSE_CONTENT, () => {
-      let requestItem = getSortedRequests(gStore.getState()).get(0);
+    expectEvent(EVENTS.UPDATING_EVENT_TIMINGS, async () => {
+      await waitUntil(() => {
+        let requestItem = getSortedRequests(store.getState()).get(0);
+        return requestItem && requestItem.eventTimings;
+      });
 
-      ok(requestItem.responseContent,
-        "There should be a responseContent data available.");
-      // eslint-disable-next-line mozilla/no-cpows-in-tests
-      is(requestItem.responseContent.content.mimeType,
-        "text/plain; charset=utf-8",
-        "The responseContent data has an incorrect |content.mimeType| property.");
-      // eslint-disable-next-line mozilla/no-cpows-in-tests
-      is(requestItem.responseContent.content.text,
-        "Hello world!",
-        "The responseContent data has an incorrect |content.text| property.");
-      // eslint-disable-next-line mozilla/no-cpows-in-tests
-      is(requestItem.responseContent.content.size,
-        12,
-        "The responseContent data has an incorrect |content.size| property.");
-
-      verifyRequestItemTarget(
-        document,
-        getDisplayedRequests(gStore.getState()),
-        requestItem,
-        "GET",
-        SIMPLE_SJS,
-        {
-          type: "plain",
-          fullMimeType: "text/plain; charset=utf-8",
-          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 12),
-          size: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 12),
-        }
-      );
-    });
-
-    monitor.panelWin.once(EVENTS.UPDATING_EVENT_TIMINGS, () => {
-      let requestItem = getSortedRequests(gStore.getState()).get(0);
+      let requestItem = getSortedRequests(store.getState()).get(0);
 
       is(typeof requestItem.totalTime, "number",
         "The attached totalTime is incorrect.");
@@ -261,7 +298,7 @@ function test() {
 
       verifyRequestItemTarget(
         document,
-        getDisplayedRequests(gStore.getState()),
+        getDisplayedRequests(store.getState()),
         requestItem,
         "GET",
         SIMPLE_SJS,
@@ -271,8 +308,13 @@ function test() {
       );
     });
 
-    monitor.panelWin.once(EVENTS.RECEIVED_EVENT_TIMINGS, () => {
-      let requestItem = getSortedRequests(gStore.getState()).get(0);
+    expectEvent(EVENTS.RECEIVED_EVENT_TIMINGS, async () => {
+      await waitUntil(() => {
+        let requestItem = getSortedRequests(store.getState()).get(0);
+        return requestItem && requestItem.eventTimings;
+      });
+
+      let requestItem = getSortedRequests(store.getState()).get(0);
 
       ok(requestItem.eventTimings,
         "There should be a eventTimings data available.");
@@ -280,6 +322,8 @@ function test() {
         "The eventTimings data has an incorrect |timings.blocked| property.");
       is(typeof requestItem.eventTimings.timings.dns, "number",
         "The eventTimings data has an incorrect |timings.dns| property.");
+      is(typeof requestItem.eventTimings.timings.ssl, "number",
+        "The eventTimings data has an incorrect |timings.ssl| property.");
       is(typeof requestItem.eventTimings.timings.connect, "number",
         "The eventTimings data has an incorrect |timings.connect| property.");
       is(typeof requestItem.eventTimings.timings.send, "number",
@@ -293,7 +337,7 @@ function test() {
 
       verifyRequestItemTarget(
         document,
-        getDisplayedRequests(gStore.getState()),
+        getDisplayedRequests(store.getState()),
         requestItem,
         "GET",
         SIMPLE_SJS,
@@ -303,6 +347,21 @@ function test() {
       );
     });
 
+    let wait = waitForNetworkEvents(monitor, 1);
     tab.linkedBrowser.reload();
+    await wait;
+
+    let requestItem = getSortedRequests(store.getState()).get(0);
+
+    if (!requestItem.requestHeaders) {
+      connector.requestData(requestItem.id, "requestHeaders");
+    }
+    if (!requestItem.responseHeaders) {
+      connector.requestData(requestItem.id, "responseHeaders");
+    }
+
+    await Promise.all(promiseList);
+    await teardown(monitor);
+    finish();
   });
 }

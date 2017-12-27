@@ -9,7 +9,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <cstdlib>
-#include <pthread.h>
+#include <unistd.h>
 
 #include "APKOpen.h"
 
@@ -104,7 +104,7 @@ public:
     };
 
     static bool IsJavaUiThread() {
-        return pthread_equal(pthread_self(), ::getJavaUiThread());
+        return mozilla::jni::GetUIThreadId() == gettid();
     }
 
     static void ConstructBridge();
@@ -175,16 +175,6 @@ public:
     bool PumpMessageLoop();
 
     // Utility methods.
-    static jstring NewJavaString(JNIEnv* env, const char16_t* string, uint32_t len);
-    static jstring NewJavaString(JNIEnv* env, const nsAString& string);
-    static jstring NewJavaString(JNIEnv* env, const char* string);
-    static jstring NewJavaString(JNIEnv* env, const nsACString& string);
-
-    static jstring NewJavaString(AutoLocalJNIFrame* frame, const char16_t* string, uint32_t len);
-    static jstring NewJavaString(AutoLocalJNIFrame* frame, const nsAString& string);
-    static jstring NewJavaString(AutoLocalJNIFrame* frame, const char* string);
-    static jstring NewJavaString(AutoLocalJNIFrame* frame, const nsACString& string);
-
     static jfieldID GetFieldID(JNIEnv* env, jclass jClass, const char* fieldName, const char* fieldType);
     static jfieldID GetStaticFieldID(JNIEnv* env, jclass jClass, const char* fieldName, const char* fieldType);
     static jmethodID GetMethodID(JNIEnv* env, jclass jClass, const char* methodName, const char* methodType);
@@ -224,15 +214,6 @@ protected:
     jni::Object::GlobalRef mMessageQueue;
     jfieldID mMessageQueueMessages;
     jmethodID mMessageQueueNext;
-
-private:
-    class DelayedTask;
-    nsTArray<DelayedTask> mUiTaskQueue;
-    mozilla::Mutex mUiTaskQueueLock;
-
-public:
-    void PostTaskToUiThread(already_AddRefed<nsIRunnable> aTask, int aDelayMs);
-    int64_t RunDelayedUiThreadTasks();
 };
 
 class AutoJNIClass {

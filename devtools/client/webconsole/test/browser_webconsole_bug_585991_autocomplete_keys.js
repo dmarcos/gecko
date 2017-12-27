@@ -31,7 +31,7 @@ add_task(function* () {
 });
 
 var consoleOpened = Task.async(function* (hud) {
-  let deferred = promise.defer();
+  let deferred = defer();
   HUD = hud;
   info("web console opened");
 
@@ -57,8 +57,8 @@ var consoleOpened = Task.async(function* (hud) {
     // 4 values, and the following properties:
     // __defineGetter__  __defineSetter__ __lookupGetter__ __lookupSetter__
     // __proto__ hasOwnProperty isPrototypeOf propertyIsEnumerable
-    // toLocaleString toString toSource unwatch valueOf watch constructor.
-    is(popup.itemCount, 19, "popup.itemCount is correct");
+    // toLocaleString toString toSource valueOfconstructor.
+    is(popup.itemCount, 17, "popup.itemCount is correct");
 
     let sameItems = popup.getItems().reverse().map(function (e) {
       return e.label;
@@ -82,36 +82,34 @@ var consoleOpened = Task.async(function* (hud) {
         "toLocaleString",
         "toSource",
         "toString",
-        "unwatch",
         "valueOf",
-        "watch",
       ][index] === prop;
     }), "getItems returns the items we expect");
 
-    is(popup.selectedIndex, 18,
+    is(popup.selectedIndex, 16,
        "Index of the first item from bottom is selected.");
     EventUtils.synthesizeKey("VK_DOWN", {});
 
     let prefix = jsterm.getInputValue().replace(/[\S]/g, " ");
 
     is(popup.selectedIndex, 0, "index 0 is selected");
-    is(popup.selectedItem.label, "watch", "watch is selected");
-    is(completeNode.value, prefix + "watch",
-        "completeNode.value holds watch");
-
-    EventUtils.synthesizeKey("VK_DOWN", {});
-
-    is(popup.selectedIndex, 1, "index 1 is selected");
     is(popup.selectedItem.label, "valueOf", "valueOf is selected");
     is(completeNode.value, prefix + "valueOf",
         "completeNode.value holds valueOf");
 
+    EventUtils.synthesizeKey("VK_DOWN", {});
+
+    is(popup.selectedIndex, 1, "index 1 is selected");
+    is(popup.selectedItem.label, "toString", "toString is selected");
+    is(completeNode.value, prefix + "toString",
+        "completeNode.value holds toString");
+
     EventUtils.synthesizeKey("VK_UP", {});
 
     is(popup.selectedIndex, 0, "index 0 is selected");
-    is(popup.selectedItem.label, "watch", "watch is selected");
-    is(completeNode.value, prefix + "watch",
-        "completeNode.value holds watch");
+    is(popup.selectedItem.label, "valueOf", "valueOf is selected");
+    is(completeNode.value, prefix + "valueOf",
+        "completeNode.value holds valueOf");
 
     let currentSelectionIndex = popup.selectedIndex;
 
@@ -127,7 +125,7 @@ var consoleOpened = Task.async(function* (hud) {
        "Index is less after Page UP");
 
     EventUtils.synthesizeKey("VK_END", {});
-    is(popup.selectedIndex, 18, "index is last after End");
+    is(popup.selectedIndex, 16, "index is last after End");
 
     EventUtils.synthesizeKey("VK_HOME", {});
     is(popup.selectedIndex, 0, "index is first after Home");
@@ -146,12 +144,12 @@ var consoleOpened = Task.async(function* (hud) {
 });
 
 function popupHideAfterTab() {
-  let deferred = promise.defer();
+  let deferred = defer();
 
   // At this point the completion suggestion should be accepted.
   ok(!popup.isOpen, "popup is not open");
 
-  is(jsterm.getInputValue(), "window.foobarBug585991.watch",
+  is(jsterm.getInputValue(), "window.foobarBug585991.valueOf",
      "completion was successful after VK_TAB");
 
   ok(!completeNode.value, "completeNode is empty");
@@ -159,17 +157,17 @@ function popupHideAfterTab() {
   popup.once("popup-opened", function onShown() {
     ok(popup.isOpen, "popup is open");
 
-    is(popup.itemCount, 19, "popup.itemCount is correct");
+    is(popup.itemCount, 17, "popup.itemCount is correct");
 
-    is(popup.selectedIndex, 18, "First index from bottom is selected");
+    is(popup.selectedIndex, 16, "First index from bottom is selected");
     EventUtils.synthesizeKey("VK_DOWN", {});
 
     let prefix = jsterm.getInputValue().replace(/[\S]/g, " ");
 
     is(popup.selectedIndex, 0, "index 0 is selected");
-    is(popup.selectedItem.label, "watch", "watch is selected");
-    is(completeNode.value, prefix + "watch",
-        "completeNode.value holds watch");
+    is(popup.selectedItem.label, "valueOf", "valueOf is selected");
+    is(completeNode.value, prefix + "valueOf",
+        "completeNode.value holds valueOf");
 
     popup.once("popup-closed", function onHidden() {
       ok(!popup.isOpen, "popup is not open after VK_ESCAPE");
@@ -198,34 +196,34 @@ function popupHideAfterTab() {
 }
 
 function testReturnKey() {
-  let deferred = promise.defer();
+  let deferred = defer();
 
   popup.once("popup-opened", function onShown() {
     ok(popup.isOpen, "popup is open");
 
-    is(popup.itemCount, 19, "popup.itemCount is correct");
+    is(popup.itemCount, 17, "popup.itemCount is correct");
 
-    is(popup.selectedIndex, 18, "First index from bottom is selected");
+    is(popup.selectedIndex, 16, "First index from bottom is selected");
     EventUtils.synthesizeKey("VK_DOWN", {});
 
     let prefix = jsterm.getInputValue().replace(/[\S]/g, " ");
 
     is(popup.selectedIndex, 0, "index 0 is selected");
-    is(popup.selectedItem.label, "watch", "watch is selected");
-    is(completeNode.value, prefix + "watch",
-        "completeNode.value holds watch");
+    is(popup.selectedItem.label, "valueOf", "valueOf is selected");
+    is(completeNode.value, prefix + "valueOf",
+        "completeNode.value holds valueOf");
 
     EventUtils.synthesizeKey("VK_DOWN", {});
 
     is(popup.selectedIndex, 1, "index 1 is selected");
-    is(popup.selectedItem.label, "valueOf", "valueOf is selected");
-    is(completeNode.value, prefix + "valueOf",
-       "completeNode.value holds valueOf");
+    is(popup.selectedItem.label, "toString", "toString is selected");
+    is(completeNode.value, prefix + "toString",
+       "completeNode.value holds toString");
 
     popup.once("popup-closed", function onHidden() {
       ok(!popup.isOpen, "popup is not open after VK_RETURN");
 
-      is(jsterm.getInputValue(), "window.foobarBug585991.valueOf",
+      is(jsterm.getInputValue(), "window.foobarBug585991.toString",
          "completion was successful after VK_RETURN");
 
       ok(!completeNode.value, "completeNode is empty");
@@ -250,7 +248,7 @@ function testReturnKey() {
 }
 
 function* dontShowArrayNumbers() {
-  let deferred = promise.defer();
+  let deferred = defer();
 
   info("dontShowArrayNumbers");
   yield ContentTask.spawn(gBrowser.selectedBrowser, {}, function* () {
@@ -286,7 +284,7 @@ function* dontShowArrayNumbers() {
 }
 
 function testReturnWithNoSelection() {
-  let deferred = promise.defer();
+  let deferred = defer();
 
   info("test pressing return with open popup, but no selection, see bug 873250");
 
@@ -325,7 +323,7 @@ function popupHideAfterReturnWithNoSelection() {
 function testCompletionInText() {
   info("test that completion works inside text, see bug 812618");
 
-  let deferred = promise.defer();
+  let deferred = defer();
 
   popup.once("popup-opened", function onShown() {
     ok(popup.isOpen, "popup is open");

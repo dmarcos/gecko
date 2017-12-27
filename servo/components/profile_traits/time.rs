@@ -10,10 +10,10 @@ use self::std_time::precise_time_ns;
 use servo_config::opts;
 use signpost;
 
-#[derive(PartialEq, Clone, PartialOrd, Eq, Ord, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct TimerMetadata {
-    pub url:         String,
-    pub iframe:      TimerMetadataFrameType,
+    pub url: String,
+    pub iframe: TimerMetadataFrameType,
     pub incremental: TimerMetadataReflowType,
 }
 
@@ -39,7 +39,7 @@ pub enum ProfilerMsg {
 }
 
 #[repr(u32)]
-#[derive(PartialEq, Clone, Copy, PartialOrd, Eq, Ord, Deserialize, Serialize, Debug, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum ProfilerCategory {
     Compositing = 0x00,
     LayoutPerform = 0x10,
@@ -89,16 +89,21 @@ pub enum ProfilerCategory {
     ScriptEnterFullscreen = 0x77,
     ScriptExitFullscreen = 0x78,
     ScriptWebVREvent = 0x79,
+    ScriptWorkletEvent = 0x7a,
+    ScriptPerformanceEvent = 0x7b,
+    TimeToFirstPaint = 0x80,
+    TimeToFirstContentfulPaint = 0x81,
+    TimeToInteractive = 0x82,
     ApplicationHeartbeat = 0x90,
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum TimerMetadataFrameType {
     RootWindow,
     IFrame,
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum TimerMetadataReflowType {
     Incremental,
     FirstReflow,
@@ -109,7 +114,7 @@ pub fn profile<T, F>(category: ProfilerCategory,
                      profiler_chan: ProfilerChan,
                      callback: F)
                   -> T
-    where F: FnOnce() -> T
+    where F: FnOnce() -> T,
 {
     if opts::get().signpost {
         signpost::start(category as u32, &[0, 0, 0, (category as usize) >> 4]);
@@ -127,7 +132,7 @@ pub fn profile<T, F>(category: ProfilerCategory,
 
     send_profile_data(category,
                       meta,
-                      profiler_chan,
+                      &profiler_chan,
                       start_time,
                       end_time,
                       start_energy,
@@ -137,7 +142,7 @@ pub fn profile<T, F>(category: ProfilerCategory,
 
 pub fn send_profile_data(category: ProfilerCategory,
                          meta: Option<TimerMetadata>,
-                         profiler_chan: ProfilerChan,
+                         profiler_chan: &ProfilerChan,
                          start_time: u64,
                          end_time: u64,
                          start_energy: u64,

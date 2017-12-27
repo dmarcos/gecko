@@ -2,6 +2,7 @@ const {AddonManagerPrivate} = Cu.import("resource://gre/modules/AddonManager.jsm
 
 const ID_PERMS = "update_perms@tests.mozilla.org";
 const ID_LEGACY = "legacy_update@tests.mozilla.org";
+const ID_ORIGINS = "update_origins@tests.mozilla.org";
 
 function getBadgeStatus() {
   let menuButton = document.getElementById("PanelUI-menu-button");
@@ -9,22 +10,24 @@ function getBadgeStatus() {
 }
 
 // Set some prefs that apply to all the tests in this file
-add_task(function* setup() {
-  yield SpecialPowers.pushPrefEnv({set: [
+add_task(async function setup() {
+  await SpecialPowers.pushPrefEnv({set: [
     // We don't have pre-pinned certificates for the local mochitest server
     ["extensions.install.requireBuiltInCerts", false],
     ["extensions.update.requireBuiltInCerts", false],
+    // Don't require the extensions to be signed
+    ["xpinstall.signatures.required", false],
   ]});
 
   // Navigate away from the initial page so that about:addons always
   // opens in a new tab during tests
   gBrowser.selectedBrowser.loadURI("about:robots");
-  yield BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
+  await BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
 
-  registerCleanupFunction(function*() {
+  registerCleanupFunction(async function() {
     // Return to about:blank when we're done
     gBrowser.selectedBrowser.loadURI("about:blank");
-    yield BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
+    await BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
   });
 });
 
@@ -59,7 +62,7 @@ async function testNoPrompt(origUrl, id) {
   is(getBadgeStatus(), "", "Should not have addon alert badge");
 
   await PanelUI.show();
-  let addons = document.getElementById("PanelUI-footer-addons");
+  let addons = PanelUI.addonNotificationContainer;
   is(addons.children.length, 0, "Have 0 updates in the PanelUI menu");
   await PanelUI.hide();
 
@@ -81,3 +84,8 @@ add_task(() => testNoPrompt(`${BASE}/browser_webext_update_perms1.xpi`,
 // doesn't show a prompt even when the webextension uses
 // promptable required permissions.
 add_task(() => testNoPrompt(`${BASE}/browser_legacy.xpi`, ID_LEGACY));
+
+// Test that an update that narrows origin permissions is just applied without
+// showing a notification promt
+add_task(() => testNoPrompt(`${BASE}/browser_webext_update_origins1.xpi`,
+                            ID_ORIGINS));

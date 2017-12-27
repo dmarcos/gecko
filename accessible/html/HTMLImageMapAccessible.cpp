@@ -10,14 +10,13 @@
 #include "DocAccessible-inl.h"
 #include "Role.h"
 
-#include "nsIDOMHTMLCollection.h"
 #include "nsIServiceManager.h"
 #include "nsIDOMElement.h"
-#include "nsIDOMHTMLAreaElement.h"
 #include "nsIFrame.h"
 #include "nsImageFrame.h"
 #include "nsImageMap.h"
 #include "nsIURI.h"
+#include "mozilla/dom/HTMLAreaElement.h"
 
 using namespace mozilla::a11y;
 
@@ -168,7 +167,7 @@ HTMLAreaAccessible::Description(nsString& aDescription)
   aDescription.Truncate();
 
   // Still to do - follow IE's standard here
-  nsCOMPtr<nsIDOMHTMLAreaElement> area(do_QueryInterface(mContent));
+  RefPtr<HTMLAreaElement> area = HTMLAreaElement::FromContentOrNull(mContent);
   if (area)
     area->GetShape(aDescription);
 }

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -10,7 +11,7 @@
 #include <math.h>
 
 #include "DrawMode.h"
-#include "DrawResult.h"
+#include "ImgDrawResult.h"
 #include "gfx2DGlue.h"
 #include "gfxMatrix.h"
 #include "gfxPoint.h"
@@ -83,7 +84,7 @@ class SVGBBox {
   typedef mozilla::gfx::Rect Rect;
 
 public:
-  SVGBBox() 
+  SVGBBox()
     : mIsEmpty(true) {}
 
   MOZ_IMPLICIT SVGBBox(const Rect& aRect)
@@ -192,17 +193,11 @@ public:
   typedef mozilla::SVGContextPaint SVGContextPaint;
   typedef mozilla::SVGContextPaintImpl SVGContextPaintImpl;
   typedef mozilla::SVGGeometryFrame SVGGeometryFrame;
-  typedef mozilla::image::DrawResult DrawResult;
+  typedef mozilla::image::imgDrawingParams imgDrawingParams;
 
   static void Init();
 
   NS_DECLARE_FRAME_PROPERTY_DELETABLE(ObjectBoundingBoxProperty, gfxRect)
-
-  /**
-   * Gets the nearest nsSVGInnerSVGFrame or nsSVGOuterSVGFrame frame. aFrame
-   * must be an SVG frame.
-   */
-  static nsIFrame* GetNearestSVGViewport(nsIFrame *aFrame);
 
   /**
    * Returns the frame's post-filter visual overflow rect when passed the
@@ -290,11 +285,11 @@ public:
 
   /* Paint SVG frame with SVG effects - aDirtyRect is the area being
    * redrawn, in device pixel coordinates relative to the outer svg */
-  static DrawResult PaintFrameWithEffects(nsIFrame *aFrame,
-                                          gfxContext& aContext,
-                                          const gfxMatrix& aTransform,
-                                          const nsIntRect *aDirtyRect = nullptr,
-                                          uint32_t aFlags = 0);
+  static void PaintFrameWithEffects(nsIFrame *aFrame,
+                                    gfxContext& aContext,
+                                    const gfxMatrix& aTransform,
+                                    imgDrawingParams& aImgParams,
+                                    const nsIntRect *aDirtyRect = nullptr);
 
   /* Hit testing - check if point hits the clipPath of indicated
    * frame.  Returns true if no clipPath set. */
@@ -385,24 +380,40 @@ public:
    * bottom right of its bbox).
    *
    * If the bbox is empty, this will return a singular matrix.
+   *
+   * @param aFlags One or more of the BBoxFlags values defined below.
    */
   static gfxMatrix AdjustMatrixForUnits(const gfxMatrix &aMatrix,
                                         nsSVGEnum *aUnits,
-                                        nsIFrame *aFrame);
+                                        nsIFrame *aFrame,
+                                        uint32_t aFlags);
 
   enum BBoxFlags {
     eBBoxIncludeFill           = 1 << 0,
+    // Include the geometry of the fill even when the fill does not
+    // actually render (e.g. when fill="none" or fill-opacity="0")
     eBBoxIncludeFillGeometry   = 1 << 1,
     eBBoxIncludeStroke         = 1 << 2,
+    // Include the geometry of the stroke even when the stroke does not
+    // actually render (e.g. when stroke="none" or stroke-opacity="0")
     eBBoxIncludeStrokeGeometry = 1 << 3,
     eBBoxIncludeMarkers        = 1 << 4,
     eBBoxIncludeClipped        = 1 << 5,
     // Normally a getBBox call on outer-<svg> should only return the
-    // bounds of the elements children.  This flag will cause the
+    // bounds of the elements children. This flag will cause the
     // element's bounds to be returned instead.
     eUseFrameBoundsForOuterSVG = 1 << 6,
     // https://developer.mozilla.org/en-US/docs/Web/API/Element/getBoundingClientRect
     eForGetClientRects         = 1 << 7,
+    // If the given frame is an HTML element, only include the region of the
+    // given frame, instead of all continuations of it, while computing bbox if
+    // this flag is set.
+    eIncludeOnlyCurrentFrameForNonSVGElement = 1 << 8,
+    // This flag is only has an effect when the target is a <use> element.
+    // getBBox returns the bounds of the elements children in user space if
+    // this flag is set; Otherwise, getBBox returns the union bounds in
+    // the coordinate system formed by the <use> element.
+    eUseUserSpaceOfUseElement = 1 << 9,
   };
   /**
    * This function in primarily for implementing the SVG DOM function getBBox()
@@ -416,7 +427,7 @@ public:
    *   obtained.
    * @param aFlags One or more of the BBoxFlags values defined above.
    * @param aToBoundsSpace If not specified the returned rect is in aFrame's
-   *   element's "user space".  A matrix can optionally be pass to specify a
+   *   element's "user space". A matrix can optionally be pass to specify a
    *   transform from aFrame's user space to the bounds space of interest
    *   (typically this will be the ancestor nsSVGOuterSVGFrame, but it could be
    *   to any other coordinate space).
@@ -510,18 +521,19 @@ public:
   static nscolor GetFallbackOrPaintColor(nsStyleContext *aStyleContext,
                                          nsStyleSVGPaint nsStyleSVG::*aFillOrStroke);
 
-  static DrawResult MakeFillPatternFor(nsIFrame *aFrame,
-                                       gfxContext* aContext,
-                                       GeneralPattern* aOutPattern,
-                                       SVGContextPaint* aContextPaint = nullptr,
-                                       uint32_t aFlags = 0);
+  static void
+  MakeFillPatternFor(nsIFrame *aFrame,
+                     gfxContext* aContext,
+                     GeneralPattern* aOutPattern,
+                     imgDrawingParams& aImgParams,
+                     SVGContextPaint* aContextPaint = nullptr);
 
-  static DrawResult
+  static void
   MakeStrokePatternFor(nsIFrame* aFrame,
                        gfxContext* aContext,
                        GeneralPattern* aOutPattern,
-                       SVGContextPaint* aContextPaint = nullptr,
-                       uint32_t aFlags = 0);
+                       imgDrawingParams& aImgParams,
+                       SVGContextPaint* aContextPaint = nullptr);
 
   static float GetOpacity(nsStyleSVGOpacitySource aOpacityType,
                           const float& aOpacity,
@@ -537,10 +549,9 @@ public:
                               SVGContextPaint* aContextPaint = nullptr);
 
   /*
-   * Set up a cairo context for a stroked path (including any dashing that
-   * applies).
+   * Set up a context for a stroked path (including any dashing that applies).
    */
-  static void SetupCairoStrokeGeometry(nsIFrame* aFrame, gfxContext *aContext,
+  static void SetupStrokeGeometry(nsIFrame* aFrame, gfxContext *aContext,
                                        SVGContextPaint* aContextPaint = nullptr);
 
   /**
@@ -567,7 +578,7 @@ public:
    * @param aContext the thebes aContext to draw to
    * @return true if rendering succeeded
    */
-  static bool PaintSVGGlyph(Element* aElement, gfxContext* aContext);
+  static void PaintSVGGlyph(Element* aElement, gfxContext* aContext);
 
   /**
    * Get the extents of a SVG glyph.

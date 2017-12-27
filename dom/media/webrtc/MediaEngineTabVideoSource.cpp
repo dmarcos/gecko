@@ -6,6 +6,7 @@
 #include "MediaEngineTabVideoSource.h"
 
 #include "mozilla/gfx/2D.h"
+#include "mozilla/gfx/DataSurfaceHelpers.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/UniquePtrExtensions.h"
 #include "mozilla/dom/BindingDeclarations.h"
@@ -50,8 +51,9 @@ nsresult
 MediaEngineTabVideoSource::StartRunnable::Run()
 {
   mVideoSource->Draw();
-  mVideoSource->mTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
-  mVideoSource->mTimer->InitWithCallback(mVideoSource, mVideoSource->mTimePerFrame, nsITimer:: TYPE_REPEATING_SLACK);
+  NS_NewTimerWithCallback(getter_AddRefs(mVideoSource->mTimer),
+                          mVideoSource, mVideoSource->mTimePerFrame,
+                          nsITimer::TYPE_REPEATING_SLACK);
   if (mVideoSource->mTabSource) {
     mVideoSource->mTabSource->NotifyStreamStart(mVideoSource->mWindow);
   }
@@ -87,8 +89,8 @@ nsresult
 MediaEngineTabVideoSource::InitRunnable::Run()
 {
   if (mVideoSource->mWindowId != -1) {
-    nsGlobalWindow* globalWindow =
-      nsGlobalWindow::GetOuterWindowWithId(mVideoSource->mWindowId);
+    nsGlobalWindowOuter* globalWindow =
+      nsGlobalWindowOuter::GetOuterWindowWithId(mVideoSource->mWindowId);
     if (!globalWindow) {
       // We can't access the window, just send a blacked out screen.
       mVideoSource->mWindow = nullptr;
@@ -303,8 +305,8 @@ MediaEngineTabVideoSource::Draw() {
     }
   }
 
-  gfxImageFormat format = SurfaceFormat::X8R8G8B8_UINT32;
-  uint32_t stride = gfxASurface::FormatStrideForWidth(format, size.width);
+  uint32_t stride = StrideForFormatAndWidth(SurfaceFormat::X8R8G8B8_UINT32,
+                                            size.width);
 
   if (mDataSize < static_cast<size_t>(stride * size.height)) {
     mDataSize = stride * size.height;
@@ -343,8 +345,8 @@ MediaEngineTabVideoSource::Draw() {
   if (mWindow) {
     RefPtr<gfxContext> context = gfxContext::CreateOrNull(dt);
     MOZ_ASSERT(context); // already checked the draw target above
-    context->SetMatrix(context->CurrentMatrix().Scale((((float) size.width)/mViewportWidth),
-                                                      (((float) size.height)/mViewportHeight)));
+    context->SetMatrix(context->CurrentMatrix().PreScale((((float) size.width)/mViewportWidth),
+                                                         (((float) size.height)/mViewportHeight)));
 
     nscolor bgColor = NS_RGB(255, 255, 255);
     uint32_t renderDocFlags = mScrollWithPage? 0 :

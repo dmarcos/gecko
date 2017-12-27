@@ -32,7 +32,7 @@ public:
 
     txStylesheet();
     nsresult init();
-    
+
     NS_INLINE_DECL_REFCOUNTING(txStylesheet)
 
     nsresult findTemplate(const txXPathNode& aNode,
@@ -119,35 +119,35 @@ private:
 
     // List of ImportFrames
     txList mImportFrames;
-    
+
     // output format
     txOutputFormat mOutputFormat;
 
     // List of first instructions of templates. This is the owner of all
     // instructions used in templates
     txList mTemplateInstructions;
-    
+
     // Root importframe
     ImportFrame* mRootFrame;
-    
+
     // Named templates
     txExpandedNameMap<txInstruction> mNamedTemplates;
-    
+
     // Map with all decimal-formats
     txOwningExpandedNameMap<txDecimalFormat> mDecimalFormats;
 
     // Map with all named attribute sets
     txExpandedNameMap<txInstruction> mAttributeSets;
-    
+
     // Map with all global variables and parameters
     txOwningExpandedNameMap<GlobalVariable> mGlobalVariables;
-    
+
     // Map with all keys
     txOwningExpandedNameMap<txXSLKey> mKeys;
-    
+
     // Array of all txStripSpaceTests, sorted in acending order
     nsTArray<nsAutoPtr<txStripSpaceTest> > mStripSpaceTests;
-    
+
     // Default templates
     nsAutoPtr<txInstruction> mContainerTemplate;
     nsAutoPtr<txInstruction> mCharactersTemplate;
@@ -161,7 +161,7 @@ private:
  */
 class txStripSpaceTest {
 public:
-    txStripSpaceTest(nsIAtom* aPrefix, nsIAtom* aLocalName, int32_t aNSID,
+    txStripSpaceTest(nsAtom* aPrefix, nsAtom* aLocalName, int32_t aNSID,
                      bool stripSpace)
         : mNameTest(aPrefix, aLocalName, aNSID, txXPathNodeType::ELEMENT_NODE),
           mStrips(stripSpace)

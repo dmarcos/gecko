@@ -36,8 +36,9 @@ HTMLLegendElement::GetFieldSet() const
 
 bool
 HTMLLegendElement::ParseAttribute(int32_t aNamespaceID,
-                                  nsIAtom* aAttribute,
+                                  nsAtom* aAttribute,
                                   const nsAString& aValue,
+                                  nsIPrincipal* aMaybeScriptedPrincipal,
                                   nsAttrValue& aResult)
 {
   // this contains center, because IE4 does
@@ -55,11 +56,11 @@ HTMLLegendElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                              aResult);
+                                              aMaybeScriptedPrincipal, aResult);
 }
 
 nsChangeHint
-HTMLLegendElement::GetAttributeChangeHint(const nsIAtom* aAttribute,
+HTMLLegendElement::GetAttributeChangeHint(const nsAtom* aAttribute,
                                           int32_t aModType) const
 {
   nsChangeHint retval =
@@ -68,21 +69,6 @@ HTMLLegendElement::GetAttributeChangeHint(const nsIAtom* aAttribute,
     retval |= NS_STYLE_HINT_REFLOW;
   }
   return retval;
-}
-
-nsresult
-HTMLLegendElement::SetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
-                           nsIAtom* aPrefix, const nsAString& aValue,
-                           bool aNotify)
-{
-  return nsGenericHTMLElement::SetAttr(aNameSpaceID, aAttribute,
-                                       aPrefix, aValue, aNotify);
-}
-nsresult
-HTMLLegendElement::UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
-                             bool aNotify)
-{
-  return nsGenericHTMLElement::UnsetAttr(aNameSpaceID, aAttribute, aNotify);
 }
 
 nsresult

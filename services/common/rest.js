@@ -91,7 +91,7 @@ this.RESTRequest = function RESTRequest(uri) {
   this._log = Log.repository.getLogger(this._logName);
   this._log.level =
     Log.Level[Prefs.get("log.logger.rest.request")];
-}
+};
 RESTRequest.prototype = {
 
   _logName: "Services.Common.RESTRequest",
@@ -281,7 +281,7 @@ RESTRequest.prototype = {
    */
   abort: function abort() {
     if (this.status != this.SENT && this.status != this.IN_PROGRESS) {
-      throw "Can only abort a request that has been sent.";
+      throw new Error("Can only abort a request that has been sent.");
     }
 
     this.status = this.ABORTED;
@@ -297,7 +297,7 @@ RESTRequest.prototype = {
 
   dispatch: function dispatch(method, data, onComplete, onProgress) {
     if (this.status != this.NOT_SENT) {
-      throw "Request has already been sent!";
+      throw new Error("Request has already been sent!");
     }
 
     this.method = method;
@@ -523,14 +523,18 @@ RESTRequest.prototype = {
         this._converterStream = Cc["@mozilla.org/intl/converter-input-stream;1"]
                                    .createInstance(Ci.nsIConverterInputStream);
       }
-
       this._converterStream.init(stream, channel.contentCharset, 0,
                                  this._converterStream.DEFAULT_REPLACEMENT_CHARACTER);
 
       try {
-        let str = {};
-        let num = this._converterStream.readString(count, str);
-        if (num != 0) {
+        let remaining = count;
+        while (remaining > 0) {
+          let str = {};
+          let num = this._converterStream.readString(remaining, str);
+          if (!num) {
+            break;
+          }
+          remaining -= num;
           this.response.body += str.value;
         }
       } catch (ex) {
@@ -644,7 +648,7 @@ this.RESTResponse = function RESTResponse() {
   this._log = Log.repository.getLogger(this._logName);
   this._log.level =
     Log.Level[Prefs.get("log.logger.rest.response")];
-}
+};
 RESTResponse.prototype = {
 
   _logName: "Services.Common.RESTResponse",
@@ -746,7 +750,7 @@ this.TokenAuthenticatedRESTRequest =
   RESTRequest.call(this, uri);
   this.authToken = authToken;
   this.extra = extra || {};
-}
+};
 TokenAuthenticatedRESTRequest.prototype = {
   __proto__: RESTRequest.prototype,
 

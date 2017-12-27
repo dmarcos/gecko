@@ -4,11 +4,8 @@
 "use strict";
 
 const { console, ConsoleAPI } = require("resource://gre/modules/Console.jsm");
-const { ConsoleAPIListener } = require("devtools/server/actors/utils/webconsole-listeners");
+const { ConsoleAPIListener } = require("devtools/server/actors/webconsole/listeners");
 const Services = require("Services");
-
-// FIXME: This test shouldn't need to rely on low-level internals.
-const {Service} = Cu.import("resource://gre/modules/ExtensionManagement.jsm", {});
 
 var seenMessages = 0;
 var seenTypes = 0;
@@ -16,30 +13,45 @@ var seenTypes = 0;
 var callback = {
   onConsoleAPICall: function (message) {
     if (message.consoleID && message.consoleID == "addon/foo") {
-      do_check_eq(message.level, "warn");
-      do_check_eq(message.arguments[0], "Warning from foo");
+      Assert.equal(message.level, "warn");
+      Assert.equal(message.arguments[0], "Warning from foo");
       seenTypes |= 1;
     } else if (message.addonId == "bar") {
-      do_check_eq(message.level, "error");
-      do_check_eq(message.arguments[0], "Error from bar");
+      Assert.equal(message.level, "error");
+      Assert.equal(message.arguments[0], "Error from bar");
       seenTypes |= 2;
     } else {
-      do_check_eq(message.level, "log");
-      do_check_eq(message.arguments[0], "Hello from default console");
+      Assert.equal(message.level, "log");
+      Assert.equal(message.arguments[0], "Hello from default console");
       seenTypes |= 4;
     }
     seenMessages++;
   }
 };
 
+let policy;
+registerCleanupFunction(() => {
+  policy.active = false;
+});
+
 function createFakeAddonWindow({addonId} = {}) {
   const uuidGen = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
   const uuid = uuidGen.generateUUID().number.slice(1, -1);
 
-  const url = `moz-extension://${uuid}/`;
-  Service.uuidMap.set(uuid, {id: addonId});
+  if (policy) {
+    policy.active = false;
+  }
+  /* globals MatchPatternSet, WebExtensionPolicy */
+  policy = new WebExtensionPolicy({
+    id: addonId,
+    mozExtensionHostname: uuid,
+    baseURL: "file:///",
+    allowedOrigins: new MatchPatternSet([]),
+    localizeCallback() {},
+  });
+  policy.active = true;
 
-  let baseURI = Services.io.newURI(url);
+  let baseURI = Services.io.newURI(`moz-extension://${uuid}/`);
   let principal = Services.scriptSecurityManager
         .createCodebasePrincipal(baseURI, {});
   let chromeWebNav = Services.appShell.createWindowlessBrowser(true);
@@ -56,8 +68,6 @@ function createFakeAddonWindow({addonId} = {}) {
  * through to console messages.
  */
 function run_test() {
-  Service.init();
-
   // console1 Test Console.jsm messages tagged by the Addon SDK
   // are still filtered correctly.
   let console1 = new ConsoleAPI({
@@ -83,16 +93,16 @@ function run_test() {
   seenTypes = 0;
   seenMessages = 0;
   messages.forEach(callback.onConsoleAPICall);
-  do_check_eq(seenMessages, 3);
-  do_check_eq(seenTypes, 7);
+  Assert.equal(seenMessages, 3);
+  Assert.equal(seenTypes, 7);
 
   seenTypes = 0;
   seenMessages = 0;
   console.log("Hello from default console");
   console1.warn("Warning from foo");
   console2.error("Error from bar");
-  do_check_eq(seenMessages, 3);
-  do_check_eq(seenTypes, 7);
+  Assert.equal(seenMessages, 3);
+  Assert.equal(seenTypes, 7);
 
   listener.destroy();
 
@@ -103,16 +113,16 @@ function run_test() {
   seenTypes = 0;
   seenMessages = 0;
   messages.forEach(callback.onConsoleAPICall);
-  do_check_eq(seenMessages, 2);
-  do_check_eq(seenTypes, 1);
+  Assert.equal(seenMessages, 2);
+  Assert.equal(seenTypes, 1);
 
   seenTypes = 0;
   seenMessages = 0;
   console.log("Hello from default console");
   console1.warn("Warning from foo");
   console2.error("Error from bar");
-  do_check_eq(seenMessages, 1);
-  do_check_eq(seenTypes, 1);
+  Assert.equal(seenMessages, 1);
+  Assert.equal(seenTypes, 1);
 
   listener.destroy();
 
@@ -123,8 +133,8 @@ function run_test() {
   seenTypes = 0;
   seenMessages = 0;
   messages.forEach(callback.onConsoleAPICall);
-  do_check_eq(seenMessages, 3);
-  do_check_eq(seenTypes, 2);
+  Assert.equal(seenMessages, 3);
+  Assert.equal(seenTypes, 2);
 
   seenTypes = 0;
   seenMessages = 0;
@@ -132,8 +142,8 @@ function run_test() {
   console1.warn("Warning from foo");
   console2.error("Error from bar");
 
-  do_check_eq(seenMessages, 1);
-  do_check_eq(seenTypes, 2);
+  Assert.equal(seenMessages, 1);
+  Assert.equal(seenTypes, 2);
 
   listener.destroy();
 

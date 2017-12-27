@@ -17,33 +17,35 @@ function run_test() {
   let xps = Cc["@mozilla.org/weave/service;1"]
               .getService(Ci.nsISupports)
               .wrappedJSObject;
-  do_check_false(xps.enabled);
+  Assert.ok(!xps.enabled);
 
   // Test fixtures
   Service.identity.username = "johndoe";
-  do_check_true(xps.enabled);
+  Assert.ok(xps.enabled);
 
   Cu.import("resource://services-sync/service.js");
 
   _("Service is enabled.");
-  do_check_eq(Service.enabled, true);
-
-  _("Engines are registered.");
-  let engines = Service.engineManager.getAll();
-  do_check_true(Utils.deepEquals(engines.map(engine => engine.name),
-                                 ["tabs", "bookmarks", "forms", "history"]));
+  Assert.equal(Service.enabled, true);
 
   _("Observers are notified of startup");
   do_test_pending();
 
-  do_check_false(Service.status.ready);
-  do_check_false(xps.ready);
-  Observers.add("weave:service:ready", function(subject, data) {
-    do_check_true(Service.status.ready);
-    do_check_true(xps.ready);
+  Assert.ok(!Service.status.ready);
+  Assert.ok(!xps.ready);
 
-    // Clean up.
-    Svc.Prefs.resetBranch("");
-    do_test_finished();
-  });
+  Async.promiseSpinningly(promiseOneObserver("weave:service:ready"));
+
+  Assert.ok(Service.status.ready);
+  Assert.ok(xps.ready);
+
+  _("Engines are registered.");
+  let engines = Service.engineManager.getAll();
+  Assert.ok(Utils.deepEquals(engines.map(engine => engine.name),
+                             ["tabs", "bookmarks", "forms", "history"]));
+
+  // Clean up.
+  Svc.Prefs.resetBranch("");
+
+  do_test_finished();
 }

@@ -6,31 +6,93 @@
 
 const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
+Cu.import("resource://gre/modules/AppConstants.jsm", this);
 Cu.import("resource://gre/modules/AsyncShutdown.jsm", this);
 Cu.import("resource://gre/modules/KeyValueParser.jsm");
 Cu.import("resource://gre/modules/osfile.jsm", this);
-Cu.import("resource://gre/modules/Promise.jsm", this);
+Cu.import("resource://gre/modules/PromiseUtils.jsm", this);
 Cu.import("resource://gre/modules/Services.jsm", this);
-Cu.import("resource://gre/modules/Task.jsm", this);
 Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
 
+// Set to true if the application is quitting
+var gQuitting = false;
+
+// Tracks all the running instances of the minidump-analyzer
+var gRunningProcesses = new Set();
+
 /**
- * Computes the SHA256 hash of the minidump file associated with a crash
+ * Run the minidump analyzer tool to gather stack traces from the minidump. The
+ * stack traces will be stored in the .extra file under the StackTraces= entry.
  *
- * @param crashID {string} Crash ID. Likely a UUID.
+ * @param minidumpPath {string} The path to the minidump file
+ * @param allThreads {bool} Gather stack traces for all threads, not just the
+ *                   crashing thread.
+ *
+ * @returns {Promise} A promise that gets resolved once minidump analysis has
+ *          finished.
+ */
+function runMinidumpAnalyzer(minidumpPath, allThreads) {
+  return new Promise((resolve, reject) => {
+    try {
+      const binSuffix = AppConstants.platform === "win" ? ".exe" : "";
+      const exeName = "minidump-analyzer" + binSuffix;
+
+      let exe = Services.dirsvc.get("GreBinD", Ci.nsIFile);
+
+      if (AppConstants.platform === "macosx") {
+        exe.append("crashreporter.app");
+        exe.append("Contents");
+        exe.append("MacOS");
+      }
+
+      exe.append(exeName);
+
+      let args = [ minidumpPath ];
+      let process = Cc["@mozilla.org/process/util;1"]
+                      .createInstance(Ci.nsIProcess);
+      process.init(exe);
+      process.startHidden = true;
+      process.noShell = true;
+
+      if (allThreads) {
+        args.unshift("--full");
+      }
+
+      process.runAsync(args, args.length, (subject, topic, data) => {
+        switch (topic) {
+          case "process-finished":
+            gRunningProcesses.delete(process);
+            resolve();
+            break;
+          case "process-failed":
+            gRunningProcesses.delete(process);
+            reject();
+            break;
+          default:
+            reject(new Error("Unexpected topic received " + topic));
+            break;
+        }
+      });
+
+      gRunningProcesses.add(process);
+    } catch (e) {
+      Cu.reportError(e);
+    }
+  });
+}
+
+/**
+ * Computes the SHA256 hash of a minidump file
+ *
+ * @param minidumpPath {string} The path to the minidump file
  *
  * @returns {Promise} A promise that resolves to the hash value of the
- *          minidump. If the hash could not be computed then null is returned
- *          instead.
+ *          minidump.
  */
-function computeMinidumpHash(id) {
-  let cr = Cc["@mozilla.org/toolkit/crash-reporter;1"]
-             .getService(Components.interfaces.nsICrashReporter);
-
-  return Task.spawn(function* () {
+function computeMinidumpHash(minidumpPath) {
+  return (async function() {
     try {
-      let minidumpFile = cr.getMinidumpForID(id);
-      let minidumpData = yield OS.File.read(minidumpFile.path);
+      let minidumpData = await OS.File.read(minidumpPath);
       let hasher = Cc["@mozilla.org/security/hash;1"]
                      .createInstance(Ci.nsICryptoHash);
       hasher.init(hasher.SHA256);
@@ -49,34 +111,41 @@ function computeMinidumpHash(id) {
       Cu.reportError(e);
       return null;
     }
-  });
+  })();
 }
 
 /**
- * Process the .extra file associated with the crash id and return the
- * annotations it contains in an object.
+ * Process the given .extra file and return the annotations it contains in an
+ * object.
  *
- * @param crashID {string} Crash ID. Likely a UUID.
+ * @param extraPath {string} The path to the .extra file
  *
  * @return {Promise} A promise that resolves to an object holding the crash
- *         annotations, this object may be empty if no annotations were found.
+ *         annotations.
  */
-function processExtraFile(id) {
-  let cr = Cc["@mozilla.org/toolkit/crash-reporter;1"]
-             .getService(Components.interfaces.nsICrashReporter);
-
-  return Task.spawn(function* () {
+function processExtraFile(extraPath) {
+  return (async function() {
     try {
-      let extraFile = cr.getExtraFileForID(id);
       let decoder = new TextDecoder();
-      let extraData = yield OS.File.read(extraFile.path);
+      let extraData = await OS.File.read(extraPath);
+      let keyValuePairs = parseKeyValuePairs(decoder.decode(extraData));
 
-      return parseKeyValuePairs(decoder.decode(extraData));
+      // When reading from an .extra file literal '\\n' sequences are
+      // automatically unescaped to two backslashes plus a newline, so we need
+      // to re-escape them into '\\n' again so that the fields holding JSON
+      // strings are valid.
+      [ "TelemetryEnvironment", "StackTraces" ].forEach(field => {
+        if (field in keyValuePairs) {
+          keyValuePairs[field] = keyValuePairs[field].replace(/\n/g, "n");
+        }
+      });
+
+      return keyValuePairs;
     } catch (e) {
       Cu.reportError(e);
       return {};
     }
-  });
+  })();
 }
 
 /**
@@ -84,7 +153,9 @@ function processExtraFile(id) {
  *
  * It is a service because some background activity will eventually occur.
  */
-this.CrashService = function() {};
+this.CrashService = function() {
+  Services.obs.addObserver(this, "quit-application");
+};
 
 CrashService.prototype = Object.freeze({
   classID: Components.ID("{92668367-1b17-4190-86b2-1061b2179744}"),
@@ -93,7 +164,7 @@ CrashService.prototype = Object.freeze({
     Ci.nsIObserver,
   ]),
 
-  addCrash(processType, crashType, id) {
+  async addCrash(processType, crashType, id) {
     switch (processType) {
     case Ci.nsICrashService.PROCESS_TYPE_MAIN:
       processType = Services.crashmanager.PROCESS_TYPE_MAIN;
@@ -114,34 +185,50 @@ CrashService.prototype = Object.freeze({
       throw new Error("Unrecognized PROCESS_TYPE: " + processType);
     }
 
+    let allThreads = false;
+
     switch (crashType) {
     case Ci.nsICrashService.CRASH_TYPE_CRASH:
       crashType = Services.crashmanager.CRASH_TYPE_CRASH;
       break;
     case Ci.nsICrashService.CRASH_TYPE_HANG:
       crashType = Services.crashmanager.CRASH_TYPE_HANG;
+      allThreads = true;
       break;
     default:
       throw new Error("Unrecognized CRASH_TYPE: " + crashType);
     }
 
-    let blocker = Task.spawn(function* () {
-      let metadata = yield processExtraFile(id);
-      let hash = yield computeMinidumpHash(id);
+    let cr = Cc["@mozilla.org/toolkit/crash-reporter;1"]
+               .getService(Components.interfaces.nsICrashReporter);
+    let minidumpPath = cr.getMinidumpForID(id).path;
+    let extraPath = cr.getExtraFileForID(id).path;
+    let metadata = {};
+    let hash = null;
 
-      if (hash) {
-        metadata.MinidumpSha256Hash = hash;
-      }
+    if (!gQuitting) {
+      // Minidump analysis can take a long time, don't start it if the browser
+      // is already quitting.
+      await runMinidumpAnalyzer(minidumpPath, allThreads);
+    }
 
-      yield Services.crashmanager.addCrash(processType, crashType, id,
-                                           new Date(), metadata);
-    });
+    metadata = await processExtraFile(extraPath);
+    hash = await computeMinidumpHash(minidumpPath);
+
+    if (hash) {
+      metadata.MinidumpSha256Hash = hash;
+    }
+
+    let blocker = Services.crashmanager.addCrash(processType, crashType, id,
+                                                 new Date(), metadata);
 
     AsyncShutdown.profileBeforeChange.addBlocker(
       "CrashService waiting for content crash ping to be sent", blocker
     );
 
     blocker.then(AsyncShutdown.profileBeforeChange.removeBlocker(blocker));
+
+    await blocker;
   },
 
   observe(subject, topic, data) {
@@ -149,6 +236,18 @@ CrashService.prototype = Object.freeze({
       case "profile-after-change":
         // Side-effect is the singleton is instantiated.
         Services.crashmanager;
+        break;
+      case "quit-application":
+        gQuitting = true;
+        gRunningProcesses.forEach((process) => {
+          try {
+            process.kill();
+          } catch (e) {
+            // If the process has already quit then kill() fails, but since
+            // this failure is benign it is safe to silently ignore it.
+          }
+          Services.obs.notifyObservers(null, "test-minidump-analyzer-killed");
+        });
         break;
     }
   },

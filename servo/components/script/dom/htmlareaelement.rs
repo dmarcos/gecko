@@ -7,7 +7,7 @@ use dom::bindings::codegen::Bindings::DOMTokenListBinding::DOMTokenListMethods;
 use dom::bindings::codegen::Bindings::HTMLAreaElementBinding;
 use dom::bindings::codegen::Bindings::HTMLAreaElementBinding::HTMLAreaElementMethods;
 use dom::bindings::inheritance::Castable;
-use dom::bindings::js::{MutNullableJS, Root};
+use dom::bindings::root::{DomRoot, MutNullableDom};
 use dom::bindings::str::DOMString;
 use dom::document::Document;
 use dom::domtokenlist::DOMTokenList;
@@ -19,11 +19,12 @@ use dom::htmlelement::HTMLElement;
 use dom::node::{Node, document_from_node};
 use dom::virtualmethods::VirtualMethods;
 use dom_struct::dom_struct;
-use euclid::point::Point2D;
-use html5ever_atoms::LocalName;
+use euclid::Point2D;
+use html5ever::{LocalName, Prefix};
 use net_traits::ReferrerPolicy;
 use std::default::Default;
 use std::f32;
+use std::str;
 use style::attr::AttrValue;
 
 #[derive(PartialEq)]
@@ -68,7 +69,6 @@ impl Area {
         //This vector will hold all parsed coordinates
         let mut number_list = Vec::new();
         let mut array = Vec::new();
-        let ar_ref = &mut array;
 
         // Step 5: walk till end of string
         while index < size {
@@ -89,24 +89,24 @@ impl Area {
 
                 match val {
                     b',' | b';' | b' ' | b'\t' | b'\n' | 0x0C | b'\r' => break,
-                    _ => (*ar_ref).push(val),
+                    _ => array.push(val),
                 }
 
                 index += 1;
             }
 
             // The input does not consist any valid charecters
-            if (*ar_ref).is_empty() {
+            if array.is_empty() {
                 break;
             }
 
             // Convert String to float
-            match String::from_utf8((*ar_ref).clone()).unwrap().parse::<f32>() {
-                Ok(v) => number_list.push(v),
-                Err(_) => number_list.push(0.0),
+            match str::from_utf8(&array).ok().and_then(|s| s.parse::<f32>().ok()) {
+                Some(v) => number_list.push(v),
+                None => number_list.push(0.0),
             };
 
-            (*ar_ref).clear();
+            array.clear();
 
             // For rectangle and circle, stop parsing once we have three
             // and four coordinates respectively
@@ -167,7 +167,7 @@ impl Area {
         }
     }
 
-    pub fn hit_test(&self, p: Point2D<f32>) -> bool {
+    pub fn hit_test(&self, p: &Point2D<f32>) -> bool {
         match *self {
             Area::Circle { left, top, radius } => {
                 (p.x - left) * (p.x - left) +
@@ -217,11 +217,11 @@ impl Area {
 #[dom_struct]
 pub struct HTMLAreaElement {
     htmlelement: HTMLElement,
-    rel_list: MutNullableJS<DOMTokenList>,
+    rel_list: MutNullableDom<DOMTokenList>,
 }
 
 impl HTMLAreaElement {
-    fn new_inherited(local_name: LocalName, prefix: Option<DOMString>, document: &Document) -> HTMLAreaElement {
+    fn new_inherited(local_name: LocalName, prefix: Option<Prefix>, document: &Document) -> HTMLAreaElement {
         HTMLAreaElement {
             htmlelement: HTMLElement::new_inherited(local_name, prefix, document),
             rel_list: Default::default(),
@@ -230,9 +230,9 @@ impl HTMLAreaElement {
 
     #[allow(unrooted_must_root)]
     pub fn new(local_name: LocalName,
-               prefix: Option<DOMString>,
-               document: &Document) -> Root<HTMLAreaElement> {
-        Node::reflect_node(box HTMLAreaElement::new_inherited(local_name, prefix, document),
+               prefix: Option<Prefix>,
+               document: &Document) -> DomRoot<HTMLAreaElement> {
+        Node::reflect_node(Box::new(HTMLAreaElement::new_inherited(local_name, prefix, document)),
                            document,
                            HTMLAreaElementBinding::Wrap)
     }
@@ -240,7 +240,7 @@ impl HTMLAreaElement {
     pub fn get_shape_from_coords(&self) -> Option<Area> {
        let elem = self.upcast::<Element>();
        let shape = elem.get_string_attribute(&"shape".into());
-       let shp: Shape = match shape.to_lowercase().as_ref() {
+       let shp: Shape = match_ignore_ascii_case! { &shape,
            "circle" => Shape::Circle,
            "circ" => Shape::Circle,
            "rectangle" => Shape::Rectangle,
@@ -273,7 +273,7 @@ impl VirtualMethods for HTMLAreaElement {
 
 impl HTMLAreaElementMethods for HTMLAreaElement {
     // https://html.spec.whatwg.org/multipage/#dom-area-rellist
-    fn RelList(&self) -> Root<DOMTokenList> {
+    fn RelList(&self) -> DomRoot<DOMTokenList> {
         self.rel_list.or_init(|| {
             DOMTokenList::new(self.upcast(), &local_name!("rel"))
         })

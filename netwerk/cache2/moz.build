@@ -24,8 +24,13 @@ EXPORTS += [
     'CacheStorageService.h',
 ]
 
-UNIFIED_SOURCES += [
+SOURCES += [
     'AppCacheStorage.cpp',
+    'CacheStorage.cpp',
+]
+
+
+UNIFIED_SOURCES += [
     'CacheEntry.cpp',
     'CacheFile.cpp',
     'CacheFileChunk.cpp',
@@ -42,7 +47,6 @@ UNIFIED_SOURCES += [
     'CacheIOThread.cpp',
     'CacheLog.cpp',
     'CacheObserver.cpp',
-    'CacheStorage.cpp',
     'CacheStorageService.cpp',
     'OldWrappers.cpp',
 ]
@@ -54,5 +58,5 @@ LOCAL_INCLUDES += [
 
 FINAL_LIBRARY = 'xul'
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

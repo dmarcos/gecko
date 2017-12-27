@@ -17,7 +17,11 @@ namespace mozilla {
 
 class OpusParser;
 
-class OpusDataDecoder : public MediaDataDecoder
+DDLoggedTypeDeclNameAndBase(OpusDataDecoder, MediaDataDecoder);
+
+class OpusDataDecoder
+  : public MediaDataDecoder
+  , public DecoderDoctorLifeLogger<OpusDataDecoder>
 {
 public:
   explicit OpusDataDecoder(const CreateDecoderParams& aParams);
@@ -28,9 +32,9 @@ public:
   RefPtr<DecodePromise> Drain() override;
   RefPtr<FlushPromise> Flush() override;
   RefPtr<ShutdownPromise> Shutdown() override;
-  const char* GetDescriptionName() const override
+  nsCString GetDescriptionName() const override
   {
-    return "opus audio decoder";
+    return NS_LITERAL_CSTRING("opus audio decoder");
   }
 
   // Return true if mimetype is Opus

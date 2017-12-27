@@ -490,8 +490,6 @@ function String_codePointAt(pos) {
     return (first - 0xD800) * 0x400 + (second - 0xDC00) + 0x10000;
 }
 
-var collatorCache = new Record();
-
 /* ES6 20121122 draft 15.5.4.21. */
 function String_repeat(count) {
     // Steps 1-3.
@@ -559,15 +557,20 @@ function StringIteratorNext() {
     if (first >= 0xD800 && first <= 0xDBFF && index + 1 < size) {
         var second = callFunction(std_String_charCodeAt, S, index + 1);
         if (second >= 0xDC00 && second <= 0xDFFF) {
+            first = (first - 0xD800) * 0x400 + (second - 0xDC00) + 0x10000;
             charCount = 2;
         }
     }
 
     UnsafeSetReservedSlot(this, ITERATOR_SLOT_NEXT_INDEX, index + charCount);
-    result.value = callFunction(String_substring, S, index, index + charCount);
+
+    // Communicate |first|'s possible range to the compiler.
+    result.value = callFunction(std_String_fromCodePoint, null, first & 0x1fffff);
 
     return result;
 }
+
+var collatorCache = new Record();
 
 /**
  * Compare this String against that String, using the locale and collation
@@ -590,8 +593,10 @@ function String_localeCompare(that) {
     if (locales === undefined && options === undefined) {
         // This cache only optimizes for the old ES5 localeCompare without
         // locales and options.
-        if (collatorCache.collator === undefined)
+        if (!IsRuntimeDefaultLocale(collatorCache.runtimeDefaultLocale)) {
             collatorCache.collator = intl_Collator(locales, options);
+            collatorCache.runtimeDefaultLocale = RuntimeDefaultLocale();
+        }
         collator = collatorCache.collator;
     } else {
         collator = intl_Collator(locales, options);

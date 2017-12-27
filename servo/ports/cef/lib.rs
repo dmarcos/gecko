@@ -3,9 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #![allow(non_camel_case_types)]
-#![feature(box_syntax)]
 #![feature(core_intrinsics)]
-#![feature(link_args)]
 
 #[macro_use]
 extern crate log;
@@ -24,13 +22,9 @@ extern crate style_traits;
 
 extern crate net_traits;
 extern crate msg;
-extern crate webrender_traits;
+extern crate webrender_api;
 
 extern crate libc;
-
-#[cfg(target_os="macos")]
-#[link_args="-Xlinker -undefined -Xlinker dynamic_lookup"]
-extern { }
 
 #[cfg(target_os="macos")]
 extern crate cocoa;

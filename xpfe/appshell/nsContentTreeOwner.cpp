@@ -35,7 +35,9 @@
 #include "nsIMIMEInfo.h"
 #include "nsIWidget.h"
 #include "nsWindowWatcher.h"
+#include "NullPrincipal.h"
 #include "mozilla/BrowserElementParent.h"
+#include "nsIDocShellLoadInfo.h"
 
 #include "nsIDOMDocument.h"
 #include "nsIScriptObjectPrincipal.h"
@@ -80,7 +82,7 @@ private:
 //***    nsContentTreeOwner: Object Management
 //*****************************************************************************
 
-nsContentTreeOwner::nsContentTreeOwner(bool fPrimary) : mXULWindow(nullptr), 
+nsContentTreeOwner::nsContentTreeOwner(bool fPrimary) : mXULWindow(nullptr),
    mPrimary(fPrimary), mContentTitleSetting(false)
 {
   // note if this fails, QI on nsIEmbeddingSiteWindow(2) will simply fail
@@ -94,7 +96,7 @@ nsContentTreeOwner::~nsContentTreeOwner()
 
 //*****************************************************************************
 // nsContentTreeOwner::nsISupports
-//*****************************************************************************   
+//*****************************************************************************
 
 NS_IMPL_ADDREF(nsContentTreeOwner)
 NS_IMPL_RELEASE(nsContentTreeOwner)
@@ -121,7 +123,7 @@ NS_INTERFACE_MAP_END
 
 //*****************************************************************************
 // nsContentTreeOwner::nsIInterfaceRequestor
-//*****************************************************************************   
+//*****************************************************************************
 
 NS_IMETHODIMP nsContentTreeOwner::GetInterface(const nsIID& aIID, void** aSink)
 {
@@ -168,7 +170,7 @@ NS_IMETHODIMP nsContentTreeOwner::GetInterface(const nsIID& aIID, void** aSink)
 
 //*****************************************************************************
 // nsContentTreeOwner::nsIDocShellTreeOwner
-//*****************************************************************************   
+//*****************************************************************************
 
 NS_IMETHODIMP
 nsContentTreeOwner::ContentShellAdded(nsIDocShellTreeItem* aContentShell,
@@ -367,7 +369,7 @@ nsContentTreeOwner::GetHasPrimaryContent(bool* aResult)
 
 //*****************************************************************************
 // nsContentTreeOwner::nsIWebBrowserChrome3
-//*****************************************************************************   
+//*****************************************************************************
 
 NS_IMETHODIMP nsContentTreeOwner::OnBeforeLinkTraversal(const nsAString &originalTarget,
                                                         nsIURI *linkURI,
@@ -383,7 +385,7 @@ NS_IMETHODIMP nsContentTreeOwner::OnBeforeLinkTraversal(const nsAString &origina
   if (xulBrowserWindow)
     return xulBrowserWindow->OnBeforeLinkTraversal(originalTarget, linkURI,
                                                    linkNode, isAppTab, _retval);
-  
+
   _retval = originalTarget;
   return NS_OK;
 }
@@ -429,7 +431,8 @@ NS_IMETHODIMP nsContentTreeOwner::ReloadInFreshProcess(nsIDocShell* aDocShell,
 }
 
 NS_IMETHODIMP nsContentTreeOwner::StartPrerenderingDocument(nsIURI* aHref,
-                                                            nsIURI* aReferrer)
+                                                            nsIURI* aReferrer,
+                                                            nsIPrincipal* aTriggeringPrincipal)
 {
   NS_WARNING("Cannot prerender a document in the parent process");
   return NS_ERROR_FAILURE;
@@ -448,7 +451,7 @@ NS_IMETHODIMP nsContentTreeOwner::ShouldSwitchToPrerenderedDocument(nsIURI* aHre
 
 //*****************************************************************************
 // nsContentTreeOwner::nsIWebBrowserChrome2
-//*****************************************************************************   
+//*****************************************************************************
 
 NS_IMETHODIMP nsContentTreeOwner::SetStatusWithContext(uint32_t aStatusType,
                                                        const nsAString &aStatusText,
@@ -459,7 +462,7 @@ NS_IMETHODIMP nsContentTreeOwner::SetStatusWithContext(uint32_t aStatusType,
     return NS_OK;
 
   NS_ENSURE_STATE(mXULWindow);
-  
+
   nsCOMPtr<nsIXULBrowserWindow> xulBrowserWindow;
   mXULWindow->GetXULBrowserWindow(getter_AddRefs(xulBrowserWindow));
 
@@ -484,7 +487,7 @@ NS_IMETHODIMP nsContentTreeOwner::SetStatusWithContext(uint32_t aStatusType,
 
 //*****************************************************************************
 // nsContentTreeOwner::nsIWebBrowserChrome
-//*****************************************************************************   
+//*****************************************************************************
 
 NS_IMETHODIMP nsContentTreeOwner::SetStatus(uint32_t aStatusType,
                                             const char16_t* aStatus)
@@ -550,15 +553,15 @@ NS_IMETHODIMP nsContentTreeOwner::IsWindowModal(bool *_retval)
 NS_IMETHODIMP nsContentTreeOwner::ExitModalEventLoop(nsresult aStatus)
 {
    NS_ENSURE_STATE(mXULWindow);
-   return mXULWindow->ExitModalLoop(aStatus);   
+   return mXULWindow->ExitModalLoop(aStatus);
 }
 
 //*****************************************************************************
 // nsContentTreeOwner::nsIBaseWindow
-//*****************************************************************************   
+//*****************************************************************************
 
 NS_IMETHODIMP nsContentTreeOwner::InitWindow(nativeWindow aParentNativeWindow,
-   nsIWidget* parentWidget, int32_t x, int32_t y, int32_t cx, int32_t cy)   
+   nsIWidget* parentWidget, int32_t x, int32_t y, int32_t cx, int32_t cy)
 {
    // Ignore wigdet parents for now.  Don't think those are a vaild thing to call.
    NS_ENSURE_SUCCESS(SetPositionAndSize(x, y, cx, cy, 0), NS_ERROR_FAILURE);
@@ -631,7 +634,7 @@ NS_IMETHODIMP nsContentTreeOwner::GetPositionAndSize(int32_t* aX, int32_t* aY,
    int32_t* aCX, int32_t* aCY)
 {
    NS_ENSURE_STATE(mXULWindow);
-   return mXULWindow->GetPositionAndSize(aX, aY, aCX, aCY); 
+   return mXULWindow->GetPositionAndSize(aX, aY, aCX, aCY);
 }
 
 NS_IMETHODIMP nsContentTreeOwner::Repaint(bool aForce)
@@ -711,22 +714,21 @@ NS_IMETHODIMP nsContentTreeOwner::SetFocus()
    return mXULWindow->SetFocus();
 }
 
-NS_IMETHODIMP nsContentTreeOwner::GetTitle(char16_t** aTitle)
+NS_IMETHODIMP nsContentTreeOwner::GetTitle(nsAString& aTitle)
 {
-   NS_ENSURE_ARG_POINTER(aTitle);
    NS_ENSURE_STATE(mXULWindow);
 
    return mXULWindow->GetTitle(aTitle);
 }
 
-NS_IMETHODIMP nsContentTreeOwner::SetTitle(const char16_t* aTitle)
+NS_IMETHODIMP nsContentTreeOwner::SetTitle(const nsAString& aTitle)
 {
    // We only allow the title to be set from the primary content shell
   if(!mPrimary || !mContentTitleSetting)
     return NS_OK;
 
   NS_ENSURE_STATE(mXULWindow);
-  
+
   nsAutoString   title;
   nsAutoString   docTitle(aTitle);
 
@@ -808,12 +810,12 @@ NS_IMETHODIMP nsContentTreeOwner::SetTitle(const char16_t* aTitle)
     return rv.StealNSResult();
   }
 
-  return mXULWindow->SetTitle(title.get());
+  return mXULWindow->SetTitle(title);
 }
 
 //*****************************************************************************
 // nsContentTreeOwner: nsIWindowProvider
-//*****************************************************************************   
+//*****************************************************************************
 NS_IMETHODIMP
 nsContentTreeOwner::ProvideWindow(mozIDOMWindowProxy* aParent,
                                   uint32_t aChromeFlags,
@@ -824,13 +826,14 @@ nsContentTreeOwner::ProvideWindow(mozIDOMWindowProxy* aParent,
                                   const nsAString& aName,
                                   const nsACString& aFeatures,
                                   bool aForceNoOpener,
+                                  nsIDocShellLoadInfo* aLoadInfo,
                                   bool* aWindowIsNew,
                                   mozIDOMWindowProxy** aReturn)
 {
   NS_ENSURE_ARG_POINTER(aParent);
 
   auto* parent = nsPIDOMWindowOuter::From(aParent);
-  
+
   *aReturn = nullptr;
 
   if (!mXULWindow) {
@@ -876,7 +879,7 @@ nsContentTreeOwner::ProvideWindow(mozIDOMWindowProxy* aParent,
         nsCOMPtr<nsIHandlerInfo> info;
         bool found;
         exUrlServ->GetURLHandlerInfoFromOS(aURI, &found, getter_AddRefs(info));
-  
+
         if (info && found) {
           info->LaunchWithURI(aURI, nullptr);
           return NS_ERROR_ABORT;
@@ -921,14 +924,15 @@ nsContentTreeOwner::ProvideWindow(mozIDOMWindowProxy* aParent,
       flags |= nsIBrowserDOMWindow::OPEN_NO_OPENER;
     }
 
-    // Get a new rendering area from the browserDOMWin.  We don't want
-    // to be starting any loads here, so get it with a null URI.
+    // Get a new rendering area from the browserDOMWin.
+    // Since we are not loading any URI, we follow the principle of least
+    // privilege and use a nullPrincipal as the triggeringPrincipal.
     //
     // This method handles setting the opener for us, so we don't need to set it
     // ourselves.
-    return browserDOMWin->OpenURI(nullptr, aParent,
-                                  openLocation,
-                                  flags, aReturn);
+    RefPtr<NullPrincipal> nullPrincipal = NullPrincipal::Create();
+    return browserDOMWin->CreateContentWindow(aURI, aParent, openLocation,
+                                              flags, nullPrincipal, aReturn);
   }
 }
 
@@ -941,7 +945,8 @@ class nsContentTitleSettingEvent : public Runnable
 {
 public:
   nsContentTitleSettingEvent(dom::Element* dse, const nsAString& wtm)
-    : mElement(dse),
+    : Runnable("nsContentTitleSettingEvent"),
+      mElement(dse),
       mTitleDefault(wtm) {}
 
   NS_IMETHOD Run() override
@@ -1144,13 +1149,13 @@ nsSiteWindow::SetVisibility(bool aVisibility)
 }
 
 NS_IMETHODIMP
-nsSiteWindow::GetTitle(char16_t * *aTitle)
+nsSiteWindow::GetTitle(nsAString& aTitle)
 {
   return mAggregator->GetTitle(aTitle);
 }
 
 NS_IMETHODIMP
-nsSiteWindow::SetTitle(const char16_t * aTitle)
+nsSiteWindow::SetTitle(const nsAString& aTitle)
 {
   return mAggregator->SetTitle(aTitle);
 }

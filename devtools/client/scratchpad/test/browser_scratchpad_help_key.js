@@ -7,11 +7,11 @@ function test()
 {
   waitForExplicitFinish();
 
-  gBrowser.selectedTab = gBrowser.addTab();
-  content.location = "data:text/html,Test keybindings for opening Scratchpad MDN Documentation, bug 650760";
-  gBrowser.selectedBrowser.addEventListener("load", function () {
+  gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
+  gBrowser.loadURI("data:text/html,Test keybindings for opening Scratchpad MDN Documentation, bug 650760");
+  BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser).then(function () {
     openScratchpad(runTest);
-  }, {capture: true, once: true});
+  });
 }
 
 function runTest()

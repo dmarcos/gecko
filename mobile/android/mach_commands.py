@@ -23,6 +23,7 @@ from mach.decorators import (
     CommandArgument,
     CommandProvider,
     Command,
+    SubCommand,
 )
 
 
@@ -39,28 +40,283 @@ def REMOVED(cls):
 
 @CommandProvider
 class MachCommands(MachCommandBase):
-    @Command('android', category='devenv',
-        description='Run the Android package manager tool.',
-        conditions=[conditions.is_android])
-    @CommandArgument('args', nargs=argparse.REMAINDER)
-    def android(self, args):
-        # Avoid logging the command
-        self.log_manager.terminal_handler.setLevel(logging.CRITICAL)
+    def _root_url(self, artifactdir=None, objdir=None):
+        if 'TASK_ID' in os.environ and 'RUN_ID' in os.environ:
+            return 'https://queue.taskcluster.net/v1/task/{}/runs/{}/artifacts/{}'.format(os.environ['TASK_ID'], os.environ['RUN_ID'], artifactdir)
+        else:
+            return os.path.join(self.topobjdir, objdir)
 
-        return self.run_process(
-            [os.path.join(self.substs['ANDROID_TOOLS'], 'android')] + args,
-            pass_thru=True, # Allow user to run gradle interactively.
-            ensure_exit_code=False, # Don't throw on non-zero exit code.
-            cwd=mozpath.join(self.topsrcdir))
+
+    @Command('android', category='devenv',
+        description='Run Android-specific commands.',
+        conditions=[conditions.is_android])
+    def android(self):
+        pass
+
+
+    @SubCommand('android', 'assemble-app',
+        """Assemble Firefox for Android.
+        See http://firefox-source-docs.mozilla.org/build/buildsystem/toolchains.html#firefox-for-android-with-gradle""")
+    @CommandArgument('args', nargs=argparse.REMAINDER)
+    def android_assemble_app(self, args):
+        ret = self.gradle(self.substs['GRADLE_ANDROID_APP_TASKS'] + ['-x', 'lint', '--continue'] + args, verbose=True)
+
+        return ret
+
+
+    @SubCommand('android', 'test',
+        """Run Android local unit tests.
+        See https://developer.mozilla.org/en-US/docs/Mozilla/Android-specific_test_suites#android-test""")
+    @CommandArgument('args', nargs=argparse.REMAINDER)
+    def android_test(self, args):
+        ret = self.gradle(self.substs['GRADLE_ANDROID_TEST_TASKS'] + ["--continue"] + args, verbose=True)
+
+        # Findbug produces both HTML and XML reports.  Visit the
+        # XML report(s) to report errors and link to the HTML
+        # report(s) for human consumption.
+        import itertools
+        import xml.etree.ElementTree as ET
+
+        from mozpack.files import (
+            FileFinder,
+        )
+
+        root_url = self._root_url(
+            artifactdir='public/android/unittest',
+            objdir='gradle/build/mobile/android/app/reports/tests')
+
+        reports = (self.substs['GRADLE_ANDROID_APP_VARIANT_NAME'],)
+        for report in reports:
+            finder = FileFinder(os.path.join(self.topobjdir, 'gradle/build/mobile/android/app/test-results/', report))
+            for p, _ in finder.find('TEST-*.xml'):
+                f = open(os.path.join(finder.base, p), 'rt')
+                tree = ET.parse(f)
+                root = tree.getroot()
+
+                # Log reports for Tree Herder "Job Details".
+                print('TinderboxPrint: report<br/><a href="{}/{}/index.html">HTML {} report</a>, visit "Inspect Task" link for details'.format(root_url, report, report))
+
+                # And make the report display as soon as possible.
+                failed = root.findall('testcase/error') or root.findall('testcase/failure')
+                if failed:
+                    print('TEST-UNEXPECTED-FAIL | android-test | There were failing tests. See the reports at: {}/{}/index.html'.format(root_url, report))
+
+                print('SUITE-START | android-test | {} {}'.format(report, root.get('name')))
+
+                for testcase in root.findall('testcase'):
+                    name = testcase.get('name')
+                    print('TEST-START | {}'.format(name))
+
+                    # Schema cribbed from
+                    # http://llg.cubic.org/docs/junit/.  There's no
+                    # particular advantage to formatting the error, so
+                    # for now let's just output the unexpected XML
+                    # tag.
+                    error_count = 0
+                    for unexpected in itertools.chain(testcase.findall('error'),
+                                                      testcase.findall('failure')):
+                        for line in ET.tostring(unexpected).strip().splitlines():
+                            print('TEST-UNEXPECTED-FAIL | {} | {}'.format(name, line))
+                        error_count += 1
+                        ret |= 1
+
+                    # Skipped tests aren't unexpected at this time; we
+                    # disable some tests that require live remote
+                    # endpoints.
+                    for skipped in testcase.findall('skipped'):
+                        for line in ET.tostring(skipped).strip().splitlines():
+                            print('TEST-INFO | {} | {}'.format(name, line))
+
+                    if not error_count:
+                        print('TEST-PASS | {}'.format(name))
+
+                print('SUITE-END | android-test | {} {}'.format(report, root.get('name')))
+
+        return ret
+
+
+    @SubCommand('android', 'lint',
+        """Run Android lint.
+        See https://developer.mozilla.org/en-US/docs/Mozilla/Android-specific_test_suites#android-lint""")
+    @CommandArgument('args', nargs=argparse.REMAINDER)
+    def android_lint(self, args):
+        ret = self.gradle(self.substs['GRADLE_ANDROID_LINT_TASKS'] + ["--continue"] + args, verbose=True)
+
+        # Android Lint produces both HTML and XML reports.  Visit the
+        # XML report(s) to report errors and link to the HTML
+        # report(s) for human consumption.
+        import xml.etree.ElementTree as ET
+
+        root_url = self._root_url(
+            artifactdir='public/android/lint',
+            objdir='gradle/build/mobile/android/app/reports')
+
+        reports = (self.substs['GRADLE_ANDROID_APP_VARIANT_NAME'],)
+        for report in reports:
+            f = open(os.path.join(self.topobjdir, 'gradle/build/mobile/android/app/reports/lint-results-{}.xml'.format(report)), 'rt')
+            tree = ET.parse(f)
+            root = tree.getroot()
+
+            # Log reports for Tree Herder "Job Details".
+            html_report_url = '{}/lint-results-{}.html'.format(root_url, report)
+            xml_report_url = '{}/lint-results-{}.xml'.format(root_url, report)
+            print('TinderboxPrint: report<br/><a href="{}">HTML {} report</a>, visit "Inspect Task" link for details'.format(html_report_url, report))
+            print('TinderboxPrint: report<br/><a href="{}">XML {} report</a>, visit "Inspect Task" link for details'.format(xml_report_url, report))
+
+            # And make the report display as soon as possible.
+            if root.findall("issue[@severity='Error']"):
+                print('TEST-UNEXPECTED-FAIL | android-lint | Lint found errors in the project; aborting build. See the report at: {}'.format(html_report_url))
+
+            print('SUITE-START | android-lint | {}'.format(report))
+            for issue in root.findall("issue[@severity='Error']"):
+                # There's no particular advantage to formatting the
+                # error, so for now let's just output the <issue> XML
+                # tag.
+                for line in ET.tostring(issue).strip().splitlines():
+                    print('TEST-UNEXPECTED-FAIL | {}'.format(line))
+                ret |= 1
+            print('SUITE-END | android-lint | {}'.format(report))
+
+        return ret
+
+
+    @SubCommand('android', 'checkstyle',
+        """Run Android checkstyle.
+        See https://developer.mozilla.org/en-US/docs/Mozilla/Android-specific_test_suites#android-checkstyle""")
+    @CommandArgument('args', nargs=argparse.REMAINDER)
+    def android_checkstyle(self, args):
+        ret = self.gradle(self.substs['GRADLE_ANDROID_CHECKSTYLE_TASKS'] + ["--continue"] + args, verbose=True)
+
+        # Checkstyle produces both HTML and XML reports.  Visit the
+        # XML report(s) to report errors and link to the HTML
+        # report(s) for human consumption.
+        import xml.etree.ElementTree as ET
+
+        f = open(os.path.join(self.topobjdir, 'gradle/build/mobile/android/app/reports/checkstyle/checkstyle.xml'), 'rt')
+        tree = ET.parse(f)
+        root = tree.getroot()
+
+        # Now the reports, linkified.
+        root_url = self._root_url(
+            artifactdir='public/android/checkstyle',
+            objdir='gradle/build/mobile/android/app/reports/checkstyle')
+
+        # Log reports for Tree Herder "Job Details".
+        print('TinderboxPrint: report<br/><a href="{}/checkstyle.html">HTML checkstyle report</a>, visit "Inspect Task" link for details'.format(root_url))
+        print('TinderboxPrint: report<br/><a href="{}/checkstyle.xml">XML checkstyle report</a>, visit "Inspect Task" link for details'.format(root_url))
+
+        # And make the report display as soon as possible.
+        if root.findall('file/error'):
+            ret |= 1
+
+        if ret:
+            print('TEST-UNEXPECTED-FAIL | android-checkstyle | Checkstyle rule violations were found. See the report at: {}/checkstyle.html'.format(root_url))
+
+        print('SUITE-START | android-checkstyle')
+        for file in root.findall('file'):
+            name = file.get('name')
+
+            print('TEST-START | {}'.format(name))
+            error_count = 0
+            for error in file.findall('error'):
+                # There's no particular advantage to formatting the
+                # error, so for now let's just output the <error> XML
+                # tag.
+                print('TEST-UNEXPECTED-FAIL | {}'.format(name))
+                for line in ET.tostring(error).strip().splitlines():
+                    print('TEST-UNEXPECTED-FAIL | {}'.format(line))
+                error_count += 1
+
+            if not error_count:
+                print('TEST-PASS | {}'.format(name))
+        print('SUITE-END | android-checkstyle')
+
+        return ret
+
+
+    @SubCommand('android', 'findbugs',
+        """Run Android findbugs.
+        See https://developer.mozilla.org/en-US/docs/Mozilla/Android-specific_test_suites#android-findbugs""")
+    @CommandArgument('args', nargs=argparse.REMAINDER)
+    def android_findbugs(self, dryrun=False, args=[]):
+        ret = self.gradle(self.substs['GRADLE_ANDROID_FINDBUGS_TASKS'] + ["--continue"] + args, verbose=True)
+
+        # Findbug produces both HTML and XML reports.  Visit the
+        # XML report(s) to report errors and link to the HTML
+        # report(s) for human consumption.
+        import xml.etree.ElementTree as ET
+
+        root_url = self._root_url(
+            artifactdir='public/android/findbugs',
+            objdir='gradle/build/mobile/android/app/reports/findbugs')
+
+        reports = (self.substs['GRADLE_ANDROID_APP_VARIANT_NAME'],)
+        for report in reports:
+            try:
+                f = open(os.path.join(self.topobjdir, 'gradle/build/mobile/android/app/reports/findbugs', 'findbugs-{}-output.xml'.format(report)), 'rt')
+            except IOError:
+                continue
+
+            tree = ET.parse(f)
+            root = tree.getroot()
+
+            # Log reports for Tree Herder "Job Details".
+            html_report_url = '{}/findbugs-{}-output.html'.format(root_url, report)
+            xml_report_url = '{}/findbugs-{}-output.xml'.format(root_url, report)
+            print('TinderboxPrint: report<br/><a href="{}">HTML {} report</a>, visit "Inspect Task" link for details'.format(html_report_url, report))
+            print('TinderboxPrint: report<br/><a href="{}">XML {} report</a>, visit "Inspect Task" link for details'.format(xml_report_url, report))
+
+            # And make the report display as soon as possible.
+            if root.findall("./BugInstance"):
+                print('TEST-UNEXPECTED-FAIL | android-findbugs | Findbugs found issues in the project. See the report at: {}'.format(html_report_url))
+
+            print('SUITE-START | android-findbugs | {}'.format(report))
+            for error in root.findall('./BugInstance'):
+                # There's no particular advantage to formatting the
+                # error, so for now let's just output the <error> XML
+                # tag.
+                print('TEST-UNEXPECTED-FAIL | {}:{} | {}'.format(report, error.get('type'), error.find('Class').get('classname')))
+                for line in ET.tostring(error).strip().splitlines():
+                    print('TEST-UNEXPECTED-FAIL | {}:{} | {}'.format(report, error.get('type'), line))
+                ret |= 1
+            print('SUITE-END | android-findbugs | {}'.format(report))
+
+        return ret
+
+
+    @SubCommand('android', 'gradle-dependencies',
+        """Collect Android Gradle dependencies.
+        See http://firefox-source-docs.mozilla.org/build/buildsystem/toolchains.html#firefox-for-android-with-gradle""")
+    @CommandArgument('args', nargs=argparse.REMAINDER)
+    def android_gradle_dependencies(self, args):
+        # We don't want to gate producing dependency archives on clean
+        # lint or checkstyle, particularly because toolchain versions
+        # can change the outputs for those processes.
+        self.gradle(self.substs['GRADLE_ANDROID_DEPENDENCIES_TASKS'] + ["--continue"] + args, verbose=True)
+
+        return 0
+
+
+    @SubCommand('android', 'archive-geckoview',
+        """Create GeckoView archives.
+        See http://firefox-source-docs.mozilla.org/build/buildsystem/toolchains.html#firefox-for-android-with-gradle""")
+    @CommandArgument('args', nargs=argparse.REMAINDER)
+    def android_archive_geckoview(self, args):
+        ret = self.gradle(self.substs['GRADLE_ANDROID_ARCHIVE_GECKOVIEW_TASKS'] + ["--continue"] + args, verbose=True)
+
+        return ret
+
 
     @Command('gradle', category='devenv',
         description='Run gradle.',
         conditions=[conditions.is_android])
+    @CommandArgument('-v', '--verbose', action='store_true',
+        help='Verbose output for what commands the build is running.')
     @CommandArgument('args', nargs=argparse.REMAINDER)
-    def gradle(self, args):
-        # Avoid logging the command
-        self.log_manager.terminal_handler.setLevel(logging.CRITICAL)
-
+    def gradle(self, args, verbose=False):
+        if not verbose:
+            # Avoid logging the command
+            self.log_manager.terminal_handler.setLevel(logging.CRITICAL)
 
         # In automation, JAVA_HOME is set via mozconfig, which needs
         # to be specially handled in each mach command. This turns
@@ -78,10 +334,20 @@ class MachCommands(MachCommandBase):
         # Android tools expect UTF-8: see
         # http://tools.android.com/knownissues/encoding.  See
         # http://stackoverflow.com/a/21267635 for discussion of this approach.
-        return self.run_process([self.substs['GRADLE']] + gradle_flags + args,
+        #
+        # It's not even enough to set the encoding just for Gradle; it
+        # needs to be for JVMs spawned by Gradle as well.  This
+        # happens during the maven deployment generating the GeckoView
+        # documents; this works around "error: unmappable character
+        # for encoding ASCII" in exoplayer2.  See
+        # https://discuss.gradle.org/t/unmappable-character-for-encoding-ascii-when-building-a-utf-8-project/10692/11
+        # and especially https://stackoverflow.com/a/21755671.
+
+        return self.run_process([self.substs['GRADLE']] + gradle_flags + ['--console=plain'] + args,
             append_env={
                 'GRADLE_OPTS': '-Dfile.encoding=utf-8',
                 'JAVA_HOME': java_home,
+                'JAVA_TOOL_OPTIONS': '-Dfile.encoding=utf-8',
             },
             pass_thru=True, # Allow user to run gradle interactively.
             ensure_exit_code=False, # Don't throw on non-zero exit code.
@@ -103,8 +369,8 @@ class AndroidEmulatorCommands(MachCommandBase):
     @Command('android-emulator', category='devenv',
         conditions=[],
         description='Run the Android emulator with an AVD from test automation.')
-    @CommandArgument('--version', metavar='VERSION', choices=['4.3', '6.0', '7.0', 'x86', 'x86-6.0'],
-        help='Specify Android version to run in emulator. One of "4.3", "6.0", "7.0", "x86", or "x86-6.0".',
+    @CommandArgument('--version', metavar='VERSION', choices=['4.3', '6.0', '7.0', 'x86', 'x86-6.0', 'x86-7.0'],
+        help='Specify Android version to run in emulator. One of "4.3", "6.0", "7.0", "x86", "x86-6.0", or "x86-7.0".',
         default='4.3')
     @CommandArgument('--wait', action='store_true',
         help='Wait for emulator to be closed.')

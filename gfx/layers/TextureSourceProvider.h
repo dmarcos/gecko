@@ -1,7 +1,8 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-* This Source Code Form is subject to the terms of the Mozilla Public
-* License, v. 2.0. If a copy of the MPL was not distributed with this
-* file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #ifndef mozilla_gfx_layers_TextureSourceProvider_h
 #define mozilla_gfx_layers_TextureSourceProvider_h
 
@@ -61,7 +62,7 @@ public:
   /// ReadLock.
   /// This function provides a convenient way to do this delayed unlocking, if
   /// the texture itself requires it.
-  void UnlockAfterComposition(TextureHost* aTexture);
+  virtual void UnlockAfterComposition(TextureHost* aTexture);
 
   /// Most compositor backends operate asynchronously under the hood. This
   /// means that when a layer stops using a texture it is often desirable to
@@ -102,11 +103,25 @@ public:
   // used to composite).
   virtual bool IsValid() const = 0;
 
+public:
+  class MOZ_STACK_CLASS AutoReadUnlockTextures
+  {
+  public:
+    explicit AutoReadUnlockTextures(TextureSourceProvider* aProvider)
+     : mProvider(aProvider)
+    {}
+    ~AutoReadUnlockTextures() {
+      mProvider->ReadUnlockTextures();
+    }
+
+  private:
+    RefPtr<TextureSourceProvider> mProvider;
+  };
+
 protected:
   // Should be called at the end of each composition.
   void ReadUnlockTextures();
 
-protected:
   virtual ~TextureSourceProvider();
 
 private:

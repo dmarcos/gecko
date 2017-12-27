@@ -13,12 +13,12 @@ const Provider = createFactory(require("react-redux").Provider);
 const { setupStore } = require("devtools/client/webconsole/new-console-output/test/helpers");
 
 // Components under test.
-const PageError = require("devtools/client/webconsole/new-console-output/components/message-types/page-error");
+const PageError = require("devtools/client/webconsole/new-console-output/components/message-types/PageError");
 const {
   MESSAGE_OPEN,
   MESSAGE_CLOSE,
 } = require("devtools/client/webconsole/new-console-output/constants");
-const { INDENT_WIDTH } = require("devtools/client/webconsole/new-console-output/components/message-indent");
+const { INDENT_WIDTH } = require("devtools/client/webconsole/new-console-output/components/MessageIndent");
 
 // Test fakes.
 const { stubPreparedMessages } = require("devtools/client/webconsole/new-console-output/test/fixtures/stubs/index");
@@ -27,9 +27,12 @@ const serviceContainer = require("devtools/client/webconsole/new-console-output/
 describe("PageError component:", () => {
   it("renders", () => {
     const message = stubPreparedMessages.get("ReferenceError: asdf is not defined");
-    const wrapper = render(PageError({ message, serviceContainer }));
-    const L10n = require("devtools/client/webconsole/new-console-output/test/fixtures/L10n");
-    const { timestampString } = new L10n();
+    const wrapper = render(PageError({
+      message,
+      serviceContainer,
+      timestampsVisible: true,
+    }));
+    const { timestampString } = require("devtools/client/webconsole/webconsole-l10n");
 
     expect(wrapper.find(".timestamp").text()).toBe(timestampString(message.timeStamp));
 
@@ -45,6 +48,25 @@ describe("PageError component:", () => {
     expect(locationLink.length).toBe(1);
     // @TODO Will likely change. See bug 1307952
     expect(locationLink.text()).toBe("test-console-api.html:3:5");
+  });
+
+  it("does not have a timestamp when timestampsVisible prop is falsy", () => {
+    const message = stubPreparedMessages.get("ReferenceError: asdf is not defined");
+    const wrapper = render(PageError({
+      message,
+      serviceContainer,
+      timestampsVisible: false,
+    }));
+
+    expect(wrapper.find(".timestamp").length).toBe(0);
+  });
+
+  it("renders an error with a longString exception message", () => {
+    const message = stubPreparedMessages.get("TypeError longString message");
+    const wrapper = render(PageError({ message, serviceContainer }));
+
+    const text = wrapper.find(".message-body").text();
+    expect(text.startsWith("Error: Long error Long error")).toBe(true);
   });
 
   it("displays a [Learn more] link", () => {
@@ -120,12 +142,18 @@ describe("PageError component:", () => {
   it("has the expected indent", () => {
     const message = stubPreparedMessages.get("ReferenceError: asdf is not defined");
     const indent = 10;
-    let wrapper = render(PageError({ message, serviceContainer, indent}));
-    expect(wrapper.find(".indent").prop("style").width)
-        .toBe(`${indent * INDENT_WIDTH}px`);
+    let wrapper = render(PageError({
+      message: Object.assign({}, message, {indent}),
+      serviceContainer
+    }));
+    let indentEl = wrapper.find(".indent");
+    expect(indentEl.prop("style").width).toBe(`${indent * INDENT_WIDTH}px`);
+    expect(indentEl.prop("data-indent")).toBe(`${indent}`);
 
     wrapper = render(PageError({ message, serviceContainer}));
-    expect(wrapper.find(".indent").prop("style").width).toBe(`0`);
+    indentEl = wrapper.find(".indent");
+    expect(indentEl.prop("style").width).toBe(`0`);
+    expect(indentEl.prop("data-indent")).toBe(`0`);
   });
 
   it("has empty error notes", () => {
@@ -139,16 +167,16 @@ describe("PageError component:", () => {
 
   it("can show an error note", () => {
     const origMessage = stubPreparedMessages.get("ReferenceError: asdf is not defined");
-    const message = origMessage.set("notes", [
-      {
+    const message = Object.assign({}, origMessage, {
+      "notes": [{
         "messageBody": "test note",
         "frame": {
           "source": "http://example.com/test.js",
           "line": 2,
           "column": 6
         }
-      }
-    ]);
+      }]
+    });
 
     let wrapper = render(PageError({ message, serviceContainer }));
 
@@ -167,8 +195,8 @@ describe("PageError component:", () => {
 
   it("can show multiple error notes", () => {
     const origMessage = stubPreparedMessages.get("ReferenceError: asdf is not defined");
-    const message = origMessage.set("notes", [
-      {
+    const message = Object.assign({}, origMessage, {
+      "notes": [{
         "messageBody": "test note 1",
         "frame": {
           "source": "http://example.com/test1.js",
@@ -191,8 +219,8 @@ describe("PageError component:", () => {
           "line": 9,
           "column": 4
         }
-      }
-    ]);
+      }]
+    });
 
     let wrapper = render(PageError({ message, serviceContainer }));
 

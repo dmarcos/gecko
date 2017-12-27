@@ -2,14 +2,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-add_task(function* test_switchtab_override() {
+add_task(async function test_switchtab_override() {
   let testURL = "http://example.org/browser/browser/base/content/test/urlbar/dummy_page.html";
 
   info("Opening first tab");
-  let tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, testURL);
+  let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, testURL);
 
   info("Opening and selecting second tab");
-  let secondTab = gBrowser.selectedTab = gBrowser.addTab();
+  let secondTab = gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
   registerCleanupFunction(() => {
     try {
       gBrowser.removeTab(tab);
@@ -17,8 +17,8 @@ add_task(function* test_switchtab_override() {
     } catch (ex) { /* tabs may have already been closed in case of failure */ }
   });
 
-  info("Wait for autocomplete")
-  let deferred = Promise.defer();
+  info("Wait for autocomplete");
+  let deferred = PromiseUtils.defer();
   let onSearchComplete = gURLBar.onSearchComplete;
   registerCleanupFunction(() => {
     gURLBar.onSearchComplete = onSearchComplete;
@@ -27,19 +27,19 @@ add_task(function* test_switchtab_override() {
     ok(gURLBar.popupOpen, "The autocomplete popup is correctly open");
     onSearchComplete.apply(gURLBar);
     deferred.resolve();
-  }
+  };
 
   gURLBar.focus();
   gURLBar.value = "dummy_pag";
   EventUtils.synthesizeKey("e", {});
-  yield deferred.promise;
+  await deferred.promise;
 
   info("Select second autocomplete popup entry");
   EventUtils.synthesizeKey("VK_DOWN", {});
   ok(/moz-action:switchtab/.test(gURLBar.value), "switch to tab entry found");
 
   info("Override switch-to-tab");
-  deferred = Promise.defer();
+  deferred = PromiseUtils.defer();
   // In case of failure this would switch tab.
   let onTabSelect = event => {
     deferred.reject(new Error("Should have overridden switch to tab"));
@@ -55,7 +55,7 @@ add_task(function* test_switchtab_override() {
   EventUtils.synthesizeKey("VK_RETURN", { });
   info(`gURLBar.value = ${gURLBar.value}`);
   EventUtils.synthesizeKey("VK_SHIFT", { type: "keyup" });
-  yield deferred.promise;
+  await deferred.promise;
 
-  yield PlacesTestUtils.clearHistory();
+  await PlacesTestUtils.clearHistory();
 });

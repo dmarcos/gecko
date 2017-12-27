@@ -16,14 +16,14 @@ function* throttleUploadTest(actuallyThrottle) {
 
   info("Starting test... (actuallyThrottle = " + actuallyThrottle + ")");
 
-  let { gStore, windowRequire } = monitor.panelWin;
+  let { connector, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
-  let { NetMonitorController } =
-    windowRequire("devtools/client/netmonitor/src/netmonitor-controller");
   let RequestListContextMenu = windowRequire(
-    "devtools/client/netmonitor/src/request-list-context-menu");
+    "devtools/client/netmonitor/src/widgets/RequestListContextMenu");
+  let { getSortedRequests } = windowRequire(
+    "devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   const size = 4096;
   const uploadSize = actuallyThrottle ? size / 3 : 0;
@@ -38,25 +38,26 @@ function* throttleUploadTest(actuallyThrottle) {
       uploadBPSMax: uploadSize,
     },
   };
-  let client = NetMonitorController.webConsoleClient;
 
   info("sending throttle request");
   yield new Promise((resolve) => {
-    client.setPreferences(request, response => {
+    connector.setPreferences(request, (response) => {
       resolve(response);
     });
   });
 
   // Execute one POST request on the page and wait till its done.
-  let wait = waitForNetworkEvents(monitor, 0, 1);
+  let onEventTimings = monitor.panelWin.once(EVENTS.RECEIVED_EVENT_TIMINGS);
+  let wait = waitForNetworkEvents(monitor, 1);
   yield ContentTask.spawn(tab.linkedBrowser, { size }, function* (args) {
     content.wrappedJSObject.executeTest2(args.size);
   });
   yield wait;
+  yield onEventTimings;
 
   // Copy HAR into the clipboard (asynchronous).
-  let contextMenu = new RequestListContextMenu({});
-  let jsonString = yield contextMenu.copyAllAsHar();
+  let contextMenu = new RequestListContextMenu({ connector });
+  let jsonString = yield contextMenu.copyAllAsHar(getSortedRequests(store.getState()));
   let har = JSON.parse(jsonString);
 
   // Check out the HAR log.

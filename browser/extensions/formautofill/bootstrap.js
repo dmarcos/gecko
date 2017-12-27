@@ -13,8 +13,13 @@ const CACHED_STYLESHEETS = new WeakMap();
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "FormAutofillParent",
+XPCOMUtils.defineLazyModuleGetter(this, "AddonManager", "resource://gre/modules/AddonManager.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "AddonManagerPrivate",
+                                  "resource://gre/modules/AddonManager.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "formAutofillParent",
                                   "resource://formautofill/FormAutofillParent.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "FormAutofillUtils",
+                                  "resource://formautofill/FormAutofillUtils.jsm");
 
 function insertStyleSheet(domWindow, url) {
   let doc = domWindow.document;
@@ -30,44 +35,92 @@ function insertStyleSheet(domWindow, url) {
   }
 }
 
-let windowListener = {
-  onOpenWindow(window) {
-    let domWindow = window.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindow);
-
-    domWindow.addEventListener("load", function onWindowLoaded() {
-      insertStyleSheet(domWindow, STYLESHEET_URI);
-    }, {once: true});
-  },
-};
-
-function startup() {
-  // Besides this pref, we'll need dom.forms.autocomplete.experimental enabled
-  // as well to make sure form autocomplete works correctly.
-  if (!Services.prefs.getBoolPref("browser.formautofill.experimental")) {
+function onMaybeOpenPopup(evt) {
+  let domWindow = evt.target.ownerGlobal;
+  if (CACHED_STYLESHEETS.has(domWindow)) {
+    // This window already has autofill stylesheets.
     return;
   }
 
-  let parent = new FormAutofillParent();
-  let enumerator = Services.wm.getEnumerator("navigator:browser");
-  // Load stylesheet to already opened windows
-  while (enumerator.hasMoreElements()) {
-    let win = enumerator.getNext();
-    let domWindow = win.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindow);
+  insertStyleSheet(domWindow, STYLESHEET_URI);
+}
 
-    insertStyleSheet(domWindow, STYLESHEET_URI);
+function addUpgradeListener(instanceID) {
+  AddonManager.addUpgradeListener(instanceID, upgrade => {
+    // don't install the upgrade by doing nothing here.
+    // The upgrade will be installed upon next restart.
+  });
+}
+
+function isAvailable() {
+  let availablePref = Services.prefs.getCharPref("extensions.formautofill.available");
+  if (availablePref == "on") {
+    return true;
+  } else if (availablePref == "detect") {
+    let locale = Services.locale.getRequestedLocale();
+    let region = Services.prefs.getCharPref("browser.search.region", "");
+    let supportedCountries = Services.prefs.getCharPref("extensions.formautofill.supportedCountries")
+                                           .split(",");
+    return locale == "en-US" && supportedCountries.includes(region);
+  }
+  return false;
+}
+
+function startup(data) {
+  if (!isAvailable()) {
+    Services.prefs.clearUserPref("dom.forms.autocomplete.formautofill");
+    // reset the sync related prefs incase the feature was previously available
+    // but isn't now.
+    Services.prefs.clearUserPref("services.sync.engine.addresses.available");
+    Services.prefs.clearUserPref("services.sync.engine.creditcards.available");
+    Services.telemetry.scalarSet("formautofill.availability", false);
+    return;
   }
 
-  Services.wm.addListener(windowListener);
+  if (data.hasOwnProperty("instanceID") && data.instanceID) {
+    if (AddonManagerPrivate.isDBLoaded()) {
+      addUpgradeListener(data.instanceID);
+    } else {
+      // Wait for the extension database to be loaded so we don't cause its init.
+      Services.obs.addObserver(function xpiDatabaseLoaded() {
+        Services.obs.removeObserver(xpiDatabaseLoaded, "xpi-database-loaded");
+        addUpgradeListener(data.instanceID);
+      }, "xpi-database-loaded");
+    }
+  } else {
+    throw Error("no instanceID passed to bootstrap startup");
+  }
 
-  parent.init();
+  // This pref is used for web contents to detect the autocomplete feature.
+  // When it's true, "element.autocomplete" will return tokens we currently
+  // support -- otherwise it'll return an empty string.
+  Services.prefs.setBoolPref("dom.forms.autocomplete.formautofill", true);
+  Services.telemetry.scalarSet("formautofill.availability", true);
+
+  // This pref determines whether the "addresses"/"creditcards" sync engine is
+  // available (ie, whether it is shown in any UI etc) - it *does not* determine
+  // whether the engine is actually enabled or not.
+  Services.prefs.setBoolPref("services.sync.engine.addresses.available", true);
+  if (FormAutofillUtils.isAutofillCreditCardsAvailable) {
+    Services.prefs.setBoolPref("services.sync.engine.creditcards.available", true);
+  } else {
+    Services.prefs.clearUserPref("services.sync.engine.creditcards.available");
+  }
+
+  // Listen for the autocomplete popup message to lazily append our stylesheet related to the popup.
+  Services.mm.addMessageListener("FormAutoComplete:MaybeOpenPopup", onMaybeOpenPopup);
+
+  formAutofillParent.init().catch(Cu.reportError);
+  Services.ppmm.loadProcessScript("data:,new " + function() {
+    Components.utils.import("resource://formautofill/FormAutofillContent.jsm");
+  }, true);
   Services.mm.loadFrameScript("chrome://formautofill/content/FormAutofillFrameScript.js", true);
 }
 
 function shutdown() {
-  Services.wm.removeListener(windowListener);
+  Services.mm.removeMessageListener("FormAutoComplete:MaybeOpenPopup", onMaybeOpenPopup);
 
   let enumerator = Services.wm.getEnumerator("navigator:browser");
-
   while (enumerator.hasMoreElements()) {
     let win = enumerator.getNext();
     let domWindow = win.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindow);

@@ -60,14 +60,11 @@ class RemoteAutomation(Automation):
         self._remoteLog = logfile
 
     # Set up what we need for the remote environment
-    def environment(self, env=None, xrePath=None, crashreporter=True, debugger=False, dmdPath=None, lsanPath=None):
+    def environment(self, env=None, xrePath=None, crashreporter=True, debugger=False, lsanPath=None, ubsanPath=None):
         # Because we are running remote, we don't want to mimic the local env
         # so no copying of os.environ
         if env is None:
             env = {}
-
-        if dmdPath:
-            env['MOZ_REPLACE_MALLOC_LIB'] = os.path.join(dmdPath, 'libdmd.so')
 
         # Except for the mochitest results table hiding option, which isn't
         # passed to runtestsremote.py as an actual option, but through the
@@ -116,6 +113,7 @@ class RemoteAutomation(Automation):
 
         topActivity = self._devicemanager.getTopActivity()
         if topActivity == proc.procName:
+            print "Browser unexpectedly found running. Killing..."
             proc.kill(True)
         if status == 1:
             if maxTime:
@@ -164,9 +162,9 @@ class RemoteAutomation(Automation):
 
     def deleteTombstones(self):
         # delete any existing tombstone files from device
-        remoteDir = "/data/tombstones"
+        tombstones = "/data/tombstones/*"
         try:
-            self._devicemanager.shellCheckOutput(['rm', '-r', remoteDir], root=True,
+            self._devicemanager.shellCheckOutput(['rm', '-r', tombstones], root=True,
                                                  timeout=DeviceManager.short_timeout)
         except DMError:
             # This may just indicate that the tombstone directory is missing
@@ -383,6 +381,7 @@ class RemoteAutomation(Automation):
             status = 0
             top = self.procName
             slowLog = False
+            endTime = datetime.datetime.now() + datetime.timedelta(seconds = timeout)
             while (top == self.procName):
                 # Get log updates on each interval, but if it is taking
                 # too long, only do it every 60 seconds
@@ -397,7 +396,7 @@ class RemoteAutomation(Automation):
                 time.sleep(interval)
                 timer += interval
                 noOutputTimer += interval
-                if (timer > timeout):
+                if datetime.datetime.now() > endTime:
                     status = 1
                     break
                 if (noOutputTimeout and noOutputTimer > noOutputTimeout):
@@ -405,6 +404,9 @@ class RemoteAutomation(Automation):
                     break
                 if not hasOutput:
                     top = self.dm.getTopActivity()
+                    if top == "":
+                        print "Failed to get top activity, retrying, once..."
+                        top = self.dm.getTopActivity()
             # Flush anything added to stdout during the sleep
             self.read_stdout()
             return status

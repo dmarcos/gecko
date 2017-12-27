@@ -15,17 +15,14 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
 
 
   x = 0;
   x = x.prop;
-  for each (let [] in ['', '']) { switch(x) { default: (function(){}); } };
+  for (let [] of ['', '']) { switch(x) { default: (function(){}); } };
 
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

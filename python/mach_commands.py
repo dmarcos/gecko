@@ -6,8 +6,8 @@ from __future__ import absolute_import, print_function, unicode_literals
 
 import argparse
 import logging
-import mozpack.path as mozpath
 import os
+import tempfile
 
 from concurrent.futures import (
     ThreadPoolExecutor,
@@ -19,6 +19,7 @@ import mozinfo
 from manifestparser import TestManifest
 from manifestparser import filters as mpf
 
+import mozpack.path as mozpath
 from mozbuild.base import (
     MachCommandBase,
 )
@@ -33,7 +34,7 @@ from mach.decorators import (
 @CommandProvider
 class MachCommands(MachCommandBase):
     @Command('python', category='devenv',
-        description='Run Python.')
+             description='Run Python.')
     @CommandArgument('args', nargs=argparse.REMAINDER)
     def python(self, args):
         # Avoid logging the command
@@ -42,40 +43,48 @@ class MachCommands(MachCommandBase):
         self._activate_virtualenv()
 
         return self.run_process([self.virtualenv_manager.python_path] + args,
-            pass_thru=True,  # Allow user to run Python interactively.
-            ensure_exit_code=False,  # Don't throw on non-zero exit code.
-            # Note: subprocess requires native strings in os.environ on Windows
-            append_env={b'PYTHONDONTWRITEBYTECODE': str('1')})
+                                pass_thru=True,  # Allow user to run Python interactively.
+                                ensure_exit_code=False,  # Don't throw on non-zero exit code.
+                                # Note: subprocess requires native strings in os.environ on Windows
+                                append_env={b'PYTHONDONTWRITEBYTECODE': str('1')})
 
     @Command('python-test', category='testing',
-        description='Run Python unit tests with an appropriate test runner.')
+             description='Run Python unit tests with an appropriate test runner.')
     @CommandArgument('--verbose',
-        default=False,
-        action='store_true',
-        help='Verbose output.')
+                     default=False,
+                     action='store_true',
+                     help='Verbose output.')
     @CommandArgument('--stop',
-        default=False,
-        action='store_true',
-        help='Stop running tests after the first error or failure.')
+                     default=False,
+                     action='store_true',
+                     help='Stop running tests after the first error or failure.')
     @CommandArgument('-j', '--jobs',
-        default=1,
-        type=int,
-        help='Number of concurrent jobs to run. Default is 1.')
+                     default=1,
+                     type=int,
+                     help='Number of concurrent jobs to run. Default is 1.')
     @CommandArgument('--subsuite',
-        default=None,
-        help=('Python subsuite to run. If not specified, all subsuites are run. '
-             'Use the string `default` to only run tests without a subsuite.'))
+                     default=None,
+                     help=('Python subsuite to run. If not specified, all subsuites are run. '
+                           'Use the string `default` to only run tests without a subsuite.'))
     @CommandArgument('tests', nargs='*',
-        metavar='TEST',
-        help=('Tests to run. Each test can be a single file or a directory. '
-              'Default test resolution relies on PYTHON_UNITTEST_MANIFESTS.'))
-    def python_test(self,
-                    tests=[],
-                    test_objects=None,
-                    subsuite=None,
-                    verbose=False,
-                    stop=False,
-                    jobs=1):
+                     metavar='TEST',
+                     help=('Tests to run. Each test can be a single file or a directory. '
+                           'Default test resolution relies on PYTHON_UNITTEST_MANIFESTS.'))
+    def python_test(self, *args, **kwargs):
+        try:
+            tempdir = os.environ[b'PYTHON_TEST_TMP'] = str(tempfile.mkdtemp(suffix='-python-test'))
+            return self.run_python_tests(*args, **kwargs)
+        finally:
+            import mozfile
+            mozfile.remove(tempdir)
+
+    def run_python_tests(self,
+                         tests=[],
+                         test_objects=None,
+                         subsuite=None,
+                         verbose=False,
+                         stop=False,
+                         jobs=1):
         self._activate_virtualenv()
 
         def find_tests_by_path():
@@ -90,8 +99,8 @@ class MachCommands(MachCommandBase):
                         files += glob.glob(mozpath.join(root, 'unit*.py'))
                 else:
                     self.log(logging.WARN, 'python-test',
-                                 {'test': t},
-                                 'TEST-UNEXPECTED-FAIL | Invalid test: {test}')
+                             {'test': t},
+                             'TEST-UNEXPECTED-FAIL | Invalid test: {test}')
                     if stop:
                         break
             return files
@@ -103,7 +112,7 @@ class MachCommands(MachCommandBase):
         # which produces output in the format Mozilla infrastructure expects.
         # Some tests are run via pytest.
         if test_objects is None:
-            from mozbuild.testing import TestResolver
+            from moztest.resolve import TestResolver
             resolver = self._spawn(TestResolver)
             if tests:
                 # If we were given test paths, try to find tests matching them.
@@ -116,12 +125,6 @@ class MachCommands(MachCommandBase):
         mp = TestManifest()
         mp.tests.extend(test_objects)
 
-        if not mp.tests:
-            message = 'TEST-UNEXPECTED-FAIL | No tests collected ' + \
-                      '(Not in PYTHON_UNITTEST_MANIFESTS?)'
-            self.log(logging.WARN, 'python-test', {}, message)
-            return 1
-
         filters = []
         if subsuite == 'default':
             filters.append(mpf.subsuite(None))
@@ -130,25 +133,45 @@ class MachCommands(MachCommandBase):
 
         tests = mp.active_tests(filters=filters, disabled=False, **mozinfo.info)
 
+        if not tests:
+            submsg = "for subsuite '{}' ".format(subsuite) if subsuite else ""
+            message = "TEST-UNEXPECTED-FAIL | No tests collected " + \
+                      "{}(Not in PYTHON_UNITTEST_MANIFESTS?)".format(submsg)
+            self.log(logging.WARN, 'python-test', {}, message)
+            return 1
+
+        parallel = []
+        sequential = []
+        for test in tests:
+            if test.get('sequential'):
+                sequential.append(test)
+            else:
+                parallel.append(test)
+
         self.jobs = jobs
         self.terminate = False
         self.verbose = verbose
 
         return_code = 0
+
+        def on_test_finished(result):
+            output, ret, test_path = result
+
+            for line in output:
+                self.log(logging.INFO, 'python-test', {'line': line.rstrip()}, '{line}')
+
+            if ret and not return_code:
+                self.log(logging.ERROR, 'python-test', {'test_path': test_path, 'ret': ret},
+                         'Setting retcode to {ret} from {test_path}')
+            return return_code or ret
+
         with ThreadPoolExecutor(max_workers=self.jobs) as executor:
             futures = [executor.submit(self._run_python_test, test['path'])
-                       for test in tests]
+                       for test in parallel]
 
             try:
                 for future in as_completed(futures):
-                    output, ret, test_path = future.result()
-
-                    for line in output:
-                        self.log(logging.INFO, 'python-test', {'line': line.rstrip()}, '{line}')
-
-                    if ret and not return_code:
-                        self.log(logging.ERROR, 'python-test', {'test_path': test_path, 'ret': ret}, 'Setting retcode to {ret} from {test_path}')
-                    return_code = return_code or ret
+                    return_code = on_test_finished(future.result())
             except KeyboardInterrupt:
                 # Hack to force stop currently running threads.
                 # https://gist.github.com/clchiou/f2608cbe54403edb0b13
@@ -156,7 +179,11 @@ class MachCommands(MachCommandBase):
                 thread._threads_queues.clear()
                 raise
 
-        self.log(logging.INFO, 'python-test', {'return_code': return_code}, 'Return code from mach python-test: {return_code}')
+        for test in sequential:
+            return_code = on_test_finished(self._run_python_test(test['path']))
+
+        self.log(logging.INFO, 'python-test', {'return_code': return_code},
+                 'Return code from mach python-test: {return_code}')
         return return_code
 
     def _run_python_test(self, test_path):
@@ -179,6 +206,10 @@ class MachCommands(MachCommandBase):
                           line.startswith('TEST-'))
                 if output:
                     file_displayed_test.append(True)
+
+            # Hack to make sure treeherder highlights pytest failures
+            if 'FAILED' in line.rsplit(' ', 1)[-1]:
+                line = line.replace('FAILED', 'TEST-UNEXPECTED-FAIL')
 
             _log(line)
 

@@ -10,7 +10,7 @@ this.EXPORTED_SYMBOLS = [
 
 const {classes: Cc, interfaces: Ci, results: Cr, utils: Cu} = Components;
 
-Cu.import("resource://gre/modules/Preferences.jsm", this);
+Cu.import("resource://gre/modules/Services.jsm", this);
 
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -19,11 +19,46 @@ const PREF_TELEMETRY_ENABLED = "toolkit.telemetry.enabled";
 const IS_CONTENT_PROCESS = (function() {
   // We cannot use Services.appinfo here because in telemetry xpcshell tests,
   // appinfo is initially unavailable, and becomes available only later on.
+  // eslint-disable-next-line mozilla/use-services
   let runtime = Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime);
   return runtime.processType == Ci.nsIXULRuntime.PROCESS_TYPE_CONTENT;
 })();
 
 this.TelemetryUtils = {
+  Preferences: Object.freeze({
+    // General Preferences
+    ArchiveEnabled: "toolkit.telemetry.archive.enabled",
+    CachedClientId: "toolkit.telemetry.cachedClientID",
+    FirstRun: "toolkit.telemetry.reportingpolicy.firstRun",
+    FirstShutdownPingEnabled: "toolkit.telemetry.firstShutdownPing.enabled",
+    HealthPingEnabled: "toolkit.telemetry.healthping.enabled",
+    OverrideOfficialCheck: "toolkit.telemetry.send.overrideOfficialCheck",
+    OverridePreRelease: "toolkit.telemetry.testing.overridePreRelease",
+    Server: "toolkit.telemetry.server",
+    ShutdownPingSender: "toolkit.telemetry.shutdownPingSender.enabled",
+    ShutdownPingSenderFirstSession: "toolkit.telemetry.shutdownPingSender.enabledFirstSession",
+    TelemetryEnabled: "toolkit.telemetry.enabled",
+    Unified: "toolkit.telemetry.unified",
+    UpdatePing: "toolkit.telemetry.updatePing.enabled",
+    NewProfilePingEnabled: "toolkit.telemetry.newProfilePing.enabled",
+    NewProfilePingDelay: "toolkit.telemetry.newProfilePing.delay",
+    PreviousBuildID: "toolkit.telemetry.previousBuildID",
+
+    // Log Preferences
+    LogLevel: "toolkit.telemetry.log.level",
+    LogDump: "toolkit.telemetry.log.dump",
+
+    // Data reporting Preferences
+    AcceptedPolicyDate: "datareporting.policy.dataSubmissionPolicyNotifiedTime",
+    AcceptedPolicyVersion: "datareporting.policy.dataSubmissionPolicyAcceptedVersion",
+    BypassNotification: "datareporting.policy.dataSubmissionPolicyBypassNotification",
+    CurrentPolicyVersion: "datareporting.policy.currentPolicyVersion",
+    DataSubmissionEnabled: "datareporting.policy.dataSubmissionEnabled",
+    FhrUploadEnabled: "datareporting.healthreport.uploadEnabled",
+    MinimumPolicyVersion: "datareporting.policy.minimumPolicyVersion",
+    FirstRunURL: "datareporting.policy.firstRunURL",
+  }),
+
   /**
    * True if this is a content process.
    */
@@ -36,7 +71,7 @@ this.TelemetryUtils = {
    * it correctly evaluates to a boolean type.
    */
   get isTelemetryEnabled() {
-    return Preferences.get(PREF_TELEMETRY_ENABLED, false) === true;
+    return Services.prefs.getBoolPref(PREF_TELEMETRY_ENABLED, false) === true;
   },
 
   /**
@@ -156,4 +191,16 @@ this.TelemetryUtils = {
       + sign(tzOffset) + padNumber(Math.floor(Math.abs(tzOffset / 60)), 2)
       + ":" + padNumber(Math.abs(tzOffset % 60), 2);
   },
+
+  /**
+   * @returns {number} The monotonic time since the process start
+   * or (non-monotonic) Date value if this fails back.
+   */
+  monotonicNow() {
+    try {
+      return Services.telemetry.msSinceProcessStart();
+    } catch (ex) {
+      return Date.now();
+    }
+  }
 };

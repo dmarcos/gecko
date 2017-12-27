@@ -1,12 +1,13 @@
 /* globals buildSettings */
+/* eslint-disable no-console */
 
 "use strict";
 
-this.log = (function () {
+this.log = (function() {
   let exports = {};
 
   const levels = ["debug", "info", "warn", "error"];
-  if (! levels.includes(buildSettings.logLevel)) {
+  if (!levels.includes(buildSettings.logLevel)) {
     console.warn("Invalid buildSettings.logLevel:", buildSettings.logLevel);
   }
   let shouldLog = {};

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -49,12 +50,13 @@ nsFrameList::DestroyFrames()
 }
 
 void
-nsFrameList::DestroyFramesFrom(nsIFrame* aDestructRoot)
+nsFrameList::DestroyFramesFrom(nsIFrame* aDestructRoot,
+                               layout::PostFrameDestroyData& aPostDestroyData)
 {
   NS_PRECONDITION(aDestructRoot, "Missing destruct root");
 
   while (nsIFrame* frame = RemoveFirstChild()) {
-    frame->DestroyFrom(aDestructRoot);
+    frame->DestroyFrom(aDestructRoot, aPostDestroyData);
   }
   mLastChild = nullptr;
 }
@@ -255,7 +257,7 @@ nsFrameList::ExtractTail(FrameLinkEnumerator& aLink)
   // Now make sure aLink doesn't point to a frame we no longer have.
   aLink.mFrame = nullptr;
 
-  NS_POSTCONDITION(aLink.AtEnd(), "What's going on here?");
+  MOZ_ASSERT(aLink.AtEnd(), "What's going on here?");
 
   return nsFrameList(newFirstFrame, newLastFrame);
 }
@@ -360,7 +362,7 @@ nsFrameList::GetPrevVisualFor(nsIFrame* aFrame) const
   nsAutoLineIterator iter = parent->GetLineIterator();
   if (!iter) {
     // Parent is not a block Frame
-    if (parent->GetType() == nsGkAtoms::lineFrame) {
+    if (parent->IsLineFrame()) {
       // Line frames are not bidi-splittable, so need to consider bidi reordering
       if (paraDir == NSBIDI_LTR) {
         return nsBidiPresUtils::GetFrameToLeftOf(aFrame, mFirstChild, -1);
@@ -377,7 +379,7 @@ nsFrameList::GetPrevVisualFor(nsIFrame* aFrame) const
     }
   }
 
-  // Parent is a block frame, so use the LineIterator to find the previous visual 
+  // Parent is a block frame, so use the LineIterator to find the previous visual
   // sibling on this line, or the last one on the previous line.
 
   int32_t thisLine;
@@ -422,7 +424,7 @@ nsFrameList::GetNextVisualFor(nsIFrame* aFrame) const
 {
   if (!mFirstChild)
     return nullptr;
-  
+
   nsIFrame* parent = mFirstChild->GetParent();
   if (!parent)
     return aFrame ? aFrame->GetPrevSibling() : mFirstChild;
@@ -430,9 +432,9 @@ nsFrameList::GetNextVisualFor(nsIFrame* aFrame) const
   nsBidiDirection paraDir = nsBidiPresUtils::ParagraphDirection(mFirstChild);
 
   nsAutoLineIterator iter = parent->GetLineIterator();
-  if (!iter) { 
+  if (!iter) {
     // Parent is not a block Frame
-    if (parent->GetType() == nsGkAtoms::lineFrame) {
+    if (parent->IsLineFrame()) {
       // Line frames are not bidi-splittable, so need to consider bidi reordering
       if (paraDir == NSBIDI_LTR) {
         return nsBidiPresUtils::GetFrameToRightOf(aFrame, mFirstChild, -1);
@@ -449,9 +451,9 @@ nsFrameList::GetNextVisualFor(nsIFrame* aFrame) const
     }
   }
 
-  // Parent is a block frame, so use the LineIterator to find the next visual 
+  // Parent is a block frame, so use the LineIterator to find the next visual
   // sibling on this line, or the first one on the next line.
-  
+
   int32_t thisLine;
   if (aFrame) {
     thisLine = iter->FindLineContaining(aFrame);
@@ -519,7 +521,7 @@ nsFrameList::VerifyList() const
       // we would have broken out of the loop long ago.
       NS_ERROR("loop in frame list.  This will probably hang soon.");
       return;
-    }                           
+    }
     if (!second) {
       break;
     }

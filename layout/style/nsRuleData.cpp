@@ -1,10 +1,12 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsRuleData.h"
 
+#include "nsAttrValueInlines.h"
 #include "nsCSSParser.h"
 #include "mozilla/Poison.h"
 #include <stdint.h>
@@ -21,18 +23,19 @@ nsRuleData::GetPoisonOffset()
                 "expect uintptr_t and size_t to be the same size");
   static_assert(uintptr_t(-1) > uintptr_t(0),
                 "expect uintptr_t to be unsigned");
-  static_assert(size_t(-1) > size_t(0),
-                "expect size_t to be unsigned");
+  static_assert(size_t(-1) > size_t(0), "expect size_t to be unsigned");
   uintptr_t framePoisonValue = mozPoisonValue();
   return size_t(framePoisonValue - uintptr_t(mValueStorage)) /
          sizeof(nsCSSValue);
 }
 
-nsRuleData::nsRuleData(uint32_t aSIDs, nsCSSValue* aValueStorage,
-                       nsPresContext* aContext, nsStyleContext* aStyleContext)
-  : GenericSpecifiedValues(StyleBackendType::Gecko, aContext, aSIDs),
-    mStyleContext(aStyleContext),
-    mValueStorage(aValueStorage)
+nsRuleData::nsRuleData(uint32_t aSIDs,
+                       nsCSSValue* aValueStorage,
+                       nsPresContext* aContext,
+                       GeckoStyleContext* aStyleContext)
+  : GenericSpecifiedValues(StyleBackendType::Gecko, aContext, aSIDs)
+  , mStyleContext(aStyleContext)
+  , mValueStorage(aValueStorage)
 {
 #ifndef MOZ_VALGRIND
   size_t framePoisonOffset = GetPoisonOffset();

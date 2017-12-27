@@ -7,41 +7,35 @@
 use app_units::Au;
 use construct::ConstructionResult;
 use context::LayoutContext;
-use euclid::point::Point2D;
-use euclid::rect::Rect;
-use euclid::size::Size2D;
-use flow::{self, Flow};
+use euclid::{Point2D, Vector2D, Rect, Size2D};
+use flow::{Flow, GetBaseFlow};
 use fragment::{Fragment, FragmentBorderBoxIterator, SpecificFragmentInfo};
-use gfx::display_list::{DisplayItemMetadata, DisplayList, OpaqueNode, ScrollOffsetMap};
-use gfx_traits::ScrollRootId;
-use inline::LAST_FRAGMENT_OF_ELEMENT;
+use gfx::display_list::{DisplayList, OpaqueNode, ScrollOffsetMap};
+use inline::InlineFragmentNodeFlags;
 use ipc_channel::ipc::IpcSender;
+use msg::constellation_msg::PipelineId;
 use opaque_node::OpaqueNodeMethods;
-use script_layout_interface::PendingImage;
-use script_layout_interface::rpc::{ContentBoxResponse, ContentBoxesResponse};
-use script_layout_interface::rpc::{HitTestResponse, LayoutRPC};
+use script_layout_interface::rpc::{ContentBoxResponse, ContentBoxesResponse, LayoutRPC};
 use script_layout_interface::rpc::{MarginStyleResponse, NodeGeometryResponse};
-use script_layout_interface::rpc::{NodeOverflowResponse, OffsetParentResponse};
-use script_layout_interface::rpc::{NodeScrollRootIdResponse, ResolvedStyleResponse, TextIndexResponse};
+use script_layout_interface::rpc::{NodeOverflowResponse, NodeScrollRootIdResponse};
+use script_layout_interface::rpc::{OffsetParentResponse, ResolvedStyleResponse, TextIndexResponse};
 use script_layout_interface::wrapper_traits::{LayoutNode, ThreadSafeLayoutElement, ThreadSafeLayoutNode};
 use script_traits::LayoutMsg as ConstellationMsg;
 use script_traits::UntrustedNodeAddress;
 use sequential;
 use std::cmp::{min, max};
-use std::mem;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
-use style::computed_values;
+use style::computed_values::display::T as Display;
+use style::computed_values::position::T as Position;
 use style::context::{StyleContext, ThreadLocalStyleContext};
 use style::dom::TElement;
 use style::logical_geometry::{WritingMode, BlockFlowDirection, InlineBaseDirection};
 use style::properties::{style_structs, PropertyId, PropertyDeclarationId, LonghandId};
-use style::properties::longhands::{display, position};
 use style::selector_parser::PseudoElement;
-use style::stylist::Stylist;
 use style_traits::ToCss;
-use style_traits::cursor::Cursor;
-use wrapper::{LayoutNodeHelpers, LayoutNodeLayoutData};
+use webrender_api::ClipId;
+use wrapper::LayoutNodeLayoutData;
 
 /// Mutable data belonging to the LayoutThread.
 ///
@@ -53,9 +47,6 @@ pub struct LayoutThreadData {
     /// The root stacking context.
     pub display_list: Option<Arc<DisplayList>>,
 
-    /// Performs CSS selector matching and style resolution.
-    pub stylist: Arc<Stylist>,
-
     /// A queued response for the union of the content boxes of a node.
     pub content_box_response: Option<Rect<Au>>,
 
@@ -65,11 +56,8 @@ pub struct LayoutThreadData {
     /// A queued response for the client {top, left, width, height} of a node in pixels.
     pub client_rect_response: Rect<i32>,
 
-    /// A queued response for the node at a given point
-    pub hit_test_response: (Option<DisplayItemMetadata>, bool),
-
     /// A queued response for the scroll root id for a given node.
-    pub scroll_root_id_response: Option<ScrollRootId>,
+    pub scroll_root_id_response: Option<ClipId>,
 
     /// A pair of overflow property in x and y
     pub overflow_response: NodeOverflowResponse,
@@ -86,14 +74,11 @@ pub struct LayoutThreadData {
     /// A queued response for the offset parent/rect of a node.
     pub margin_style_response: MarginStyleResponse,
 
-    /// Scroll offsets of stacking contexts. This will only be populated if WebRender is in use.
-    pub stacking_context_scroll_offsets: ScrollOffsetMap,
+    /// Scroll offsets of scrolling regions.
+    pub scroll_offsets: ScrollOffsetMap,
 
     /// Index in a text fragment. We need this do determine the insertion point.
     pub text_index_response: TextIndexResponse,
-
-    /// A list of images requests that need to be initiated.
-    pub pending_images: Vec<PendingImage>,
 
     /// A queued response for the list of nodes at a given point.
     pub nodes_from_point_response: Vec<UntrustedNodeAddress>,
@@ -127,24 +112,6 @@ impl LayoutRPC for LayoutRPCImpl {
         let &LayoutRPCImpl(ref rw_data) = self;
         let rw_data = rw_data.lock().unwrap();
         ContentBoxesResponse(rw_data.content_boxes_response.clone())
-    }
-
-    /// Requests the node containing the point of interest.
-    fn hit_test(&self) -> HitTestResponse {
-        let &LayoutRPCImpl(ref rw_data) = self;
-        let rw_data = rw_data.lock().unwrap();
-        let &(ref result, update_cursor) = &rw_data.hit_test_response;
-        if update_cursor {
-            // Compute the new cursor.
-            let cursor = match *result {
-                None => Cursor::Default,
-                Some(dim) => dim.pointing.unwrap(),
-            };
-            rw_data.constellation_chan.send(ConstellationMsg::SetCursor(cursor)).unwrap();
-        }
-        HitTestResponse {
-            node_address: result.map(|dim| dim.node.to_untrusted_node_address()),
-        }
     }
 
     fn nodes_from_point_response(&self) -> Vec<UntrustedNodeAddress> {
@@ -200,12 +167,6 @@ impl LayoutRPC for LayoutRPCImpl {
         let &LayoutRPCImpl(ref rw_data) = self;
         let rw_data = rw_data.lock().unwrap();
         rw_data.text_index_response.clone()
-    }
-
-    fn pending_images(&self) -> Vec<PendingImage> {
-        let &LayoutRPCImpl(ref rw_data) = self;
-        let mut rw_data = rw_data.lock().unwrap();
-        mem::replace(&mut rw_data.pending_images, vec![])
     }
 }
 
@@ -466,10 +427,14 @@ impl FragmentBorderBoxIterator for FragmentLocatingFragmentIterator {
             border_left_width: left_width,
             ..
         } = *fragment.style.get_border();
-        self.client_rect.origin.y = top_width.to_px();
-        self.client_rect.origin.x = left_width.to_px();
-        self.client_rect.size.width = (border_box.size.width - left_width - right_width).to_px();
-        self.client_rect.size.height = (border_box.size.height - top_width - bottom_width).to_px();
+        let (left_width, right_width) = (left_width.px(), right_width.px());
+        let (top_width, bottom_width) = (top_width.px(), bottom_width.px());
+        self.client_rect.origin.y = top_width as i32;
+        self.client_rect.origin.x = left_width as i32;
+        self.client_rect.size.width =
+            (border_box.size.width.to_f32_px() - left_width - right_width) as i32;
+        self.client_rect.size.height =
+            (border_box.size.height.to_f32_px() - top_width - bottom_width) as i32;
     }
 
     fn should_process(&mut self, fragment: &Fragment) -> bool {
@@ -492,10 +457,12 @@ impl FragmentBorderBoxIterator for UnioningFragmentScrollAreaIterator {
             border_left_width: left_border,
             ..
         } = *fragment.style.get_border();
-        let right_padding = (border_box.size.width - right_border - left_border).to_px();
-        let bottom_padding = (border_box.size.height - bottom_border - top_border).to_px();
-        let top_padding = top_border.to_px();
-        let left_padding = left_border.to_px();
+        let (left_border, right_border) = (left_border.px(), right_border.px());
+        let (top_border, bottom_border) = (top_border.px(), bottom_border.px());
+        let right_padding = (border_box.size.width.to_f32_px() - right_border - left_border) as i32;
+        let bottom_padding = (border_box.size.height.to_f32_px() - bottom_border - top_border) as i32;
+        let top_padding = top_border as i32;
+        let left_padding = left_border as i32;
 
         match self.level {
             Some(start_level) if level <= start_level => { self.is_child = false; }
@@ -564,7 +531,7 @@ impl FragmentBorderBoxIterator for ParentOffsetBorderBoxIterator {
             });
 
             // offsetParent returns null if the node is fixed.
-            if fragment.style.get_box().position == computed_values::position::T::fixed {
+            if fragment.style.get_box().position == Position::Fixed {
                 self.parent_nodes.clear();
             }
         } else if let Some(node) = fragment.inline_context.as_ref().and_then(|inline_context| {
@@ -595,7 +562,7 @@ impl FragmentBorderBoxIterator for ParentOffsetBorderBoxIterator {
                 },
             }
 
-            if node.flags.contains(LAST_FRAGMENT_OF_ELEMENT) {
+            if node.flags.contains(InlineFragmentNodeFlags::LAST_FRAGMENT_OF_ELEMENT) {
                 self.has_processed_node = true;
             }
         } else if self.node_offset_box.is_none() {
@@ -612,14 +579,15 @@ impl FragmentBorderBoxIterator for ParentOffsetBorderBoxIterator {
                 //  2) Is static position *and* is a table or table cell
                 //  3) Is not static position
                 (true, _, _) |
-                (false, computed_values::position::T::static_, &SpecificFragmentInfo::Table) |
-                (false, computed_values::position::T::static_, &SpecificFragmentInfo::TableCell) |
-                (false, computed_values::position::T::absolute, _) |
-                (false, computed_values::position::T::relative, _) |
-                (false, computed_values::position::T::fixed, _) => true,
+                (false, Position::Static, &SpecificFragmentInfo::Table) |
+                (false, Position::Static, &SpecificFragmentInfo::TableCell) |
+                (false, Position::Sticky, _) |
+                (false, Position::Absolute, _) |
+                (false, Position::Relative, _) |
+                (false, Position::Fixed, _) => true,
 
                 // Otherwise, it's not a valid parent
-                (false, computed_values::position::T::static_, _) => false,
+                (false, Position::Static, _) => false,
             };
 
             let parent_info = if is_valid_parent {
@@ -627,7 +595,7 @@ impl FragmentBorderBoxIterator for ParentOffsetBorderBoxIterator {
 
                 Some(ParentBorderBoxInfo {
                     node_address: fragment.node,
-                    origin: border_box.origin + Point2D::new(border_width.left, border_width.top),
+                    origin: border_box.origin + Vector2D::new(border_width.left, border_width.top),
                 })
             } else {
                 None
@@ -650,9 +618,11 @@ pub fn process_node_geometry_request<N: LayoutNode>(requested_node: N, layout_ro
     iterator.client_rect
 }
 
-pub fn process_node_scroll_root_id_request<N: LayoutNode>(requested_node: N) -> ScrollRootId {
+pub fn process_node_scroll_root_id_request<N: LayoutNode>(id: PipelineId,
+                                                          requested_node: N)
+                                                          -> ClipId {
     let layout_node = requested_node.to_threadsafe();
-    layout_node.scroll_root_id()
+    layout_node.generate_scroll_root_id(id)
 }
 
 pub fn process_node_scroll_area_request< N: LayoutNode>(requested_node: N, layout_root: &mut Flow)
@@ -686,7 +656,7 @@ pub fn process_node_scroll_area_request< N: LayoutNode>(requested_node: N, layou
 }
 
 /// Return the resolved value of property for a given (pseudo)element.
-/// https://drafts.csswg.org/cssom/#resolved-value
+/// <https://drafts.csswg.org/cssom/#resolved-value>
 pub fn process_resolved_style_request<'a, N>(context: &LayoutContext,
                                              node: N,
                                              pseudo: &Option<PseudoElement>,
@@ -694,7 +664,9 @@ pub fn process_resolved_style_request<'a, N>(context: &LayoutContext,
                                              layout_root: &mut Flow) -> String
     where N: LayoutNode,
 {
+    use style::stylist::RuleInclusion;
     use style::traversal::resolve_style;
+
     let element = node.as_element().unwrap();
 
     // We call process_resolved_style_request after performing a whole-document
@@ -703,30 +675,45 @@ pub fn process_resolved_style_request<'a, N>(context: &LayoutContext,
         return process_resolved_style_request_internal(node, pseudo, property, layout_root);
     }
 
-    // However, the element may be in a display:none subtree. The style system
-    // has a mechanism to give us that within a defined scope (after which point
-    // it's cleared to maintained style system invariants).
+    // In a display: none subtree. No pseudo-element exists.
+    if pseudo.is_some() {
+        return String::new();
+    }
+
     let mut tlc = ThreadLocalStyleContext::new(&context.style_context);
     let mut context = StyleContext {
         shared: &context.style_context,
         thread_local: &mut tlc,
     };
-    let mut result = None;
-    let ensure = |el: N::ConcreteElement| el.as_node().initialize_data();
-    let clear = |el: N::ConcreteElement| el.as_node().clear_data();
-    resolve_style(&mut context, element, &ensure, &clear, |_: &_| {
-        let s = process_resolved_style_request_internal(node, pseudo, property, layout_root);
-        result = Some(s);
-    });
-    result.unwrap()
+
+    let styles = resolve_style(&mut context, element, RuleInclusion::All, false, pseudo.as_ref());
+    let style = styles.primary();
+    let longhand_id = match *property {
+        PropertyId::LonghandAlias(id, _) |
+        PropertyId::Longhand(id) => id,
+        // Firefox returns blank strings for the computed value of shorthands,
+        // so this should be web-compatible.
+        PropertyId::ShorthandAlias(..) |
+        PropertyId::Shorthand(_) => return String::new(),
+        PropertyId::Custom(ref name) => {
+            return style.computed_value_to_string(PropertyDeclarationId::Custom(name))
+        }
+    };
+
+    // No need to care about used values here, since we're on a display: none
+    // subtree, use the resolved value.
+    style.computed_value_to_string(PropertyDeclarationId::Longhand(longhand_id))
 }
 
 /// The primary resolution logic, which assumes that the element is styled.
-fn process_resolved_style_request_internal<'a, N>(requested_node: N,
-                                                  pseudo: &Option<PseudoElement>,
-                                                  property: &PropertyId,
-                                                  layout_root: &mut Flow) -> String
-    where N: LayoutNode,
+fn process_resolved_style_request_internal<'a, N>(
+    requested_node: N,
+    pseudo: &Option<PseudoElement>,
+    property: &PropertyId,
+    layout_root: &mut Flow,
+) -> String
+where
+    N: LayoutNode,
 {
     let layout_el = requested_node.to_threadsafe().as_element().unwrap();
     let layout_el = match *pseudo {
@@ -735,6 +722,8 @@ fn process_resolved_style_request_internal<'a, N>(requested_node: N,
         Some(PseudoElement::DetailsSummary) |
         Some(PseudoElement::DetailsContent) |
         Some(PseudoElement::Selection) => None,
+        // FIXME(emilio): What about the other pseudos? Probably they shouldn't
+        // just return the element's style!
         _ => Some(layout_el)
     };
 
@@ -749,24 +738,23 @@ fn process_resolved_style_request_internal<'a, N>(requested_node: N,
     };
 
     let style = &*layout_el.resolved_style();
-
     let longhand_id = match *property {
+        PropertyId::LonghandAlias(id, _) |
         PropertyId::Longhand(id) => id,
-
         // Firefox returns blank strings for the computed value of shorthands,
         // so this should be web-compatible.
+        PropertyId::ShorthandAlias(..) |
         PropertyId::Shorthand(_) => return String::new(),
-
         PropertyId::Custom(ref name) => {
             return style.computed_value_to_string(PropertyDeclarationId::Custom(name))
         }
     };
 
     let positioned = match style.get_box().position {
-        position::computed_value::T::relative |
-        /*position::computed_value::T::sticky |*/
-        position::computed_value::T::fixed |
-        position::computed_value::T::absolute => true,
+        Position::Relative |
+        Position::Sticky |
+        Position::Fixed |
+        Position::Absolute => true,
         _ => false
     };
 
@@ -786,7 +774,7 @@ fn process_resolved_style_request_internal<'a, N>(requested_node: N,
         let position = maybe_data.map_or(Point2D::zero(), |data| {
             match (*data).flow_construction_result {
                 ConstructionResult::Flow(ref flow_ref, _) =>
-                    flow::base(flow_ref.deref()).stacking_relative_position,
+                    flow_ref.deref().base().stacking_relative_position.to_point(),
                 // TODO(dzbarsky) search parents until we find node with a flow ref.
                 // https://github.com/servo/servo/issues/8307
                 _ => Point2D::zero()
@@ -816,7 +804,7 @@ fn process_resolved_style_request_internal<'a, N>(requested_node: N,
         LonghandId::MarginLeft | LonghandId::MarginRight |
         LonghandId::PaddingBottom | LonghandId::PaddingTop |
         LonghandId::PaddingLeft | LonghandId::PaddingRight
-        if applies && style.get_box().display != display::computed_value::T::none => {
+        if applies && style.get_box().display != Display::None => {
             let (margin_padding, side) = match longhand_id {
                 LonghandId::MarginBottom => (MarginPadding::Margin, Side::Bottom),
                 LonghandId::MarginTop => (MarginPadding::Margin, Side::Top),
@@ -839,13 +827,11 @@ fn process_resolved_style_request_internal<'a, N>(requested_node: N,
         },
 
         LonghandId::Bottom | LonghandId::Top | LonghandId::Right | LonghandId::Left
-        if applies && positioned && style.get_box().display !=
-                display::computed_value::T::none => {
+        if applies && positioned && style.get_box().display != Display::None => {
             used_value_for_position_property(layout_el, layout_root, requested_node, longhand_id)
         }
         LonghandId::Width | LonghandId::Height
-        if applies && style.get_box().display !=
-                display::computed_value::T::none => {
+        if applies && style.get_box().display != Display::None => {
             used_value_for_position_property(layout_el, layout_root, requested_node, longhand_id)
         }
         // FIXME: implement used value computation for line-height
@@ -864,7 +850,7 @@ pub fn process_offset_parent_query<N: LayoutNode>(requested_node: N, layout_root
     let parent_info = iterator.parent_nodes.into_iter().rev().filter_map(|info| info).next();
     match (node_offset_box, parent_info) {
         (Some(node_offset_box), Some(parent_info)) => {
-            let origin = node_offset_box.offset - parent_info.origin;
+            let origin = node_offset_box.offset - parent_info.origin.to_vector();
             let size = node_offset_box.rectangle.size;
             OffsetParentResponse {
                 node_address: Some(parent_info.node_address.to_untrusted_node_address()),
@@ -882,7 +868,7 @@ pub fn process_node_overflow_request<N: LayoutNode>(requested_node: N) -> NodeOv
     let style = &*layout_node.as_element().unwrap().resolved_style();
     let style_box = style.get_box();
 
-    NodeOverflowResponse(Some((Point2D::new(style_box.overflow_x, style_box.overflow_y.0))))
+    NodeOverflowResponse(Some((Point2D::new(style_box.overflow_x, style_box.overflow_y))))
 }
 
 pub fn process_margin_style_query<N: LayoutNode>(requested_node: N)

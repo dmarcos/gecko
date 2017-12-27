@@ -10,6 +10,15 @@ interface nsIOutputStream;
 interface nsICacheInfoChannel : nsISupports
 {
   /**
+   * Get the number of times the cache entry has been opened. This attribute is
+   * equivalent to nsICachingChannel.cacheToken.fetchCount.
+   *
+   * @throws NS_ERROR_NOT_AVAILABLE if the cache entry or the alternate data
+   *         cache entry cannot be read.
+   */
+  readonly attribute int32_t cacheTokenFetchCount;
+
+  /**
    * Get expiration time from cache token. This attribute is equivalent to
    * nsICachingChannel.cacheToken.expirationTime.
    */
@@ -28,6 +37,18 @@ interface nsICacheInfoChannel : nsISupports
    * and after the channel fires its OnStopRequest notification.
    */
   boolean isFromCache();
+
+  /**
+   * The unique ID of the corresponding nsICacheEntry from which the response is
+   * retrieved. By comparing the returned value, we can judge whether the data
+   * of two distinct nsICacheInfoChannels is from the same nsICacheEntry. This
+   * scenario could be useful when verifying whether the alternative data from
+   * one nsICacheInfochannel matches the main data from another one.
+   *
+   * Note: NS_ERROR_NOT_AVAILABLE is thrown when a nsICacheInfoChannel has no
+   * valid corresponding nsICacheEntry.
+   */
+  uint64_t getCacheEntryId();
 
   /**
    * Set/get the cache key... uniquely identifies the data in the cache
@@ -62,6 +83,13 @@ interface nsICacheInfoChannel : nsISupports
    * Must be called before AsyncOpen.
    */
   void preferAlternativeDataType(in ACString type);
+
+  /**
+   * Get the preferred alternative data type set by preferAlternativeDataType().
+   * This attribute stands for the desired data type instead of the type of the
+   * information retrieved from the network stack.
+   */
+  readonly attribute ACString preferredAlternativeDataType;
 
   /**
    * Holds the type of the alternative data representation that the channel

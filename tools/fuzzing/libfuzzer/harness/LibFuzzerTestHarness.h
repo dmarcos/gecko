@@ -13,13 +13,14 @@
 #define LibFuzzerTestHarness_h__
 
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/Attributes.h"
 
 #include "prenv.h"
 #include "nsComponentManagerUtils.h"
 #include "nsServiceManagerUtils.h"
 #include "nsCOMPtr.h"
 #include "nsAutoPtr.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsDirectoryServiceUtils.h"
@@ -41,7 +42,7 @@ static uint32_t gFailCount = 0;
  * "TEST-UNEXPECTED-FAIL " for the benefit of the test harness and
  * appending "\n" to eliminate having to type it at each call site.
  */
-void fail(const char* msg, ...)
+MOZ_FORMAT_PRINTF(1, 2) void fail(const char* msg, ...)
 {
   va_list ap;
 
@@ -53,24 +54,6 @@ void fail(const char* msg, ...)
 
   putchar('\n');
   ++gFailCount;
-}
-
-/**
- * Prints the given success message and arguments using printf, prepending
- * "TEST-PASS " for the benefit of the test harness and
- * appending "\n" to eliminate having to type it at each call site.
- */
-void passed(const char* msg, ...)
-{
-  va_list ap;
-
-  printf("TEST-PASS | ");
-
-  va_start(ap, msg);
-  vprintf(msg, ap);
-  va_end(ap);
-
-  putchar('\n');
 }
 
 //-----------------------------------------------------------------------------
@@ -132,11 +115,6 @@ class ScopedXPCOM : public nsIDirectoryServiceProvider2
       printf("Finished running %s tests.\n", mTestName);
     }
 
-    bool failed()
-    {
-      return mServMgr == nullptr;
-    }
-
     already_AddRefed<nsIFile> GetProfileDirectory()
     {
       if (mProfD) {
@@ -196,7 +174,7 @@ class ScopedXPCOM : public nsIDirectoryServiceProvider2
 #ifdef XP_MACOSX
       nsAutoCString leafName;
       mGREBinD->GetNativeLeafName(leafName);
-      if (leafName.Equals("Resources")) {
+      if (leafName.EqualsLiteral("Resources")) {
         mGREBinD->SetNativeLeafName(NS_LITERAL_CSTRING("MacOS"));
       }
 #endif

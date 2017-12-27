@@ -8,18 +8,12 @@ config = {
         'checkout-sources',
         'setup-mock',
         'build',
-        # 'generate-build-stats',
     ],
     "buildbot_json_path": "buildprops.json",
-    'exes': {
-        "buildbot": "/tools/buildbot/bin/buildbot",
-    },
     'app_ini_path': '%(obj_dir)s/dist/bin/application.ini',
     # decides whether we want to use moz_sign_cmd in env
     'enable_signing': False,
-    'enable_ccache': True,
     'vcs_share_base': '/builds/hg-shared',
-    'objdir': 'obj-firefox',
     'tooltool_script': ["/builds/tooltool.py"],
     'tooltool_bootstrap': "setup.sh",
     'enable_count_ctors': True,
@@ -37,12 +31,11 @@ config = {
     'publish_nightly_en_US_routes': False,
     'env': {
         'MOZBUILD_STATE_PATH': os.path.join(os.getcwd(), '.mozbuild'),
-        'MOZ_AUTOMATION': '1',
         'DISPLAY': ':2',
         'HG_SHARE_BASE_DIR': '/builds/hg-shared',
-        'MOZ_OBJDIR': 'obj-firefox',
+        'MOZ_OBJDIR': '%(abs_obj_dir)s',
         'TINDERBOX_OUTPUT': '1',
-        'TOOLTOOL_CACHE': '/home/worker/tooltool-cache',
+        'TOOLTOOL_CACHE': '/builds/worker/tooltool-cache',
         'TOOLTOOL_HOME': '/builds',
         'MOZ_CRASHREPORTER_NO_REPORT': '1',
         'CCACHE_DIR': '/builds/ccache',
@@ -50,7 +43,7 @@ config = {
         'CCACHE_UMASK': '002',
         'LC_ALL': 'C',
         ## 64 bit specific
-        'PATH': '/tools/buildbot/bin:/usr/local/bin:/usr/lib64/ccache:/bin:\
+        'PATH': '/usr/local/bin:/usr/lib64/ccache:/bin:\
 /usr/bin:/usr/local/sbin:/usr/sbin:/sbin:/tools/git/bin:/tools/python27/bin:\
 /tools/python27-mercurial/bin:/home/cltbld/bin',
         'LD_LIBRARY_PATH': "/tools/gcc-4.3.3/installed/lib64",
@@ -82,9 +75,9 @@ config = {
         'gstreamer-plugins-base-devel', 'freetype-2.3.11-6.el6_1.8.x86_64',
         'freetype-devel-2.3.11-6.el6_1.8.x86_64'
     ],
-    'src_mozconfig': 'browser/config/mozconfigs/linux64/opt-static-analysis-clang',
-    'tooltool_manifest_src': 'browser/config/tooltool-manifests/linux64/\
-clang.manifest.centos6',
+    # This doesn't actually inherit from anything.
+    'mozconfig_platform': 'linux64',
+    'mozconfig_variant': 'opt-static-analysis-clang',
     #######################
     'artifact_flag_build_variant_in_try': None,
 }

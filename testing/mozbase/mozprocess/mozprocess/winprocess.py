@@ -34,7 +34,7 @@
 # NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION
 # WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-from __future__ import absolute_import, unicode_literals
+from __future__ import absolute_import, unicode_literals, print_function
 
 import sys
 import subprocess
@@ -99,6 +99,7 @@ class PROCESS_INFORMATION(Structure):
 
         self.cb = sizeof(self)
 
+
 LPPROCESS_INFORMATION = POINTER(PROCESS_INFORMATION)
 
 # STARTUPINFO structure
@@ -124,6 +125,8 @@ class STARTUPINFO(Structure):
                 ("hStdOutput", HANDLE),
                 ("hStdError", HANDLE)
                 ]
+
+
 LPSTARTUPINFO = POINTER(STARTUPINFO)
 
 SW_HIDE = 0
@@ -159,6 +162,7 @@ class EnvironmentBlock:
                 values.append("{}={}".format(k, v))
             values.append("")
             self._as_parameter_ = LPCWSTR("\0".join(values))
+
 
 # Error Messages we need to watch for go here
 # See: http://msdn.microsoft.com/en-us/library/ms681388%28v=vs.85%29.aspx
@@ -201,6 +205,7 @@ def ErrCheckCreateProcess(result, func, args):
     # return a tuple (hProcess, hThread, dwProcessID, dwThreadID)
     pi = args[9]
     return AutoHANDLE(pi.hProcess), AutoHANDLE(pi.hThread), pi.dwProcessID, pi.dwThreadID
+
 
 CreateProcess = CreateProcessProto(("CreateProcessW", windll.kernel32),
                                    CreateProcessFlags)
@@ -361,6 +366,7 @@ def ErrCheckResumeThread(result, func, args):
 
     return args
 
+
 ResumeThreadProto = WINFUNCTYPE(DWORD,      # Return type
                                 HANDLE      # hThread
                                 )
@@ -447,33 +453,33 @@ def CanCreateJobObject():
 
 
 def parent():
-    print 'Starting parent'
+    print('Starting parent')
     currentProc = GetCurrentProcess()
     if IsProcessInJob(currentProc):
-        print >> sys.stderr, "You should not be in a job object to test"
+        print("You should not be in a job object to test", file=sys.stderr)
         sys.exit(1)
     assert CanCreateJobObject()
-    print 'File: %s' % __file__
+    print('File: %s' % __file__)
     command = [sys.executable, __file__, '-child']
-    print 'Running command: %s' % command
+    print('Running command: %s' % command)
     process = subprocess.Popen(command)
     process.kill()
     code = process.returncode
-    print 'Child code: %s' % code
+    print('Child code: %s' % code)
     assert code == 127
 
 
 def child():
-    print 'Starting child'
+    print('Starting child')
     currentProc = GetCurrentProcess()
     injob = IsProcessInJob(currentProc)
-    print "Is in a job?: %s" % injob
+    print("Is in a job?: %s" % injob)
     can_create = CanCreateJobObject()
-    print 'Can create job?: %s' % can_create
+    print('Can create job?: %s' % can_create)
     process = subprocess.Popen('c:\\windows\\notepad.exe')
     assert process._job
     jobinfo = QueryInformationJobObject(process._job, 'JobObjectExtendedLimitInformation')
-    print 'Job info: %s' % jobinfo
+    print('Job info: %s' % jobinfo)
     limitflags = jobinfo['BasicLimitInformation']['LimitFlags']
-    print 'LimitFlags: %s' % limitflags
+    print('LimitFlags: %s' % limitflags)
     process.kill()

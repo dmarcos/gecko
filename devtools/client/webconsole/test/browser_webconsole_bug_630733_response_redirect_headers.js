@@ -26,7 +26,7 @@ add_task(function* () {
 });
 
 function consoleOpened(hud) {
-  let deferred = promise.defer();
+  let deferred = defer();
 
   webConsoleClient = hud.ui.webConsoleClient;
   HUDService.lastFinishedRequest.callback = (aHttpRequest) => {
@@ -43,7 +43,7 @@ function consoleOpened(hud) {
 }
 
 function getHeaders() {
-  let deferred = promise.defer();
+  let deferred = defer();
 
   HUDService.lastFinishedRequest.callback = null;
 
@@ -64,7 +64,7 @@ function getHeaders() {
 }
 
 function getContent() {
-  let deferred = promise.defer();
+  let deferred = defer();
 
   webConsoleClient.getResponseContent(lastFinishedRequests["301"].actor,
     function (response) {
@@ -87,7 +87,7 @@ function getContent() {
 function performTest() {
   function readHeader(name) {
     for (let header of headers) {
-      if (header.name == name) {
+      if (header.name.toLowerCase() == name.toLowerCase()) {
         return header.value;
       }
     }

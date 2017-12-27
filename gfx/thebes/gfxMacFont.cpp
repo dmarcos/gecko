@@ -31,6 +31,7 @@ gfxMacFont::gfxMacFont(const RefPtr<UnscaledFontMac>& aUnscaledFont,
       mCGFont(nullptr),
       mCTFont(nullptr),
       mFontFace(nullptr),
+      mFontSmoothingBackgroundColor(aFontStyle->fontSmoothingBackgroundColor),
       mVariationFont(aFontEntry->HasVariations())
 {
     mApplySyntheticBold = aNeedsBold;
@@ -83,24 +84,6 @@ gfxMacFont::gfxMacFont(const RefPtr<UnscaledFontMac>& aUnscaledFont,
     cairo_matrix_t sizeMatrix, ctm;
     cairo_matrix_init_identity(&ctm);
     cairo_matrix_init_scale(&sizeMatrix, mAdjustedSize, mAdjustedSize);
-
-    // synthetic oblique by skewing via the font matrix
-    bool needsOblique = mFontEntry != nullptr &&
-                        mFontEntry->IsUpright() &&
-                        mStyle.style != NS_FONT_STYLE_NORMAL &&
-                        mStyle.allowSyntheticStyle;
-
-    if (needsOblique) {
-        cairo_matrix_t style;
-        cairo_matrix_init(&style,
-                          1,                //xx
-                          0,                //yx
-                          -1 * OBLIQUE_SKEW_FACTOR, //xy
-                          1,                //yy
-                          0,                //x0
-                          0);               //y0
-        cairo_matrix_multiply(&sizeMatrix, &sizeMatrix, &style);
-    }
 
     cairo_font_options_t *fontOptions = cairo_font_options_create();
 
@@ -163,7 +146,8 @@ gfxMacFont::ShapeText(DrawTarget     *aDrawTarget,
 
     // Currently, we don't support vertical shaping via CoreText,
     // so we ignore RequiresAATLayout if vertical is requested.
-    if (static_cast<MacOSFontEntry*>(GetFontEntry())->RequiresAATLayout() &&
+    auto macFontEntry = static_cast<MacOSFontEntry*>(GetFontEntry());
+    if (macFontEntry->RequiresAATLayout() &&
         !aVertical) {
         if (!mCoreTextShaper) {
             mCoreTextShaper = MakeUnique<gfxCoreTextShaper>(this);
@@ -173,6 +157,24 @@ gfxMacFont::ShapeText(DrawTarget     *aDrawTarget,
                                        aShapedText)) {
             PostShapingFixup(aDrawTarget, aText, aOffset,
                              aLength, aVertical, aShapedText);
+
+            if (macFontEntry->HasTrackingTable()) {
+                // Convert font size from device pixels back to CSS px
+                // to use in selecting tracking value
+                float trackSize = GetAdjustedSize() *
+                    aShapedText->GetAppUnitsPerDevUnit() /
+                    AppUnitsPerCSSPixel();
+                float tracking =
+                    macFontEntry->TrackingForCSSPx(trackSize) *
+                    mFUnitsConvFactor;
+                // Applying tracking is a lot like the adjustment we do for
+                // synthetic bold: we want to apply between clusters, not to
+                // non-spacing glyphs within a cluster. So we can reuse that
+                // helper here.
+                aShapedText->AdjustAdvancesForSyntheticBold(tracking,
+                                                            aOffset, aLength);
+            }
+
             return true;
         }
     }
@@ -199,7 +201,7 @@ gfxMacFont::Measure(const gfxTextRun *aTextRun,
                     BoundingBoxType aBoundingBoxType,
                     DrawTarget *aRefDrawTarget,
                     Spacing *aSpacing,
-                    uint16_t aOrientation)
+                    gfx::ShapedTextFlags aOrientation)
 {
     gfxFont::RunMetrics metrics =
         gfxFont::Measure(aTextRun, aStart, aEnd,
@@ -500,28 +502,22 @@ gfxMacFont::InitMetricsFromPlatform()
 already_AddRefed<ScaledFont>
 gfxMacFont::GetScaledFont(DrawTarget *aTarget)
 {
-  if (!mAzureScaledFont) {
-    NativeFont nativeFont;
-    nativeFont.mType = NativeFontType::MAC_FONT_FACE;
-    nativeFont.mFont = GetCGFontRef();
-    mAzureScaledFont =
-      Factory::CreateScaledFontWithCairo(nativeFont,
-                                         GetUnscaledFont(),
-                                         GetAdjustedSize(),
-                                         mScaledFont);
-  }
+    if (!mAzureScaledFont) {
+        mAzureScaledFont =
+            Factory::CreateScaledFontForMacFont(GetCGFontRef(),
+                                                GetUnscaledFont(),
+                                                GetAdjustedSize(),
+                                                Color::FromABGR(mFontSmoothingBackgroundColor),
+                                                !mStyle.useGrayscaleAntialiasing);
+        if (!mAzureScaledFont) {
+            return nullptr;
+        }
 
-  RefPtr<ScaledFont> scaledFont(mAzureScaledFont);
-  return scaledFont.forget();
-}
-
-already_AddRefed<GlyphRenderingOptions>
-gfxMacFont::GetGlyphRenderingOptions(const TextRunDrawParams* aRunParams)
-{
-    if (aRunParams) {
-        return Factory::CreateCGGlyphRenderingOptions(aRunParams->fontSmoothingBGColor);
+        mAzureScaledFont->SetCairoScaledFont(mScaledFont);
     }
-    return nullptr;
+
+    RefPtr<ScaledFont> scaledFont(mAzureScaledFont);
+    return scaledFont.forget();
 }
 
 void

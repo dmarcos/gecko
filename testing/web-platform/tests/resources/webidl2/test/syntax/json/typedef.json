@@ -14,7 +14,6 @@
                     "sequence": false,
                     "generic": null,
                     "nullable": false,
-                    "array": false,
                     "union": false,
                     "idlType": "float"
                 },
@@ -31,7 +30,6 @@
                     "sequence": false,
                     "generic": null,
                     "nullable": false,
-                    "array": false,
                     "union": false,
                     "idlType": "float"
                 },
@@ -44,18 +42,15 @@
     },
     {
         "type": "typedef",
-        "typeExtAttrs": [],
         "idlType": {
             "sequence": true,
             "generic": "sequence",
             "nullable": false,
-            "array": false,
             "union": false,
             "idlType": {
                 "sequence": false,
                 "generic": null,
                 "nullable": false,
-                "array": false,
                 "union": false,
                 "idlType": "Point"
             }
@@ -78,7 +73,6 @@
                     "sequence": false,
                     "generic": null,
                     "nullable": false,
-                    "array": false,
                     "union": false,
                     "idlType": "Point"
                 },
@@ -95,7 +89,6 @@
                     "sequence": false,
                     "generic": null,
                     "nullable": false,
-                    "array": false,
                     "union": false,
                     "idlType": "Point"
                 },
@@ -121,7 +114,6 @@
                     "sequence": false,
                     "generic": null,
                     "nullable": false,
-                    "array": false,
                     "union": false,
                     "idlType": "Rect"
                 },
@@ -132,16 +124,13 @@
                 "type": "operation",
                 "getter": false,
                 "setter": false,
-                "creator": false,
                 "deleter": false,
-                "legacycaller": false,
                 "static": false,
                 "stringifier": false,
                 "idlType": {
                     "sequence": false,
                     "generic": null,
                     "nullable": false,
-                    "array": false,
                     "union": false,
                     "idlType": "boolean"
                 },
@@ -155,7 +144,6 @@
                             "sequence": false,
                             "generic": null,
                             "nullable": false,
-                            "array": false,
                             "union": false,
                             "idlType": "Point"
                         },
@@ -168,16 +156,13 @@
                 "type": "operation",
                 "getter": false,
                 "setter": false,
-                "creator": false,
                 "deleter": false,
-                "legacycaller": false,
                 "static": false,
                 "stringifier": false,
                 "idlType": {
                     "sequence": false,
                     "generic": null,
                     "nullable": false,
-                    "array": false,
                     "union": false,
                     "idlType": "boolean"
                 },
@@ -191,7 +176,6 @@
                             "sequence": false,
                             "generic": null,
                             "nullable": false,
-                            "array": false,
                             "union": false,
                             "idlType": "PointSequence"
                         },
@@ -206,19 +190,20 @@
     },
     {
         "type": "typedef",
-        "typeExtAttrs": [
-            {
-                "name": "Clamp",
-                "arguments": null
-            }
-        ],
         "idlType": {
             "sequence": false,
             "generic": null,
             "nullable": false,
-            "array": false,
             "union": false,
-            "idlType": "octet"
+            "idlType": "octet",
+            "extAttrs": [
+                {
+                    "name": "Clamp",
+                    "arguments": null,
+                    "type": "extended-attribute",
+                    "rhs": null
+                }
+            ]
         },
         "name": "value",
         "extAttrs": []

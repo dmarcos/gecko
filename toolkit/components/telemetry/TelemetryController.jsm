@@ -14,10 +14,8 @@ const myScope = this;
 Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://gre/modules/Services.jsm", this);
 Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
-Cu.import("resource://gre/modules/Promise.jsm", this);
-Cu.import("resource://gre/modules/Task.jsm", this);
+Cu.import("resource://gre/modules/PromiseUtils.jsm", this);
 Cu.import("resource://gre/modules/DeferredTask.jsm", this);
-Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
 Cu.import("resource://gre/modules/TelemetryUtils.jsm", this);
 Cu.import("resource://gre/modules/AppConstants.jsm");
@@ -27,26 +25,22 @@ const Utils = TelemetryUtils;
 const LOGGER_NAME = "Toolkit.Telemetry";
 const LOGGER_PREFIX = "TelemetryController::";
 
-const PREF_BRANCH = "toolkit.telemetry.";
-const PREF_BRANCH_LOG = PREF_BRANCH + "log.";
-const PREF_SERVER = PREF_BRANCH + "server";
-const PREF_LOG_LEVEL = PREF_BRANCH_LOG + "level";
-const PREF_LOG_DUMP = PREF_BRANCH_LOG + "dump";
-const PREF_CACHED_CLIENTID = PREF_BRANCH + "cachedClientID";
-const PREF_FHR_UPLOAD_ENABLED = "datareporting.healthreport.uploadEnabled";
-const PREF_SESSIONS_BRANCH = "datareporting.sessions.";
-const PREF_UNIFIED = PREF_BRANCH + "unified";
+const PREF_BRANCH_LOG = "toolkit.telemetry.log.";
 
 // Whether the FHR/Telemetry unification features are enabled.
 // Changing this pref requires a restart.
-const IS_UNIFIED_TELEMETRY = Preferences.get(PREF_UNIFIED, false);
+const IS_UNIFIED_TELEMETRY = Services.prefs.getBoolPref(TelemetryUtils.Preferences.Unified, false);
 
 const PING_FORMAT_VERSION = 4;
 
 // Delay before intializing telemetry (ms)
-const TELEMETRY_DELAY = Preferences.get("toolkit.telemetry.initDelay", 60) * 1000;
+const TELEMETRY_DELAY = Services.prefs.getIntPref("toolkit.telemetry.initDelay", 60) * 1000;
 // Delay before initializing telemetry if we're testing (ms)
 const TELEMETRY_TEST_DELAY = 1;
+
+// How long to wait (ms) before sending the new profile ping on the first
+// run of a new profile.
+const NEWPROFILE_PING_DEFAULT_DELAY = 30 * 60 * 1000;
 
 // Ping types.
 const PING_TYPE_MAIN = "main";
@@ -56,33 +50,25 @@ const PING_TYPE_DELETION = "deletion";
 const REASON_GATHER_PAYLOAD = "gather-payload";
 const REASON_GATHER_SUBSESSION_PAYLOAD = "gather-subsession-payload";
 
-XPCOMUtils.defineLazyModuleGetter(this, "ClientID",
-                                  "resource://gre/modules/ClientID.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "Telemetry",
                                    "@mozilla.org/base/telemetry;1",
                                    "nsITelemetry");
-XPCOMUtils.defineLazyModuleGetter(this, "AsyncShutdown",
-                                  "resource://gre/modules/AsyncShutdown.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "TelemetryStorage",
-                                  "resource://gre/modules/TelemetryStorage.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ThirdPartyCookieProbe",
-                                  "resource://gre/modules/ThirdPartyCookieProbe.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "TelemetryEnvironment",
-                                  "resource://gre/modules/TelemetryEnvironment.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "SessionRecorder",
-                                  "resource://gre/modules/SessionRecorder.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
-                                  "resource://gre/modules/UpdateUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "TelemetryArchive",
-                                  "resource://gre/modules/TelemetryArchive.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "TelemetrySession",
-                                  "resource://gre/modules/TelemetrySession.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "TelemetrySend",
-                                  "resource://gre/modules/TelemetrySend.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "TelemetryReportingPolicy",
-                                  "resource://gre/modules/TelemetryReportingPolicy.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "TelemetryModules",
-                                  "resource://gre/modules/TelemetryModules.jsm");
+
+XPCOMUtils.defineLazyModuleGetters(this, {
+  ClientID: "resource://gre/modules/ClientID.jsm",
+  AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
+  TelemetryStorage: "resource://gre/modules/TelemetryStorage.jsm",
+  ThirdPartyCookieProbe: "resource://gre/modules/ThirdPartyCookieProbe.jsm",
+  TelemetryEnvironment: "resource://gre/modules/TelemetryEnvironment.jsm",
+  UpdateUtils: "resource://gre/modules/UpdateUtils.jsm",
+  TelemetryArchive: "resource://gre/modules/TelemetryArchive.jsm",
+  TelemetrySession: "resource://gre/modules/TelemetrySession.jsm",
+  TelemetrySend: "resource://gre/modules/TelemetrySend.jsm",
+  TelemetryReportingPolicy: "resource://gre/modules/TelemetryReportingPolicy.jsm",
+  TelemetryModules: "resource://gre/modules/TelemetryModules.jsm",
+  UpdatePing: "resource://gre/modules/UpdatePing.jsm",
+  TelemetryHealthPing: "resource://gre/modules/TelemetryHealthPing.jsm",
+});
 
 /**
  * Setup Telemetry logging. This function also gets called when loggin related
@@ -98,14 +84,14 @@ function configureLogging() {
     let consoleAppender = new Log.ConsoleAppender(new Log.BasicFormatter());
     gLogger.addAppender(consoleAppender);
 
-    Preferences.observe(PREF_BRANCH_LOG, configureLogging);
+    Services.prefs.addObserver(PREF_BRANCH_LOG, configureLogging);
   }
 
   // Make sure the logger keeps up with the logging level preference.
-  gLogger.level = Log.Level[Preferences.get(PREF_LOG_LEVEL, "Warn")];
+  gLogger.level = Log.Level[Services.prefs.getStringPref(TelemetryUtils.Preferences.LogLevel, "Warn")];
 
   // If enabled in the preferences, add a dump appender.
-  let logDumping = Preferences.get(PREF_LOG_DUMP, false);
+  let logDumping = Services.prefs.getBoolPref(TelemetryUtils.Preferences.LogDump, false);
   if (logDumping != !!gLogAppenderDump) {
     if (logDumping) {
       gLogAppenderDump = new Log.DumpAppender(new Log.BasicFormatter());
@@ -124,16 +110,17 @@ var Policy = {
   now: () => new Date(),
   generatePingId: () => Utils.generateUUID(),
   getCachedClientID: () => ClientID.getCachedClientID(),
-}
+};
 
 this.EXPORTED_SYMBOLS = ["TelemetryController"];
 
 this.TelemetryController = Object.freeze({
-  Constants: Object.freeze({
-    PREF_LOG_LEVEL,
-    PREF_LOG_DUMP,
-    PREF_SERVER,
-  }),
+  /**
+   * Used only for testing purposes.
+   */
+  testAssemblePing(aType, aPayload, aOptions) {
+    return Impl.assemblePing(aType, aPayload, aOptions);
+  },
 
   /**
    * Used only for testing purposes.
@@ -301,14 +288,6 @@ this.TelemetryController = Object.freeze({
   },
 
   /**
-   * The session recorder instance managed by Telemetry.
-   * @return {Object} The active SessionRecorder instance or null if not available.
-   */
-  getSessionRecorder() {
-    return Impl._sessionRecorder;
-  },
-
-  /**
    * Allows waiting for TelemetryControllers delayed initialization to complete.
    * The returned promise is guaranteed to resolve before TelemetryController is shutting down.
    * @return {Promise} Resolved when delayed TelemetryController initialization completed.
@@ -322,6 +301,7 @@ var Impl = {
   _initialized: false,
   _initStarted: false, // Whether we started setting up TelemetryController.
   _shuttingDown: false, // Whether the browser is shutting down.
+  _shutDown: false, // Whether the browser has shut down.
   _logger: null,
   _prevValues: {},
   // The previous build ID, if this is the first run with a new build.
@@ -333,8 +313,6 @@ var Impl = {
   // The deferred promise resolved when the initialization task completes.
   _delayedInitTaskDeferred: null,
 
-  // The session recorder, shared with FHR and the Data Reporting Service.
-  _sessionRecorder: null,
   // This is a public barrier Telemetry clients can use to add blockers to the shutdown
   // of TelemetryController.
   // After this barrier, clients can not submit Telemetry pings anymore.
@@ -343,6 +321,8 @@ var Impl = {
   _connectionsBarrier: new AsyncShutdown.Barrier("TelemetryController: Waiting for pending ping activity"),
   // This is true when running in the test infrastructure.
   _testMode: false,
+  // The task performing the delayed sending of the "new-profile" ping.
+  _delayedNewPingTask: null,
 
   get _log() {
     if (!this._logger) {
@@ -498,7 +478,7 @@ var Impl = {
     this._log.trace("submitExternalPing - type: " + aType + ", aOptions: " + JSON.stringify(aOptions));
 
     // Reject pings sent after shutdown.
-    if (this._shuttingDown) {
+    if (this._shutDown) {
       const errorMessage = "submitExternalPing - Submission is not allowed after shutdown, discarding ping of type: " + aType;
       this._log.error(errorMessage);
       return Promise.reject(new Error(errorMessage));
@@ -643,9 +623,24 @@ var Impl = {
     // Configure base Telemetry recording.
     // Unified Telemetry makes it opt-out. If extended Telemetry is enabled, base recording
     // is always on as well.
-    const enabled = Utils.isTelemetryEnabled;
-    Telemetry.canRecordBase = enabled || IS_UNIFIED_TELEMETRY;
-    Telemetry.canRecordExtended = enabled;
+    if (IS_UNIFIED_TELEMETRY) {
+      // Enable extended Telemetry on pre-release channels and disable it
+      // on Release/ESR.
+      let prereleaseChannels = ["nightly", "aurora", "beta"];
+      if (!AppConstants.MOZILLA_OFFICIAL) {
+        // Turn extended telemetry for local developer builds.
+        prereleaseChannels.push("default");
+      }
+      const isPrereleaseChannel =
+        prereleaseChannels.includes(AppConstants.MOZ_UPDATE_CHANNEL);
+      Telemetry.canRecordBase = true;
+      Telemetry.canRecordExtended = isPrereleaseChannel ||
+        Services.prefs.getBoolPref(TelemetryUtils.Preferences.OverridePreRelease, false);
+    } else {
+      // We're not on unified Telemetry, stick to the old behaviour for
+      // supporting Fennec.
+      Telemetry.canRecordBase = Telemetry.canRecordExtended = Utils.isTelemetryEnabled;
+    }
 
     this._log.config("enableTelemetryRecording - canRecordBase:" + Telemetry.canRecordBase +
                      ", canRecordExtended: " + Telemetry.canRecordExtended);
@@ -670,6 +665,7 @@ var Impl = {
   setupTelemetry: function setupTelemetry(testing) {
     this._initStarted = true;
     this._shuttingDown = false;
+    this._shutDown = false;
     this._testMode = testing;
 
     this._log.trace("setupTelemetry");
@@ -692,12 +688,6 @@ var Impl = {
       return Promise.resolve();
     }
 
-    // Initialize the session recorder.
-    if (!this._sessionRecorder) {
-      this._sessionRecorder = new SessionRecorder(PREF_SESSIONS_BRANCH);
-      this._sessionRecorder.onStartup();
-    }
-
     this._attachObservers();
 
     // Perform a lightweight, early initialization for the component, just registering
@@ -713,23 +703,34 @@ var Impl = {
     // lead to some stale client ids.
     this._clientID = ClientID.getCachedClientID();
 
+    // Init the update ping telemetry as early as possible. This won't have
+    // an impact on startup.
+    UpdatePing.earlyInit();
+
     // Delay full telemetry initialization to give the browser time to
     // run various late initializers. Otherwise our gathered memory
     // footprint and other numbers would be too optimistic.
-    this._delayedInitTaskDeferred = Promise.defer();
-    this._delayedInitTask = new DeferredTask(function* () {
+    this._delayedInitTaskDeferred = PromiseUtils.defer();
+    this._delayedInitTask = new DeferredTask(async () => {
       try {
         // TODO: This should probably happen after all the delayed init here.
         this._initialized = true;
         TelemetryEnvironment.delayedInit();
 
         // Load the ClientID.
-        this._clientID = yield ClientID.getClientID();
+        this._clientID = await ClientID.getClientID();
 
-        yield TelemetrySend.setup(this._testMode);
+        await TelemetrySend.setup(this._testMode);
 
         // Perform TelemetrySession delayed init.
-        yield TelemetrySession.delayedInit();
+        await TelemetrySession.delayedInit();
+
+        if (Services.prefs.getBoolPref(TelemetryUtils.Preferences.NewProfilePingEnabled, false) &&
+            !TelemetrySession.newProfilePingSent) {
+          // Kick off the scheduling of the new-profile ping.
+          this.scheduleNewProfilePing();
+        }
+
         // Purge the pings archive by removing outdated pings. We don't wait for
         // this task to complete, but TelemetryStorage blocks on it during
         // shutdown.
@@ -749,7 +750,8 @@ var Impl = {
       } finally {
         this._delayedInitTask = null;
       }
-    }.bind(this), this._testMode ? TELEMETRY_TEST_DELAY : TELEMETRY_DELAY);
+    }, this._testMode ? TELEMETRY_TEST_DELAY : TELEMETRY_DELAY,
+       this._testMode ? 0 : undefined);
 
     AsyncShutdown.sendTelemetry.addBlocker("TelemetryController: shutting down",
                                            () => this.shutdown(),
@@ -781,17 +783,28 @@ var Impl = {
       return;
     }
 
-    Preferences.ignore(PREF_BRANCH_LOG, configureLogging);
+    this._shuttingDown = true;
+
+    Services.prefs.removeObserver(PREF_BRANCH_LOG, configureLogging);
     this._detachObservers();
 
     // Now do an orderly shutdown.
     try {
+      if (this._delayedNewPingTask) {
+        await this._delayedNewPingTask.finalize();
+      }
+
+      UpdatePing.shutdown();
+
       // Stop the datachoices infobar display.
       TelemetryReportingPolicy.shutdown();
       TelemetryEnvironment.shutdown();
 
       // Stop any ping sending.
       await TelemetrySend.shutdown();
+
+      // Send latest data.
+      await TelemetryHealthPing.shutdown();
 
       await TelemetrySession.shutdown();
 
@@ -807,7 +820,7 @@ var Impl = {
       // Reset state.
       this._initialized = false;
       this._initStarted = false;
-      this._shuttingDown = true;
+      this._shutDown = true;
     }
   },
 
@@ -824,6 +837,7 @@ var Impl = {
     // This handles 1).
     if (!this._initStarted) {
       this._shuttingDown = true;
+      this._shutDown = true;
       return Promise.resolve();
     }
 
@@ -857,6 +871,10 @@ var Impl = {
     case "app-startup":
       // app-startup is only registered for content processes.
       return this.setupContentTelemetry();
+    case "nsPref:changed":
+      if (aData == TelemetryUtils.Preferences.FhrUploadEnabled) {
+        return this._onUploadPrefChange();
+      }
     }
     return undefined;
   },
@@ -872,6 +890,7 @@ var Impl = {
       shutdownBarrier: this._shutdownBarrier.state,
       connectionsBarrier: this._connectionsBarrier.state,
       sendModule: TelemetrySend.getShutdownState(),
+      haveDelayedNewProfileTask: !!this._delayedNewPingTask,
     };
   },
 
@@ -880,19 +899,19 @@ var Impl = {
    * the preferences panel), this triggers sending the deletion ping.
    */
   _onUploadPrefChange() {
-    const uploadEnabled = Preferences.get(PREF_FHR_UPLOAD_ENABLED, false);
+    const uploadEnabled = Services.prefs.getBoolPref(TelemetryUtils.Preferences.FhrUploadEnabled, false);
     if (uploadEnabled) {
       // There's nothing we should do if we are enabling upload.
       return;
     }
 
-    let p = Task.spawn(function*() {
+    let p = (async () => {
       try {
         // Clear the current pings.
-        yield TelemetrySend.clearCurrentPings();
+        await TelemetrySend.clearCurrentPings();
 
         // Remove all the pending pings, but not the deletion ping.
-        yield TelemetryStorage.runRemovePendingPingsTask();
+        await TelemetryStorage.runRemovePendingPingsTask();
       } catch (e) {
         this._log.error("_onUploadPrefChange - error clearing pending pings", e);
       } finally {
@@ -900,16 +919,18 @@ var Impl = {
         this._log.trace("_onUploadPrefChange - Sending deletion ping.");
         this.submitExternalPing(PING_TYPE_DELETION, {}, { addClientId: true });
       }
-    }.bind(this));
+    })();
 
     this._shutdownBarrier.client.addBlocker(
       "TelemetryController: removing pending pings after data upload was disabled", p);
   },
 
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsISupportsWeakReference]),
+
   _attachObservers() {
     if (IS_UNIFIED_TELEMETRY) {
       // Watch the FHR upload setting to trigger deletion pings.
-      Preferences.observe(PREF_FHR_UPLOAD_ENABLED, this._onUploadPrefChange, this);
+      Services.prefs.addObserver(TelemetryUtils.Preferences.FhrUploadEnabled, this, true);
     }
   },
 
@@ -918,7 +939,7 @@ var Impl = {
    */
   _detachObservers() {
     if (IS_UNIFIED_TELEMETRY) {
-      Preferences.ignore(PREF_FHR_UPLOAD_ENABLED, this._onUploadPrefChange, this);
+      Services.prefs.removeObserver(TelemetryUtils.Preferences.FhrUploadEnabled, this);
     }
   },
 
@@ -932,7 +953,7 @@ var Impl = {
   },
 
   getCurrentPingData(aSubsession) {
-    this._log.trace("getCurrentPingData - subsession: " + aSubsession)
+    this._log.trace("getCurrentPingData - subsession: " + aSubsession);
 
     // Telemetry is disabled, don't gather any data.
     if (!Telemetry.canRecordBase) {
@@ -971,5 +992,51 @@ var Impl = {
     await TelemetryEnvironment.testReset();
 
     await controllerSetup;
+  },
+
+  /**
+   * Schedule sending the "new-profile" ping.
+   */
+  scheduleNewProfilePing() {
+    this._log.trace("scheduleNewProfilePing");
+
+    const sendDelay =
+      Services.prefs.getIntPref(TelemetryUtils.Preferences.NewProfilePingDelay, NEWPROFILE_PING_DEFAULT_DELAY);
+
+    this._delayedNewPingTask = new DeferredTask(async () => {
+      try {
+        await this.sendNewProfilePing();
+      } finally {
+        this._delayedNewPingTask = null;
+      }
+    }, sendDelay);
+
+    this._delayedNewPingTask.arm();
+  },
+
+  /**
+   * Generate and send the new-profile ping
+   */
+  async sendNewProfilePing() {
+    this._log.trace("sendNewProfilePing - shutting down: " + this._shuttingDown);
+
+    // Generate the payload.
+    const payload = {
+      "reason": this._shuttingDown ? "shutdown" : "startup",
+    };
+
+    // Generate and send the "new-profile" ping. This uses the
+    // pingsender if we're shutting down.
+    let options = {
+      addClientId: true,
+      addEnvironment: true,
+      usePingSender: this._shuttingDown,
+    };
+    // TODO: we need to be smarter about when to send the ping (and save the
+    // state to file). |requestIdleCallback| is currently only accessible
+    // through DOM. See bug 1361996.
+    await TelemetryController.submitExternalPing("new-profile", payload, options)
+                             .then(() => TelemetrySession.markNewProfilePingSent(),
+                                   e => this._log.error("sendNewProfilePing - failed to submit new-profile ping", e));
   },
 };

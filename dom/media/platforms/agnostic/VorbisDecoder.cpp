@@ -10,6 +10,7 @@
 
 #include "mozilla/PodOperations.h"
 #include "mozilla/SyncRunnable.h"
+#include "VideoUtils.h"
 
 #undef LOG
 #define LOG(type, msg) MOZ_LOG(sPDMLog, type, msg)
@@ -74,12 +75,17 @@ VorbisDataDecoder::Init()
   if (!XiphExtradataToHeaders(headers, headerLens,
                               mInfo.mCodecSpecificConfig->Elements(),
                               mInfo.mCodecSpecificConfig->Length())) {
-    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
+    return InitPromise::CreateAndReject(
+      MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                  RESULT_DETAIL("Could not get vorbis header.")),
+      __func__);
   }
   for (size_t i = 0; i < headers.Length(); i++) {
     if (NS_FAILED(DecodeHeader(headers[i], headerLens[i]))) {
-      return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR,
-                                          __func__);
+      return InitPromise::CreateAndReject(
+        MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                    RESULT_DETAIL("Could not decode vorbis header.")),
+        __func__);
     }
   }
 
@@ -87,12 +93,18 @@ VorbisDataDecoder::Init()
 
   int r = vorbis_synthesis_init(&mVorbisDsp, &mVorbisInfo);
   if (r) {
-    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
+    return InitPromise::CreateAndReject(
+      MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                  RESULT_DETAIL("Systhesis init fail.")),
+      __func__);
   }
 
   r = vorbis_block_init(&mVorbisDsp, &mVorbisBlock);
   if (r) {
-    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
+    return InitPromise::CreateAndReject(
+      MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                  RESULT_DETAIL("Block init fail.")),
+      __func__);
   }
 
   if (mInfo.mRate != (uint32_t)mVorbisDsp.vi->rate) {
@@ -106,7 +118,10 @@ VorbisDataDecoder::Init()
 
   AudioConfig::ChannelLayout layout(mVorbisDsp.vi->channels);
   if (!layout.IsValid()) {
-    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
+    return InitPromise::CreateAndReject(
+      MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                  RESULT_DETAIL("Invalid audio layout.")),
+      __func__);
   }
 
   return InitPromise::CreateAndResolve(TrackInfo::kAudioTrack, __func__);
@@ -141,19 +156,19 @@ VorbisDataDecoder::ProcessDecode(MediaRawData* aSample)
   const unsigned char* aData = aSample->Data();
   size_t aLength = aSample->Size();
   int64_t aOffset = aSample->mOffset;
-  int64_t aTstampUsecs = aSample->mTime;
-  int64_t aTotalFrames = 0;
 
   MOZ_ASSERT(mPacketCount >= 3);
 
-  if (!mLastFrameTime || mLastFrameTime.ref() != aSample->mTime) {
+  if (!mLastFrameTime ||
+      mLastFrameTime.ref() != aSample->mTime.ToMicroseconds()) {
     // We are starting a new block.
     mFrames = 0;
-    mLastFrameTime = Some(aSample->mTime);
+    mLastFrameTime = Some(aSample->mTime.ToMicroseconds());
   }
 
-  ogg_packet pkt = InitVorbisPacket(aData, aLength, false, aSample->mEOS,
-                                    aSample->mTimecode, mPacketCount++);
+  ogg_packet pkt = InitVorbisPacket(
+    aData, aLength, false, aSample->mEOS,
+    aSample->mTimecode.ToMicroseconds(), mPacketCount++);
 
   int err = vorbis_synthesis(&mVorbisBlock, &pkt);
   if (err) {
@@ -193,27 +208,27 @@ VorbisDataDecoder::ProcessDecode(MediaRawData* aSample)
       }
     }
 
-    CheckedInt64 duration = FramesToUsecs(frames, rate);
-    if (!duration.isValid()) {
+    auto duration = FramesToTimeUnit(frames, rate);
+    if (!duration.IsValid()) {
       return DecodePromise::CreateAndReject(
         MediaResult(NS_ERROR_DOM_MEDIA_OVERFLOW_ERR,
                     RESULT_DETAIL("Overflow converting audio duration")),
         __func__);
     }
-    CheckedInt64 total_duration = FramesToUsecs(mFrames, rate);
-    if (!total_duration.isValid()) {
+    auto total_duration = FramesToTimeUnit(mFrames, rate);
+    if (!total_duration.IsValid()) {
       return DecodePromise::CreateAndReject(
         MediaResult(NS_ERROR_DOM_MEDIA_OVERFLOW_ERR,
                     RESULT_DETAIL("Overflow converting audio total_duration")),
         __func__);
     }
 
-    CheckedInt64 time = total_duration + aTstampUsecs;
-    if (!time.isValid()) {
+    auto time = total_duration + aSample->mTime;
+    if (!time.IsValid()) {
       return DecodePromise::CreateAndReject(
         MediaResult(
           NS_ERROR_DOM_MEDIA_OVERFLOW_ERR,
-          RESULT_DETAIL("Overflow adding total_duration and aTstampUsecs")),
+          RESULT_DETAIL("Overflow adding total_duration and aSample->mTime")),
         __func__);
     };
 
@@ -233,9 +248,7 @@ VorbisDataDecoder::ProcessDecode(MediaRawData* aSample)
     AudioSampleBuffer data(Move(buffer));
     data = mAudioConverter->Process(Move(data));
 
-    aTotalFrames += frames;
-
-    results.AppendElement(new AudioData(aOffset, time.value(), duration.value(),
+    results.AppendElement(new AudioData(aOffset, time, duration,
                                         frames, data.Forget(), channels, rate));
     mFrames += frames;
     err = vorbis_synthesis_read(&mVorbisDsp, frames);
@@ -263,12 +276,12 @@ RefPtr<MediaDataDecoder::FlushPromise>
 VorbisDataDecoder::Flush()
 {
   RefPtr<VorbisDataDecoder> self = this;
-  return InvokeAsync(mTaskQueue, __func__, [self, this]() {
+  return InvokeAsync(mTaskQueue, __func__, [self]() {
     // Ignore failed results from vorbis_synthesis_restart. They
     // aren't fatal and it fails when ResetDecode is called at a
     // time when no vorbis data has been read.
-    vorbis_synthesis_restart(&mVorbisDsp);
-    mLastFrameTime.reset();
+    vorbis_synthesis_restart(&self->mVorbisDsp);
+    self->mLastFrameTime.reset();
     return FlushPromise::CreateAndResolve(true, __func__);
   });
 }

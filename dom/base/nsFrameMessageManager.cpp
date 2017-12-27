@@ -9,6 +9,8 @@
 #include "nsFrameMessageManager.h"
 
 #include "ContentChild.h"
+#include "GeckoProfiler.h"
+#include "nsASCIIMask.h"
 #include "nsContentUtils.h"
 #include "nsDOMClassInfoID.h"
 #include "nsError.h"
@@ -18,7 +20,7 @@
 #include "nsJSUtils.h"
 #include "nsJSPrincipals.h"
 #include "nsNetUtil.h"
-#include "nsScriptLoader.h"
+#include "mozilla/dom/ScriptLoader.h"
 #include "nsFrameLoader.h"
 #include "nsIInputStream.h"
 #include "nsIXULRuntime.h"
@@ -32,6 +34,7 @@
 #include "mozilla/CycleCollectedJSContext.h"
 #include "mozilla/IntentionalCrash.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/ScriptPreloader.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/MessagePort.h"
@@ -40,8 +43,6 @@
 #include "mozilla/dom/ProcessGlobal.h"
 #include "mozilla/dom/SameProcessMessageQueue.h"
 #include "mozilla/dom/ScriptSettings.h"
-#include "mozilla/dom/ipc/BlobChild.h"
-#include "mozilla/dom/ipc/BlobParent.h"
 #include "mozilla/dom/ipc/StructuredCloneData.h"
 #include "mozilla/dom/DOMStringList.h"
 #include "mozilla/jsipc/CrossProcessObjectWrappers.h"
@@ -50,10 +51,6 @@
 #include "nsQueryObject.h"
 #include <algorithm>
 #include "chrome/common/ipc_channel.h" // for IPC::Channel::kMaximumMessageSize
-
-#ifdef MOZ_CRASHREPORTER
-#include "nsExceptionHandler.h"
-#endif
 
 #ifdef ANDROID
 #include <android/log.h>
@@ -255,17 +252,13 @@ nsFrameMessageManager::AddMessageListener(const nsAString& aMessage,
                                           nsIMessageListener* aListener,
                                           bool aListenWhenClosed)
 {
-  nsAutoTObserverArray<nsMessageListenerInfo, 1>* listeners =
-    mListeners.Get(aMessage);
-  if (!listeners) {
-    listeners = new nsAutoTObserverArray<nsMessageListenerInfo, 1>();
-    mListeners.Put(aMessage, listeners);
-  } else {
-    uint32_t len = listeners->Length();
-    for (uint32_t i = 0; i < len; ++i) {
-      if (listeners->ElementAt(i).mStrongListener == aListener) {
-        return NS_OK;
-      }
+  auto listeners = mListeners.LookupForAdd(aMessage).OrInsert([]() {
+      return new nsAutoTObserverArray<nsMessageListenerInfo, 1>();
+    });
+  uint32_t len = listeners->Length();
+  for (uint32_t i = 0; i < len; ++i) {
+    if (listeners->ElementAt(i).mStrongListener == aListener) {
+      return NS_OK;
     }
   }
 
@@ -322,17 +315,13 @@ nsFrameMessageManager::AddWeakMessageListener(const nsAString& aMessage,
   }
 #endif
 
-  nsAutoTObserverArray<nsMessageListenerInfo, 1>* listeners =
-    mListeners.Get(aMessage);
-  if (!listeners) {
-    listeners = new nsAutoTObserverArray<nsMessageListenerInfo, 1>();
-    mListeners.Put(aMessage, listeners);
-  } else {
-    uint32_t len = listeners->Length();
-    for (uint32_t i = 0; i < len; ++i) {
-      if (listeners->ElementAt(i).mWeakListener == weak) {
-        return NS_OK;
-      }
+  auto listeners = mListeners.LookupForAdd(aMessage).OrInsert([]() {
+      return new nsAutoTObserverArray<nsMessageListenerInfo, 1>();
+    });
+  uint32_t len = listeners->Length();
+  for (uint32_t i = 0; i < len; ++i) {
+    if (listeners->ElementAt(i).mWeakListener == weak) {
+      return NS_OK;
     }
   }
 
@@ -584,18 +573,6 @@ nsFrameMessageManager::SendRpcMessage(const nsAString& aMessageName,
 static bool
 AllowMessage(size_t aDataLength, const nsAString& aMessageName)
 {
-  static const size_t kMinTelemetryMessageSize = 8192;
-
-  if (aDataLength < kMinTelemetryMessageSize) {
-    return true;
-  }
-
-  NS_ConvertUTF16toUTF8 messageName(aMessageName);
-  messageName.StripChars("0123456789");
-
-  Telemetry::Accumulate(Telemetry::MESSAGE_MANAGER_MESSAGE_SIZE2, messageName,
-                        aDataLength);
-
   // A message includes more than structured clone data, so subtract
   // 20KB to make it more likely that a message within this bound won't
   // result in an overly large IPC message.
@@ -603,6 +580,9 @@ AllowMessage(size_t aDataLength, const nsAString& aMessageName)
   if (aDataLength < kMaxMessageSize) {
     return true;
   }
+
+  NS_ConvertUTF16toUTF8 messageName(aMessageName);
+  messageName.StripTaggedASCII(ASCIIMask::Mask0to9());
 
   Telemetry::Accumulate(Telemetry::REJECTED_MESSAGE_MANAGER_MESSAGE,
                         messageName);
@@ -620,10 +600,8 @@ nsFrameMessageManager::SendMessage(const nsAString& aMessageName,
                                    JS::MutableHandle<JS::Value> aRetval,
                                    bool aIsSync)
 {
-  NS_LossyConvertUTF16toASCII messageNameCStr(aMessageName);
-  PROFILER_LABEL_DYNAMIC("nsFrameMessageManager", "SendMessage",
-                          js::ProfileEntry::Category::EVENTS,
-                          messageNameCStr.get());
+  AUTO_PROFILER_LABEL_DYNAMIC_LOSSY_NSSTRING(
+    "nsFrameMessageManager::SendMessage", EVENTS, aMessageName);
 
   NS_ASSERTION(!IsGlobal(), "Should not call SendSyncMessage in chrome");
   NS_ASSERTION(!IsBroadcaster(), "Should not call SendSyncMessage in chrome");
@@ -677,7 +655,7 @@ nsFrameMessageManager::SendMessage(const nsAString& aMessageName,
     // NOTE: We need to strip digit characters from the message name in order to
     // avoid a large number of buckets due to generated names from addons (such
     // as "ublock:sb:{N}"). See bug 1348113 comment 10.
-    messageName.StripChars("0123456789");
+    messageName.StripTaggedASCII(ASCIIMask::Mask0to9());
     Telemetry::Accumulate(Telemetry::IPC_SYNC_MESSAGE_MANAGER_LATENCY_MS,
                           messageName, latencyMs);
   }
@@ -827,6 +805,10 @@ nsFrameMessageManager::ReleaseCachedProcesses()
 NS_IMETHODIMP
 nsFrameMessageManager::Dump(const nsAString& aStr)
 {
+  if (!nsContentUtils::DOMWindowDumpEnabled()) {
+    return NS_OK;
+  }
+
 #ifdef ANDROID
   __android_log_print(ANDROID_LOG_INFO, "Gecko", "%s", NS_ConvertUTF16toUTF8(aStr).get());
 #endif
@@ -861,6 +843,13 @@ NS_IMETHODIMP
 nsFrameMessageManager::GetDocShell(nsIDocShell** aDocShell)
 {
   *aDocShell = nullptr;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsFrameMessageManager::GetTabEventTarget(nsIEventTarget** aTarget)
+{
+  *aTarget = nullptr;
   return NS_OK;
 }
 
@@ -1319,6 +1308,16 @@ nsFrameMessageManager::GetProcessMessageManager(nsIMessageSender** aPMM)
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsFrameMessageManager::GetRemoteType(nsAString& aRemoteType)
+{
+  aRemoteType.Truncate();
+  if (mCallback) {
+    return mCallback->DoGetRemoteType(aRemoteType);
+  }
+  return NS_OK;
+}
+
 namespace {
 
 struct MessageManagerReferentCount
@@ -1537,6 +1536,9 @@ void
 nsMessageManagerScriptExecutor::LoadScriptInternal(const nsAString& aURL,
                                                    bool aRunInGlobalScope)
 {
+  AUTO_PROFILER_LABEL_DYNAMIC_LOSSY_NSSTRING(
+    "nsMessageManagerScriptExecutor::LoadScriptInternal", OTHER, aURL);
+
   if (!mGlobal || !sCachedScripts) {
     return;
   }
@@ -1555,7 +1557,7 @@ nsMessageManagerScriptExecutor::LoadScriptInternal(const nsAString& aURL,
                                  shouldCache, &script);
   }
 
-  JS::Rooted<JSObject*> global(rcx, mGlobal->GetJSObject());
+  JS::Rooted<JSObject*> global(rcx, mGlobal);
   if (global) {
     AutoEntryScript aes(global, "message manager script load");
     JSContext* cx = aes.cx();
@@ -1598,53 +1600,58 @@ nsMessageManagerScriptExecutor::TryCacheLoadAndCompileScript(
     return;
   }
 
-  nsCOMPtr<nsIChannel> channel;
-  NS_NewChannel(getter_AddRefs(channel),
-                uri,
-                nsContentUtils::GetSystemPrincipal(),
-                nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
-                nsIContentPolicy::TYPE_OTHER);
-
-  if (!channel) {
+  // Compile the script in the compilation scope instead of the current global
+  // to avoid keeping the current compartment alive.
+  AutoJSAPI jsapi;
+  if (!jsapi.Init(xpc::CompilationScope())) {
     return;
   }
+  JSContext* cx = jsapi.cx();
+  JS::Rooted<JSScript*> script(cx);
 
-  nsCOMPtr<nsIInputStream> input;
-  rv = channel->Open2(getter_AddRefs(input));
-  NS_ENSURE_SUCCESS_VOID(rv);
-  nsString dataString;
-  char16_t* dataStringBuf = nullptr;
-  size_t dataStringLength = 0;
-  uint64_t avail64 = 0;
-  if (input && NS_SUCCEEDED(input->Available(&avail64)) && avail64) {
-    if (avail64 > UINT32_MAX) {
+  script = ScriptPreloader::GetChildSingleton().GetCachedScript(cx, url);
+
+  if (!script) {
+    nsCOMPtr<nsIChannel> channel;
+    NS_NewChannel(getter_AddRefs(channel),
+                  uri,
+                  nsContentUtils::GetSystemPrincipal(),
+                  nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
+                  nsIContentPolicy::TYPE_OTHER);
+
+    if (!channel) {
       return;
     }
-    nsCString buffer;
-    uint32_t avail = (uint32_t)std::min(avail64, (uint64_t)UINT32_MAX);
-    if (NS_FAILED(NS_ReadInputStreamToString(input, buffer, avail))) {
-      return;
-    }
-    nsScriptLoader::ConvertToUTF16(channel, (uint8_t*)buffer.get(), avail,
+
+    nsCOMPtr<nsIInputStream> input;
+    rv = channel->Open2(getter_AddRefs(input));
+    NS_ENSURE_SUCCESS_VOID(rv);
+    nsString dataString;
+    char16_t* dataStringBuf = nullptr;
+    size_t dataStringLength = 0;
+    if (input) {
+      nsCString buffer;
+      uint64_t written;
+      if (NS_FAILED(NS_ReadInputStreamToString(input, buffer, -1, &written))) {
+        return;
+      }
+
+      uint32_t size = (uint32_t)std::min(written, (uint64_t)UINT32_MAX);
+      ScriptLoader::ConvertToUTF16(channel, (uint8_t*)buffer.get(), size,
                                    EmptyString(), nullptr,
                                    dataStringBuf, dataStringLength);
-  }
+    }
 
-  JS::SourceBufferHolder srcBuf(dataStringBuf, dataStringLength,
-                                JS::SourceBufferHolder::GiveOwnership);
+    JS::SourceBufferHolder srcBuf(dataStringBuf, dataStringLength,
+                                  JS::SourceBufferHolder::GiveOwnership);
 
-  if (dataStringBuf && dataStringLength > 0) {
-    // Compile the script in the compilation scope instead of the current global
-    // to avoid keeping the current compartment alive.
-    AutoJSAPI jsapi;
-    if (!jsapi.Init(xpc::CompilationScope())) {
+    if (!dataStringBuf || dataStringLength == 0) {
       return;
     }
-    JSContext* cx = jsapi.cx();
-    JS::CompileOptions options(cx, JSVERSION_LATEST);
+
+    JS::CompileOptions options(cx);
     options.setFileAndLine(url.get(), 1);
     options.setNoScriptRval(true);
-    JS::Rooted<JSScript*> script(cx);
 
     if (aRunInGlobalScope) {
       if (!JS::Compile(cx, options, srcBuf, &script)) {
@@ -1654,18 +1661,19 @@ nsMessageManagerScriptExecutor::TryCacheLoadAndCompileScript(
     } else if (!JS::CompileForNonSyntacticScope(cx, options, srcBuf, &script)) {
       return;
     }
+  }
 
-    MOZ_ASSERT(script);
-    aScriptp.set(script);
+  MOZ_ASSERT(script);
+  aScriptp.set(script);
 
-    nsAutoCString scheme;
-    uri->GetScheme(scheme);
-    // We don't cache data: scripts!
-    if (aShouldCache && !scheme.EqualsLiteral("data")) {
-      // Root the object also for caching.
-      auto* holder = new nsMessageManagerScriptHolder(cx, script, aRunInGlobalScope);
-      sCachedScripts->Put(aURL, holder);
-    }
+  nsAutoCString scheme;
+  uri->GetScheme(scheme);
+  // We don't cache data: scripts!
+  if (aShouldCache && !scheme.EqualsLiteral("data")) {
+    ScriptPreloader::GetChildSingleton().NoteScript(url, url, script);
+    // Root the object also for caching.
+    auto* holder = new nsMessageManagerScriptHolder(cx, script, aRunInGlobalScope);
+    sCachedScripts->Put(aURL, holder);
   }
 }
 
@@ -1684,6 +1692,14 @@ nsMessageManagerScriptExecutor::Trace(const TraceCallbacks& aCallbacks, void* aC
   for (size_t i = 0, length = mAnonymousGlobalScopes.Length(); i < length; ++i) {
     aCallbacks.Trace(&mAnonymousGlobalScopes[i], "mAnonymousGlobalScopes[i]", aClosure);
   }
+  aCallbacks.Trace(&mGlobal, "mGlobal", aClosure);
+}
+
+void
+nsMessageManagerScriptExecutor::Unlink()
+{
+  ImplCycleCollectionUnlink(mAnonymousGlobalScopes);
+  mGlobal = nullptr;
 }
 
 bool
@@ -1694,29 +1710,27 @@ nsMessageManagerScriptExecutor::InitChildGlobalInternal(
   AutoSafeJSContext cx;
   nsContentUtils::GetSecurityManager()->GetSystemPrincipal(getter_AddRefs(mPrincipal));
 
-  nsIXPConnect* xpc = nsContentUtils::XPConnect();
-  const uint32_t flags = nsIXPConnect::INIT_JS_STANDARD_CLASSES;
+  const uint32_t flags = xpc::INIT_JS_STANDARD_CLASSES;
 
   JS::CompartmentOptions options;
   options.creationOptions().setSystemZone();
-  options.behaviors().setVersion(JSVERSION_LATEST);
 
   if (xpc::SharedMemoryEnabled()) {
     options.creationOptions().setSharedMemoryAndAtomicsEnabled(true);
   }
 
-  nsresult rv =
-    xpc->InitClassesWithNewWrappedGlobal(cx, aScope, mPrincipal,
-                                         flags, options, getter_AddRefs(mGlobal));
+  JS::Rooted<JSObject*> global(cx);
+  nsresult rv = xpc::InitClassesWithNewWrappedGlobal(cx, aScope, mPrincipal,
+                                                     flags, options,
+                                                     &global);
   NS_ENSURE_SUCCESS(rv, false);
 
-
-  JS::Rooted<JSObject*> global(cx, mGlobal->GetJSObject());
-  NS_ENSURE_TRUE(global, false);
+  mGlobal = global;
+  NS_ENSURE_TRUE(mGlobal, false);
 
   // Set the location information for the new global, so that tools like
   // about:memory may use that information.
-  xpc::SetLocationForGlobal(global, aID);
+  xpc::SetLocationForGlobal(mGlobal, aID);
 
   DidCreateGlobal();
   return true;
@@ -1743,6 +1757,7 @@ public:
   nsAsyncMessageToSameProcessChild(JS::RootingContext* aRootingCx,
                                    JS::Handle<JSObject*> aCpows)
     : nsSameProcessAsyncMessageBase(aRootingCx, aCpows)
+    , mozilla::Runnable("nsAsyncMessageToSameProcessChild")
   { }
   NS_IMETHOD Run() override
   {
@@ -2033,8 +2048,7 @@ nsFrameMessageManager::MarkForCC()
 
 nsSameProcessAsyncMessageBase::nsSameProcessAsyncMessageBase(JS::RootingContext* aRootingCx,
                                                              JS::Handle<JSObject*> aCpows)
-  : mRootingCx(aRootingCx)
-  , mCpows(aRootingCx, aCpows)
+  : mCpows(aRootingCx, aCpows)
 #ifdef DEBUG
   , mCalledInit(false)
 #endif
@@ -2068,7 +2082,7 @@ nsSameProcessAsyncMessageBase::ReceiveMessage(nsISupports* aTarget,
   // Make sure that we have called Init() and it has succeeded.
   MOZ_ASSERT(mCalledInit);
   if (aManager) {
-    SameProcessCpowHolder cpows(mRootingCx, mCpows);
+    SameProcessCpowHolder cpows(RootingCx(), mCpows);
 
     RefPtr<nsFrameMessageManager> mm = aManager;
     mm->ReceiveMessage(aTarget, aTargetFrameLoader, mMessage, false, &mData,

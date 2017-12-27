@@ -19,7 +19,7 @@
 function sendMessage_background() {
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     browser.test.assertEq("from frame", msg, "Expected message from frame");
-    sendResponse("msg from back");  // Should not throw or anything like that.
+    sendResponse("msg from back"); // Should not throw or anything like that.
     delayedNotifyPass("Received sendMessage from closing frame");
   });
 }
@@ -60,8 +60,19 @@ function connect_background() {
   });
 }
 function connect_contentScript(testType) {
+  let isUnloading = false;
+  addEventListener("pagehide", () => { isUnloading = true; }, {once: true});
+
   let port = browser.runtime.connect({name: "port from frame"});
   port.onMessage.addListener(msg => {
+    // The background page sends a reply as soon as we call runtime.connect().
+    // It is possible that the reply reaches this frame before the
+    // window.close() request has been processed.
+    if (!isUnloading) {
+      browser.test.log(`Ignorting unexpected reply ("${msg}") because the page is not being unloaded.`);
+      return;
+    }
+
     // The frame has been removed, so we should not get a reply.
     browser.test.fail(`Unexpected reply: ${msg}`);
   });
@@ -110,58 +121,58 @@ function createTestExtension(testType, backgroundScript, contentScript) {
   return extension;
 }
 
-add_task(function* testSendMessage_and_remove_frame() {
+add_task(async function testSendMessage_and_remove_frame() {
   let extension = createTestExtension("frame", sendMessage_background, sendMessage_contentScript);
-  yield extension.startup();
+  await extension.startup();
 
   let frame = document.createElement("iframe");
   frame.src = "file_sample.html";
   document.body.appendChild(frame);
 
-  yield extension.awaitFinish("Received sendMessage from closing frame");
-  yield extension.unload();
+  await extension.awaitFinish("Received sendMessage from closing frame");
+  await extension.unload();
 });
 
-add_task(function* testConnect_and_remove_frame() {
+add_task(async function testConnect_and_remove_frame() {
   let extension = createTestExtension("frame", connect_background, connect_contentScript);
-  yield extension.startup();
+  await extension.startup();
 
   let frame = document.createElement("iframe");
   frame.src = "file_sample.html";
   document.body.appendChild(frame);
 
-  yield extension.awaitFinish("Received onDisconnect from closing frame");
-  yield extension.unload();
+  await extension.awaitFinish("Received onDisconnect from closing frame");
+  await extension.unload();
 });
 
-add_task(function* testSendMessage_and_remove_window() {
+add_task(async function testSendMessage_and_remove_window() {
   if (AppConstants.MOZ_BUILD_APP !== "browser") {
     // We can't rely on this timing on Android.
     return;
   }
 
   let extension = createTestExtension("window", sendMessage_background, sendMessage_contentScript);
-  yield extension.startup();
+  await extension.startup();
 
   window.open("file_sample.html");
 
-  yield extension.awaitFinish("Received sendMessage from closing frame");
-  yield extension.unload();
+  await extension.awaitFinish("Received sendMessage from closing frame");
+  await extension.unload();
 });
 
-add_task(function* testConnect_and_remove_window() {
+add_task(async function testConnect_and_remove_window() {
   if (AppConstants.MOZ_BUILD_APP !== "browser") {
     // We can't rely on this timing on Android.
     return;
   }
 
   let extension = createTestExtension("window", connect_background, connect_contentScript);
-  yield extension.startup();
+  await extension.startup();
 
   window.open("file_sample.html");
 
-  yield extension.awaitFinish("Received onDisconnect from closing frame");
-  yield extension.unload();
+  await extension.awaitFinish("Received onDisconnect from closing frame");
+  await extension.unload();
 });
 
 </script>

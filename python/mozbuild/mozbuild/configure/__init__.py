@@ -4,6 +4,7 @@
 
 from __future__ import absolute_import, print_function, unicode_literals
 
+import __builtin__
 import inspect
 import logging
 import os
@@ -46,6 +47,8 @@ class SandboxDependsFunction(object):
     '''Sandbox-visible representation of @depends functions.'''
     def __init__(self, unsandboxed):
         self._or = unsandboxed.__or__
+        self._and = unsandboxed.__and__
+        self._getattr = unsandboxed.__getattr__
 
     def __call__(self, *arg, **kwargs):
         raise ConfigureError('The `%s` function may not be called'
@@ -56,6 +59,19 @@ class SandboxDependsFunction(object):
             raise ConfigureError('Can only do binary arithmetic operations '
                                  'with another @depends function.')
         return self._or(other).sandboxed
+
+    def __and__(self, other):
+        if not isinstance(other, SandboxDependsFunction):
+            raise ConfigureError('Can only do binary arithmetic operations '
+                                 'with another @depends function.')
+        return self._and(other).sandboxed
+
+    def __getattr__(self, key):
+        return self._getattr(key).sandboxed
+
+    def __nonzero__(self):
+        raise ConfigureError(
+            'Cannot do boolean operations on @depends functions.')
 
 
 class DependsFunction(object):
@@ -119,17 +135,47 @@ class DependsFunction(object):
             other = self.sandbox._depends.get(other)
         assert isinstance(other, DependsFunction)
         assert self.sandbox is other.sandbox
-        return CombinedDependsFunction(self.sandbox, self.first_true,
+        return CombinedDependsFunction(self.sandbox, self.or_impl,
                                        (self, other))
 
     @staticmethod
-    def first_true(iterable):
-        # Like the builtin any(), but returns the first element that is true,
-        # instead of True. If none are true, returns the last element.
+    def or_impl(iterable):
+        # Applies "or" to all the items of iterable.
+        # e.g. if iterable contains a, b and c, returns `a or b or c`.
         for i in iterable:
             if i:
                 return i
         return i
+
+    def __and__(self, other):
+        if isinstance(other, SandboxDependsFunction):
+            other = self.sandbox._depends.get(other)
+        assert isinstance(other, DependsFunction)
+        assert self.sandbox is other.sandbox
+        return CombinedDependsFunction(self.sandbox, self.and_impl,
+                                       (self, other))
+
+    @staticmethod
+    def and_impl(iterable):
+        # Applies "and" to all the items of iterable.
+        # e.g. if iterable contains a, b and c, returns `a and b and c`.
+        for i in iterable:
+            if not i:
+                return i
+        return i
+
+    def __getattr__(self, key):
+        if key.startswith('_'):
+            return super(DependsFunction, self).__getattr__(key)
+        # Our function may return None or an object that simply doesn't have
+        # the wanted key. In that case, just return None.
+        return TrivialDependsFunction(
+            self.sandbox, lambda x: getattr(x, key, None), [self], self.when)
+
+
+class TrivialDependsFunction(DependsFunction):
+    '''Like a DependsFunction, but the linter won't expect it to have a
+    dependency on --help ever.'''
 
 
 class CombinedDependsFunction(DependsFunction):
@@ -207,7 +253,7 @@ class ConfigureSandbox(dict):
     # The default set of builtins. We expose unicode as str to make sandboxed
     # files more python3-ready.
     BUILTINS = ReadOnlyDict({
-        b: __builtins__[b]
+        b: getattr(__builtin__, b)
         for b in ('None', 'False', 'True', 'int', 'bool', 'any', 'all', 'len',
                   'list', 'tuple', 'set', 'dict', 'isinstance', 'getattr',
                   'hasattr', 'enumerate', 'range', 'zip')
@@ -316,6 +362,7 @@ class ConfigureSandbox(dict):
 
     def include_file(self, path):
         '''Include one file in the sandbox. Users of this class probably want
+        to use `run` instead.
 
         Note: this will execute all template invocations, as well as @depends
         functions that depend on '--help', but nothing else.
@@ -862,6 +909,9 @@ class ConfigureSandbox(dict):
         The `reason` argument indicates what caused the option to be implied.
         It is necessary when it cannot be inferred from the `value`.
         '''
+
+        when = self._normalize_when(when, 'imply_option')
+
         # Don't do anything when --help was on the command line
         if self._help:
             return
@@ -883,8 +933,6 @@ class ConfigureSandbox(dict):
                 "Cannot infer what implies '%s'. Please add a `reason` to "
                 "the `imply_option` call."
                 % option)
-
-        when = self._normalize_when(when, 'imply_option')
 
         prefix, name, values = Option.split_option(option)
         if values != ():

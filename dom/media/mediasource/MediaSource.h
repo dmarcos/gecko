@@ -12,6 +12,7 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/DOMEventTargetHelper.h"
+#include "mozilla/MozPromise.h"
 #include "mozilla/dom/MediaSourceBinding.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionNoteChild.h"
@@ -33,6 +34,11 @@ template <typename T> class AsyncEventRunner;
 class MediaResult;
 
 namespace dom {
+class MediaSource;
+} // namespace dom
+DDLoggedTypeName(dom::MediaSource);
+
+namespace dom {
 
 class GlobalObject;
 class SourceBuffer;
@@ -43,7 +49,9 @@ template <typename T> class Optional;
   { 0x3839d699, 0x22c5, 0x439f, \
   { 0x94, 0xca, 0x0e, 0x0b, 0x26, 0xf9, 0xca, 0xbf } }
 
-class MediaSource final : public DOMEventTargetHelper
+class MediaSource final
+  : public DOMEventTargetHelper
+  , public DecoderDoctorLifeLogger<MediaSource>
 {
 public:
   /** WebIDL Methods. */
@@ -119,6 +127,9 @@ public:
     return mAbstractMainThread;
   }
 
+  // Resolve all CompletionPromise pending.
+  void CompletePendingTransactions();
+
 private:
   // SourceBuffer uses SetDuration and SourceBufferIsActive
   friend class mozilla::dom::SourceBuffer;
@@ -136,8 +147,14 @@ private:
   // SetDuration with no checks.
   void SetDuration(double aDuration);
 
+  typedef MozPromise<bool, MediaResult, /* IsExclusive = */ true>
+    ActiveCompletionPromise;
   // Mark SourceBuffer as active and rebuild ActiveSourceBuffers.
-  void SourceBufferIsActive(SourceBuffer* aSourceBuffer);
+  // Return a MozPromise that will be resolved once all related operations are
+  // completed, or can't progress any further.
+  // Such as, transition of readyState from HAVE_NOTHING to HAVE_METADATA.
+  RefPtr<ActiveCompletionPromise> SourceBufferIsActive(
+    SourceBuffer* aSourceBuffer);
 
   RefPtr<SourceBufferList> mSourceBuffers;
   RefPtr<SourceBufferList> mActiveSourceBuffers;
@@ -154,6 +171,7 @@ private:
   MediaSourceReadyState mReadyState;
 
   Maybe<media::TimeInterval> mLiveSeekableRange;
+  nsTArray<MozPromiseHolder<ActiveCompletionPromise>> mCompletionPromises;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(MediaSource, MOZILLA_DOM_MEDIASOURCE_IMPLEMENTATION_IID)

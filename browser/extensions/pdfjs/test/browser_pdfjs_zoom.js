@@ -3,7 +3,6 @@
 
 requestLongerTimeout(2);
 
-Components.utils.import("resource://gre/modules/Promise.jsm", this);
 
 const RELATIVE_DIR = "browser/extensions/pdfjs/test/";
 const TESTROOT = "http://example.com/browser/" + RELATIVE_DIR;
@@ -58,7 +57,7 @@ const TESTS = [
   }
 ];
 
-add_task(function* test() {
+add_task(async function test() {
   let mimeService = Cc["@mozilla.org/mime;1"].getService(Ci.nsIMIMEService);
   let handlerInfo = mimeService.getFromTypeAndExtension("application/pdf", "pdf");
 
@@ -70,11 +69,11 @@ add_task(function* test() {
 
   info("Pref action: " + handlerInfo.preferredAction);
 
-  yield BrowserTestUtils.withNewTab({ gBrowser, url: "about:blank" },
-    function* (newTabBrowser) {
-      yield waitForPdfJS(newTabBrowser, TESTROOT + "file_pdfjs_test.pdf#zoom=100");
+  await BrowserTestUtils.withNewTab({ gBrowser, url: "about:blank" },
+    async function(newTabBrowser) {
+      await waitForPdfJS(newTabBrowser, TESTROOT + "file_pdfjs_test.pdf#zoom=100");
 
-      yield ContentTask.spawn(newTabBrowser, TESTS, function* (contentTESTS) {
+      await ContentTask.spawn(newTabBrowser, TESTS, async function(contentTESTS) {
         let document = content.document;
 
         function waitForRender() {
@@ -123,7 +122,7 @@ add_task(function* test() {
           }
 
           el.dispatchEvent(ev);
-          yield waitForRender();
+          await waitForRender();
 
           var pageZoomScale = content.document.querySelector("select#scaleSelect");
 
@@ -145,7 +144,7 @@ add_task(function* test() {
         }
 
         var viewer = content.wrappedJSObject.PDFViewerApplication;
-        yield viewer.close();
+        await viewer.close();
       });
     });
 });

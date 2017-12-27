@@ -56,16 +56,12 @@ function contentHandler(metadata, response)
 function run_test()
 {
   // Static check
-  do_check_true(responseBody.length > 1024);
+  Assert.ok(responseBody.length > 1024);
 
   do_get_profile();
 
-  if (!newCacheBackEndUsed()) {
-    do_check_true(true, "This test doesn't run when the old cache back end is used since the behavior is different");
-    return;
-  }
-
   Services.prefs.setIntPref("browser.cache.disk.max_entry_size", 1);
+  Services.prefs.setBoolPref("network.http.rcwn.enabled", false);
 
   httpServer = new HttpServer();
   httpServer.registerPathHandler("/content", contentHandler);
@@ -81,7 +77,7 @@ function run_test()
 
 function firstTimeThrough(request, buffer)
 {
-  do_check_eq(buffer, responseBody);
+  Assert.equal(buffer, responseBody);
 }
 
 function secondTimeThrough(request, buffer)

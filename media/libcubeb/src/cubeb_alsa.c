@@ -1287,8 +1287,10 @@ alsa_stream_set_volume(cubeb_stream * stm, float volume)
 
 static int
 alsa_enumerate_devices(cubeb * context, cubeb_device_type type,
-                       cubeb_device_collection ** collection)
+                       cubeb_device_collection * collection)
 {
+  cubeb_device_info* device = NULL;
+
   if (!context)
     return CUBEB_ERROR;
 
@@ -1305,32 +1307,42 @@ alsa_enumerate_devices(cubeb * context, cubeb_device_type type,
     return CUBEB_ERROR;
   }
 
-  *collection = (cubeb_device_collection *) calloc(1, sizeof(cubeb_device_collection) + 1*sizeof(cubeb_device_info *));
-  assert(*collection);
-
   char const * a_name = "default";
-  (*collection)->device[0] = (cubeb_device_info *) calloc(1, sizeof(cubeb_device_info));
-  assert((*collection)->device[0]);
+  device = (cubeb_device_info *) calloc(1, sizeof(cubeb_device_info));
+  assert(device);
+  if (!device)
+    return CUBEB_ERROR;
 
-  (*collection)->device[0]->device_id = strdup(a_name);
-  (*collection)->device[0]->devid = (*collection)->device[0]->device_id;
-  (*collection)->device[0]->friendly_name = strdup(a_name);
-  (*collection)->device[0]->group_id = strdup(a_name);
-  (*collection)->device[0]->vendor_name = strdup(a_name);
-  (*collection)->device[0]->type = type;
-  (*collection)->device[0]->state = CUBEB_DEVICE_STATE_ENABLED;
-  (*collection)->device[0]->preferred = CUBEB_DEVICE_PREF_ALL;
-  (*collection)->device[0]->format = CUBEB_DEVICE_FMT_S16NE;
-  (*collection)->device[0]->default_format = CUBEB_DEVICE_FMT_S16NE;
-  (*collection)->device[0]->max_channels = max_channels;
-  (*collection)->device[0]->min_rate = rate;
-  (*collection)->device[0]->max_rate = rate;
-  (*collection)->device[0]->default_rate = rate;
-  (*collection)->device[0]->latency_lo = 0;
-  (*collection)->device[0]->latency_hi = 0;
+  device->device_id = a_name;
+  device->devid = (cubeb_devid) device->device_id;
+  device->friendly_name = a_name;
+  device->group_id = a_name;
+  device->vendor_name = a_name;
+  device->type = type;
+  device->state = CUBEB_DEVICE_STATE_ENABLED;
+  device->preferred = CUBEB_DEVICE_PREF_ALL;
+  device->format = CUBEB_DEVICE_FMT_S16NE;
+  device->default_format = CUBEB_DEVICE_FMT_S16NE;
+  device->max_channels = max_channels;
+  device->min_rate = rate;
+  device->max_rate = rate;
+  device->default_rate = rate;
+  device->latency_lo = 0;
+  device->latency_hi = 0;
 
-  (*collection)->count = 1;
+  collection->device = device;
+  collection->count = 1;
 
+  return CUBEB_OK;
+}
+
+static int
+alsa_device_collection_destroy(cubeb * context,
+                               cubeb_device_collection * collection)
+{
+  assert(collection->count == 1);
+  (void) context;
+  free(collection->device);
   return CUBEB_OK;
 }
 
@@ -1342,11 +1354,13 @@ static struct cubeb_ops const alsa_ops = {
   .get_preferred_sample_rate = alsa_get_preferred_sample_rate,
   .get_preferred_channel_layout = NULL,
   .enumerate_devices = alsa_enumerate_devices,
+  .device_collection_destroy = alsa_device_collection_destroy,
   .destroy = alsa_destroy,
   .stream_init = alsa_stream_init,
   .stream_destroy = alsa_stream_destroy,
   .stream_start = alsa_stream_start,
   .stream_stop = alsa_stream_stop,
+  .stream_reset_default_device = NULL,
   .stream_get_position = alsa_stream_get_position,
   .stream_get_latency = alsa_stream_get_latency,
   .stream_set_volume = alsa_stream_set_volume,

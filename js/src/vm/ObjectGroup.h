@@ -85,7 +85,7 @@ enum NewObjectKind {
 /* Type information about an object accessed by a script. */
 class ObjectGroup : public gc::TenuredCell
 {
-    friend void gc::MergeCompartments(JSCompartment* source, JSCompartment* target);
+    friend class gc::GCRuntime;
 
     /* Class shared by objects in this group. */
     const Class* clasp_;
@@ -97,7 +97,6 @@ class ObjectGroup : public gc::TenuredCell
     JSCompartment* compartment_;
 
   public:
-
     const Class* clasp() const {
         return clasp_;
     }
@@ -390,7 +389,8 @@ class ObjectGroup : public gc::TenuredCell
     inline HeapTypeSet* getProperty(JSContext* cx, JSObject* obj, jsid id);
 
     /* Get a property only if it already exists. */
-    inline HeapTypeSet* maybeGetProperty(jsid id);
+    MOZ_ALWAYS_INLINE HeapTypeSet* maybeGetProperty(jsid id);
+    MOZ_ALWAYS_INLINE HeapTypeSet* maybeGetPropertyDontCheckGeneration(jsid id);
 
     /*
      * Iterate through the group's properties. getPropertyCount overapproximates
@@ -472,6 +472,7 @@ class ObjectGroup : public gc::TenuredCell
     }
 
     inline uint32_t basePropertyCount();
+    inline uint32_t basePropertyCountDontCheckGeneration();
 
   private:
     inline void setBasePropertyCount(uint32_t count);
@@ -515,11 +516,11 @@ class ObjectGroup : public gc::TenuredCell
         UnknownIndex  // Make an array with an unknown element type.
     };
 
-    // Create an ArrayObject or UnboxedArrayObject with the specified elements
-    // and a group specialized for the elements.
-    static JSObject* newArrayObject(JSContext* cx, const Value* vp, size_t length,
-                                    NewObjectKind newKind,
-                                    NewArrayKind arrayKind = NewArrayKind::Normal);
+    // Create an ArrayObject with the specified elements and a group specialized
+    // for the elements.
+    static ArrayObject* newArrayObject(JSContext* cx, const Value* vp, size_t length,
+                                       NewObjectKind newKind,
+                                       NewArrayKind arrayKind = NewArrayKind::Normal);
 
     // Create a PlainObject or UnboxedPlainObject with the specified properties
     // and a group specialized for those properties.
@@ -566,6 +567,28 @@ class ObjectGroupCompartment
     NewTable* defaultNewTable;
     NewTable* lazyTable;
 
+    // Cache for defaultNewGroup. Purged on GC.
+    class DefaultNewGroupCache
+    {
+        ObjectGroup* group_;
+        JSObject* associated_;
+
+      public:
+        DefaultNewGroupCache() { purge(); }
+
+        void purge() {
+            group_ = nullptr;
+        }
+        void put(ObjectGroup* group, JSObject* associated) {
+            group_ = group;
+            associated_ = associated;
+        }
+
+        MOZ_ALWAYS_INLINE ObjectGroup* lookup(const Class* clasp, TaggedProto proto,
+                                              JSObject* associated);
+    };
+    DefaultNewGroupCache defaultNewGroupCache;
+
     struct ArrayObjectKey;
     using ArrayObjectTable = js::GCRekeyableHashMap<ArrayObjectKey,
                                                     ReadBarrieredObjectGroup,
@@ -601,6 +624,14 @@ class ObjectGroupCompartment
     // Table for referencing types of objects keyed to an allocation site.
     AllocationSiteTable* allocationSiteTable;
 
+    // A single per-compartment ObjectGroup for all calls to StringSplitString.
+    // StringSplitString is always called from self-hosted code, and conceptually
+    // the return object for a string.split(string) operation should have a
+    // unified type.  Having a global group for this also allows us to remove
+    // the hash-table lookup that would be required if we allocated this group
+    // on the basis of call-site pc.
+    ReadBarrieredObjectGroup stringSplitStringGroup;
+
   public:
     struct NewEntry;
 
@@ -618,6 +649,8 @@ class ObjectGroupCompartment
                                   Handle<TaggedProto> proto,
                                   ObjectGroupFlags initialFlags = 0);
 
+    static ObjectGroup* getStringSplitStringGroup(JSContext* cx);
+
     void addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf,
                                 size_t* allocationSiteTables,
                                 size_t* arrayGroupTables,
@@ -627,6 +660,10 @@ class ObjectGroupCompartment
     void clearTables();
 
     void sweep(FreeOp* fop);
+
+    void purge() {
+        defaultNewGroupCache.purge();
+    }
 
 #ifdef JSGC_HASH_TABLE_CHECKS
     void checkTablesAfterMovingGC() {

@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=8 et tw=80 : */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -30,6 +30,7 @@ protected:
   virtual void TearDown() {
     while (mcc->RunThroughDelayedTasks());
     manager->ClearTree();
+    manager->ClearContentController();
   }
 
   /**
@@ -95,8 +96,9 @@ protected:
 
   static void SetScrollableFrameMetrics(Layer* aLayer, FrameMetrics::ViewID aScrollId,
                                         CSSRect aScrollableRect = CSSRect(-1, -1, -1, -1)) {
-    ParentLayerIntRect compositionBounds = ViewAs<ParentLayerPixel>(
-        aLayer->GetVisibleRegion().ToUnknownRegion().GetBounds());
+    ParentLayerIntRect compositionBounds =
+        RoundedToInt(aLayer->GetLocalTransformTyped().
+            TransformBounds(LayerRect(aLayer->GetVisibleRegion().GetBounds())));
     ScrollMetadata metadata = BuildScrollMetadata(aScrollId, aScrollableRect,
         ParentLayerRect(compositionBounds));
     aLayer->SetScrollMetadata(metadata);

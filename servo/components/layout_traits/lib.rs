@@ -6,12 +6,13 @@
 
 extern crate gfx;
 extern crate ipc_channel;
+extern crate metrics;
 extern crate msg;
 extern crate net_traits;
 extern crate profile_traits;
 extern crate script_traits;
 extern crate servo_url;
-extern crate webrender_traits;
+extern crate webrender_api;
 
 // This module contains traits in layout used generically
 //   in the rest of Servo.
@@ -20,7 +21,9 @@ extern crate webrender_traits;
 
 use gfx::font_cache_thread::FontCacheThread;
 use ipc_channel::ipc::{IpcReceiver, IpcSender};
-use msg::constellation_msg::{FrameId, PipelineId};
+use metrics::PaintTimeMetrics;
+use msg::constellation_msg::PipelineId;
+use msg::constellation_msg::TopLevelBrowsingContextId;
 use net_traits::image_cache::ImageCache;
 use profile_traits::{mem, time};
 use script_traits::{ConstellationControlMsg, LayoutControlMsg};
@@ -34,7 +37,7 @@ use std::sync::mpsc::{Receiver, Sender};
 pub trait LayoutThreadFactory {
     type Message;
     fn create(id: PipelineId,
-              top_level_frame_id: Option<FrameId>,
+              top_level_browsing_context_id: TopLevelBrowsingContextId,
               url: ServoUrl,
               is_iframe: bool,
               chan: (Sender<Self::Message>, Receiver<Self::Message>),
@@ -46,6 +49,8 @@ pub trait LayoutThreadFactory {
               time_profiler_chan: time::ProfilerChan,
               mem_profiler_chan: mem::ProfilerChan,
               content_process_shutdown_chan: Option<IpcSender<()>>,
-              webrender_api_sender: webrender_traits::RenderApiSender,
-              layout_threads: usize);
+              webrender_api_sender: webrender_api::RenderApiSender,
+              webrender_document: webrender_api::DocumentId,
+              layout_threads: usize,
+              paint_time_metrics: PaintTimeMetrics);
 }

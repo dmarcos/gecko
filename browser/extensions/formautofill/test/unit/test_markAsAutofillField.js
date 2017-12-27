@@ -4,8 +4,11 @@ Cu.import("resource://formautofill/FormAutofillContent.jsm");
 
 const TESTCASES = [
   {
-    description: "Form containing 5 fields with autocomplete attribute.",
+    description: "Form containing 8 fields with autocomplete attribute.",
     document: `<form>
+                 <input id="given-name" autocomplete="given-name">
+                 <input id="additional-name" autocomplete="additional-name">
+                 <input id="family-name" autocomplete="family-name">
                  <input id="street-addr" autocomplete="street-address">
                  <input id="city" autocomplete="address-level2">
                  <input id="country" autocomplete="country">
@@ -14,7 +17,11 @@ const TESTCASES = [
                  <input id="without-autocomplete-1">
                  <input id="without-autocomplete-2">
                </form>`,
+    targetElementId: "given-name",
     expectedResult: [
+      "given-name",
+      "additional-name",
+      "family-name",
       "street-addr",
       "city",
       "country",
@@ -30,6 +37,7 @@ const TESTCASES = [
                  <input id="without-autocomplete-1">
                  <input id="without-autocomplete-2">
                </form>`,
+    targetElementId: "street-addr",
     expectedResult: [],
   },
   {
@@ -41,6 +49,7 @@ const TESTCASES = [
                <input id="tel" autocomplete="tel">
                <input id="without-autocomplete-1">
                <input id="without-autocomplete-2">`,
+    targetElementId: "street-addr",
     expectedResult: [
       "street-addr",
       "city",
@@ -57,14 +66,15 @@ FormAutofillContent._markAsAutofillField = function(field) {
 };
 
 TESTCASES.forEach(testcase => {
-  add_task(function* () {
-    do_print("Starting testcase: " + testcase.description);
+  add_task(async function() {
+    info("Starting testcase: " + testcase.description);
 
     markedFieldId = [];
 
     let doc = MockDocument.createTestDocument(
       "http://localhost:8080/test/", testcase.document);
-    FormAutofillContent.identifyAutofillFields(doc);
+    let element = doc.getElementById(testcase.targetElementId);
+    FormAutofillContent.identifyAutofillFields(element);
 
     Assert.deepEqual(markedFieldId, testcase.expectedResult,
       "Check the fields were marked correctly.");

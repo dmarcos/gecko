@@ -10,7 +10,6 @@ const { interfaces: Ci, classes: Cc, utils: Cu } = Components;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Geometry.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
   "resource://gre/modules/BrowserUtils.jsm");
@@ -89,7 +88,7 @@ Finder.prototype = {
 
     if (options.storeResult) {
       this._searchString = options.searchString;
-      this.clipboardSearchString = options.searchString
+      this.clipboardSearchString = options.searchString;
     }
 
     let foundLink = this._fastFind.foundLink;
@@ -238,9 +237,9 @@ Finder.prototype = {
     return searchString;
   },
 
-  highlight: Task.async(function* (aHighlight, aWord, aLinksOnly) {
-    yield this.highlighter.highlight(aHighlight, aWord, aLinksOnly);
-  }),
+  async highlight(aHighlight, aWord, aLinksOnly) {
+    await this.highlighter.highlight(aHighlight, aWord, aLinksOnly);
+  },
 
   getInitialSelection() {
     this._getWindow().setTimeout(() => {
@@ -313,18 +312,17 @@ Finder.prototype = {
     }
 
     let fastFind = this._fastFind;
-    const fm = Cc["@mozilla.org/focus-manager;1"].getService(Ci.nsIFocusManager);
     try {
       // Try to find the best possible match that should receive focus and
       // block scrolling on focus since find already scrolls. Further
       // scrolling is due to user action, so don't override this.
       if (fastFind.foundLink) {
-        fm.setFocus(fastFind.foundLink, fm.FLAG_NOSCROLL);
+        Services.focus.setFocus(fastFind.foundLink, Services.focus.FLAG_NOSCROLL);
       } else if (fastFind.foundEditable) {
-        fm.setFocus(fastFind.foundEditable, fm.FLAG_NOSCROLL);
+        Services.focus.setFocus(fastFind.foundEditable, Services.focus.FLAG_NOSCROLL);
         fastFind.collapseSelection();
       } else {
-        this._getWindow().focus()
+        this._getWindow().focus();
       }
     } catch (e) {}
   },

@@ -13,14 +13,14 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(JSONP_URL);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   let wait = waitForNetworkEvents(monitor, 2);
   yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
@@ -28,10 +28,18 @@ add_task(function* () {
   });
   yield wait;
 
+  let requestItems = document.querySelectorAll(".request-list-item");
+  for (let requestItem of requestItems) {
+    requestItem.scrollIntoView();
+    let requestsListStatus = requestItem.querySelector(".requests-list-status");
+    EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+    yield waitUntil(() => requestsListStatus.title);
+  }
+
   verifyRequestItemTarget(
     document,
-    getDisplayedRequests(gStore.getState()),
-    getSortedRequests(gStore.getState()).get(0),
+    getDisplayedRequests(store.getState()),
+    getSortedRequests(store.getState()).get(0),
     "GET",
     CONTENT_TYPE_SJS + "?fmt=jsonp&jsonp=$_0123Fun",
     {
@@ -44,8 +52,8 @@ add_task(function* () {
     });
   verifyRequestItemTarget(
     document,
-    getDisplayedRequests(gStore.getState()),
-    getSortedRequests(gStore.getState()).get(1),
+    getDisplayedRequests(store.getState()),
+    getSortedRequests(store.getState()).get(1),
     "GET",
     CONTENT_TYPE_SJS + "?fmt=jsonp2&jsonp=$_4567Sad",
     {
@@ -57,7 +65,8 @@ add_task(function* () {
       time: true
     });
 
-  wait = waitForDOM(document, "#response-panel");
+  info("Testing first request");
+  wait = waitForDOM(document, "#response-panel .CodeMirror-code");
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector(".network-details-panel-toggle"));
   EventUtils.sendMouseEvent({ type: "click" },
@@ -66,7 +75,9 @@ add_task(function* () {
 
   testResponseTab("$_0123Fun", "Hello JSONP!");
 
-  wait = waitForDOM(document, "#response-panel .tree-section");
+  info("Testing second request");
+  wait = waitForDOM(document, "#response-panel .CodeMirror-code");
+
   EventUtils.sendMouseEvent({ type: "mousedown" },
     document.querySelectorAll(".request-list-item")[1]);
   yield wait;
@@ -83,13 +94,13 @@ add_task(function* () {
     is(tabpanel.querySelector(".tree-section .treeLabel").textContent,
       L10N.getFormatStr("jsonpScopeName", func),
       "The response json view has the intened visibility and correct title.");
-    is(tabpanel.querySelector(".CodeMirror-code") === null, true,
-      "The response editor doesn't have the intended visibility.");
+    is(tabpanel.querySelector(".CodeMirror-code") === null, false,
+      "The response editor has the intended visibility.");
     is(tabpanel.querySelector(".responseImageBox") === null, true,
       "The response image box doesn't have the intended visibility.");
 
-    is(tabpanel.querySelectorAll(".tree-section").length, 1,
-      "There should be 1 tree sections displayed in this tabpanel.");
+    is(tabpanel.querySelectorAll(".tree-section").length, 2,
+      "There should be 2 tree sections displayed in this tabpanel.");
     is(tabpanel.querySelectorAll(".treeRow:not(.tree-section)").length, 1,
       "There should be 1 json properties displayed in this tabpanel.");
     is(tabpanel.querySelectorAll(".empty-notice").length, 0,

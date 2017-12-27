@@ -12,7 +12,7 @@ var CaptivePortalWatcher = {
    * and small enough that the delay in opening a tab isn't too noticeable.
    * Please see comments for _delayedCaptivePortalDetected for more details.
    */
-  PORTAL_RECHECK_DELAY_MS: Preferences.get("captivedetect.portalRecheckDelayMS", 500),
+  PORTAL_RECHECK_DELAY_MS: Services.prefs.getIntPref("captivedetect.portalRecheckDelayMS", 500),
 
   // This is the value used to identify the captive portal notification.
   PORTAL_NOTIFICATION_VALUE: "captive-portal-detected",
@@ -62,9 +62,15 @@ var CaptivePortalWatcher = {
       if (windows.getNext() == window && !windows.hasMoreElements()) {
         this.ensureCaptivePortalTab();
       }
+    } else if (cps.state == cps.UNKNOWN) {
+      // We trigger a portal check after delayed startup to avoid doing a network
+      // request before first paint.
+      this._delayedRecheckPending = true;
+      Services.obs.addObserver(this, "browser-delayed-startup-finished");
     }
 
-    cps.recheckCaptivePortal();
+    XPCOMUtils.defineLazyPreferenceGetter(this, "PORTAL_RECHECK_DELAY_MS",
+                                          "captivedetect.portalRecheckDelayMS", 500);
   },
 
   uninit() {
@@ -72,6 +78,9 @@ var CaptivePortalWatcher = {
     Services.obs.removeObserver(this, "captive-portal-login-abort");
     Services.obs.removeObserver(this, "captive-portal-login-success");
 
+    if (this._delayedRecheckPending) {
+      Services.obs.removeObserver(this, "browser-delayed-startup-finished");
+    }
 
     if (this._delayedCaptivePortalDetectedInProgress) {
       Services.obs.removeObserver(this, "xul-window-visible");
@@ -80,6 +89,11 @@ var CaptivePortalWatcher = {
 
   observe(aSubject, aTopic, aData) {
     switch (aTopic) {
+      case "browser-delayed-startup-finished":
+        Services.obs.removeObserver(this, "browser-delayed-startup-finished");
+        delete this._delayedRecheckPending;
+        cps.recheckCaptivePortal();
+        break;
       case "captive-portal-login":
         this._captivePortalDetected();
         break;
@@ -250,7 +264,7 @@ var CaptivePortalWatcher = {
         return;
       }
       gBrowser.removeTab(tab);
-    }
+    };
     Services.obs.addObserver(tabCloser, "captive-portal-login-abort");
     Services.obs.addObserver(tabCloser, "captive-portal-login-success");
   },

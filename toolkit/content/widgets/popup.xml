@@ -16,7 +16,7 @@
       <stylesheet src="chrome://global/skin/popup.css"/>
     </resources>
 
-    <implementation implements="nsIDOMXULPopupElement">
+    <implementation>
       <property name="label" onget="return this.getAttribute('label');"
                              onset="this.setAttribute('label', val); return val;"/>
       <property name="position" onget="return this.getAttribute('position');"
@@ -46,6 +46,19 @@
         <parameter name="aTriggerEvent"/>
         <body>
         <![CDATA[
+          // Allow for passing an options object as the second argument.
+          if (arguments.length == 2 &&
+              arguments[1] != null &&
+              typeof arguments[1] == "object") {
+            let params = arguments[1];
+            aPosition = params.position;
+            aX = params.x;
+            aY = params.y;
+            aIsContextMenu = params.isContextMenu;
+            aAttributesOverride = params.attributesOverride;
+            aTriggerEvent = params.triggerEvent;
+          }
+
           try {
             var popupBox = this.popupBoxObject;
             if (popupBox)
@@ -278,7 +291,7 @@
 
   <binding id="panel" role="xul:panel"
            extends="chrome://global/content/bindings/popup.xml#popup-base">
-    <implementation implements="nsIDOMXULPopupElement">
+    <implementation>
       <field name="_prevFocus">0</field>
       <field name="_dragBindingAlive">true</field>
       <constructor>
@@ -291,7 +304,7 @@
             let draghandle = new tmp.WindowDraggingElement(this);
             draghandle.mouseDownCheck = function() {
               return this._dragBindingAlive;
-            }
+            };
           } catch (e) {}
         }
       ]]>
@@ -479,10 +492,11 @@
         document.getAnonymousElementByAttribute(this, "anonid", "arrowbox")
                 .style.removeProperty("transform");
 
-        this.adjustArrowPosition();
-
         if (this.getAttribute("animate") != "false") {
           this.setAttribute("animate", "open");
+          // the animating attribute prevents user interaction during transition
+          // it is removed when popupshown fires
+          this.setAttribute("animating", "true");
         }
 
         // set fading
@@ -512,6 +526,7 @@
         }
       </handler>
       <handler event="popupshown" phase="target">
+        this.removeAttribute("animating");
         this.setAttribute("panelopen", "true");
       </handler>
       <handler event="popuphidden" phase="target">

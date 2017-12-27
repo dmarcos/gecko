@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -202,13 +203,6 @@ nsTreeColumn::GetIdConst(const char16_t** aIdConst)
 }
 
 NS_IMETHODIMP
-nsTreeColumn::GetAtom(nsIAtom** aAtom)
-{
-  NS_IF_ADDREF(*aAtom = GetAtom());
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 nsTreeColumn::GetIndex(int32_t* aIndex)
 {
   *aIndex = GetIndex();
@@ -279,7 +273,7 @@ nsTreeColumn::Invalidate()
   }
 
   // Cache our index.
-  nsTreeUtils::GetColumnIndex(mContent, &mIndex);
+  nsTreeUtils::GetColumnIndex(mContent->AsElement(), &mIndex);
 
   const nsStyleVisibility* vis = frame->StyleVisibility();
 
@@ -411,7 +405,7 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsTreeColumns)
   NS_INTERFACE_MAP_ENTRY(nsITreeColumns)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
-                                                                                
+
 NS_IMPL_CYCLE_COLLECTING_ADDREF(nsTreeColumns)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(nsTreeColumns)
 
@@ -544,7 +538,7 @@ nsTreeColumns::GetKeyColumn()
 
     if (!first)
       first = currCol;
-    
+
     if (nsContentUtils::HasNonEmptyAttr(currCol->mContent, kNameSpaceID_None,
                                         nsGkAtoms::sortDirection)) {
       // Use sorted column as the key.
@@ -685,7 +679,10 @@ nsTreeColumns::RestoreNaturalOrder()
     nsCOMPtr<nsIContent> child = colsContent->GetChildAt(i);
     nsAutoString ordinal;
     ordinal.AppendInt(i);
-    child->SetAttr(kNameSpaceID_None, nsGkAtoms::ordinal, ordinal, true);
+    if (child->IsElement()) {
+      child->AsElement()->SetAttr(kNameSpaceID_None, nsGkAtoms::ordinal, ordinal,
+                                  true);
+    }
   }
 
   nsTreeColumns::InvalidateColumns();

@@ -58,8 +58,8 @@ final class GeckoEditableChild extends JNIObject implements IGeckoEditableChild 
         }
 
         @Override // IGeckoEditableChild
-        public void onImeUpdateComposition(int start, int end) {
-            GeckoEditableChild.this.onImeUpdateComposition(start, end);
+        public void onImeUpdateComposition(int start, int end, int flags) {
+            GeckoEditableChild.this.onImeUpdateComposition(start, end, flags);
         }
 
         @Override // IGeckoEditableChild
@@ -105,8 +105,12 @@ final class GeckoEditableChild extends JNIObject implements IGeckoEditableChild 
                                                 boolean rangeBoldLine, int rangeForeColor,
                                                 int rangeBackColor, int rangeLineColor);
 
+    // Don't update to the new composition if it's different than the current composition.
+    @WrapForJNI
+    public static final int FLAG_KEEP_CURRENT_COMPOSITION = 1;
+
     @WrapForJNI(dispatchTo = "proxy") @Override // IGeckoEditableChild
-    public native void onImeUpdateComposition(int start, int end);
+    public native void onImeUpdateComposition(int start, int end, int flags);
 
     @WrapForJNI(dispatchTo = "proxy") @Override // IGeckoEditableChild
     public native void onImeRequestCursorUpdates(int requestMode);
@@ -128,15 +132,10 @@ final class GeckoEditableChild extends JNIObject implements IGeckoEditableChild 
         if (DEBUG) {
             ThreadUtils.assertOnGeckoThread();
             Log.d(LOGTAG, "notifyIME(" + GeckoEditable.getConstantName(
-                          GeckoEditableListener.class, "NOTIFY_IME_", type) + ")");
+                          TextInputController.EditableListener.class,
+                          "NOTIFY_IME_", type) + ")");
         }
-        if (type == GeckoEditableListener.NOTIFY_IME_TO_COMMIT_COMPOSITION) {
-            // Gecko already committed its composition. However, Android keyboards
-            // have trouble dealing with us removing the composition manually on
-            // the Java side. Therefore, we keep the composition intact on the Java
-            // side. The text content should still be in-sync on both sides.
-            return;
-        } else if (type == GeckoEditableListener.NOTIFY_IME_TO_CANCEL_COMPOSITION) {
+        if (type == TextInputController.EditableListener.NOTIFY_IME_TO_CANCEL_COMPOSITION) {
             // Composition should have been canceled on the parent side through text
             // update notifications. We cannot verify that here because we don't
             // keep track of spans on the child side, but it's simple to add the
@@ -154,16 +153,19 @@ final class GeckoEditableChild extends JNIObject implements IGeckoEditableChild 
 
     @WrapForJNI(calledFrom = "gecko")
     private void notifyIMEContext(final int state, final String typeHint,
-                                  final String modeHint, final String actionHint) {
+                                  final String modeHint, final String actionHint,
+                                  final int flags) {
         if (DEBUG) {
             ThreadUtils.assertOnGeckoThread();
             Log.d(LOGTAG, "notifyIMEContext(" + GeckoEditable.getConstantName(
-                          GeckoEditableListener.class, "IME_STATE_", state) + ", \"" +
-                          typeHint + "\", \"" + modeHint + "\", \"" + actionHint + "\")");
+                          TextInputController.EditableListener.class,
+                          "IME_STATE_", state) + ", \"" +
+                          typeHint + "\", \"" + modeHint + "\", \"" + actionHint +
+                          "\", 0x" + Integer.toHexString(flags) + ")");
         }
 
         try {
-            mEditableParent.notifyIMEContext(state, typeHint, modeHint, actionHint);
+            mEditableParent.notifyIMEContext(state, typeHint, modeHint, actionHint, flags);
         } catch (final RemoteException e) {
             Log.e(LOGTAG, "Remote call failed", e);
         }

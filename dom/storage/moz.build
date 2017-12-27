@@ -8,22 +8,33 @@ with Files("**"):
     BUG_COMPONENT = ("Core", "DOM")
 
 EXPORTS.mozilla.dom += [
+    'LocalStorage.h',
+    'LocalStorageManager.h',
+    'SessionStorageManager.h',
     'Storage.h',
     'StorageIPC.h',
+    'StorageNotifierService.h',
+    'StorageUtils.h',
 ]
 
 UNIFIED_SOURCES += [
+    'LocalStorage.cpp',
+    'LocalStorageCache.cpp',
+    'LocalStorageManager.cpp',
+    'SessionStorage.cpp',
+    'SessionStorageCache.cpp',
+    'SessionStorageManager.cpp',
     'Storage.cpp',
-    'StorageCache.cpp',
     'StorageDBThread.cpp',
     'StorageDBUpdater.cpp',
     'StorageIPC.cpp',
-    'StorageManager.cpp',
+    'StorageNotifierService.cpp',
     'StorageObserver.cpp',
+    'StorageUtils.cpp',
 ]
 
 IPDL_SOURCES += [
-    'PStorage.ipdl',
+    'PBackgroundStorage.ipdl',
 ]
 
 include('/ipc/chromium/chromium-config.mozbuild')

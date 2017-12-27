@@ -16,24 +16,22 @@
 #include "nsIFrame.h"
 #include "nsITextControlFrame.h"
 #include "nsIFormControl.h"
-#include "nsIEditor.h"
-#include "nsIPlaintextEditor.h"
 #include "nsTextFragment.h"
 #include "nsString.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsServiceManagerUtils.h"
 #include "nsUnicharUtils.h"
 #include "nsIDOMElement.h"
-#include "nsIWordBreaker.h"
 #include "nsCRT.h"
 #include "nsRange.h"
 #include "nsContentUtils.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/TextEditor.h"
 
 using namespace mozilla;
 
 // Yikes!  Casting a char to unichar can fill with ones!
-#define CHAR_TO_UNICHAR(c) ((char16_t)(const unsigned char)c)
+#define CHAR_TO_UNICHAR(c) ((char16_t)(unsigned char)c)
 
 static NS_DEFINE_CID(kCContentIteratorCID, NS_CONTENTITERATOR_CID);
 static NS_DEFINE_CID(kCPreContentIteratorCID, NS_PRECONTENTITERATOR_CID);
@@ -98,6 +96,18 @@ public:
     return NS_ERROR_NOT_IMPLEMENTED;
   }
   virtual nsresult Init(nsIDOMRange* aRange) override
+  {
+    NS_NOTREACHED("internal error");
+    return NS_ERROR_NOT_IMPLEMENTED;
+  }
+  virtual nsresult Init(nsINode* aStartContainer, uint32_t aStartOffset,
+                        nsINode* aEndContainer, uint32_t aEndOffset) override
+  {
+    NS_NOTREACHED("internal error");
+    return NS_ERROR_NOT_IMPLEMENTED;
+  }
+  virtual nsresult Init(const RawRangeBoundary& aStart,
+                        const RawRangeBoundary& aEnd) override
   {
     NS_NOTREACHED("internal error");
     return NS_ERROR_NOT_IMPLEMENTED;
@@ -373,21 +383,14 @@ nsFindContentIterator::SetupInnerIterator(nsIContent* aContent)
     return;
   }
 
-  nsCOMPtr<nsIEditor> editor;
-  tcFrame->GetEditor(getter_AddRefs(editor));
-  if (!editor) {
-    return;
-  }
-
   // don't mess with disabled input fields
-  uint32_t editorFlags = 0;
-  editor->GetFlags(&editorFlags);
-  if (editorFlags & nsIPlaintextEditor::eEditorDisabledMask) {
+  RefPtr<TextEditor> textEditor = tcFrame->GetTextEditor();
+  if (!textEditor || textEditor->IsDisabled()) {
     return;
   }
 
   nsCOMPtr<nsIDOMElement> rootElement;
-  editor->GetRootElement(getter_AddRefs(rootElement));
+  textEditor->GetRootElement(getter_AddRefs(rootElement));
 
   nsCOMPtr<nsIDOMRange> innerRange = CreateRange(aContent);
   nsCOMPtr<nsIDOMRange> outerRange = CreateRange(aContent);
@@ -467,6 +470,7 @@ NS_IMPL_CYCLE_COLLECTION(nsFind, mLastBlockParent, mIterNode, mIterator)
 nsFind::nsFind()
   : mFindBackward(false)
   , mCaseSensitive(false)
+  , mWordBreaker(nullptr)
   , mIterOffset(0)
 {
 }
@@ -609,7 +613,7 @@ nsFind::NextNode(nsIDOMRange* aSearchRange,
     // beginning/end of the search range.
     nsCOMPtr<nsIDOMNode> startNode;
     nsCOMPtr<nsIDOMNode> endNode;
-    int32_t startOffset, endOffset;
+    uint32_t startOffset, endOffset;
     if (aContinueOk) {
 #ifdef DEBUG_FIND
       printf("Match in progress: continuing past endpoint\n");
@@ -645,7 +649,8 @@ nsFind::NextNode(nsIDOMRange* aSearchRange,
       }
     }
 
-    rv = InitIterator(startNode, startOffset, endNode, endOffset);
+    rv = InitIterator(startNode, static_cast<int32_t>(startOffset),
+                      endNode, static_cast<int32_t>(endOffset));
     NS_ENSURE_SUCCESS(rv, rv);
     if (!aStartPoint) {
       aStartPoint = aSearchRange;
@@ -665,14 +670,18 @@ nsFind::NextNode(nsIDOMRange* aSearchRange,
       if (mFindBackward) {
         aStartPoint->GetEndContainer(getter_AddRefs(node));
         if (mIterNode.get() == node.get()) {
-          aStartPoint->GetEndOffset(&mIterOffset);
+          uint32_t endOffset;
+          aStartPoint->GetEndOffset(&endOffset);
+          mIterOffset = static_cast<int32_t>(endOffset);
         } else {
           mIterOffset = -1; // sign to start from end
         }
       } else {
         aStartPoint->GetStartContainer(getter_AddRefs(node));
         if (mIterNode.get() == node.get()) {
-          aStartPoint->GetStartOffset(&mIterOffset);
+          uint32_t startOffset;
+          aStartPoint->GetStartOffset(&startOffset);
+          mIterOffset = static_cast<int32_t>(startOffset);
         } else {
           mIterOffset = 0;
         }
@@ -996,7 +1005,7 @@ nsFind::Find(const char16_t* aPatText, nsIDOMRange* aSearchRange,
 
   // Get the end point, so we know when to end searches:
   nsCOMPtr<nsIDOMNode> endNode;
-  int32_t endOffset;
+  uint32_t endOffset;
   aEndPoint->GetEndContainer(getter_AddRefs(endNode));
   aEndPoint->GetEndOffset(&endOffset);
 
@@ -1131,8 +1140,8 @@ nsFind::Find(const char16_t* aPatText, nsIDOMRange* aSearchRange,
     // Have we gone past the endpoint yet? If we have, and we're not in the
     // middle of a match, return.
     if (mIterNode == endNode &&
-        ((mFindBackward && findex < endOffset) ||
-         (!mFindBackward && findex > endOffset))) {
+        ((mFindBackward && findex < static_cast<int32_t>(endOffset)) ||
+         (!mFindBackward && findex > static_cast<int32_t>(endOffset)))) {
       ResetAll();
       return NS_OK;
     }

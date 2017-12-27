@@ -84,10 +84,8 @@ function check_mp4(v, enabled) {
   check("audio/mp4; codecs=opus", "probably");
 
   // Flac.
-  // Not available on Android yet.
-  var expectedResult = IsSupportedAndroid() ? "" : "probably";
-  check("audio/mp4; codecs=\"flac\"", expectedResult);
-  check("audio/mp4; codecs=flac", expectedResult);
+  check("audio/mp4; codecs=\"flac\"", "probably");
+  check("audio/mp4; codecs=flac", "probably");
 
   // VP9.
   // Note: canPlayType assumes non-fragmented MP4. Once we support VP9 in
@@ -162,13 +160,12 @@ var haveMp4 = getPref("media.wmf.enabled") ||
 
 check_mp4(document.getElementById('v'), haveMp4);
 
-var haveMp3 = getPref("media.directshow.enabled") ||
-              getPref("media.wmf.enabled") ||
+var haveMp3 = getPref("media.wmf.enabled") ||
               (IsLinux() && getPref("media.ffmpeg.enabled")) ||
               (IsSupportedAndroid() &&
                ((IsJellyBeanOrLater() && getPref("media.android-media-codec.enabled")) ||
                 getPref("media.plugins.enabled"))) ||
-              getPref("media.apple.mp3.enabled");
+              IsMacOSSnowLeopardOrLater();
 check_mp3(document.getElementById('v'), haveMp3);
 
 mediaTestCleanup();

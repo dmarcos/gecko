@@ -12,7 +12,6 @@
 #include "mozilla/dom/FileSystemRequestParent.h"
 #include "mozilla/dom/FileSystemUtils.h"
 #include "mozilla/dom/Promise.h"
-#include "mozilla/dom/ipc/BlobParent.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/BackgroundParent.h"
 #include "mozilla/ipc/PBackgroundChild.h"
@@ -106,8 +105,6 @@ private:
 
 } // anonymous namespace
 
-NS_IMPL_ISUPPORTS(FileSystemTaskChildBase, nsIIPCBackgroundChildCreateCallback)
-
 /**
  * FileSystemTaskBase class
  */
@@ -141,34 +138,9 @@ FileSystemTaskChildBase::Start()
   mFileSystem->AssertIsOnOwningThread();
 
   mozilla::ipc::PBackgroundChild* actor =
-    mozilla::ipc::BackgroundChild::GetForCurrentThread();
-  if (actor) {
-    ActorCreated(actor);
-  } else {
-    if (NS_WARN_IF(
-        !mozilla::ipc::BackgroundChild::GetOrCreateForCurrentThread(this))) {
-      MOZ_CRASH();
-    }
-  }
-}
-
-void
-FileSystemTaskChildBase::ActorFailed()
-{
-  MOZ_CRASH("Failed to create a PBackgroundChild actor!");
-}
-
-void
-FileSystemTaskChildBase::ActorCreated(mozilla::ipc::PBackgroundChild* aActor)
-{
-  if (HasError()) {
-    // In this case we don't want to use IPC at all.
-    RefPtr<ErrorRunnable> runnable = new ErrorRunnable(this);
-    FileSystemUtils::DispatchRunnable(mGlobalObject, runnable.forget());
-    return;
-  }
-
-  if (mFileSystem->IsShutdown()) {
+    mozilla::ipc::BackgroundChild::GetOrCreateForCurrentThread();
+  if (NS_WARN_IF(!actor)) {
+    // We are probably shutting down.
     return;
   }
 
@@ -191,10 +163,10 @@ FileSystemTaskChildBase::ActorCreated(mozilla::ipc::PBackgroundChild* aActor)
     nsIEventTarget* target = mGlobalObject->EventTargetFor(TaskCategory::Other);
     MOZ_ASSERT(target);
 
-    aActor->SetEventTargetForActor(this, target);
+    actor->SetEventTargetForActor(this, target);
   }
 
-  aActor->SendPFileSystemRequestConstructor(this, params);
+  actor->SendPFileSystemRequestConstructor(this, params);
 }
 
 void
@@ -232,13 +204,15 @@ FileSystemTaskChildBase::SetError(const nsresult& aErrorValue)
  * FileSystemTaskParentBase class
  */
 
-FileSystemTaskParentBase::FileSystemTaskParentBase(FileSystemBase* aFileSystem,
-                                                   const FileSystemParams& aParam,
-                                                   FileSystemRequestParent* aParent)
-  : mErrorValue(NS_OK)
+FileSystemTaskParentBase::FileSystemTaskParentBase(
+  FileSystemBase* aFileSystem,
+  const FileSystemParams& aParam,
+  FileSystemRequestParent* aParent)
+  : Runnable("dom::FileSystemTaskParentBase")
+  , mErrorValue(NS_OK)
   , mFileSystem(aFileSystem)
   , mRequestParent(aParent)
-  , mBackgroundEventTarget(NS_GetCurrentThread())
+  , mBackgroundEventTarget(GetCurrentThreadEventTarget())
 {
   MOZ_ASSERT(XRE_IsParentProcess(),
              "Only call from parent process!");
@@ -252,8 +226,12 @@ FileSystemTaskParentBase::~FileSystemTaskParentBase()
 {
   // This task can be released on different threads because we dispatch it (as
   // runnable) to main-thread, I/O and then back to the PBackground thread.
-  NS_ProxyRelease(mBackgroundEventTarget, mFileSystem.forget());
-  NS_ProxyRelease(mBackgroundEventTarget, mRequestParent.forget());
+  NS_ProxyRelease(
+    "FileSystemTaskParentBase::mFileSystem",
+    mBackgroundEventTarget, mFileSystem.forget());
+  NS_ProxyRelease(
+    "FileSystemTaskParentBase::mRequestParent",
+    mBackgroundEventTarget, mRequestParent.forget());
 }
 
 void

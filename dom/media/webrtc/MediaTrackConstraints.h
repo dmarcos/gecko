@@ -85,12 +85,19 @@ public:
       return mMax >= aOther.mMin && mMin <= aOther.mMax;
     }
     void Intersect(const Range& aOther) {
-      MOZ_ASSERT(Intersects(aOther));
       mMin = std::max(mMin, aOther.mMin);
-      mMax = std::min(mMax, aOther.mMax);
+      if (Intersects(aOther)) {
+        mMax = std::min(mMax, aOther.mMax);
+      } else {
+        // If there is no intersection, we will down-scale or drop frame
+        mMax = std::max(mMax, aOther.mMax);
+      }
     }
     bool Merge(const Range& aOther) {
-      if (!Intersects(aOther)) {
+      if (strcmp(mName, "width") != 0 &&
+          strcmp(mName, "height") != 0 &&
+          strcmp(mName, "frameRate") != 0 &&
+          !Intersects(aOther)) {
         return false;
       }
       Intersect(aOther);
@@ -204,7 +211,7 @@ public:
     void SetFrom(const dom::ConstrainDOMStringParameters& aOther);
     ValueType Clamp(const ValueType& n) const;
     ValueType Get(const ValueType& defaultValue) const {
-      return Clamp(mIdeal.size() ? mIdeal : defaultValue);
+      return Clamp(mIdeal.empty() ? defaultValue : mIdeal);
     }
     bool Intersects(const StringRange& aOther) const;
     void Intersect(const StringRange& aOther);
@@ -225,7 +232,8 @@ public:
   BooleanRange mScrollWithPage;
   StringRange mDeviceId;
   LongRange mViewportOffsetX, mViewportOffsetY, mViewportWidth, mViewportHeight;
-  BooleanRange mEchoCancellation, mMozNoiseSuppression, mMozAutoGainControl;
+  BooleanRange mEchoCancellation, mNoiseSuppression, mAutoGainControl;
+  LongRange mChannelCount;
 private:
   typedef NormalizedConstraintSet T;
 public:
@@ -254,11 +262,13 @@ public:
                     aOther.mViewportHeight, advanced, aList)
   , mEchoCancellation(&T::mEchoCancellation, "echoCancellation",
                       aOther.mEchoCancellation, advanced, aList)
-  , mMozNoiseSuppression(&T::mMozNoiseSuppression, "mozNoiseSuppression",
-                         aOther.mMozNoiseSuppression,
-                         advanced, aList)
-  , mMozAutoGainControl(&T::mMozAutoGainControl, "mozAutoGainControl",
-                        aOther.mMozAutoGainControl, advanced, aList) {}
+  , mNoiseSuppression(&T::mNoiseSuppression, "noiseSuppression",
+                      aOther.mNoiseSuppression,
+                      advanced, aList)
+  , mAutoGainControl(&T::mAutoGainControl, "autoGainControl",
+                     aOther.mAutoGainControl, advanced, aList)
+  , mChannelCount(&T::mChannelCount, "channelCount",
+                  aOther.mChannelCount, advanced, aList) {}
 };
 
 template<> bool NormalizedConstraintSet::Range<bool>::Merge(const Range& aOther);
@@ -294,6 +304,8 @@ class MediaConstraintsHelper
 protected:
   template<class ValueType, class NormalizedRange>
   static uint32_t FitnessDistance(ValueType aN, const NormalizedRange& aRange);
+  template<class ValueType, class NormalizedRange>
+  static uint32_t FeasibilityDistance(ValueType aN, const NormalizedRange& aRange);
   static uint32_t FitnessDistance(nsString aN,
       const NormalizedConstraintSet::StringRange& aConstraint);
 
@@ -442,6 +454,15 @@ public:
   FindBadConstraint(const NormalizedConstraints& aConstraints,
                     const MediaEngineSourceType& aMediaEngineSource,
                     const nsString& aDeviceId);
+
+  // Warn on and convert use of deprecated constraints to new ones
+
+  static void
+  ConvertOldWithWarning(
+      const dom::OwningBooleanOrConstrainBooleanParameters& old,
+      dom::OwningBooleanOrConstrainBooleanParameters& to,
+      const char* aMessageName,
+      nsPIDOMWindowInner* aWindow);
 };
 
 } // namespace mozilla

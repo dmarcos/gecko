@@ -1,8 +1,8 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
-/* This Source Code is subject to the terms of the Mozilla Public License
- * version 2.0 (the "License"). You can obtain a copy of the License at
- * http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* rendering object for CSS "display: ruby" */
 
@@ -22,16 +22,14 @@ nsContainerFrame* NS_NewRubyFrame(nsIPresShell* aPresShell,
 class nsRubyFrame final : public nsInlineFrame
 {
 public:
-  NS_DECL_FRAMEARENA_HELPERS
-  NS_DECL_QUERYFRAME_TARGET(nsRubyFrame)
+  NS_DECL_FRAMEARENA_HELPERS(nsRubyFrame)
   NS_DECL_QUERYFRAME
 
   // nsIFrame overrides
-  virtual nsIAtom* GetType() const override;
   virtual bool IsFrameOfType(uint32_t aFlags) const override;
-  virtual void AddInlineMinISize(nsRenderingContext *aRenderingContext,
+  virtual void AddInlineMinISize(gfxContext *aRenderingContext,
                                  InlineMinISizeData *aData) override;
-  virtual void AddInlinePrefISize(nsRenderingContext *aRenderingContext,
+  virtual void AddInlinePrefISize(gfxContext *aRenderingContext,
                                   InlinePrefISizeData *aData) override;
   virtual void Reflow(nsPresContext* aPresContext,
                       ReflowOutput& aDesiredSize,
@@ -50,7 +48,8 @@ protected:
   friend nsContainerFrame* NS_NewRubyFrame(nsIPresShell* aPresShell,
                                            nsStyleContext* aContext);
   explicit nsRubyFrame(nsStyleContext* aContext)
-    : nsInlineFrame(aContext) {}
+    : nsInlineFrame(aContext, kClassID)
+  {}
 
   void ReflowSegment(nsPresContext* aPresContext,
                      const ReflowInput& aReflowInput,

@@ -34,12 +34,6 @@
                           accesskey="&newPrivateWindow.accesskey;"
                           command="Tools:PrivateBrowsing"
                           key="key_privatebrowsing"/>
-#ifdef E10S_TESTING_ONLY
-                <menuitem id="menu_newNonRemoteWindow"
-                          label="&newNonRemoteWindow.label;"
-                          hidden="true"
-                          command="Tools:NonRemoteWindow"/>
-#endif
 #ifdef MAC_NON_BROWSER_WINDOW
                 <menuitem id="menu_openLocation"
                           label="&openLocationCmd.label;"
@@ -185,7 +179,7 @@
                 <menuitem id="menu_preferences"
                           label="&preferencesCmdUnix.label;"
                           accesskey="&preferencesCmdUnix.accesskey;"
-                          oncommand="openPreferences();"/>
+                          oncommand="openPreferences(undefined, {origin: 'menubar'});"/>
 #endif
 #endif
               </menupopup>
@@ -385,7 +379,8 @@
 #endif
                context="placesContext"
                openInTabs="children"
-               oncommand="BookmarksEventHandler.onCommand(event, this.parentNode._placesView);"
+               onmouseup="BookmarksEventHandler.onMouseUp(event);"
+               oncommand="BookmarksEventHandler.onCommand(event);"
                onclick="BookmarksEventHandler.onClick(event, this.parentNode._placesView);"
                onpopupshowing="BookmarkingUI.onMainMenuPopupShowing(event);
                                if (!this.parentNode._placesView)
@@ -424,10 +419,6 @@
                 class="show-only-for-keyboard"
                 command="Browser:BookmarkAllTabs"
                 key="bookmarkAllTabsKb"/>
-      <menuseparator/>
-      <menuitem label="&recentBookmarks.label;"
-                id="menu_recentBookmarks"
-                disabled="true"/>
       <menuseparator id="bookmarksToolbarSeparator"/>
       <menu id="bookmarksToolbarFolderMenu"
             class="menu-iconic bookmark-item"
@@ -473,14 +464,8 @@
 
             <menu id="tools-menu"
                   label="&toolsMenu.label;"
-                  accesskey="&toolsMenu.accesskey;"
-                  onpopupshowing="mirrorShow(this)">
-              <menupopup id="menu_ToolsPopup"
-# We have to use setTimeout() here to avoid a flickering menu bar when opening
-# the Tools menu, see bug 970769. This can be removed once we got rid of the
-# event loop spinning in Weave.Status._authManager.
-                         onpopupshowing="setTimeout(() => gSyncUI.updateUI());"
-                         >
+                  accesskey="&toolsMenu.accesskey;">
+              <menupopup id="menu_ToolsPopup">
               <menuitem id="menu_openDownloads"
                         label="&downloads.label;"
                         accesskey="&downloads.accesskey;"
@@ -492,22 +477,27 @@
                         key="key_openAddons"
                         command="Tools:Addons"/>
 
-              <!-- only one of sync-setup, sync-syncnowitem or sync-reauthitem will be showing at once -->
+              <!-- only one of sync-setup, sync-unverifieditem, sync-syncnowitem or sync-reauthitem will be showing at once -->
               <menuitem id="sync-setup"
                         label="&syncSignIn.label;"
                         accesskey="&syncSignIn.accesskey;"
                         observes="sync-setup-state"
-                        oncommand="gSyncUI.openPrefs('menubar')"/>
+                        oncommand="gSync.openPrefs('menubar')"/>
+              <menuitem id="sync-unverifieditem"
+                        label="&syncSignIn.label;"
+                        accesskey="&syncSignIn.accesskey;"
+                        observes="sync-unverified-state"
+                        oncommand="gSync.openPrefs('menubar')"/>
               <menuitem id="sync-syncnowitem"
                         label="&syncSyncNowItem.label;"
                         accesskey="&syncSyncNowItem.accesskey;"
                         observes="sync-syncnow-state"
-                        oncommand="gSyncUI.doSync(event);"/>
+                        oncommand="gSync.doSync(event);"/>
               <menuitem id="sync-reauthitem"
                         label="&syncReAuthItem.label;"
                         accesskey="&syncReAuthItem.accesskey;"
                         observes="sync-reauth-state"
-                        oncommand="gSyncUI.openSignInAgainPage('menubar');"/>
+                        oncommand="gSync.openSignInAgainPage('menubar');"/>
               <menuseparator id="devToolsSeparator"/>
               <menu id="webDeveloperMenu"
                     label="&webDeveloperMenu.label;"
@@ -525,19 +515,12 @@
                         key="key_viewInfo"
 #endif
                         command="View:PageInfo"/>
-              <menu id="menu_mirrorTabCmd"
-                    hidden="true"
-                    accesskey="&mirrorTabCmd.accesskey;"
-                    label="&mirrorTabCmd.label;">
-                <menupopup id="menu_mirrorTab-popup"
-                           onpopupshowing="populateMirrorTabMenu(this)"/>
-              </menu>
 #ifndef XP_UNIX
               <menuseparator id="prefSep"/>
               <menuitem id="menu_preferences"
                         label="&preferencesCmd2.label;"
                         accesskey="&preferencesCmd2.accesskey;"
-                        oncommand="openPreferences();"/>
+                        oncommand="openPreferences(undefined, {origin: 'menubar'});"/>
 #endif
               </menupopup>
             </menu>

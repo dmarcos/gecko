@@ -10,6 +10,7 @@
 #include "nsComponentManagerUtils.h"
 #include "nsTArray.h"
 #include "mozilla/Likely.h"
+#include "mozilla/Encoding.h"
 #include "mozilla/EndianUtils.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/UniquePtr.h"
@@ -794,14 +795,12 @@ public:
 
     static uint32_t
     FindPreferredSubtable(const uint8_t *aBuf, uint32_t aBufLength,
-                          uint32_t *aTableOffset, uint32_t *aUVSTableOffset,
-                          bool *aSymbolEncoding);
+                          uint32_t *aTableOffset, uint32_t *aUVSTableOffset);
 
     static nsresult
     ReadCMAP(const uint8_t *aBuf, uint32_t aBufLength,
              gfxSparseBitSet& aCharacterMap,
-             uint32_t& aUVSOffset,
-             bool& aUnicodeFont, bool& aSymbolFont);
+             uint32_t& aUVSOffset);
 
     static uint32_t
     MapCharToGlyphFormat4(const uint8_t *aBuf, char16_t aCh);
@@ -905,8 +904,12 @@ public:
         return (ch == 0x200D);
     }
 
+    // We treat Combining Grapheme Joiner (U+034F) together with the join
+    // controls (ZWJ, ZWNJ) here, because (like them) it is an invisible
+    // char that will be handled by the shaper even if not explicitly
+    // supported by the font. (See bug 1408366.)
     static inline bool IsJoinControl(uint32_t ch) {
-        return (ch == 0x200C || ch == 0x200D);
+        return (ch == 0x200C || ch == 0x200D || ch == 0x034f);
     }
 
     enum {
@@ -1004,24 +1007,24 @@ protected:
     ReadNames(const char *aNameData, uint32_t aDataLen, uint32_t aNameID,
               int32_t aLangID, int32_t aPlatformID, nsTArray<nsString>& aNames);
 
-    // convert opentype name-table platform/encoding/language values to a charset name
-    // we can use to convert the name data to unicode, or "" if data is UTF16BE
-    static const char*
+    // convert opentype name-table platform/encoding/language values to an
+    // Encoding object we can use to convert the name data to unicode
+    static const mozilla::Encoding*
     GetCharsetForFontName(uint16_t aPlatform, uint16_t aScript, uint16_t aLanguage);
 
     struct MacFontNameCharsetMapping {
-        uint16_t    mEncoding;
+        uint16_t    mScript;
         uint16_t    mLanguage;
-        const char *mCharsetName;
+        const mozilla::Encoding* mEncoding;
 
         bool operator<(const MacFontNameCharsetMapping& rhs) const {
-            return (mEncoding < rhs.mEncoding) ||
-                   ((mEncoding == rhs.mEncoding) && (mLanguage < rhs.mLanguage));
+            return (mScript < rhs.mScript) ||
+                   ((mScript == rhs.mScript) && (mLanguage < rhs.mLanguage));
         }
     };
     static const MacFontNameCharsetMapping gMacFontNameCharsets[];
-    static const char* gISOFontNameCharsets[];
-    static const char* gMSFontNameCharsets[];
+    static const mozilla::Encoding* gISOFontNameCharsets[];
+    static const mozilla::Encoding* gMSFontNameCharsets[];
 };
 
 #endif /* GFX_FONT_UTILS_H */

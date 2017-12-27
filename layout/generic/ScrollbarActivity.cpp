@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,6 +16,7 @@
 #include "nsQueryFrame.h"
 #include "nsComponentManagerUtils.h"
 #include "nsStyledElement.h"
+#include "mozilla/dom/Element.h"
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/Preferences.h"
 
@@ -158,7 +160,7 @@ ScrollbarActivity::IsStillFading(TimeStamp aTime)
 void
 ScrollbarActivity::HandleEventForScrollbar(const nsAString& aType,
                                            nsIContent* aTarget,
-                                           nsIContent* aScrollbar,
+                                           Element* aScrollbar,
                                            bool* aStoredHoverState)
 {
   if (!aTarget || !aScrollbar ||
@@ -322,14 +324,14 @@ ScrollbarActivity::UnregisterFromRefreshDriver()
 }
 
 static void
-SetBooleanAttribute(nsIContent* aContent, nsIAtom* aAttribute, bool aValue)
+SetBooleanAttribute(Element* aElement, nsAtom* aAttribute, bool aValue)
 {
-  if (aContent) {
+  if (aElement) {
     if (aValue) {
-      aContent->SetAttr(kNameSpaceID_None, aAttribute,
+      aElement->SetAttr(kNameSpaceID_None, aAttribute,
                         NS_LITERAL_STRING("true"), true);
     } else {
-      aContent->UnsetAttr(kNameSpaceID_None, aAttribute, true);
+      aElement->UnsetAttr(kNameSpaceID_None, aAttribute, true);
     }
   }
 }
@@ -428,7 +430,7 @@ ScrollbarActivity::StartFadeBeginTimer()
     return;
   }
   if (!mFadeBeginTimer) {
-    mFadeBeginTimer = do_CreateInstance("@mozilla.org/timer;1");
+    mFadeBeginTimer = NS_NewTimer();
   }
   mFadeBeginTimer->InitWithNamedFuncCallback(
     FadeBeginTimerFired, this, mScrollbarFadeBeginDelay,
@@ -444,7 +446,7 @@ ScrollbarActivity::CancelFadeBeginTimer()
 }
 
 void
-ScrollbarActivity::HoveredScrollbar(nsIContent* aScrollbar)
+ScrollbarActivity::HoveredScrollbar(Element* aScrollbar)
 {
   SetBooleanAttribute(GetHorizontalScrollbar(), nsGkAtoms::hover, false);
   SetBooleanAttribute(GetVerticalScrollbar(), nsGkAtoms::hover, false);
@@ -458,11 +460,11 @@ ScrollbarActivity::GetRefreshDriver()
   return scrollableFrame->PresContext()->RefreshDriver();
 }
 
-nsIContent*
+Element*
 ScrollbarActivity::GetScrollbarContent(bool aVertical)
 {
   nsIFrame* box = mScrollableFrame->GetScrollbarBox(aVertical);
-  return box ? box->GetContent() : nullptr;
+  return box ? box->GetContent()->AsElement() : nullptr;
 }
 
 } // namespace layout

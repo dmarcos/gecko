@@ -136,11 +136,12 @@ nsresult
 gfxSVGGlyphsDocument::SetupPresentation()
 {
     nsCOMPtr<nsICategoryManager> catMan = do_GetService(NS_CATEGORYMANAGER_CONTRACTID);
-    nsXPIDLCString contractId;
+    nsCString contractId;
     nsresult rv = catMan->GetCategoryEntry("Gecko-Content-Viewers", "image/svg+xml", getter_Copies(contractId));
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCOMPtr<nsIDocumentLoaderFactory> docLoaderFactory = do_GetService(contractId);
+    nsCOMPtr<nsIDocumentLoaderFactory> docLoaderFactory =
+      do_GetService(contractId.get());
     NS_ASSERTION(docLoaderFactory, "Couldn't get DocumentLoaderFactory");
 
     nsCOMPtr<nsIContentViewer> viewer;
@@ -161,15 +162,15 @@ gfxSVGGlyphsDocument::SetupPresentation()
 
     if (!presShell->DidInitialize()) {
         nsRect rect = presContext->GetVisibleArea();
-        rv = presShell->Initialize(rect.width, rect.height);
+        rv = presShell->Initialize(rect.Width(), rect.Height());
         NS_ENSURE_SUCCESS(rv, rv);
     }
 
     mDocument->FlushPendingNotifications(FlushType::Layout);
 
-    nsSMILAnimationController* controller = mDocument->GetAnimationController();
-    if (controller) {
-      controller->Resume(nsSMILTimeContainer::PAUSE_IMAGE);
+    if (mDocument->HasAnimationController()) {
+      mDocument->GetAnimationController()
+               ->Resume(nsSMILTimeContainer::PAUSE_IMAGE);
     }
     mDocument->ImageTracker()->SetAnimatingState(true);
 
@@ -212,18 +213,18 @@ gfxSVGGlyphsDocument::FindGlyphElements(Element *aElem)
  * @param aGlyphId The glyph id
  * @return true iff rendering succeeded
  */
-bool
+void
 gfxSVGGlyphs::RenderGlyph(gfxContext *aContext, uint32_t aGlyphId,
                           SVGContextPaint* aContextPaint)
 {
     gfxContextAutoSaveRestore aContextRestorer(aContext);
 
     Element *glyph = mGlyphIdMap.Get(aGlyphId);
-    NS_ASSERTION(glyph, "No glyph element. Should check with HasSVGGlyph() first!");
+    MOZ_ASSERT(glyph, "No glyph element. Should check with HasSVGGlyph() first!");
 
     AutoSetRestoreSVGContextPaint autoSetRestore(aContextPaint, glyph->OwnerDoc());
 
-    return nsSVGUtils::PaintSVGGlyph(glyph, aContext);
+    nsSVGUtils::PaintSVGGlyph(glyph, aContext);
 }
 
 bool
@@ -332,7 +333,8 @@ CreateBufferedStream(const uint8_t *aBuffer, uint32_t aBufLen,
 
     nsCOMPtr<nsIInputStream> aBufferedStream;
     if (!NS_InputStreamIsBuffered(stream)) {
-        rv = NS_NewBufferedInputStream(getter_AddRefs(aBufferedStream), stream, 4096);
+        rv = NS_NewBufferedInputStream(getter_AddRefs(aBufferedStream),
+                                       stream.forget(), 4096);
         NS_ENSURE_SUCCESS(rv, rv);
         stream = aBufferedStream;
     }
@@ -361,6 +363,8 @@ gfxSVGGlyphsDocument::ParseDocument(const uint8_t *aBuffer, uint32_t aBufLen)
 
     nsCOMPtr<nsIPrincipal> principal = NullPrincipal::Create();
 
+    auto styleBackend = nsLayoutUtils::StyloEnabled() ? StyleBackendType::Servo
+                                                      : StyleBackendType::Gecko;
     nsCOMPtr<nsIDOMDocument> domDoc;
     rv = NS_NewDOMDocument(getter_AddRefs(domDoc),
                            EmptyString(),   // aNamespaceURI
@@ -369,7 +373,8 @@ gfxSVGGlyphsDocument::ParseDocument(const uint8_t *aBuffer, uint32_t aBufLen)
                            uri, uri, principal,
                            false,           // aLoadedAsData
                            nullptr,          // aEventObject
-                           DocumentFlavorSVG);
+                           DocumentFlavorSVG,
+                           styleBackend);
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsCOMPtr<nsIDocument> document(do_QueryInterface(domDoc));

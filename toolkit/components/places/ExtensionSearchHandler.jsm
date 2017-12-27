@@ -52,7 +52,9 @@ class InputSession {
   }
 
   addSuggestions(suggestions) {
-    this._suggestionsCallback(suggestions);
+    if (this._suggestionsCallback) {
+      this._suggestionsCallback(suggestions);
+    }
   }
 
   start(eventName) {
@@ -60,6 +62,7 @@ class InputSession {
   }
 
   update(eventName, text, suggestionsCallback, searchFinishedCallback) {
+    // Check to see if an existing input session needs to be ended first.
     if (this._searchFinishedCallback) {
       this._searchFinishedCallback();
     }
@@ -69,12 +72,20 @@ class InputSession {
   }
 
   cancel(eventName) {
-    this._searchFinishedCallback();
+    if (this._searchFinishedCallback) {
+      this._searchFinishedCallback();
+      this._searchFinishedCallback = null;
+      this._suggestionsCallback = null;
+    }
     this._extension.emit(eventName);
   }
 
   end(eventName, text, disposition) {
-    this._searchFinishedCallback();
+    if (this._searchFinishedCallback) {
+      this._searchFinishedCallback();
+      this._searchFinishedCallback = null;
+      this._suggestionsCallback = null;
+    }
     this._extension.emit(eventName, text, disposition);
   }
 }
@@ -263,7 +274,7 @@ var ExtensionSearchHandler = Object.freeze({
       current: "currentTab",
       tab: "newForegroundTab",
       tabshifted: "newBackgroundTab",
-    }
+    };
     let disposition = dispositionMap[where];
 
     if (!disposition) {
@@ -274,7 +285,7 @@ var ExtensionSearchHandler = Object.freeze({
     // we only want to send the text that follows.
     text = text.substring(keyword.length + 1);
 
-    gActiveInputSession.end(this.MSG_INPUT_ENTERED, text, disposition)
+    gActiveInputSession.end(this.MSG_INPUT_ENTERED, text, disposition);
     gActiveInputSession = null;
   },
 

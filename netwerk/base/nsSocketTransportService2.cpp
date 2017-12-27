@@ -27,7 +27,6 @@
 #include "nsThreadUtils.h"
 #include "nsIFile.h"
 #include "nsIWidget.h"
-#include "mozilla/dom/FlyWebService.h"
 
 #ifdef MOZ_TASK_TRACER
 #include "GeckoTaskTracer.h"
@@ -41,7 +40,7 @@ LazyLogModule gUDPSocketLog("UDPSocket");
 LazyLogModule gTCPSocketLog("TCPSocket");
 
 nsSocketTransportService *gSocketTransportService = nullptr;
-Atomic<PRThread*, Relaxed> gSocketThread;
+static Atomic<PRThread*, Relaxed> gSocketThread;
 
 #define SEND_BUFFER_PREF "network.tcp.sendbuffer"
 #define KEEPALIVE_ENABLED_PREF "network.tcp.keepalive.enabled"
@@ -50,7 +49,7 @@ Atomic<PRThread*, Relaxed> gSocketThread;
 #define KEEPALIVE_PROBE_COUNT_PREF "network.tcp.keepalive.probe_count"
 #define SOCKET_LIMIT_TARGET 1000U
 #define SOCKET_LIMIT_MIN      50U
-#define BLIP_INTERVAL_PREF "network.activity.blipIntervalMilliseconds"
+#define INTERVAL_PREF "network.activity.intervalMilliseconds"
 #define MAX_TIME_BETWEEN_TWO_POLLS "network.sts.max_time_for_events_between_two_polls"
 #define TELEMETRY_PREF "toolkit.telemetry.enabled"
 #define MAX_TIME_FOR_PR_CLOSE_DURING_SHUTDOWN "network.sts.max_time_for_pr_close_during_shutdown"
@@ -59,6 +58,13 @@ Atomic<PRThread*, Relaxed> gSocketThread;
 
 uint32_t nsSocketTransportService::gMaxCount;
 PRCallOnceType nsSocketTransportService::gMaxCountInitOnce;
+
+// Utility functions
+bool
+OnSocketThread()
+{
+  return PR_GetCurrentThread() == gSocketThread;
+}
 
 //-----------------------------------------------------------------------------
 // ctor/dtor (called on the main/UI thread by the service manager)
@@ -166,6 +172,14 @@ nsSocketTransportService::IsOnCurrentThread(bool *result)
     return thread->IsOnCurrentThread(result);
 }
 
+NS_IMETHODIMP_(bool)
+nsSocketTransportService::IsOnCurrentThreadInfallible()
+{
+    nsCOMPtr<nsIThread> thread = GetThreadSafely();
+    NS_ENSURE_TRUE(thread, false);
+    return thread->IsOnCurrentThread();
+}
+
 //-----------------------------------------------------------------------------
 // socket api (socket thread only)
 
@@ -174,7 +188,7 @@ nsSocketTransportService::NotifyWhenCanAttachSocket(nsIRunnable *event)
 {
     SOCKET_LOG(("nsSocketTransportService::NotifyWhenCanAttachSocket\n"));
 
-    NS_ASSERTION(PR_GetCurrentThread() == gSocketThread, "wrong thread");
+    MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
     if (CanAttachSocket()) {
         return Dispatch(event, NS_DISPATCH_NORMAL);
@@ -190,7 +204,7 @@ nsSocketTransportService::AttachSocket(PRFileDesc *fd, nsASocketHandler *handler
 {
     SOCKET_LOG(("nsSocketTransportService::AttachSocket [handler=%p]\n", handler));
 
-    NS_ASSERTION(PR_GetCurrentThread() == gSocketThread, "wrong thread");
+    MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
     if (!CanAttachSocket()) {
         return NS_ERROR_NOT_AVAILABLE;
@@ -257,7 +271,7 @@ nsSocketTransportService::DetachSocket(SocketContext *listHead, SocketContext *s
         RemoveFromIdleList(sock);
 
     // NOTE: sock is now an invalid pointer
-    
+
     //
     // notify the first element on the pending socket queue...
     //
@@ -289,7 +303,7 @@ nsSocketTransportService::AddToPollList(SocketContext *sock)
             return NS_ERROR_OUT_OF_MEMORY;
         }
     }
-    
+
     uint32_t newSocketIndex = mActiveCount;
     if (ChaosMode::isActive(ChaosFeature::NetworkScheduling)) {
       newSocketIndex = ChaosMode::randomUint32LessThan(mActiveCount + 1);
@@ -497,7 +511,7 @@ nsSocketTransportService::Poll(uint32_t *interval,
     }
 
     SOCKET_LOG(("    ...returned after %i milliseconds\n",
-         PR_IntervalToMilliseconds(passedInterval))); 
+         PR_IntervalToMilliseconds(passedInterval)));
 
     *interval = PR_IntervalToSeconds(passedInterval);
     return rv;
@@ -533,7 +547,7 @@ nsSocketTransportService::Init()
     nsCOMPtr<nsIThread> thread;
     nsresult rv = NS_NewNamedThread("Socket Thread", getter_AddRefs(thread), this);
     if (NS_FAILED(rv)) return rv;
-    
+
     {
         MutexAutoLock lock(mLock);
         // Install our mThread, protecting against concurrent readers
@@ -618,7 +632,7 @@ nsSocketTransportService::ShutdownThread()
     }
 
     nsCOMPtr<nsIPrefBranch> tmpPrefService = do_GetService(NS_PREFSERVICE_CONTRACTID);
-    if (tmpPrefService) 
+    if (tmpPrefService)
         tmpPrefService->RemoveObserver(SEND_BUFFER_PREF, this);
 
     nsCOMPtr<nsIObserverService> obsSvc = services::GetObserverService();
@@ -724,20 +738,6 @@ nsSocketTransportService::CreateRoutedTransport(const char **types,
                                                 nsIProxyInfo *proxyInfo,
                                                 nsISocketTransport **result)
 {
-    // Check FlyWeb table for host mappings.  If one exists, then use that.
-    RefPtr<mozilla::dom::FlyWebService> fws =
-        mozilla::dom::FlyWebService::GetExisting();
-    if (fws) {
-        nsresult rv = fws->CreateTransportForHost(types, typeCount, host, port,
-                                                  hostRoute, portRoute,
-                                                  proxyInfo, result);
-        NS_ENSURE_SUCCESS(rv, rv);
-
-        if (*result) {
-            return NS_OK;
-        }
-    }
-
     NS_ENSURE_TRUE(mInitialized, NS_ERROR_NOT_INITIALIZED);
     NS_ENSURE_TRUE(port >= 0 && port <= 0xFFFF, NS_ERROR_ILLEGAL_VALUE);
 
@@ -775,7 +775,7 @@ nsSocketTransportService::CreateUnixDomainTransport(nsIFile *aPath,
 }
 
 NS_IMETHODIMP
-nsSocketTransportService::OnDispatchedEvent(nsIThreadInternal *thread)
+nsSocketTransportService::OnDispatchedEvent()
 {
 #ifndef XP_WIN
     // On windows poll can hang and this became worse when we introduced the
@@ -783,7 +783,7 @@ nsSocketTransportService::OnDispatchedEvent(nsIThreadInternal *thread)
     // behavior on windows to be as before bug 698882, e.g. write to the socket
     // also if an event dispatch is on the socket thread and writing to the
     // socket for each event.
-    if (PR_GetCurrentThread() == gSocketThread) {
+    if (OnSocketThread()) {
         // this check is redundant to one done inside ::Signal(), but
         // we can do it here and skip obtaining the lock - given that
         // this is a relatively common occurance its worth the
@@ -831,6 +831,18 @@ NS_IMETHODIMP
 nsSocketTransportService::Run()
 {
     SOCKET_LOG(("STS thread init %d sockets\n", gMaxCount));
+
+#if defined(XP_WIN)
+    // see bug 1361495, gethostname() triggers winsock initialization.
+    // so do it here (on parent and child) to protect against it being done first
+    // accidentally on the main thread.. especially via PR_GetSystemInfo(). This
+    // will also improve latency of first real winsock operation
+    // ..
+    // If STS-thread is no longer needed this should still be run before exiting
+
+    char ignoredStackBuffer[255];
+    Unused << gethostname(ignoredStackBuffer, 255);
+#endif
 
     psm::InitializeSSLServerCertVerificationThreads();
 
@@ -921,12 +933,16 @@ nsSocketTransportService::Run()
             mRawThread->HasPendingEvents(&pendingEvents);
             if (pendingEvents) {
                 if (!mServingPendingQueue) {
-                    nsresult rv = Dispatch(NewRunnableMethod(this,
-                        &nsSocketTransportService::MarkTheLastElementOfPendingQueue),
-                        nsIEventTarget::DISPATCH_NORMAL);
-                    if (NS_FAILED(rv)) {
-                        NS_WARNING("Could not dispatch a new event on the "
-                                   "socket thread.");
+                  nsresult rv = Dispatch(
+                    NewRunnableMethod("net::nsSocketTransportService::"
+                                      "MarkTheLastElementOfPendingQueue",
+                                      this,
+                                      &nsSocketTransportService::
+                                        MarkTheLastElementOfPendingQueue),
+                    nsIEventTarget::DISPATCH_NORMAL);
+                  if (NS_FAILED(rv)) {
+                    NS_WARNING("Could not dispatch a new event on the "
+                               "socket thread.");
                     } else {
                         mServingPendingQueue = true;
                     }
@@ -1148,7 +1164,7 @@ nsSocketTransportService::DoPollIteration(TimeDuration *pollDuration)
                     s.mElapsedTime = UINT16_MAX;
                 else
                     s.mElapsedTime += uint16_t(pollInterval);
-                // check for timeout expiration 
+                // check for timeout expiration
                 if (s.mElapsedTime >= s.mHandler->mPollTimeout) {
 #ifdef MOZ_TASK_TRACER
 		    tasktracer::AutoSourceEvent taskTracerEvent(tasktracer::SourceEventType::SocketIO);
@@ -1288,12 +1304,14 @@ void
 nsSocketTransportService::OnKeepaliveEnabledPrefChange()
 {
     // Dispatch to socket thread if we're not executing there.
-    if (PR_GetCurrentThread() != gSocketThread) {
-        gSocketTransportService->Dispatch(
-            NewRunnableMethod(
-                this, &nsSocketTransportService::OnKeepaliveEnabledPrefChange),
-            NS_DISPATCH_NORMAL);
-        return;
+    if (!OnSocketThread()) {
+      gSocketTransportService->Dispatch(
+        NewRunnableMethod(
+          "net::nsSocketTransportService::OnKeepaliveEnabledPrefChange",
+          this,
+          &nsSocketTransportService::OnKeepaliveEnabledPrefChange),
+        NS_DISPATCH_NORMAL);
+      return;
     }
 
     SOCKET_LOG(("nsSocketTransportService::OnKeepaliveEnabledPrefChange %s",
@@ -1335,20 +1353,21 @@ nsSocketTransportService::Observe(nsISupports *subject,
     }
 
     if (!strcmp(topic, "profile-initial-state")) {
-        int32_t blipInterval = Preferences::GetInt(BLIP_INTERVAL_PREF, 0);
-        if (blipInterval <= 0) {
+        int32_t interval = Preferences::GetInt(INTERVAL_PREF, 0);
+        if (interval <= 0) {
             return NS_OK;
         }
 
-        return net::NetworkActivityMonitor::Init(blipInterval);
+        return net::NetworkActivityMonitor::Init(interval);
     }
 
     if (!strcmp(topic, "last-pb-context-exited")) {
-        nsCOMPtr<nsIRunnable> ev =
-          NewRunnableMethod(this,
-			    &nsSocketTransportService::ClosePrivateConnections);
-        nsresult rv = Dispatch(ev, nsIEventTarget::DISPATCH_NORMAL);
-        NS_ENSURE_SUCCESS(rv, rv);
+      nsCOMPtr<nsIRunnable> ev = NewRunnableMethod(
+        "net::nsSocketTransportService::ClosePrivateConnections",
+        this,
+        &nsSocketTransportService::ClosePrivateConnections);
+      nsresult rv = Dispatch(ev, nsIEventTarget::DISPATCH_NORMAL);
+      NS_ENSURE_SUCCESS(rv, rv);
     }
 
     if (!strcmp(topic, NS_TIMER_CALLBACK_TOPIC)) {
@@ -1372,10 +1391,8 @@ nsSocketTransportService::Observe(nsISupports *subject,
         }
     } else if (!strcmp(topic, NS_WIDGET_WAKE_OBSERVER_TOPIC)) {
         if (mSleepPhase && !mAfterWakeUpTimer) {
-            mAfterWakeUpTimer = do_CreateInstance("@mozilla.org/timer;1");
-            if (mAfterWakeUpTimer) {
-                mAfterWakeUpTimer->Init(this, 2000, nsITimer::TYPE_ONE_SHOT);
-            }
+            NS_NewTimerWithObserver(getter_AddRefs(mAfterWakeUpTimer),
+                                    this, 2000, nsITimer::TYPE_ONE_SHOT);
         }
     } else if (!strcmp(topic, "xpcom-shutdown-threads")) {
         ShutdownThread();
@@ -1429,7 +1446,7 @@ nsSocketTransportService::GetSendBufferSize(int32_t *value)
 void
 nsSocketTransportService::ProbeMaxCount()
 {
-    NS_ASSERTION(PR_GetCurrentThread() == gSocketThread, "wrong thread");
+    MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
     if (mProbedMaxCount)
         return;
@@ -1463,7 +1480,7 @@ nsSocketTransportService::ProbeMaxCount()
     static_assert(SOCKET_LIMIT_MIN >= 32U, "Minimum Socket Limit is >= 32");
     while (gMaxCount <= numAllocated) {
         int32_t rv = PR_Poll(pfd, gMaxCount, PR_MillisecondsToInterval(0));
-        
+
         SOCKET_LOG(("Socket Limit Test poll() size=%d rv=%d\n",
                     gMaxCount, rv));
 
@@ -1581,7 +1598,7 @@ nsSocketTransportService::AnalyzeConnection(nsTArray<SocketInfo> *data,
 void
 nsSocketTransportService::GetSocketConnections(nsTArray<SocketInfo> *data)
 {
-    NS_ASSERTION(PR_GetCurrentThread() == gSocketThread, "wrong thread");
+    MOZ_ASSERT(OnSocketThread(), "not on socket thread");
     for (uint32_t i = 0; i < mActiveCount; i++)
         AnalyzeConnection(data, &mActiveList[i], true);
     for (uint32_t i = 0; i < mIdleCount; i++)
@@ -1592,17 +1609,23 @@ nsSocketTransportService::GetSocketConnections(nsTArray<SocketInfo> *data)
 void
 nsSocketTransportService::StartPollWatchdog()
 {
-    MutexAutoLock lock(mLock);
+    // Start off the timer from a runnable off of the main thread in order to
+    // avoid a deadlock, see bug 1370448.
+    RefPtr<nsSocketTransportService> self(this);
+    NS_DispatchToMainThread(NS_NewRunnableFunction("nsSocketTransportService::StartPollWatchdog",
+                                                   [self] {
+         MutexAutoLock lock(self->mLock);
 
-    // Poll can hang sometimes. If we are in shutdown, we are going to start a
-    // watchdog. If we do not exit poll within REPAIR_POLLABLE_EVENT_TIME
-    // signal a pollable event again.
-    MOZ_ASSERT(gIOService->IsNetTearingDown());
-    if (mPolling && !mPollRepairTimer) {
-        mPollRepairTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
-        mPollRepairTimer->Init(this, REPAIR_POLLABLE_EVENT_TIME,
-                               nsITimer::TYPE_REPEATING_SLACK);
-    }
+         // Poll can hang sometimes. If we are in shutdown, we are going to start a
+         // watchdog. If we do not exit poll within REPAIR_POLLABLE_EVENT_TIME
+         // signal a pollable event again.
+         MOZ_ASSERT(gIOService->IsNetTearingDown());
+         if (self->mPolling && !self->mPollRepairTimer) {
+             NS_NewTimerWithObserver(getter_AddRefs(self->mPollRepairTimer),
+                                     self, REPAIR_POLLABLE_EVENT_TIME,
+                                     nsITimer::TYPE_REPEATING_SLACK);
+         }
+    }));
 }
 
 void

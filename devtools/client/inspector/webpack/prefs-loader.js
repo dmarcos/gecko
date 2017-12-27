@@ -8,7 +8,6 @@
 
 const PREF_WHITELIST = [
   "devtools",
-  "layout.css.grid.enabled"
 ];
 
 const acceptLine = function (line) {
@@ -57,6 +56,8 @@ module.exports = function (content) {
         ignoring = !ifMap[line];
       } else if (line.startsWith("#else")) {
         ignoring = !ignoring;
+      } else if (line.startsWith("#endif")) {
+        ignoring = false;
       }
     }
 

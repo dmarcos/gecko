@@ -115,11 +115,11 @@
 #if defined(XP_UNIX) || defined(XP_MACOSX)
 /**
  * Directory service keys for the system-wide and user-specific
- * directories where host manifests used by the WebExtensions
- * native messaging feature are found.
+ * directories where native manifests used by the WebExtensions
+ * native messaging and managed storage features are found.
  */
-#define XRE_SYS_NATIVE_MESSAGING_MANIFESTS "XRESysNativeMessaging"
-#define XRE_USER_NATIVE_MESSAGING_MANIFESTS "XREUserNativeMessaging"
+#define XRE_SYS_NATIVE_MANIFESTS "XRESysNativeManifests"
+#define XRE_USER_NATIVE_MANIFESTS "XREUserNativeManifests"
 #endif
 
 /**
@@ -127,6 +127,12 @@
  * parent directory.
  */
 #define XRE_USER_SYS_EXTENSION_DIR "XREUSysExt"
+
+/**
+ * A directory service key which specifies a directory where temporary
+ * system extensions can be loaded from during development.
+ */
+#define XRE_USER_SYS_EXTENSION_DEV_DIR "XRESysExtDev"
 
 /**
  * A directory service key which specifies the distribution specific files for
@@ -169,26 +175,9 @@
  *
  * Mac:        ~/Library/Caches/Mozilla/updates/<absolute path to app dir>
  *
- * Gonk:       /data/local
- *
  * All others: Parent directory of XRE_EXECUTABLE_FILE.
  */
 #define XRE_UPDATE_ROOT_DIR "UpdRootD"
-
-/**
- * A directory service key which provides an alternate location
- * to UpdRootD to  to store large files. This key is currently
- * only implemented in the Gonk directory service provider.
- */
-
-#define XRE_UPDATE_ARCHIVE_DIR "UpdArchD"
-
-/**
- * A directory service key which provides the directory where an OS update is
-*  applied.
- * At present this is supported only in Gonk.
- */
-#define XRE_OS_UPDATE_APPLY_TO_DIR "OSUpdApplyToD"
 
 /**
  * Begin an XUL application. Does not return until the user exits the
@@ -222,12 +211,9 @@ XRE_API(nsresult,
 
 /**
  * Get the path of the running application binary and store it in aResult.
- * @param aArgv0  The value passed as argv[0] of main(). This value is only
- *                used on *nix, and only when other methods of determining
- *                the binary path have failed.
  */
 XRE_API(nsresult,
-        XRE_GetBinaryPath, (const char* aArgv0, nsIFile** aResult))
+        XRE_GetBinaryPath, (nsIFile** aResult))
 
 /**
  * Get the static module built in to libxul.
@@ -388,7 +374,7 @@ enum GeckoProcessType
   GeckoProcessType_GMPlugin, // Gecko Media Plugin
 
   GeckoProcessType_GPU,      // GPU and compositor process
-
+  GeckoProcessType_PDFium,   // Gecko PDFium process
   GeckoProcessType_End,
   GeckoProcessType_Invalid = GeckoProcessType_End
 };
@@ -399,7 +385,8 @@ static const char* const kGeckoProcessTypeString[] = {
   "tab",
   "ipdlunittest",
   "geckomediaplugin",
-  "gpu"
+  "gpu",
+  "pdfium"
 };
 
 static_assert(MOZ_ARRAY_LENGTH(kGeckoProcessTypeString) ==
@@ -417,7 +404,6 @@ XRE_API(void,
 XRE_API(void,
         XRE_SetProcessType, (const char* aProcessTypeString))
 
-#if defined(MOZ_CRASHREPORTER)
 // Used in the "master" parent process hosting the crash server
 XRE_API(bool,
         XRE_TakeMinidumpForChild, (uint32_t aChildPid, nsIFile** aDump,
@@ -426,7 +412,6 @@ XRE_API(bool,
 // Used in child processes.
 XRE_API(bool,
         XRE_SetRemoteExceptionHandler, (const char* aPipe))
-#endif
 
 namespace mozilla {
 namespace gmp {
@@ -442,6 +427,17 @@ XRE_API(nsresult,
 XRE_API(GeckoProcessType,
         XRE_GetProcessType, ())
 
+/**
+ * Returns true when called in the e10s parent process.  Does *NOT* return true
+ * when called in the main process if e10s is disabled.
+ */
+XRE_API(bool,
+        XRE_IsE10sParentProcess, ())
+
+/**
+ * Returns true when called in the e10s parent process or called in the main
+ * process when e10s is disabled.
+ */
 XRE_API(bool,
         XRE_IsParentProcess, ())
 
@@ -450,6 +446,13 @@ XRE_API(bool,
 
 XRE_API(bool,
         XRE_IsGPUProcess, ())
+
+/**
+ * Returns true if the appshell should run its own native event loop. Returns
+ * false if we should rely solely on the Gecko event loop.
+ */
+XRE_API(bool,
+        XRE_UseNativeEventProcessing, ())
 
 typedef void (*MainFunction)(void* aData);
 

@@ -1,7 +1,6 @@
 import os
 import platform
 
-PYTHON = '/tools/buildbot/bin/python'
 VENV_PATH = '%s/build/venv' % os.getcwd()
 if platform.architecture()[0] == '64bit':
     TOOLTOOL_MANIFEST_PATH = "config/tooltool-manifests/linux64/releng.manifest"
@@ -9,6 +8,10 @@ if platform.architecture()[0] == '64bit':
 else:
     TOOLTOOL_MANIFEST_PATH = "config/tooltool-manifests/linux32/releng.manifest"
     MINIDUMP_STACKWALK_PATH = "linux32-minidump_stackwalk"
+
+exes = {
+    'tooltool.py': "/tools/tooltool.py",
+}
 
 config = {
     "log_name": "talos",
@@ -20,11 +23,7 @@ config = {
         "http://pypi.pub.build.mozilla.org/pub",
     ],
     "pip_index": False,
-    "exes": {
-        'python': PYTHON,
-        'virtualenv': [PYTHON, '/tools/misc-python/virtualenv.py'],
-        'tooltool.py': "/tools/tooltool.py",
-    },
+    "exes": exes,
     "title": os.uname()[1].lower().split('.')[0],
     "default_actions": [
         "clobber",
@@ -33,6 +32,7 @@ config = {
         "populate-webroot",
         "create-virtualenv",
         "install",
+        "setup-mitmproxy",
         "run-tests",
     ],
     "default_blob_upload_servers": [

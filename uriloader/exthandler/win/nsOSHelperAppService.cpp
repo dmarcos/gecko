@@ -8,7 +8,6 @@
 #include "nsOSHelperAppService.h"
 #include "nsISupports.h"
 #include "nsString.h"
-#include "nsXPIDLString.h"
 #include "nsIURL.h"
 #include "nsIMIMEInfo.h"
 #include "nsMIMEInfoWin.h"
@@ -225,7 +224,7 @@ NS_IMETHODIMP nsOSHelperAppService::GetApplicationDescription(const nsACString& 
 //
 // This function sets only the Description attribute of the input nsIMIMEInfo.
 /* static */
-nsresult nsOSHelperAppService::GetMIMEInfoFromRegistry(const nsAFlatString& fileType, nsIMIMEInfo *pInfo)
+nsresult nsOSHelperAppService::GetMIMEInfoFromRegistry(const nsString& fileType, nsIMIMEInfo *pInfo)
 {
   nsresult rv = NS_OK;
 
@@ -390,48 +389,30 @@ nsOSHelperAppService::GetDefaultAppInfo(const nsAString& aAppInfo,
   return NS_OK;
 }
 
-already_AddRefed<nsMIMEInfoWin> nsOSHelperAppService::GetByExtension(const nsAFlatString& aFileExt, const char *aTypeHint)
+already_AddRefed<nsMIMEInfoWin> nsOSHelperAppService::GetByExtension(const nsString& aFileExt, const char *aTypeHint)
 {
   if (aFileExt.IsEmpty())
     return nullptr;
 
-  // windows registry assumes your file extension is going to include the '.'.
-  // so make sure it's there...
+  // Determine the mime type.
+  nsAutoCString typeToUse;
+  if (aTypeHint && *aTypeHint) {
+    typeToUse.Assign(aTypeHint);
+  } else if (!GetMIMETypeFromOSForExtension(NS_ConvertUTF16toUTF8(aFileExt), typeToUse)) {
+    return nullptr;
+  }
+
+  RefPtr<nsMIMEInfoWin> mimeInfo = new nsMIMEInfoWin(typeToUse);
+
+  // windows registry assumes your file extension is going to include the '.',
+  // but our APIs expect it to not be there, so make sure we normalize that bit.
   nsAutoString fileExtToUse;
   if (aFileExt.First() != char16_t('.'))
     fileExtToUse = char16_t('.');
 
   fileExtToUse.Append(aFileExt);
 
-  // Try to get an entry from the windows registry.
-  nsCOMPtr<nsIWindowsRegKey> regKey = 
-    do_CreateInstance("@mozilla.org/windows-registry-key;1");
-  if (!regKey) 
-    return nullptr; 
-
-  nsresult rv = regKey->Open(nsIWindowsRegKey::ROOT_KEY_CLASSES_ROOT,
-                             fileExtToUse,
-                             nsIWindowsRegKey::ACCESS_QUERY_VALUE);
-  if (NS_FAILED(rv))
-    return nullptr; 
-
-  nsAutoCString typeToUse;
-  if (aTypeHint && *aTypeHint) {
-    typeToUse.Assign(aTypeHint);
-  }
-  else {
-    nsAutoString temp;
-    if (NS_FAILED(regKey->ReadStringValue(NS_LITERAL_STRING("Content Type"),
-                  temp)) || temp.IsEmpty()) {
-      return nullptr; 
-    }
-    // Content-Type is always in ASCII
-    LossyAppendUTF16toASCII(temp, typeToUse);
-  }
-
-  RefPtr<nsMIMEInfoWin> mimeInfo = new nsMIMEInfoWin(typeToUse);
-
-  // don't append the '.'
+  // don't append the '.' for our APIs.
   mimeInfo->AppendExtension(NS_ConvertUTF16toUTF8(Substring(fileExtToUse, 1)));
   mimeInfo->SetPreferredAction(nsIMIMEInfo::useSystemDefault);
 
@@ -458,8 +439,17 @@ already_AddRefed<nsMIMEInfoWin> nsOSHelperAppService::GetByExtension(const nsAFl
   } 
   else
   {
-    found = NS_SUCCEEDED(regKey->ReadStringValue(EmptyString(), 
-                                                 appInfo));
+    nsCOMPtr<nsIWindowsRegKey> regKey =
+      do_CreateInstance("@mozilla.org/windows-registry-key;1");
+    if (!regKey)
+      return nullptr;
+    nsresult rv = regKey->Open(nsIWindowsRegKey::ROOT_KEY_CLASSES_ROOT,
+                               fileExtToUse,
+                               nsIWindowsRegKey::ACCESS_QUERY_VALUE);
+    if (NS_SUCCEEDED(rv)) {
+      found = NS_SUCCEEDED(regKey->ReadStringValue(EmptyString(),
+                                                   appInfo));
+    }
   }
 
   // Bug 358297 - ignore the default handler, force the user to choose app
@@ -504,7 +494,8 @@ already_AddRefed<nsIMIMEInfo> nsOSHelperAppService::GetMIMEInfoFromOS(const nsAC
    * useless....
    * We'll do extension-based lookup for this type later in this function.
    */
-  if (!aMIMEType.LowerCaseEqualsLiteral(APPLICATION_OCTET_STREAM)) {
+  if (!aMIMEType.IsEmpty() &&
+      !aMIMEType.LowerCaseEqualsLiteral(APPLICATION_OCTET_STREAM)) {
     // (1) try to use the windows mime database to see if there is a mapping to a file extension
     // (2) try to see if we have some left over 4.x registry info we can peek at...
     GetExtensionFromWindowsMimeDatabase(aMIMEType, fileExtension);
@@ -596,3 +587,40 @@ nsOSHelperAppService::GetProtocolHandlerInfoFromOS(const nsACString &aScheme,
   return NS_OK;
 }
 
+bool
+nsOSHelperAppService::GetMIMETypeFromOSForExtension(const nsACString& aExtension,
+                                                    nsACString& aMIMEType)
+{
+  if (aExtension.IsEmpty())
+    return false;
+
+  // windows registry assumes your file extension is going to include the '.'.
+  // so make sure it's there...
+  nsAutoString fileExtToUse;
+  if (aExtension.First() != '.')
+    fileExtToUse = char16_t('.');
+
+  AppendUTF8toUTF16(aExtension, fileExtToUse);
+
+  // Try to get an entry from the windows registry.
+  nsCOMPtr<nsIWindowsRegKey> regKey =
+    do_CreateInstance("@mozilla.org/windows-registry-key;1");
+  if (!regKey)
+    return false;
+
+  nsresult rv = regKey->Open(nsIWindowsRegKey::ROOT_KEY_CLASSES_ROOT,
+                             fileExtToUse,
+                             nsIWindowsRegKey::ACCESS_QUERY_VALUE);
+  if (NS_FAILED(rv))
+    return false;
+
+  nsAutoString mimeType;
+  if (NS_FAILED(regKey->ReadStringValue(NS_LITERAL_STRING("Content Type"),
+                mimeType)) || mimeType.IsEmpty()) {
+    return false;
+  }
+  // Content-Type is always in ASCII
+  aMIMEType.Truncate();
+  LossyAppendUTF16toASCII(mimeType, aMIMEType);
+  return true;
+}

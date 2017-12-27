@@ -20,23 +20,26 @@ DIRS += [
     'alerts',
     'apppicker',
     'asyncshutdown',
+    'backgroundhangmonitor',
     'browser',
+    'cloudstorage',
     'commandlines',
     'contentprefs',
     'contextualidentity',
+    'crashes',
     'crashmonitor',
     'diskspacewatcher',
     'downloads',
     'extensions',
-    'exthelper',
     'filewatcher',
     'finalizationwitness',
-    'formautofill',
     'find',
     'jsdownloads',
+    'jsoncpp/src/lib_json',
     'lz4',
     'mediasniffer',
     'microformats',
+    'mozintl',
     'mozprotocol',
     'osfile',
     'parentalcontrols',
@@ -52,6 +55,8 @@ DIRS += [
     'reader',
     'remotebrowserutils',
     'reflect',
+    'reputationservice',
+    'resistfingerprinting',
     'securityreporter',
     'startup',
     'statusfilter',
@@ -70,17 +75,11 @@ DIRS += [
     'xulstore'
 ]
 
-if CONFIG['ENABLE_INTL_API']:
-    DIRS += ['mozintl']
-
 if CONFIG['MOZ_BUILD_APP'] != 'mobile/android':
     DIRS += ['narrate', 'viewsource'];
 
     if CONFIG['NS_PRINTING']:
         DIRS += ['printing']
-
-if CONFIG['MOZ_CRASHREPORTER']:
-    DIRS += ['crashes']
 
 if CONFIG['BUILD_CTYPES']:
     DIRS += ['ctypes']
@@ -112,3 +111,6 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] != 'android':
         'nsDefaultCLH.js',
         'nsDefaultCLH.manifest',
     ]
+
+if CONFIG['NIGHTLY_BUILD'] and CONFIG['MOZ_BUILD_APP'] == 'browser':
+    DIRS += ['payments']

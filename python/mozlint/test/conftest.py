@@ -2,7 +2,10 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 import os
+import sys
 
 import pytest
 
@@ -32,11 +35,13 @@ def files(filedir, request):
 
 @pytest.fixture(scope='session')
 def lintdir():
-    return os.path.join(here, 'linters')
+    lintdir = os.path.join(here, 'linters')
+    sys.path.insert(0, lintdir)
+    return lintdir
 
 
 @pytest.fixture(scope='module')
 def linters(lintdir, request):
-    suffix_filter = getattr(request.module, 'linters', ['.lint'])
+    suffix_filter = getattr(request.module, 'linters', ['.lint.py'])
     return [os.path.join(lintdir, p) for p in os.listdir(lintdir)
             if any(p.endswith(suffix) for suffix in suffix_filter)]

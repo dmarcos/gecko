@@ -78,7 +78,7 @@ class CodeGeneratorShared : public LElementVisitor
     LBlock* current;
     SnapshotWriter snapshots_;
     RecoverWriter recovers_;
-    JitCode* deoptTable_;
+    mozilla::Maybe<TrampolinePtr> deoptTable_;
 #ifdef DEBUG
     uint32_t pushedArgs_;
 #endif
@@ -212,9 +212,6 @@ class CodeGeneratorShared : public LElementVisitor
 
     // For arguments to the current function.
     inline int32_t ArgToStackOffset(int32_t slot) const;
-
-    // For the callee of the current function.
-    inline int32_t CalleeStackOffset() const;
 
     inline int32_t SlotToStackOffset(int32_t slot) const;
     inline int32_t StackOffsetToSlot(int32_t offset) const;
@@ -457,8 +454,8 @@ class CodeGeneratorShared : public LElementVisitor
         return masm.PushWithPatch(t);
     }
 
-    void storeResultTo(Register reg) {
-        masm.storeCallWordResult(reg);
+    void storePointerResultTo(Register reg) {
+        masm.storeCallPointerResult(reg);
     }
 
     void storeFloatResultTo(FloatRegister reg) {
@@ -728,7 +725,9 @@ class StoreRegisterTo
     { }
 
     inline void generate(CodeGeneratorShared* codegen) const {
-        codegen->storeResultTo(out_);
+        // It's okay to use storePointerResultTo here - the VMFunction wrapper
+        // ensures the upper bytes are zero for bool/int32 return values.
+        codegen->storePointerResultTo(out_);
     }
     inline LiveRegisterSet clobbered() const {
         LiveRegisterSet set;

@@ -1,14 +1,16 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "IMFYCbCrImage.h"
+#include "mozilla/gfx/DeviceManagerDx.h"
+#include "mozilla/gfx/gfxVars.h"
+#include "mozilla/gfx/Types.h"
 #include "mozilla/layers/TextureD3D11.h"
 #include "mozilla/layers/CompositableClient.h"
 #include "mozilla/layers/CompositableForwarder.h"
-#include "mozilla/gfx/DeviceManagerDx.h"
-#include "mozilla/gfx/Types.h"
 #include "mozilla/layers/TextureClient.h"
 #include "d3d9.h"
 
@@ -30,38 +32,6 @@ IMFYCbCrImage::~IMFYCbCrImage()
     mBuffer->Unlock();
   }
 }
-
-struct AutoLockTexture
-{
-  explicit AutoLockTexture(ID3D11Texture2D* aTexture)
-  {
-    aTexture->QueryInterface((IDXGIKeyedMutex**)getter_AddRefs(mMutex));
-    if (!mMutex) {
-      return;
-    }
-    HRESULT hr = mMutex->AcquireSync(0, 10000);
-    if (hr == WAIT_TIMEOUT) {
-      MOZ_CRASH("GFX: IMFYCbCrImage timeout");
-    }
-
-    if (FAILED(hr)) {
-      NS_WARNING("Failed to lock the texture");
-    }
-  }
-
-  ~AutoLockTexture()
-  {
-    if (!mMutex) {
-      return;
-    }
-    HRESULT hr = mMutex->ReleaseSync(0);
-    if (FAILED(hr)) {
-      NS_WARNING("Failed to unlock the texture");
-    }
-  }
-
-  RefPtr<IDXGIKeyedMutex> mMutex;
-};
 
 static already_AddRefed<IDirect3DTexture9>
 InitTextures(IDirect3DDevice9* aDevice,
@@ -138,12 +108,10 @@ IMFYCbCrImage::GetD3D11TextureData(Data aData, gfx::IntSize aSize)
   HRESULT hr;
   RefPtr<ID3D10Multithread> mt;
 
-  RefPtr<ID3D11Device> device =
-    gfx::DeviceManagerDx::Get()->GetContentDevice();
+  RefPtr<ID3D11Device> device = gfx::DeviceManagerDx::Get()->GetContentDevice();
 
   if (!device) {
-    device =
-      gfx::DeviceManagerDx::Get()->GetCompositorDevice();
+    device = gfx::DeviceManagerDx::Get()->GetCompositorDevice();
   }
 
   hr = device->QueryInterface((ID3D10Multithread**)getter_AddRefs(mt));
@@ -168,7 +136,9 @@ IMFYCbCrImage::GetD3D11TextureData(Data aData, gfx::IntSize aSize)
   CD3D11_TEXTURE2D_DESC newDesc(DXGI_FORMAT_R8_UNORM,
                                 aData.mYSize.width, aData.mYSize.height, 1, 1);
 
-  if (device == gfx::DeviceManagerDx::Get()->GetCompositorDevice()) {
+  // WebRender requests keyed mutex
+  if (device == gfx::DeviceManagerDx::Get()->GetCompositorDevice() &&
+      !gfxVars::UseWebRender()) {
     newDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
   } else {
     newDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
@@ -198,11 +168,10 @@ IMFYCbCrImage::GetD3D11TextureData(Data aData, gfx::IntSize aSize)
   // required but were added for extra security.
 
   {
-    AutoLockTexture lockY(textureY);
-    AutoLockTexture lockCr(textureCr);
-    AutoLockTexture lockCb(textureCb);
-
-    mt->Enter();
+    AutoLockD3D11Texture lockY(textureY);
+    AutoLockD3D11Texture lockCr(textureCr);
+    AutoLockD3D11Texture lockCb(textureCb);
+    D3D11MTAutoEnter mtAutoEnter(mt.forget());
 
     RefPtr<ID3D11DeviceContext> ctx;
     device->GetImmediateContext((ID3D11DeviceContext**)getter_AddRefs(ctx));
@@ -218,13 +187,11 @@ IMFYCbCrImage::GetD3D11TextureData(Data aData, gfx::IntSize aSize)
     box.bottom = aData.mCbCrSize.height;
     ctx->UpdateSubresource(textureCb, 0, &box, aData.mCbChannel, aData.mCbCrStride, 0);
     ctx->UpdateSubresource(textureCr, 0, &box, aData.mCrChannel, aData.mCbCrStride, 0);
-
-    mt->Leave();
   }
 
-  return DXGIYCbCrTextureData::Create(TextureFlags::DEFAULT, textureY,
-                                      textureCb, textureCr, aSize, aData.mYSize,
-                                      aData.mCbCrSize);
+  return DXGIYCbCrTextureData::Create(textureY, textureCb, textureCr,
+                                      aSize, aData.mYSize, aData.mCbCrSize,
+                                      aData.mYUVColorSpace);
 }
 
 TextureClient*
@@ -258,8 +225,7 @@ IMFYCbCrImage::GetTextureClient(KnowsCompositor* aForwarder)
       gfx::DeviceManagerDx::Get()->GetCompositorDevice();
   }
 
-  LayersBackend backend = aForwarder->GetCompositorBackendType();
-  if (!device || backend != LayersBackend::LAYERS_D3D11) {
+  if (!device || !aForwarder->SupportsD3D11()) {
     return nullptr;
   }
   return GetD3D11TextureClient(aForwarder);

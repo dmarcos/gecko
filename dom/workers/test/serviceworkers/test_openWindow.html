@@ -6,8 +6,8 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=1172870
 <head>
   <title>Bug 1172870 - Test clients.openWindow</title>
   <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
-  <script type="text/javascript" src="/tests/dom/tests/mochitest/notification/MockServices.js"></script>
-  <script type="text/javascript" src="/tests/dom/tests/mochitest/notification/NotificationTest.js"></script>
+  <script type="text/javascript" src="/tests/dom/notification/test/mochitest/MockServices.js"></script>
+  <script type="text/javascript" src="/tests/dom/notification/test/mochitest/NotificationTest.js"></script>
   <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css" />
 </head>
 <body>
@@ -17,6 +17,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=1172870
 </div>
 <pre id="test">
 </pre>
+<script src="utils.js"></script>
 <script type="text/javascript">
   SimpleTest.requestFlakyTimeout("Mock alert service dispatches show and click events.");
 
@@ -27,15 +28,8 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=1172870
       .then(function(swr) {
         ok(swr, "Registration successful");
         ctx.registration = swr;
-        return ctx;
+        return waitForState(swr.installing, 'activated', ctx);
       });
-  }
-
-  function waitForActiveServiceWorker(ctx) {
-    return navigator.serviceWorker.ready.then(function(result) {
-      ok(ctx.registration.active, "Service Worker is active");
-      return ctx;
-    });
   }
 
   function setupMessageHandler(ctx) {
@@ -87,7 +81,6 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=1172870
 
   function runTest() {
     setup({})
-      .then(waitForActiveServiceWorker)
       // Permission to allow popups persists for some time after a notification
       // click event, so the order here is important.
       .then(testPopupNotAllowed)
@@ -107,7 +100,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=1172870
     ["dom.webnotifications.workers.enabled", true],
     ["dom.webnotifications.serviceworker.enabled", true],
     ["notification.prompt.testing", true],
-    ["dom.disable_open_click_delay", 1000],
+    ["dom.serviceWorkers.disable_open_click_delay", 1000],
     ["dom.serviceWorkers.idle_timeout", 299999],
     ["dom.serviceWorkers.idle_extended_timeout", 299999]
   ]}, runTest);

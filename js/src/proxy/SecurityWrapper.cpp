@@ -87,11 +87,10 @@ SecurityWrapper<Base>::isArray(JSContext* cx, HandleObject obj, JS::IsArrayAnswe
 }
 
 template <class Base>
-bool
-SecurityWrapper<Base>::regexp_toShared(JSContext* cx, HandleObject obj,
-                                       MutableHandle<RegExpShared*> shared) const
+RegExpShared*
+SecurityWrapper<Base>::regexp_toShared(JSContext* cx, HandleObject obj) const
 {
-    return Base::regexp_toShared(cx, obj, shared);
+    return Base::regexp_toShared(cx, obj);
 }
 
 template <class Base>
@@ -124,25 +123,6 @@ SecurityWrapper<Base>::defineProperty(JSContext* cx, HandleObject wrapper, Handl
 
     return Base::defineProperty(cx, wrapper, id, desc, result);
 }
-
-template <class Base>
-bool
-SecurityWrapper<Base>::watch(JSContext* cx, HandleObject proxy,
-                             HandleId id, HandleObject callable) const
-{
-    ReportAccessDenied(cx);
-    return false;
-}
-
-template <class Base>
-bool
-SecurityWrapper<Base>::unwatch(JSContext* cx, HandleObject proxy,
-                               HandleId id) const
-{
-    ReportAccessDenied(cx);
-    return false;
-}
-
 
 template class js::SecurityWrapper<Wrapper>;
 template class js::SecurityWrapper<CrossCompartmentWrapper>;

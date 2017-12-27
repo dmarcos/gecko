@@ -20,8 +20,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
                                   "resource://gre/modules/PluralForm.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
                                   "resource://gre/modules/PrivateBrowsingUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Task",
-                                  "resource://gre/modules/Task.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "SitePermissions",
                                   "resource:///modules/SitePermissions.jsm");
 
@@ -35,39 +33,11 @@ this.webrtcUI = {
 
   init() {
     Services.obs.addObserver(maybeAddMenuIndicator, "browser-delayed-startup-finished");
-
-    let ppmm = Cc["@mozilla.org/parentprocessmessagemanager;1"]
-                 .getService(Ci.nsIMessageBroadcaster);
-    ppmm.addMessageListener("webrtc:UpdatingIndicators", this);
-    ppmm.addMessageListener("webrtc:UpdateGlobalIndicators", this);
-    ppmm.addMessageListener("child-process-shutdown", this);
-
-    let mm = Cc["@mozilla.org/globalmessagemanager;1"]
-               .getService(Ci.nsIMessageListenerManager);
-    mm.addMessageListener("rtcpeer:Request", this);
-    mm.addMessageListener("rtcpeer:CancelRequest", this);
-    mm.addMessageListener("webrtc:Request", this);
-    mm.addMessageListener("webrtc:StopRecording", this);
-    mm.addMessageListener("webrtc:CancelRequest", this);
-    mm.addMessageListener("webrtc:UpdateBrowserIndicators", this);
+    Services.ppmm.addMessageListener("child-process-shutdown", this);
   },
 
   uninit() {
     Services.obs.removeObserver(maybeAddMenuIndicator, "browser-delayed-startup-finished");
-
-    let ppmm = Cc["@mozilla.org/parentprocessmessagemanager;1"]
-                 .getService(Ci.nsIMessageBroadcaster);
-    ppmm.removeMessageListener("webrtc:UpdatingIndicators", this);
-    ppmm.removeMessageListener("webrtc:UpdateGlobalIndicators", this);
-
-    let mm = Cc["@mozilla.org/globalmessagemanager;1"]
-               .getService(Ci.nsIMessageListenerManager);
-    mm.removeMessageListener("rtcpeer:Request", this);
-    mm.removeMessageListener("rtcpeer:CancelRequest", this);
-    mm.removeMessageListener("webrtc:Request", this);
-    mm.removeMessageListener("webrtc:StopRecording", this);
-    mm.removeMessageListener("webrtc:CancelRequest", this);
-    mm.removeMessageListener("webrtc:UpdateBrowserIndicators", this);
 
     if (gIndicatorWindow) {
       gIndicatorWindow.close();
@@ -231,6 +201,7 @@ this.webrtcUI = {
     return this.emitter.off(...args);
   },
 
+  // Listeners and observers are registered in nsBrowserGlue.js
   receiveMessage(aMessage) {
     switch (aMessage.name) {
 
@@ -241,10 +212,10 @@ this.webrtcUI = {
 
         let blockers = Array.from(this.peerConnectionBlockers);
 
-        Task.spawn(function*() {
+        (async function() {
           for (let blocker of blockers) {
             try {
-              let result = yield blocker(params);
+              let result = await blocker(params);
               if (result == "deny") {
                 return false;
               }
@@ -253,7 +224,7 @@ this.webrtcUI = {
             }
           }
           return true;
-        }).then(decision => {
+        })().then(decision => {
           let message;
           if (decision) {
             this.emitter.emit("peer-request-allowed", params);
@@ -397,7 +368,13 @@ function prompt(aBrowser, aRequest) {
   aBrowser.dispatchEvent(new aBrowser.ownerGlobal
                                      .CustomEvent("PermissionStateChange"));
 
-  let uri = Services.io.newURI(aRequest.documentURI);
+  let uri;
+  try {
+    // This fails for principals that serialize to "null", e.g. file URIs.
+    uri = Services.io.newURI(aRequest.origin);
+  } catch (e) {
+    uri = Services.io.newURI(aRequest.documentURI);
+  }
   let host = getHost(uri);
   let chromeDoc = aBrowser.ownerDocument;
   let stringBundle = chromeDoc.defaultView.gNavigatorBundle;
@@ -508,19 +485,22 @@ function prompt(aBrowser, aRequest) {
         let activeCamera;
         let activeMic;
 
-        for (let device of videoDevices) {
-          let set = webrtcUI.activePerms.get(aBrowser.outerWindowID);
-          if (set && set.has(aRequest.windowID + device.mediaSource + device.id)) {
-            activeCamera = device;
-            break;
+        // Always prompt for screen sharing
+        if (!sharingScreen) {
+          for (let device of videoDevices) {
+            let set = webrtcUI.activePerms.get(aBrowser.outerWindowID);
+            if (set && set.has(aRequest.windowID + device.mediaSource + device.id)) {
+              activeCamera = device;
+              break;
+            }
           }
-        }
 
-        for (let device of audioDevices) {
-          let set = webrtcUI.activePerms.get(aBrowser.outerWindowID);
-          if (set && set.has(aRequest.windowID + device.mediaSource + device.id)) {
-            activeMic = device;
-            break;
+          for (let device of audioDevices) {
+            let set = webrtcUI.activePerms.get(aBrowser.outerWindowID);
+            if (set && set.has(aRequest.windowID + device.mediaSource + device.id)) {
+              activeMic = device;
+              break;
+            }
           }
         }
 
@@ -567,6 +547,17 @@ function prompt(aBrowser, aRequest) {
           addDeviceToList(menupopup, device.name, device.deviceIndex);
       }
 
+      function checkDisabledWindowMenuItem() {
+        let list = doc.getElementById("webRTC-selectWindow-menulist");
+        let item = list.selectedItem;
+        let notificationElement = doc.getElementById("webRTC-shareDevices-notification");
+        if (!item || item.hasAttribute("disabled")) {
+          notificationElement.setAttribute("invalidselection", "true");
+        } else {
+          notificationElement.removeAttribute("invalidselection");
+        }
+      }
+
       function listScreenShareDevices(menupopup, devices) {
         while (menupopup.lastChild)
           menupopup.removeChild(menupopup.lastChild);
@@ -581,10 +572,10 @@ function prompt(aBrowser, aRequest) {
         label.setAttribute("accesskey",
                            stringBundle.getString(gumStringId + ".accesskey"));
 
-        // "No <type>" is the default because we can't pick a
+        // "Select <type>" is the default because we can't pick a
         // 'default' window to share.
         addDeviceToList(menupopup,
-                        stringBundle.getString("getUserMedia.no" + typeName + ".label"),
+                        stringBundle.getString("getUserMedia.pick" + typeName + ".label"),
                         "-1");
         menupopup.appendChild(doc.createElement("menuseparator"));
 
@@ -625,7 +616,9 @@ function prompt(aBrowser, aRequest) {
         // Always re-select the "No <type>" item.
         doc.getElementById("webRTC-selectWindow-menulist").removeAttribute("value");
         doc.getElementById("webRTC-all-windows-shared").hidden = true;
+
         menupopup._commandEventListener = event => {
+          checkDisabledWindowMenuItem();
           let video = doc.getElementById("webRTC-previewVideo");
           if (video.stream) {
             video.stream.getTracks().forEach(t => t.stop());
@@ -665,6 +658,7 @@ function prompt(aBrowser, aRequest) {
               string = bundle.getFormattedString("getUserMedia.shareFirefoxWarning.message",
                                                  [brand, learnMore]);
             }
+            // eslint-disable-next-line no-unsanitized/property
             warning.innerHTML = string;
           }
 
@@ -700,6 +694,10 @@ function prompt(aBrowser, aRequest) {
         menuitem.setAttribute("tooltiptext", deviceName);
         if (type)
           menuitem.setAttribute("devicetype", type);
+
+        if (deviceIndex == "-1")
+          menuitem.setAttribute("disabled", true);
+
         menupopup.appendChild(menuitem);
         return menuitem;
       }
@@ -711,10 +709,13 @@ function prompt(aBrowser, aRequest) {
       let camMenupopup = doc.getElementById("webRTC-selectCamera-menupopup");
       let windowMenupopup = doc.getElementById("webRTC-selectWindow-menupopup");
       let micMenupopup = doc.getElementById("webRTC-selectMicrophone-menupopup");
-      if (sharingScreen)
+      if (sharingScreen) {
         listScreenShareDevices(windowMenupopup, videoDevices);
-      else
+        checkDisabledWindowMenuItem();
+      } else {
         listDevices(camMenupopup, videoDevices);
+        doc.getElementById("webRTC-shareDevices-notification").removeAttribute("invalidselection");
+      }
 
       if (!sharingAudio)
         listDevices(micMenupopup, audioDevices);
@@ -863,9 +864,7 @@ function getGlobalIndicator() {
     _microphone: null,
     _screen: null,
 
-    _hiddenDoc: Cc["@mozilla.org/appshell/appShellService;1"]
-                  .getService(Ci.nsIAppShellService)
-                  .hiddenDOMWindow.document,
+    _hiddenDoc: Services.appShell.hiddenDOMWindow.document,
     _statusBar: Cc["@mozilla.org/widget/macsystemstatusbar;1"]
                   .getService(Ci.nsISystemStatusBar),
 
@@ -957,7 +956,7 @@ function getGlobalIndicator() {
       } else if (this[field] && !aState) {
         this._statusBar.removeItem(this[field]);
         this[field].remove();
-        this[field] = null
+        this[field] = null;
       }
     },
     updateIndicatorState() {
@@ -1092,10 +1091,15 @@ function updateIndicators(data, target) {
   }
 
   if (webrtcUI.showGlobalIndicator) {
-    if (!gIndicatorWindow)
+    if (!gIndicatorWindow) {
       gIndicatorWindow = getGlobalIndicator();
-    else
-      gIndicatorWindow.updateIndicatorState();
+    } else {
+      try {
+        gIndicatorWindow.updateIndicatorState();
+      } catch (err) {
+        Cu.reportError(`error in gIndicatorWindow.updateIndicatorState(): ${err.message}`);
+      }
+    }
   } else if (gIndicatorWindow) {
     gIndicatorWindow.close();
     gIndicatorWindow = null;

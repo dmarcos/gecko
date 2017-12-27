@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -73,6 +74,7 @@ nsresult
 nsDOMCSSAttributeDeclaration::SetCSSDeclaration(DeclarationBlock* aDecl)
 {
   NS_ASSERTION(mElement, "Must have Element to set the declaration!");
+  aDecl->SetDirty();
   return mIsSMILOverride
     ? mElement->SetSMILOverrideStyleDeclaration(aDecl, true)
     : mElement->SetInlineStyleDeclaration(aDecl, nullptr, true);
@@ -162,21 +164,28 @@ nsDOMCSSAttributeDeclaration::GetCSSDeclaration(Operation aOperation)
 }
 
 void
-nsDOMCSSAttributeDeclaration::GetCSSParsingEnvironment(CSSParsingEnvironment& aCSSParseEnv)
+nsDOMCSSAttributeDeclaration::GetCSSParsingEnvironment(CSSParsingEnvironment& aCSSParseEnv,
+                                                       nsIPrincipal* aSubjectPrincipal)
 {
   NS_ASSERTION(mElement, "Something is severely broken -- there should be an Element here!");
 
   nsIDocument* doc = mElement->OwnerDoc();
   aCSSParseEnv.mSheetURI = doc->GetDocumentURI();
   aCSSParseEnv.mBaseURI = mElement->GetBaseURIForStyleAttr();
-  aCSSParseEnv.mPrincipal = mElement->NodePrincipal();
+  aCSSParseEnv.mPrincipal = (aSubjectPrincipal ? aSubjectPrincipal
+                                               : mElement->NodePrincipal());
   aCSSParseEnv.mCSSLoader = doc->CSSLoader();
 }
 
-URLExtraData*
-nsDOMCSSAttributeDeclaration::GetURLData() const
+nsDOMCSSDeclaration::ServoCSSParsingEnvironment
+nsDOMCSSAttributeDeclaration::GetServoCSSParsingEnvironment(
+    nsIPrincipal* aSubjectPrincipal) const
 {
-  return mElement->GetURLDataForStyleAttr();
+  return {
+    mElement->GetURLDataForStyleAttr(aSubjectPrincipal),
+    mElement->OwnerDoc()->GetCompatibilityMode(),
+    mElement->OwnerDoc()->CSSLoader(),
+  };
 }
 
 NS_IMETHODIMP
@@ -194,9 +203,16 @@ nsDOMCSSAttributeDeclaration::GetParentObject()
   return mElement;
 }
 
+/* virtual */ DocGroup*
+nsDOMCSSAttributeDeclaration::GetDocGroup() const
+{
+  return mElement ? mElement->OwnerDoc()->GetDocGroup() : nullptr;
+}
+
 NS_IMETHODIMP
 nsDOMCSSAttributeDeclaration::SetPropertyValue(const nsCSSPropertyID aPropID,
-                                               const nsAString& aValue)
+                                               const nsAString& aValue,
+                                               nsIPrincipal* aSubjectPrincipal)
 {
   // Scripted modifications to style.opacity or style.transform
   // could immediately force us into the animated state if heuristics suggest
@@ -206,8 +222,6 @@ nsDOMCSSAttributeDeclaration::SetPropertyValue(const nsCSSPropertyID aPropID,
   if (aPropID == eCSSProperty_opacity || aPropID == eCSSProperty_transform ||
       aPropID == eCSSProperty_left || aPropID == eCSSProperty_top ||
       aPropID == eCSSProperty_right || aPropID == eCSSProperty_bottom ||
-      aPropID == eCSSProperty_margin_left || aPropID == eCSSProperty_margin_top ||
-      aPropID == eCSSProperty_margin_right || aPropID == eCSSProperty_margin_bottom ||
       aPropID == eCSSProperty_background_position_x ||
       aPropID == eCSSProperty_background_position_y ||
       aPropID == eCSSProperty_background_position) {
@@ -216,5 +230,5 @@ nsDOMCSSAttributeDeclaration::SetPropertyValue(const nsCSSPropertyID aPropID,
       ActiveLayerTracker::NotifyInlineStyleRuleModified(frame, aPropID, aValue, this);
     }
   }
-  return nsDOMCSSDeclaration::SetPropertyValue(aPropID, aValue);
+  return nsDOMCSSDeclaration::SetPropertyValue(aPropID, aValue, aSubjectPrincipal);
 }

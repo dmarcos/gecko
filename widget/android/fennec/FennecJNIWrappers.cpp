@@ -4,8 +4,10 @@
 // corresponding Java methods and rerun the build. Manually updating this file
 // will cause your build to fail.
 
+#ifndef MOZ_PREPROCESSOR
 #include "FennecJNIWrappers.h"
 #include "mozilla/jni/Accessors.h"
+#endif
 
 namespace mozilla {
 namespace java {
@@ -21,6 +23,20 @@ constexpr char ANRReporter::ReleaseNativeStack_t::signature[];
 
 constexpr char ANRReporter::RequestNativeStack_t::name[];
 constexpr char ANRReporter::RequestNativeStack_t::signature[];
+
+const char BrowserLocaleManager::name[] =
+        "org/mozilla/gecko/BrowserLocaleManager";
+
+constexpr char BrowserLocaleManager::GetLocale_t::name[];
+constexpr char BrowserLocaleManager::GetLocale_t::signature[];
+
+auto BrowserLocaleManager::GetLocale() -> mozilla::jni::String::LocalRef
+{
+    return mozilla::jni::Method<GetLocale_t>::Call(BrowserLocaleManager::Context(), nullptr);
+}
+
+constexpr char BrowserLocaleManager::RefreshLocales_t::name[];
+constexpr char BrowserLocaleManager::RefreshLocales_t::signature[];
 
 const char DownloadsIntegration::name[] =
         "org/mozilla/gecko/DownloadsIntegration";
@@ -39,6 +55,28 @@ constexpr char DownloadsIntegration::ScanMedia_t::signature[];
 auto DownloadsIntegration::ScanMedia(mozilla::jni::String::Param a0, mozilla::jni::String::Param a1) -> void
 {
     return mozilla::jni::Method<ScanMedia_t>::Call(DownloadsIntegration::Context(), nullptr, a0, a1);
+}
+
+const char GeckoApp::name[] =
+        "org/mozilla/gecko/GeckoApp";
+
+constexpr char GeckoApp::LaunchOrBringToFront_t::name[];
+constexpr char GeckoApp::LaunchOrBringToFront_t::signature[];
+
+auto GeckoApp::LaunchOrBringToFront() -> void
+{
+    return mozilla::jni::Method<LaunchOrBringToFront_t>::Call(GeckoApp::Context(), nullptr);
+}
+
+const char GeckoApplication::name[] =
+        "org/mozilla/gecko/GeckoApplication";
+
+constexpr char GeckoApplication::CreateShortcut_t::name[];
+constexpr char GeckoApplication::CreateShortcut_t::signature[];
+
+auto GeckoApplication::CreateShortcut(mozilla::jni::String::Param a0, mozilla::jni::String::Param a1) -> void
+{
+    return mozilla::jni::Method<CreateShortcut_t>::Call(GeckoApplication::Context(), nullptr, a0, a1);
 }
 
 const char GeckoJavaSampler::name[] =
@@ -103,6 +141,33 @@ auto GeckoJavaSampler::Unpause() -> void
     return mozilla::jni::Method<Unpause_t>::Call(GeckoJavaSampler::Context(), nullptr);
 }
 
+const char GlobalHistory::name[] =
+        "org/mozilla/gecko/GlobalHistory";
+
+constexpr char GlobalHistory::CheckURIVisited_t::name[];
+constexpr char GlobalHistory::CheckURIVisited_t::signature[];
+
+auto GlobalHistory::CheckURIVisited(mozilla::jni::String::Param a0) -> void
+{
+    return mozilla::jni::Method<CheckURIVisited_t>::Call(GlobalHistory::Context(), nullptr, a0);
+}
+
+constexpr char GlobalHistory::MarkURIVisited_t::name[];
+constexpr char GlobalHistory::MarkURIVisited_t::signature[];
+
+auto GlobalHistory::MarkURIVisited(mozilla::jni::String::Param a0) -> void
+{
+    return mozilla::jni::Method<MarkURIVisited_t>::Call(GlobalHistory::Context(), nullptr, a0);
+}
+
+constexpr char GlobalHistory::SetURITitle_t::name[];
+constexpr char GlobalHistory::SetURITitle_t::signature[];
+
+auto GlobalHistory::SetURITitle(mozilla::jni::String::Param a0, mozilla::jni::String::Param a1) -> void
+{
+    return mozilla::jni::Method<SetURITitle_t>::Call(GlobalHistory::Context(), nullptr, a0, a1);
+}
+
 const char MemoryMonitor::name[] =
         "org/mozilla/gecko/MemoryMonitor";
 
@@ -152,12 +217,6 @@ auto ThumbnailHelper::NotifyThumbnail(mozilla::jni::ByteBuffer::Param a0, mozill
 
 constexpr char ThumbnailHelper::RequestThumbnail_t::name[];
 constexpr char ThumbnailHelper::RequestThumbnail_t::signature[];
-
-const char ZoomedView::name[] =
-        "org/mozilla/gecko/ZoomedView";
-
-constexpr char ZoomedView::RequestZoomedViewData_t::name[];
-constexpr char ZoomedView::RequestZoomedViewData_t::signature[];
 
 const char AudioFocusAgent::name[] =
         "org/mozilla/gecko/media/AudioFocusAgent";

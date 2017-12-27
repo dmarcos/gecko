@@ -78,69 +78,6 @@ enum {
 - (void)_removeDisplayedNotification:(id<FakeNSUserNotification>)notification;
 @end
 
-@interface mozNotificationCenterDelegate : NSObject <NSUserNotificationCenterDelegate>
-{
-  OSXNotificationCenter *mOSXNC;
-}
-  - (id)initWithOSXNC:(OSXNotificationCenter*)osxnc;
-@end
-
-@implementation mozNotificationCenterDelegate
-
-- (id)initWithOSXNC:(OSXNotificationCenter*)osxnc
-{
-  [super init];
-  // We should *never* outlive this OSXNotificationCenter.
-  mOSXNC = osxnc;
-  return self;
-}
-
-- (void)userNotificationCenter:(id<FakeNSUserNotificationCenter>)center
-        didDeliverNotification:(id<FakeNSUserNotification>)notification
-{
-
-}
-
-- (void)userNotificationCenter:(id<FakeNSUserNotificationCenter>)center
-       didActivateNotification:(id<FakeNSUserNotification>)notification
-{
-  unsigned long long additionalActionIndex = ULLONG_MAX;
-  if ([notification respondsToSelector:@selector(_alternateActionIndex)]) {
-    NSNumber *alternateActionIndex = [(NSObject*)notification valueForKey:@"_alternateActionIndex"];
-    additionalActionIndex = [alternateActionIndex unsignedLongLongValue];
-  }
-  mOSXNC->OnActivate([[notification userInfo] valueForKey:@"name"],
-                     notification.activationType,
-                     additionalActionIndex);
-}
-
-- (BOOL)userNotificationCenter:(id<FakeNSUserNotificationCenter>)center
-     shouldPresentNotification:(id<FakeNSUserNotification>)notification
-{
-  return YES;
-}
-
-// This is an undocumented method that we need for parity with Safari.
-// Apple bug #15440664.
-- (void)userNotificationCenter:(id<FakeNSUserNotificationCenter>)center
-  didRemoveDeliveredNotifications:(NSArray *)notifications
-{
-  for (id<FakeNSUserNotification> notification in notifications) {
-    NSString *name = [[notification userInfo] valueForKey:@"name"];
-    mOSXNC->CloseAlertCocoaString(name);
-  }
-}
-
-// This is an undocumented method that we need to be notified if a user clicks the close button.
-- (void)userNotificationCenter:(id<FakeNSUserNotificationCenter>)center
-  didDismissAlert:(id<FakeNSUserNotification>)notification
-{
-  NSString *name = [[notification userInfo] valueForKey:@"name"];
-  mOSXNC->CloseAlertCocoaString(name);
-}
-
-@end
-
 namespace mozilla {
 
 enum {
@@ -161,7 +98,7 @@ public:
   nsCOMPtr<nsIObserver> mObserver;
   nsString mCookie;
   RefPtr<nsICancelable> mIconRequest;
-  id<FakeNSUserNotification> mPendingNotifiction;
+  id<FakeNSUserNotification> mPendingNotification;
 };
 
 NS_IMPL_ISUPPORTS0(OSXNotificationInfo)
@@ -175,7 +112,7 @@ OSXNotificationInfo::OSXNotificationInfo(NSString *name, nsIObserver *observer,
   mName = [name retain];
   mObserver = observer;
   mCookie = alertCookie;
-  mPendingNotifiction = nil;
+  mPendingNotification = nil;
 
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
@@ -185,7 +122,7 @@ OSXNotificationInfo::~OSXNotificationInfo()
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
 
   [mName release];
-  [mPendingNotifiction release];
+  [mPendingNotification release];
 
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
@@ -201,22 +138,10 @@ static id<FakeNSUserNotificationCenter> GetNotificationCenter() {
 
 OSXNotificationCenter::OSXNotificationCenter()
 {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
-
-  mDelegate = [[mozNotificationCenterDelegate alloc] initWithOSXNC:this];
-  GetNotificationCenter().delegate = mDelegate;
-
-  NS_OBJC_END_TRY_ABORT_BLOCK;
 }
 
 OSXNotificationCenter::~OSXNotificationCenter()
 {
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
-
-  [GetNotificationCenter() removeAllDeliveredNotifications];
-  [mDelegate release];
-
-  NS_OBJC_END_TRY_ABORT_BLOCK;
 }
 
 NS_IMPL_ISUPPORTS(OSXNotificationCenter, nsIAlertsService, nsIAlertsIconData,
@@ -298,11 +223,11 @@ OSXNotificationCenter::ShowAlertWithIconData(nsIAlertNotification* aAlert,
 
   if (!hostPort.IsEmpty() && bundle) {
     const char16_t* formatStrings[] = { hostPort.get() };
-    nsXPIDLString notificationSource;
-    bundle->FormatStringFromName(u"source.label",
+    nsAutoString notificationSource;
+    bundle->FormatStringFromName("source.label",
                                  formatStrings,
                                  ArrayLength(formatStrings),
-                                 getter_Copies(notificationSource));
+                                 notificationSource);
     notification.subtitle = nsCocoaUtils::ToNSString(notificationSource);
   }
 
@@ -317,20 +242,17 @@ OSXNotificationCenter::ShowAlertWithIconData(nsIAlertNotification* aAlert,
   // If this is not an application/extension alert, show additional actions dealing with permissions.
   bool isActionable;
   if (bundle && NS_SUCCEEDED(aAlert->GetActionable(&isActionable)) && isActionable) {
-    nsXPIDLString closeButtonTitle, actionButtonTitle, disableButtonTitle, settingsButtonTitle;
-    bundle->GetStringFromName(u"closeButton.title",
-                              getter_Copies(closeButtonTitle));
-    bundle->GetStringFromName(u"actionButton.label",
-                              getter_Copies(actionButtonTitle));
+    nsAutoString closeButtonTitle, actionButtonTitle, disableButtonTitle, settingsButtonTitle;
+    bundle->GetStringFromName("closeButton.title", closeButtonTitle);
+    bundle->GetStringFromName("actionButton.label", actionButtonTitle);
     if (!hostPort.IsEmpty()) {
       const char16_t* formatStrings[] = { hostPort.get() };
-      bundle->FormatStringFromName(u"webActions.disableForOrigin.label",
+      bundle->FormatStringFromName("webActions.disableForOrigin.label",
                                    formatStrings,
                                    ArrayLength(formatStrings),
-                                   getter_Copies(disableButtonTitle));
+                                   disableButtonTitle);
     }
-    bundle->GetStringFromName(u"webActions.settings.label",
-                              getter_Copies(settingsButtonTitle));
+    bundle->GetStringFromName("webActions.settings.label", settingsButtonTitle);
 
     notification.otherButtonTitle = nsCocoaUtils::ToNSString(closeButtonTitle);
 
@@ -404,7 +326,7 @@ OSXNotificationCenter::ShowAlertWithIconData(nsIAlertNotification* aAlert,
     }
   } else {
     mPendingAlerts.AppendElement(osxni);
-    osxni->mPendingNotifiction = notification;
+    osxni->mPendingNotification = notification;
     // Wait six seconds for the image to load.
     rv = aAlert->LoadImage(6000, this, osxni,
                            getter_AddRefs(osxni->mIconRequest));
@@ -530,14 +452,14 @@ OSXNotificationCenter::ShowPendingNotification(OSXNotificationInfo *osxni)
     }
   }
 
-  [GetNotificationCenter() deliverNotification:osxni->mPendingNotifiction];
+  [GetNotificationCenter() deliverNotification:osxni->mPendingNotification];
 
   if (osxni->mObserver) {
     osxni->mObserver->Observe(nullptr, "alertshow", osxni->mCookie.get());
   }
 
-  [osxni->mPendingNotifiction release];
-  osxni->mPendingNotifiction = nil;
+  [osxni->mPendingNotification release];
+  osxni->mPendingNotification = nil;
 
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
@@ -548,7 +470,7 @@ OSXNotificationCenter::OnImageMissing(nsISupports* aUserData)
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
   OSXNotificationInfo *osxni = static_cast<OSXNotificationInfo*>(aUserData);
-  if (osxni->mPendingNotifiction) {
+  if (osxni->mPendingNotification) {
     // If there was an error getting the image, or the request timed out, show
     // the notification without a content image.
     ShowPendingNotification(osxni);
@@ -571,13 +493,13 @@ OSXNotificationCenter::OnImageReady(nsISupports* aUserData,
   }
 
   OSXNotificationInfo *osxni = static_cast<OSXNotificationInfo*>(aUserData);
-  if (!osxni->mPendingNotifiction) {
+  if (!osxni->mPendingNotification) {
     return NS_ERROR_FAILURE;
   }
 
   NSImage *cocoaImage = nil;
   nsCocoaUtils::CreateNSImageFromImageContainer(image, imgIContainer::FRAME_FIRST, &cocoaImage, 1.0f);
-  (osxni->mPendingNotifiction).contentImage = cocoaImage;
+  (osxni->mPendingNotification).contentImage = cocoaImage;
   [cocoaImage release];
   ShowPendingNotification(osxni);
 

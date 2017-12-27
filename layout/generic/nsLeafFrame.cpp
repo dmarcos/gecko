@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,7 +16,7 @@ nsLeafFrame::~nsLeafFrame()
 }
 
 /* virtual */ nscoord
-nsLeafFrame::GetMinISize(nsRenderingContext *aRenderingContext)
+nsLeafFrame::GetMinISize(gfxContext *aRenderingContext)
 {
   nscoord result;
   DISPLAY_MIN_WIDTH(this, result);
@@ -24,7 +25,7 @@ nsLeafFrame::GetMinISize(nsRenderingContext *aRenderingContext)
 }
 
 /* virtual */ nscoord
-nsLeafFrame::GetPrefISize(nsRenderingContext *aRenderingContext)
+nsLeafFrame::GetPrefISize(gfxContext *aRenderingContext)
 {
   nscoord result;
   DISPLAY_PREF_WIDTH(this, result);
@@ -34,7 +35,7 @@ nsLeafFrame::GetPrefISize(nsRenderingContext *aRenderingContext)
 
 /* virtual */
 LogicalSize
-nsLeafFrame::ComputeAutoSize(nsRenderingContext* aRenderingContext,
+nsLeafFrame::ComputeAutoSize(gfxContext*         aRenderingContext,
                              WritingMode         aWM,
                              const LogicalSize&  aCBSize,
                              nscoord             aAvailableISize,
@@ -46,53 +47,6 @@ nsLeafFrame::ComputeAutoSize(nsRenderingContext* aRenderingContext,
   const WritingMode wm = GetWritingMode();
   LogicalSize result(wm, GetIntrinsicISize(), GetIntrinsicBSize());
   return result.ConvertTo(aWM, wm);
-}
-
-void
-nsLeafFrame::Reflow(nsPresContext* aPresContext,
-                    ReflowOutput& aMetrics,
-                    const ReflowInput& aReflowInput,
-                    nsReflowStatus& aStatus)
-{
-  MarkInReflow();
-  DO_GLOBAL_REFLOW_COUNT("nsLeafFrame");
-  NS_FRAME_TRACE(NS_FRAME_TRACE_CALLS,
-                 ("enter nsLeafFrame::Reflow: aMaxSize=%d,%d",
-                  aReflowInput.AvailableWidth(), aReflowInput.AvailableHeight()));
-
-  NS_PRECONDITION(mState & NS_FRAME_IN_REFLOW, "frame is not in reflow");
-
-  DoReflow(aPresContext, aMetrics, aReflowInput, aStatus);
-
-  FinishAndStoreOverflow(&aMetrics);
-}
-
-void
-nsLeafFrame::DoReflow(nsPresContext* aPresContext,
-                      ReflowOutput& aMetrics,
-                      const ReflowInput& aReflowInput,
-                      nsReflowStatus& aStatus)
-{
-  NS_ASSERTION(aReflowInput.ComputedWidth() != NS_UNCONSTRAINEDSIZE,
-               "Shouldn't have unconstrained stuff here "
-               "thanks to the rules of reflow");
-  NS_ASSERTION(NS_INTRINSICSIZE != aReflowInput.ComputedHeight(),
-               "Shouldn't have unconstrained stuff here "
-               "thanks to ComputeAutoSize");
-
-  // XXX how should border&padding effect baseline alignment?
-  // => descent = borderPadding.bottom for example
-  WritingMode wm = aReflowInput.GetWritingMode();
-  aMetrics.SetSize(wm, aReflowInput.ComputedSizeWithBorderPadding());
-
-  aStatus.Reset();
-
-  NS_FRAME_TRACE(NS_FRAME_TRACE_CALLS,
-                 ("exit nsLeafFrame::DoReflow: size=%d,%d",
-                  aMetrics.ISize(wm), aMetrics.BSize(wm)));
-  NS_FRAME_SET_TRUNCATION(aStatus, aReflowInput, aMetrics);
-
-  aMetrics.SetOverflowAreasToDesiredBounds();
 }
 
 nscoord
@@ -111,5 +65,5 @@ nsLeafFrame::SizeToAvailSize(const ReflowInput& aReflowInput,
                    aReflowInput.AvailableBSize());
   aDesiredSize.SetSize(wm, size);
   aDesiredSize.SetOverflowAreasToDesiredBounds();
-  FinishAndStoreOverflow(&aDesiredSize);  
+  FinishAndStoreOverflow(&aDesiredSize, aReflowInput.mStyleDisplay);
 }

@@ -1,7 +1,5 @@
 import os
 
-MOZ_OBJDIR = 'obj-firefox'
-
 config = {
     #########################################################################
     ######## LINUX GENERIC CONFIG KEYS/VAlUES
@@ -20,15 +18,10 @@ config = {
         'sendchange',
     ],
     "buildbot_json_path": "buildprops.json",
-    'exes': {
-        "buildbot": "/tools/buildbot/bin/buildbot",
-    },
     'app_ini_path': '%(obj_dir)s/dist/bin/application.ini',
     # decides whether we want to use moz_sign_cmd in env
     'enable_signing': False,
-    'enable_ccache': True,
     'vcs_share_base': '/builds/hg-shared',
-    'objdir': MOZ_OBJDIR,
     'tooltool_script': ["/builds/tooltool.py"],
     'tooltool_bootstrap': "setup.sh",
     'enable_count_ctors': True,
@@ -49,10 +42,9 @@ config = {
     'publish_nightly_en_US_routes': False,
     'env': {
         'MOZBUILD_STATE_PATH': os.path.join(os.getcwd(), '.mozbuild'),
-        'MOZ_AUTOMATION': '1',
         'DISPLAY': ':2',
         'HG_SHARE_BASE_DIR': '/builds/hg-shared',
-        'MOZ_OBJDIR': MOZ_OBJDIR,
+        'MOZ_OBJDIR': '%(abs_obj_dir)s',
         'TINDERBOX_OUTPUT': '1',
         'TOOLTOOL_CACHE': '/builds/tooltool_cache',
         'TOOLTOOL_HOME': '/builds',
@@ -64,7 +56,7 @@ config = {
         # debug-specific
         'XPCOM_DEBUG_BREAK': 'stack-and-abort',
         # 32 bit specific
-        'PATH': '/tools/buildbot/bin:/usr/local/bin:/usr/lib/ccache:\
+        'PATH': '/usr/local/bin:/usr/lib/ccache:\
 /bin:/usr/bin:/usr/local/sbin:/usr/sbin:/sbin:/tools/git/bin:\
 /tools/python27/bin:/tools/python27-mercurial/bin:/home/cltbld/bin',
         'LD_LIBRARY_PATH': "/tools/gcc-4.3.3/installed/lib",
@@ -116,7 +108,7 @@ config = {
         'freetype-2.3.11-6.el6_1.8.x86_64',
         ######## 32 bit specific ###########
     ],
-    'src_mozconfig': 'browser/config/mozconfigs/linux32/debug-artifact',
+    'mozconfig_variant': 'debug-artifact',
     'tooltool_manifest_src': "browser/config/tooltool-manifests/linux32/\
 releng.manifest",
     #########################################################################

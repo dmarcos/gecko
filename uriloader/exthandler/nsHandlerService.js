@@ -302,6 +302,9 @@ HandlerService.prototype = {
 
   //**************************************************************************//
   // nsIHandlerService
+  asyncInit: function HS_asyncInit() {
+    // noop
+  },
 
   enumerate: function HS_enumerate() {
     var handlers = Cc["@mozilla.org/array;1"].
@@ -623,10 +626,10 @@ HandlerService.prototype = {
    *
    * @param aPath  {string}  a path to a file
    *
-   * @returns {nsILocalFile} the file, or null if the file does not exist
+   * @returns {nsIFile} the file, or null if the file does not exist
    */
   _getFileWithPath: function HS__getFileWithPath(aPath) {
-    var file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsILocalFile);
+    var file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
 
     try {
       file.initWithPath(aPath);
@@ -637,7 +640,7 @@ HandlerService.prototype = {
     catch(ex) {
       // Note: for historical reasons, we don't actually check to see
       // if the exception is NS_ERROR_FILE_UNRECOGNIZED_PATH, which is what
-      // nsILocalFile::initWithPath throws when a path is relative.
+      // nsIFile::initWithPath throws when a path is relative.
 
       file = this._dirSvc.get("XCurProcD", Ci.nsIFile);
 
@@ -709,12 +712,7 @@ HandlerService.prototype = {
 
     var handler = aHandlerInfo.preferredApplicationHandler;
 
-    if (handler) {
-      // If the handlerApp is an unknown type, ignore it.
-      // Android default application handler is the case.
-      if (this._handlerAppIsUnknownType(handler)) {
-        return;
-      }
+    if (handler && !this._handlerAppIsUnknownType(handler)) {
       this._storeHandlerApp(handlerID, handler);
 
       // Make this app be the preferred app for the handler info.
@@ -728,8 +726,9 @@ HandlerService.prototype = {
       this._setResource(infoID, NC_PREFERRED_APP, handlerID);
     }
     else {
-      // There isn't a preferred handler.  Remove the existing record for it,
-      // if any.
+      // There isn't a preferred handler or the handler cannot be serialized,
+      // for example the Android default application handler. Remove the
+      // existing record for it, if any.
       this._removeTarget(infoID, NC_PREFERRED_APP);
       this._removeAssertions(handlerID);
     }

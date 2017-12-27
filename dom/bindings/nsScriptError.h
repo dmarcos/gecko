@@ -14,6 +14,8 @@
 #include "jsapi.h"
 #include "js/RootingAPI.h"
 
+#include "nsCOMArray.h"
+#include "nsCycleCollectionParticipant.h"
 #include "nsIScriptError.h"
 #include "nsString.h"
 
@@ -52,6 +54,12 @@ protected:
 
   void
   InitializeOnMainThread();
+
+  void InitializationHelper(const nsAString& message,
+                            const nsAString& sourceLine, uint32_t lineNumber,
+                            uint32_t columnNumber, uint32_t flags,
+                            const nsACString& category,
+                            uint64_t aInnerWindowID);
 
   nsCOMArray<nsIScriptErrorNote> mNotes;
   nsString mMessage;

@@ -19,28 +19,36 @@ class FFmpegVideoDecoder : public FFmpegDataDecoder<V>
 {
 };
 
-template <>
-class FFmpegVideoDecoder<LIBAV_VER> : public FFmpegDataDecoder<LIBAV_VER>
+template<>
+class FFmpegVideoDecoder<LIBAV_VER>;
+DDLoggedTypeNameAndBase(FFmpegVideoDecoder<LIBAV_VER>,
+                        FFmpegDataDecoder<LIBAV_VER>);
+
+template<>
+class FFmpegVideoDecoder<LIBAV_VER>
+  : public FFmpegDataDecoder<LIBAV_VER>
+  , public DecoderDoctorLifeLogger<FFmpegVideoDecoder<LIBAV_VER>>
 {
   typedef mozilla::layers::Image Image;
   typedef mozilla::layers::ImageContainer ImageContainer;
+  typedef mozilla::layers::KnowsCompositor KnowsCompositor;
   typedef SimpleMap<int64_t> DurationMap;
 
 public:
   FFmpegVideoDecoder(FFmpegLibWrapper* aLib, TaskQueue* aTaskQueue,
                      const VideoInfo& aConfig,
+                     KnowsCompositor* aAllocator,
                      ImageContainer* aImageContainer,
                      bool aLowLatency);
-  virtual ~FFmpegVideoDecoder();
 
   RefPtr<InitPromise> Init() override;
   void InitCodecContext() override;
-  const char* GetDescriptionName() const override
+  nsCString GetDescriptionName() const override
   {
 #ifdef USING_MOZFFVPX
-    return "ffvpx video decoder";
+    return NS_LITERAL_CSTRING("ffvpx video decoder");
 #else
-    return "ffmpeg video decoder";
+    return NS_LITERAL_CSTRING("ffmpeg video decoder");
 #endif
   }
   ConversionRequired NeedsConversion() const override
@@ -51,14 +59,21 @@ public:
   static AVCodecID GetCodecId(const nsACString& aMimeType);
 
 private:
-  RefPtr<DecodePromise> ProcessDecode(MediaRawData* aSample) override;
-  RefPtr<DecodePromise> ProcessDrain() override;
   RefPtr<FlushPromise> ProcessFlush() override;
-  MediaResult DoDecode(MediaRawData* aSample, bool* aGotFrame,
-                       DecodedData& aResults);
-  MediaResult DoDecode(MediaRawData* aSample, uint8_t* aData, int aSize,
-                       bool* aGotFrame, DecodedData& aResults);
+  MediaResult DoDecode(MediaRawData* aSample,
+                       uint8_t* aData,
+                       int aSize,
+                       bool* aGotFrame,
+                       DecodedData& aResults) override;
   void OutputDelayedFrames();
+  bool NeedParser() const override
+  {
+    return
+#if LIBAVCODEC_VERSION_MAJOR >= 55
+      mCodecID == AV_CODEC_ID_VP9 ||
+#endif
+      mCodecID == AV_CODEC_ID_VP8;
+  }
 
   /**
    * This method allocates a buffer for FFmpeg's decoder, wrapped in an Image.
@@ -69,11 +84,9 @@ private:
   int AllocateYUV420PVideoBuffer(AVCodecContext* aCodecContext,
                                  AVFrame* aFrame);
 
+  RefPtr<KnowsCompositor> mImageAllocator;
   RefPtr<ImageContainer> mImageContainer;
   VideoInfo mInfo;
-
-  // Parser used for VP8 and VP9 decoding.
-  AVCodecParserContext* mCodecParser;
 
   class PtsCorrectionContext
   {
@@ -91,7 +104,6 @@ private:
   };
 
   PtsCorrectionContext mPtsContext;
-  int64_t mLastInputDts;
 
   DurationMap mDurationMap;
   const bool mLowLatency;

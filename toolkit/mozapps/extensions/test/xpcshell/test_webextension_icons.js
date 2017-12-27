@@ -11,30 +11,18 @@ profileDir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
 createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "42");
 startupManager();
 
-const { Management } = Components.utils.import("resource://gre/modules/Extension.jsm", {});
+async function testSimpleIconsetParsing(manifest) {
+  await promiseWriteWebManifestForExtension(manifest, profileDir);
 
-function promiseAddonStartup() {
-  return new Promise(resolve => {
-    let listener = (evt, extension) => {
-      Management.off("startup", listener);
-      resolve(extension);
-    };
-
-    Management.on("startup", listener);
-  });
-}
-
-function* testSimpleIconsetParsing(manifest) {
-  yield promiseWriteWebManifestForExtension(manifest, profileDir);
-
-  yield promiseRestartManager();
-  if (!manifest.theme)
-    yield promiseAddonStartup();
+  await Promise.all([
+    promiseRestartManager(),
+    manifest.theme || promiseWebExtensionStartup(ID),
+  ]);
 
   let uri = do_get_addon_root_uri(profileDir, ID);
 
-  let addon = yield promiseAddonByID(ID);
-  do_check_neq(addon, null);
+  let addon = await promiseAddonByID(ID);
+  Assert.notEqual(addon, null);
 
   function check_icons(addon_copy) {
     deepEqual(addon_copy.icons, {
@@ -60,29 +48,29 @@ function* testSimpleIconsetParsing(manifest) {
   check_icons(addon);
 
   // check if icons are persisted through a restart
-  yield promiseRestartManager();
-  if (!manifest.theme)
-    yield promiseAddonStartup();
+  await Promise.all([
+    promiseRestartManager(),
+    manifest.theme || promiseWebExtensionStartup(ID),
+  ]);
 
-  addon = yield promiseAddonByID(ID);
-  do_check_neq(addon, null);
+  addon = await promiseAddonByID(ID);
+  Assert.notEqual(addon, null);
 
   check_icons(addon);
 
   addon.uninstall();
-
-  yield promiseRestartManager();
 }
 
-function* testRetinaIconsetParsing(manifest) {
-  yield promiseWriteWebManifestForExtension(manifest, profileDir);
+async function testRetinaIconsetParsing(manifest) {
+  await promiseWriteWebManifestForExtension(manifest, profileDir);
 
-  yield promiseRestartManager();
-  if (!manifest.theme)
-    yield promiseAddonStartup();
+  await Promise.all([
+    promiseRestartManager(),
+    manifest.theme || promiseWebExtensionStartup(ID),
+  ]);
 
-  let addon = yield promiseAddonByID(ID);
-  do_check_neq(addon, null);
+  let addon = await promiseAddonByID(ID);
+  Assert.notEqual(addon, null);
 
   let uri = do_get_addon_root_uri(profileDir, ID);
 
@@ -100,19 +88,18 @@ function* testRetinaIconsetParsing(manifest) {
   }), uri + "icon128.png");
 
   addon.uninstall();
-
-  yield promiseRestartManager();
 }
 
-function* testNoIconsParsing(manifest) {
-  yield promiseWriteWebManifestForExtension(manifest, profileDir);
+async function testNoIconsParsing(manifest) {
+  await promiseWriteWebManifestForExtension(manifest, profileDir);
 
-  yield promiseRestartManager();
-  if (!manifest.theme)
-    yield promiseAddonStartup();
+  await Promise.all([
+    promiseRestartManager(),
+    manifest.theme || promiseWebExtensionStartup(ID),
+  ]);
 
-  let addon = yield promiseAddonByID(ID);
-  do_check_neq(addon, null);
+  let addon = await promiseAddonByID(ID);
+  Assert.notEqual(addon, null);
 
   deepEqual(addon.icons, {});
 
@@ -122,13 +109,11 @@ function* testNoIconsParsing(manifest) {
   equal(AddonManager.getPreferredIconURL(addon, 128), null);
 
   addon.uninstall();
-
-  yield promiseRestartManager();
 }
 
 // Test simple icon set parsing
-add_task(function*() {
-  yield* testSimpleIconsetParsing({
+add_task(async function() {
+  await testSimpleIconsetParsing({
     name: "Web Extension Name",
     version: "1.0",
     manifest_version: 2,
@@ -146,7 +131,7 @@ add_task(function*() {
   });
 
   // Now for theme-type extensions too.
-  yield* testSimpleIconsetParsing({
+  await testSimpleIconsetParsing({
     name: "Web Extension Name",
     version: "1.0",
     manifest_version: 2,
@@ -166,8 +151,8 @@ add_task(function*() {
 });
 
 // Test AddonManager.getPreferredIconURL for retina screen sizes
-add_task(function*() {
-  yield* testRetinaIconsetParsing({
+add_task(async function() {
+  await testRetinaIconsetParsing({
     name: "Web Extension Name",
     version: "1.0",
     manifest_version: 2,
@@ -185,7 +170,7 @@ add_task(function*() {
     }
   });
 
-  yield* testRetinaIconsetParsing({
+  await testRetinaIconsetParsing({
     name: "Web Extension Name",
     version: "1.0",
     manifest_version: 2,
@@ -206,8 +191,8 @@ add_task(function*() {
 });
 
 // Handles no icons gracefully
-add_task(function*() {
-  yield* testNoIconsParsing({
+add_task(async function() {
+  await testNoIconsParsing({
     name: "Web Extension Name",
     version: "1.0",
     manifest_version: 2,
@@ -218,7 +203,7 @@ add_task(function*() {
     }
   });
 
-  yield* testNoIconsParsing({
+  await testNoIconsParsing({
     name: "Web Extension Name",
     version: "1.0",
     manifest_version: 2,

@@ -6,13 +6,17 @@
 // This defines a common base class for nsITheme implementations, to reduce
 // code duplication.
 
+#ifndef _NSNATIVETHEME_H_
+#define _NSNATIVETHEME_H_
+
 #include "nsAlgorithm.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsCOMPtr.h"
 #include "nsString.h"
 #include "nsMargin.h"
 #include "nsGkAtoms.h"
 #include "nsTArray.h"
+#include "nsINamed.h"
 #include "nsITimer.h"
 #include "nsIContent.h"
 
@@ -24,13 +28,14 @@ namespace mozilla {
 class EventStates;
 } // namespace mozilla
 
-class nsNativeTheme : public nsITimerCallback
+class nsNativeTheme : public nsITimerCallback, public nsINamed
 {
  protected:
   virtual ~nsNativeTheme() {}
 
   NS_DECL_ISUPPORTS
   NS_DECL_NSITIMERCALLBACK
+  NS_DECL_NSINAMED
 
   enum ScrollbarButtonType {
     eScrollbarButton_UpTop   = 0,
@@ -159,8 +164,8 @@ class nsNativeTheme : public nsITimerCallback
   bool IsMenuListEditable(nsIFrame *aFrame);
 
   nsIPresShell *GetPresShell(nsIFrame* aFrame);
-  static bool CheckBooleanAttr(nsIFrame* aFrame, nsIAtom* aAtom);
-  static int32_t CheckIntAttr(nsIFrame* aFrame, nsIAtom* aAtom, int32_t defaultValue);
+  static bool CheckBooleanAttr(nsIFrame* aFrame, nsAtom* aAtom);
+  static int32_t CheckIntAttr(nsIFrame* aFrame, nsAtom* aAtom, int32_t defaultValue);
 
   // Helpers for progressbar.
   static double GetProgressValue(nsIFrame* aFrame);
@@ -185,3 +190,5 @@ class nsNativeTheme : public nsITimerCallback
   nsCOMPtr<nsITimer> mAnimatedContentTimer;
   AutoTArray<nsCOMPtr<nsIContent>, 20> mAnimatedContentList;
 };
+
+#endif // _NSNATIVETHEME_H_

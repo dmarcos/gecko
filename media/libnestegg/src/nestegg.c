@@ -154,6 +154,7 @@ enum ebml_type_enum {
 /* Track IDs */
 #define TRACK_ID_VP8                "V_VP8"
 #define TRACK_ID_VP9                "V_VP9"
+#define TRACK_ID_AV1                "V_AV1"
 #define TRACK_ID_VORBIS             "A_VORBIS"
 #define TRACK_ID_OPUS               "A_OPUS"
 
@@ -1046,7 +1047,7 @@ static int
 ne_read_simple(nestegg * ctx, struct ebml_element_desc * desc, size_t length)
 {
   struct ebml_type * storage;
-  int r;
+  int r = -1;
 
   storage = (struct ebml_type *) (ctx->ancestor->data + desc->offset);
 
@@ -2114,7 +2115,7 @@ nestegg_init(nestegg ** context, nestegg_io io, nestegg_log callback, int64_t ma
 
   if (ne_get_string(ctx->ebml.doctype, &doctype) != 0)
     doctype = "matroska";
-  if (strcmp(doctype, "webm") != 0) {
+  if (!!strcmp(doctype, "webm") && !!strcmp(doctype, "matroska")) {
     nestegg_destroy(ctx);
     return -1;
   }
@@ -2173,7 +2174,7 @@ nestegg_duration(nestegg * ctx, uint64_t * duration)
     return -1;
 
   if (unscaled_duration != unscaled_duration ||
-      unscaled_duration < 0 || unscaled_duration > (double) UINT64_MAX ||
+      unscaled_duration < 0 || unscaled_duration >= (double) UINT64_MAX ||
       (uint64_t) unscaled_duration > UINT64_MAX / tc_scale)
     return -1;
 
@@ -2369,6 +2370,9 @@ nestegg_track_codec_id(nestegg * ctx, unsigned int track)
 
   if (strcmp(codec_id, TRACK_ID_VP9) == 0)
     return NESTEGG_CODEC_VP9;
+
+  if (strcmp(codec_id, TRACK_ID_AV1) == 0)
+    return NESTEGG_CODEC_AV1;
 
   if (strcmp(codec_id, TRACK_ID_VORBIS) == 0)
     return NESTEGG_CODEC_VORBIS;

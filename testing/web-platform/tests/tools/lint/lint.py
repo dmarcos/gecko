@@ -3,6 +3,7 @@ from __future__ import print_function, unicode_literals
 import abc
 import argparse
 import ast
+import itertools
 import json
 import os
 import re
@@ -12,18 +13,40 @@ import sys
 from collections import defaultdict
 
 from . import fnmatch
-from ..localpaths import repo_root
+from .. import localpaths
 from ..gitignore.gitignore import PathFilter
+from ..wpt import testfiles
 
-from manifest.sourcefile import SourceFile, js_meta_re, python_meta_re
+from manifest.sourcefile import SourceFile, js_meta_re, python_meta_re, space_chars
 from six import binary_type, iteritems, itervalues
 from six.moves import range
 from six.moves.urllib.parse import urlsplit, urljoin
 
-here = os.path.abspath(os.path.split(__file__)[0])
+import logging
+
+logger = None
+
+def setup_logging(prefix=False):
+    global logger
+    if logger is None:
+        logger = logging.getLogger(os.path.basename(os.path.splitext(__file__)[0]))
+        handler = logging.StreamHandler(sys.stdout)
+        logger.addHandler(handler)
+    if prefix:
+        format = logging.BASIC_FORMAT
+    else:
+        format = "%(message)s"
+    formatter = logging.Formatter(format)
+    for handler in logger.handlers:
+        handler.setFormatter(formatter)
+    logger.setLevel(logging.DEBUG)
+
+
+setup_logging()
+
 
 ERROR_MSG = """You must fix all errors; for details on how to fix them, see
-https://github.com/w3c/web-platform-tests/blob/master/docs/lint-tool.md
+http://web-platform-tests.org/writing-tests/lint-tool.html
 
 However, instead of fixing a particular error, it's sometimes
 OK to add a line to the lint.whitelist file in the root of the
@@ -33,7 +56,7 @@ For example, to make the lint tool ignore all '%s'
 errors in the %s file,
 you could add the following line to the lint.whitelist file.
 
-%s:%s"""
+%s: %s"""
 
 def all_filesystem_paths(repo_root):
     path_filter = PathFilter(repo_root, extras=[".git/*"])
@@ -45,6 +68,45 @@ def all_filesystem_paths(repo_root):
         dirnames[:] = [item for item in dirnames if
                        path_filter(os.path.relpath(os.path.join(dirpath, item) + "/",
                                                    repo_root))]
+
+
+def _all_files_equal(paths):
+    """
+    Checks all the paths are files that are byte-for-byte identical
+
+    :param paths: the list of paths to compare
+    :returns: True if they are all identical
+    """
+    paths = list(paths)
+    if len(paths) < 2:
+        return True
+
+    first = paths.pop()
+    size = os.path.getsize(first)
+    if any(os.path.getsize(path) != size for path in paths):
+        return False
+
+    # Chunk this to avoid eating up memory and file descriptors
+    bufsize = 4096*4  # 16KB, a "reasonable" number of disk sectors
+    groupsize = 8  # Hypothesised to be large enough in the common case that everything fits in one group
+    with open(first, "rb") as first_f:
+        for start in range(0, len(paths), groupsize):
+            path_group = paths[start:start+groupsize]
+            first_f.seek(0)
+            try:
+                files = [open(x, "rb") for x in path_group]
+                for _ in range(0, size, bufsize):
+                    a = first_f.read(bufsize)
+                    for f in files:
+                        b = f.read(bufsize)
+                        if a != b:
+                            return False
+            finally:
+                for f in files:
+                    f.close()
+
+    return True
+
 
 def check_path_length(repo_root, path, css_mode):
     if len(path) + 1 > 150:
@@ -65,6 +127,117 @@ def check_worker_collision(repo_root, path, css_mode):
     return []
 
 
+def check_ahem_copy(repo_root, path, css_mode):
+    lpath = path.lower()
+    if "ahem" in lpath and lpath.endswith(".ttf"):
+        return [("AHEM COPY", "Don't add extra copies of Ahem, use /fonts/Ahem.ttf", path, None)]
+    return []
+
+
+drafts_csswg_re = re.compile(r"https?\:\/\/drafts\.csswg\.org\/([^/?#]+)")
+w3c_tr_re = re.compile(r"https?\:\/\/www\.w3c?\.org\/TR\/([^/?#]+)")
+w3c_dev_re = re.compile(r"https?\:\/\/dev\.w3c?\.org\/[^/?#]+\/([^/?#]+)")
+
+
+def check_css_globally_unique(repo_root, paths, css_mode):
+    """
+    Checks that CSS filenames are sufficiently unique
+
+    This groups files by path classifying them as "test", "reference", or
+    "support".
+
+    "test" files must have a unique name across files that share links to the
+    same spec.
+
+    "reference" and "support" files, on the other hand, must have globally
+    unique names.
+
+    :param repo_root: the repository root
+    :param paths: list of all paths
+    :param css_mode: whether we're in CSS testsuite mode
+    :returns: a list of errors found in ``paths``
+
+    """
+    test_files = defaultdict(set)
+    ref_files = defaultdict(set)
+    support_files = defaultdict(set)
+
+    for path in paths:
+        if os.name == "nt":
+            path = path.replace("\\", "/")
+
+        if not css_mode:
+            if not path.startswith("css/"):
+                continue
+
+        # we're within css or in css_mode after all that
+        source_file = SourceFile(repo_root, path, "/")
+        if source_file.name_is_non_test:
+            # If we're name_is_non_test for a reason apart from support, ignore it.
+            # We care about support because of the requirement all support files in css/ to be in
+            # a support directory; see the start of check_parsed.
+            offset = path.find("/support/")
+            if offset == -1:
+                continue
+
+            parts = source_file.dir_path.split(os.path.sep)
+            if (parts[0] in source_file.root_dir_non_test or
+                any(item in source_file.dir_non_test - {"support"} for item in parts) or
+                any(parts[:len(non_test_path)] == list(non_test_path) for non_test_path in source_file.dir_path_non_test)):
+                continue
+
+            name = path[offset+1:]
+            support_files[name].add(path)
+        elif source_file.name_is_reference:
+            ref_files[source_file.name].add(path)
+        else:
+            test_files[source_file.name].add(path)
+
+    errors = []
+
+    for name, colliding in iteritems(test_files):
+        if len(colliding) > 1:
+            if not _all_files_equal([os.path.join(repo_root, x) for x in colliding]):
+                # Only compute by_spec if there are prima-facie collisions because of cost
+                by_spec = defaultdict(set)
+                for path in colliding:
+                    source_file = SourceFile(repo_root, path, "/")
+                    for link in source_file.spec_links:
+                        for r in (drafts_csswg_re, w3c_tr_re, w3c_dev_re):
+                            m = r.match(link)
+                            if m:
+                                spec = m.group(1)
+                                break
+                        else:
+                            continue
+                        by_spec[spec].add(path)
+
+                for spec, paths in iteritems(by_spec):
+                    if not _all_files_equal([os.path.join(repo_root, x) for x in paths]):
+                        for x in paths:
+                            errors.append(("CSS-COLLIDING-TEST-NAME",
+                                           "The filename %s in the %s testsuite is shared by: %s"
+                                           % (name,
+                                              spec,
+                                              ", ".join(sorted(paths))),
+                                           x,
+                                           None))
+
+    for error_name, d in [("CSS-COLLIDING-REF-NAME", ref_files),
+                          ("CSS-COLLIDING-SUPPORT-NAME", support_files)]:
+        for name, colliding in iteritems(d):
+            if len(colliding) > 1:
+                if not _all_files_equal([os.path.join(repo_root, x) for x in colliding]):
+                    for x in colliding:
+                        errors.append((error_name,
+                                       "The filename %s is shared by: %s" % (name,
+                                                                             ", ".join(sorted(colliding))),
+                                       x,
+                                       None))
+
+    return errors
+
+
 def parse_whitelist(f):
     """
     Parse the whitelist file given by `f`, and return the parsed structure.
@@ -83,18 +256,20 @@ def parse_whitelist(f):
         else:
             parts[-1] = int(parts[-1])
 
-        error_type, file_match, line_number = parts
+        error_types, file_match, line_number = parts
+        error_types = {item.strip() for item in error_types.split(",")}
         file_match = os.path.normcase(file_match)
 
-        if error_type == "*":
+        if "*" in error_types:
             ignored_files.add(file_match)
         else:
-            data[file_match][error_type].add(line_number)
+            for error_type in error_types:
+                data[error_type][file_match].add(line_number)
 
     return data, ignored_files
 
 
-def filter_whitelist_errors(data, path, errors):
+def filter_whitelist_errors(data, errors):
     """
     Filter out those errors that are whitelisted in `data`.
     """
@@ -103,14 +278,14 @@ def filter_whitelist_errors(data, path, errors):
         return []
 
     whitelisted = [False for item in range(len(errors))]
-    normpath = os.path.normcase(path)
 
-    for file_match, whitelist_errors in iteritems(data):
-        if fnmatch.fnmatchcase(normpath, file_match):
-            for i, (error_type, msg, path, line) in enumerate(errors):
-                if error_type in whitelist_errors:
-                    allowed_lines = whitelist_errors[error_type]
-                    if None in allowed_lines or line in allowed_lines:
+    for i, (error_type, msg, path, line) in enumerate(errors):
+        normpath = os.path.normcase(path)
+        if error_type in data:
+            wl_files = data[error_type]
+            for file_match, allowed_lines in iteritems(wl_files):
+                if None in allowed_lines or line in allowed_lines:
+                    if fnmatch.fnmatchcase(normpath, file_match):
                         whitelisted[i] = True
 
     return [item for i, item in enumerate(errors) if not whitelisted[i]]
@@ -168,11 +343,30 @@ class ConsoleRegexp(Regexp):
     file_extensions = [".html", ".htm", ".js", ".xht", ".xhtml", ".svg"]
     description = "Console logging API used"
 
+class GenerateTestsRegexp(Regexp):
+    pattern = b"generate_tests\s*\("
+    error = "GENERATE_TESTS"
+    file_extensions = [".html", ".htm", ".js", ".xht", ".xhtml", ".svg"]
+    description = "generate_tests used"
+
 class PrintRegexp(Regexp):
     pattern = b"print(?:\s|\s*\()"
     error = "PRINT STATEMENT"
     file_extensions = [".py"]
     description = "Print function used"
+
+class LayoutTestsRegexp(Regexp):
+    pattern = b"eventSender|testRunner|window\.internals"
+    error = "LAYOUTTESTS APIS"
+    file_extensions = [".html", ".htm", ".js", ".xht", ".xhtml", ".svg"]
+    description = "eventSender/testRunner/window.internals used; these are LayoutTests-specific APIs (WebKit/Blink)"
+
+class SpecialPowersRegexp(Regexp):
+    pattern = b"SpecialPowers"
+    error = "SPECIALPOWERS API"
+    file_extensions = [".html", ".htm", ".js", ".xht", ".xhtml", ".svg"]
+    description = "SpecialPowers used; this is gecko-specific and not supported in wpt"
+
 
 regexps = [item() for item in
            [TrailingWhitespaceRegexp,
@@ -182,7 +376,10 @@ regexps = [item() for item in
             W3CTestOrgRegexp,
             Webidl2Regexp,
             ConsoleRegexp,
-            PrintRegexp]]
+            GenerateTestsRegexp,
+            PrintRegexp,
+            LayoutTestsRegexp,
+            SpecialPowersRegexp]]
 
 def check_regexp_line(repo_root, path, f, css_mode):
     errors = []
@@ -207,6 +404,11 @@ def check_parsed(repo_root, path, f, css_mode):
             not source_file.name_is_reference):
             return [("SUPPORT-WRONG-DIR", "Support file not in support directory", path, None)]
 
+        if (source_file.type != "support" and
+            not source_file.name_is_reference and
+            not source_file.spec_links):
+            return [("MISSING-LINK", "Testcase file must have a link to a spec", path, None)]
+
     if source_file.name_is_non_test or source_file.name_is_manual:
         return []
 
@@ -223,7 +425,7 @@ def check_parsed(repo_root, path, f, css_mode):
         return [("CONTENT-VISUAL", "Visual test whose filename doesn't end in '-visual'", path, None)]
 
     for reftest_node in source_file.reftest_nodes:
-        href = reftest_node.attrib.get("href", "")
+        href = reftest_node.attrib.get("href", "").strip(space_chars)
         parts = urlsplit(href)
         if parts.scheme or parts.netloc:
             errors.append(("ABSOLUTE-URL-REF",
@@ -313,13 +515,25 @@ def check_parsed(repo_root, path, f, css_mode):
             if all(seen_elements[name] for name in required_elements):
                 break
 
+    if source_file.testdriver_nodes:
+        if len(source_file.testdriver_nodes) > 1:
+            errors.append(("MULTIPLE-TESTDRIVER",
+                           "More than one <script src='/resources/testdriver.js'>", path, None))
+
+        testdriver_vendor_nodes = source_file.root.findall(".//{http://www.w3.org/1999/xhtml}script[@src='/resources/testdriver-vendor.js']")
+        if not testdriver_vendor_nodes:
+            errors.append(("MISSING-TESTDRIVER-VENDOR",
+                           "Missing <script src='/resources/testdriver-vendor.js'>", path, None))
+        else:
+            if len(testdriver_vendor_nodes) > 1:
+                errors.append(("MULTIPLE-TESTDRIVER-VENDOR",
+                               "More than one <script src='/resources/testdriver-vendor.js'>", path, None))
 
     for element in source_file.root.findall(".//{http://www.w3.org/1999/xhtml}script[@src]"):
         src = element.attrib["src"]
-        for name in ["testharness", "testharnessreport"]:
+        for name in ["testharness", "testharnessreport", "testdriver", "testdriver-vendor"]:
             if "%s.js" % name == src or ("/%s.js" % name in src and src != "/resources/%s.js" % name):
                 errors.append(("%s-PATH" % name.upper(), "%s.js script seen with incorrect path" % name, path, None))
-
 
     return errors
 
@@ -423,6 +637,22 @@ def check_path(repo_root, path, css_mode):
     return errors
 
 
+def check_all_paths(repo_root, paths, css_mode):
+    """
+    Runs lints that check all paths globally.
+
+    :param repo_root: the repository root
+    :param paths: a list of all the paths within the repository
+    :param css_mode: whether we're in CSS testsuite mode
+    :returns: a list of errors found in ``f``
+    """
+
+    errors = []
+    for paths_fn in all_paths_lints:
+        errors.extend(paths_fn(repo_root, paths, css_mode))
+    return errors
+
+
 def check_file_contents(repo_root, path, f, css_mode):
     """
     Runs lints that check the file contents.
@@ -446,12 +676,30 @@ def output_errors_text(errors):
         pos_string = path
         if line_number:
             pos_string += ":%s" % line_number
-        print("%s: %s (%s)" % (pos_string, description, error_type))
+        logger.error("%s: %s (%s)" % (pos_string, description, error_type))
+
+
+def output_errors_markdown(errors):
+    if not errors:
+        return
+    heading = """Got lint errors:
+
+| Error Type | Position | Message |
+|------------|----------|---------|"""
+    for line in heading.split("\n"):
+        logger.error(line)
+    for error_type, description, path, line_number in errors:
+        pos_string = path
+        if line_number:
+            pos_string += ":%s" % line_number
+        logger.error("%s | %s | %s |" % (error_type, pos_string, description))
+
 
 def output_errors_json(errors):
     for error_type, error, path, line_number in errors:
         print(json.dumps({"path": path, "lineno": line_number,
                           "rule": error_type, "message": error}))
+
 
 def output_error_count(error_count):
     if not error_count:
@@ -459,49 +707,96 @@ def output_error_count(error_count):
 
     by_type = " ".join("%s: %d" % item for item in error_count.items())
     count = sum(error_count.values())
+    logger.info("")
     if count == 1:
-        print("There was 1 error (%s)" % (by_type,))
+        logger.info("There was 1 error (%s)" % (by_type,))
     else:
-        print("There were %d errors (%s)" % (count, by_type))
+        logger.info("There were %d errors (%s)" % (count, by_type))
 
-def parse_args():
+
+def changed_files(wpt_root):
+    revish = testfiles.get_revish(revish=None)
+    changed, _ = testfiles.files_changed(revish, set(), include_uncommitted=True, include_new=True)
+    return [os.path.relpath(item, wpt_root) for item in changed]
+
+
+def lint_paths(kwargs, wpt_root):
+    if kwargs.get("paths"):
+        paths = kwargs["paths"]
+    elif kwargs["all"]:
+        paths = list(all_filesystem_paths(wpt_root))
+    else:
+        changed_paths = changed_files(wpt_root)
+        force_all = False
+        # If we changed the lint itself ensure that we retest everything
+        for path in changed_paths:
+            path = path.replace(os.path.sep, "/")
+            if path == "lint.whitelist" or path.startswith("tools/lint/"):
+                force_all = True
+                break
+        paths = (list(changed_paths) if not force_all
+                 else list(all_filesystem_paths(wpt_root)))
+
+    return paths
+
+
+def create_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("paths", nargs="*",
                         help="List of paths to lint")
     parser.add_argument("--json", action="store_true",
                         help="Output machine-readable JSON format")
+    parser.add_argument("--markdown", action="store_true",
+                        help="Output markdown")
     parser.add_argument("--css-mode", action="store_true",
                         help="Run CSS testsuite specific lints")
-    return parser.parse_args()
+    parser.add_argument("--repo-root", help="The WPT directory. Use this"
+                        "option if the lint script exists outside the repository")
+    parser.add_argument("--all", action="store_true", help="If no paths are passed, try to lint the whole "
+                        "working directory, not just files that changed")
+    return parser
 
-def main(force_css_mode=False):
-    args = parse_args()
-    paths = args.paths if args.paths else all_filesystem_paths(repo_root)
-    return lint(repo_root, paths, args.json, force_css_mode or args.css_mode)
 
-def lint(repo_root, paths, output_json, css_mode):
+def main(**kwargs):
+    if kwargs.get("json") and kwargs.get("markdown"):
+        logger.critical("Cannot specify --json and --markdown")
+        sys.exit(2)
+
+    repo_root = kwargs.get('repo_root') or localpaths.repo_root
+    output_format = {(True, False): "json",
+                     (False, True): "markdown",
+                     (False, False): "normal"}[(kwargs.get("json", False),
+                                                kwargs.get("markdown", False))]
+
+    if output_format == "markdown":
+        setup_logging(True)
+
+    paths = lint_paths(kwargs, repo_root)
+
+    return lint(repo_root, paths, output_format, kwargs.get("css_mode", False))
+
+
+def lint(repo_root, paths, output_format, css_mode):
     error_count = defaultdict(int)
     last = None
 
     with open(os.path.join(repo_root, "lint.whitelist")) as f:
         whitelist, ignored_files = parse_whitelist(f)
 
-    if output_json:
-        output_errors = output_errors_json
-    else:
-        output_errors = output_errors_text
+    output_errors = {"json": output_errors_json,
+                     "markdown": output_errors_markdown,
+                     "normal": output_errors_text}[output_format]
 
-    def process_errors(path, errors):
+    def process_errors(errors):
         """
         Filters and prints the errors, and updates the ``error_count`` object.
 
-        :param path: the path of the file that contains the errors
         :param errors: a list of error tuples (error type, message, path, line number)
         :returns: ``None`` if there were no errors, or
                   a tuple of the error type and the path otherwise
         """
 
-        errors = filter_whitelist_errors(whitelist, path, errors)
+        errors = filter_whitelist_errors(whitelist, errors)
 
         if not errors:
             return None
@@ -512,32 +807,40 @@ def lint(repo_root, paths, output_json, css_mode):
 
         return (errors[-1][0], path)
 
-    for path in paths:
+    for path in paths[:]:
         abs_path = os.path.join(repo_root, path)
         if not os.path.exists(abs_path):
+            paths.remove(path)
             continue
 
         if any(fnmatch.fnmatch(path, file_match) for file_match in ignored_files):
+            paths.remove(path)
             continue
 
         errors = check_path(repo_root, path, css_mode)
-        last = process_errors(path, errors) or last
+        last = process_errors(errors) or last
 
         if not os.path.isdir(abs_path):
             with open(abs_path, 'rb') as f:
                 errors = check_file_contents(repo_root, path, f, css_mode)
-                last = process_errors(path, errors) or last
+                last = process_errors(errors) or last
 
-    if not output_json:
+    errors = check_all_paths(repo_root, paths, css_mode)
+    last = process_errors(errors) or last
+
+    if output_format in ("normal", "markdown"):
         output_error_count(error_count)
         if error_count:
-            print(ERROR_MSG % (last[0], last[1], last[0], last[1]))
+            for line in (ERROR_MSG % (last[0], last[1], last[0], last[1])).split("\n"):
+                logger.info(line)
     return sum(itervalues(error_count))
 
-path_lints = [check_path_length, check_worker_collision]
+path_lints = [check_path_length, check_worker_collision, check_ahem_copy]
+all_paths_lints = [check_css_globally_unique]
 file_lints = [check_regexp_line, check_parsed, check_python_ast, check_script_metadata]
 
 if __name__ == "__main__":
-    error_count = main()
+    args = create_parser().parse_args()
+    error_count = main(**vars(args))
     if error_count > 0:
         sys.exit(1)

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -463,21 +464,9 @@ CSS_PROP_DISPLAY(
 CSS_PROP_DISPLAY(
     -moz-appearance,
     _moz_appearance,
-    MozAppearance,
-    CSS_PROPERTY_PARSE_VALUE |
-        CSS_PROPERTY_ENABLED_IN_UA_SHEETS_AND_CHROME,
-    "layout.css.moz-appearance.enabled",
-    VARIANT_HK,
-    kMozAppearanceKTable,
-    CSS_PROP_NO_OFFSET,
-    eStyleAnimType_Discrete)
-CSS_PROP_DISPLAY(
-    appearance,
-    appearance,
-    Appearance,
-    CSS_PROPERTY_PARSE_VALUE |
-        CSS_PROPERTY_ENABLED_IN_UA_SHEETS_AND_CHROME,
-    "layout.css.appearance.enabled", // also controls -webkit-appearance
+    CSS_PROP_DOMPROP_PREFIXED(Appearance),
+    CSS_PROPERTY_PARSE_VALUE,
+    "",
     VARIANT_HK,
     kAppearanceKTable,
     CSS_PROP_NO_OFFSET,
@@ -804,11 +793,14 @@ CSS_PROP_BORDER(
     nullptr,
     offsetof(nsStyleBorder, mBorderBottomColor),
     eStyleAnimType_ComplexColor)
+#ifndef CSS_PROP_LIST_EXCLUDE_INTERNAL
 CSS_PROP_BORDER(
     -moz-border-bottom-colors,
     _moz_border_bottom_colors,
     CSS_PROP_DOMPROP_PREFIXED(BorderBottomColors),
     CSS_PROPERTY_PARSE_FUNCTION |
+        CSS_PROPERTY_INTERNAL |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS_AND_CHROME |
         CSS_PROPERTY_APPLIES_TO_FIRST_LETTER |
         CSS_PROPERTY_IGNORED_WHEN_COLORS_DISABLED,
     "",
@@ -816,6 +808,7 @@ CSS_PROP_BORDER(
     nullptr,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Discrete)
+#endif
 CSS_PROP_BORDER(
     border-bottom-left-radius,
     border_bottom_left_radius,
@@ -1068,11 +1061,14 @@ CSS_PROP_BORDER(
     nullptr,
     offsetof(nsStyleBorder, mBorderLeftColor),
     eStyleAnimType_ComplexColor)
+#ifndef CSS_PROP_LIST_EXCLUDE_INTERNAL
 CSS_PROP_BORDER(
     -moz-border-left-colors,
     _moz_border_left_colors,
     CSS_PROP_DOMPROP_PREFIXED(BorderLeftColors),
     CSS_PROPERTY_PARSE_FUNCTION |
+        CSS_PROPERTY_INTERNAL |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS_AND_CHROME |
         CSS_PROPERTY_APPLIES_TO_FIRST_LETTER |
         CSS_PROPERTY_IGNORED_WHEN_COLORS_DISABLED,
     "",
@@ -1080,6 +1076,7 @@ CSS_PROP_BORDER(
     nullptr,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Discrete)
+#endif
 CSS_PROP_BORDER(
     border-left-style,
     border_left_style,
@@ -1130,11 +1127,14 @@ CSS_PROP_BORDER(
     nullptr,
     offsetof(nsStyleBorder, mBorderRightColor),
     eStyleAnimType_ComplexColor)
+#ifndef CSS_PROP_LIST_EXCLUDE_INTERNAL
 CSS_PROP_BORDER(
     -moz-border-right-colors,
     _moz_border_right_colors,
     CSS_PROP_DOMPROP_PREFIXED(BorderRightColors),
     CSS_PROPERTY_PARSE_FUNCTION |
+        CSS_PROPERTY_INTERNAL |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS_AND_CHROME |
         CSS_PROPERTY_APPLIES_TO_FIRST_LETTER |
         CSS_PROPERTY_IGNORED_WHEN_COLORS_DISABLED,
     "",
@@ -1142,6 +1142,7 @@ CSS_PROP_BORDER(
     nullptr,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Discrete)
+#endif
 CSS_PROP_BORDER(
     border-right-style,
     border_right_style,
@@ -1204,11 +1205,14 @@ CSS_PROP_BORDER(
     nullptr,
     offsetof(nsStyleBorder, mBorderTopColor),
     eStyleAnimType_ComplexColor)
+#ifndef CSS_PROP_LIST_EXCLUDE_INTERNAL
 CSS_PROP_BORDER(
     -moz-border-top-colors,
     _moz_border_top_colors,
     CSS_PROP_DOMPROP_PREFIXED(BorderTopColors),
     CSS_PROPERTY_PARSE_FUNCTION |
+        CSS_PROPERTY_INTERNAL |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS_AND_CHROME |
         CSS_PROPERTY_APPLIES_TO_FIRST_LETTER |
         CSS_PROPERTY_IGNORED_WHEN_COLORS_DISABLED,
     "",
@@ -1216,6 +1220,7 @@ CSS_PROP_BORDER(
     nullptr,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Discrete)
+#endif
 CSS_PROP_BORDER(
     border-top-left-radius,
     border_top_left_radius,
@@ -1616,6 +1621,19 @@ CSS_PROP_CONTENT(
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Discrete)
 #ifndef CSS_PROP_LIST_EXCLUDE_INTERNAL
+CSS_PROP_SVG(
+    // Only intended to be used internally by Mozilla, so prefixed.
+    -moz-context-properties,
+    _moz_context_properties,
+    CSS_PROP_DOMPROP_PREFIXED(ContextProperties),
+    CSS_PROPERTY_PARSE_FUNCTION |
+        CSS_PROPERTY_VALUE_LIST_USES_COMMAS |
+        CSS_PROPERTY_INTERNAL,
+    "",
+    0,
+    nullptr,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_None)
 CSS_PROP_TEXT(
     -moz-control-character-visibility,
     _moz_control_character_visibility,
@@ -1723,7 +1741,7 @@ CSS_PROP_SVG(
     FillOpacity,
     CSS_PROPERTY_PARSE_VALUE,
     "",
-    VARIANT_HN | VARIANT_OPENTYPE_SVG_KEYWORD,
+    VARIANT_HN | VARIANT_KEYWORD,
     kContextOpacityKTable,
     offsetof(nsStyleSVG, mFillOpacity),
     eStyleAnimType_float)
@@ -1950,6 +1968,20 @@ CSS_PROP_FONT(
     nullptr,
     offsetof(nsStyleFont, mFont.sizeAdjust),
     eStyleAnimType_float)
+#ifndef CSS_PROP_LIST_EXCLUDE_INTERNAL
+CSS_PROP_FONT(
+    -moz-font-smoothing-background-color,
+    _moz_font_smoothing_background_color,
+    CSS_PROP_DOMPROP_PREFIXED(FontSmoothingBackgroundColor),
+    CSS_PROPERTY_INTERNAL |
+        CSS_PROPERTY_PARSE_VALUE |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS_AND_CHROME,
+    "",
+    VARIANT_HC,
+    nullptr,
+    offsetof(nsStyleFont, mFont.fontSmoothingBackgroundColor),
+    eStyleAnimType_Color)
+#endif // CSS_PROP_LIST_EXCLUDE_INTERNAL
 CSS_PROP_FONT(
     font-stretch,
     font_stretch,
@@ -2113,21 +2145,20 @@ CSS_PROP_SHORTHAND(
     grid,
     Grid,
     CSS_PROPERTY_PARSE_FUNCTION,
-    "layout.css.grid.enabled")
+    "")
 CSS_PROP_SHORTHAND(
     grid-area,
     grid_area,
     GridArea,
     CSS_PROPERTY_PARSE_FUNCTION,
-    "layout.css.grid.enabled")
+    "")
 CSS_PROP_POSITION(
     grid-auto-columns,
     grid_auto_columns,
     GridAutoColumns,
     CSS_PROPERTY_PARSE_FUNCTION |
-        CSS_PROPERTY_STORES_CALC |
-        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
-    "layout.css.grid.enabled",
+        CSS_PROPERTY_STORES_CALC,
+    "",
     0,
     kGridTrackBreadthKTable,
     CSS_PROP_NO_OFFSET,
@@ -2136,9 +2167,8 @@ CSS_PROP_POSITION(
     grid-auto-flow,
     grid_auto_flow,
     GridAutoFlow,
-    CSS_PROPERTY_PARSE_FUNCTION |
-        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
-    "layout.css.grid.enabled",
+    CSS_PROPERTY_PARSE_FUNCTION,
+    "",
     0,
     kGridAutoFlowKTable,
     CSS_PROP_NO_OFFSET,
@@ -2148,9 +2178,8 @@ CSS_PROP_POSITION(
     grid_auto_rows,
     GridAutoRows,
     CSS_PROPERTY_PARSE_FUNCTION |
-        CSS_PROPERTY_STORES_CALC |
-        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
-    "layout.css.grid.enabled",
+        CSS_PROPERTY_STORES_CALC,
+    "",
     0,
     kGridTrackBreadthKTable,
     CSS_PROP_NO_OFFSET,
@@ -2160,13 +2189,13 @@ CSS_PROP_SHORTHAND(
     grid_column,
     GridColumn,
     CSS_PROPERTY_PARSE_FUNCTION,
-    "layout.css.grid.enabled")
+    "")
 CSS_PROP_POSITION(
     grid-column-end,
     grid_column_end,
     GridColumnEnd,
     CSS_PROPERTY_PARSE_FUNCTION,
-    "layout.css.grid.enabled",
+    "",
     0,
     nullptr,
     CSS_PROP_NO_OFFSET,
@@ -2176,9 +2205,8 @@ CSS_PROP_POSITION(
     grid_column_gap,
     GridColumnGap,
     CSS_PROPERTY_PARSE_VALUE |
-        CSS_PROPERTY_VALUE_NONNEGATIVE |
-        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
-    "layout.css.grid.enabled",
+        CSS_PROPERTY_VALUE_NONNEGATIVE,
+    "",
     VARIANT_HLP | VARIANT_CALC,
     nullptr,
     offsetof(nsStylePosition, mGridColumnGap),
@@ -2188,7 +2216,7 @@ CSS_PROP_POSITION(
     grid_column_start,
     GridColumnStart,
     CSS_PROPERTY_PARSE_FUNCTION,
-    "layout.css.grid.enabled",
+    "",
     0,
     nullptr,
     CSS_PROP_NO_OFFSET,
@@ -2198,19 +2226,19 @@ CSS_PROP_SHORTHAND(
     grid_gap,
     GridGap,
     CSS_PROPERTY_PARSE_FUNCTION,
-    "layout.css.grid.enabled")
+    "")
 CSS_PROP_SHORTHAND(
     grid-row,
     grid_row,
     GridRow,
     CSS_PROPERTY_PARSE_FUNCTION,
-    "layout.css.grid.enabled")
+    "")
 CSS_PROP_POSITION(
     grid-row-end,
     grid_row_end,
     GridRowEnd,
     CSS_PROPERTY_PARSE_FUNCTION,
-    "layout.css.grid.enabled",
+    "",
     0,
     nullptr,
     CSS_PROP_NO_OFFSET,
@@ -2220,9 +2248,8 @@ CSS_PROP_POSITION(
     grid_row_gap,
     GridRowGap,
     CSS_PROPERTY_PARSE_VALUE |
-        CSS_PROPERTY_VALUE_NONNEGATIVE |
-        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
-    "layout.css.grid.enabled",
+        CSS_PROPERTY_VALUE_NONNEGATIVE,
+    "",
     VARIANT_HLP | VARIANT_CALC,
     nullptr,
     offsetof(nsStylePosition, mGridRowGap),
@@ -2232,7 +2259,7 @@ CSS_PROP_POSITION(
     grid_row_start,
     GridRowStart,
     CSS_PROPERTY_PARSE_FUNCTION,
-    "layout.css.grid.enabled",
+    "",
     0,
     nullptr,
     CSS_PROP_NO_OFFSET,
@@ -2242,14 +2269,13 @@ CSS_PROP_SHORTHAND(
     grid_template,
     GridTemplate,
     CSS_PROPERTY_PARSE_FUNCTION,
-    "layout.css.grid.enabled")
+    "")
 CSS_PROP_POSITION(
     grid-template-areas,
     grid_template_areas,
     GridTemplateAreas,
-    CSS_PROPERTY_PARSE_FUNCTION |
-        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
-    "layout.css.grid.enabled",
+    CSS_PROPERTY_PARSE_FUNCTION,
+    "",
     0,
     nullptr,
     CSS_PROP_NO_OFFSET,
@@ -2260,9 +2286,8 @@ CSS_PROP_POSITION(
     GridTemplateColumns,
     CSS_PROPERTY_PARSE_FUNCTION |
         CSS_PROPERTY_STORES_CALC |
-        CSS_PROPERTY_GETCS_NEEDS_LAYOUT_FLUSH |
-        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
-    "layout.css.grid.enabled",
+        CSS_PROPERTY_GETCS_NEEDS_LAYOUT_FLUSH,
+    "",
     0,
     kGridTrackBreadthKTable,
     CSS_PROP_NO_OFFSET,
@@ -2273,9 +2298,8 @@ CSS_PROP_POSITION(
     GridTemplateRows,
     CSS_PROPERTY_PARSE_FUNCTION |
         CSS_PROPERTY_STORES_CALC |
-        CSS_PROPERTY_GETCS_NEEDS_LAYOUT_FLUSH |
-        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
-    "layout.css.grid.enabled",
+        CSS_PROPERTY_GETCS_NEEDS_LAYOUT_FLUSH,
+    "",
     0,
     kGridTrackBreadthKTable,
     CSS_PROP_NO_OFFSET,
@@ -2692,19 +2716,6 @@ CSS_PROP_SVG(
     nullptr,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Discrete)
-#ifndef MOZ_ENABLE_MASK_AS_SHORTHAND
-CSS_PROP_SVGRESET(
-    mask,
-    mask,
-    Mask,
-    CSS_PROPERTY_PARSE_VALUE |
-      CSS_PROPERTY_CREATES_STACKING_CONTEXT,
-    "",
-    VARIANT_HUO,
-    nullptr,
-    CSS_PROP_NO_OFFSET,
-    eStyleAnimType_Discrete)
-#else
 CSS_PROP_SHORTHAND(
     mask,
     mask,
@@ -2823,7 +2834,6 @@ CSS_PROP_SVGRESET(
     kImageLayerSizeKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Custom)
-#endif // MOZ_ENABLE_MASK_AS_SHORTHAND
 CSS_PROP_SVGRESET(
     mask-type,
     mask_type,
@@ -3246,10 +3256,30 @@ CSS_PROP_SHORTHAND(
     Overflow,
     CSS_PROPERTY_PARSE_FUNCTION,
     "")
-CSS_PROP_DISPLAY(
+CSS_PROP_SHORTHAND(
     overflow-clip-box,
     overflow_clip_box,
     OverflowClipBox,
+    CSS_PROPERTY_PARSE_FUNCTION |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS |
+        CSS_PROPERTY_APPLIES_TO_PLACEHOLDER,
+    "layout.css.overflow-clip-box.enabled")
+CSS_PROP_DISPLAY(
+    overflow-clip-box-block,
+    overflow_clip_box_block,
+    OverflowClipBoxBlock,
+    CSS_PROPERTY_PARSE_VALUE |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS |
+        CSS_PROPERTY_APPLIES_TO_PLACEHOLDER,
+    "layout.css.overflow-clip-box.enabled",
+    VARIANT_HK,
+    kOverflowClipBoxKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_Discrete)
+CSS_PROP_DISPLAY(
+    overflow-clip-box-inline,
+    overflow_clip_box_inline,
+    OverflowClipBoxInline,
     CSS_PROPERTY_PARSE_VALUE |
         CSS_PROPERTY_ENABLED_IN_UA_SHEETS |
         CSS_PROPERTY_APPLIES_TO_PLACEHOLDER,
@@ -3655,6 +3685,32 @@ CSS_PROP_DISPLAY(
     kScrollBehaviorKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Discrete)
+CSS_PROP_SHORTHAND(
+    overscroll-behavior,
+    overscroll_behavior,
+    OverscrollBehavior,
+    CSS_PROPERTY_PARSE_FUNCTION,
+    "layout.css.overscroll-behavior.enabled")
+CSS_PROP_DISPLAY(
+    overscroll-behavior-x,
+    overscroll_behavior_x,
+    OverscrollBehaviorX,
+    CSS_PROPERTY_PARSE_VALUE,
+    "layout.css.overscroll-behavior.enabled",
+    VARIANT_HK,
+    kOverscrollBehaviorKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_Discrete)
+CSS_PROP_DISPLAY(
+    overscroll-behavior-y,
+    overscroll_behavior_y,
+    OverscrollBehaviorY,
+    CSS_PROPERTY_PARSE_VALUE,
+    "layout.css.overscroll-behavior.enabled",
+    VARIANT_HK,
+    kOverscrollBehaviorKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_Discrete)
 CSS_PROP_DISPLAY(
     scroll-snap-coordinate,
     scroll_snap_coordinate,
@@ -3731,17 +3787,29 @@ CSS_PROP_DISPLAY(
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_Discrete)
 CSS_PROP_DISPLAY(
+    shape-image-threshold,
+    shape_image_threshold,
+    ShapeImageThreshold,
+    CSS_PROPERTY_PARSE_VALUE,
+    "layout.css.shape-outside.enabled",
+    VARIANT_HN,
+    nullptr,
+    offsetof(nsStyleDisplay, mShapeImageThreshold),
+    eStyleAnimType_float)
+CSS_PROP_DISPLAY(
     shape-outside,
     shape_outside,
     ShapeOutside,
     CSS_PROPERTY_PARSE_VALUE |
         CSS_PROPERTY_VALUE_PARSER_FUNCTION |
-        CSS_PROPERTY_APPLIES_TO_FIRST_LETTER,
+        CSS_PROPERTY_APPLIES_TO_FIRST_LETTER |
+        CSS_PROPERTY_START_IMAGE_LOADS |
+        CSS_PROPERTY_STORES_CALC,
     "layout.css.shape-outside.enabled",
     0,
     nullptr,
     CSS_PROP_NO_OFFSET,
-    eStyleAnimType_Discrete) // FIXME: Bug 1289049 for adding animation support
+    eStyleAnimType_Custom)
 CSS_PROP_SVG(
     shape-rendering,
     shape_rendering,
@@ -3868,7 +3936,7 @@ CSS_PROP_SVG(
     StrokeOpacity,
     CSS_PROPERTY_PARSE_VALUE,
     "",
-    VARIANT_HN | VARIANT_OPENTYPE_SVG_KEYWORD,
+    VARIANT_HN | VARIANT_KEYWORD,
     kContextOpacityKTable,
     offsetof(nsStyleSVG, mStrokeOpacity),
     eStyleAnimType_float)
@@ -4493,6 +4561,41 @@ CSS_PROP_UIRESET(
     kWindowShadowKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
+CSS_PROP_UIRESET(
+    -moz-window-opacity,
+    _moz_window_opacity,
+    CSS_PROP_DOMPROP_PREFIXED(WindowOpacity),
+    CSS_PROPERTY_INTERNAL | CSS_PROPERTY_PARSE_VALUE,
+    "",
+    VARIANT_HN,
+    nullptr,
+    offsetof(nsStyleUIReset, mWindowOpacity),
+    eStyleAnimType_float)
+CSS_PROP_UIRESET(
+    -moz-window-transform,
+    _moz_window_transform,
+    CSS_PROP_DOMPROP_PREFIXED(WindowTransform),
+    CSS_PROPERTY_INTERNAL |
+        CSS_PROPERTY_PARSE_FUNCTION |
+        CSS_PROPERTY_GETCS_NEEDS_LAYOUT_FLUSH,
+    "",
+    0,
+    nullptr,
+    offsetof(nsStyleUIReset, mSpecifiedWindowTransform),
+    eStyleAnimType_Custom)
+CSS_PROP_UIRESET(
+    -moz-window-transform-origin,
+    _moz_window_transform_origin,
+    CSS_PROP_DOMPROP_PREFIXED(WindowTransformOrigin),
+    CSS_PROPERTY_INTERNAL |
+        CSS_PROPERTY_PARSE_FUNCTION |
+        CSS_PROPERTY_STORES_CALC |
+        CSS_PROPERTY_GETCS_NEEDS_LAYOUT_FLUSH,
+    "",
+    0,
+    kImageLayerPositionKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_Custom)
 #endif // CSS_PROP_LIST_EXCLUDE_INTERNAL
 CSS_PROP_TEXT(
     word-break,

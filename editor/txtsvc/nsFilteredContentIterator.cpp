@@ -4,12 +4,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/mozalloc.h"
+#include "mozilla/Move.h"
 #include "nsComponentManagerUtils.h"
 #include "nsContentUtils.h"
 #include "nsDebug.h"
 #include "nsError.h"
 #include "nsFilteredContentIterator.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsIContent.h"
 #include "nsIContentIterator.h"
 #include "nsIDOMNode.h"
@@ -18,6 +19,8 @@
 #include "nsISupportsUtils.h"
 #include "nsITextServicesFilter.h"
 #include "nsRange.h"
+
+using namespace mozilla;
 
 //------------------------------------------------------------
 nsFilteredContentIterator::nsFilteredContentIterator(nsITextServicesFilter* aFilter) :
@@ -78,17 +81,66 @@ nsFilteredContentIterator::Init(nsINode* aRoot)
 nsresult
 nsFilteredContentIterator::Init(nsIDOMRange* aRange)
 {
-  NS_ENSURE_TRUE(mPreIterator, NS_ERROR_FAILURE);
-  NS_ENSURE_TRUE(mIterator, NS_ERROR_FAILURE);
-  NS_ENSURE_ARG_POINTER(aRange);
-  mIsOutOfRange    = false;
-  mDirection       = eForward;
+  if (NS_WARN_IF(!aRange)) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  nsRange* range = static_cast<nsRange*>(aRange);
+  if (NS_WARN_IF(!range->IsPositioned())) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  mRange = range->CloneRange();
+
+  return InitWithRange();
+}
+
+//------------------------------------------------------------
+nsresult
+nsFilteredContentIterator::Init(nsINode* aStartContainer, uint32_t aStartOffset,
+                                nsINode* aEndContainer, uint32_t aEndOffset)
+{
+  return Init(RawRangeBoundary(aStartContainer, aStartOffset),
+              RawRangeBoundary(aEndContainer, aEndOffset));
+}
+
+nsresult
+nsFilteredContentIterator::Init(const RawRangeBoundary& aStart,
+                                const RawRangeBoundary& aEnd)
+{
+  RefPtr<nsRange> range;
+  nsresult rv = nsRange::CreateRange(aStart, aEnd, getter_AddRefs(range));
+  if (NS_WARN_IF(NS_FAILED(rv)) || NS_WARN_IF(!range) ||
+      NS_WARN_IF(!range->IsPositioned())) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  MOZ_ASSERT(range->StartRef() == aStart);
+  MOZ_ASSERT(range->EndRef() == aEnd);
+
+  mRange = Move(range);
+
+  return InitWithRange();
+}
+
+nsresult
+nsFilteredContentIterator::InitWithRange()
+{
+  MOZ_ASSERT(mRange);
+  MOZ_ASSERT(mRange->IsPositioned());
+
+  if (NS_WARN_IF(!mPreIterator) || NS_WARN_IF(!mIterator)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  mIsOutOfRange = false;
+  mDirection = eForward;
   mCurrentIterator = mPreIterator;
 
-  mRange = static_cast<nsRange*>(aRange)->CloneRange();
-
   nsresult rv = mPreIterator->Init(mRange);
-  NS_ENSURE_SUCCESS(rv, rv);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
   return mIterator->Init(mRange);
 }
 
@@ -182,8 +234,8 @@ nsFilteredContentIterator::Last()
 // ContentToParentOffset: returns the content node's parent and offset.
 //
 static void
-ContentToParentOffset(nsIContent *aContent, nsIDOMNode **aParent,
-                      int32_t *aOffset)
+ContentToParentOffset(nsIContent* aContent, nsIContent** aParent,
+                      int32_t* aOffset)
 {
   if (!aParent || !aOffset)
     return;
@@ -194,14 +246,12 @@ ContentToParentOffset(nsIContent *aContent, nsIDOMNode **aParent,
   if (!aContent)
     return;
 
-  nsIContent* parent = aContent->GetParent();
-
+  nsCOMPtr<nsIContent> parent = aContent->GetParent();
   if (!parent)
     return;
 
   *aOffset = parent->IndexOf(aContent);
-
-  CallQueryInterface(parent, aParent);
+  parent.forget(aParent);
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -209,13 +259,13 @@ ContentToParentOffset(nsIContent *aContent, nsIDOMNode **aParent,
 // the traversal of the range in the specified mode.
 //
 static bool
-ContentIsInTraversalRange(nsIContent *aContent,   bool aIsPreMode,
-                          nsIDOMNode *aStartNode, int32_t aStartOffset,
-                          nsIDOMNode *aEndNode,   int32_t aEndOffset)
+ContentIsInTraversalRange(nsIContent* aContent, bool aIsPreMode,
+                          nsINode* aStartContainer, int32_t aStartOffset,
+                          nsINode* aEndContainer, int32_t aEndOffset)
 {
-  NS_ENSURE_TRUE(aStartNode && aEndNode && aContent, false);
+  NS_ENSURE_TRUE(aStartContainer && aEndContainer && aContent, false);
 
-  nsCOMPtr<nsIDOMNode> parentNode;
+  nsCOMPtr<nsIContent> parentNode;
   int32_t indx = 0;
 
   ContentToParentOffset(aContent, getter_AddRefs(parentNode), &indx);
@@ -225,9 +275,10 @@ ContentIsInTraversalRange(nsIContent *aContent,   bool aIsPreMode,
   if (!aIsPreMode)
     ++indx;
 
-  int32_t startRes = nsContentUtils::ComparePoints(aStartNode, aStartOffset,
-                                                   parentNode, indx);
-  int32_t endRes = nsContentUtils::ComparePoints(aEndNode, aEndOffset,
+  int32_t startRes =
+    nsContentUtils::ComparePoints(aStartContainer, aStartOffset,
+                                  parentNode, indx);
+  int32_t endRes = nsContentUtils::ComparePoints(aEndContainer, aEndOffset,
                                                  parentNode, indx);
   return (startRes <= 0) && (endRes >= 0);
 }
@@ -238,15 +289,11 @@ ContentIsInTraversalRange(nsRange* aRange, nsIDOMNode* aNextNode, bool aIsPreMod
   nsCOMPtr<nsIContent> content(do_QueryInterface(aNextNode));
   NS_ENSURE_TRUE(content && aRange, false);
 
-  nsCOMPtr<nsIDOMNode> sNode;
-  nsCOMPtr<nsIDOMNode> eNode;
-  int32_t sOffset;
-  int32_t eOffset;
-  aRange->GetStartContainer(getter_AddRefs(sNode));
-  aRange->GetStartOffset(&sOffset);
-  aRange->GetEndContainer(getter_AddRefs(eNode));
-  aRange->GetEndOffset(&eOffset);
-  return ContentIsInTraversalRange(content, aIsPreMode, sNode, sOffset, eNode, eOffset);
+  return ContentIsInTraversalRange(content, aIsPreMode,
+                                   aRange->GetStartContainer(),
+                                   static_cast<int32_t>(aRange->StartOffset()),
+                                   aRange->GetEndContainer(),
+                                   static_cast<int32_t>(aRange->EndOffset()));
 }
 
 //------------------------------------------------------------

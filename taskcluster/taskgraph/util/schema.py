@@ -115,6 +115,14 @@ def resolve_keyed_by(item, field, item_name, **extra_values):
         key = extra_values.get(keyed_by) if keyed_by in extra_values else item[keyed_by]
         alternatives = value.values()[0]
 
+        if len(alternatives) == 1 and 'default' in alternatives:
+            # Error out when only 'default' is specified as only alternatives,
+            # because we don't need to by-{keyed_by} there.
+            raise Exception(
+                "Keyed-by '{}' unnecessary with only value 'default' "
+                "found, when determining item '{}' in '{}'".format(
+                    keyed_by, field, item_name))
+
         matches = keymatch(alternatives, key)
         if len(matches) > 1:
             raise Exception(
@@ -129,12 +137,18 @@ def resolve_keyed_by(item, field, item_name, **extra_values):
             "No {} matching {!r} nor 'default' found while determining item {} in {}".format(
                 keyed_by, key, field, item_name))
 
+
 # Schemas for YAML files should use dashed identifiers by default.  If there are
 # components of the schema for which there is a good reason to use another format,
 # they can be whitelisted here.
 WHITELISTED_SCHEMA_IDENTIFIERS = [
     # upstream-artifacts are handed directly to scriptWorker, which expects interCaps
     lambda path: "[u'upstream-artifacts']" in path,
+    # bbb release promotion properties
+    lambda path: path.endswith("[u'build_number']"),
+    lambda path: path.endswith("[u'tuxedo_server_url']"),
+    lambda path: path.endswith("[u'release_promotion']"),
+    lambda path: path.endswith("[u'generate_bz2_blob']"),
 ]
 
 

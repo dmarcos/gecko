@@ -12,7 +12,6 @@ const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "LoginHelper",
                                   "resource://gre/modules/LoginHelper.jsm");
@@ -52,10 +51,10 @@ this.LoginManagerStorage_json.prototype = {
                                   "logins.json");
       this._store = new LoginStore(jsonPath);
 
-      return Task.spawn(function* () {
+      return (async () => {
         // Load the data asynchronously.
         this.log("Opening database at", this._store.path);
-        yield this._store.load();
+        await this._store.load();
 
         // The import from previous versions operates the first time
         // that this built-in storage back-end is used.  This may be
@@ -72,19 +71,19 @@ this.LoginManagerStorage_json.prototype = {
         // Import only happens asynchronously.
         let sqlitePath = OS.Path.join(OS.Constants.Path.profileDir,
                                       "signons.sqlite");
-        if (yield OS.File.exists(sqlitePath)) {
+        if (await OS.File.exists(sqlitePath)) {
           let loginImport = new LoginImport(this._store, sqlitePath);
           // Failures during import, for example due to a corrupt
           // file or a schema version that is too old, will not
           // prevent us from marking the operation as completed.
           // At the next startup, we will not try the import again.
-          yield loginImport.import().catch(Cu.reportError);
+          await loginImport.import().catch(Cu.reportError);
           this._store.saveSoon();
         }
 
         // We won't attempt import again on next startup.
         Services.prefs.setBoolPref("signon.importedFromSqlite", true);
-      }.bind(this)).catch(Cu.reportError);
+      })().catch(Cu.reportError);
     } catch (e) {
       this.log("Initialization failed:", e);
       throw new Error("Initialization failed");
@@ -114,8 +113,23 @@ this.LoginManagerStorage_json.prototype = {
     // Initialize the nsILoginMetaInfo fields, unless the caller gave us values
     loginClone.QueryInterface(Ci.nsILoginMetaInfo);
     if (loginClone.guid) {
-      if (!this._isGuidUnique(loginClone.guid))
-        throw new Error("specified GUID already exists");
+      let guid = loginClone.guid;
+      if (!this._isGuidUnique(guid)) {
+        // We have an existing GUID, but it's possible that entry is unable
+        // to be decrypted - if that's the case we remove the existing one
+        // and allow this one to be added.
+        let existing = this._searchLogins({guid})[0];
+        if (this._decryptLogins(existing).length) {
+          // Existing item is good, so it's an error to try and re-add it.
+          throw new Error("specified GUID already exists");
+        }
+        // find and remove the existing bad entry.
+        let foundIndex = this._store.data.logins.findIndex(l => l.guid == guid);
+        if (foundIndex == -1) {
+          throw new Error("can't find a matching GUID to remove");
+        }
+        this._store.data.logins.splice(foundIndex, 1);
+      }
     } else {
       loginClone.guid = gUUIDGenerator.generateUUID().toString();
     }

@@ -108,12 +108,8 @@ public:
   const std::string &GetVersion() const { return mVersion; }
   const std::string &GetArch() const { return mArch; }
 
-  void SetNativeDebugPath(nsString path) {
-    mDebugPath = path;
-  }
-
 private:
-  SharedLibrary() {}
+  SharedLibrary() : mStart{0}, mEnd{0}, mOffset{0} {}
 
   uintptr_t mStart;
   uintptr_t mEnd;
@@ -136,6 +132,8 @@ CompareAddresses(const SharedLibrary& first, const SharedLibrary& second)
 class SharedLibraryInfo {
 public:
   static SharedLibraryInfo GetInfoForSelf();
+  static void Initialize();
+
   SharedLibraryInfo() {}
 
   void AddSharedLibrary(SharedLibrary entry)

@@ -36,7 +36,7 @@ class EnvironmentCoordinate
         MOZ_ASSERT(JOF_OPTYPE(JSOp(*pc)) == JOF_ENVCOORD);
     }
 
-    EnvironmentCoordinate() {}
+    EnvironmentCoordinate() = default;
 
     void setHops(uint32_t hops) {
         MOZ_ASSERT(hops < ENVCOORD_HOPS_LIMIT);
@@ -76,10 +76,12 @@ enum class DeclarationKind : uint8_t
     ForOfVar,
     Let,
     Const,
+    Class, // Handled as same as `let` after parsing.
     Import,
     BodyLevelFunction,
     ModuleBodyLevelFunction,
     LexicalFunction,
+    SloppyLexicalFunction,
     VarForAnnexBLexicalFunction,
     SimpleCatchParameter,
     CatchParameter
@@ -102,7 +104,9 @@ DeclarationKindToBindingKind(DeclarationKind kind)
         return BindingKind::Var;
 
       case DeclarationKind::Let:
+      case DeclarationKind::Class:
       case DeclarationKind::LexicalFunction:
+      case DeclarationKind::SloppyLexicalFunction:
       case DeclarationKind::SimpleCatchParameter:
       case DeclarationKind::CatchParameter:
         return BindingKind::Let;

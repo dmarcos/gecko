@@ -92,38 +92,49 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
     Address ToType(Address base) {
         return ToType(Operand(base)).toAddress();
     }
-    void moveValue(const Value& val, Register type, Register data) {
-        movl(Imm32(val.toNunboxTag()), type);
-        if (val.isGCThing())
-            movl(ImmGCPtr(val.toGCThing()), data);
-        else
-            movl(Imm32(val.toNunboxPayload()), data);
-    }
-    void moveValue(const Value& val, const ValueOperand& dest) {
-        moveValue(val, dest.typeReg(), dest.payloadReg());
-    }
-    void moveValue(const ValueOperand& src, const ValueOperand& dest) {
-        Register s0 = src.typeReg(), d0 = dest.typeReg(),
-                 s1 = src.payloadReg(), d1 = dest.payloadReg();
 
-        // Either one or both of the source registers could be the same as a
-        // destination register.
-        if (s1 == d0) {
-            if (s0 == d1) {
-                // If both are, this is just a swap of two registers.
-                xchgl(d0, d1);
-                return;
-            }
-            // If only one is, copy that source first.
-            mozilla::Swap(s0, s1);
-            mozilla::Swap(d0, d1);
-        }
-
-        if (s0 != d0)
-            movl(s0, d0);
-        if (s1 != d1)
-            movl(s1, d1);
+    template <typename T>
+    void add64(const T& address, Register64 dest) {
+        addl(Operand(LowWord(address)), dest.low);
+        adcl(Operand(HighWord(address)), dest.high);
     }
+    template <typename T>
+    void sub64(const T& address, Register64 dest) {
+        subl(Operand(LowWord(address)), dest.low);
+        sbbl(Operand(HighWord(address)), dest.high);
+    }
+    template <typename T>
+    void and64(const T& address, Register64 dest) {
+        andl(Operand(LowWord(address)), dest.low);
+        andl(Operand(HighWord(address)), dest.high);
+    }
+    template <typename T>
+    void or64(const T& address, Register64 dest) {
+        orl(Operand(LowWord(address)), dest.low);
+        orl(Operand(HighWord(address)), dest.high);
+    }
+    template <typename T>
+    void xor64(const T& address, Register64 dest) {
+        xorl(Operand(LowWord(address)), dest.low);
+        xorl(Operand(HighWord(address)), dest.high);
+    }
+
+    // Here, `value` is an address to an Int64 because we don't have enough
+    // registers for all the operands.  It is allowed to be SP-relative.
+    template <typename T, typename U>
+    void atomicFetchAdd64(const T& value, const U& address, Register64 temp, Register64 output);
+
+    template <typename T, typename U>
+    void atomicFetchSub64(const T& value, const U& address, Register64 temp, Register64 output);
+
+    template <typename T, typename U>
+    void atomicFetchAnd64(const T& value, const U& address, Register64 temp, Register64 output);
+
+    template <typename T, typename U>
+    void atomicFetchOr64(const T& value, const U& address, Register64 temp, Register64 output);
+
+    template <typename T, typename U>
+    void atomicFetchXor64(const T& value, const U& address, Register64 temp, Register64 output);
 
     /////////////////////////////////////////////////////////////////
     // X86/X64-common interface.
@@ -446,6 +457,11 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
         cmp32(tagOf(address), ImmTag(JSVAL_TAG_BOOLEAN));
         return cond;
     }
+    Condition testString(Condition cond, const Address& address) {
+        MOZ_ASSERT(cond == Equal || cond == NotEqual);
+        cmp32(tagOf(address), ImmTag(JSVAL_TAG_STRING));
+        return cond;
+    }
     Condition testString(Condition cond, const BaseIndex& address) {
         MOZ_ASSERT(cond == Equal || cond == NotEqual);
         cmp32(tagOf(address), ImmTag(JSVAL_TAG_STRING));
@@ -614,10 +630,10 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
     void load32(AbsoluteAddress address, Register dest) {
         movl(Operand(address), dest);
     }
-    void load64(const Address& address, Register64 dest) {
-        movl(Operand(Address(address.base, address.offset + INT64LOW_OFFSET)), dest.low);
-        int32_t highOffset = (address.offset < 0) ? -int32_t(INT64HIGH_OFFSET) : INT64HIGH_OFFSET;
-        movl(Operand(Address(address.base, address.offset + highOffset)), dest.high);
+    template <typename T>
+    void load64(const T& address, Register64 dest) {
+        movl(Operand(LowWord(address)), dest.low);
+        movl(Operand(HighWord(address)), dest.high);
     }
     template <typename T>
     void storePtr(ImmWord imm, T address) {
@@ -649,28 +665,74 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
     void store16(Register src, AbsoluteAddress address) {
         movw(src, Operand(address));
     }
-    void store64(Register64 src, Address address) {
-        movl(src.low, Operand(Address(address.base, address.offset + INT64LOW_OFFSET)));
-        movl(src.high, Operand(Address(address.base, address.offset + INT64HIGH_OFFSET)));
+    template <typename T>
+    void store64(Register64 src, const T& address) {
+        movl(src.low, Operand(LowWord(address)));
+        movl(src.high, Operand(HighWord(address)));
     }
     void store64(Imm64 imm, Address address) {
-        movl(imm.low(), Operand(Address(address.base, address.offset + INT64LOW_OFFSET)));
-        movl(imm.hi(), Operand(Address(address.base, address.offset + INT64HIGH_OFFSET)));
+        movl(imm.low(), Operand(LowWord(address)));
+        movl(imm.hi(), Operand(HighWord(address)));
+    }
+
+    template <typename T>
+    void atomicLoad64(const T& address, Register64 temp, Register64 output) {
+        MOZ_ASSERT(temp.low == ebx);
+        MOZ_ASSERT(temp.high == ecx);
+        MOZ_ASSERT(output.high == edx);
+        MOZ_ASSERT(output.low == eax);
+
+        // In the event edx:eax matches what's in memory, ecx:ebx will be
+        // stored.  The two pairs must therefore have the same values.
+        movl(edx, ecx);
+        movl(eax, ebx);
+
+        lock_cmpxchg8b(edx, eax, ecx, ebx, Operand(address));
+    }
+
+    template <typename T>
+    void atomicExchange64(const T& address, Register64 value, Register64 output) {
+        MOZ_ASSERT(value.low == ebx);
+        MOZ_ASSERT(value.high == ecx);
+        MOZ_ASSERT(output.high == edx);
+        MOZ_ASSERT(output.low == eax);
+
+        // edx:eax has garbage initially, and that is the best we can do unless
+        // we can guess with high probability what's in memory.
+
+        Label again;
+        bind(&again);
+        lock_cmpxchg8b(edx, eax, ecx, ebx, Operand(address));
+        j(Assembler::Condition::NonZero, &again);
+    }
+
+    template <typename T>
+    void compareExchange64(const T& address, Register64 expected, Register64 replacement,
+                           Register64 output)
+    {
+        MOZ_ASSERT(expected == output);
+        MOZ_ASSERT(expected.high == edx);
+        MOZ_ASSERT(expected.low == eax);
+        MOZ_ASSERT(replacement.high == ecx);
+        MOZ_ASSERT(replacement.low == ebx);
+
+        lock_cmpxchg8b(edx, eax, ecx, ebx, Operand(address));
     }
 
     void setStackArg(Register reg, uint32_t arg) {
         movl(reg, Operand(esp, arg * sizeof(intptr_t)));
     }
 
-    // Note: this function clobbers the source register.
-    void boxDouble(FloatRegister src, const ValueOperand& dest) {
+    void boxDouble(FloatRegister src, const ValueOperand& dest, FloatRegister temp) {
         if (Assembler::HasSSE41()) {
             vmovd(src, dest.payloadReg());
             vpextrd(1, src, dest.typeReg());
         } else {
             vmovd(src, dest.payloadReg());
-            vpsrldq(Imm32(4), src, src);
-            vmovd(src, dest.typeReg());
+            if (src != temp)
+                moveDouble(src, temp);
+            vpsrldq(Imm32(4), temp, temp);
+            vmovd(temp, dest.typeReg());
         }
     }
     void boxNonDouble(JSValueType type, Register src, const ValueOperand& dest) {
@@ -852,7 +914,7 @@ class MacroAssemblerX86 : public MacroAssemblerX86Shared
 
   public:
     // Used from within an Exit frame to handle a pending exception.
-    void handleFailureWithHandlerTail(void* handler);
+    void handleFailureWithHandlerTail(void* handler, Label* profilerExitTail);
 
     // Instrumentation for entering and leaving the profiler.
     void profilerEnterFrame(Register framePtr, Register scratch);

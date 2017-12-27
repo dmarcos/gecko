@@ -136,7 +136,7 @@ add_task(function* () {
   // It seems that this test may be slow on Ubuntu builds running on ec2.
   requestLongerTimeout(2);
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let {
     getDisplayedRequests,
@@ -144,7 +144,7 @@ add_task(function* () {
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   let wait = waitForNetworkEvents(monitor, 9);
   loadCommonFrameScript();
@@ -154,21 +154,21 @@ add_task(function* () {
   EventUtils.sendMouseEvent({ type: "mousedown" },
     document.querySelectorAll(".request-list-item")[0]);
 
-  isnot(getSelectedRequest(gStore.getState()), null,
+  isnot(getSelectedRequest(store.getState()), null,
     "There should be a selected item in the requests menu.");
-  is(getSelectedIndex(gStore.getState()), 0,
+  is(getSelectedIndex(store.getState()), 0,
     "The first item should be selected in the requests menu.");
   is(!!document.querySelector(".network-details-panel"), true,
     "The network details panel should be visible after toggle button was pressed.");
 
   testFilterButtons(monitor, "all");
-  testContents([1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  yield testContents([1, 1, 1, 1, 1, 1, 1, 1, 1]);
 
   info("Testing html filtering.");
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector(".requests-list-filter-html-button"));
   testFilterButtons(monitor, "html");
-  testContents([1, 0, 0, 0, 0, 0, 0, 0, 0]);
+  yield testContents([1, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   info("Performing more requests.");
   wait = waitForNetworkEvents(monitor, 9);
@@ -177,7 +177,7 @@ add_task(function* () {
 
   info("Testing html filtering again.");
   testFilterButtons(monitor, "html");
-  testContents([1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+  yield testContents([1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   info("Performing more requests.");
   wait = waitForNetworkEvents(monitor, 9);
@@ -186,15 +186,15 @@ add_task(function* () {
 
   info("Testing html filtering again.");
   testFilterButtons(monitor, "html");
-  testContents([1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
-                0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+  yield testContents([1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+                      0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   info("Resetting filters.");
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector(".requests-list-filter-all-button"));
   testFilterButtons(monitor, "all");
-  testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  yield testContents([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
 
   yield teardown(monitor);
 
@@ -205,16 +205,24 @@ add_task(function* () {
     return getSortedRequests(state).findIndex(r => r.id === state.requests.selectedId);
   }
 
-  function testContents(visibility) {
-    isnot(getSelectedRequest(gStore.getState()), null,
+  function* testContents(visibility) {
+    let requestItems = document.querySelectorAll(".request-list-item");
+    for (let requestItem of requestItems) {
+      requestItem.scrollIntoView();
+      let requestsListStatus = requestItem.querySelector(".requests-list-status");
+      EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+      yield waitUntil(() => requestsListStatus.title);
+    }
+
+    isnot(getSelectedRequest(store.getState()), null,
       "There should still be a selected item after filtering.");
-    is(getSelectedIndex(gStore.getState()), 0,
+    is(getSelectedIndex(store.getState()), 0,
       "The first item should be still selected after filtering.");
     is(!!document.querySelector(".network-details-panel"), true,
       "The network details panel should still be visible after filtering.");
 
-    const items = getSortedRequests(gStore.getState());
-    const visibleItems = getDisplayedRequests(gStore.getState());
+    const items = getSortedRequests(store.getState());
+    const visibleItems = getDisplayedRequests(store.getState());
 
     is(items.size, visibility.length,
       "There should be a specific amount of items in the requests menu.");
@@ -235,8 +243,8 @@ add_task(function* () {
         if (visibility[j]) {
           verifyRequestItemTarget(
             document,
-            getDisplayedRequests(gStore.getState()),
-            getSortedRequests(gStore.getState()).get(i),
+            getDisplayedRequests(store.getState()),
+            getSortedRequests(store.getState()).get(i),
             method,
             url,
             data

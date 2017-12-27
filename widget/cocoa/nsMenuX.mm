@@ -36,6 +36,7 @@
 #include "nsIServiceManager.h"
 #include "nsXULPopupManager.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "mozilla/EventDispatcher.h"
 
 #include "jsapi.h"
 #include "nsIScriptGlobalObject.h"
@@ -154,12 +155,14 @@ nsMenuX::~nsMenuX()
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
 
-nsresult nsMenuX::Create(nsMenuObjectX* aParent, nsMenuGroupOwnerX* aMenuGroupOwner, nsIContent* aNode)
+nsresult nsMenuX::Create(nsMenuObjectX* aParent, nsMenuGroupOwnerX* aMenuGroupOwner, nsIContent* aContent)
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
-  mContent = aNode;
-  mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::label, mLabel);
+  mContent = aContent;
+  if (mContent->IsElement()) {
+    mContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::label, mLabel);
+  }
   mNativeMenu = CreateMenuWithGeckoString(mLabel);
 
   // register this menu to be notified when changes are made to our content object
@@ -338,7 +341,10 @@ nsresult nsMenuX::RemoveAll()
 nsEventStatus nsMenuX::MenuOpened()
 {
   // Open the node.
-  mContent->SetAttr(kNameSpaceID_None, nsGkAtoms::open, NS_LITERAL_STRING("true"), true);
+  if (mContent->IsElement()) {
+    mContent->AsElement()->SetAttr(kNameSpaceID_None, nsGkAtoms::open,
+                                   NS_LITERAL_STRING("true"), true);
+  }
 
   // Fire a handler. If we're told to stop, don't build the menu at all
   bool keepProcessing = OnOpen();
@@ -361,7 +367,7 @@ nsEventStatus nsMenuX::MenuOpened()
   nsCOMPtr<nsIContent> popupContent;
   GetMenuPopupContent(getter_AddRefs(popupContent));
   nsIContent* dispatchTo = popupContent ? popupContent : mContent;
-  dispatchTo->DispatchDOMEvent(&event, nullptr, nullptr, &status);
+  EventDispatcher::Dispatch(dispatchTo, nullptr, &event, nullptr, &status);
 
   return nsEventStatus_eConsumeNoDefault;
 }
@@ -376,7 +382,9 @@ void nsMenuX::MenuClosed()
     if (mNeedsRebuild)
       mConstructed = false;
 
-    mContent->UnsetAttr(kNameSpaceID_None, nsGkAtoms::open, true);
+    if (mContent->IsElement()) {
+      mContent->AsElement()->UnsetAttr(kNameSpaceID_None, nsGkAtoms::open, true);
+    }
 
     nsEventStatus status = nsEventStatus_eIgnore;
     WidgetMouseEvent event(true, eXULPopupHidden, nullptr,
@@ -385,7 +393,7 @@ void nsMenuX::MenuClosed()
     nsCOMPtr<nsIContent> popupContent;
     GetMenuPopupContent(getter_AddRefs(popupContent));
     nsIContent* dispatchTo = popupContent ? popupContent : mContent;
-    dispatchTo->DispatchDOMEvent(&event, nullptr, nullptr, &status);
+    EventDispatcher::Dispatch(dispatchTo, nullptr, &event, nullptr, &status);
 
     mDestroyHandlerCalled = true;
     mConstructed = false;
@@ -574,7 +582,7 @@ bool nsMenuX::OnOpen()
 
   nsresult rv = NS_OK;
   nsIContent* dispatchTo = popupContent ? popupContent : mContent;
-  rv = dispatchTo->DispatchDOMEvent(&event, nullptr, nullptr, &status);
+  rv = EventDispatcher::Dispatch(dispatchTo, nullptr, &event, nullptr, &status);
   if (NS_FAILED(rv) || status == nsEventStatus_eConsumeNoDefault)
     return false;
 
@@ -612,7 +620,7 @@ bool nsMenuX::OnClose()
 
   nsresult rv = NS_OK;
   nsIContent* dispatchTo = popupContent ? popupContent : mContent;
-  rv = dispatchTo->DispatchDOMEvent(&event, nullptr, nullptr, &status);
+  rv = EventDispatcher::Dispatch(dispatchTo, nullptr, &event, nullptr, &status);
 
   mDestroyHandlerCalled = true;
 
@@ -634,10 +642,9 @@ void nsMenuX::GetMenuPopupContent(nsIContent** aResult)
   // Check to see if we are a "menupopup" node (if we are a native menu).
   {
     int32_t dummy;
-    nsCOMPtr<nsIAtom> tag = mContent->OwnerDoc()->BindingManager()->ResolveTag(mContent, &dummy);
+    RefPtr<nsAtom> tag = mContent->OwnerDoc()->BindingManager()->ResolveTag(mContent, &dummy);
     if (tag == nsGkAtoms::menupopup) {
-      *aResult = mContent;
-      NS_ADDREF(*aResult);
+      NS_ADDREF(*aResult = mContent);
       return;
     }
   }
@@ -649,7 +656,7 @@ void nsMenuX::GetMenuPopupContent(nsIContent** aResult)
   for (uint32_t i = 0; i < count; i++) {
     int32_t dummy;
     nsIContent *child = mContent->GetChildAt(i);
-    nsCOMPtr<nsIAtom> tag = child->OwnerDoc()->BindingManager()->ResolveTag(child, &dummy);
+    RefPtr<nsAtom> tag = child->OwnerDoc()->BindingManager()->ResolveTag(child, &dummy);
     if (tag == nsGkAtoms::menupopup) {
       *aResult = child;
       NS_ADDREF(*aResult);
@@ -680,7 +687,7 @@ bool nsMenuX::IsXULHelpMenu(nsIContent* aMenuContent)
 //
 
 void nsMenuX::ObserveAttributeChanged(nsIDocument *aDocument, nsIContent *aContent,
-                                      nsIAtom *aAttribute)
+                                      nsAtom *aAttribute)
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
 
@@ -695,7 +702,7 @@ void nsMenuX::ObserveAttributeChanged(nsIDocument *aDocument, nsIContent *aConte
                                       nsGkAtoms::_true, eCaseMatters));
   }
   else if (aAttribute == nsGkAtoms::label) {
-    mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::label, mLabel);
+    mContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::label, mLabel);
 
     // invalidate my parent. If we're a submenu parent, we have to rebuild
     // the parent menu in order for the changes to be picked up. If we're
@@ -760,8 +767,10 @@ void nsMenuX::ObserveAttributeChanged(nsIDocument *aDocument, nsIContent *aConte
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
 
-void nsMenuX::ObserveContentRemoved(nsIDocument *aDocument, nsIContent *aChild,
-                                    int32_t aIndexInContainer)
+void nsMenuX::ObserveContentRemoved(nsIDocument* aDocument,
+                                    nsIContent* aContainer,
+                                    nsIContent* aChild,
+                                    nsIContent* aPreviousSibling)
 {
   if (gConstructingMenu)
     return;

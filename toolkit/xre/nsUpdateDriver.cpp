@@ -24,6 +24,7 @@
 #include "mozilla/Preferences.h"
 #include "nsPrintfCString.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/Printf.h"
 
 #ifdef XP_MACOSX
 #include "nsILocalFileMac.h"
@@ -82,7 +83,8 @@ UpdateDriverSetupMacCommandLine(int& argc, char**& argv, bool restart)
   Monitor monitor("nsUpdateDriver SetupMacCommandLine");
 
   nsresult rv = NS_DispatchToMainThread(
-    NS_NewRunnableFunction([&argc, &argv, restart, &monitor]() -> void
+    NS_NewRunnableFunction("UpdateDriverSetupMacCommandLine",
+                           [&argc, &argv, restart, &monitor]() -> void
     {
       CommandLineServiceMac::SetupMacCommandLine(argc, argv, restart);
       MonitorAutoLock(monitor).Notify();
@@ -159,37 +161,8 @@ GetInstallDirPath(nsIFile *appDir, nsACString& installDirPath)
   return NS_OK;
 }
 
-#if defined(XP_MACOSX)
-// This is a copy of OS X's XRE_GetBinaryPath from nsAppRunner.cpp with the
-// gBinaryPath check removed so that the updater can reload the stub executable
-// instead of xulrunner-bin. See bug 349737.
-static nsresult
-GetXULRunnerStubPath(const char* argv0, nsIFile* *aResult)
-{
-  // Works even if we're not bundled.
-  CFBundleRef appBundle = ::CFBundleGetMainBundle();
-  if (!appBundle)
-    return NS_ERROR_FAILURE;
-
-  CFURLRef bundleURL = ::CFBundleCopyExecutableURL(appBundle);
-  if (!bundleURL)
-    return NS_ERROR_FAILURE;
-
-  nsCOMPtr<nsILocalFileMac> lfm;
-  nsresult rv = NS_NewLocalFileWithCFURL(bundleURL, true, getter_AddRefs(lfm));
-
-  ::CFRelease(bundleURL);
-
-  if (NS_FAILED(rv))
-    return rv;
-
-  lfm.forget(aResult);
-  return NS_OK;
-}
-#endif /* XP_MACOSX */
-
 static bool
-GetFile(nsIFile *dir, const nsCSubstring &name, nsCOMPtr<nsIFile> &result)
+GetFile(nsIFile* dir, const nsACString& name, nsCOMPtr<nsIFile>& result)
 {
   nsresult rv;
 
@@ -406,18 +379,15 @@ AppendToLibPath(const char *pathToAppend)
 {
   char *pathValue = getenv(LD_LIBRARY_PATH_ENVVAR_NAME);
   if (nullptr == pathValue || '\0' == *pathValue) {
-    char *s = PR_smprintf("%s=%s", LD_LIBRARY_PATH_ENVVAR_NAME, pathToAppend);
+    // Leak the string because that is required by PR_SetEnv.
+    char *s = Smprintf("%s=%s", LD_LIBRARY_PATH_ENVVAR_NAME, pathToAppend).release();
     PR_SetEnv(s);
   } else if (!strstr(pathValue, pathToAppend)) {
-    char *s = PR_smprintf("%s=%s" PATH_SEPARATOR "%s",
-                    LD_LIBRARY_PATH_ENVVAR_NAME, pathToAppend, pathValue);
+    // Leak the string because that is required by PR_SetEnv.
+    char *s = Smprintf("%s=%s" PATH_SEPARATOR "%s",
+                       LD_LIBRARY_PATH_ENVVAR_NAME, pathToAppend, pathValue).release();
     PR_SetEnv(s);
   }
-
-  // The memory used by PR_SetEnv is not copied to the environment on all
-  // platform, it can be used by reference directly. So we purposely do not
-  // call PR_smprintf_free on s.  Subsequent calls to PR_SetEnv will free
-  // the old memory first.
 }
 #endif
 
@@ -538,13 +508,7 @@ ApplyUpdate(nsIFile *greDir, nsIFile *updateDir, nsIFile *appDir, int appArgc,
     // Get the application file path used by the updater to restart the
     // application after the update has finished.
     nsCOMPtr<nsIFile> appFile;
-#if defined(XP_MACOSX)
-    // On OS X we need to pass the location of the xulrunner-stub executable
-    // rather than xulrunner-bin. See bug 349737.
-    GetXULRunnerStubPath(appArgv[0], getter_AddRefs(appFile));
-#else
-    XRE_GetBinaryPath(appArgv[0], getter_AddRefs(appFile));
-#endif
+    XRE_GetBinaryPath(getter_AddRefs(appFile));
     if (!appFile) {
       return;
     }
@@ -592,7 +556,6 @@ ApplyUpdate(nsIFile *greDir, nsIFile *updateDir, nsIFile *appDir, int appArgc,
       return;
     }
     applyToDirPath = NS_ConvertUTF16toUTF8(applyToDirPathW);
-    rv = updatedDir->GetNativePath(applyToDirPath);
 #else
     rv = updatedDir->GetNativePath(applyToDirPath);
 #endif
@@ -703,15 +666,26 @@ ApplyUpdate(nsIFile *greDir, nsIFile *updateDir, nsIFile *appDir, int appArgc,
   }
 #elif defined(XP_MACOSX)
   UpdateDriverSetupMacCommandLine(argc, argv, restart);
-  // LaunchChildMac uses posix_spawnp and prefers the current
-  // architecture when launching. It doesn't require a
-  // null-terminated string but it doesn't matter if we pass one.
+  // We need to detect whether elevation is required for this update. This can
+  // occur when an admin user installs the application, but another admin
+  // user attempts to update (see bug 394984).
+  if (restart && !IsRecursivelyWritable(installDirPath.get())) {
+    if (!LaunchElevatedUpdate(argc, argv, outpid)) {
+      LOG(("Failed to launch elevated update!"));
+      exit(1);
+    }
+    exit(0);
+  }
+
   if (isStaged) {
     // Launch the updater to replace the installation with the staged updated.
     LaunchChildMac(argc, argv);
   } else {
     // Launch the updater to either stage or apply an update.
     LaunchChildMac(argc, argv, outpid);
+  }
+  if (restart) {
+    exit(0);
   }
 #else
   if (isStaged) {
@@ -798,6 +772,16 @@ ProcessUpdates(nsIFile *greDir, nsIFile *appDir, nsIFile *updRootDir,
     return rv;
   }
 
+  // Return early since there isn't a valid update when the update application
+  // version file doesn't exist or if the update's application version is less
+  // than the current application version. The cleanup of the update will happen
+  // during post update processing in nsUpdateService.js.
+  nsCOMPtr<nsIFile> versionFile;
+  if (!GetVersionFile(updatesDir, versionFile) ||
+      IsOlderVersion(versionFile, appVersion)) {
+    return NS_OK;
+  }
+
   nsCOMPtr<nsIFile> statusFile;
   UpdateStatus status = GetUpdateStatus(updatesDir, statusFile);
   switch (status) {
@@ -816,16 +800,7 @@ ProcessUpdates(nsIFile *greDir, nsIFile *appDir, nsIFile *updRootDir,
   }
   case ePendingUpdate:
   case ePendingService: {
-    nsCOMPtr<nsIFile> versionFile;
-    // Remove the update if the update application version file doesn't exist
-    // or if the update's application version is less than the current
-    // application version.
-    if (!GetVersionFile(updatesDir, versionFile) ||
-        IsOlderVersion(versionFile, appVersion)) {
-      updatesDir->Remove(true);
-    } else {
-      ApplyUpdate(greDir, updatesDir, appDir, argc, argv, restart, false, pid);
-    }
+    ApplyUpdate(greDir, updatesDir, appDir, argc, argv, restart, false, pid);
     break;
   }
   case eAppliedUpdate:
@@ -908,7 +883,10 @@ nsUpdateProcessor::ProcessUpdate(nsIUpdate* aUpdate)
   mInfo.mAppVersion = appVersion;
 
   MOZ_ASSERT(NS_IsMainThread(), "not main thread");
-  nsCOMPtr<nsIRunnable> r = NewRunnableMethod(this, &nsUpdateProcessor::StartStagedUpdate);
+  nsCOMPtr<nsIRunnable> r =
+    NewRunnableMethod("nsUpdateProcessor::StartStagedUpdate",
+                      this,
+                      &nsUpdateProcessor::StartStagedUpdate);
   return NS_NewNamedThread("Update Watcher", getter_AddRefs(mProcessWatcher),
                            r);
 }
@@ -932,13 +910,19 @@ nsUpdateProcessor::StartStagedUpdate()
 
   if (mUpdaterPID) {
     // Track the state of the updater process while it is staging an update.
-    rv = NS_DispatchToCurrentThread(NewRunnableMethod(this, &nsUpdateProcessor::WaitForProcess));
+    rv = NS_DispatchToCurrentThread(
+      NewRunnableMethod("nsUpdateProcessor::WaitForProcess",
+                        this,
+                        &nsUpdateProcessor::WaitForProcess));
     NS_ENSURE_SUCCESS_VOID(rv);
   } else {
     // Failed to launch the updater process for some reason.
     // We need to shutdown the current thread as there isn't anything more for
     // us to do...
-    rv = NS_DispatchToMainThread(NewRunnableMethod(this, &nsUpdateProcessor::ShutdownWatcherThread));
+    rv = NS_DispatchToMainThread(
+      NewRunnableMethod("nsUpdateProcessor::ShutdownWatcherThread",
+                        this,
+                        &nsUpdateProcessor::ShutdownWatcherThread));
     NS_ENSURE_SUCCESS_VOID(rv);
   }
 }
@@ -956,9 +940,13 @@ nsUpdateProcessor::WaitForProcess()
 {
   MOZ_ASSERT(!NS_IsMainThread(), "main thread");
   if (ProcessHasTerminated(mUpdaterPID)) {
-    NS_DispatchToMainThread(NewRunnableMethod(this, &nsUpdateProcessor::UpdateDone));
+    NS_DispatchToMainThread(NewRunnableMethod(
+      "nsUpdateProcessor::UpdateDone", this, &nsUpdateProcessor::UpdateDone));
   } else {
-    NS_DispatchToCurrentThread(NewRunnableMethod(this, &nsUpdateProcessor::WaitForProcess));
+    NS_DispatchToCurrentThread(
+      NewRunnableMethod("nsUpdateProcessor::WaitForProcess",
+                        this,
+                        &nsUpdateProcessor::WaitForProcess));
   }
 }
 

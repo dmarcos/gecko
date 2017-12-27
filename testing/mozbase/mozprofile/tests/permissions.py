@@ -4,6 +4,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 import mozfile
 import os
 import shutil
@@ -197,6 +199,7 @@ http://127.0.0.1:8888           privileged
 
     def test_existing_permissions_db_v5(self):
         self.verify_user_version(5)
+
 
 if __name__ == '__main__':
     mozunit.main()

@@ -7,7 +7,7 @@
 /*
  * A base class implementing nsIObjectLoadingContent for use by
  * various content nodes that want to provide plugin/document/image
- * loading functionality (eg <embed>, <object>, <applet>, etc).
+ * loading functionality (eg <embed>, <object>, etc).
  */
 
 #ifndef NSOBJECTLOADINGCONTENT_H_
@@ -64,12 +64,16 @@ class nsObjectLoadingContent : public nsImageLoadingContent
       eType_Image          = TYPE_IMAGE,
       // Content is a plugin
       eType_Plugin         = TYPE_PLUGIN,
+      // Content is a fake plugin, which loads as a document but behaves as a
+      // plugin (see nsPluginHost::CreateFakePlugin)
+      eType_FakePlugin     = TYPE_FAKE_PLUGIN,
       // Content is a subdocument, possibly SVG
       eType_Document       = TYPE_DOCUMENT,
       // No content loaded (fallback). May be showing alternate content or
       // a custom error handler - *including* click-to-play dialogs
       eType_Null           = TYPE_NULL
     };
+
     enum FallbackType {
       // The content type is not supported (e.g. plugin not installed)
       eFallbackUnsupported = nsIObjectLoadingContent::PLUGIN_UNSUPPORTED,
@@ -90,13 +94,15 @@ class nsObjectLoadingContent : public nsImageLoadingContent
       /// ** All values >= eFallbackClickToPlay are plugin placeholder types
       ///    that would be replaced by a real plugin if activated (PlayPlugin())
       /// ** Furthermore, values >= eFallbackClickToPlay and
-      ///    <= eFallbackVulnerableNoUpdate are click-to-play types.
+      ///    <= eFallbackClickToPlayQuiet are click-to-play types.
       // The plugin is disabled until the user clicks on it
       eFallbackClickToPlay = nsIObjectLoadingContent::PLUGIN_CLICK_TO_PLAY,
       // The plugin is vulnerable (update available)
       eFallbackVulnerableUpdatable = nsIObjectLoadingContent::PLUGIN_VULNERABLE_UPDATABLE,
       // The plugin is vulnerable (no update available)
       eFallbackVulnerableNoUpdate = nsIObjectLoadingContent::PLUGIN_VULNERABLE_NO_UPDATE,
+      // The plugin is click-to-play, but the user won't see overlays
+      eFallbackClickToPlayQuiet = nsIObjectLoadingContent::PLUGIN_CLICK_TO_PLAY_QUIET,
     };
 
     nsObjectLoadingContent();
@@ -177,8 +183,8 @@ class nsObjectLoadingContent : public nsImageLoadingContent
     static bool MayResolve(jsid aId);
 
     // Helper for WebIDL enumeration
-    void GetOwnPropertyNames(JSContext* aCx, nsTArray<nsString>& /* unused */,
-                             mozilla::ErrorResult& aRv);
+    void GetOwnPropertyNames(JSContext* aCx, JS::AutoIdVector& /* unused */,
+                             bool /* unused */, mozilla::ErrorResult& aRv);
 
     // WebIDL API
     nsIDocument* GetContentDocument(nsIPrincipal& aSubjectPrincipal);
@@ -192,7 +198,7 @@ class nsObjectLoadingContent : public nsImageLoadingContent
     }
     uint32_t GetContentTypeForMIMEType(const nsAString& aMIMEType)
     {
-      return GetTypeOfContent(NS_ConvertUTF16toUTF8(aMIMEType));
+      return GetTypeOfContent(NS_ConvertUTF16toUTF8(aMIMEType), false);
     }
     void PlayPlugin(mozilla::dom::SystemCallerGuarantee,
                     mozilla::ErrorResult& aRv);
@@ -222,6 +228,11 @@ class nsObjectLoadingContent : public nsImageLoadingContent
     bool HasRunningPlugin() const
     {
       return !!mInstanceOwner;
+    }
+    // FIXME rename this
+    void SkipFakePlugins(mozilla::ErrorResult& aRv)
+    {
+      aRv = SkipFakePlugins();
     }
     void SwapFrameLoaders(mozilla::dom::HTMLIFrameElement& aOtherLoaderOwner,
                           mozilla::ErrorResult& aRv)
@@ -253,8 +264,8 @@ class nsObjectLoadingContent : public nsImageLoadingContent
      * Begins loading the object when called
      *
      * Attributes of |this| QI'd to nsIContent will be inspected, depending on
-     * the node type. This function currently assumes it is a <applet>,
-     * <object>, or <embed> tag.
+     * the node type. This function currently assumes it is a <object> or
+     * <embed> tag.
      *
      * The instantiated plugin depends on:
      * - The URI (<embed src>, <object data>)
@@ -292,7 +303,8 @@ class nsObjectLoadingContent : public nsImageLoadingContent
       eSupportDocuments    = 1u << 2, // Documents are supported
                                         // (nsIDocumentLoaderFactory)
                                         // This flag always includes SVG
-      eSupportClassID      = 1u << 3, // The classid attribute is supported
+      eSupportClassID      = 1u << 3, // The classid attribute is supported. No
+                                      // longer used.
 
       // If possible to get a *plugin* type from the type attribute *or* file
       // extension, we can use that type and begin loading the plugin before
@@ -380,12 +392,8 @@ class nsObjectLoadingContent : public nsImageLoadingContent
      *
      * @param aParameters     The array containing pairs of name/value strings
      *                        from nested <param> objects.
-     * @param aIgnoreCodebase Flag for ignoring the "codebase" param when
-     *                        building the array. This is useful when loading
-     *                        java.
      */
-    void GetNestedParams(nsTArray<mozilla::dom::MozPluginParameter>& aParameters,
-                         bool aIgnoreCodebase);
+    void GetNestedParams(nsTArray<mozilla::dom::MozPluginParameter>& aParameters);
 
     MOZ_MUST_USE nsresult BuildParametersArray();
 
@@ -416,7 +424,7 @@ class nsObjectLoadingContent : public nsImageLoadingContent
      * - mContentType         : The final content type, considering mChannel if
      *                          mChannelLoaded is set
      * - mBaseURI             : The object's base URI, which may be set by the
-     *                          object (codebase attribute)
+     *                          object
      * - mType                : The type the object is determined to be based
      *                          on the above
      *
@@ -427,13 +435,9 @@ class nsObjectLoadingContent : public nsImageLoadingContent
      * NOTE This function does not perform security checks, only determining the
      *      requested type and parameters of the object.
      *
-     * @param aJavaURI Specify that the URI will be consumed by java, which
-     *                 changes codebase parsing and URI construction. Used
-     *                 internally.
-     *
      * @return Returns a bitmask of ParameterUpdateFlags values
      */
-    ParameterUpdateFlags UpdateObjectParameters(bool aJavaURI = false);
+    ParameterUpdateFlags UpdateObjectParameters();
 
     /**
      * Queue a CheckPluginStopEvent and track it in mPendingCheckPluginStopEvent
@@ -461,9 +465,10 @@ class nsObjectLoadingContent : public nsImageLoadingContent
      * If this object is allowed to play plugin content, or if it would display
      * click-to-play instead.
      * NOTE that this does not actually check if the object is a loadable plugin
-     * NOTE This ignores the current activated state. The caller should check this if appropriate.
+     * NOTE This ignores the current activated state. The caller should check
+     *      this if appropriate.
      */
-    bool ShouldPlay(FallbackType &aReason, bool aIgnoreCurrentType);
+    bool ShouldPlay(FallbackType &aReason);
 
     /**
      * This method tells if the fallback content should be attempted to be used
@@ -491,11 +496,6 @@ class nsObjectLoadingContent : public nsImageLoadingContent
      */
     bool PreferFallback(bool aIsPluginClickToPlay);
 
-    /*
-     * Helper to check if mBaseURI can be used by java as a codebase
-     */
-    bool CheckJavaCodebase();
-
     /**
      * Helper to check if our current URI passes policy
      *
@@ -520,6 +520,16 @@ class nsObjectLoadingContent : public nsImageLoadingContent
      * it to mFinalListener
      */
     bool MakePluginListener();
+
+    void SetupFrameLoader(int32_t aJSPluginId);
+
+    /**
+     * Helper to spawn mFrameLoader and return a pointer to its docshell
+     *
+     * @param aURI URI we intend to load for the recursive load check (does not
+     *             actually load anything)
+     */
+    already_AddRefed<nsIDocShell> SetupDocShell(nsIURI* aRecursionCheckURI);
 
     /**
      * Unloads all content and resets the object to a completely unloaded state
@@ -550,10 +560,14 @@ class nsObjectLoadingContent : public nsImageLoadingContent
      * support the given MIME type as, taking capabilities and plugin state
      * into account
      *
+     * @param aNoFakePlugin Don't select a fake plugin handler as a valid type,
+     *                      as when SkipFakePlugins() is called.
+     * @return The ObjectType enum value that we would attempt to load
+     *
      * NOTE this does not consider whether the content would be suppressed by
      *      click-to-play or other content policy checks
      */
-    ObjectType GetTypeOfContent(const nsCString& aMIMEType);
+    ObjectType GetTypeOfContent(const nsCString& aMIMEType, bool aNoFakePlugin);
 
     /**
      * Gets the frame that's associated with this content node.
@@ -570,12 +584,12 @@ class nsObjectLoadingContent : public nsImageLoadingContent
      *
      * - is an embed or object node
      * - has a URL pointing at the youtube.com domain, using "/v/" style video
-     *   path reference, and without enablejsapi=1 in the path
+     *   path reference.
      *
      * Having the enablejsapi flag means the document that contains the element
      * could possibly be manipulating the youtube video elsewhere on the page
-     * via javascript. We can't rewrite these kinds of elements without possibly
-     * breaking content, which we want to avoid.
+     * via javascript. In the context of embed elements, this usage has been
+     * deprecated by youtube, so we can just rewrite as normal.
      *
      * If we can rewrite the URL, we change the "/v/" to "/embed/", and change
      * our type to eType_Document so that we render similarly to an iframe
@@ -648,12 +662,11 @@ class nsObjectLoadingContent : public nsImageLoadingContent
     // a loaded type
     nsCOMPtr<nsIURI>            mURI;
 
-    // The original URI obtained from inspecting the element (codebase, and
-    // src/data). May differ from mURI due to redirects
+    // The original URI obtained from inspecting the element. May differ from
+    // mURI due to redirects
     nsCOMPtr<nsIURI>            mOriginalURI;
 
-    // The baseURI used for constructing mURI, and used by some plugins (java)
-    // as a root for other resource requests.
+    // The baseURI used for constructing mURI.
     nsCOMPtr<nsIURI>            mBaseURI;
 
 
@@ -687,14 +700,17 @@ class nsObjectLoadingContent : public nsImageLoadingContent
     // Whether content blocking is enabled or not for this object.
     bool                        mContentBlockingEnabled : 1;
 
+    // If we should not use fake plugins until the next type change
+    bool                        mSkipFakePlugins : 1;
+
     // Protects DoStopPlugin from reentry (bug 724781).
     bool                        mIsStopping : 1;
 
     // Protects LoadObject from re-entry
     bool                        mIsLoading : 1;
 
-    // For plugin stand-in types (click-to-play) tracks
-    // whether content js has tried to access the plugin script object.
+    // For plugin stand-in types (click-to-play) tracks whether content js has
+    // tried to access the plugin script object.
     bool                        mScriptRequested : 1;
 
     // True if object represents an object/embed tag pointing to a flash embed

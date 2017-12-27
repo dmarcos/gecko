@@ -12,7 +12,7 @@
 #include "nsGenericHTMLElement.h"
 #include "nsGkAtoms.h"
 #include "nsStyleConsts.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsRuleData.h"
 
 namespace mozilla {
@@ -26,7 +26,8 @@ public:
   {
   }
 
-  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+                         bool aPreallocateChildren) const override;
 
 protected:
   virtual ~HTMLSpanElement();

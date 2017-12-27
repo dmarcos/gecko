@@ -1,6 +1,7 @@
 //! Intermediate representation of variables.
 
-use super::context::{BindgenContext, ItemId};
+use super::context::{BindgenContext, TypeId};
+use super::dot::DotAttributes;
 use super::function::cursor_mangling;
 use super::int::IntKind;
 use super::item::Item;
@@ -8,6 +9,7 @@ use super::ty::{FloatKind, TypeKind};
 use cexpr;
 use clang;
 use parse::{ClangItemParser, ClangSubItemParser, ParseError, ParseResult};
+use std::io;
 use std::num::Wrapping;
 
 /// The type for a constant variable.
@@ -33,7 +35,7 @@ pub struct Var {
     /// The mangled name of the variable.
     mangled_name: Option<String>,
     /// The type of the variable.
-    ty: ItemId,
+    ty: TypeId,
     /// The value of the variable, that needs to be suitable for `ty`.
     val: Option<VarType>,
     /// Whether this variable is const.
@@ -42,19 +44,20 @@ pub struct Var {
 
 impl Var {
     /// Construct a new `Var`.
-    pub fn new(name: String,
-               mangled: Option<String>,
-               ty: ItemId,
-               val: Option<VarType>,
-               is_const: bool)
-               -> Var {
+    pub fn new(
+        name: String,
+        mangled_name: Option<String>,
+        ty: TypeId,
+        val: Option<VarType>,
+        is_const: bool,
+    ) -> Var {
         assert!(!name.is_empty());
         Var {
-            name: name,
-            mangled_name: mangled,
-            ty: ty,
-            val: val,
-            is_const: is_const,
+            name,
+            mangled_name,
+            ty,
+            val,
+            is_const,
         }
     }
 
@@ -69,7 +72,7 @@ impl Var {
     }
 
     /// Get this variable's type.
-    pub fn ty(&self) -> ItemId {
+    pub fn ty(&self) -> TypeId {
         self.ty
     }
 
@@ -84,15 +87,46 @@ impl Var {
     }
 }
 
+impl DotAttributes for Var {
+    fn dot_attributes<W>(
+        &self,
+        _ctx: &BindgenContext,
+        out: &mut W,
+    ) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        if self.is_const {
+            try!(writeln!(out, "<tr><td>const</td><td>true</td></tr>"));
+        }
+
+        if let Some(ref mangled) = self.mangled_name {
+            try!(writeln!(
+                out,
+                "<tr><td>mangled name</td><td>{}</td></tr>",
+                mangled
+            ));
+        }
+
+        Ok(())
+    }
+}
+
 impl ClangSubItemParser for Var {
-    fn parse(cursor: clang::Cursor,
-             ctx: &mut BindgenContext)
-             -> Result<ParseResult<Self>, ParseError> {
+    fn parse(
+        cursor: clang::Cursor,
+        ctx: &mut BindgenContext,
+    ) -> Result<ParseResult<Self>, ParseError> {
         use clang_sys::*;
         use cexpr::expr::EvalResult;
         use cexpr::literal::CChar;
         match cursor.kind() {
             CXCursor_MacroDefinition => {
+
+                if let Some(visitor) = ctx.parse_callbacks() {
+                    visitor.parsed_macro(&cursor.spelling());
+                }
+
                 let value = parse_macro(ctx, &cursor, ctx.translation_unit());
 
                 let (id, value) = match value {
@@ -123,7 +157,7 @@ impl ClangSubItemParser for Var {
                 let (type_kind, val) = match value {
                     EvalResult::Invalid => return Err(ParseError::Continue),
                     EvalResult::Float(f) => {
-                        (TypeKind::Float(FloatKind::Float), VarType::Float(f))
+                        (TypeKind::Float(FloatKind::Double), VarType::Float(f))
                     }
                     EvalResult::Char(c) => {
                         let c = match c {
@@ -140,14 +174,15 @@ impl ClangSubItemParser for Var {
                         (TypeKind::Int(IntKind::U8), VarType::Char(c))
                     }
                     EvalResult::Str(val) => {
-                        let char_ty =
-                            Item::builtin_type(TypeKind::Int(IntKind::U8),
-                                               true,
-                                               ctx);
+                        let char_ty = Item::builtin_type(
+                            TypeKind::Int(IntKind::U8),
+                            true,
+                            ctx,
+                        );
                         (TypeKind::Pointer(char_ty), VarType::String(val))
                     }
                     EvalResult::Int(Wrapping(value)) => {
-                        let kind = ctx.type_chooser()
+                        let kind = ctx.parse_callbacks()
                             .and_then(|c| c.int_macro(&name, value))
                             .unwrap_or_else(|| if value < 0 {
                                 if value < i32::min_value() as i64 {
@@ -155,9 +190,7 @@ impl ClangSubItemParser for Var {
                                 } else {
                                     IntKind::Int
                                 }
-                            } else if value >
-                                                         u32::max_value() as
-                                                         i64 {
+                            } else if value > u32::max_value() as i64 {
                                 IntKind::ULongLong
                             } else {
                                 IntKind::UInt
@@ -169,8 +202,10 @@ impl ClangSubItemParser for Var {
 
                 let ty = Item::builtin_type(type_kind, true, ctx);
 
-                Ok(ParseResult::New(Var::new(name, None, ty, Some(val), true),
-                                    Some(cursor)))
+                Ok(ParseResult::New(
+                    Var::new(name, None, ty, Some(val), true),
+                    Some(cursor),
+                ))
             }
             CXCursor_VarDecl => {
                 let name = cursor.spelling();
@@ -184,13 +219,15 @@ impl ClangSubItemParser for Var {
                 // XXX this is redundant, remove!
                 let is_const = ty.is_const();
 
-                let ty = match Item::from_ty(&ty, Some(cursor), None, ctx) {
+                let ty = match Item::from_ty(&ty, cursor, None, ctx) {
                     Ok(ty) => ty,
                     Err(e) => {
-                        assert_eq!(ty.kind(),
-                                   CXType_Auto,
-                                   "Couldn't resolve constant type, and it \
-                                   wasn't an nondeductible auto type!");
+                        assert_eq!(
+                            ty.kind(),
+                            CXType_Auto,
+                            "Couldn't resolve constant type, and it \
+                                   wasn't an nondeductible auto type!"
+                        );
                         return Err(e);
                     }
                 };
@@ -199,8 +236,9 @@ impl ClangSubItemParser for Var {
                 // tests/headers/inner_const.hpp
                 //
                 // That's fine because in that case we know it's not a literal.
-                let canonical_ty = ctx.safe_resolve_type(ty)
-                    .and_then(|t| t.safe_canonical_type(ctx));
+                let canonical_ty = ctx.safe_resolve_type(ty).and_then(|t| {
+                    t.safe_canonical_type(ctx)
+                });
 
                 let is_integer = canonical_ty.map_or(false, |t| t.is_integer());
                 let is_float = canonical_ty.map_or(false, |t| t.is_float());
@@ -215,7 +253,8 @@ impl ClangSubItemParser for Var {
                         _ => unreachable!(),
                     };
 
-                    let mut val = cursor.evaluate()
+                    let mut val = cursor
+                        .evaluate()
                         .and_then(|v| v.as_int())
                         .map(|val| val as i64);
                     if val.is_none() || !kind.signedness_matches(val.unwrap()) {
@@ -229,16 +268,16 @@ impl ClangSubItemParser for Var {
                         VarType::Int(val)
                     })
                 } else if is_float {
-                    cursor.evaluate()
-                        .and_then(|v| v.as_double())
-                        .map(VarType::Float)
+                    cursor.evaluate().and_then(|v| v.as_double()).map(
+                        VarType::Float,
+                    )
                 } else {
-                    cursor.evaluate()
-                        .and_then(|v| v.as_literal_string())
-                        .map(VarType::String)
+                    cursor.evaluate().and_then(|v| v.as_literal_string()).map(
+                        VarType::String,
+                    )
                 };
 
-                let mangling = cursor_mangling(&cursor);
+                let mangling = cursor_mangling(ctx, &cursor);
                 let var = Var::new(name, mangling, ty, value, is_const);
 
                 Ok(ParseResult::New(var, Some(cursor)))
@@ -252,29 +291,47 @@ impl ClangSubItemParser for Var {
 }
 
 /// Try and parse a macro using all the macros parsed until now.
-fn parse_macro(ctx: &BindgenContext,
-               cursor: &clang::Cursor,
-               unit: &clang::TranslationUnit)
-               -> Option<(Vec<u8>, cexpr::expr::EvalResult)> {
+fn parse_macro(
+    ctx: &BindgenContext,
+    cursor: &clang::Cursor,
+    unit: &clang::TranslationUnit,
+) -> Option<(Vec<u8>, cexpr::expr::EvalResult)> {
     use cexpr::{expr, nom};
 
-    let cexpr_tokens = match unit.cexpr_tokens(cursor) {
+    let mut cexpr_tokens = match unit.cexpr_tokens(cursor) {
         None => return None,
         Some(tokens) => tokens,
     };
 
     let parser = expr::IdentifierParser::new(ctx.parsed_macros());
-    let result = parser.macro_definition(&cexpr_tokens);
 
-    match result {
+    match parser.macro_definition(&cexpr_tokens) {
+        nom::IResult::Done(_, (id, val)) => {
+            return Some((id.into(), val));
+        }
+        _ => {}
+    }
+
+    // Try without the last token, to workaround a libclang bug in versions
+    // previous to 4.0.
+    //
+    // See:
+    //   https://bugs.llvm.org//show_bug.cgi?id=9069
+    //   https://reviews.llvm.org/D26446
+    if cexpr_tokens.pop().is_none() {
+        return None;
+    }
+
+    match parser.macro_definition(&cexpr_tokens) {
         nom::IResult::Done(_, (id, val)) => Some((id.into(), val)),
         _ => None,
     }
 }
 
-fn parse_int_literal_tokens(cursor: &clang::Cursor,
-                            unit: &clang::TranslationUnit)
-                            -> Option<i64> {
+fn parse_int_literal_tokens(
+    cursor: &clang::Cursor,
+    unit: &clang::TranslationUnit,
+) -> Option<i64> {
     use cexpr::{expr, nom};
     use cexpr::expr::EvalResult;
 
@@ -290,9 +347,10 @@ fn parse_int_literal_tokens(cursor: &clang::Cursor,
     }
 }
 
-fn get_integer_literal_from_cursor(cursor: &clang::Cursor,
-                                   unit: &clang::TranslationUnit)
-                                   -> Option<i64> {
+fn get_integer_literal_from_cursor(
+    cursor: &clang::Cursor,
+    unit: &clang::TranslationUnit,
+) -> Option<i64> {
     use clang_sys::*;
     let mut value = None;
     cursor.visit(|c| {

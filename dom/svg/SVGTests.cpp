@@ -15,7 +15,7 @@
 namespace mozilla {
 namespace dom {
 
-nsIAtom** SVGTests::sStringListNames[3] =
+nsStaticAtom** SVGTests::sStringListNames[3] =
 {
   &nsGkAtoms::requiredFeatures,
   &nsGkAtoms::requiredExtensions,
@@ -61,7 +61,7 @@ SVGTests::HasExtension(const nsAString& aExtension)
 }
 
 bool
-SVGTests::IsConditionalProcessingAttribute(const nsIAtom* aAttribute) const
+SVGTests::IsConditionalProcessingAttribute(const nsAtom* aAttribute) const
 {
   for (uint32_t i = 0; i < ArrayLength(sStringListNames); i++) {
     if (aAttribute == *sStringListNames[i]) {
@@ -72,7 +72,7 @@ SVGTests::IsConditionalProcessingAttribute(const nsIAtom* aAttribute) const
 }
 
 int32_t
-SVGTests::GetBestLanguagePreferenceRank(const nsSubstring& aAcceptLangs) const
+SVGTests::GetBestLanguagePreferenceRank(const nsAString& aAcceptLangs) const
 {
   const nsDefaultStringComparator defaultComparator;
 
@@ -86,7 +86,7 @@ SVGTests::GetBestLanguagePreferenceRank(const nsSubstring& aAcceptLangs) const
     nsCharSeparatedTokenizer languageTokenizer(aAcceptLangs, ',');
     int32_t index = 0;
     while (languageTokenizer.hasMoreTokens()) {
-      const nsSubstring &languageToken = languageTokenizer.nextToken();
+      const nsAString& languageToken = languageTokenizer.nextToken();
       bool exactMatch = (languageToken == mStringListAttributes[LANGUAGE][i]);
       bool prefixOnlyMatch =
         !exactMatch &&
@@ -147,8 +147,12 @@ SVGTests::PassesConditionalProcessingTests(const nsString *aAcceptLangs) const
     }
 
     // Get our language preferences
-    const nsAutoString acceptLangs(aAcceptLangs ? *aAcceptLangs :
-      Preferences::GetLocalizedString("intl.accept_languages"));
+    nsAutoString acceptLangs;
+    if (aAcceptLangs) {
+      acceptLangs.Assign(*aAcceptLangs);
+    } else {
+      Preferences::GetLocalizedString("intl.accept_languages", acceptLangs);
+    }
 
     if (acceptLangs.IsEmpty()) {
       NS_WARNING("no default language specified for systemLanguage conditional test");
@@ -174,7 +178,7 @@ SVGTests::PassesConditionalProcessingTests(const nsString *aAcceptLangs) const
 }
 
 bool
-SVGTests::ParseConditionalProcessingAttribute(nsIAtom* aAttribute,
+SVGTests::ParseConditionalProcessingAttribute(nsAtom* aAttribute,
                                               const nsAString& aValue,
                                               nsAttrValue& aResult)
 {
@@ -192,7 +196,7 @@ SVGTests::ParseConditionalProcessingAttribute(nsIAtom* aAttribute,
 }
 
 void
-SVGTests::UnsetAttr(const nsIAtom* aAttribute)
+SVGTests::UnsetAttr(const nsAtom* aAttribute)
 {
   for (uint32_t i = 0; i < ArrayLength(sStringListNames); i++) {
     if (aAttribute == *sStringListNames[i]) {
@@ -203,7 +207,7 @@ SVGTests::UnsetAttr(const nsIAtom* aAttribute)
   }
 }
 
-nsIAtom*
+nsAtom*
 SVGTests::GetAttrName(uint8_t aAttrEnum) const
 {
   return *sStringListNames[aAttrEnum];

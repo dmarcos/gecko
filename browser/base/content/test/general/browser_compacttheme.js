@@ -8,7 +8,6 @@
 const PREF_LWTHEME_USED_THEMES = "lightweightThemes.usedThemes";
 const COMPACT_LIGHT_ID = "firefox-compact-light@mozilla.org";
 const COMPACT_DARK_ID = "firefox-compact-dark@mozilla.org";
-const SKIP_TEST = !AppConstants.INSTALL_COMPACT_THEMES;
 const {LightweightThemeManager} = Components.utils.import("resource://gre/modules/LightweightThemeManager.jsm", {});
 
 registerCleanupFunction(() => {
@@ -17,12 +16,7 @@ registerCleanupFunction(() => {
   Services.prefs.clearUserPref(PREF_LWTHEME_USED_THEMES);
 });
 
-add_task(function* startTests() {
-  if (SKIP_TEST) {
-    ok(true, "No need to run this test since themes aren't installed");
-    return;
-  }
-
+add_task(async function startTests() {
   info("Setting the current theme to null");
   LightweightThemeManager.currentTheme = null;
   ok(!CompactTheme.isStyleSheetEnabled, "There is no compact style sheet when no lw theme is applied.");
@@ -53,17 +47,13 @@ function dummyLightweightTheme(id) {
     id,
     name: id,
     headerURL: "resource:///chrome/browser/content/browser/defaultthemes/compact.header.png",
-    iconURL: "resource:///chrome/browser/content/browser/defaultthemes/compactlight.icon.svg",
+    iconURL: "resource:///chrome/browser/content/browser/defaultthemes/light.icon.svg",
     textcolor: "red",
     accentcolor: "blue"
   };
 }
 
-add_task(function* testLightweightThemePreview() {
-  if (SKIP_TEST) {
-    ok(true, "No need to run this test since themes aren't installed");
-    return;
-  }
+add_task(async function testLightweightThemePreview() {
   info("Setting compact to current and previewing others");
   LightweightThemeManager.currentTheme = LightweightThemeManager.getUsedTheme(COMPACT_LIGHT_ID);
   ok(CompactTheme.isStyleSheetEnabled, "The compact stylesheet is enabled.");

@@ -536,14 +536,14 @@ class TypedObject : public ShapedObject
     static MOZ_MUST_USE bool obj_deleteProperty(JSContext* cx, HandleObject obj, HandleId id,
                                                 ObjectOpResult& result);
 
-    static MOZ_MUST_USE bool obj_enumerate(JSContext* cx, HandleObject obj,
-                                           AutoIdVector& properties, bool enumerableOnly);
-
 
     uint8_t* typedMem() const;
     uint8_t* typedMemBase() const;
 
   public:
+    static MOZ_MUST_USE bool obj_newEnumerate(JSContext* cx, HandleObject obj,
+                                              AutoIdVector& properties, bool enumerableOnly);
+
     TypedProto& typedProto() const {
         // Typed objects' prototypes can't be modified.
         return staticPrototype()->as<TypedProto>();
@@ -707,12 +707,7 @@ class InlineTypedObject : public TypedObject
   public:
     static const size_t MaximumSize = JSObject::MAX_BYTE_SIZE - sizeof(TypedObject);
 
-    static gc::AllocKind allocKindForTypeDescriptor(TypeDescr* descr) {
-        size_t nbytes = descr->size();
-        MOZ_ASSERT(nbytes <= MaximumSize);
-
-        return gc::GetGCObjectKindForBytes(nbytes + sizeof(TypedObject));
-    }
+    static inline gc::AllocKind allocKindForTypeDescriptor(TypeDescr* descr);
 
     uint8_t* inlineTypedMem(const JS::AutoRequireNoGC&) const {
         return inlineTypedMem();
@@ -723,7 +718,7 @@ class InlineTypedObject : public TypedObject
     }
 
     static void obj_trace(JSTracer* trace, JSObject* object);
-    static void objectMovedDuringMinorGC(JSTracer* trc, JSObject* dst, JSObject* src);
+    static size_t obj_moved(JSObject* dst, JSObject* src);
 
     static size_t offsetOfDataStart() {
         return offsetof(InlineTypedObject, data_);

@@ -1,3 +1,5 @@
+from __future__ import absolute_import
+
 import argparse
 import sys
 import traceback
@@ -97,6 +99,7 @@ def main():
         runner.run()
     except:
         logger.critical("Error during test run:\n%s" % traceback.format_exc())
+
 
 if __name__ == "__main__":
     main()

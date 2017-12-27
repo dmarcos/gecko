@@ -40,11 +40,11 @@ AutoCompleteInput.prototype = {
     selectBy() {},
     invalidate() {},
     set selectedIndex(val) { return val; }, // ignore
-    get selectedIndex() { return -1 },
+    get selectedIndex() { return -1; },
     QueryInterface: XPCOMUtils.generateQI([Ci.nsIAutoCompletePopup])
   },
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIAutoCompleteInput])
-}
+};
 
 
 /**
@@ -58,20 +58,20 @@ AutoCompleteSearch.prototype = {
   stopSearchInvoked: true,
   startSearch(aSearchString, aSearchParam, aPreviousResult, aListener) {
     print("Check stop search has been called");
-    do_check_true(this.stopSearchInvoked);
+    Assert.ok(this.stopSearchInvoked);
     this.stopSearchInvoked = false;
   },
   stopSearch() {
     this.stopSearchInvoked = true;
   },
   QueryInterface: XPCOMUtils.generateQI([
-    Ci.nsIFactory
-  , Ci.nsIAutoCompleteSearch
+    Ci.nsIFactory,
+    Ci.nsIAutoCompleteSearch
   ]),
   createInstance(outer, iid) {
     return this.QueryInterface(iid);
   }
-}
+};
 
 
 /**
@@ -153,13 +153,13 @@ function run_test() {
   controller.input = input;
 
   input.onSearchBegin = function() {
-    do_execute_soon(function() {
+    executeSoon(function() {
       gCurrentTest(controller);
     });
   };
   input.onSearchComplete = function() {
     run_next_test(controller);
-  }
+  };
 
   // Search is asynchronous, so don't let the test finish immediately
   do_test_pending();

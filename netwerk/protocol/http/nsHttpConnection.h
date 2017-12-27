@@ -16,6 +16,7 @@
 #include "TunnelUtils.h"
 #include "mozilla/Mutex.h"
 #include "ARefBase.h"
+#include "TimingStruct.h"
 
 #include "nsIAsyncInputStream.h"
 #include "nsIAsyncOutputStream.h"
@@ -82,6 +83,12 @@ public:
     // a multiplexing protocol such as SPDY is being used
     MOZ_MUST_USE nsresult Activate(nsAHttpTransaction *, uint32_t caps,
                                    int32_t pri);
+
+    void SetFastOpen(bool aFastOpen);
+    // Close this connection and return the transaction. The transaction is
+    // restarted as well. This will only happened before connection is
+    // connected.
+    nsAHttpTransaction * CloseConnectionFastOpenTakesTooLongOrError(bool aCloseocketTransport);
 
     // Close the underlying socket transport.
     void Close(nsresult reason, bool aIsShutdown = false);
@@ -217,7 +224,8 @@ public:
     // connection since CheckForTraffic() was called.
     bool NoTraffic() {
         return mTrafficStamp &&
-            (mTrafficCount == (mTotalBytesWritten + mTotalBytesRead));
+            (mTrafficCount == (mTotalBytesWritten + mTotalBytesRead)) &&
+            !mFastOpen;
     }
     // override of nsAHttpConnection
     virtual uint32_t Version();
@@ -225,7 +233,9 @@ public:
     bool TestJoinConnection(const nsACString &hostname, int32_t port);
     bool JoinConnection(const nsACString &hostname, int32_t port);
 
-    void ThrottleResponse(bool aThrottle);
+    void SetFastOpenStatus(uint8_t tfoStatus);
+
+    void SetEvent(nsresult aStatus);
 
 private:
     // Value (set in mTCPKeepaliveConfig) indicates which set of prefs to use.
@@ -386,12 +396,16 @@ private:
     nsCString                      mEarlyNegotiatedALPN;
     bool                           mDid0RTTSpdy;
 
-    // Reflects throttling request, effects if we resume read from the socket.
-    // Accessed only on the socket thread.
-    bool                           mResponseThrottled;
-    // A read from the socket was requested while we where throttled, means
-    // to ResumeRecv() when untrottled again. Only accessed on the socket thread.
-    bool                           mResumeRecvOnUnthrottle;
+    bool                           mFastOpen;
+    uint8_t                        mFastOpenStatus;
+
+    bool                           mForceSendDuringFastOpenPending;
+    bool                           mReceivedSocketWouldBlockDuringFastOpen;
+
+public:
+    void BootstrapTimings(TimingStruct times);
+private:
+    TimingStruct    mBootstrappedTimings;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsHttpConnection, NS_HTTPCONNECTION_IID)

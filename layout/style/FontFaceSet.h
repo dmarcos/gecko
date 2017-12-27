@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,15 +15,15 @@
 #include "nsICSSLoaderObserver.h"
 
 struct gfxFontFaceSrc;
+class gfxFontSrcPrincipal;
 class gfxUserFontEntry;
 class nsFontFaceLoader;
 class nsIPrincipal;
 class nsPIDOMWindowInner;
 
 namespace mozilla {
-namespace css {
-class FontFamilyListRefCnt;
-} // namespace css
+class PostTraversalTask;
+class SharedFontList;
 namespace dom {
 class FontFace;
 class Promise;
@@ -36,6 +37,7 @@ class FontFaceSet final : public DOMEventTargetHelper
                         , public nsIDOMEventListener
                         , public nsICSSLoaderObserver
 {
+  friend class mozilla::PostTraversalTask;
   friend class UserFontSet;
 
 public:
@@ -61,12 +63,19 @@ public:
 
     FontFaceSet* GetFontFaceSet() { return mFontFaceSet; }
 
+    gfxFontSrcPrincipal* GetStandardFontLoadPrincipal() override;
+
     virtual nsresult CheckFontLoad(const gfxFontFaceSrc* aFontFaceSrc,
-                                   nsIPrincipal** aPrincipal,
+                                   gfxFontSrcPrincipal** aPrincipal,
                                    bool* aBypassCache) override;
 
     virtual bool IsFontLoadAllowed(nsIURI* aFontLocation,
-                                   nsIPrincipal* aPrincipal) override;
+                                   nsIPrincipal* aPrincipal,
+                                   nsTArray<nsCOMPtr<nsIRunnable>>* aViolations)
+                                     override;
+
+    void DispatchFontLoadViolations(
+		  nsTArray<nsCOMPtr<nsIRunnable>>& aViolations) override;
 
     virtual nsresult StartLoad(gfxUserFontEntry* aUserFontEntry,
                                const gfxFontFaceSrc* aFontFaceSrc) override;
@@ -92,7 +101,7 @@ public:
                                    uint8_t aStyle,
                                    const nsTArray<gfxFontFeature>& aFeatureSettings,
                                    uint32_t aLanguageOverride,
-                                   gfxSparseBitSet* aUnicodeRanges,
+                                   gfxCharacterMap* aUnicodeRanges,
                                    uint8_t aFontDisplay) override;
 
   private:
@@ -160,6 +169,15 @@ public:
   {
     FontFaceSet* set = static_cast<UserFontSet*>(aUserFontSet)->mFontFaceSet;
     return set ? set->GetPresContext() : nullptr;
+  }
+
+  void UpdateStandardFontLoadPrincipal();
+
+  bool HasStandardFontLoadPrincipalChanged()
+  {
+    bool changed = mHasStandardFontLoadPrincipalChanged;
+    mHasStandardFontLoadPrincipalChanged = false;
+    return changed;
   }
 
   nsIDocument* Document() const { return mDocument; }
@@ -259,11 +277,14 @@ private:
 
   nsresult StartLoad(gfxUserFontEntry* aUserFontEntry,
                      const gfxFontFaceSrc* aFontFaceSrc);
+  gfxFontSrcPrincipal* GetStandardFontLoadPrincipal();
   nsresult CheckFontLoad(const gfxFontFaceSrc* aFontFaceSrc,
-                         nsIPrincipal** aPrincipal,
+                         gfxFontSrcPrincipal** aPrincipal,
                          bool* aBypassCache);
-  bool IsFontLoadAllowed(nsIURI* aFontLocation, nsIPrincipal* aPrincipal);
-  bool GetPrivateBrowsing();
+  bool IsFontLoadAllowed(nsIURI* aFontLocation,
+                         nsIPrincipal* aPrincipal,
+                         nsTArray<nsCOMPtr<nsIRunnable>>* aViolations);
+  void DispatchFontLoadViolations(nsTArray<nsCOMPtr<nsIRunnable>>& aViolations);
   nsresult SyncLoadFontData(gfxUserFontEntry* aFontToLoad,
                             const gfxFontFaceSrc* aFontFaceSrc,
                             uint8_t*& aBuffer,
@@ -293,7 +314,7 @@ private:
 
   void ParseFontShorthandForMatching(
               const nsAString& aFont,
-              RefPtr<mozilla::css::FontFamilyListRefCnt>& aFamilyList,
+              RefPtr<SharedFontList>& aFamilyList,
               uint32_t& aWeight,
               int32_t& aStretch,
               uint8_t& aStyle,
@@ -303,12 +324,29 @@ private:
                              nsTArray<FontFace*>& aFontFaces,
                              mozilla::ErrorResult& aRv);
 
+  void DispatchLoadingEventAndReplaceReadyPromise();
+  void DispatchCheckLoadingFinishedAfterDelay();
+
   TimeStamp GetNavigationStartTimeStamp();
 
   RefPtr<UserFontSet> mUserFontSet;
 
   // The document this is a FontFaceSet for.
   nsCOMPtr<nsIDocument> mDocument;
+
+  // The document's node principal, which is the principal font loads for
+  // this FontFaceSet will generally use.  (This principal is not used for
+  // @font-face rules in UA and user sheets, where the principal of the
+  // sheet is used instead.)
+  //
+  // This field is used from GetStandardFontLoadPrincipal.  When on a
+  // style worker thread, we use mStandardFontLoadPrincipal assuming
+  // it is up to date.  Because mDocument's principal can change over time,
+  // its value must be updated by a call to UpdateStandardFontLoadPrincipal
+  // before a restyle.  (When called while on the main thread,
+  // GetStandardFontLoadPrincipal will call UpdateStandardFontLoadPrincipal
+  // to ensure its value is up to date.)
+  RefPtr<gfxFontSrcPrincipal> mStandardFontLoadPrincipal;
 
   // A Promise that is fulfilled once all of the FontFace objects
   // in mRuleFaces and mNonRuleFaces that started or were loading at the
@@ -350,6 +388,18 @@ private:
   // Whether CheckLoadingFinished calls should be ignored.  See comment in
   // OnFontFaceStatusChanged.
   bool mDelayedLoadCheck;
+
+  // Whether the docshell for our document indicated that loads should
+  // bypass the cache.
+  bool mBypassCache;
+
+  // Whether the docshell for our document indicates that we are in private
+  // browsing mode.
+  bool mPrivateBrowsing;
+
+  // Whether mStandardFontLoadPrincipal has changed since the last call to
+  // HasStandardFontLoadPrincipalChanged.
+  bool mHasStandardFontLoadPrincipalChanged;
 };
 
 } // namespace dom

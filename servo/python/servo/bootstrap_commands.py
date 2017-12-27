@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import urllib2
+import glob
 
 from mach.decorators import (
     CommandArgument,
@@ -26,8 +27,9 @@ from mach.decorators import (
 )
 
 import servo.bootstrap as bootstrap
-from servo.command_base import CommandBase, BIN_SUFFIX
+from servo.command_base import CommandBase, BIN_SUFFIX, cd
 from servo.util import delete, download_bytes, download_file, extract, host_triple
+from servo.util import STATIC_RUST_LANG_ORG_DIST
 
 
 @CommandProvider
@@ -67,13 +69,11 @@ class MachCommands(CommandBase):
                      help='Use stable rustc version')
     def bootstrap_rustc(self, force=False, target=[], stable=False):
         self.set_use_stable_rust(stable)
-        version = self.rust_version()
-        rust_path = self.rust_path()
-        rust_dir = path.join(self.context.sharedir, "rust", rust_path)
-        install_dir = path.join(self.context.sharedir, "rust", version)
-        if not self.config["build"]["llvm-assertions"]:
-            if not self.use_stable_rust():
-                install_dir += "-alt"
+        rust_dir = path.join(self.context.sharedir, "rust", self.rust_path())
+        install_dir = path.join(self.context.sharedir, "rust", self.rust_install_dir())
+        version = self.rust_stable_version() if stable else "nightly"
+
+        nightly_dist = STATIC_RUST_LANG_ORG_DIST + "/" + self.rust_nightly_date()
 
         if not force and path.exists(path.join(rust_dir, "rustc", "bin", "rustc" + BIN_SUFFIX)):
             print("Rust compiler already downloaded.", end=" ")
@@ -89,16 +89,12 @@ class MachCommands(CommandBase):
             # giving a directory name that will be the same as the tarball name (rustc is
             # in that directory).
             if stable:
-                tarball = "rustc-%s-%s.tar.gz" % (version, host_triple())
-                rustc_url = "https://static-rust-lang-org.s3.amazonaws.com/dist/" + tarball
+                base_url = STATIC_RUST_LANG_ORG_DIST
             else:
-                tarball = "%s/rustc-nightly-%s.tar.gz" % (version, host_triple())
-                base_url = "https://s3.amazonaws.com/rust-lang-ci/rustc-builds"
-                if not self.config["build"]["llvm-assertions"]:
-                    base_url += "-alt"
-                rustc_url = base_url + "/" + tarball
-            tgz_file = rust_dir + '-rustc.tar.gz'
+                base_url = nightly_dist
 
+            rustc_url = base_url + "/rustc-%s-%s.tar.gz" % (version, host_triple())
+            tgz_file = rust_dir + '-rustc.tar.gz'
             download_file("Rust compiler", rustc_url, tgz_file)
 
             print("Extracting Rust compiler...")
@@ -110,10 +106,8 @@ class MachCommands(CommandBase):
         # a directory of the name `rust-std-TRIPLE` inside and then a `lib` directory.
         # This `lib` directory needs to be extracted and merged with the `rustc/lib`
         # directory from the host compiler above.
-        nightly_suffix = "" if stable else "-nightly"
-        stable_version = "-{}".format(version) if stable else ""
         lib_dir = path.join(install_dir,
-                            "rustc{}{}-{}".format(nightly_suffix, stable_version, host_triple()),
+                            "rustc-%s-%s" % (version, host_triple()),
                             "rustc", "lib", "rustlib")
 
         # ensure that the libs for the host's target is downloaded
@@ -129,26 +123,25 @@ class MachCommands(CommandBase):
                 print("Use |bootstrap-rust --force| to download again.")
                 continue
 
+            tarball = "rust-std-%s-%s.tar.gz" % (version, target_triple)
+            tgz_file = path.join(install_dir, tarball)
             if self.use_stable_rust():
-                std_url = ("https://static-rust-lang-org.s3.amazonaws.com/dist/rust-std-%s-%s.tar.gz"
-                           % (version, target_triple))
-                tgz_file = install_dir + ('rust-std-%s-%s.tar.gz' % (version, target_triple))
+                std_url = STATIC_RUST_LANG_ORG_DIST + "/" + tarball
             else:
-                std_url = ("https://s3.amazonaws.com/rust-lang-ci/rustc-builds/%s/rust-std-nightly-%s.tar.gz"
-                           % (version, target_triple))
-                tgz_file = install_dir + ('rust-std-nightly-%s.tar.gz' % target_triple)
+                std_url = nightly_dist + "/" + tarball
 
             download_file("Host rust library for target %s" % target_triple, std_url, tgz_file)
             print("Extracting Rust stdlib for target %s..." % target_triple)
             extract(tgz_file, install_dir)
             shutil.copytree(path.join(install_dir,
-                                      "rust-std%s%s-%s" % (nightly_suffix, stable_version, target_triple),
-                                      "rust-std-%s" % target_triple, "lib", "rustlib", target_triple),
+                                      "rust-std-%s-%s" % (version, target_triple),
+                                      "rust-std-%s" % target_triple,
+                                      "lib", "rustlib", target_triple),
                             path.join(install_dir,
-                                      "rustc%s%s-%s" % (nightly_suffix, stable_version, host_triple()),
-                                      "rustc", "lib", "rustlib", target_triple))
-            shutil.rmtree(path.join(install_dir,
-                          "rust-std%s%s-%s" % (nightly_suffix, stable_version, target_triple)))
+                                      "rustc-%s-%s" % (version, host_triple()),
+                                      "rustc",
+                                      "lib", "rustlib", target_triple))
+            shutil.rmtree(path.join(install_dir, "rust-std-%s-%s" % (version, target_triple)))
 
             print("Rust {} libs ready.".format(target_triple))
 
@@ -170,8 +163,9 @@ class MachCommands(CommandBase):
         if path.isdir(docs_dir):
             shutil.rmtree(docs_dir)
         docs_name = self.rust_path().replace("rustc-", "rust-docs-")
-        docs_url = ("https://static-rust-lang-org.s3.amazonaws.com/dist/rust-docs-nightly-%s.tar.gz"
-                    % host_triple())
+        docs_url = "%s/%s/rust-docs-nightly-%s.tar.gz" % (
+            STATIC_RUST_LANG_ORG_DIST, self.rust_nightly_date(), host_triple()
+        )
         tgz_file = path.join(rust_root, 'doc.tar.gz')
 
         download_file("Rust docs", docs_url, tgz_file)
@@ -194,8 +188,7 @@ class MachCommands(CommandBase):
                      action='store_true',
                      help='Force download even if cargo already exists')
     def bootstrap_cargo(self, force=False):
-        cargo_dir = path.join(self.context.sharedir, "cargo",
-                              self.cargo_build_id())
+        cargo_dir = path.join(self.context.sharedir, "cargo", self.rust_nightly_date())
         if not force and path.exists(path.join(cargo_dir, "cargo", "bin", "cargo" + BIN_SUFFIX)):
             print("Cargo already downloaded.", end=" ")
             print("Use |bootstrap-cargo --force| to download again.")
@@ -206,8 +199,7 @@ class MachCommands(CommandBase):
         os.makedirs(cargo_dir)
 
         tgz_file = "cargo-nightly-%s.tar.gz" % host_triple()
-        nightly_url = "https://s3.amazonaws.com/rust-lang-ci/cargo-builds/%s/%s" % \
-            (self.cargo_build_id(), tgz_file)
+        nightly_url = "%s/%s/%s" % (STATIC_RUST_LANG_ORG_DIST, self.rust_nightly_date(), tgz_file)
 
         download_file("Cargo nightly", nightly_url, tgz_file)
 
@@ -290,50 +282,49 @@ class MachCommands(CommandBase):
                      default='1',
                      help='Keep up to this many most recent nightlies')
     def clean_nightlies(self, force=False, keep=None):
-        rust_current = self.rust_version()
-        cargo_current = self.cargo_build_id()
-        print("Current Rust version: {}".format(rust_current))
-        print("Current Cargo version: {}".format(cargo_current))
-        to_keep = {
-            'rust': set(),
-            'cargo': set(),
-        }
+        rust_current_nightly = self.rust_nightly_date()
+        rust_current_stable = self.rust_stable_version()
+        print("Current Rust nightly version: {}".format(rust_current_nightly))
+        print("Current Rust stable version: {}".format(rust_current_stable))
+        to_keep = set()
         if int(keep) == 1:
             # Optimize keep=1 case to not invoke git
-            to_keep['rust'].add(rust_current)
-            to_keep['cargo'].add(cargo_current)
+            to_keep.add(rust_current_nightly)
+            to_keep.add(rust_current_stable)
         else:
-            for tool in ["rust", "cargo"]:
-                commit_file = '{}-commit-hash'.format(tool)
+            for version_file in ['rust-toolchain', 'rust-stable-version']:
                 cmd = subprocess.Popen(
-                    ['git', 'log', '--pretty=format:%H', '-n', keep, commit_file],
+                    ['git', 'log', '--oneline', '--no-color', '-n', keep, '--patch', version_file],
                     stdout=subprocess.PIPE,
                     universal_newlines=True
                 )
                 stdout, _ = cmd.communicate()
-                for commit in stdout.splitlines():
-                    cmd = subprocess.Popen(
-                        ['git', 'show', '{}:{}'.format(commit, commit_file)],
-                        stdout=subprocess.PIPE,
-                        universal_newlines=True
-                    )
-                    commit_hash, _ = cmd.communicate()
-                    to_keep[tool].add(commit_hash.rstrip())
+                for line in stdout.splitlines():
+                    if line.startswith(b"+") and not line.startswith(b"+++"):
+                        line = line[len(b"+"):]
+                        if line.startswith(b"nightly-"):
+                            line = line[len(b"nightly-"):]
+                        to_keep.add(line)
 
         removing_anything = False
         for tool in ["rust", "cargo"]:
             base = path.join(self.context.sharedir, tool)
+            if not path.isdir(base):
+                continue
             for name in os.listdir(base):
-                # We append `-alt` if LLVM assertions aren't enabled,
-                # so use just the commit hash itself.
-                # This may occasionally leave an extra nightly behind
-                # but won't remove too many nightlies.
-                if name.partition('-')[0] not in to_keep[tool]:
+                full_path = path.join(base, name)
+                if name.startswith("rust-"):
+                    name = name[len("rust-"):]
+                if name.endswith("-alt"):
+                    name = name[:-len("-alt")]
+                if name not in to_keep:
                     removing_anything = True
-                    full_path = path.join(base, name)
                     if force:
                         print("Removing {}".format(full_path))
-                        delete(full_path)
+                        try:
+                            delete(full_path)
+                        except OSError as e:
+                            print("Removal failed with error {}".format(e))
                     else:
                         print("Would remove {}".format(full_path))
         if not removing_anything:
@@ -341,3 +332,176 @@ class MachCommands(CommandBase):
         elif not force:
             print("Nothing done. "
                   "Run `./mach clean-nightlies -f` to actually remove.")
+
+    @Command('clean-cargo-cache',
+             description='Clean unused Cargo packages',
+             category='bootstrap')
+    @CommandArgument('--force', '-f',
+                     action='store_true',
+                     help='Actually remove stuff')
+    @CommandArgument('--show-size', '-s',
+                     action='store_true',
+                     help='Show packages size')
+    @CommandArgument('--keep',
+                     default='1',
+                     help='Keep up to this many most recent dependencies')
+    @CommandArgument('--custom-path', '-c',
+                     action='store_true',
+                     help='Get Cargo path from CARGO_HOME environment variable')
+    def clean_cargo_cache(self, force=False, show_size=False, keep=None, custom_path=False):
+        def get_size(path):
+            if os.path.isfile(path):
+                return os.path.getsize(path) / (1024 * 1024.0)
+            total_size = 0
+            for dirpath, dirnames, filenames in os.walk(path):
+                for f in filenames:
+                    fp = os.path.join(dirpath, f)
+                    total_size += os.path.getsize(fp)
+            return total_size / (1024 * 1024.0)
+
+        removing_anything = False
+        packages = {
+            'crates': {},
+            'git': {},
+        }
+        import toml
+        if os.environ.get("CARGO_HOME", "") and custom_path:
+            cargo_dir = os.environ.get("CARGO_HOME")
+        else:
+            cargo_dir = path.join(self.context.topdir, ".cargo")
+        if not os.path.isdir(cargo_dir):
+            return
+        cargo_file = open(path.join(self.context.topdir, "Cargo.lock"))
+        content = toml.load(cargo_file)
+
+        for package in content.get("package", []):
+            source = package.get("source", "")
+            version = package["version"]
+            if source == u"registry+https://github.com/rust-lang/crates.io-index":
+                crate_name = "{}-{}".format(package["name"], version)
+                if not packages["crates"].get(crate_name, False):
+                    packages["crates"][package["name"]] = {
+                        "current": [],
+                        "exist": [],
+                    }
+                packages["crates"][package["name"]]["current"].append(crate_name)
+            elif source.startswith("git+"):
+                name = source.split("#")[0].split("/")[-1].replace(".git", "")
+                branch = ""
+                crate_name = "{}-{}".format(package["name"], source.split("#")[1])
+                crate_branch = name.split("?")
+                if len(crate_branch) > 1:
+                    branch = crate_branch[1].replace("branch=", "")
+                    name = crate_branch[0]
+
+                if not packages["git"].get(name, False):
+                    packages["git"][name] = {
+                        "current": [],
+                        "exist": [],
+                    }
+                packages["git"][name]["current"].append(source.split("#")[1][:7])
+                if branch:
+                    packages["git"][name]["current"].append(branch)
+
+        crates_dir = path.join(cargo_dir, "registry")
+        crates_cache_dir = ""
+        crates_src_dir = ""
+        if os.path.isdir(path.join(crates_dir, "cache")):
+            for p in os.listdir(path.join(crates_dir, "cache")):
+                crates_cache_dir = path.join(crates_dir, "cache", p)
+                crates_src_dir = path.join(crates_dir, "src", p)
+
+        git_dir = path.join(cargo_dir, "git")
+        git_db_dir = path.join(git_dir, "db")
+        git_checkout_dir = path.join(git_dir, "checkouts")
+        git_db_list = filter(lambda f: not f.startswith('.'), os.listdir(git_db_dir))
+        git_checkout_list = os.listdir(git_checkout_dir)
+
+        for d in list(set(git_db_list + git_checkout_list)):
+            crate_name = d.replace("-{}".format(d.split("-")[-1]), "")
+            if not packages["git"].get(crate_name, False):
+                packages["git"][crate_name] = {
+                    "current": [],
+                    "exist": [],
+                }
+            if os.path.isdir(path.join(git_checkout_dir, d)):
+                with cd(path.join(git_checkout_dir, d)):
+                    git_crate_hash = glob.glob('*')
+                if not git_crate_hash or not os.path.isdir(path.join(git_db_dir, d)):
+                    packages["git"][crate_name]["exist"].append(("del", d, ""))
+                    continue
+                for d2 in git_crate_hash:
+                    dep_path = path.join(git_checkout_dir, d, d2)
+                    if os.path.isdir(dep_path):
+                        packages["git"][crate_name]["exist"].append((path.getmtime(dep_path), d, d2))
+            elif os.path.isdir(path.join(git_db_dir, d)):
+                packages["git"][crate_name]["exist"].append(("del", d, ""))
+
+        for d in os.listdir(crates_src_dir):
+            crate_name = re.sub(r"\-\d+(\.\d+){1,3}.+", "", d)
+            if not packages["crates"].get(crate_name, False):
+                packages["crates"][crate_name] = {
+                    "current": [],
+                    "exist": [],
+                }
+            packages["crates"][crate_name]["exist"].append(d)
+
+        total_size = 0
+        for packages_type in ["git", "crates"]:
+            sorted_packages = sorted(packages[packages_type])
+            for crate_name in sorted_packages:
+                crate_count = 0
+                existed_crates = packages[packages_type][crate_name]["exist"]
+                for exist in sorted(existed_crates, reverse=True):
+                    current_crate = packages[packages_type][crate_name]["current"]
+                    size = 0
+                    exist_name = path.join(exist[1], exist[2]) if packages_type == "git" else exist
+                    exist_item = exist[2] if packages_type == "git" else exist
+                    if exist_item not in current_crate:
+                        crate_count += 1
+                        if int(crate_count) >= int(keep) or not current_crate or \
+                           exist[0] == "del" or exist[2] == "master":
+                            removing_anything = True
+                            crate_paths = []
+                            if packages_type == "git":
+                                exist_checkout_path = path.join(git_checkout_dir, exist[1])
+                                exist_db_path = path.join(git_db_dir, exist[1])
+                                exist_path = path.join(git_checkout_dir, exist_name)
+
+                                if exist[0] == "del":
+                                    if os.path.isdir(exist_checkout_path):
+                                        crate_paths.append(exist_checkout_path)
+                                    if os.path.isdir(exist_db_path):
+                                        crate_paths.append(exist_db_path)
+                                    crate_count += -1
+                                else:
+                                    crate_paths.append(exist_path)
+
+                                    exist_checkout_list = glob.glob(path.join(exist_checkout_path, '*'))
+                                    if len(exist_checkout_list) <= 1:
+                                        crate_paths.append(exist_checkout_path)
+                                        if os.path.isdir(exist_db_path):
+                                            crate_paths.append(exist_db_path)
+                            else:
+                                crate_paths.append(path.join(crates_cache_dir, "{}.crate".format(exist)))
+                                crate_paths.append(path.join(crates_src_dir, exist))
+
+                            size = sum(get_size(p) for p in crate_paths) if show_size else 0
+                            total_size += size
+                            print_msg = (exist_name, " ({}MB)".format(round(size, 2)) if show_size else "", cargo_dir)
+                            if force:
+                                print("Removing `{}`{} package from {}".format(*print_msg))
+                                for crate_path in crate_paths:
+                                    if os.path.exists(crate_path):
+                                        delete(crate_path)
+                            else:
+                                print("Would remove `{}`{} package from {}".format(*print_msg))
+
+        if removing_anything and show_size:
+            print("\nTotal size of {} MB".format(round(total_size, 2)))
+
+        if not removing_anything:
+            print("Nothing to remove.")
+        elif not force:
+            print("\nNothing done. "
+                  "Run `./mach clean-cargo-cache -f` to actually remove.")

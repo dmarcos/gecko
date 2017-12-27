@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -29,9 +30,8 @@ class nsListBoxBodyFrame final : public nsBoxFrame,
   virtual ~nsListBoxBodyFrame();
 
 public:
-  NS_DECL_QUERYFRAME_TARGET(nsListBoxBodyFrame)
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsListBoxBodyFrame)
 
   // non-virtual ListBoxObject
   int32_t GetNumberOfVisibleRows();
@@ -44,14 +44,14 @@ public:
 
   friend nsIFrame* NS_NewListBoxBodyFrame(nsIPresShell* aPresShell,
                                           nsStyleContext* aContext);
-  
+
   // nsIFrame
   virtual void Init(nsIContent*       aContent,
-                    nsContainerFrame* aParent, 
+                    nsContainerFrame* aParent,
                     nsIFrame*         aPrevInFlow) override;
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
-  virtual nsresult AttributeChanged(int32_t aNameSpaceID, nsIAtom* aAttribute, int32_t aModType) override;
+  virtual nsresult AttributeChanged(int32_t aNameSpaceID, nsAtom* aAttribute, int32_t aModType) override;
 
   // nsIScrollbarMediator
   virtual void ScrollByPage(nsScrollbarFrame* aScrollbar, int32_t aDirection,
@@ -90,9 +90,10 @@ public:
   virtual nsSize GetXULMinSizeForScrollArea(nsBoxLayoutState& aBoxLayoutState) override;
   virtual nsSize GetXULPrefSize(nsBoxLayoutState& aBoxLayoutState) override;
 
-  // size calculation 
+  // size calculation
   int32_t GetRowCount();
   int32_t GetRowHeightAppUnits() { return mRowHeight; }
+  int32_t GetRowHeightPixels() const;
   int32_t GetFixedRowSize();
   void SetRowHeight(nscoord aRowHeight);
   nscoord GetYPosition();
@@ -152,11 +153,13 @@ protected:
   class nsPositionChangedEvent : public mozilla::Runnable
   {
   public:
-    nsPositionChangedEvent(nsListBoxBodyFrame* aFrame,
-                           bool aUp, int32_t aDelta) :
-      mFrame(aFrame), mUp(aUp), mDelta(aDelta)
+    nsPositionChangedEvent(nsListBoxBodyFrame* aFrame, bool aUp, int32_t aDelta)
+      : mozilla::Runnable("nsListBoxBodyFrame::nsPositionChangedEvent")
+      , mFrame(aFrame)
+      , mUp(aUp)
+      , mDelta(aDelta)
     {}
-  
+
     NS_IMETHOD Run() override
     {
       if (!mFrame) {
@@ -201,7 +204,7 @@ protected:
 
   // scrolling
   int32_t mCurrentIndex; // Row-based
-  int32_t mOldIndex; 
+  int32_t mOldIndex;
   int32_t mYPosition;
   int32_t mTimePerRow;
 

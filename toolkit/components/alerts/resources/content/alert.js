@@ -70,7 +70,7 @@ function prefillAlertInfo() {
                                             1));
         let doNotDisturbMenuItem = document.getElementById("doNotDisturbMenuItem");
         doNotDisturbMenuItem.setAttribute("label",
-          ALERT_BUNDLE.formatStringFromName("doNotDisturb.label",
+          ALERT_BUNDLE.formatStringFromName("pauseNotifications.label",
                                             [BRAND_NAME],
                                             1));
         let disableForOrigin = document.getElementById("disableForOriginMenuItem");
@@ -169,7 +169,7 @@ function onAlertLoad() {
 
   // If the require interaction flag is set, prevent auto-closing the notification.
   if (!gRequireInteraction) {
-    if (Services.prefs.getBoolPref("alerts.disableSlidingEffect")) {
+    if (!Services.prefs.getBoolPref("toolkit.cosmeticAnimations.enabled")) {
       setTimeout(function() { window.close(); }, ALERT_DURATION_IMMEDIATE);
     } else {
       let alertBox = document.getElementById("alertBox");

@@ -1,3 +1,5 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -21,8 +23,6 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
                                   "resource://gre/modules/AddonManager.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
-                                  "resource://gre/modules/AppConstants.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Extension",
                                   "resource://gre/modules/Extension.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "ExtensionParent",
@@ -220,6 +220,7 @@ this.ExtensionTestCommon = class ExtensionTestCommon {
                   em:type="2"
                   em:version="${manifest.version}"
                   em:description=""
+                  em:multiprocessCompatible="true"
                   em:hasEmbeddedWebExtension="true"
                   em:bootstrap="true">
 
@@ -229,6 +230,13 @@ this.ExtensionTestCommon = class ExtensionTestCommon {
                           em:id="{ec8030f7-c20a-464f-9b0e-13a3a9e97384}"
                           em:minVersion="51.0a1"
                           em:maxVersion="*"/>
+                  </em:targetApplication>
+                  <em:targetApplication>
+                    <Description>
+                      <em:id>toolkit@mozilla.org</em:id>
+                      <em:minVersion>0</em:minVersion>
+                      <em:maxVersion>*</em:maxVersion>
+                    </Description>
                   </em:targetApplication>
               </Description>
           </RDF>
@@ -305,18 +313,12 @@ this.ExtensionTestCommon = class ExtensionTestCommon {
   }
 
   /**
-   * Properly serialize a script into eval-able code string.
+   * Properly serialize a function into eval-able code string.
    *
-   * @param {string|function|Array} script
+   * @param {function} script
    * @returns {string}
    */
-  static serializeScript(script) {
-    if (Array.isArray(script)) {
-      return script.map(this.serializeScript).join(";");
-    }
-    if (typeof script !== "function") {
-      return script;
-    }
+  static serializeFunction(script) {
     // Serialization of object methods doesn't include `function` anymore.
     const method = /^(async )?(\w+)\(/;
 
@@ -325,7 +327,23 @@ this.ExtensionTestCommon = class ExtensionTestCommon {
     if (match && match[2] !== "function") {
       code = code.replace(method, "$1function $2(");
     }
-    return `(${code})();`;
+    return code;
+  }
+
+  /**
+   * Properly serialize a script into eval-able code string.
+   *
+   * @param {string|function|Array} script
+   * @returns {string}
+   */
+  static serializeScript(script) {
+    if (Array.isArray(script)) {
+      return Array.from(script, this.serializeScript, this).join(";");
+    }
+    if (typeof script !== "function") {
+      return script;
+    }
+    return `(${this.serializeFunction(script)})();`;
   }
 
   /**

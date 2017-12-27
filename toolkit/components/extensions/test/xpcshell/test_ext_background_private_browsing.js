@@ -4,7 +4,7 @@
 
 Cu.import("resource://gre/modules/Preferences.jsm");
 
-function* testBackgroundPage(expected) {
+async function testBackgroundPage(expected) {
   let extension = ExtensionTestUtils.loadExtension({
     async background() {
       browser.test.assertEq(window, browser.extension.getBackgroundPage(),
@@ -16,25 +16,25 @@ function* testBackgroundPage(expected) {
     },
   });
 
-  yield extension.startup();
+  await extension.startup();
 
-  let incognito = yield extension.awaitMessage("incognito");
+  let incognito = await extension.awaitMessage("incognito");
   equal(incognito, expected.incognito, "Expected incognito value");
 
-  yield extension.unload();
+  await extension.unload();
 }
 
-add_task(function* test_background_incognito() {
-  do_print("Test background page incognito value with permanent private browsing disabled");
+add_task(async function test_background_incognito() {
+  info("Test background page incognito value with permanent private browsing disabled");
 
-  yield testBackgroundPage({incognito: false});
+  await testBackgroundPage({incognito: false});
 
-  do_print("Test background page incognito value with permanent private browsing enabled");
+  info("Test background page incognito value with permanent private browsing enabled");
 
   Preferences.set("browser.privatebrowsing.autostart", true);
-  do_register_cleanup(() => {
+  registerCleanupFunction(() => {
     Preferences.reset("browser.privatebrowsing.autostart");
   });
 
-  yield testBackgroundPage({incognito: true});
+  await testBackgroundPage({incognito: true});
 });

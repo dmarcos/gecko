@@ -3,13 +3,13 @@
     "message": "Rekam klip dan tangkapan layar dari Web dan simpan untuk sementara atau secara permanen."
   },
   "addonAuthorsList": {
-    "message": "Mozilla <screenshots-feedback@mozilla.org>"
+    "message": "Mozilla <screenshots-feedback@mozilla.com>"
   },
   "contextMenuLabel": {
-    "message": "Buat Tangkapan layar"
+    "message": "Buat Tangkapan Layar"
   },
   "myShotsLink": {
-    "message": "Gambar Saya"
+    "message": "Tangkapan Saya"
   },
   "screenshotInstructions": {
     "message": "Seret atau klik pada laman untuk memilih area. Tekan ESC untuk membatalkan."
@@ -29,6 +29,21 @@
   "downloadScreenshot": {
     "message": "Unduh"
   },
+  "downloadOnlyNotice": {
+    "message": "Anda saat ini berada di mode Hanya-Unduh."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots secara otomatis berganti ke mode Hanya-Unduh pada situasi berikut:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "Di jendela Penjelajahan Pribadi."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Kuki pihak ketiga dinonaktifkan."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "“Jangan pernah ingat riwayat” diaktifkan."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Tautan Disalin"
   },
@@ -36,6 +51,28 @@
     "message": "Tautan ke gambar Anda telah disalin ke papan klip. Tekan $META_KEY$-V untuk menempelkan.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Salin"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Tangkapan Disalin"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Tangkapan Anda telah disalin ke papan klip. Tekan $META_KEY$-V untuk menempelkan.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Gambar ini telah dipotong menjadi $PIXELS$px.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -64,35 +101,50 @@
   "selfScreenshotErrorTitle": {
     "message": "Anda tidak dapat merekam gambar dari laman Firefox Screenshots!"
   },
+  "emptySelectionErrorTitle": {
+    "message": "Seleksi Anda terlalu kecil"
+  },
+  "privateWindowErrorTitle": {
+    "message": "Screenshots dinonaktifkan di Mode Penjelajahan Pribadi"
+  },
+  "privateWindowErrorDetails": {
+    "message": "Maaf atas ketidaknyamanannya. Kami sedang mengerjakan fitur ini untuk peluncuran masa mendatang."
+  },
   "genericErrorTitle": {
     "message": "Wah! Firefox Screenshots mendadak kacau."
   },
   "genericErrorDetails": {
     "message": "Kami tidak yakin akan apa yang terjadi. Ingin mencoba lagi atau merekam gambar dari laman yang berbeda?"
   },
-  "tourBodyOne": {
+  "tourBodyIntro": {
     "message": "Ambil, simpan, dan bagikan tangkapan layar tanpa meninggalkan Firefox."
   },
-  "tourHeaderTwo": {
+  "tourHeaderPageAction": {
+    "message": "Cara baru untuk menyimpan"
+  },
+  "tourBodyPageAction": {
+    "message": "Bentangkan menu tindakan laman di bilah alamat setiap kali Anda ingin buat tangkapan layar."
+  },
+  "tourHeaderClickAndDrag": {
     "message": "Rekam Bagian Yang Anda Inginkan"
   },
-  "tourBodyTwo": {
+  "tourBodyClickAndDrag": {
     "message": "Klik dan seret untuk merekam sebagian area laman. Anda juga dapat menggeser kursor untuk menyoroti pilihan Anda."
   },
-  "tourHeaderThree": {
-    "message": "Sesuka Anda"
-  },
-  "tourBodyThree": {
-    "message": "Simpan potongan tangkapan Anda ke Web agar mudah dibagikan, atau unduh ke komputer. Anda pun dapat mengeklik pada tombol Gambar Saya untuk menemukan semua tangkapan yang pernah Anda rekam."
-  },
-  "tourHeaderFour": {
+  "tourHeaderFullPage": {
     "message": "Rekam Jendela atau Seluruh Laman"
   },
-  "tourBodyFour": {
+  "tourBodyFullPage": {
     "message": "Pilih tombol di kanan atas untuk merekam area yang terlihat pada jendela atau rekam seluruh laman."
   },
+  "tourHeaderDownloadUpload": {
+    "message": "Sesuka Anda"
+  },
+  "tourBodyDownloadUpload": {
+    "message": "Simpan potongan tangkapan Anda ke Web agar mudah dibagikan, atau unduh ke komputer. Anda pun dapat mengeklik pada tombol Gambar Saya untuk menemukan semua tangkapan yang pernah Anda rekam."
+  },
   "tourSkip": {
-    "message": "Lewati"
+    "message": "LEWATI"
   },
   "tourNext": {
     "message": "Salindia Selanjutnya"
@@ -103,8 +155,8 @@
   "tourDone": {
     "message": "Selesai"
   },
-  "termsAndPrivacyNotice": {
-    "message": "Dengan menggunakan Firefox Screenshots, Anda setuju dengan $TERMSANDPRIVACYNOTICETERMSLINK$ dan $TERMSANDPRIVACYNOTICEPRIVACYLINK$ Screenshots.",
+  "termsAndPrivacyNotice2": {
+    "message": "Dengan menggunakan Firefox Screenshots, Anda setuju dengan $TERMSANDPRIVACYNOTICETERMSLINK$ dan $TERMSANDPRIVACYNOTICEPRIVACYLINK$ kami.",
     "placeholders": {
       "termsandprivacynoticetermslink": {
         "content": "$1"
@@ -119,5 +171,8 @@
   },
   "termsAndPrivacyNoticyPrivacyLink": {
     "message": "Kebijakan Privasi"
+  },
+  "libraryLabel": {
+    "message": "Screenshots"
   }
 }

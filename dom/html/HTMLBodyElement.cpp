@@ -7,6 +7,8 @@
 #include "HTMLBodyElement.h"
 #include "mozilla/dom/HTMLBodyElementBinding.h"
 #include "mozilla/GenericSpecifiedValuesInlines.h"
+#include "mozilla/HTMLEditor.h"
+#include "mozilla/TextEditor.h"
 #include "nsAttrValueInlines.h"
 #include "nsGkAtoms.h"
 #include "nsStyleConsts.h"
@@ -14,7 +16,6 @@
 #include "nsIPresShell.h"
 #include "nsIDocument.h"
 #include "nsHTMLStyleSheet.h"
-#include "nsIEditor.h"
 #include "nsMappedAttributes.h"
 #include "nsIDocShell.h"
 #include "nsRuleWalker.h"
@@ -37,117 +38,15 @@ HTMLBodyElement::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto)
   return HTMLBodyElementBinding::Wrap(aCx, this, aGivenProto);
 }
 
-NS_IMPL_ISUPPORTS_INHERITED(HTMLBodyElement, nsGenericHTMLElement,
-                            nsIDOMHTMLBodyElement)
+NS_IMPL_ISUPPORTS_INHERITED0(HTMLBodyElement, nsGenericHTMLElement)
 
 NS_IMPL_ELEMENT_CLONE(HTMLBodyElement)
 
-NS_IMETHODIMP 
-HTMLBodyElement::SetBackground(const nsAString& aBackground)
-{
-  ErrorResult rv;
-  SetBackground(aBackground, rv);
-  return rv.StealNSResult();
-}
-
-NS_IMETHODIMP
-HTMLBodyElement::GetBackground(nsAString& aBackground)
-{
-  DOMString background;
-  GetBackground(background);
-  background.ToString(aBackground);
-  return NS_OK;
-}
-
-NS_IMETHODIMP 
-HTMLBodyElement::SetVLink(const nsAString& aVLink)
-{
-  ErrorResult rv;
-  SetVLink(aVLink, rv);
-  return rv.StealNSResult();
-}
-
-NS_IMETHODIMP
-HTMLBodyElement::GetVLink(nsAString& aVLink)
-{
-  DOMString vLink;
-  GetVLink(vLink);
-  vLink.ToString(aVLink);
-  return NS_OK;
-}
-
-NS_IMETHODIMP 
-HTMLBodyElement::SetALink(const nsAString& aALink)
-{
-  ErrorResult rv;
-  SetALink(aALink, rv);
-  return rv.StealNSResult();
-}
-
-NS_IMETHODIMP
-HTMLBodyElement::GetALink(nsAString& aALink)
-{
-  DOMString aLink;
-  GetALink(aLink);
-  aLink.ToString(aALink);
-  return NS_OK;
-}
-
-NS_IMETHODIMP 
-HTMLBodyElement::SetLink(const nsAString& aLink)
-{
-  ErrorResult rv;
-  SetLink(aLink, rv);
-  return rv.StealNSResult();
-}
-
-NS_IMETHODIMP
-HTMLBodyElement::GetLink(nsAString& aLink)
-{
-  DOMString link;
-  GetLink(link);
-  link.ToString(aLink);
-  return NS_OK;
-}
-
-NS_IMETHODIMP 
-HTMLBodyElement::SetText(const nsAString& aText)
-{
-  ErrorResult rv;
-  SetText(aText, rv);
-  return rv.StealNSResult();
-}
-
-NS_IMETHODIMP
-HTMLBodyElement::GetText(nsAString& aText)
-{
-  DOMString text;
-  GetText(text);
-  text.ToString(aText);
-  return NS_OK;
-}
-
-NS_IMETHODIMP 
-HTMLBodyElement::SetBgColor(const nsAString& aBgColor)
-{
-  ErrorResult rv;
-  SetBgColor(aBgColor, rv);
-  return rv.StealNSResult();
-}
-
-NS_IMETHODIMP
-HTMLBodyElement::GetBgColor(nsAString& aBgColor)
-{
-  DOMString bgColor;
-  GetBgColor(bgColor);
-  bgColor.ToString(aBgColor);
-  return NS_OK;
-}
-
 bool
 HTMLBodyElement::ParseAttribute(int32_t aNamespaceID,
-                                nsIAtom* aAttribute,
+                                nsAtom* aAttribute,
                                 const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None) {
@@ -172,7 +71,7 @@ HTMLBodyElement::ParseAttribute(int32_t aNamespaceID,
                                                         aAttribute, aValue,
                                                         aResult) ||
          nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                              aResult);
+                                              aMaybeScriptedPrincipal, aResult);
 }
 
 void
@@ -195,11 +94,6 @@ HTMLBodyElement::MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
     int32_t bodyBottomMargin = -1;
     int32_t bodyLeftMargin = -1;
     int32_t bodyRightMargin = -1;
-
-    // check the mode (fortunately, the GenericSpecifiedValues has a presContext for us to use!)
-    NS_ASSERTION(aData->mPresContext, "null presContext in MapAttributesIntoRule was unexpected");
-    nsCompatibility mode = aData->mPresContext->CompatibilityMode();
-
 
     const nsAttrValue* value;
     // if marginwidth/marginheight are set, reflect them as 'margin'
@@ -279,20 +173,6 @@ HTMLBodyElement::MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
         nscoord frameMarginHeight=-1; // default value
         docShell->GetMarginWidth(&frameMarginWidth); // -1 indicates not set
         docShell->GetMarginHeight(&frameMarginHeight);
-        if (frameMarginWidth >= 0 && bodyMarginWidth == -1) { // set in <frame> & not in <body>
-          if (eCompatibility_NavQuirks == mode) {
-            if (bodyMarginHeight == -1 && 0 > frameMarginHeight) { // nav quirk
-              frameMarginHeight = 0;
-            }
-          }
-        }
-        if (frameMarginHeight >= 0 && bodyMarginHeight == -1) { // set in <frame> & not in <body>
-          if (eCompatibility_NavQuirks == mode) {
-            if (bodyMarginWidth == -1 && 0 > frameMarginWidth) { // nav quirk
-              frameMarginWidth = 0;
-            }
-          }
-        }
 
         if (bodyMarginWidth == -1 && frameMarginWidth >= 0) {
           if (bodyLeftMargin == -1) {
@@ -366,7 +246,7 @@ HTMLBodyElement::GetAttributeMappingFunction() const
 }
 
 NS_IMETHODIMP_(bool)
-HTMLBodyElement::IsAttributeMapped(const nsIAtom* aAttribute) const
+HTMLBodyElement::IsAttributeMapped(const nsAtom* aAttribute) const
 {
   static const MappedAttributeEntry attributes[] = {
     { &nsGkAtoms::link },
@@ -391,12 +271,12 @@ HTMLBodyElement::IsAttributeMapped(const nsIAtom* aAttribute) const
   return FindAttributeDependence(aAttribute, map);
 }
 
-already_AddRefed<nsIEditor>
+already_AddRefed<TextEditor>
 HTMLBodyElement::GetAssociatedEditor()
 {
-  nsCOMPtr<nsIEditor> editor = GetEditorInternal();
-  if (editor) {
-    return editor.forget();
+  RefPtr<TextEditor> textEditor = GetTextEditorInternal();
+  if (textEditor) {
+    return textEditor.forget();
   }
 
   // Make sure this is the actual body of the document
@@ -415,12 +295,12 @@ HTMLBodyElement::GetAssociatedEditor()
     return nullptr;
   }
 
-  docShell->GetEditor(getter_AddRefs(editor));
-  return editor.forget();
+  RefPtr<HTMLEditor> htmlEditor = docShell->GetHTMLEditor();
+  return htmlEditor.forget();
 }
 
 bool
-HTMLBodyElement::IsEventAttributeName(nsIAtom *aName)
+HTMLBodyElement::IsEventAttributeNameInternal(nsAtom *aName)
 {
   return nsContentUtils::IsEventAttributeName(aName,
                                               EventNameType_HTML |
@@ -440,12 +320,15 @@ HTMLBodyElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
 }
 
 nsresult
-HTMLBodyElement::AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
+HTMLBodyElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                               const nsAttrValue* aValue,
+                              const nsAttrValue* aOldValue,
+                              nsIPrincipal* aSubjectPrincipal,
                               bool aNotify)
 {
   nsresult rv = nsGenericHTMLElement::AfterSetAttr(aNameSpaceID,
-                                                   aName, aValue, aNotify);
+                                                   aName, aValue, aOldValue,
+                                                   aSubjectPrincipal, aNotify);
   NS_ENSURE_SUCCESS(rv, rv);
   // if the last mapped attribute was removed, don't clear the
   // nsMappedAttributes, our style can still depend on the containing frame element
@@ -466,7 +349,7 @@ HTMLBodyElement::AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
   HTMLBodyElement::GetOn##name_()                                              \
   {                                                                            \
     if (nsPIDOMWindowInner* win = OwnerDoc()->GetInnerWindow()) {              \
-      nsGlobalWindow* globalWin = nsGlobalWindow::Cast(win);                   \
+      nsGlobalWindowInner* globalWin = nsGlobalWindowInner::Cast(win);         \
       return globalWin->GetOn##name_();                                        \
     }                                                                          \
     return nullptr;                                                            \
@@ -479,7 +362,7 @@ HTMLBodyElement::AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
       return;                                                                  \
     }                                                                          \
                                                                                \
-    nsGlobalWindow* globalWin = nsGlobalWindow::Cast(win);                     \
+    nsGlobalWindowInner* globalWin = nsGlobalWindowInner::Cast(win);           \
     return globalWin->SetOn##name_(handler);                                   \
   }
 #define WINDOW_EVENT(name_, id_, type_, struct_)                               \

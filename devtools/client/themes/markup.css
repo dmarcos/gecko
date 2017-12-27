@@ -3,11 +3,19 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 :root {
+  --markup-hidden-attr-name-color: #CA60AC;
+  --markup-hidden-attr-value-color: #5C6D87;
+  --markup-hidden-punctuation-color: #909090;
+  --markup-hidden-tag-color: #97A4B3;
   --markup-outline: var(--theme-splitter-color);
 }
 
 .theme-dark:root {
-  --markup-outline: var(--theme-highlight-pink);
+  --markup-hidden-attr-name-color: #CC8EC8;
+  --markup-hidden-attr-value-color: #9893A3;
+  --markup-hidden-punctuation-color: #909090;
+  --markup-hidden-tag-color: #AFB5BF;
+  --markup-outline: var(--theme-selection-background);
 }
 
 * {
@@ -175,6 +183,11 @@ ul.children + .tag-line::before {
   z-index: 0;
 }
 
+.tag-line .tag-hover:not(.theme-selected) {
+  background: var(--theme-selection-background-hover);
+  z-index: -1;
+}
+
 .expander {
   display: inline-block;
   margin-left: -14px;
@@ -261,6 +274,10 @@ ul.children + .tag-line::before {
   z-index: 1;
 }
 
+.editor.comment:not(.doctype) {
+  color: var(--theme-highlight-green);
+}
+
 .editor.text {
   display: inline-block;
 }
@@ -268,6 +285,10 @@ ul.children + .tag-line::before {
 .editor.text pre,
 .editor.comment pre {
   font: inherit;
+}
+
+.theme-dark .editor.text pre {
+  color: var(--theme-content-color1);
 }
 
 /* Whitespace only text nodes are sometimes shown in the markup-view, and when they do
@@ -319,6 +340,22 @@ ul.children + .tag-line::before {
   z-index: 1;
 }
 
+.not-displayed {
+  color: var(--markup-hidden-punctuation-color);
+}
+
+.not-displayed .attr-name {
+  color: var(--markup-hidden-attr-name-color);
+}
+
+.not-displayed .attr-value {
+  color: var(--markup-hidden-attr-value-color);
+}
+
+.not-displayed .tag {
+  color: var(--markup-hidden-tag-color);
+}
+
 /* Firebug Theme */
 
 .theme-firebug .theme-fg-color3 {
@@ -340,10 +377,17 @@ ul.children + .tag-line::before {
   font-size: var(--theme-toolbar-font-size);
 }
 
+/* In case a node isn't displayed in the page, we fade the syntax highlighting */
+.theme-firebug .not-displayed .open,
+.theme-firebug .not-displayed .close {
+  opacity: .5;
+}
+
 /* Selected nodes in the tree should have light selected text.
    theme-selected doesn't work in this case since the text is a
    sibling of the class, not a child. */
 .theme-selected ~ .editor,
+.theme-selected ~ .editor.comment,
 .theme-selected ~ .editor .theme-fg-color1,
 .theme-selected ~ .editor .theme-fg-color2,
 .theme-selected ~ .editor .theme-fg-color3,
@@ -368,12 +412,6 @@ ul.children + .tag-line::before {
 
 .theme-firebug .doctype {
   color: #787878;
-}
-
-/* In case a node isn't displayed in the page, we fade the syntax highlighting */
-.not-displayed .open,
-.not-displayed .close {
-  opacity: .5;
 }
 
 /* Events */

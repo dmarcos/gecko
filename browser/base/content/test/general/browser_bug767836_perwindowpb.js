@@ -2,9 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
-/* globals waitForExplicitFinish, executeSoon, finish, whenNewWindowLoaded, ok */
-/* globals is */
-/* exported test */
 
 function test() {
   // initialization
@@ -78,12 +75,14 @@ function openNewTab(aWindow, aCallback) {
   aWindow.BrowserOpenTab();
 
   let browser = aWindow.gBrowser.selectedBrowser;
-  if (browser.contentDocument.readyState === "complete") {
+  // eslint-disable-next-line mozilla/no-cpows-in-tests
+  let doc = browser.contentDocumentAsCPOW;
+  if (doc && doc.readyState === "complete") {
     executeSoon(aCallback);
     return;
   }
 
-  browser.addEventListener("load", function() {
+  BrowserTestUtils.browserLoaded(browser).then(() => {
     executeSoon(aCallback);
-  }, {capture: true, once: true});
+  });
 }

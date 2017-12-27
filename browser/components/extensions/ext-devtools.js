@@ -2,17 +2,19 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-/* global getTargetTabIdForToolbox */
+/* exported getDevToolsTargetForContext, getInspectedWindowFront, getToolboxEvalOptions */
+/* global getTargetTabIdForToolbox, getDevToolsTargetForContext, getInspectedWindowFront, getToolboxEvalOptions */
+
+// The ext-* files are imported into the same scopes.
+/* import-globals-from ext-browser.js */
 
 /**
  * This module provides helpers used by the other specialized `ext-devtools-*.js` modules
  * and the implementation of the `devtools_page`.
  */
 
-XPCOMUtils.defineLazyModuleGetter(this, "gDevTools",
-                                  "resource://devtools/client/framework/gDevTools.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Task",
-                                  "resource://gre/modules/Task.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "DevToolsShim",
+                                  "chrome://devtools-shim/content/DevToolsShim.jsm");
 
 Cu.import("resource://gre/modules/ExtensionParent.jsm");
 
@@ -37,28 +39,26 @@ let initDevTools;
  * @returns {Promise<TabTarget>}
  *   The cloned devtools target associated to the context.
  */
-global.getDevToolsTargetForContext = (context) => {
-  return Task.spawn(function* asyncGetTabTarget() {
-    if (context.devToolsTarget) {
-      yield context.devToolsTarget.makeRemote();
-      return context.devToolsTarget;
-    }
-
-    if (!context.devToolsToolbox || !context.devToolsToolbox.target) {
-      throw new Error("Unable to get a TabTarget for a context not associated to any toolbox");
-    }
-
-    if (!context.devToolsToolbox.target.isLocalTab) {
-      throw new Error("Unexpected target type: only local tabs are currently supported.");
-    }
-
-    const {TabTarget} = require("devtools/client/framework/target");
-
-    context.devToolsTarget = new TabTarget(context.devToolsToolbox.target.tab);
-    yield context.devToolsTarget.makeRemote();
-
+global.getDevToolsTargetForContext = async (context) => {
+  if (context.devToolsTarget) {
+    await context.devToolsTarget.makeRemote();
     return context.devToolsTarget;
-  });
+  }
+
+  if (!context.devToolsToolbox || !context.devToolsToolbox.target) {
+    throw new Error("Unable to get a TabTarget for a context not associated to any toolbox");
+  }
+
+  if (!context.devToolsToolbox.target.isLocalTab) {
+    throw new Error("Unexpected target type: only local tabs are currently supported.");
+  }
+
+  const tab = context.devToolsToolbox.target.tab;
+  context.devToolsTarget = DevToolsShim.createTargetForTab(tab);
+
+  await context.devToolsTarget.makeRemote();
+
+  return context.devToolsTarget;
 };
 
 /**
@@ -83,6 +83,36 @@ global.getTargetTabIdForToolbox = (toolbox) => {
   let tab = parentWindow.gBrowser.getTabForBrowser(target.tab.linkedBrowser);
 
   return tabTracker.getId(tab);
+};
+
+// Create an InspectedWindowFront instance for a given context (used in devtoools.inspectedWindow.eval
+// and in sidebar.setExpression API methods).
+global.getInspectedWindowFront = async function(context) {
+  // If there is not yet a front instance, then a lazily cloned target for the context is
+  // retrieved using the DevtoolsParentContextsManager helper (which is an asynchronous operation,
+  // because the first time that the target has been cloned, it is not ready to be used to create
+  // the front instance until it is connected to the remote debugger successfully).
+  const clonedTarget = await getDevToolsTargetForContext(context);
+  return DevToolsShim.createWebExtensionInspectedWindowFront(clonedTarget);
+};
+
+// Get the WebExtensionInspectedWindowActor eval options (needed to provide the $0 and inspect
+// binding provided to the evaluated js code).
+global.getToolboxEvalOptions = function(context) {
+  const options = {};
+  const toolbox = context.devToolsToolbox;
+  const selectedNode = toolbox.selection;
+
+  if (selectedNode && selectedNode.nodeFront) {
+    // If there is a selected node in the inspector, we hand over
+    // its actor id to the eval request in order to provide the "$0" binding.
+    options.toolboxSelectedNodeActorID = selectedNode.nodeFront.actorID;
+  }
+
+  // Provide the console actor ID to implement the "inspect" binding.
+  options.toolboxConsoleActorID = toolbox.target.form.consoleActor;
+
+  return options;
 };
 
 /**
@@ -119,37 +149,36 @@ class DevToolsPage extends HiddenExtensionPage {
     });
   }
 
-  build() {
-    return Task.spawn(function* () {
-      yield this.createBrowserElement();
+  async build() {
+    await this.createBrowserElement();
 
-      // Listening to new proxy contexts.
-      this.unwatchExtensionProxyContextLoad = watchExtensionProxyContextLoad(this, context => {
-        // Keep track of the toolbox and target associated to the context, which is
-        // needed by the API methods implementation.
-        context.devToolsToolbox = this.toolbox;
+    // Listening to new proxy contexts.
+    this.unwatchExtensionProxyContextLoad = watchExtensionProxyContextLoad(this, context => {
+      // Keep track of the toolbox and target associated to the context, which is
+      // needed by the API methods implementation.
+      context.devToolsToolbox = this.toolbox;
 
-        if (!this.topLevelContext) {
-          this.topLevelContext = context;
+      if (!this.topLevelContext) {
+        this.topLevelContext = context;
 
-          // Ensure this devtools page is destroyed, when the top level context proxy is
-          // closed.
-          this.topLevelContext.callOnClose(this);
+        // Ensure this devtools page is destroyed, when the top level context proxy is
+        // closed.
+        this.topLevelContext.callOnClose(this);
 
-          this.resolveTopLevelContext(context);
-        }
-      });
+        this.resolveTopLevelContext(context);
+      }
+    });
 
-      extensions.emit("extension-browser-inserted", this.browser, {
-        devtoolsToolboxInfo: {
-          inspectedWindowTabId: getTargetTabIdForToolbox(this.toolbox),
-        },
-      });
+    extensions.emit("extension-browser-inserted", this.browser, {
+      devtoolsToolboxInfo: {
+        inspectedWindowTabId: getTargetTabIdForToolbox(this.toolbox),
+        themeName: DevToolsShim.getTheme(),
+      },
+    });
 
-      this.browser.loadURI(this.url);
+    this.browser.loadURI(this.url);
 
-      yield this.waitForTopLevelContext;
-    }.bind(this));
+    await this.waitForTopLevelContext;
   }
 
   close() {
@@ -206,6 +235,10 @@ class DevToolsPageDefinition {
     this.devtoolsPageForTarget = new Map();
   }
 
+  onThemeChanged(evt, themeName) {
+    Services.ppmm.broadcastAsyncMessage("Extension:DevToolsThemeChanged", {themeName});
+  }
+
   buildForToolbox(toolbox) {
     if (this.devtoolsPageForTarget.has(toolbox.target)) {
       return Promise.reject(new Error("DevtoolsPage has been already created for this toolbox"));
@@ -214,6 +247,11 @@ class DevToolsPageDefinition {
     const devtoolsPage = new DevToolsPage(this.extension, {
       toolbox, url: this.url, devToolsPageDefinition: this,
     });
+
+    // If this is the first DevToolsPage, subscribe to the theme-changed event
+    if (this.devtoolsPageForTarget.size === 0) {
+      DevToolsShim.on("theme-changed", this.onThemeChanged);
+    }
     this.devtoolsPageForTarget.set(toolbox.target, devtoolsPage);
 
     return devtoolsPage.build();
@@ -228,6 +266,11 @@ class DevToolsPageDefinition {
       // raise an exception if it is still there.
       if (this.devtoolsPageForTarget.has(target)) {
         throw new Error(`Leaked DevToolsPage instance for target "${target.toString()}"`);
+      }
+
+      // If this was the last DevToolsPage, unsubscribe from the theme-changed event
+      if (this.devtoolsPageForTarget.size === 0) {
+        DevToolsShim.off("theme-changed", this.onThemeChanged);
       }
     }
   }
@@ -259,7 +302,7 @@ initDevTools = function() {
   /* eslint-disable mozilla/balanced-listeners */
   // Create a devtools page context for a new opened toolbox,
   // based on the registered devtools_page definitions.
-  gDevTools.on("toolbox-created", (evt, toolbox) => {
+  DevToolsShim.on("toolbox-created", (evt, toolbox) => {
     if (!toolbox.target.isLocalTab) {
       // Only local tabs are currently supported (See Bug 1304378 for additional details
       // related to remote targets support).
@@ -268,8 +311,7 @@ initDevTools = function() {
                 "Only local tab are currently supported by the WebExtensions DevTools API.";
       let scriptError = Cc["@mozilla.org/scripterror;1"].createInstance(Ci.nsIScriptError);
       scriptError.init(msg, null, null, null, null, Ci.nsIScriptError.warningFlag, "content javascript");
-      let consoleService = Cc["@mozilla.org/consoleservice;1"].getService(Ci.nsIConsoleService);
-      consoleService.logMessage(scriptError);
+      Services.console.logMessage(scriptError);
 
       return;
     }
@@ -281,7 +323,7 @@ initDevTools = function() {
 
   // Destroy a devtools page context for a destroyed toolbox,
   // based on the registered devtools_page definitions.
-  gDevTools.on("toolbox-destroy", (evt, target) => {
+  DevToolsShim.on("toolbox-destroy", (evt, target) => {
     if (!target.isLocalTab) {
       // Only local tabs are currently supported (See Bug 1304378 for additional details
       // related to remote targets support).

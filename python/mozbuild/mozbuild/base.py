@@ -13,9 +13,12 @@ import subprocess
 import sys
 import which
 
-from mach.mixin.logging import LoggingMixin
 from mach.mixin.process import ProcessExecutionMixin
-from mozversioncontrol import get_repository_object
+from mozversioncontrol import (
+    get_repository_from_build_config,
+    get_repository_object,
+    InvalidRepoPath,
+)
 
 from .backend.configenvironment import ConfigEnvironment
 from .controller.clobber import Clobberer
@@ -24,6 +27,7 @@ from .mozconfig import (
     MozconfigLoadException,
     MozconfigLoader,
 )
+from .pythonutil import find_python3_executable
 from .util import memoized_property
 from .virtualenv import VirtualenvManager
 
@@ -211,8 +215,7 @@ class MozbuildObject(ProcessExecutionMixin):
         """
         if not isinstance(self._mozconfig, dict):
             loader = MozconfigLoader(self.topsrcdir)
-            self._mozconfig = loader.read_mozconfig(path=self._mozconfig,
-                moz_build_app=os.environ.get('MOZ_CURRENT_PROJECT'))
+            self._mozconfig = loader.read_mozconfig(path=self._mozconfig)
 
         return self._mozconfig
 
@@ -265,6 +268,21 @@ class MozbuildObject(ProcessExecutionMixin):
     def statedir(self):
         return os.path.join(self.topobjdir, '.mozbuild')
 
+    @property
+    def platform(self):
+        """Returns current platform and architecture name"""
+        import mozinfo
+        platform_name = None
+        bits = str(mozinfo.info['bits'])
+        if mozinfo.isLinux:
+            platform_name = "linux" + bits
+        elif mozinfo.isWin:
+            platform_name = "win" + bits
+        elif mozinfo.isMac:
+            platform_name = "macosx" + bits
+
+        return platform_name, bits + 'bit'
+
     @memoized_property
     def extra_environment_variables(self):
         '''Some extra environment variables are stored in .mozconfig.mk.
@@ -286,7 +304,107 @@ class MozbuildObject(ProcessExecutionMixin):
     def repository(self):
         '''Get a `mozversioncontrol.Repository` object for the
         top source directory.'''
+        # We try to obtain a repo using the configured VCS info first.
+        # If we don't have a configure context, fall back to auto-detection.
+        try:
+            return get_repository_from_build_config(self)
+        except BuildEnvironmentNotFoundException:
+            pass
+
         return get_repository_object(self.topsrcdir)
+
+    def mozbuild_reader(self, config_mode='build', vcs_revision=None,
+                        vcs_check_clean=True):
+        """Obtain a ``BuildReader`` for evaluating moz.build files.
+
+        Given arguments, returns a ``mozbuild.frontend.reader.BuildReader``
+        that can be used to evaluate moz.build files for this repo.
+
+        ``config_mode`` is either ``build`` or ``empty``. If ``build``,
+        ``self.config_environment`` is used. This requires a configured build
+        system to work. If ``empty``, an empty config is used. ``empty`` is
+        appropriate for file-based traversal mode where ``Files`` metadata is
+        read.
+
+        If ``vcs_revision`` is defined, it specifies a version control revision
+        to use to obtain files content. The default is to use the filesystem.
+        This mode is only supported with Mercurial repositories.
+
+        If ``vcs_revision`` is not defined and the version control checkout is
+        sparse, this implies ``vcs_revision='.'``.
+
+        If ``vcs_revision`` is ``.`` (denotes the parent of the working
+        directory), we will verify that the working directory is clean unless
+        ``vcs_check_clean`` is False. This prevents confusion due to uncommitted
+        file changes not being reflected in the reader.
+        """
+        from mozbuild.frontend.reader import (
+            default_finder,
+            BuildReader,
+            EmptyConfig,
+        )
+        from mozpack.files import (
+            MercurialRevisionFinder,
+        )
+
+        if config_mode == 'build':
+            config = self.config_environment
+        elif config_mode == 'empty':
+            config = EmptyConfig(self.topsrcdir)
+        else:
+            raise ValueError('unknown config_mode value: %s' % config_mode)
+
+        try:
+            repo = self.repository
+        except InvalidRepoPath:
+            repo = None
+
+        if repo and not vcs_revision and repo.sparse_checkout_present():
+            vcs_revision = '.'
+
+        if vcs_revision is None:
+            finder = default_finder
+        else:
+            # If we failed to detect the repo prior, check again to raise its
+            # exception.
+            if not repo:
+                self.repository
+                assert False
+
+            if repo.name != 'hg':
+                raise Exception('do not support VCS reading mode for %s' %
+                                repo.name)
+
+            if vcs_revision == '.' and vcs_check_clean:
+                with repo:
+                    if not repo.working_directory_clean():
+                        raise Exception('working directory is not clean; '
+                                        'refusing to use a VCS-based finder')
+
+            finder = MercurialRevisionFinder(self.topsrcdir, rev=vcs_revision,
+                                             recognize_repo_paths=True)
+
+        return BuildReader(config, finder=finder)
+
+
+    @memoized_property
+    def python3(self):
+        """Obtain info about a Python 3 executable.
+
+        Returns a tuple of an executable path and its version (as a tuple).
+        Either both entries will have a value or both will be None.
+        """
+        # Search configured build info first. Then fall back to system.
+        try:
+            subst = self.substs
+
+            if 'PYTHON3' in subst:
+                version = tuple(map(int, subst['PYTHON3_VERSION'].split('.')))
+                return subst['PYTHON3'], version
+        except BuildEnvironmentNotFoundException:
+            pass
+
+        return find_python3_executable()
 
     def is_clobber_needed(self):
         if not os.path.exists(self.topobjdir):
@@ -361,7 +479,7 @@ class MozbuildObject(ProcessExecutionMixin):
         args = o._normalize_command([p], True)
 
         _config_guess_output.append(
-                subprocess.check_output(args, cwd=self.topsrcdir).strip())
+                subprocess.check_output(args, cwd=self.topsrcdir, shell=True).strip())
         return _config_guess_output[0]
 
     def notify(self, msg):
@@ -451,7 +569,7 @@ class MozbuildObject(ProcessExecutionMixin):
             srcdir=False, allow_parallel=True, line_handler=None,
             append_env=None, explicit_env=None, ignore_errors=False,
             ensure_exit_code=0, silent=True, print_directory=True,
-            pass_thru=False, num_jobs=0):
+            pass_thru=False, num_jobs=0, keep_going=False):
         """Invoke make.
 
         directory -- Relative directory to look for Makefile in.
@@ -513,6 +631,9 @@ class MozbuildObject(ProcessExecutionMixin):
         if print_directory:
             args.append('-w')
 
+        if keep_going:
+            args.append('-k')
+
         if isinstance(target, list):
             args.extend(target)
         elif target:
@@ -551,7 +672,7 @@ class MozbuildObject(ProcessExecutionMixin):
         baseconfig = os.path.join(self.topsrcdir, 'config', 'baseconfig.mk')
 
         def is_xcode_lisense_error(output):
-            return self._is_osx() and 'Agreeing to the Xcode' in output
+            return self._is_osx() and b'Agreeing to the Xcode' in output
 
         def validate_make(make):
             if os.path.exists(baseconfig) and os.path.exists(make):
@@ -622,6 +743,10 @@ class MozbuildObject(ProcessExecutionMixin):
     def _activate_virtualenv(self):
         self.virtualenv_manager.ensure()
         self.virtualenv_manager.activate()
+
+
+    def _set_log_level(self, verbose):
+        self.log_manager.terminal_handler.setLevel(logging.INFO if not verbose else logging.DEBUG)
 
 
 class MachCommandBase(MozbuildObject):
@@ -735,37 +860,6 @@ class MachCommandConditions(object):
         return False
 
     @staticmethod
-    def is_mulet(cls):
-        """Must have a Mulet build."""
-        if hasattr(cls, 'substs'):
-            return cls.substs.get('MOZ_BUILD_APP') == 'b2g/dev'
-        return False
-
-    @staticmethod
-    def is_b2g(cls):
-        """Must have a B2G build."""
-        if hasattr(cls, 'substs'):
-            return cls.substs.get('MOZ_WIDGET_TOOLKIT') == 'gonk'
-        return False
-
-    @staticmethod
-    def is_b2g_desktop(cls):
-        """Must have a B2G desktop build."""
-        if hasattr(cls, 'substs'):
-            return cls.substs.get('MOZ_BUILD_APP') == 'b2g' and \
-                   cls.substs.get('MOZ_WIDGET_TOOLKIT') != 'gonk'
-        return False
-
-    @staticmethod
-    def is_emulator(cls):
-        """Must have a B2G build with an emulator configured."""
-        try:
-            return MachCommandConditions.is_b2g(cls) and \
-                   cls.device_name.startswith('emulator')
-        except AttributeError:
-            return False
-
-    @staticmethod
     def is_android(cls):
         """Must have an Android build."""
         if hasattr(cls, 'substs'):
@@ -775,24 +869,17 @@ class MachCommandConditions(object):
     @staticmethod
     def is_hg(cls):
         """Must have a mercurial source checkout."""
-        if hasattr(cls, 'substs'):
-            top_srcdir = cls.substs.get('top_srcdir')
-        elif hasattr(cls, 'topsrcdir'):
-            top_srcdir = cls.topsrcdir
-        else:
-            return False
-        return top_srcdir and os.path.isdir(os.path.join(top_srcdir, '.hg'))
+        return getattr(cls, 'substs', {}).get('VCS_CHECKOUT_TYPE') == 'hg'
 
     @staticmethod
     def is_git(cls):
         """Must have a git source checkout."""
-        if hasattr(cls, 'substs'):
-            top_srcdir = cls.substs.get('top_srcdir')
-        elif hasattr(cls, 'topsrcdir'):
-            top_srcdir = cls.topsrcdir
-        else:
-            return False
-        return top_srcdir and os.path.exists(os.path.join(top_srcdir, '.git'))
+        return getattr(cls, 'substs', {}).get('VCS_CHECKOUT_TYPE') == 'git'
+
+    @staticmethod
+    def is_artifact_build(cls):
+        """Must be an artifact build."""
+        return getattr(cls, 'substs', {}).get('MOZ_ARTIFACT_BUILDS')
 
 
 class PathArgument(object):

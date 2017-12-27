@@ -10,7 +10,7 @@
 #include "mozilla/dom/BindingDeclarations.h"
 #include "nsIDOMEventTarget.h"
 #include "nsWrapperCache.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 
 class nsPIDOMWindowOuter;
 class nsIGlobalObject;
@@ -28,6 +28,7 @@ class Event;
 class EventListener;
 class EventListenerOptionsOrBoolean;
 class EventHandlerNonNull;
+class GlobalObject;
 
 template <class T> struct Nullable;
 
@@ -43,6 +44,8 @@ public:
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_EVENTTARGET_IID)
 
   // WebIDL API
+  static already_AddRefed<EventTarget> Constructor(const GlobalObject& aGlobal,
+                                                   ErrorResult& aRv);
   using nsIDOMEventTarget::AddEventListener;
   using nsIDOMEventTarget::RemoveEventListener;
   using nsIDOMEventTarget::DispatchEvent;
@@ -57,10 +60,15 @@ public:
                                    ErrorResult& aRv);
   bool DispatchEvent(Event& aEvent, CallerType aCallerType, ErrorResult& aRv);
 
+  nsIGlobalObject* GetParentObject() const
+  {
+    return GetOwnerGlobal();
+  }
+
   // Note, this takes the type in onfoo form!
   EventHandlerNonNull* GetEventHandler(const nsAString& aType)
   {
-    nsCOMPtr<nsIAtom> type = NS_Atomize(aType);
+    RefPtr<nsAtom> type = NS_Atomize(aType);
     return GetEventHandler(type, EmptyString());
   }
 
@@ -69,10 +77,10 @@ public:
                        ErrorResult& rv);
 
   // Note, for an event 'foo' aType will be 'onfoo'.
-  virtual void EventListenerAdded(nsIAtom* aType) {}
+  virtual void EventListenerAdded(nsAtom* aType) {}
   virtual void EventListenerAdded(const nsAString& aType) {}
 
-  virtual void EventListenerRemoved(nsIAtom* aType) {}
+  virtual void EventListenerRemoved(nsAtom* aType) {}
   virtual void EventListenerRemoved(const nsAString& aType) {}
 
   // Returns an outer window that corresponds to the inner window this event
@@ -99,12 +107,20 @@ public:
   // Called from AsyncEventDispatcher to notify it is running.
   virtual void AsyncEventRunning(AsyncEventDispatcher* aEvent) {}
 
+  // Used by APZ to determine whether this event target has non-chrome event
+  // listeners for untrusted key events.
+  bool HasNonSystemGroupListenersForUntrustedKeyEvents() const;
+
+  // Used by APZ to determine whether this event target has non-chrome and
+  // non-passive event listeners for untrusted key events.
+  bool HasNonPassiveNonSystemGroupListenersForUntrustedKeyEvents() const;
+
   virtual bool IsApzAware() const;
 
 protected:
-  EventHandlerNonNull* GetEventHandler(nsIAtom* aType,
+  EventHandlerNonNull* GetEventHandler(nsAtom* aType,
                                        const nsAString& aTypeString);
-  void SetEventHandler(nsIAtom* aType, const nsAString& aTypeString,
+  void SetEventHandler(nsAtom* aType, const nsAString& aTypeString,
                        EventHandlerNonNull* aHandler);
 };
 

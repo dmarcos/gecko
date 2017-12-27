@@ -5,7 +5,7 @@
 description: Rest object doesn't contain non-enumerable properties (static class expression method)
 esid: sec-runtime-semantics-bindingclassdeclarationevaluation
 es6id: 14.5.15
-features: [destructuring-binding]
+features: [object-rest, destructuring-binding]
 flags: [generated]
 includes: [propertyHelper.js]
 info: |
@@ -64,18 +64,21 @@ Object.defineProperty(o, "x", { value: 4, enumerable: false });
 var callCount = 0;
 class C {
   static method({...rest}) {
-    assert.sameValue(rest.a, 3);
-    assert.sameValue(rest.b, 4);
     assert.sameValue(rest.x, undefined);
 
-    verifyEnumerable(rest, "a");
-    verifyWritable(rest, "a");
-    verifyConfigurable(rest, "a");
+    verifyProperty(rest, "a", {
+      enumerable: true,
+      writable: true,
+      configurable: true,
+      value: 3
+    });
 
-    verifyEnumerable(rest, "b");
-    verifyWritable(rest, "b");
-    verifyConfigurable(rest, "b");
-
+    verifyProperty(rest, "b", {
+      enumerable: true,
+      writable: true,
+      configurable: true,
+      value: 4
+    });
     callCount = callCount + 1;
   }
 };

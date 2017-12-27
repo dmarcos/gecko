@@ -11,10 +11,10 @@ function test() {
         executeSoon(checkURLBarRevert);
       }
     }
-  }
+  };
 
   gBrowser.addProgressListener(pageLoaded);
-  tab = gBrowser.addTab("http://example.com");
+  tab = BrowserTestUtils.addTab(gBrowser, "http://example.com");
   gBrowser.selectedTab = tab;
 }
 

@@ -7,8 +7,10 @@
 #ifndef FennecJNINatives_h
 #define FennecJNINatives_h
 
+#ifndef MOZ_PREPROCESSOR
 #include "FennecJNIWrappers.h"
 #include "mozilla/jni/Natives.h"
+#endif
 
 namespace mozilla {
 namespace java {
@@ -34,6 +36,21 @@ const JNINativeMethod ANRReporter::Natives<Impl>::methods[] = {
     mozilla::jni::MakeNativeMethod<ANRReporter::RequestNativeStack_t>(
             mozilla::jni::NativeStub<ANRReporter::RequestNativeStack_t, Impl>
             ::template Wrap<&Impl::RequestNativeStack>)
+};
+
+template<class Impl>
+class BrowserLocaleManager::Natives : public mozilla::jni::NativeImpl<BrowserLocaleManager, Impl>
+{
+public:
+    static const JNINativeMethod methods[1];
+};
+
+template<class Impl>
+const JNINativeMethod BrowserLocaleManager::Natives<Impl>::methods[] = {
+
+    mozilla::jni::MakeNativeMethod<BrowserLocaleManager::RefreshLocales_t>(
+            mozilla::jni::NativeStub<BrowserLocaleManager::RefreshLocales_t, Impl>
+            ::template Wrap<&Impl::RefreshLocales>)
 };
 
 template<class Impl>
@@ -133,21 +150,6 @@ const JNINativeMethod ThumbnailHelper::Natives<Impl>::methods[] = {
     mozilla::jni::MakeNativeMethod<ThumbnailHelper::RequestThumbnail_t>(
             mozilla::jni::NativeStub<ThumbnailHelper::RequestThumbnail_t, Impl>
             ::template Wrap<&Impl::RequestThumbnail>)
-};
-
-template<class Impl>
-class ZoomedView::Natives : public mozilla::jni::NativeImpl<ZoomedView, Impl>
-{
-public:
-    static const JNINativeMethod methods[1];
-};
-
-template<class Impl>
-const JNINativeMethod ZoomedView::Natives<Impl>::methods[] = {
-
-    mozilla::jni::MakeNativeMethod<ZoomedView::RequestZoomedViewData_t>(
-            mozilla::jni::NativeStub<ZoomedView::RequestZoomedViewData_t, Impl>
-            ::template Wrap<&Impl::RequestZoomedViewData>)
 };
 
 } /* java */

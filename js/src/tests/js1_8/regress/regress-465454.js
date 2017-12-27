@@ -16,16 +16,13 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
 
 
-  for each (let b in [(-1/0), new String(''), new String(''), null, (-1/0),
-                      (-1/0), new String(''), new String(''), null]) '' + b;
+  for (let b of [(-1/0), new String(''), new String(''), null, (-1/0),
+                 (-1/0), new String(''), new String(''), null]) '' + b;
 
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

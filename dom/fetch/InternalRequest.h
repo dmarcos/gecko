@@ -53,7 +53,7 @@ namespace dom {
  * image             | TYPE_INTERNAL_IMAGE, TYPE_INTERNAL_IMAGE_PRELOAD, TYPE_INTERNAL_IMAGE_FAVICON
  * imageset          | TYPE_IMAGESET
  * import            | Not supported by Gecko
- * internal          | TYPE_DOCUMENT, TYPE_XBL, TYPE_OTHER
+ * internal          | TYPE_DOCUMENT, TYPE_XBL, TYPE_OTHER, TYPE_SAVEAS_DOWNLOAD
  * location          |
  * manifest          | TYPE_WEB_MANIFEST
  * object            | TYPE_INTERNAL_OBJECT
@@ -141,7 +141,7 @@ public:
     if (GetFragment().IsEmpty()) {
       return;
     }
-    aURL.Append(NS_LITERAL_CSTRING("#"));
+    aURL.AppendLiteral("#");
     aURL.Append(GetFragment());
   }
 
@@ -402,6 +402,19 @@ public:
     MOZ_ASSERT(mIntegrity.IsEmpty());
     mIntegrity.Assign(aIntegrity);
   }
+
+  bool
+  MozErrors() const
+  {
+    return mMozErrors;
+  }
+
+  void
+  SetMozErrors()
+  {
+    mMozErrors = true;
+  }
+
   const nsCString&
   GetFragment() const
   {
@@ -462,20 +475,25 @@ public:
   }
 
   void
-  SetBody(nsIInputStream* aStream)
+  SetBody(nsIInputStream* aStream, int64_t aBodyLength)
   {
     // A request's body may not be reset once set.
     MOZ_ASSERT_IF(aStream, !mBodyStream);
     mBodyStream = aStream;
+    mBodyLength = aBodyLength;
   }
 
   // Will return the original stream!
   // Use a tee or copy if you don't want to erase the original.
   void
-  GetBody(nsIInputStream** aStream)
+  GetBody(nsIInputStream** aStream, int64_t* aBodyLength = nullptr)
   {
     nsCOMPtr<nsIInputStream> s = mBodyStream;
     s.forget(aStream);
+
+    if (aBodyLength) {
+      *aBodyLength = mBodyLength;
+    }
   }
 
   // The global is used as the client for the new object.
@@ -534,6 +552,18 @@ public:
     return mPrincipalInfo;
   }
 
+  const nsCString&
+  GetPreferredAlternativeDataType() const
+  {
+    return mPreferredAlternativeDataType;
+  }
+
+  void
+  SetPreferredAlternativeDataType(const nsACString& aDataType)
+  {
+    mPreferredAlternativeDataType = aDataType;
+  }
+
 private:
   // Does not copy mBodyStream.  Use fallible Clone() for complete copy.
   explicit InternalRequest(const InternalRequest& aOther);
@@ -554,6 +584,9 @@ private:
   nsTArray<nsCString> mURLList;
   RefPtr<InternalHeaders> mHeaders;
   nsCOMPtr<nsIInputStream> mBodyStream;
+  int64_t mBodyLength;
+
+  nsCString mPreferredAlternativeDataType;
 
   nsContentPolicyType mContentPolicyType;
 
@@ -575,6 +608,7 @@ private:
   RequestCache mCacheMode;
   RequestRedirect mRedirectMode;
   nsString mIntegrity;
+  bool mMozErrors;
   nsCString mFragment;
   MOZ_INIT_OUTSIDE_CTOR bool mAuthenticationFlag;
   MOZ_INIT_OUTSIDE_CTOR bool mForceOriginHeader;

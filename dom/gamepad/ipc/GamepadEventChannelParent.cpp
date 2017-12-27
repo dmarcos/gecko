@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -20,12 +22,13 @@ class SendGamepadUpdateRunnable final : public Runnable
   RefPtr<GamepadEventChannelParent> mParent;
   GamepadChangeEvent mEvent;
  public:
-  SendGamepadUpdateRunnable(GamepadEventChannelParent* aParent,
-                            GamepadChangeEvent aEvent)
-    : mEvent(aEvent)
-  {
-    MOZ_ASSERT(aParent);
-    mParent = aParent;
+   SendGamepadUpdateRunnable(GamepadEventChannelParent* aParent,
+                             GamepadChangeEvent aEvent)
+     : Runnable("dom::SendGamepadUpdateRunnable")
+     , mEvent(aEvent)
+   {
+     MOZ_ASSERT(aParent);
+     mParent = aParent;
   }
   NS_IMETHOD Run() override
   {
@@ -45,8 +48,9 @@ GamepadEventChannelParent::GamepadEventChannelParent()
   RefPtr<GamepadPlatformService> service =
     GamepadPlatformService::GetParentService();
   MOZ_ASSERT(service);
+
+  mBackgroundEventTarget = GetCurrentThreadEventTarget();
   service->AddChannelParent(this);
-  mBackgroundThread = NS_GetCurrentThread();
 }
 
 mozilla::ipc::IPCResult
@@ -116,8 +120,8 @@ GamepadEventChannelParent::ActorDestroy(ActorDestroyReason aWhy)
 void
 GamepadEventChannelParent::DispatchUpdateEvent(const GamepadChangeEvent& aEvent)
 {
-  mBackgroundThread->Dispatch(new SendGamepadUpdateRunnable(this, aEvent),
-                              NS_DISPATCH_NORMAL);
+  mBackgroundEventTarget->Dispatch(new SendGamepadUpdateRunnable(this, aEvent),
+                                   NS_DISPATCH_NORMAL);
 }
 
 } // namespace dom

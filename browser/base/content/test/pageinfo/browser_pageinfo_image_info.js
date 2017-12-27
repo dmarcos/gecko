@@ -1,20 +1,29 @@
 /* Make sure that "View Image Info" loads the correct image data */
+function getImageInfo(imageElement) {
+  return {
+    currentSrc: imageElement.currentSrc,
+    width: imageElement.width,
+    height: imageElement.height,
+    imageText: imageElement.title || imageElement.alt
+  };
+}
 
 function test() {
   waitForExplicitFinish();
 
-  gBrowser.selectedTab = gBrowser.addTab();
+  gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
 
-  gBrowser.selectedBrowser.addEventListener("load", function() {
-    var doc = gBrowser.contentDocument;
+  BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser).then(function() {
+    // eslint-disable-next-line mozilla/no-cpows-in-tests
+    var doc = gBrowser.contentDocumentAsCPOW;
     var testImg = doc.getElementById("test-image");
     var pageInfo = BrowserPageInfo(gBrowser.selectedBrowser.currentURI.spec,
-                                   "mediaTab", testImg);
+                                   "mediaTab", getImageInfo(testImg));
 
     pageInfo.addEventListener("load", function() {
       pageInfo.onFinished.push(function() {
-        executeSoon(function() {
-          var pageInfoImg = pageInfo.document.getElementById("thepreviewimage");
+        var pageInfoImg = pageInfo.document.getElementById("thepreviewimage");
+        pageInfoImg.addEventListener("loadend", function() {
 
           is(pageInfoImg.src, testImg.src, "selected image has the correct source");
           is(pageInfoImg.width, testImg.width, "selected image has the correct width");
@@ -26,14 +35,14 @@ function test() {
         });
       });
     }, {capture: true, once: true});
-  }, {capture: true, once: true});
+  });
 
-  content.location =
+  gBrowser.loadURI(
     "data:text/html," +
     "<style type='text/css'>%23test-image,%23not-test-image {background-image: url('about:logo?c');}</style>" +
     "<img src='about:logo?b' height=300 width=350 alt=2 id='not-test-image'>" +
     "<img src='about:logo?b' height=300 width=350 alt=2>" +
     "<img src='about:logo?a' height=200 width=250>" +
     "<img src='about:logo?b' height=200 width=250 alt=1>" +
-    "<img src='about:logo?b' height=100 width=150 alt=2 id='test-image'>";
+    "<img src='about:logo?b' height=100 width=150 alt=2 id='test-image'>");
 }

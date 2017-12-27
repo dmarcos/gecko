@@ -32,8 +32,10 @@ class Http2Decompressor;
 class Http2Stream
   : public nsAHttpSegmentReader
   , public nsAHttpSegmentWriter
+  , public SupportsWeakPtr<Http2Stream>
 {
 public:
+  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(Http2Stream)
   NS_DECL_NSAHTTPSEGMENTREADER
   NS_DECL_NSAHTTPSEGMENTWRITER
 
@@ -50,7 +52,7 @@ public:
   const static int32_t kWorstPriority = kNormalPriority + nsISupportsPriority::PRIORITY_LOWEST;
   const static int32_t kBestPriority = kNormalPriority + nsISupportsPriority::PRIORITY_HIGHEST;
 
-  Http2Stream(nsAHttpTransaction *, Http2Session *, int32_t);
+  Http2Stream(nsAHttpTransaction *, Http2Session *, int32_t, uint64_t);
 
   uint32_t StreamID() { return mStreamID; }
   Http2PushedStream *PushSource() { return mPushSource; }
@@ -68,9 +70,9 @@ public:
   // http2PushedStream overrides it
   virtual Http2Stream *GetConsumerStream() { return nullptr; };
 
-  const nsAFlatCString &Origin() const { return mOrigin; }
-  const nsAFlatCString &Host() const { return mHeaderHost; }
-  const nsAFlatCString &Path() const { return mHeaderPath; }
+  const nsCString& Origin() const { return mOrigin; }
+  const nsCString& Host() const { return mHeaderHost; }
+  const nsCString& Path() const { return mHeaderPath; }
 
   bool RequestBlockedOnRead()
   {
@@ -151,6 +153,9 @@ public:
   // once it is matched to a pull stream.
   virtual bool HasSink() { return true; }
 
+  // This is a no-op on pull streams. Pushed streams override this.
+  virtual void SetPushComplete() { };
+
   virtual ~Http2Stream();
 
   Http2Session *Session() { return mSession; }
@@ -166,12 +171,16 @@ public:
   bool Do0RTT();
   nsresult Finish0RTT(bool aRestart, bool aAlpnIgnored);
 
+  nsresult GetOriginAttributes(mozilla::OriginAttributes *oa);
+
+  void TopLevelOuterContentWindowIdChanged(uint64_t windowId);
+
 protected:
   static void CreatePushHashKey(const nsCString &scheme,
                                 const nsCString &hostHeader,
                                 const mozilla::OriginAttributes &originAttributes,
                                 uint64_t serial,
-                                const nsCSubstring &pathInfo,
+                                const nsACString& pathInfo,
                                 nsCString &outOrigin,
                                 nsCString &outKey);
 
@@ -342,6 +351,10 @@ private:
   SimpleBuffer mSimpleBuffer;
 
   bool mAttempting0RTT;
+
+  uint64_t mCurrentForegroundTabOuterContentWindowId;
+
+  uint64_t mTransactionTabId;
 
 /// connect tunnels
 public:

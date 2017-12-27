@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -30,7 +31,7 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(TreeBoxObject, BoxObject,
 NS_IMPL_ADDREF_INHERITED(TreeBoxObject, BoxObject)
 NS_IMPL_RELEASE_INHERITED(TreeBoxObject, BoxObject)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(TreeBoxObject)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(TreeBoxObject)
   NS_INTERFACE_MAP_ENTRY(nsITreeBoxObject)
 NS_INTERFACE_MAP_END_INHERITING(BoxObject)
 
@@ -665,6 +666,24 @@ TreeBoxObject::ClearStyleAndImageCaches()
   if (body)
     return body->ClearStyleAndImageCaches();
   return NS_OK;
+}
+
+NS_IMETHODIMP
+TreeBoxObject::RemoveImageCacheEntry(int32_t aRowIndex, nsITreeColumn* aCol)
+{
+  NS_ENSURE_ARG(aCol);
+  NS_ENSURE_TRUE(aRowIndex >= 0, NS_ERROR_INVALID_ARG);
+  nsTreeBodyFrame* body = GetTreeBodyFrame();
+  if (body) {
+    return body->RemoveImageCacheEntry(aRowIndex, aCol);
+  }
+  return NS_OK;
+}
+
+void
+TreeBoxObject::RemoveImageCacheEntry(int32_t row, nsITreeColumn& col, ErrorResult& aRv)
+{
+  aRv = RemoveImageCacheEntry(row, &col);
 }
 
 void

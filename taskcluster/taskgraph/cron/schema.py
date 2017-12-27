@@ -19,6 +19,7 @@ def even_15_minutes(minutes):
     if minutes % 15 != 0:
         raise ValueError("minutes must be evenly divisible by 15")
 
+
 cron_yml_schema = Schema({
     'jobs': [{
         # Name of the crontask (must be unique)
@@ -32,9 +33,6 @@ cron_yml_schema = Schema({
 
             # Treeherder symbol for the cron task
             Required('treeherder-symbol'): basestring,
-
-            # --triggered-by './mach taskgraph decision' argument
-            'triggered-by': basestring,
 
             # --target-tasks-method './mach taskgraph decision' argument
             'target-tasks-method': basestring,

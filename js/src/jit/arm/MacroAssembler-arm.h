@@ -13,7 +13,6 @@
 
 #include "jit/arm/Assembler-arm.h"
 #include "jit/AtomicOp.h"
-#include "jit/IonCaches.h"
 #include "jit/JitFrames.h"
 #include "jit/MoveResolver.h"
 
@@ -125,12 +124,10 @@ class MacroAssemblerARM : public Assembler
     void ma_movPatchable(Imm32 imm, Register dest, Assembler::Condition c);
     void ma_movPatchable(ImmPtr imm, Register dest, Assembler::Condition c);
 
+    // To be used with Iter := InstructionIterator or BufferInstructionIterator.
+    template<class Iter>
     static void ma_mov_patch(Imm32 imm, Register dest, Assembler::Condition c,
-                             RelocStyle rs, Instruction* i);
-    static void ma_mov_patch(ImmPtr imm, Register dest, Assembler::Condition c,
-                             RelocStyle rs, Instruction* i);
-
-    Instruction* offsetToInstruction(CodeOffset offs);
+                             RelocStyle rs, Iter iter);
 
     // ALU based ops
     // mov
@@ -667,6 +664,11 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     void jump(JitCode* code) {
         branch(code);
     }
+    void jump(TrampolinePtr code) {
+        ScratchRegisterScope scratch(asMasm());
+        movePtr(ImmPtr(code.value), scratch);
+        ma_bx(scratch);
+    }
     void jump(Register reg) {
         ma_bx(reg);
     }
@@ -780,7 +782,7 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     }
 
     // Boxing code.
-    void boxDouble(FloatRegister src, const ValueOperand& dest);
+    void boxDouble(FloatRegister src, const ValueOperand& dest, FloatRegister);
     void boxNonDouble(JSValueType type, Register src, const ValueOperand& dest);
 
     // Extended unboxing API. If the payload is already in a register, returns
@@ -819,8 +821,6 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     void int32ValueToFloat32(const ValueOperand& operand, FloatRegister dest);
     void loadConstantFloat32(float f, FloatRegister dest);
 
-    void moveValue(const Value& val, Register type, Register data);
-
     CodeOffsetJump jumpWithPatch(RepatchLabel* label, Condition cond = Always,
                                  Label* documentation = nullptr);
     CodeOffsetJump backedgeJump(RepatchLabel* label, Label* documentation) {
@@ -854,36 +854,6 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
             return;
           default: MOZ_CRASH("Bad payload width");
         }
-    }
-
-    void moveValue(const Value& val, const ValueOperand& dest);
-
-    void moveValue(const ValueOperand& src, const ValueOperand& dest) {
-        Register s0 = src.typeReg(), d0 = dest.typeReg(),
-                 s1 = src.payloadReg(), d1 = dest.payloadReg();
-
-        // Either one or both of the source registers could be the same as a
-        // destination register.
-        if (s1 == d0) {
-            if (s0 == d1) {
-                // If both are, this is just a swap of two registers.
-                ScratchRegisterScope scratch(asMasm());
-                MOZ_ASSERT(d1 != scratch);
-                MOZ_ASSERT(d0 != scratch);
-                ma_mov(d1, scratch);
-                ma_mov(d0, d1);
-                ma_mov(scratch, d0);
-                return;
-            }
-            // If only one is, copy that source first.
-            mozilla::Swap(s0, s1);
-            mozilla::Swap(d0, d1);
-        }
-
-        if (s0 != d0)
-            ma_mov(s0, d0);
-        if (s1 != d1)
-            ma_mov(s1, d1);
     }
 
     void storeValue(ValueOperand val, const Address& dst);
@@ -1010,7 +980,7 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     void storeTypeTag(ImmTag tag, const Address& dest);
     void storeTypeTag(ImmTag tag, const BaseIndex& dest);
 
-    void handleFailureWithHandlerTail(void* handler);
+    void handleFailureWithHandlerTail(void* handler, Label* profilerExitTail);
 
     /////////////////////////////////////////////////////////////////
     // Common interface.
@@ -1043,9 +1013,8 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     void load32(const BaseIndex& address, Register dest);
     void load32(AbsoluteAddress address, Register dest);
     void load64(const Address& address, Register64 dest) {
-        load32(Address(address.base, address.offset + INT64LOW_OFFSET), dest.low);
-        int32_t highOffset = (address.offset < 0) ? -int32_t(INT64HIGH_OFFSET) : INT64HIGH_OFFSET;
-        load32(Address(address.base, address.offset + highOffset), dest.high);
+        load32(LowWord(address), dest.low);
+        load32(HighWord(address), dest.high);
     }
 
     void loadPtr(const Address& address, Register dest);
@@ -1115,13 +1084,13 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     void store32(Imm32 src, const BaseIndex& address);
 
     void store64(Register64 src, Address address) {
-        store32(src.low, Address(address.base, address.offset + INT64LOW_OFFSET));
-        store32(src.high, Address(address.base, address.offset + INT64HIGH_OFFSET));
+        store32(src.low, LowWord(address));
+        store32(src.high, HighWord(address));
     }
 
     void store64(Imm64 imm, Address address) {
-        store32(imm.low(), Address(address.base, address.offset + INT64LOW_OFFSET));
-        store32(imm.hi(), Address(address.base, address.offset + INT64HIGH_OFFSET));
+        store32(imm.low(), LowWord(address));
+        store32(imm.hi(), HighWord(address));
     }
 
     void storePtr(ImmWord imm, const Address& address);
@@ -1143,36 +1112,12 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     Register computePointer(const T& src, Register r);
 
     template<typename T>
-    void compareExchangeARMv6(int nbytes, bool signExtend, const T& mem, Register oldval,
-                              Register newval, Register output);
-
-    template<typename T>
-    void compareExchangeARMv7(int nbytes, bool signExtend, const T& mem, Register oldval,
-                              Register newval, Register output);
-
-    template<typename T>
     void compareExchange(int nbytes, bool signExtend, const T& address, Register oldval,
                          Register newval, Register output);
 
     template<typename T>
-    void atomicExchangeARMv6(int nbytes, bool signExtend, const T& mem, Register value,
-                             Register output);
-
-    template<typename T>
-    void atomicExchangeARMv7(int nbytes, bool signExtend, const T& mem, Register value,
-                             Register output);
-
-    template<typename T>
     void atomicExchange(int nbytes, bool signExtend, const T& address, Register value,
                         Register output);
-
-    template<typename T>
-    void atomicFetchOpARMv6(int nbytes, bool signExtend, AtomicOp op, const Register& value,
-                            const T& mem, Register flagTemp, Register output);
-
-    template<typename T>
-    void atomicFetchOpARMv7(int nbytes, bool signExtend, AtomicOp op, const Register& value,
-                            const T& mem, Register flagTemp, Register output);
 
     template<typename T>
     void atomicFetchOp(int nbytes, bool signExtend, AtomicOp op, const Imm32& value,
@@ -1183,20 +1128,16 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
                        const T& address, Register flagTemp, Register output);
 
     template<typename T>
-    void atomicEffectOpARMv6(int nbytes, AtomicOp op, const Register& value, const T& address,
-                             Register flagTemp);
-
-    template<typename T>
-    void atomicEffectOpARMv7(int nbytes, AtomicOp op, const Register& value, const T& address,
-                             Register flagTemp);
-
-    template<typename T>
     void atomicEffectOp(int nbytes, AtomicOp op, const Imm32& value, const T& address,
                              Register flagTemp);
 
     template<typename T>
     void atomicEffectOp(int nbytes, AtomicOp op, const Register& value, const T& address,
                              Register flagTemp);
+
+    template<typename T>
+    void atomicFetchOp64(AtomicOp op, Register64 value, const T& mem, Register64 temp,
+                         Register64 output);
 
   public:
     // T in {Address,BaseIndex}
@@ -1416,6 +1357,48 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     void atomicXor32(const S& value, const T& mem, Register flagTemp) {
         atomicEffectOp(4, AtomicFetchXorOp, value, mem, flagTemp);
     }
+
+    // Temp should be invalid; output must be (even,odd) pair.
+    template<typename T>
+    void atomicLoad64(const T& mem, Register64 temp, Register64 output);
+
+    // Registers must be distinct; temp and output must be (even,odd) pairs.
+    template <typename T>
+    void atomicFetchAdd64(Register64 value, const T& mem, Register64 temp, Register64 output) {
+        atomicFetchOp64(AtomicFetchAddOp, value, mem, temp, output);
+    }
+
+    // Registers must be distinct; temp and output must be (even,odd) pairs.
+    template <typename T>
+    void atomicFetchSub64(Register64 value, const T& mem, Register64 temp, Register64 output) {
+        atomicFetchOp64(AtomicFetchSubOp, value, mem, temp, output);
+    }
+
+    // Registers must be distinct; temp and output must be (even,odd) pairs.
+    template <typename T>
+    void atomicFetchAnd64(Register64 value, const T& mem, Register64 temp, Register64 output) {
+        atomicFetchOp64(AtomicFetchAndOp, value, mem, temp, output);
+    }
+
+    // Registers must be distinct; temp and output must be (even,odd) pairs.
+    template <typename T>
+    void atomicFetchOr64(Register64 value, const T& mem, Register64 temp, Register64 output) {
+        atomicFetchOp64(AtomicFetchOrOp, value, mem, temp, output);
+    }
+
+    // Registers must be distinct; temp and output must be (even,odd) pairs.
+    template <typename T>
+    void atomicFetchXor64(Register64 value, const T& mem, Register64 temp, Register64 output) {
+        atomicFetchOp64(AtomicFetchXorOp, value, mem, temp, output);
+    }
+
+    // Registers must be distinct; value and output must be (even,odd) pairs.
+    template <typename T>
+    void atomicExchange64(const T& mem, Register64 value, Register64 output);
+
+    // Registers must be distinct; replace and output must be (even,odd) pairs.
+    template <typename T>
+    void compareExchange64(const T& mem, Register64 expect, Register64 replace, Register64 output);
 
     template<typename T>
     void compareExchangeToTypedIntArray(Scalar::Type arrayType, const T& mem, Register oldval, Register newval,

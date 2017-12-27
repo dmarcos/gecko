@@ -12,7 +12,6 @@
 #include "mozilla/ipc/Transport.h"
 
 class nsIDOMBlob;
-class nsIIPCBackgroundChildCreateCallback;
 
 namespace mozilla {
 namespace dom {
@@ -20,7 +19,6 @@ namespace dom {
 class BlobImpl;
 class ContentChild;
 class ContentParent;
-class PBlobChild;
 
 } // namespace dom
 
@@ -35,13 +33,9 @@ class PBackgroundChild;
 // across threads. Each PBackgroundChild is unique and valid as long as its
 // designated thread lives.
 //
-// Creation of PBackground is asynchronous. GetForCurrentThread() will return
-// null until the sequence is complete. GetOrCreateForCurrentThread() will start
-// the creation sequence and will call back via the
-// nsIIPCBackgroundChildCreateCallback interface when completed. Thereafter
-// (assuming success) GetForCurrentThread() will return the same actor every
-// time. SynchronouslyCreateForCurrentThread() will spin the event loop until
-// the BackgroundChild until the creation sequence is complete.
+// Creation of PBackground is synchronous. GetOrCreateForCurrentThread will
+// create the actor if it doesn't exist yet. Thereafter (assuming success)
+// GetForCurrentThread() will return the same actor every time.
 //
 // CloseForCurrentThread() will close the current PBackground actor.  Subsequent
 // calls to GetForCurrentThread will return null.  CloseForCurrentThread() may
@@ -64,20 +58,8 @@ public:
   GetForCurrentThread();
 
   // See above.
-  static bool
-  GetOrCreateForCurrentThread(nsIIPCBackgroundChildCreateCallback* aCallback);
-
-  // See above.
   static PBackgroundChild*
-  SynchronouslyCreateForCurrentThread();
-
-  static mozilla::dom::PBlobChild*
-  GetOrCreateActorForBlob(PBackgroundChild* aBackgroundActor,
-                          nsIDOMBlob* aBlob);
-
-  static mozilla::dom::PBlobChild*
-  GetOrCreateActorForBlobImpl(PBackgroundChild* aBackgroundActor,
-                              mozilla::dom::BlobImpl* aBlobImpl);
+  GetOrCreateForCurrentThread();
 
   // See above.
   static void

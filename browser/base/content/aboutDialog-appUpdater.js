@@ -2,7 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// Note: this file is included in aboutDialog.xul if MOZ_UPDATER is defined.
+// Note: this file is included in aboutDialog.xul and preferences/advanced.xul
+// if MOZ_UPDATER is defined.
 
 /* import-globals-from aboutDialog.js */
 
@@ -26,7 +27,7 @@ function onUnload(aEvent) {
 }
 
 
-function appUpdater() {
+function appUpdater(options = {}) {
   XPCOMUtils.defineLazyServiceGetter(this, "aus",
                                      "@mozilla.org/updates/update-service;1",
                                      "nsIApplicationUpdateService");
@@ -37,6 +38,7 @@ function appUpdater() {
                                      "@mozilla.org/updates/update-manager;1",
                                      "nsIUpdateManager");
 
+  this.options = options;
   this.updateDeck = document.getElementById("updateDeck");
 
   // Hide the update deck when the update window is already open and it's not
@@ -54,7 +56,7 @@ function appUpdater() {
 
   let manualURL = Services.urlFormatter.formatURLPref("app.update.url.manual");
   let manualLink = document.getElementById("manualLink");
-  manualLink.value = manualURL;
+  manualLink.textContent = manualURL;
   manualLink.href = manualURL;
   document.getElementById("failedLink").href = manualURL;
 
@@ -174,14 +176,23 @@ appUpdater.prototype =
     if (button) {
       if (aChildID == "downloadAndInstall") {
         let updateVersion = gAppUpdater.update.displayVersion;
+        // Include the build ID if this is an "a#" (nightly or aurora) build
+        if (/a\d+$/.test(updateVersion)) {
+          let buildID = gAppUpdater.update.buildID;
+          let year = buildID.slice(0, 4);
+          let month = buildID.slice(4, 6);
+          let day = buildID.slice(6, 8);
+          updateVersion += ` (${year}-${month}-${day})`;
+        }
         button.label = this.bundle.formatStringFromName("update.downloadAndInstallButton.label", [updateVersion], 1);
         button.accessKey = this.bundle.GetStringFromName("update.downloadAndInstallButton.accesskey");
       }
       this.updateDeck.selectedPanel = panel;
-      if (!document.commandDispatcher.focusedElement || // don't steal the focus
-          document.commandDispatcher.focusedElement.localName == "button") // except from the other buttons
+      if (this.options.buttonAutoFocus &&
+          (!document.commandDispatcher.focusedElement || // don't steal the focus
+           document.commandDispatcher.focusedElement.localName == "button")) { // except from the other buttons
         button.focus();
-
+      }
     } else {
       this.updateDeck.selectedPanel = panel;
     }
@@ -226,17 +237,14 @@ appUpdater.prototype =
       return;
     }
 
-    let appStartup = Components.classes["@mozilla.org/toolkit/app-startup;1"].
-                     getService(Components.interfaces.nsIAppStartup);
-
     // If already in safe mode restart in safe mode (bug 327119)
     if (Services.appinfo.inSafeMode) {
-      appStartup.restartInSafeMode(Components.interfaces.nsIAppStartup.eAttemptQuit);
+      Services.startup.restartInSafeMode(Components.interfaces.nsIAppStartup.eAttemptQuit);
       return;
     }
 
-    appStartup.quit(Components.interfaces.nsIAppStartup.eAttemptQuit |
-                    Components.interfaces.nsIAppStartup.eRestart);
+    Services.startup.quit(Components.interfaces.nsIAppStartup.eAttemptQuit |
+                          Components.interfaces.nsIAppStartup.eRestart);
   },
 
   /**
@@ -323,7 +331,7 @@ appUpdater.prototype =
    */
   setupDownloadingUI() {
     this.downloadStatus = document.getElementById("downloadStatus");
-    this.downloadStatus.value =
+    this.downloadStatus.textContent =
       DownloadUtils.getTransferTotal(0, this.update.selectedPatch.size);
     this.selectPanel("downloading");
     this.aus.addDownloadListener(this);
@@ -366,7 +374,7 @@ appUpdater.prototype =
       if (this.backgroundUpdateEnabled) {
         this.selectPanel("applying");
         let self = this;
-        Services.obs.addObserver(function(aSubject, aTopic, aData) {
+        Services.obs.addObserver(function observer(aSubject, aTopic, aData) {
           // Update the UI when the background updater is finished
           let status = aData;
           if (status == "applied" || status == "applied-service" ||
@@ -387,7 +395,7 @@ appUpdater.prototype =
             self.setupDownloadingUI();
             return;
           }
-          Services.obs.removeObserver(arguments.callee, "update-staged");
+          Services.obs.removeObserver(observer, "update-staged");
         }, "update-staged");
       } else {
         this.selectPanel("apply");
@@ -410,7 +418,7 @@ appUpdater.prototype =
    * See nsIProgressEventSink.idl
    */
   onProgress(aRequest, aContext, aProgress, aProgressMax) {
-    this.downloadStatus.value =
+    this.downloadStatus.textContent =
       DownloadUtils.getTransferTotal(aProgress, aProgressMax);
   },
 

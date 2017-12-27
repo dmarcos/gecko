@@ -64,29 +64,25 @@ function waitForOnDeleteVisits(aCallback) {
   PlacesUtils.history.addObserver(historyObserver);
 }
 
-function run_test() {
-  run_next_test();
-}
-
 add_test(function test_dh_is_from_places() {
   // Test that this nsIDownloadHistory is the one places implements.
-  do_check_true(gDownloadHistory instanceof Ci.mozIAsyncHistory);
+  Assert.ok(gDownloadHistory instanceof Ci.mozIAsyncHistory);
 
   run_next_test();
 });
 
 add_test(function test_dh_addRemoveDownload() {
   waitForOnVisit(function DHAD_onVisit(aURI) {
-    do_check_true(aURI.equals(DOWNLOAD_URI));
+    Assert.ok(aURI.equals(DOWNLOAD_URI));
 
     // Verify that the URI is already available in results at this time.
-    do_check_true(!!page_in_database(DOWNLOAD_URI));
+    Assert.ok(!!page_in_database(DOWNLOAD_URI));
 
     waitForOnDeleteURI(function DHRAD_onDeleteURI(aDeletedURI) {
-      do_check_true(aDeletedURI.equals(DOWNLOAD_URI));
+      Assert.ok(aDeletedURI.equals(DOWNLOAD_URI));
 
       // Verify that the URI is already available in results at this time.
-      do_check_false(!!page_in_database(DOWNLOAD_URI));
+      Assert.ok(!page_in_database(DOWNLOAD_URI));
 
       run_next_test();
     });
@@ -102,12 +98,12 @@ add_test(function test_dh_addMultiRemoveDownload() {
     transition: TRANSITION_TYPED
   }).then(function() {
     waitForOnVisit(function DHAD_onVisit(aURI) {
-      do_check_true(aURI.equals(DOWNLOAD_URI));
-      do_check_true(!!page_in_database(DOWNLOAD_URI));
+      Assert.ok(aURI.equals(DOWNLOAD_URI));
+      Assert.ok(!!page_in_database(DOWNLOAD_URI));
 
       waitForOnDeleteVisits(function DHRAD_onDeleteVisits(aDeletedURI) {
-        do_check_true(aDeletedURI.equals(DOWNLOAD_URI));
-        do_check_true(!!page_in_database(DOWNLOAD_URI));
+        Assert.ok(aDeletedURI.equals(DOWNLOAD_URI));
+        Assert.ok(!!page_in_database(DOWNLOAD_URI));
 
         PlacesTestUtils.clearHistory().then(run_next_test);
       });
@@ -118,39 +114,43 @@ add_test(function test_dh_addMultiRemoveDownload() {
   });
 });
 
-add_test(function test_dh_addBookmarkRemoveDownload() {
-  PlacesUtils.bookmarks.insertBookmark(PlacesUtils.unfiledBookmarksFolderId,
-                                       DOWNLOAD_URI,
-                                       PlacesUtils.bookmarks.DEFAULT_INDEX,
-                                       "A bookmark");
-  waitForOnVisit(function DHAD_onVisit(aURI) {
-    do_check_true(aURI.equals(DOWNLOAD_URI));
-    do_check_true(!!page_in_database(DOWNLOAD_URI));
-
-    waitForOnDeleteVisits(function DHRAD_onDeleteVisits(aDeletedURI) {
-      do_check_true(aDeletedURI.equals(DOWNLOAD_URI));
-      do_check_true(!!page_in_database(DOWNLOAD_URI));
-
-      PlacesTestUtils.clearHistory().then(run_next_test);
-    });
-    gDownloadHistory.removeAllDownloads();
+add_task(async function test_dh_addBookmarkRemoveDownload() {
+  await PlacesUtils.bookmarks.insert({
+    parentGuid: PlacesUtils.bookmarks.unfiledGuid,
+    url: DOWNLOAD_URI,
+    title: "A bookmark"
   });
 
-  gDownloadHistory.addDownload(DOWNLOAD_URI, null, Date.now() * 1000);
+  await new Promise(resolve => {
+    waitForOnVisit(function DHAD_onVisit(aURI) {
+      Assert.ok(aURI.equals(DOWNLOAD_URI));
+      Assert.ok(!!page_in_database(DOWNLOAD_URI));
+
+      waitForOnDeleteVisits(function DHRAD_onDeleteVisits(aDeletedURI) {
+        Assert.ok(aDeletedURI.equals(DOWNLOAD_URI));
+        Assert.ok(!!page_in_database(DOWNLOAD_URI));
+
+        PlacesTestUtils.clearHistory().then(resolve);
+      });
+      gDownloadHistory.removeAllDownloads();
+    });
+
+    gDownloadHistory.addDownload(DOWNLOAD_URI, null, Date.now() * 1000);
+  });
 });
 
 add_test(function test_dh_addDownload_referrer() {
   waitForOnVisit(function DHAD_prepareReferrer(aURI, aVisitID) {
-    do_check_true(aURI.equals(REFERRER_URI));
+    Assert.ok(aURI.equals(REFERRER_URI));
     let referrerVisitId = aVisitID;
 
     waitForOnVisit(function DHAD_onVisit(aVisitedURI, unused, unused2, unused3,
                                          aReferringID) {
-      do_check_true(aVisitedURI.equals(DOWNLOAD_URI));
-      do_check_eq(aReferringID, referrerVisitId);
+      Assert.ok(aVisitedURI.equals(DOWNLOAD_URI));
+      Assert.equal(aReferringID, referrerVisitId);
 
       // Verify that the URI is already available in results at this time.
-      do_check_true(!!page_in_database(DOWNLOAD_URI));
+      Assert.ok(!!page_in_database(DOWNLOAD_URI));
 
       PlacesTestUtils.clearHistory().then(run_next_test);
     });
@@ -175,10 +175,10 @@ add_test(function test_dh_addDownload_disabledHistory() {
     // test is based on the assumption that visit notifications are received in
     // the same order of the addDownload calls, which is currently true because
     // database access is serialized on the same worker thread.
-    do_check_true(aURI.equals(DOWNLOAD_URI));
+    Assert.ok(aURI.equals(DOWNLOAD_URI));
 
-    do_check_true(!!page_in_database(DOWNLOAD_URI));
-    do_check_false(!!page_in_database(PRIVATE_URI));
+    Assert.ok(!!page_in_database(DOWNLOAD_URI));
+    Assert.ok(!page_in_database(PRIVATE_URI));
 
     PlacesTestUtils.clearHistory().then(run_next_test);
   });
@@ -207,10 +207,9 @@ add_test(function test_dh_details() {
 
   let titleSet = false;
   let destinationFileUriSet = false;
-  let destinationFileNameSet = false;
 
   function checkFinished() {
-    if (titleSet && destinationFileUriSet && destinationFileNameSet) {
+    if (titleSet && destinationFileUriSet) {
       PlacesUtils.annotations.removeObserver(annoObserver);
       PlacesUtils.history.removeObserver(historyObserver);
 
@@ -225,11 +224,7 @@ add_test(function test_dh_details() {
         switch (aName) {
           case "downloads/destinationFileURI":
             destinationFileUriSet = true;
-            do_check_eq(value, destFileUri.spec);
-            break;
-          case "downloads/destinationFileName":
-            destinationFileNameSet = true;
-            do_check_eq(value, DEST_FILE_NAME);
+            Assert.equal(value, destFileUri.spec);
             break;
         }
         checkFinished();
@@ -238,7 +233,7 @@ add_test(function test_dh_details() {
     onItemAnnotationSet() {},
     onPageAnnotationRemoved() {},
     onItemAnnotationRemoved() {}
-  }
+  };
 
   let historyObserver = {
     onBeginUpdateBatch() {},
@@ -247,7 +242,7 @@ add_test(function test_dh_details() {
     onTitleChanged: function HO_onTitleChanged(aURI, aPageTitle) {
       if (aURI.equals(SOURCE_URI)) {
         titleSet = true;
-        do_check_eq(aPageTitle, DEST_FILE_NAME);
+        Assert.equal(aPageTitle, DEST_FILE_NAME);
         checkFinished();
       }
     },

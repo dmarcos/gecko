@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=8 et tw=80 : */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -291,4 +291,30 @@ TEST_F(APZCPinchGestureDetectorTester, Pinch_NoSpan) {
   EXPECT_EQ(originalMetrics.GetScrollOffset().y + 50, fm.GetScrollOffset().y);
 
   apzc->AssertStateIsReset();
+}
+
+TEST_F(APZCPinchTester, Pinch_TwoFinger_APZZoom_Disabled_Bug1354185) {
+  // Set up APZ such that mZoomConstraints.mAllowZoom is false.
+  SCOPED_GFX_PREF(APZAllowZooming, bool, false);
+  apzc->SetFrameMetrics(GetPinchableFrameMetrics());
+  MakeApzcUnzoomable();
+
+  // We expect a repaint request for scrolling.
+  EXPECT_CALL(*mcc, RequestContentRepaint(_)).Times(1);
+
+  // Send only the PINCHGESTURE_START and PINCHGESTURE_SCALE events,
+  // in order to trigger a call to AsyncPanZoomController::OnScale
+  // but not to AsyncPanZoomController::OnScaleEnd.
+  ScreenIntPoint aFocus(250, 350);
+  ScreenIntPoint aSecondFocus(200, 300);
+  float aScale = 10;
+  apzc->ReceiveInputEvent(
+      CreatePinchGestureInput(PinchGestureInput::PINCHGESTURE_START,
+                              aFocus, 10.0, 10.0),
+      nullptr);
+
+  apzc->ReceiveInputEvent(
+      CreatePinchGestureInput(PinchGestureInput::PINCHGESTURE_SCALE,
+                              aSecondFocus, 10.0 * aScale, 10.0),
+      nullptr);
 }

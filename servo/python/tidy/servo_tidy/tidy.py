@@ -53,11 +53,12 @@ FILE_PATTERNS_TO_CHECK = ["*.rs", "*.rc", "*.cpp", "*.c",
                           "*.yml"]
 
 # File patterns that are ignored for all tidy and lint checks.
-FILE_PATTERNS_TO_IGNORE = ["*.#*", "*.pyc", "fake-ld.sh"]
+FILE_PATTERNS_TO_IGNORE = ["*.#*", "*.pyc", "fake-ld.sh", "*.ogv", "*.webm"]
 
 SPEC_BASE_PATH = "components/script/dom/"
 
 WEBIDL_STANDARDS = [
+    "//www.khronos.org/registry/webgl/extensions",
     "//www.khronos.org/registry/webgl/specs",
     "//developer.mozilla.org/en-US/docs/Web/API",
     "//dev.w3.org/2006/webapi",
@@ -65,8 +66,8 @@ WEBIDL_STANDARDS = [
     "//dev.w3.org/fxtf",
     "//dvcs.w3.org/hg",
     "//dom.spec.whatwg.org",
-    "//domparsing.spec.whatwg.org",
     "//drafts.csswg.org",
+    "//drafts.css-houdini.org",
     "//drafts.fxtf.org",
     "//encoding.spec.whatwg.org",
     "//fetch.spec.whatwg.org",
@@ -77,6 +78,7 @@ WEBIDL_STANDARDS = [
     "//heycam.github.io/webidl",
     "//webbluetoothcg.github.io/web-bluetooth/",
     "//svgwg.org/svg2-draft",
+    "//wicg.github.io",
     # Not a URL
     "// This interface is entirely internal to Servo, and should not be" +
     " accessible to\n// web pages."
@@ -314,7 +316,7 @@ def check_flake8(file_name, contents):
 
 def check_lock(file_name, contents):
     def find_reverse_dependencies(name, content):
-        for package in itertools.chain([content["root"]], content["package"]):
+        for package in itertools.chain([content.get("root", {})], content["package"]):
             for dependency in package.get("dependencies", []):
                 if dependency.startswith("{} ".format(name)):
                     yield package["name"], dependency
@@ -337,10 +339,17 @@ def check_lock(file_name, contents):
         packages_by_name.setdefault(package["name"], []).append((package["version"], source))
 
     for (name, packages) in packages_by_name.iteritems():
-        if name in exceptions or len(packages) <= 1:
+        has_duplicates = len(packages) > 1
+        duplicates_allowed = name in exceptions
+
+        if has_duplicates == duplicates_allowed:
             continue
 
-        message = "duplicate versions for package `{}`".format(name)
+        if duplicates_allowed:
+            message = 'duplicates for `{}` are allowed, but only single version found'.format(name)
+        else:
+            message = "duplicate versions for package `{}`".format(name)
+
         packages.sort()
         packages_dependencies = list(find_reverse_dependencies(name, content))
         for version, source in packages:
@@ -446,10 +455,13 @@ def check_rust(file_name, lines):
 
     prev_use = None
     prev_open_brace = False
+    multi_line_string = False
     current_indent = 0
     prev_crate = {}
     prev_mod = {}
     prev_feature_name = ""
+    indent = 0
+    prev_indent = 0
 
     decl_message = "{} is not in alphabetical order"
     decl_expected = "\n\t\033[93mexpected: {}\033[0m"
@@ -458,6 +470,9 @@ def check_rust(file_name, lines):
     for idx, original_line in enumerate(lines):
         # simplify the analysis
         line = original_line.strip()
+        prev_indent = indent
+        indent = len(original_line) - len(line)
+
         is_attribute = re.search(r"#\[.*\]", line)
         is_comment = re.search(r"^//|^/\*|^\*", line)
 
@@ -476,6 +491,14 @@ def check_rust(file_name, lines):
             line = merged_lines + line
             merged_lines = ''
 
+        if multi_line_string:
+            line, count = re.subn(
+                r'^(\\.|[^"\\])*?"', '', line, count=1)
+            if count == 1:
+                multi_line_string = False
+            else:
+                continue
+
         # Ignore attributes, comments, and imports
         # Keep track of whitespace to enable checking for a merged import block
         if import_block:
@@ -486,9 +509,17 @@ def check_rust(file_name, lines):
                     import_block = False
 
         # get rid of strings and chars because cases like regex expression, keep attributes
-        if not is_attribute:
+        if not is_attribute and not is_comment:
             line = re.sub(r'"(\\.|[^\\"])*?"', '""', line)
-            line = re.sub(r"'(\\.|[^\\'])*?'", "''", line)
+            line = re.sub(
+                r"'(\\.|[^\\']|(\\x[0-9a-fA-F]{2})|(\\u{[0-9a-fA-F]{1,6}}))'",
+                "''", line)
+            # If, after parsing all single-line strings, we still have
+            # an odd number of double quotes, this line starts a
+            # multiline string
+            if line.count('"') % 2 == 1:
+                line = re.sub(r'"(\\.|[^\\"])*?$', '""', line)
+                multi_line_string = True
 
         # get rid of comments
         line = re.sub('//.*?$|/\*.*?$|^\*.*?$', '//', line)
@@ -549,11 +580,11 @@ def check_rust(file_name, lines):
             # No benefit over using &str
             (r": &String", "use &str instead of &String", no_filter),
             # There should be any use of banned types:
-            # Cell<JSVal>, Cell<JS<T>>, DOMRefCell<JS<T>>, DOMRefCell<HEAP<T>>
-            (r"(\s|:)+Cell<JSVal>", "Banned type Cell<JSVal> detected. Use MutJS<JSVal> instead", no_filter),
-            (r"(\s|:)+Cell<JS<.+>>", "Banned type Cell<JS<T>> detected. Use MutJS<JS<T>> instead", no_filter),
-            (r"DOMRefCell<JS<.+>>", "Banned type DOMRefCell<JS<T>> detected. Use MutJS<JS<T>> instead", no_filter),
-            (r"DOMRefCell<Heap<.+>>", "Banned type DOMRefCell<Heap<T>> detected. Use MutJS<JS<T>> instead", no_filter),
+            # Cell<JSVal>, Cell<Dom<T>>, DomRefCell<Dom<T>>, DomRefCell<HEAP<T>>
+            (r"(\s|:)+Cell<JSVal>", "Banned type Cell<JSVal> detected. Use MutDom<JSVal> instead", no_filter),
+            (r"(\s|:)+Cell<Dom<.+>>", "Banned type Cell<Dom<T>> detected. Use MutDom<T> instead", no_filter),
+            (r"DomRefCell<Dom<.+>>", "Banned type DomRefCell<Dom<T>> detected. Use MutDom<T> instead", no_filter),
+            (r"DomRefCell<Heap<.+>>", "Banned type DomRefCell<Heap<T>> detected. Use MutDom<T> instead", no_filter),
             # No benefit to using &Root<T>
             (r": &Root<", "use &T instead of &Root<T>", no_filter),
             (r"^&&", "operators should go at the end of the first line", no_filter),
@@ -567,6 +598,12 @@ def check_rust(file_name, lines):
             # -> () is unnecessary
             (r"-> \(\)", "encountered function signature with -> ()", no_filter),
         ]
+        keywords = ["if", "let", "mut", "extern", "as", "impl", "fn", "struct", "enum", "pub", "mod",
+                    "use", "in", "ref", "type", "where", "trait"]
+        extra_space_after = lambda key: (r"(?<![A-Za-z0-9\-_]){key}  ".format(key=key),
+                                         "extra space after {key}".format(key=key),
+                                         lambda match, line: not is_attribute)
+        regex_rules.extend(map(extra_space_after, keywords))
 
         for pattern, message, filter_func in regex_rules:
             for match in re.finditer(pattern, line):
@@ -577,11 +614,17 @@ def check_rust(file_name, lines):
             yield (idx + 1, "found an empty line following a {")
         prev_open_brace = line.endswith("{")
 
+        # ensure a line starting with { or } has a number of leading spaces that is a multiple of 4
+        if line.startswith(("{", "}")):
+            match = re.match(r"(?: {4})* {1,3}([{}])", original_line)
+            if match:
+                if indent != prev_indent - 4:
+                    yield (idx + 1, "space before {} is not a multiple of 4".format(match.group(1)))
+
         # check alphabetical order of extern crates
         if line.startswith("extern crate "):
             # strip "extern crate " from the begin and ";" from the end
             crate_name = line[13:-1]
-            indent = len(original_line) - len(line)
             if indent not in prev_crate:
                 prev_crate[indent] = ""
             if prev_crate[indent] > crate_name:
@@ -589,6 +632,10 @@ def check_rust(file_name, lines):
                       + decl_expected.format(prev_crate[indent])
                       + decl_found.format(crate_name))
             prev_crate[indent] = crate_name
+
+        if line == "}":
+            for i in [i for i in prev_crate.keys() if i > indent]:
+                del prev_crate[i]
 
         # check alphabetical order of feature attributes in lib.rs files
         if is_lib_rs_file:
@@ -616,7 +663,6 @@ def check_rust(file_name, lines):
         # into a single import block
         if line.startswith("use "):
             import_block = True
-            indent = len(original_line) - len(line)
             if not line.endswith(";") and '{' in line:
                 yield (idx + 1, "use statement spans multiple lines")
             if '{ ' in line:
@@ -645,7 +691,6 @@ def check_rust(file_name, lines):
 
         # modules must be in the same line and alphabetically sorted
         if line.startswith("mod ") or line.startswith("pub mod "):
-            indent = len(original_line) - len(line)
             # strip /(pub )?mod/ from the left and ";" from the right
             mod = line[4:-1] if line.startswith("mod ") else line[8:-1]
 
@@ -663,6 +708,19 @@ def check_rust(file_name, lines):
         else:
             # we now erase previous entries
             prev_mod = {}
+
+        # derivable traits should be alphabetically ordered
+        if is_attribute:
+            # match the derivable traits filtering out macro expansions
+            match = re.search(r"#\[derive\(([a-zA-Z, ]*)", line)
+            if match:
+                derives = map(lambda w: w.strip(), match.group(1).split(','))
+                # sort, compare and report
+                sorted_derives = sorted(derives)
+                if sorted_derives != derives:
+                    yield(idx + 1, decl_message.format("derivable traits list")
+                              + decl_expected.format(", ".join(sorted_derives))
+                              + decl_found.format(", ".join(derives)))
 
 
 # Avoid flagging <Item=Foo> constructs
@@ -805,10 +863,10 @@ def check_spec(file_name, lines):
     macro_patt = re.compile("^\s*\S+!(.*)$")
 
     # Pattern representing a line with comment containing a spec link
-    link_patt = re.compile("^\s*///? https://.+$")
+    link_patt = re.compile("^\s*///? (<https://.+>|https://.+)$")
 
-    # Pattern representing a line with comment
-    comment_patt = re.compile("^\s*///?.+$")
+    # Pattern representing a line with comment or attribute
+    comment_patt = re.compile("^\s*(///?.+|#\[.+\])$")
 
     brace_count = 0
     in_impl = False
@@ -830,12 +888,11 @@ def check_spec(file_name, lines):
                         # No more comments exist above, yield warning
                         yield (idx + 1, "method declared in webidl is missing a comment with a specification link")
                         break
-            if '{' in line and in_impl:
-                brace_count += 1
-            if '}' in line and in_impl:
-                if brace_count == 1:
+            if in_impl:
+                brace_count += line.count('{')
+                brace_count -= line.count('}')
+                if brace_count < 1:
                     break
-                brace_count -= 1
 
 
 def check_config_file(config_file, print_text=True):
@@ -1051,34 +1108,6 @@ def run_lint_scripts(only_changed_files=False, progress=True, stylo=False):
             yield error
 
 
-def check_commits(path='.'):
-    """ Checks if the test is being run under Travis CI environment
-        This is necessary since, after travis clones the branch for a PR, it merges
-        the branch against master, creating a merge commit. Hence, as a workaround,
-        we have to check if the second last merge commit is done by the author of
-        the pull request.
-        """
-    is_travis = os.environ.get('TRAVIS') == 'true'
-    number_commits = '-n2' if is_travis else '-n1'
-
-    """Gets all commits since the last merge."""
-    args = ['git', 'log', number_commits, '--merges', '--format=%H:%an']
-    # last_merge stores both the commit hash and the author name of the last merge in the output
-    last_merge_hash, last_merge_author = subprocess.check_output(args, cwd=path).strip().splitlines()[-1].split(':')
-    args = ['git', 'log', '{}..HEAD'.format(last_merge_hash), '--format=%s']
-    commits = subprocess.check_output(args, cwd=path).lower().splitlines()
-
-    for commit in commits:
-        # .split() to only match entire words
-        if 'wip' in commit.split():
-            yield (':', ':', 'no commits should contain WIP')
-
-    if last_merge_author != 'bors-servo':
-        yield (':', ':', 'no merge commits allowed, please rebase your commits over the upstream master branch')
-
-    raise StopIteration
-
-
 def scan(only_changed_files=False, progress=True, stylo=False):
     # check config file for errors
     config_errors = check_config_file(CONFIG_FILE_PATH)
@@ -1094,11 +1123,9 @@ def scan(only_changed_files=False, progress=True, stylo=False):
     dep_license_errors = check_dep_license_errors(get_dep_toml_files(only_changed_files), progress)
     # other lint checks
     lint_errors = run_lint_scripts(only_changed_files, progress, stylo=stylo)
-    # check commits for WIP
-    commit_errors = [] if stylo else check_commits()
     # chain all the iterators
     errors = itertools.chain(config_errors, directory_errors, lint_errors,
-                             file_errors, dep_license_errors, commit_errors)
+                             file_errors, dep_license_errors)
 
     error = None
     for error in errors:

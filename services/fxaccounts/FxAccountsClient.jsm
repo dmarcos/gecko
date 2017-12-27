@@ -7,7 +7,6 @@ this.EXPORTED_SYMBOLS = ["FxAccountsClient"];
 const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://services-common/utils.js");
 Cu.import("resource://services-common/hawkclient.js");
@@ -423,19 +422,27 @@ this.FxAccountsClient.prototype = {
    * @param  sessionTokenHex
    *         Session token obtained from signIn
    * @param  deviceIds
-   *         Devices to send the message to
+   *         Devices to send the message to. If null, will be sent to all devices.
+   * @param  excludedIds
+   *         Devices to exclude when sending to all devices (deviceIds must be null).
    * @param  payload
    *         Data to send with the message
    * @return Promise
    *         Resolves to an empty object:
    *         {}
    */
-  notifyDevices(sessionTokenHex, deviceIds, payload, TTL = 0) {
+  notifyDevices(sessionTokenHex, deviceIds, excludedIds, payload, TTL = 0) {
+    if (deviceIds && excludedIds) {
+      throw new Error("You cannot specify excluded devices if deviceIds is set.");
+    }
     const body = {
-      to: deviceIds,
+      to: deviceIds || "all",
       payload,
       TTL
     };
+    if (excludedIds) {
+      body.excluded = excludedIds;
+    }
     return this._request("/account/devices/notify", "POST",
       deriveHawkCredentials(sessionTokenHex, "sessionToken"), body);
   },
@@ -564,45 +571,37 @@ this.FxAccountsClient.prototype = {
    *          "info": "https://docs.dev.lcip.og/errors/1234" // link to more info on the error
    *        }
    */
-  _request: function hawkRequest(path, method, credentials, jsonPayload) {
-    let deferred = Promise.defer();
-
+  async _request(path, method, credentials, jsonPayload) {
     // We were asked to back off.
     if (this.backoffError) {
       log.debug("Received new request during backoff, re-rejecting.");
-      deferred.reject(this.backoffError);
-      return deferred.promise;
+      throw this.backoffError;
     }
-
-    this.hawk.request(path, method, credentials, jsonPayload).then(
-      (response) => {
-        try {
-          let responseObj = JSON.parse(response.body);
-          deferred.resolve(responseObj);
-        } catch (err) {
-          log.error("json parse error on response: " + response.body);
-          deferred.reject({error: err});
-        }
-      },
-
-      (error) => {
-        log.error("error " + method + "ing " + path + ": " + JSON.stringify(error));
-        if (error.retryAfter) {
-          log.debug("Received backoff response; caching error as flag.");
-          this.backoffError = error;
-          // Schedule clearing of cached-error-as-flag.
-          CommonUtils.namedTimer(
-            this._clearBackoff,
-            error.retryAfter * 1000,
-            this,
-            "fxaBackoffTimer"
-           );
-        }
-        deferred.reject(error);
+    let response;
+    try {
+      response = await this.hawk.request(path, method, credentials, jsonPayload);
+    } catch (error) {
+      log.error("error " + method + "ing " + path + ": " + JSON.stringify(error));
+      if (error.retryAfter) {
+        log.debug("Received backoff response; caching error as flag.");
+        this.backoffError = error;
+        // Schedule clearing of cached-error-as-flag.
+        CommonUtils.namedTimer(
+          this._clearBackoff,
+          error.retryAfter * 1000,
+          this,
+          "fxaBackoffTimer"
+         );
       }
-    );
-
-    return deferred.promise;
+      throw error;
+    }
+    try {
+      return JSON.parse(response.body);
+    } catch (error) {
+      log.error("json parse error on response: " + response.body);
+      // eslint-disable-next-line no-throw-literal
+      throw {error};
+    }
   },
 };
 

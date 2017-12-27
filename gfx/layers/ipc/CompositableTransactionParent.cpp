@@ -1,6 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: sw=2 ts=8 et :
- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -48,7 +47,7 @@ class Compositor;
 static bool
 ScheduleComposition(CompositableHost* aCompositable)
 {
-  uint64_t id = aCompositable->GetCompositorID();
+  uint64_t id = aCompositable->GetCompositorBridgeID();
   if (!id) {
     return false;
   }
@@ -241,7 +240,8 @@ CompositableParentManager::DestroyActor(const OpDestroy& aOp)
 
 RefPtr<CompositableHost>
 CompositableParentManager::AddCompositable(const CompositableHandle& aHandle,
-				           const TextureInfo& aInfo)
+				           const TextureInfo& aInfo,
+                                           bool aUseWebRender)
 {
   if (mCompositables.find(aHandle.Value()) != mCompositables.end()) {
     NS_ERROR("Client should not allocate duplicate handles");
@@ -252,7 +252,7 @@ CompositableParentManager::AddCompositable(const CompositableHandle& aHandle,
     return nullptr;
   }
 
-  RefPtr<CompositableHost> host = CompositableHost::Create(aInfo);
+  RefPtr<CompositableHost> host = CompositableHost::Create(aInfo, aUseWebRender);
   if (!host) {
     return nullptr;
   }

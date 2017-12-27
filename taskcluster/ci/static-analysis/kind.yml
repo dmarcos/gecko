@@ -4,10 +4,14 @@
 
 loader: taskgraph.loader.transform:loader
 
+kind-dependencies:
+    - toolchain
+
 transforms:
-   - taskgraph.transforms.build_attrs:transforms
-   - taskgraph.transforms.job:transforms
-   - taskgraph.transforms.task:transforms
+    - taskgraph.transforms.build_attrs:transforms
+    - taskgraph.transforms.use_toolchains:transforms
+    - taskgraph.transforms.job:transforms
+    - taskgraph.transforms.task:transforms
 
 job-defaults:
     index:
@@ -18,52 +22,6 @@ job-defaults:
         tier: 1
 
 jobs:
-    macosx64-st-an/debug:
-        description: "MacOS X x64 Debug Cross-compile Static Analysis"
-        index:
-            job-name: macosx64-st-an-debug
-        treeherder:
-            platform: osx-10-7/debug
-        worker-type: aws-provisioner-v1/gecko-{level}-b-macosx64
-        worker:
-            implementation: docker-worker
-            docker-image: {in-tree: desktop-build}
-            max-run-time: 36000
-        run:
-            using: mozharness
-            actions: [build generate-build-stats update]
-            config:
-                - builds/releng_base_mac_64_cross_builds.py
-                - balrog/production.py
-            # enables static analysis.
-            custom-build-variant-cfg: cross-debug-st-an
-            script: "mozharness/scripts/fx_desktop_build.py"
-            tooltool-downloads: internal
-            keep-artifacts: false
-
-    macosx64-st-an/opt:
-        description: "MacOS X x64 Opt Cross-compile Static Analysis"
-        index:
-            job-name: macosx64-st-an-opt
-        treeherder:
-            platform: osx-10-7/opt
-        worker-type: aws-provisioner-v1/gecko-{level}-b-macosx64
-        worker:
-            implementation: docker-worker
-            docker-image: {in-tree: desktop-build}
-            max-run-time: 36000
-        run:
-            using: mozharness
-            actions: [build generate-build-stats update]
-            config:
-                - builds/releng_base_mac_64_cross_builds.py
-                - balrog/production.py
-            # enables static analysis.
-            custom-build-variant-cfg: cross-opt-st-an
-            script: "mozharness/scripts/fx_desktop_build.py"
-            tooltool-downloads: internal
-            keep-artifacts: false
-
     linux64-st-an/debug:
         description: "Linux64 Debug Static Analysis"
         index:
@@ -72,18 +30,24 @@ jobs:
             platform: linux64/debug
         worker-type: aws-provisioner-v1/gecko-{level}-b-linux
         worker:
-            implementation: docker-worker
             docker-image: {in-tree: desktop-build}
             max-run-time: 36000
+            env:
+                TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/linux64/releng.manifest"
         run:
             using: mozharness
-            actions: [build generate-build-stats]
+            actions: [build]
             config:
+                - builds/releng_base_firefox.py
                 - builds/releng_sub_linux_configs/64_stat_and_debug.py
                 - balrog/production.py
             script: "mozharness/scripts/fx_desktop_build.py"
             tooltool-downloads: public
             keep-artifacts: false
+        toolchains:
+            - linux64-clang
+            - linux64-rust
+            - linux64-sccache
 
     linux64-st-an/opt:
         description: "Linux64 Opt Static Analysis"
@@ -93,18 +57,24 @@ jobs:
             platform: linux64/opt
         worker-type: aws-provisioner-v1/gecko-{level}-b-linux
         worker:
-            implementation: docker-worker
             docker-image: {in-tree: desktop-build}
             max-run-time: 36000
+            env:
+                TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/linux64/releng.manifest"
         run:
             using: mozharness
-            actions: [build generate-build-stats]
+            actions: [build]
             config:
+                - builds/releng_base_firefox.py
                 - builds/releng_sub_linux_configs/64_stat_and_opt.py
                 - balrog/production.py
             script: "mozharness/scripts/fx_desktop_build.py"
             tooltool-downloads: public
             keep-artifacts: false
+        toolchains:
+            - linux64-clang
+            - linux64-rust
+            - linux64-sccache
 
     win32-st-an/debug:
         description: "Win32 Static Analysis Debug (clang-cl)"
@@ -117,13 +87,22 @@ jobs:
             tier: 1
         worker-type: aws-provisioner-v1/gecko-{level}-b-win2012
         worker:
-            implementation: generic-worker
             max-run-time: 7200
+            env:
+                TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win32/releng.manifest"
         run:
             using: mozharness
+            options: [append-env-variables-from-configs]
             script: mozharness/scripts/fx_desktop_build.py
             config:
-                - builds/taskcluster_firefox_win32_clang_debug.py
+                - builds/releng_base_firefox.py
+                - builds/taskcluster_base_windows.py
+                - builds/taskcluster_base_win32.py
+                - builds/taskcluster_sub_win32/clang_debug.py
+        toolchains:
+            - win32-clang-cl
+            - win32-rust
+            - win64-sccache
 
     win32-st-an/opt:
         description: "Win32 Static Analysis Opt (clang-cl)"
@@ -136,13 +115,22 @@ jobs:
             tier: 1
         worker-type: aws-provisioner-v1/gecko-{level}-b-win2012
         worker:
-            implementation: generic-worker
             max-run-time: 7200
+            env:
+                TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win32/releng.manifest"
         run:
             using: mozharness
+            options: [append-env-variables-from-configs]
             script: mozharness/scripts/fx_desktop_build.py
             config:
-                - builds/taskcluster_firefox_win32_clang.py
+                - builds/releng_base_firefox.py
+                - builds/taskcluster_base_windows.py
+                - builds/taskcluster_base_win32.py
+                - builds/taskcluster_sub_win32/clang.py
+        toolchains:
+            - win32-clang-cl
+            - win32-rust
+            - win64-sccache
 
     win64-st-an/debug:
         description: "Win64 Static Analysis Debug (clang-cl)"
@@ -155,13 +143,22 @@ jobs:
             tier: 1
         worker-type: aws-provisioner-v1/gecko-{level}-b-win2012
         worker:
-            implementation: generic-worker
             max-run-time: 7200
+            env:
+                TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
         run:
             using: mozharness
+            options: [append-env-variables-from-configs]
             script: mozharness/scripts/fx_desktop_build.py
             config:
-                - builds/taskcluster_firefox_win64_clang_debug.py
+                - builds/releng_base_firefox.py
+                - builds/taskcluster_base_windows.py
+                - builds/taskcluster_base_win64.py
+                - builds/taskcluster_sub_win64/clang_debug.py
+        toolchains:
+            - win64-clang-cl
+            - win64-rust
+            - win64-sccache
 
     win64-st-an/opt:
         description: "Win64 Static Analysis Opt (clang-cl)"
@@ -174,10 +171,19 @@ jobs:
             tier: 1
         worker-type: aws-provisioner-v1/gecko-{level}-b-win2012
         worker:
-            implementation: generic-worker
             max-run-time: 7200
+            env:
+                TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/win64/releng.manifest"
         run:
             using: mozharness
+            options: [append-env-variables-from-configs]
             script: mozharness/scripts/fx_desktop_build.py
             config:
-                - builds/taskcluster_firefox_win64_clang.py
+                - builds/releng_base_firefox.py
+                - builds/taskcluster_base_windows.py
+                - builds/taskcluster_base_win64.py
+                - builds/taskcluster_sub_win64/clang.py
+        toolchains:
+            - win64-clang-cl
+            - win64-rust
+            - win64-sccache

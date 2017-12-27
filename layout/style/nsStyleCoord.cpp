@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -82,40 +83,6 @@ bool nsStyleCoord::operator==(const nsStyleCoord& aOther) const
   }
   MOZ_ASSERT(false, "unexpected unit");
   return false;
-}
-
-uint32_t nsStyleCoord::HashValue(uint32_t aHash = 0) const
-{
-  aHash = mozilla::AddToHash(aHash, mUnit);
-
-  switch (mUnit) {
-    case eStyleUnit_Null:
-    case eStyleUnit_Normal:
-    case eStyleUnit_Auto:
-    case eStyleUnit_None:
-      return mozilla::AddToHash(aHash, true);
-    case eStyleUnit_Percent:
-    case eStyleUnit_Factor:
-    case eStyleUnit_Degree:
-    case eStyleUnit_Grad:
-    case eStyleUnit_Radian:
-    case eStyleUnit_Turn:
-    case eStyleUnit_FlexFraction:
-      return mozilla::AddToHash(aHash, mValue.mFloat);
-    case eStyleUnit_Coord:
-    case eStyleUnit_Integer:
-    case eStyleUnit_Enumerated:
-      return mozilla::AddToHash(aHash, mValue.mInt);
-    case eStyleUnit_Calc:
-      Calc* calcValue = GetCalcValue();
-      aHash = mozilla::AddToHash(aHash, calcValue->mLength);
-      if (HasPercent()) {
-        return mozilla::AddToHash(aHash, calcValue->mPercent);
-      }
-      return aHash;
-  }
-  MOZ_ASSERT(false, "unexpected unit");
-  return aHash;
 }
 
 void nsStyleCoord::Reset()
@@ -228,6 +195,30 @@ nsStyleCoord::GetAngleValueInRadians() const
   default:
     NS_NOTREACHED("unrecognized angular unit");
     return 0.0;
+  }
+}
+
+nscoord
+nsStyleCoord::ComputeComputedCalc(nscoord aPercentageBasis) const
+{
+  Calc* calc = GetCalcValue();
+  return calc->mLength +
+         NSToCoordFloorClamped(aPercentageBasis * calc->mPercent);
+}
+
+nscoord
+nsStyleCoord::ComputeCoordPercentCalc(nscoord aPercentageBasis) const
+{
+  switch (GetUnit()) {
+    case eStyleUnit_Coord:
+      return GetCoordValue();
+    case eStyleUnit_Percent:
+      return NSToCoordFloorClamped(aPercentageBasis * GetPercentValue());
+    case eStyleUnit_Calc:
+      return ComputeComputedCalc(aPercentageBasis);
+    default:
+      MOZ_ASSERT_UNREACHABLE("Unexpected unit!");
+      return 0;
   }
 }
 

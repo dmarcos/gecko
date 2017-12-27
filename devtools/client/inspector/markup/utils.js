@@ -37,7 +37,7 @@ function flashElementOn(backgroundElt, foregroundElt = backgroundElt) {
  * See flashElementOn.
  *
  * @param  {Node} backgroundElt
- *         The element to reomve the highlighted background color on.
+ *         The element to remove the highlighted background color on.
  * @param  {Node} foregroundElt
  *         The element to remove the matching foreground color on.
  *         Optional.  This will equal backgroundElt if not set.

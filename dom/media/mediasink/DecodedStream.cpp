@@ -22,12 +22,14 @@
 
 namespace mozilla {
 
+using media::TimeUnit;
+
 /*
  * A container class to make it easier to pass the playback info all the
  * way to DecodedStreamGraphListener from DecodedStream.
  */
 struct PlaybackInfoInit {
-  media::TimeUnit mStartTime;
+  TimeUnit mStartTime;
   MediaInfo mInfo;
 };
 
@@ -57,8 +59,9 @@ public:
   {
     if (event == MediaStreamGraphEvent::EVENT_FINISHED) {
       aGraph->DispatchToMainThreadAfterStreamStateUpdate(
-        mAbstractMainThread,
-        NewRunnableMethod(this, &DecodedStreamGraphListener::DoNotifyFinished));
+        NewRunnableMethod("DecodedStreamGraphListener::DoNotifyFinished",
+                          this,
+                          &DecodedStreamGraphListener::DoNotifyFinished));
     }
   }
 
@@ -71,10 +74,11 @@ public:
   void Forget()
   {
     RefPtr<DecodedStreamGraphListener> self = this;
-    mAbstractMainThread->Dispatch(NS_NewRunnableFunction([self] () {
-      MOZ_ASSERT(NS_IsMainThread());
-      self->mFinishPromise.ResolveIfExists(true, __func__);
-    }));
+    mAbstractMainThread->Dispatch(
+      NS_NewRunnableFunction("DecodedStreamGraphListener::Forget", [self]() {
+        MOZ_ASSERT(NS_IsMainThread());
+        self->mFinishPromise.ResolveIfExists(true, __func__);
+      }));
     MutexAutoLock lock(mMutex);
     mStream = nullptr;
   }
@@ -108,9 +112,11 @@ UpdateStreamSuspended(AbstractThread* aMainThread, MediaStream* aStream, bool aB
   } else {
     nsCOMPtr<nsIRunnable> r;
     if (aBlocking) {
-      r = NewRunnableMethod(aStream, &MediaStream::Suspend);
+      r = NewRunnableMethod(
+        "MediaStream::Suspend", aStream, &MediaStream::Suspend);
     } else {
-      r = NewRunnableMethod(aStream, &MediaStream::Resume);
+      r =
+        NewRunnableMethod("MediaStream::Resume", aStream, &MediaStream::Resume);
     }
     aMainThread->Dispatch(r.forget());
   }
@@ -144,8 +150,8 @@ public:
   // mNextVideoTime is the end timestamp for the last packet sent to the stream.
   // Therefore video packets starting at or after this time need to be copied
   // to the output stream.
-  media::TimeUnit mNextVideoTime;
-  media::TimeUnit mNextAudioTime;
+  TimeUnit mNextVideoTime;
+  TimeUnit mNextAudioTime;
   // The last video image sent to the stream. Useful if we need to replicate
   // the image.
   RefPtr<layers::Image> mLastVideoImage;
@@ -176,7 +182,7 @@ DecodedStreamData::DecodedStreamData(OutputStreamManager* aOutputStreamManager,
   , mHaveSentFinish(false)
   , mHaveSentFinishAudio(false)
   , mHaveSentFinishVideo(false)
-  , mStream(aOutputStreamManager->Graph()->CreateSourceStream(aMainThread))
+  , mStream(aOutputStreamManager->Graph()->CreateSourceStream())
   // DecodedStreamGraphListener will resolve this promise.
   , mListener(new DecodedStreamGraphListener(mStream, Move(aPromise), aMainThread))
   // mPlaying is initially true because MDSM won't start playback until playing
@@ -294,13 +300,13 @@ DecodedStream::OnEnded(TrackType aType)
 }
 
 void
-DecodedStream::Start(const media::TimeUnit& aStartTime, const MediaInfo& aInfo)
+DecodedStream::Start(const TimeUnit& aStartTime, const MediaInfo& aInfo)
 {
   AssertOwnerThread();
   MOZ_ASSERT(mStartTime.isNothing(), "playback already started.");
 
   mStartTime.emplace(aStartTime);
-  mLastOutputTime = media::TimeUnit::Zero();
+  mLastOutputTime = TimeUnit::Zero();
   mInfo = aInfo;
   mPlaying = true;
   ConnectListener();
@@ -404,10 +410,9 @@ DecodedStream::DestroyData(UniquePtr<DecodedStreamData> aData)
 
   DecodedStreamData* data = aData.release();
   data->Forget();
-  nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction([=] () {
-    delete data;
-  });
-  mAbstractMainThread->Dispatch(r.forget());
+  nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction("DecodedStream::DestroyData",
+                                                   [=]() { delete data; });
+  NS_DispatchToMainThread(r.forget());
 }
 
 void
@@ -448,7 +453,7 @@ DecodedStream::SetPreservesPitch(bool aPreservesPitch)
 }
 
 static void
-SendStreamAudio(DecodedStreamData* aStream, const media::TimeUnit& aStartTime,
+SendStreamAudio(DecodedStreamData* aStream, const TimeUnit& aStartTime,
                 AudioData* aData, AudioSegment* aOutput, uint32_t aRate,
                 const PrincipalHandle& aPrincipalHandle)
 {
@@ -461,7 +466,7 @@ SendStreamAudio(DecodedStreamData* aStream, const media::TimeUnit& aStartTime,
   // the exact same silences
   CheckedInt64 audioWrittenOffset = aStream->mAudioFramesWritten
     + TimeUnitToFrames(aStartTime, aRate);
-  CheckedInt64 frameOffset = UsecsToFrames(audio->mTime, aRate);
+  CheckedInt64 frameOffset = TimeUnitToFrames(audio->mTime, aRate);
 
   if (!audioWrittenOffset.isValid() ||
       !frameOffset.isValid() ||
@@ -541,8 +546,8 @@ DecodedStream::SendAudio(double aVolume, bool aIsSameOrigin,
 static void
 WriteVideoToMediaStream(MediaStream* aStream,
                         layers::Image* aImage,
-                        const media::TimeUnit& aEnd,
-                        const media::TimeUnit& aStart,
+                        const TimeUnit& aEnd,
+                        const TimeUnit& aStart,
                         const mozilla::gfx::IntSize& aIntrinsicSize,
                         const TimeStamp& aTimeStamp,
                         VideoSegment* aOutput,
@@ -595,7 +600,7 @@ DecodedStream::SendVideo(bool aIsSameOrigin, const PrincipalHandle& aPrincipalHa
   for (uint32_t i = 0; i < video.Length(); ++i) {
     VideoData* v = video[i];
 
-    if (mData->mNextVideoTime.ToMicroseconds() < v->mTime) {
+    if (mData->mNextVideoTime < v->mTime) {
       // Write last video frame to catch up. mLastVideoImage can be null here
       // which is fine, it just means there's no video.
 
@@ -605,12 +610,11 @@ DecodedStream::SendVideo(bool aIsSameOrigin, const PrincipalHandle& aPrincipalHa
       // video frame). E.g. if we have a video frame that is 30 sec long
       // and capture happens at 15 sec, we'll have to append a black frame
       // that is 15 sec long.
-      WriteVideoToMediaStream(sourceStream, mData->mLastVideoImage,
-        FromMicroseconds(v->mTime),
+      WriteVideoToMediaStream(sourceStream, mData->mLastVideoImage, v->mTime,
         mData->mNextVideoTime, mData->mLastVideoImageDisplaySize,
-        tracksStartTimeStamp + TimeDuration::FromMicroseconds(v->mTime),
+        tracksStartTimeStamp + v->mTime.ToTimeDuration(),
         &output, aPrincipalHandle);
-      mData->mNextVideoTime = FromMicroseconds(v->mTime);
+      mData->mNextVideoTime = v->mTime;
     }
 
     if (mData->mNextVideoTime < v->GetEndTime()) {
@@ -708,11 +712,11 @@ DecodedStream::SendData()
 
   if (finished && !mData->mHaveSentFinish) {
     mData->mHaveSentFinish = true;
-    mData->mStream->Finish();
+    mData->mStream->FinishPending();
   }
 }
 
-media::TimeUnit
+TimeUnit
 DecodedStream::GetEndTime(TrackType aType) const
 {
   AssertOwnerThread();
@@ -725,10 +729,10 @@ DecodedStream::GetEndTime(TrackType aType) const
   } else if (aType == TrackInfo::kVideoTrack && mData) {
     return mData->mNextVideoTime;
   }
-  return media::TimeUnit::Zero();
+  return TimeUnit::Zero();
 }
 
-media::TimeUnit
+TimeUnit
 DecodedStream::GetPosition(TimeStamp* aTimeStamp) const
 {
   AssertOwnerThread();
@@ -746,7 +750,7 @@ DecodedStream::NotifyOutput(int64_t aTime)
 {
   AssertOwnerThread();
   mLastOutputTime = FromMicroseconds(aTime);
-  int64_t currentTime = GetPosition().ToMicroseconds();
+  auto currentTime = GetPosition();
 
   // Remove audio samples that have been played by MSG from the queue.
   RefPtr<AudioData> a = mAudioQueue.PeekFront();
@@ -787,10 +791,18 @@ DecodedStream::GetDebugInfo()
 {
   AssertOwnerThread();
   int64_t startTime = mStartTime.isSome() ? mStartTime->ToMicroseconds() : -1;
-  return nsPrintfCString(
-    "DecodedStream=%p mStartTime=%" PRId64 " mLastOutputTime=%" PRId64 " mPlaying=%d mData=%p",
-    this, startTime, mLastOutputTime.ToMicroseconds(), mPlaying, mData.get())
-    + (mData ? nsCString("\n") + mData->GetDebugInfo() : nsCString());
+  auto str =
+    nsPrintfCString("DecodedStream=%p mStartTime=%" PRId64
+                    " mLastOutputTime=%" PRId64 " mPlaying=%d mData=%p",
+                    this,
+                    startTime,
+                    mLastOutputTime.ToMicroseconds(),
+                    mPlaying,
+                    mData.get());
+  if (mData) {
+    AppendStringIfNotEmpty(str, mData->GetDebugInfo());
+  }
+  return str;
 }
 
 } // namespace mozilla

@@ -45,27 +45,26 @@ let prompterParent = runInParent(() => {
   let chromeWin = Services.wm.getMostRecentWindow("navigator:browser");
   let prompter2 = promptFac.getPrompt(chromeWin, Ci.nsIAuthPrompt2);
 
-  let ioService = Cc["@mozilla.org/network/io-service;1"].getService(Ci.nsIIOService);
   let channels = {};
-  channels.channel1 = ioService.newChannel2("http://example.com",
-                                            null,
-                                            null,
-                                            null,      // aLoadingNode
-                                            Services.
-                                            scriptSecurityManager.getSystemPrincipal(),
-                                            null,      // aTriggeringPrincipal
-                                            Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
-                                            Ci.nsIContentPolicy.TYPE_OTHER);
+  channels.channel1 = Services.io.newChannel2("http://example.com",
+                                              null,
+                                              null,
+                                              null, // aLoadingNode
+                                              Services.
+                                              scriptSecurityManager.getSystemPrincipal(),
+                                              null, // aTriggeringPrincipal
+                                              Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
+                                              Ci.nsIContentPolicy.TYPE_OTHER);
 
-  channels.channel2 = ioService.newChannel2("http://example2.com",
-                                            null,
-                                            null,
-                                            null,      // aLoadingNode
-                                            Services.
-                                            scriptSecurityManager.getSystemPrincipal(),
-                                            null,      // aTriggeringPrincipal
-                                            Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
-                                            Ci.nsIContentPolicy.TYPE_OTHER);
+  channels.channel2 = Services.io.newChannel2("http://example2.com",
+                                              null,
+                                              null,
+                                              null, // aLoadingNode
+                                              Services.
+                                              scriptSecurityManager.getSystemPrincipal(),
+                                              null, // aTriggeringPrincipal
+                                              Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
+                                              Ci.nsIContentPolicy.TYPE_OTHER);
 
   addMessageListener("proxyPrompter", function onMessage(msg) {
     let args = [...msg.args];
@@ -80,11 +79,6 @@ let prompterParent = runInParent(() => {
       args: msg.args,
     };
   });
-
-  Cu.import("resource://gre/modules/Services.jsm");
-
-  let pwmgr = Cc["@mozilla.org/login-manager;1"].
-              getService(Ci.nsILoginManager);
 
   let login1, login2A, login2B, login2C, login2D, login2E;
   login1  = Cc["@mozilla.org/login-manager/loginInfo;1"].
@@ -113,17 +107,17 @@ let prompterParent = runInParent(() => {
   login2E.init("http://example2.com", null, "http://example2.com",
                "100%beef", "user3pass", "", "");
 
-  pwmgr.addLogin(login1);
-  pwmgr.addLogin(login2A);
-  pwmgr.addLogin(login2B);
-  pwmgr.addLogin(login2C);
-  pwmgr.addLogin(login2D);
-  pwmgr.addLogin(login2E);
+  Services.logins.addLogin(login1);
+  Services.logins.addLogin(login2A);
+  Services.logins.addLogin(login2B);
+  Services.logins.addLogin(login2C);
+  Services.logins.addLogin(login2D);
+  Services.logins.addLogin(login2E);
 });
 
 let prompter2 = new PrompterProxy(prompterParent);
 
-add_task(function* test_accept() {
+add_task(async function test_accept() {
   state = {
     msg: "http://example.com is requesting your username and password. The site says: “some realm”",
     title: "Authentication Required",
@@ -153,14 +147,14 @@ add_task(function* test_accept() {
   // we can't send a channel in a message, we instead send the channel name that
   // already exists in the chromeScript.
   isOk = prompter2.promptAuth("channel1", level, authinfo);
-  yield promptDone;
+  await promptDone;
 
   ok(isOk, "Checking dialog return value (accept)");
   is(authinfo.username, "outuser", "Checking returned username");
   is(authinfo.password, "outpass", "Checking returned password");
 });
 
-add_task(function* test_cancel() {
+add_task(async function test_cancel() {
   state = {
     msg: "http://example.com is requesting your username and password. The site says: “some realm”",
     title: "Authentication Required",
@@ -181,12 +175,12 @@ add_task(function* test_cancel() {
   };
   promptDone = handlePrompt(state, action);
   isOk = prompter2.promptAuth("channel1", level, authinfo);
-  yield promptDone;
+  await promptDone;
 
   ok(!isOk, "Checking dialog return value (cancel)");
 });
 
-add_task(function* test_pwonly() {
+add_task(async function test_pwonly() {
   // test filling in password-only login
   state = {
     msg: "http://example.com is requesting your username and password. The site says: “http://example.com”",
@@ -212,14 +206,14 @@ add_task(function* test_pwonly() {
 
   promptDone = handlePrompt(state, action);
   isOk = prompter2.promptAuth("channel1", level, authinfo);
-  yield promptDone;
+  await promptDone;
 
   ok(isOk, "Checking dialog return value (accept)");
   is(authinfo.username, "", "Checking returned username");
   is(authinfo.password, "examplepass", "Checking returned password");
 });
 
-add_task(function* test_multipleExisting() {
+add_task(async function test_multipleExisting() {
   // test filling in existing login (undetermined from multiple selection)
   // user2name/user2pass would also be valid to fill here.
   state = {
@@ -246,14 +240,14 @@ add_task(function* test_multipleExisting() {
 
   promptDone = handlePrompt(state, action);
   isOk = prompter2.promptAuth("channel2", level, authinfo);
-  yield promptDone;
+  await promptDone;
 
   ok(isOk, "Checking dialog return value (accept)");
   ok(authinfo.username == "user1name" || authinfo.username == "user2name", "Checking returned username");
   ok(authinfo.password == "user1pass" || authinfo.password == "user2pass", "Checking returned password");
 });
 
-add_task(function* test_multipleExisting2() {
+add_task(async function test_multipleExisting2() {
   // test filling in existing login (undetermined --> user1)
   // user2name/user2pass would also be valid to fill here.
   state = {
@@ -283,14 +277,14 @@ add_task(function* test_multipleExisting2() {
 
   promptDone = handlePrompt(state, action);
   isOk = prompter2.promptAuth("channel2", level, authinfo);
-  yield promptDone;
+  await promptDone;
 
   ok(isOk, "Checking dialog return value (accept)");
   is(authinfo.username, "user1name", "Checking returned username");
   is(authinfo.password, "user1pass", "Checking returned password");
 });
 
-add_task(function* test_multipleExisting3() {
+add_task(async function test_multipleExisting3() {
   // test filling in existing login (undetermined --> user2)
   // user2name/user2pass would also be valid to fill here.
   state = {
@@ -320,14 +314,14 @@ add_task(function* test_multipleExisting3() {
 
   promptDone = handlePrompt(state, action);
   isOk = prompter2.promptAuth("channel2", level, authinfo);
-  yield promptDone;
+  await promptDone;
 
   ok(isOk, "Checking dialog return value (accept)");
   is(authinfo.username, "user2name", "Checking returned username");
   is(authinfo.password, "user2pass", "Checking returned password");
 });
 
-add_task(function* test_changingMultiple() {
+add_task(async function test_changingMultiple() {
   // test changing a password (undetermined --> user2 w/ newpass)
   // user2name/user2pass would also be valid to fill here.
   state = {
@@ -357,14 +351,14 @@ add_task(function* test_changingMultiple() {
 
   promptDone = handlePrompt(state, action);
   isOk = prompter2.promptAuth("channel2", level, authinfo);
-  yield promptDone;
+  await promptDone;
 
   ok(isOk, "Checking dialog return value (accept)");
   is(authinfo.username, "user2name", "Checking returned username");
   is(authinfo.password, "NEWuser2pass", "Checking returned password");
 });
 
-add_task(function* test_changingMultiple2() {
+add_task(async function test_changingMultiple2() {
   // test changing a password (undetermined --> user2 w/ origpass)
   // user2name/user2pass would also be valid to fill here.
   state = {
@@ -394,7 +388,7 @@ add_task(function* test_changingMultiple2() {
 
   promptDone = handlePrompt(state, action);
   isOk = prompter2.promptAuth("channel2", level, authinfo);
-  yield promptDone;
+  await promptDone;
 
   ok(isOk, "Checking dialog return value (accept)");
   is(authinfo.username, "user2name", "Checking returned username");

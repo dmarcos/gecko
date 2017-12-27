@@ -4,11 +4,9 @@
 
 // Tests various aspects of the details view
 
-const { REQUIRE_SIGNING } = Components.utils.import("resource://gre/modules/addons/AddonConstants.jsm", {});
+Components.utils.import("resource://gre/modules/AppConstants.jsm");
 
 const PREF_AUTOUPDATE_DEFAULT = "extensions.update.autoUpdateDefault";
-const PREF_GETADDONS_GETSEARCHRESULTS = "extensions.getAddons.search.url";
-const SEARCH_URL = TESTROOT + "browser_details.xml";
 const PREF_EM_HOTFIX_ID = "extensions.hotfix.id";
 
 var gManagerWindow;
@@ -46,9 +44,6 @@ function get(aId) {
 
 function test() {
   requestLongerTimeout(2);
-  // Turn on searching for this test
-  Services.prefs.setIntPref(PREF_SEARCH_MAXRESULTS, 15);
-  Services.prefs.setCharPref(PREF_GETADDONS_GETSEARCHRESULTS, SEARCH_URL);
   Services.prefs.setCharPref(PREF_EM_HOTFIX_ID, "hotfix@tests.mozilla.org");
 
   waitForExplicitFinish();
@@ -710,7 +705,7 @@ add_test(function() {
 });
 
 // These tests are only appropriate when signing can be turned off
-if (!REQUIRE_SIGNING) {
+if (!AppConstants.MOZ_REQUIRE_SIGNING) {
   // Opens and tests the details view for add-on 9
   add_test(function() {
     open_details("addon9@tests.mozilla.org", "extension", function() {
@@ -774,7 +769,7 @@ add_test(function() {
 });
 
 // These tests are only appropriate when signing can be turned off
-if (!REQUIRE_SIGNING) {
+if (!AppConstants.REQUIRE_SIGNING) {
   // Opens and tests the details view for add-on 10
   add_test(function() {
     open_details("addon10@tests.mozilla.org", "extension", function() {
@@ -1010,7 +1005,7 @@ add_test(function() {
 
     is_element_hidden(get("detail-downloads"), "Downloads should be hidden");
 
-    is_element_visible(get("detail-prefs-btn"), "Preferences button should be visible");
+    is_element_hidden(get("detail-prefs-btn"), "Preferences button should be hidden");
     is_element_hidden(get("detail-enable-btn"), "Enable button should be hidden");
     is_element_visible(get("detail-disable-btn"), "Disable button should be visible");
     is_element_visible(get("detail-uninstall-btn"), "Remove button should be visible");

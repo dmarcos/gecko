@@ -15,6 +15,7 @@ def read(*parts):
     with open(os.path.join(THIS_DIR, *parts)) as f:
         return f.read()
 
+
 setup(name='telemetry-harness',
       version=PACKAGE_VERSION,
       description=("""Custom Marionette runner classes and entry scripts for Telemetry
@@ -31,7 +32,7 @@ specific Marionette tests."""),
       keywords='mozilla',
       author='Firefox Test Engineering Team',
       author_email='firefox-test-engineering@mozilla.org',
-      url='https://hg.mozilla.org/mozilla-central/toolkit/telemetry/tests',
+      url='https://developer.mozilla.org/en-US/docs/Mozilla/QA/telemetry_harness',
       license='MPL 2.0',
       packages=find_packages(),
       zip_safe=False,

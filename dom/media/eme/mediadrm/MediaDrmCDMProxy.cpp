@@ -69,7 +69,8 @@ MediaDrmCDMProxy::Init(PromiseId aPromiseId,
   }
 
   mCDM = mozilla::MakeUnique<MediaDrmProxySupport>(mKeySystem);
-  nsCOMPtr<nsIRunnable> task(NewRunnableMethod<uint32_t>(this,
+  nsCOMPtr<nsIRunnable> task(NewRunnableMethod<uint32_t>("MediaDrmCDMProxy::md_Init",
+                                                         this,
                                                          &MediaDrmCDMProxy::md_Init,
                                                          aPromiseId));
   mOwnerThread->Dispatch(task, NS_DISPATCH_NORMAL);
@@ -93,7 +94,8 @@ MediaDrmCDMProxy::CreateSession(uint32_t aCreateSessionToken,
   data->mInitData = Move(aInitData);
 
   nsCOMPtr<nsIRunnable> task(
-    NewRunnableMethod<UniquePtr<CreateSessionData>&&>(this,
+    NewRunnableMethod<UniquePtr<CreateSessionData>&&>("MediaDrmCDMProxy::md_CreateSession",
+                                                      this,
                                                       &MediaDrmCDMProxy::md_CreateSession,
                                                       Move(data)));
   mOwnerThread->Dispatch(task, NS_DISPATCH_NORMAL);
@@ -106,7 +108,7 @@ MediaDrmCDMProxy::LoadSession(PromiseId aPromiseId,
 {
   // TODO: Implement LoadSession.
   RejectPromise(aPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
-                NS_LITERAL_CSTRING("Currently Fennec did not support LoadSession"));
+                NS_LITERAL_CSTRING("Currently Fennec does not support LoadSession"));
 }
 
 void
@@ -115,7 +117,7 @@ MediaDrmCDMProxy::SetServerCertificate(PromiseId aPromiseId,
 {
   // TODO: Implement SetServerCertificate.
   RejectPromise(aPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
-                NS_LITERAL_CSTRING("Currently Fennec did not support SetServerCertificate"));
+                NS_LITERAL_CSTRING("Currently Fennec does not support SetServerCertificate"));
 }
 
 void
@@ -133,7 +135,8 @@ MediaDrmCDMProxy::UpdateSession(const nsAString& aSessionId,
   data->mResponse = Move(aResponse);
 
   nsCOMPtr<nsIRunnable> task(
-    NewRunnableMethod<UniquePtr<UpdateSessionData>&&>(this,
+    NewRunnableMethod<UniquePtr<UpdateSessionData>&&>("MediaDrmCDMProxy::md_UpdateSession",
+                                                      this,
                                                       &MediaDrmCDMProxy::md_UpdateSession,
                                                       Move(data)));
   mOwnerThread->Dispatch(task, NS_DISPATCH_NORMAL);
@@ -152,7 +155,8 @@ MediaDrmCDMProxy::CloseSession(const nsAString& aSessionId,
   data->mSessionId = NS_ConvertUTF16toUTF8(aSessionId);
 
   nsCOMPtr<nsIRunnable> task(
-    NewRunnableMethod<UniquePtr<SessionOpData>&&>(this,
+    NewRunnableMethod<UniquePtr<SessionOpData>&&>("MediaDrmCDMProxy::md_CloseSession",
+                                                  this,
                                                   &MediaDrmCDMProxy::md_CloseSession,
                                                   Move(data)));
   mOwnerThread->Dispatch(task, NS_DISPATCH_NORMAL);
@@ -164,7 +168,7 @@ MediaDrmCDMProxy::RemoveSession(const nsAString& aSessionId,
 {
   // TODO: Implement RemoveSession.
   RejectPromise(aPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
-                NS_LITERAL_CSTRING("Currently Fennec did not support RemoveSession"));
+                NS_LITERAL_CSTRING("Currently Fennec does not support RemoveSession"));
 }
 
 void
@@ -173,7 +177,8 @@ MediaDrmCDMProxy::Shutdown()
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(mOwnerThread);
   nsCOMPtr<nsIRunnable> task(
-    NewRunnableMethod(this, &MediaDrmCDMProxy::md_Shutdown));
+    NewRunnableMethod("MediaDrmCDMProxy::md_Shutdown",
+                      this, &MediaDrmCDMProxy::md_Shutdown));
 
   mOwnerThread->Dispatch(task, NS_DISPATCH_NORMAL);
   mOwnerThread->Shutdown();
@@ -221,7 +226,7 @@ MediaDrmCDMProxy::OnResolveLoadSessionPromise(uint32_t aPromiseId, bool aSuccess
 void
 MediaDrmCDMProxy::OnSessionMessage(const nsAString& aSessionId,
                                    dom::MediaKeyMessageType aMessageType,
-                                   nsTArray<uint8_t>& aMessage)
+                                   const nsTArray<uint8_t>& aMessage)
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (mKeys.IsNull()) {
@@ -326,7 +331,8 @@ MediaDrmCDMProxy::ResolvePromise(PromiseId aId)
     }
   } else {
     nsCOMPtr<nsIRunnable> task;
-    task = NewRunnableMethod<PromiseId>(this,
+    task = NewRunnableMethod<PromiseId>("MediaDrmCDMProxy::ResolvePromise",
+                                        this,
                                         &MediaDrmCDMProxy::ResolvePromise,
                                         aId);
     mMainThread->Dispatch(task.forget(), NS_DISPATCH_NORMAL);
@@ -339,7 +345,7 @@ MediaDrmCDMProxy::KeySystem() const
   return mKeySystem;
 }
 
-CDMCaps&
+DataMutex<CDMCaps>&
 MediaDrmCDMProxy::Capabilites()
 {
   return mCapabilites;
@@ -362,8 +368,17 @@ void
 MediaDrmCDMProxy::GetSessionIdsForKeyId(const nsTArray<uint8_t>& aKeyId,
                                       nsTArray<nsCString>& aSessionIds)
 {
-  CDMCaps::AutoLock caps(Capabilites());
-  caps.GetSessionIdsForKeyId(aKeyId, aSessionIds);
+  auto caps = Capabilites().Lock();
+  caps->GetSessionIdsForKeyId(aKeyId, aSessionIds);
+}
+
+void
+MediaDrmCDMProxy::GetStatusForPolicy(PromiseId aPromiseId,
+                                     const nsAString& aMinHdcpVersion)
+{
+  // TODO: Implement GetStatusForPolicy.
+  RejectPromise(aPromiseId, NS_ERROR_DOM_NOT_SUPPORTED_ERR,
+                NS_LITERAL_CSTRING("Currently Fennec does not support GetStatusForPolicy"));
 }
 
 #ifdef DEBUG
@@ -408,7 +423,8 @@ MediaDrmCDMProxy::md_Init(uint32_t aPromiseId)
   mCallback.reset(new MediaDrmCDMCallbackProxy(this));
   mCDM->Init(mCallback.get());
   nsCOMPtr<nsIRunnable> task(
-    NewRunnableMethod<uint32_t>(this,
+    NewRunnableMethod<uint32_t>("MediaDrmCDMProxy::OnCDMCreated",
+                                this,
                                 &MediaDrmCDMProxy::OnCDMCreated,
                                 aPromiseId));
   mMainThread->Dispatch(task.forget(), NS_DISPATCH_NORMAL);

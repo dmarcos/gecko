@@ -35,16 +35,9 @@ function ArrayIndexOf(searchElement/*, fromIndex*/) {
     }
 
     /* Step 9. */
-    if (IsPackedArray(O)) {
-        for (; k < len; k++) {
-            if (O[k] === searchElement)
-                return k;
-        }
-    } else {
-        for (; k < len; k++) {
-            if (k in O && O[k] === searchElement)
-                return k;
-        }
+    for (; k < len; k++) {
+        if (k in O && O[k] === searchElement)
+            return k;
     }
 
     /* Step 10. */
@@ -83,16 +76,9 @@ function ArrayLastIndexOf(searchElement/*, fromIndex*/) {
         k = n;
 
     /* Step 8. */
-    if (IsPackedArray(O)) {
-        for (; k >= 0; k--) {
-            if (O[k] === searchElement)
-                return k;
-        }
-    } else {
-        for (; k >= 0; k--) {
-            if (k in O && O[k] === searchElement)
-                return k;
-        }
+    for (; k >= 0; k--) {
+        if (k in O && O[k] === searchElement)
+            return k;
     }
 
     /* Step 9. */
@@ -195,16 +181,28 @@ function ArrayStaticSome(list, callbackfn/*, thisArg*/) {
     return callFunction(ArraySome, list, callbackfn, T);
 }
 
-/* ES6 draft 2016-1-15 22.1.3.25 Array.prototype.sort (comparefn) */
+// ES2018 draft rev 3bbc87cd1b9d3bf64c3e68ca2fe9c5a3f2c304c0
+// 22.1.3.25 Array.prototype.sort ( comparefn )
 function ArraySort(comparefn) {
-    /* Step 1. */
+    // Step 1.
+    if (comparefn !== undefined) {
+        if (!IsCallable(comparefn))
+            ThrowTypeError(JSMSG_BAD_SORT_ARG);
+    }
+
+    // Step 2.
     var O = ToObject(this);
 
-    /* Step 2. */
+    // First try to sort the array in native code, if that fails, indicated by
+    // returning |false| from ArrayNativeSort, sort it in self-hosted code.
+    if (callFunction(ArrayNativeSort, O, comparefn))
+        return O;
+
+    // Step 3.
     var len = ToLength(O.length);
 
     if (len <= 1)
-      return this;
+      return O;
 
     /* 22.1.3.25.1 Runtime Semantics: SortCompare( x, y ) */
     var wrappedCompareFn = comparefn;
@@ -223,7 +221,7 @@ function ArraySort(comparefn) {
 
         /* Step 4.b-c. */
         return v !== v ? 0 : v;
-    }
+    };
 
     return MergeSort(O, len, comparefn);
 }
@@ -738,10 +736,13 @@ function ArrayIteratorNext() {
     // Step 8-9.
     var len;
     if (IsPossiblyWrappedTypedArray(a)) {
-        if (PossiblyWrappedTypedArrayHasDetachedBuffer(a))
-            ThrowTypeError(JSMSG_TYPED_ARRAY_DETACHED);
-
         len = PossiblyWrappedTypedArrayLength(a);
+
+        // If the length is non-zero, the buffer can't be detached.
+        if (len === 0) {
+            if (PossiblyWrappedTypedArrayHasDetachedBuffer(a))
+                ThrowTypeError(JSMSG_TYPED_ARRAY_DETACHED);
+        }
     } else {
         len = ToLength(a.length);
     }
@@ -804,19 +805,27 @@ function ArrayFrom(items, mapfn = undefined, thisArg = undefined) {
     var T = thisArg;
 
     // Step 4.
-    var usingIterator = GetMethod(items, std_iterator);
+    // Inlined: GetMethod, steps 1-2.
+    var usingIterator = items[std_iterator];
 
     // Step 5.
-    if (usingIterator !== undefined) {
-        // Steps 5.a-c.
+    // Inlined: GetMethod, step 3.
+    if (usingIterator !== undefined && usingIterator !== null) {
+        // Inlined: GetMethod, step 4.
+        if (!IsCallable(usingIterator))
+            ThrowTypeError(JSMSG_NOT_ITERABLE, DecompileArg(0, items));
+
+        // Steps 5.a-b.
         var A = IsConstructor(C) ? new C() : [];
+
+        // Step 5.c.
+        var iterator = MakeIteratorWrapper(items, usingIterator);
 
         // Step 5.d.
         var k = 0;
 
-        // Step 5.c, 5.e.
-        var iteratorWrapper = { [std_iterator]() { return GetIterator(items, usingIterator); } };
-        for (var nextValue of allowContentIter(iteratorWrapper)) {
+        // Step 5.e
+        for (var nextValue of allowContentIter(iterator)) {
             // Step 5.e.i.
             // Disabled for performance reason.  We won't hit this case on
             // normal array, since _DefineDataProperty will throw before it.
@@ -839,8 +848,8 @@ function ArrayFrom(items, mapfn = undefined, thisArg = undefined) {
         return A;
     }
 
-    // Step 7.
-    assert(usingIterator === undefined, "`items` can't be an Iterable after step 6.g.iv");
+    // Step 7 is an assertion: items is not an Iterator. Testing this is
+    // literally the very last thing we did, so we don't assert here.
 
     // Steps 8-9.
     var arrayLike = ToObject(items);
@@ -868,6 +877,21 @@ function ArrayFrom(items, mapfn = undefined, thisArg = undefined) {
 
     // Step 19.
     return A;
+}
+
+function MakeIteratorWrapper(items, method) {
+    assert(IsCallable(method), "method argument is a function");
+
+    // This function is not inlined in ArrayFrom, because function default
+    // parameters combined with nested functions are currently not optimized
+    // correctly.
+    return {
+        // Use a named function expression instead of a method definition, so
+        // we don't create an inferred name for this function at runtime.
+        [std_iterator]: function IteratorMethod() {
+            return callContentFunction(method, items);
+        }
+    };
 }
 
 // ES2015 22.1.3.27 Array.prototype.toString.
@@ -1110,7 +1134,7 @@ function ArrayStaticReverse(arr) {
 function ArrayStaticSort(arr, comparefn) {
     if (arguments.length < 1)
         ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, "Array.sort");
-    return callFunction(std_Array_sort, arr, comparefn);
+    return callFunction(ArraySort, arr, comparefn);
 }
 
 function ArrayStaticPush(arr, arg1) {

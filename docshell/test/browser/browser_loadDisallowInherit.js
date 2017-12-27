@@ -4,20 +4,24 @@
 function test() {
   waitForExplicitFinish();
 
-  let tab = gBrowser.selectedTab = gBrowser.addTab();
+  // data: URI will only inherit principal only when the pref is false.
+  Services.prefs.setBoolPref("security.data_uri.unique_opaque_origin", false);
   registerCleanupFunction(function () {
-    gBrowser.removeTab(tab);
+    Services.prefs.clearUserPref("security.data_uri.unique_opaque_origin");
   });
+
+  executeSoon(startTest);
+}
+
+function startTest() {
+  let tab = gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
 
   let browser = gBrowser.getBrowserForTab(tab);
 
   function loadURL(url, flags, func) {
-    browser.addEventListener("load", function loadListener(e) {
-      if (browser.currentURI.spec != url)
-        return;
-      browser.removeEventListener(e.type, loadListener, true);
+    BrowserTestUtils.browserLoaded(browser, false, url).then(() => {
       func();
-    }, true);
+    });
     browser.loadURIWithFlags(url, flags, null, null, null);
   }
 
@@ -38,7 +42,7 @@ function test() {
           ok(newPrincipal, "got inner principal");
           ok(!newPrincipal.equals(pagePrincipal),
              url + " should not inherit principal when loaded with DISALLOW_INHERIT_OWNER");
-  
+
           func();
         });
       });
@@ -54,12 +58,14 @@ function test() {
 
   function nextTest() {
     let url = urls.shift();
-    if (url)
+    if (url) {
       testURL(url, nextTest);
-    else
+    } else {
+      gBrowser.removeTab(tab);
       finish();
+    }
   }
-  
+
   nextTest();
 }
 

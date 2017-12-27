@@ -32,13 +32,13 @@ const baseManifestProperties = [
   "developer",
 ];
 
-function* getAdditionalInvalidManifestProperties() {
+async function getAdditionalInvalidManifestProperties() {
   let invalidProperties = [];
-  yield Schemas.load(BASE_SCHEMA_URL);
+  await Schemas.load(BASE_SCHEMA_URL);
   for (let [name, url] of XPCOMUtils.enumerateCategoryEntries(CATEGORY_EXTENSION_SCHEMAS)) {
     if (name !== "theme") {
-      yield Schemas.load(url);
-      let types = Schemas.schemaJSON.get(url)[0].types;
+      await Schemas.load(url);
+      let types = Schemas.schemaJSON.get(url).deserialize({})[0].types;
       types.forEach(type => {
         if (type.$extend == "WebExtensionManifest") {
           let properties = Object.getOwnPropertyNames(type.properties);
@@ -61,8 +61,8 @@ function checkProperties(actual, expected) {
   }
 }
 
-add_task(function* test_theme_supported_properties() {
-  let additionalInvalidProperties = yield getAdditionalInvalidManifestProperties();
+add_task(async function test_theme_supported_properties() {
+  let additionalInvalidProperties = await getAdditionalInvalidManifestProperties();
   let actual = validateThemeManifest([...baseManifestProperties, ...additionalInvalidProperties]);
   let expected = ["background", "permissions", "content_scripts", ...additionalInvalidProperties];
   checkProperties(actual, expected);

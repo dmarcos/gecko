@@ -10,7 +10,13 @@
 
 this.EXPORTED_SYMBOLS = ["NS_ASSERT"];
 
-var gTraceOnAssert = true;
+var Cu = Components.utils;
+
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Services",
+                                  "resource://gre/modules/Services.jsm");
+
+var gTraceOnAssert = false;
 
 /**
  * This function provides a simple assertion function for JavaScript.
@@ -34,9 +40,7 @@ this.NS_ASSERT = function NS_ASSERT(condition, message) {
     return;
 
   var releaseBuild = true;
-  var defB = Components.classes["@mozilla.org/preferences-service;1"]
-                       .getService(Components.interfaces.nsIPrefService)
-                       .getDefaultBranch(null);
+  var defB = Services.prefs.getDefaultBranch(null);
   try {
     switch (defB.getCharPref("app.update.channel")) {
       case "nightly":
@@ -47,7 +51,6 @@ this.NS_ASSERT = function NS_ASSERT(condition, message) {
     }
   } catch (ex) {}
 
-  var caller = arguments.callee.caller;
   var assertionText = "ASSERT: " + message + "\n";
 
   // Report the error to the console
@@ -62,6 +65,8 @@ this.NS_ASSERT = function NS_ASSERT(condition, message) {
   if (gTraceOnAssert) {
     stackText = "Stack Trace: \n";
     var count = 0;
+    // eslint-disable-next-line no-caller
+    var caller = arguments.callee.caller;
     while (caller) {
       stackText += count++ + ":" + caller.name + "(";
       for (var i = 0; i < caller.arguments.length; ++i) {
@@ -76,4 +81,4 @@ this.NS_ASSERT = function NS_ASSERT(condition, message) {
   }
 
   dump(assertionText + stackText);
-}
+};

@@ -32,6 +32,12 @@ firefox_ui_tests_config_options = [
         "default": False,
         "help": "Permits a software GL implementation (such as LLVMPipe) to use the GL compositor.",
     }],
+    [["--enable-webrender"], {
+        "action": "store_true",
+        "dest": "enable_webrender",
+        "default": False,
+        "help": "Tries to enable the WebRender compositor.",
+    }],
     [['--dry-run'], {
         'dest': 'dry_run',
         'default': False,
@@ -156,9 +162,13 @@ class FirefoxUITests(TestingMixin, VCSToolsScript, CodeCoverageMixin):
         abs_tests_install_dir = os.path.join(abs_dirs['abs_work_dir'], 'tests')
 
         dirs = {
-            'abs_blob_upload_dir': os.path.join(abs_dirs['abs_work_dir'], 'blobber_upload_dir'),
+            'abs_blob_upload_dir': os.path.join(
+                abs_dirs['abs_work_dir'], 'blobber_upload_dir'),
+            'abs_fxui_dir': os.path.join(
+                abs_tests_install_dir, 'firefox-ui'),
+            'abs_fxui_manifest_dir': os.path.join(
+                abs_tests_install_dir, 'firefox-ui', 'tests', 'testing', 'firefox-ui', 'tests'),
             'abs_test_install_dir': abs_tests_install_dir,
-            'abs_fxui_dir': os.path.join(abs_tests_install_dir, 'firefox-ui'),
         }
 
         for key in dirs:
@@ -238,7 +248,7 @@ class FirefoxUITests(TestingMixin, VCSToolsScript, CodeCoverageMixin):
                                         strict=False)
 
         # Add the default tests to run
-        tests = [os.path.join(dirs['abs_fxui_dir'], 'tests', test) for test in self.default_tests]
+        tests = [os.path.join(dirs['abs_fxui_manifest_dir'], t) for t in self.default_tests]
         cmd.extend(tests)
 
         # Set further environment settings
@@ -246,18 +256,22 @@ class FirefoxUITests(TestingMixin, VCSToolsScript, CodeCoverageMixin):
         env.update({'MINIDUMP_SAVE_PATH': dirs['abs_blob_upload_dir']})
         if self.query_minidump_stackwalk():
             env.update({'MINIDUMP_STACKWALK': self.minidump_stackwalk_path})
-        env['RUST_BACKTRACE'] = '1'
+        env['RUST_BACKTRACE'] = 'full'
 
-        # If code coverage is enabled, set GCOV_PREFIX env variable
+        # If code coverage is enabled, set GCOV_PREFIX and JS_CODE_COVERAGE_OUTPUT_DIR env variables
         if self.config.get('code_coverage'):
             env['GCOV_PREFIX'] = self.gcov_dir
+            env['JS_CODE_COVERAGE_OUTPUT_DIR'] = self.jsvm_dir
 
         if self.config['allow_software_gl_layers']:
             env['MOZ_LAYERS_ALLOW_SOFTWARE_GL'] = '1'
+        if self.config['enable_webrender']:
+            env['MOZ_WEBRENDER'] = '1'
+            env['MOZ_ACCELERATED'] = '1'
 
         return_code = self.run_command(cmd,
-                                       cwd=dirs['abs_work_dir'],
-                                       output_timeout=300,
+                                       cwd=dirs['abs_fxui_dir'],
+                                       output_timeout=1000,
                                        output_parser=parser,
                                        env=env)
 

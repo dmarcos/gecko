@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -36,7 +37,10 @@ ChromeProcessController::ChromeProcessController(nsIWidget* aWidget,
   MOZ_ASSERT(aAPZEventState);
   MOZ_ASSERT(aAPZCTreeManager);
 
-  mUILoop->PostTask(NewRunnableMethod(this, &ChromeProcessController::InitializeRoot));
+  mUILoop->PostTask(
+    NewRunnableMethod("layers::ChromeProcessController::InitializeRoot",
+                      this,
+                      &ChromeProcessController::InitializeRoot));
 }
 
 ChromeProcessController::~ChromeProcessController() {}
@@ -82,7 +86,10 @@ void
 ChromeProcessController::Destroy()
 {
   if (MessageLoop::current() != mUILoop) {
-    mUILoop->PostTask(NewRunnableMethod(this, &ChromeProcessController::Destroy));
+    mUILoop->PostTask(
+      NewRunnableMethod("layers::ChromeProcessController::Destroy",
+                        this,
+                        &ChromeProcessController::Destroy));
     return;
   }
 
@@ -164,10 +171,19 @@ ChromeProcessController::HandleTap(TapType aType,
                                    uint64_t aInputBlockId)
 {
   if (MessageLoop::current() != mUILoop) {
-    mUILoop->PostTask(NewRunnableMethod<TapType, mozilla::LayoutDevicePoint, Modifiers,
-                                        ScrollableLayerGuid, uint64_t>(this,
-                        &ChromeProcessController::HandleTap,
-                        aType, aPoint, aModifiers, aGuid, aInputBlockId));
+    mUILoop->PostTask(
+      NewRunnableMethod<TapType,
+                        mozilla::LayoutDevicePoint,
+                        Modifiers,
+                        ScrollableLayerGuid,
+                        uint64_t>("layers::ChromeProcessController::HandleTap",
+                                  this,
+                                  &ChromeProcessController::HandleTap,
+                                  aType,
+                                  aPoint,
+                                  aModifiers,
+                                  aGuid,
+                                  aInputBlockId));
     return;
   }
 
@@ -202,11 +218,6 @@ ChromeProcessController::HandleTap(TapType aType,
   case TapType::eLongTapUp:
     mAPZEventState->ProcessLongTapUp(presShell, point, scale, aModifiers);
     break;
-  case TapType::eSentinel:
-    // Should never happen, but we need to handle this case branch for the
-    // compiler to be happy.
-    MOZ_ASSERT(false);
-    break;
   }
 }
 
@@ -217,13 +228,17 @@ ChromeProcessController::NotifyPinchGesture(PinchGestureInput::PinchGestureType 
                                             Modifiers aModifiers)
 {
   if (MessageLoop::current() != mUILoop) {
-    mUILoop->PostTask(NewRunnableMethod
-                      <PinchGestureInput::PinchGestureType,
-                       ScrollableLayerGuid,
-                       LayoutDeviceCoord,
-                       Modifiers>(this,
-                          &ChromeProcessController::NotifyPinchGesture,
-                          aType, aGuid, aSpanChange, aModifiers));
+    mUILoop->PostTask(NewRunnableMethod<PinchGestureInput::PinchGestureType,
+                                        ScrollableLayerGuid,
+                                        LayoutDeviceCoord,
+                                        Modifiers>(
+      "layers::ChromeProcessController::NotifyPinchGesture",
+      this,
+      &ChromeProcessController::NotifyPinchGesture,
+      aType,
+      aGuid,
+      aSpanChange,
+      aModifiers));
     return;
   }
 
@@ -238,11 +253,14 @@ ChromeProcessController::NotifyAPZStateChange(const ScrollableLayerGuid& aGuid,
                                               int aArg)
 {
   if (MessageLoop::current() != mUILoop) {
-    mUILoop->PostTask(NewRunnableMethod
-                      <ScrollableLayerGuid,
-                       APZStateChange,
-                       int>(this, &ChromeProcessController::NotifyAPZStateChange,
-                            aGuid, aChange, aArg));
+    mUILoop->PostTask(
+      NewRunnableMethod<ScrollableLayerGuid, APZStateChange, int>(
+        "layers::ChromeProcessController::NotifyAPZStateChange",
+        this,
+        &ChromeProcessController::NotifyAPZStateChange,
+        aGuid,
+        aChange,
+        aArg));
     return;
   }
 
@@ -257,10 +275,12 @@ void
 ChromeProcessController::NotifyMozMouseScrollEvent(const FrameMetrics::ViewID& aScrollId, const nsString& aEvent)
 {
   if (MessageLoop::current() != mUILoop) {
-    mUILoop->PostTask(NewRunnableMethod
-                      <FrameMetrics::ViewID,
-                       nsString>(this, &ChromeProcessController::NotifyMozMouseScrollEvent,
-                                 aScrollId, aEvent));
+    mUILoop->PostTask(NewRunnableMethod<FrameMetrics::ViewID, nsString>(
+      "layers::ChromeProcessController::NotifyMozMouseScrollEvent",
+      this,
+      &ChromeProcessController::NotifyMozMouseScrollEvent,
+      aScrollId,
+      aEvent));
     return;
   }
 
@@ -279,11 +299,43 @@ void
 ChromeProcessController::NotifyAsyncScrollbarDragRejected(const FrameMetrics::ViewID& aScrollId)
 {
   if (MessageLoop::current() != mUILoop) {
-    mUILoop->PostTask(NewRunnableMethod<FrameMetrics::ViewID>(this,
-                        &ChromeProcessController::NotifyAsyncScrollbarDragRejected,
-                        aScrollId));
+    mUILoop->PostTask(NewRunnableMethod<FrameMetrics::ViewID>(
+      "layers::ChromeProcessController::NotifyAsyncScrollbarDragRejected",
+      this,
+      &ChromeProcessController::NotifyAsyncScrollbarDragRejected,
+      aScrollId));
     return;
   }
 
   APZCCallbackHelper::NotifyAsyncScrollbarDragRejected(aScrollId);
+}
+
+void
+ChromeProcessController::NotifyAsyncAutoscrollRejected(const FrameMetrics::ViewID& aScrollId)
+{
+  if (MessageLoop::current() != mUILoop) {
+    mUILoop->PostTask(NewRunnableMethod<FrameMetrics::ViewID>(
+      "layers::ChromeProcessController::NotifyAsyncAutoscrollRejected",
+      this,
+      &ChromeProcessController::NotifyAsyncAutoscrollRejected,
+      aScrollId));
+    return;
+  }
+
+  APZCCallbackHelper::NotifyAsyncAutoscrollRejected(aScrollId);
+}
+
+void
+ChromeProcessController::CancelAutoscroll(const ScrollableLayerGuid& aGuid)
+{
+  if (MessageLoop::current() != mUILoop) {
+    mUILoop->PostTask(NewRunnableMethod<ScrollableLayerGuid>(
+      "layers::ChromeProcessController::CancelAutoscroll",
+      this,
+      &ChromeProcessController::CancelAutoscroll,
+      aGuid));
+    return;
+  }
+
+  APZCCallbackHelper::CancelAutoscroll(aGuid.mScrollId);
 }

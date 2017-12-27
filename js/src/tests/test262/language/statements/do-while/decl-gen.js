@@ -8,6 +8,9 @@ es6id: 13.7.2
 negative:
   phase: early
   type: SyntaxError
+features: [generators]
 ---*/
+
+throw "Test262: This statement should not be evaluated.";
 
 do function* g() {} while (false)

@@ -18,7 +18,7 @@ namespace mozilla {
 namespace dom {
 
 // http://www.w3.org/TR/resource-timing/#performanceresourcetiming
-class PerformanceResourceTiming final : public PerformanceEntry
+class PerformanceResourceTiming : public PerformanceEntry
 {
 public:
   typedef mozilla::TimeStamp TimeStamp;
@@ -30,7 +30,8 @@ public:
 
   PerformanceResourceTiming(PerformanceTiming* aPerformanceTiming,
                             Performance* aPerformance,
-                            const nsAString& aName);
+                            const nsAString& aName,
+                            nsIHttpChannel* aChannel = nullptr);
 
   virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
@@ -60,6 +61,12 @@ public:
   void SetNextHopProtocol(const nsAString& aNextHopProtocol)
   {
     mNextHopProtocol = aNextHopProtocol;
+  }
+
+  DOMHighResTimeStamp WorkerStart() const {
+    return mTiming
+        ? mTiming->WorkerStartHighRes()
+        : 0;
   }
 
   DOMHighResTimeStamp FetchStart() const {
@@ -128,9 +135,9 @@ public:
 
   DOMHighResTimeStamp SecureConnectionStart() const
   {
-    // This measurement is not available for Navigation Timing either.
-    // There is a different bug submitted for it.
-    return 0;
+    return mTiming && mTiming->TimingAllowed()
+        ? mTiming->SecureConnectionStartHighRes()
+        : 0;
   }
 
   virtual const PerformanceResourceTiming* ToResourceTiming() const override
@@ -168,8 +175,15 @@ public:
     mDecodedBodySize = aDecodedBodySize;
   }
 
+  size_t
+  SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const override;
+
 protected:
   virtual ~PerformanceResourceTiming();
+  void SetPropertiesFromChannel(nsIHttpChannel* aChannel);
+
+  size_t
+  SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const override;
 
   nsString mInitiatorType;
   nsString mNextHopProtocol;

@@ -6,7 +6,6 @@
 
 #include "nsGenericHTMLFrameElement.h"
 
-#include "mozilla/dom/BrowserElementAudioChannel.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/HTMLIFrameElement.h"
 #include "mozilla/Preferences.h"
@@ -25,6 +24,7 @@
 #include "nsServiceManagerUtils.h"
 #include "nsSubDocumentFrame.h"
 #include "nsXULElement.h"
+#include "nsAttrValueOrString.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -36,7 +36,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(nsGenericHTMLFrameElement,
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mFrameLoader)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOpenerWindow)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mBrowserElementAPI)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mBrowserElementAudioChannels)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(nsGenericHTMLFrameElement,
@@ -48,18 +47,15 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(nsGenericHTMLFrameElement,
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mFrameLoader)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mOpenerWindow)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mBrowserElementAPI)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mBrowserElementAudioChannels)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
-NS_IMPL_ADDREF_INHERITED(nsGenericHTMLFrameElement, nsGenericHTMLElement)
-NS_IMPL_RELEASE_INHERITED(nsGenericHTMLFrameElement, nsGenericHTMLElement)
+NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(nsGenericHTMLFrameElement,
+                                             nsGenericHTMLElement,
+                                             nsIFrameLoaderOwner,
+                                             nsIDOMMozBrowserFrame,
+                                             nsIMozBrowserFrame,
+                                             nsGenericHTMLFrameElement)
 
-NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(nsGenericHTMLFrameElement)
-  NS_INTERFACE_TABLE_INHERITED(nsGenericHTMLFrameElement,
-                               nsIFrameLoaderOwner,
-                               nsIDOMMozBrowserFrame,
-                               nsIMozBrowserFrame)
-NS_INTERFACE_TABLE_TAIL_INHERITING(nsGenericHTMLElement)
 NS_IMPL_BOOL_ATTR(nsGenericHTMLFrameElement, Mozbrowser, mozbrowser)
 
 int32_t
@@ -132,9 +128,6 @@ nsGenericHTMLFrameElement::GetContentWindow()
   if (!win) {
     return nullptr;
   }
-
-  NS_ASSERTION(win->IsOuterWindow(),
-               "Uh, this window should always be an outer window!");
 
   return win.forget();
 }
@@ -277,8 +270,7 @@ nsGenericHTMLFrameElement::BindToTree(nsIDocument* aDocument,
     NS_ASSERTION(!nsContentUtils::IsSafeToRunScript(),
                  "Missing a script blocker!");
 
-    PROFILER_LABEL("nsGenericHTMLFrameElement", "BindToTree",
-      js::ProfileEntry::Category::OTHER);
+    AUTO_PROFILER_LABEL("nsGenericHTMLFrameElement::BindToTree", OTHER);
 
     // We're in a document now.  Kick off the frame load.
     LoadSrc();
@@ -305,55 +297,6 @@ nsGenericHTMLFrameElement::UnbindFromTree(bool aDeep, bool aNullParent)
   }
 
   nsGenericHTMLElement::UnbindFromTree(aDeep, aNullParent);
-}
-
-nsresult
-nsGenericHTMLFrameElement::SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                   nsIAtom* aPrefix, const nsAString& aValue,
-                                   bool aNotify)
-{
-  nsresult rv = nsGenericHTMLElement::SetAttr(aNameSpaceID, aName, aPrefix,
-                                              aValue, aNotify);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  if (aNameSpaceID == kNameSpaceID_None && aName == nsGkAtoms::src &&
-      (!IsHTMLElement(nsGkAtoms::iframe) ||
-       !HasAttr(kNameSpaceID_None,nsGkAtoms::srcdoc))) {
-    // Don't propagate error here. The attribute was successfully set, that's
-    // what we should reflect.
-    LoadSrc();
-  } else if (aNameSpaceID == kNameSpaceID_None && aName == nsGkAtoms::name) {
-    // Propagate "name" to the docshell to make browsing context names live,
-    // per HTML5.
-    nsIDocShell *docShell = mFrameLoader ? mFrameLoader->GetExistingDocShell()
-                                         : nullptr;
-    if (docShell) {
-      docShell->SetName(aValue);
-    }
-  }
-
-  return NS_OK;
-}
-
-nsresult
-nsGenericHTMLFrameElement::UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
-                                     bool aNotify)
-{
-  // Invoke on the superclass.
-  nsresult rv = nsGenericHTMLElement::UnsetAttr(aNameSpaceID, aAttribute, aNotify);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  if (aNameSpaceID == kNameSpaceID_None && aAttribute == nsGkAtoms::name) {
-    // Propagate "name" to the docshell to make browsing context names live,
-    // per HTML5.
-    nsIDocShell *docShell = mFrameLoader ? mFrameLoader->GetExistingDocShell()
-                                         : nullptr;
-    if (docShell) {
-      docShell->SetName(EmptyString());
-    }
-  }
-
-  return NS_OK;
 }
 
 /* static */ int32_t
@@ -384,41 +327,95 @@ PrincipalAllowsBrowserFrame(nsIPrincipal* aPrincipal)
 }
 
 /* virtual */ nsresult
-nsGenericHTMLFrameElement::AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
+nsGenericHTMLFrameElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                                         const nsAttrValue* aValue,
+                                        const nsAttrValue* aOldValue,
+                                        nsIPrincipal* aMaybeScriptedPrincipal,
                                         bool aNotify)
 {
-  if (aName == nsGkAtoms::scrolling && aNameSpaceID == kNameSpaceID_None) {
-    if (mFrameLoader) {
-      nsIDocShell* docshell = mFrameLoader->GetExistingDocShell();
-      nsCOMPtr<nsIScrollable> scrollable = do_QueryInterface(docshell);
-      if (scrollable) {
-        int32_t cur;
-        scrollable->GetDefaultScrollbarPreferences(nsIScrollable::ScrollOrientation_X, &cur);
-        int32_t val = MapScrollingAttribute(aValue);
-        if (cur != val) {
-          scrollable->SetDefaultScrollbarPreferences(nsIScrollable::ScrollOrientation_X, val);
-          scrollable->SetDefaultScrollbarPreferences(nsIScrollable::ScrollOrientation_Y, val);
-          RefPtr<nsPresContext> presContext;
-          docshell->GetPresContext(getter_AddRefs(presContext));
-          nsIPresShell* shell = presContext ? presContext->GetPresShell() : nullptr;
-          nsIFrame* rootScroll = shell ? shell->GetRootScrollFrame() : nullptr;
-          if (rootScroll) {
-            shell->FrameNeedsReflow(rootScroll, nsIPresShell::eStyleChange,
-                                    NS_FRAME_IS_DIRTY);
+  if (aValue) {
+    nsAttrValueOrString value(aValue);
+    AfterMaybeChangeAttr(aNameSpaceID, aName, &value, aMaybeScriptedPrincipal, aNotify);
+  } else {
+    AfterMaybeChangeAttr(aNameSpaceID, aName, nullptr, aMaybeScriptedPrincipal, aNotify);
+  }
+
+  if (aNameSpaceID == kNameSpaceID_None) {
+    if (aName == nsGkAtoms::scrolling) {
+      if (mFrameLoader) {
+        nsIDocShell* docshell = mFrameLoader->GetExistingDocShell();
+        nsCOMPtr<nsIScrollable> scrollable = do_QueryInterface(docshell);
+        if (scrollable) {
+          int32_t cur;
+          scrollable->GetDefaultScrollbarPreferences(nsIScrollable::ScrollOrientation_X, &cur);
+          int32_t val = MapScrollingAttribute(aValue);
+          if (cur != val) {
+            scrollable->SetDefaultScrollbarPreferences(nsIScrollable::ScrollOrientation_X, val);
+            scrollable->SetDefaultScrollbarPreferences(nsIScrollable::ScrollOrientation_Y, val);
+            RefPtr<nsPresContext> presContext;
+            docshell->GetPresContext(getter_AddRefs(presContext));
+            nsIPresShell* shell = presContext ? presContext->GetPresShell() : nullptr;
+            nsIFrame* rootScroll = shell ? shell->GetRootScrollFrame() : nullptr;
+            if (rootScroll) {
+              shell->FrameNeedsReflow(rootScroll, nsIPresShell::eStyleChange,
+                                      NS_FRAME_IS_DIRTY);
+            }
           }
+        }
+      }
+    } else if (aName == nsGkAtoms::mozbrowser) {
+      mReallyIsBrowser = !!aValue && BrowserFramesEnabled() &&
+                         PrincipalAllowsBrowserFrame(NodePrincipal());
+    }
+  }
+
+  return nsGenericHTMLElement::AfterSetAttr(aNameSpaceID, aName, aValue,
+                                            aOldValue, aMaybeScriptedPrincipal, aNotify);
+}
+
+nsresult
+nsGenericHTMLFrameElement::OnAttrSetButNotChanged(int32_t aNamespaceID,
+                                                  nsAtom* aName,
+                                                  const nsAttrValueOrString& aValue,
+                                                  bool aNotify)
+{
+  AfterMaybeChangeAttr(aNamespaceID, aName, &aValue, nullptr, aNotify);
+
+  return nsGenericHTMLElement::OnAttrSetButNotChanged(aNamespaceID, aName,
+                                                      aValue, aNotify);
+}
+
+void
+nsGenericHTMLFrameElement::AfterMaybeChangeAttr(int32_t aNamespaceID,
+                                                nsAtom* aName,
+                                                const nsAttrValueOrString* aValue,
+                                                nsIPrincipal* aMaybeScriptedPrincipal,
+                                                bool aNotify)
+{
+  if (aNamespaceID == kNameSpaceID_None) {
+    if (aName == nsGkAtoms::src) {
+      mSrcTriggeringPrincipal = nsContentUtils::GetAttrTriggeringPrincipal(
+          this, aValue ? aValue->String() : EmptyString(), aMaybeScriptedPrincipal);
+      if (aValue && (!IsHTMLElement(nsGkAtoms::iframe) ||
+          !HasAttr(kNameSpaceID_None, nsGkAtoms::srcdoc))) {
+        // Don't propagate error here. The attribute was successfully set,
+        // that's what we should reflect.
+        LoadSrc();
+      }
+    } else if (aName == nsGkAtoms::name) {
+      // Propagate "name" to the docshell to make browsing context names live,
+      // per HTML5.
+      nsIDocShell* docShell = mFrameLoader ? mFrameLoader->GetExistingDocShell()
+                                           : nullptr;
+      if (docShell) {
+        if (aValue) {
+          docShell->SetName(aValue->String());
+        } else {
+          docShell->SetName(EmptyString());
         }
       }
     }
   }
-
-  if (aName == nsGkAtoms::mozbrowser && aNameSpaceID == kNameSpaceID_None) {
-    mReallyIsBrowser = !!aValue && BrowserFramesEnabled() &&
-                       PrincipalAllowsBrowserFrame(NodePrincipal());
-  }
-
-  return nsGenericHTMLElement::AfterSetAttr(aNameSpaceID, aName, aValue,
-                                            aNotify);
 }
 
 void
@@ -433,9 +430,10 @@ nsGenericHTMLFrameElement::DestroyContent()
 }
 
 nsresult
-nsGenericHTMLFrameElement::CopyInnerTo(Element* aDest)
+nsGenericHTMLFrameElement::CopyInnerTo(Element* aDest,
+                                       bool aPreallocateChildren)
 {
-  nsresult rv = nsGenericHTMLElement::CopyInnerTo(aDest);
+  nsresult rv = nsGenericHTMLElement::CopyInnerTo(aDest, aPreallocateChildren);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsIDocument* doc = aDest->OwnerDoc();

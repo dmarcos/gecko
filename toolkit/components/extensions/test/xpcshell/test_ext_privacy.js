@@ -25,7 +25,11 @@ add_task(async function test_privacy() {
     "network.networkPredictionEnabled": {
       "network.predictor.enabled": true,
       "network.prefetch-next": true,
-      "network.http.speculative-parallel-limit": 10,
+      // This pref starts with a numerical value and we need to use whatever the
+      // default is or we encounter issues when the pref is reset during the test.
+      "network.http.speculative-parallel-limit":
+        ExtensionPreferencesManager.getDefaultValue(
+          "network.http.speculative-parallel-limit"),
       "network.dns.disablePrefetch": false,
     },
     "websites.hyperlinkAuditingEnabled": {
@@ -68,7 +72,7 @@ add_task(async function test_privacy() {
     }
   }
 
-  do_register_cleanup(() => {
+  registerCleanupFunction(() => {
     // Reset the prefs.
     for (let setting in SETTINGS) {
       for (let pref in SETTINGS[setting]) {
@@ -107,20 +111,20 @@ add_task(async function test_privacy() {
     let data = await testExtensions[0].awaitMessage("gotData");
     ok(data.value, "get returns expected value.");
     equal(data.levelOfControl, "controllable_by_this_extension",
-      "get returns expected levelOfControl.");
+          "get returns expected levelOfControl.");
 
     testExtensions[0].sendMessage("get", {incognito: true}, setting);
     data = await testExtensions[0].awaitMessage("gotData");
     ok(data.value, "get returns expected value with incognito.");
     equal(data.levelOfControl, "not_controllable",
-      "get returns expected levelOfControl with incognito.");
+          "get returns expected levelOfControl with incognito.");
 
     // Change the value to false.
     testExtensions[0].sendMessage("set", {value: false}, setting);
     data = await testExtensions[0].awaitMessage("afterSet");
     ok(!data.value, "get returns expected value after setting.");
     equal(data.levelOfControl, "controlled_by_this_extension",
-      "get returns expected levelOfControl after setting.");
+          "get returns expected levelOfControl after setting.");
 
     // Verify the prefs have been set to match the "false" setting.
     for (let pref in SETTINGS[setting]) {
@@ -137,7 +141,7 @@ add_task(async function test_privacy() {
     data = await testExtensions[1].awaitMessage("afterSet");
     ok(data.value, "get returns expected value after setting via newer extension.");
     equal(data.levelOfControl, "controlled_by_this_extension",
-      "get returns expected levelOfControl after setting.");
+          "get returns expected levelOfControl after setting.");
 
     // Verify the prefs have been set to match the "true" setting.
     for (let pref in SETTINGS[setting]) {
@@ -154,27 +158,27 @@ add_task(async function test_privacy() {
     data = await testExtensions[0].awaitMessage("afterSet");
     ok(data.value, "Newer extension remains in control.");
     equal(data.levelOfControl, "controlled_by_other_extensions",
-      "get returns expected levelOfControl when controlled by other.");
+          "get returns expected levelOfControl when controlled by other.");
 
     // Clear the value of the newer extension.
     testExtensions[1].sendMessage("clear", {}, setting);
     data = await testExtensions[1].awaitMessage("afterClear");
     ok(!data.value, "Older extension gains control.");
     equal(data.levelOfControl, "controllable_by_this_extension",
-      "Expected levelOfControl returned after clearing.");
+          "Expected levelOfControl returned after clearing.");
 
     testExtensions[0].sendMessage("get", {}, setting);
     data = await testExtensions[0].awaitMessage("gotData");
     ok(!data.value, "Current, older extension has control.");
     equal(data.levelOfControl, "controlled_by_this_extension",
-      "Expected levelOfControl returned after clearing.");
+          "Expected levelOfControl returned after clearing.");
 
     // Set the value again with the newer extension.
     testExtensions[1].sendMessage("set", {value: true}, setting);
     data = await testExtensions[1].awaitMessage("afterSet");
     ok(data.value, "get returns expected value after setting via newer extension.");
     equal(data.levelOfControl, "controlled_by_this_extension",
-      "get returns expected levelOfControl after setting.");
+          "get returns expected levelOfControl after setting.");
 
     // Unload the newer extension. Expect the older extension to regain control.
     await testExtensions[1].unload();
@@ -182,7 +186,7 @@ add_task(async function test_privacy() {
     data = await testExtensions[0].awaitMessage("gotData");
     ok(!data.value, "Older extension regained control.");
     equal(data.levelOfControl, "controlled_by_this_extension",
-      "Expected levelOfControl returned after unloading.");
+          "Expected levelOfControl returned after unloading.");
 
     // Reload the extension for the next iteration of the loop.
     testExtensions[1] = ExtensionTestUtils.loadExtension({
@@ -199,7 +203,7 @@ add_task(async function test_privacy() {
     data = await testExtensions[0].awaitMessage("afterClear");
     ok(data.value, "Setting returns to original value when all are cleared.");
     equal(data.levelOfControl, "controllable_by_this_extension",
-      "Expected levelOfControl returned after clearing.");
+          "Expected levelOfControl returned after clearing.");
 
     // Verify that our initial values were restored.
     for (let pref in SETTINGS[setting]) {
@@ -214,45 +218,63 @@ add_task(async function test_privacy() {
   await promiseShutdownManager();
 });
 
-add_task(async function test_privacy_webRTCIPHandlingPolicy() {
-  // Create a object to hold the default values of all the prefs.
-  const PREF_DEFAULTS = {
-    "media.peerconnection.ice.default_address_only": null,
-    "media.peerconnection.ice.no_host": null,
-    "media.peerconnection.ice.proxy_only": null,
+add_task(async function test_privacy_other_prefs() {
+  // Create an object to hold the values to which we will initialize the prefs.
+  const SETTINGS = {
+    "network.webRTCIPHandlingPolicy": {
+      "media.peerconnection.ice.default_address_only": false,
+      "media.peerconnection.ice.no_host": false,
+      "media.peerconnection.ice.proxy_only": false,
+    },
+    "network.peerConnectionEnabled": {
+      "media.peerconnection.enabled": true,
+    },
+    "services.passwordSavingEnabled": {
+      "signon.rememberSignons": true,
+    },
+    "websites.referrersEnabled": {
+      "network.http.sendRefererHeader": 2,
+    },
+    "websites.resistFingerprinting": {
+      "privacy.resistFingerprinting": true,
+    },
+    "websites.firstPartyIsolate": {
+      "privacy.firstparty.isolate": true,
+    },
   };
 
-  // Store the default values of each pref.
-  for (let pref in PREF_DEFAULTS) {
-    PREF_DEFAULTS[pref] = ExtensionPreferencesManager.getDefaultValue(pref);
-  }
-
-  do_register_cleanup(() => {
-    // Reset the prefs.
-    for (let pref in PREF_DEFAULTS) {
-      Preferences.reset(pref);
-    }
-  });
-
   async function background() {
-    browser.test.onMessage.addListener(async (msg, value) => {
-      let rtcData;
+    browser.test.onMessage.addListener(async (msg, ...args) => {
+      let data = args[0];
+      // The second argument is the end of the api name,
+      // e.g., "network.webRTCIPHandlingPolicy".
+      let apiObj = args[1].split(".").reduce((o, i) => o[i], browser.privacy);
+      let settingData;
       switch (msg) {
         case "set":
-          await browser.privacy.network.webRTCIPHandlingPolicy.set({value});
-          rtcData = await browser.privacy.network.webRTCIPHandlingPolicy.get({});
-          browser.test.sendMessage("rtcData", rtcData);
+          await apiObj.set(data);
+          settingData = await apiObj.get({});
+          browser.test.sendMessage("settingData", settingData);
           break;
-
-        case "clear":
-          await browser.privacy.network.webRTCIPHandlingPolicy.clear({});
-          rtcData = await browser.privacy.network.webRTCIPHandlingPolicy.get({});
-          browser.test.sendMessage("rtcData", rtcData);
-          break;
-
       }
     });
   }
+
+  // Set prefs to our initial values.
+  for (let setting in SETTINGS) {
+    for (let pref in SETTINGS[setting]) {
+      Preferences.set(pref, SETTINGS[setting][pref]);
+    }
+  }
+
+  registerCleanupFunction(() => {
+    // Reset the prefs.
+    for (let setting in SETTINGS) {
+      for (let pref in SETTINGS[setting]) {
+        Preferences.reset(pref);
+      }
+    }
+  });
 
   let extension = ExtensionTestUtils.loadExtension({
     background,
@@ -265,33 +287,117 @@ add_task(async function test_privacy_webRTCIPHandlingPolicy() {
   await promiseStartupManager();
   await extension.startup();
 
-  async function testSetting(value, truePrefs) {
-    extension.sendMessage("set", value);
-    let data = await extension.awaitMessage("rtcData");
+  async function testSetting(setting, value, expected) {
+    extension.sendMessage("set", {value: value}, setting);
+    let data = await extension.awaitMessage("settingData");
     equal(data.value, value);
-    for (let pref in PREF_DEFAULTS) {
-      let prefValue = Preferences.get(pref);
-      if (truePrefs.includes(pref)) {
-        ok(prefValue, `${pref} set correctly for ${value}`);
-      } else {
-        equal(prefValue, PREF_DEFAULTS[pref], `${pref} contains default value for ${value}`);
-      }
+    for (let pref in expected) {
+      equal(Preferences.get(pref), expected[pref], `${pref} set correctly for ${value}`);
     }
   }
 
   await testSetting(
+    "network.webRTCIPHandlingPolicy",
     "default_public_and_private_interfaces",
-    ["media.peerconnection.ice.default_address_only"]);
-
+    {
+      "media.peerconnection.ice.default_address_only": true,
+      "media.peerconnection.ice.no_host": false,
+      "media.peerconnection.ice.proxy_only": false,
+    });
   await testSetting(
+    "network.webRTCIPHandlingPolicy",
     "default_public_interface_only",
-    ["media.peerconnection.ice.default_address_only", "media.peerconnection.ice.no_host"]);
+    {
+      "media.peerconnection.ice.default_address_only": true,
+      "media.peerconnection.ice.no_host": true,
+      "media.peerconnection.ice.proxy_only": false,
+    });
+  await testSetting(
+    "network.webRTCIPHandlingPolicy",
+    "disable_non_proxied_udp",
+    {
+      "media.peerconnection.ice.default_address_only": false,
+      "media.peerconnection.ice.no_host": false,
+      "media.peerconnection.ice.proxy_only": true,
+    });
+  await testSetting(
+    "network.webRTCIPHandlingPolicy", "default",
+    {
+      "media.peerconnection.ice.default_address_only": false,
+      "media.peerconnection.ice.no_host": false,
+      "media.peerconnection.ice.proxy_only": false,
+    });
 
   await testSetting(
-    "disable_non_proxied_udp",
-    ["media.peerconnection.ice.proxy_only"]);
+    "network.peerConnectionEnabled", false,
+    {
+      "media.peerconnection.enabled": false,
+    });
+  await testSetting(
+    "network.peerConnectionEnabled", true,
+    {
+      "media.peerconnection.enabled": true,
+    });
 
-  await testSetting("default", []);
+  await testSetting(
+    "websites.referrersEnabled", false,
+    {
+      "network.http.sendRefererHeader": 0,
+    });
+  await testSetting(
+    "websites.referrersEnabled", true,
+    {
+      "network.http.sendRefererHeader": 2,
+    });
+
+  await testSetting(
+    "websites.resistFingerprinting", false,
+    {
+      "privacy.resistFingerprinting": false,
+    });
+  await testSetting(
+    "websites.resistFingerprinting", true,
+    {
+      "privacy.resistFingerprinting": true,
+    });
+
+  await testSetting(
+    "websites.firstPartyIsolate", false,
+    {
+      "privacy.firstparty.isolate": false,
+    });
+  await testSetting(
+    "websites.firstPartyIsolate", true,
+    {
+      "privacy.firstparty.isolate": true,
+    });
+
+  await testSetting(
+    "websites.trackingProtectionMode", "always", {
+      "privacy.trackingprotection.enabled": true,
+      "privacy.trackingprotection.pbmode.enabled": true,
+    });
+  await testSetting(
+    "websites.trackingProtectionMode", "never", {
+      "privacy.trackingprotection.enabled": false,
+      "privacy.trackingprotection.pbmode.enabled": false,
+    });
+  await testSetting(
+    "websites.trackingProtectionMode", "private_browsing", {
+      "privacy.trackingprotection.enabled": false,
+      "privacy.trackingprotection.pbmode.enabled": true,
+    });
+
+  await testSetting(
+    "services.passwordSavingEnabled", false,
+    {
+      "signon.rememberSignons": false,
+    });
+  await testSetting(
+    "services.passwordSavingEnabled", true,
+    {
+      "signon.rememberSignons": true,
+    });
 
   await extension.unload();
 

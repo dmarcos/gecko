@@ -58,8 +58,7 @@ const POINT_PER_INCH = 72;
 const POINT_PER_MILLIMETER = POINT_PER_INCH / 25.4;
 
 const PRINT_FILE_NAME = "print.pdf";
-const PRINT_CONTENT_TEMP_KEY =
-  (Services.appinfo.OS == "Linux") ? "TmpD" : "ContentTmpD";
+const PRINT_TEMP_KEY = "TmpD";
 
 const PP_Bool = {
   PP_FALSE: 0,
@@ -916,10 +915,10 @@ class Buffer extends PP_Resource {
 class Flash_MessageLoop extends PP_Resource {
   run() {
     this._running = true;
-    let thread = Cc["@mozilla.org/thread-manager;1"].getService().currentThread;
-    while (this._running) {
-      thread.processNextEvent(true);
-    }
+    let tm = Cc["@mozilla.org/thread-manager;1"].getService();
+    tm.spinEventLoopUntil(() => {
+      return !this._running;
+    });
   }
   quit() {
     this._running = false;
@@ -1812,14 +1811,16 @@ class PPAPIInstance {
         this.mm.sendAsyncMessage("ppapi.js:setFullscreen", message.fullscreen);
         break;
       case 'save':
-        this.mm.sendAsyncMessage("ppapipdf.js:save");
+        this.mm.sendAsyncMessage("ppapipdf.js:save", {
+          url: this.info.url });
         break;
       case 'setHash':
         this.mm.sendAsyncMessage("ppapipdf.js:setHash", message.hash);
         break;
       case 'startPrint':
         // We need permission for showing print dialog to get print settings
-        this.mm.sendAsyncMessage("ppapipdf.js:getPrintSettings");
+        this.mm.sendAsyncMessage("ppapipdf.js:getPrintSettings", {
+          url: this.info.url });
         break;
       case 'openLink':
         this.mm.sendAsyncMessage("ppapipdf.js:openLink", {
@@ -2078,12 +2079,11 @@ dump(`callFromJSON: < ${JSON.stringify(call)}\n`);
       return result ? JSON.parse(result) : result;
     }
 
-    let thread = Services.tm.currentThread;
-    thread.dispatch(() => {
+    Services.tm.dispatchToMainThread(() => {
 dump(`callFromJSON (async): > ${JSON.stringify(call)}\n`);
       let result = this.process.sendMessage(JSON.stringify(call));
 dump(`callFromJSON: < ${JSON.stringify(call)}\n`);
-    }, Ci.nsIThread.DISPATCH_NORMAL);
+    });
   },
 
   table: {
@@ -5011,7 +5011,7 @@ dump(`callFromJSON: < ${JSON.stringify(call)}\n`);
       let buffer = PP_Resource.lookup(bufferId);
 
       // Save PDF to file
-      let file = Services.dirsvc.get(PRINT_CONTENT_TEMP_KEY, Ci.nsIFile);
+      let file = Services.dirsvc.get(PRINT_TEMP_KEY, Ci.nsIFile);
       file.append(PRINT_FILE_NAME);
       file.createUnique(Ci.nsIFile.NORMAL_FILE_TYPE, PR_IRUSR | PR_IWUSR);
       let stream = Cc["@mozilla.org/network/file-output-stream;1"].
@@ -5033,7 +5033,7 @@ dump(`callFromJSON: < ${JSON.stringify(call)}\n`);
         "PPP_Printing(Dev);0.6", "End", { instance }), true);
       // We need permission for printing PDF file
       instance.mm.sendAsyncMessage("ppapipdf.js:printPDF", {
-        contentTempKey: PRINT_CONTENT_TEMP_KEY, fileName: PRINT_FILE_NAME });
+        filePath: file.path });
     },
 
     /**

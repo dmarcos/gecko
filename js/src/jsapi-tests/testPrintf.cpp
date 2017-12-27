@@ -6,7 +6,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/IntegerPrintfMacros.h"
-#include "mozilla/SizePrintfMacros.h"
 
 #include <cfloat>
 #include <stdarg.h>
@@ -22,13 +21,10 @@ print_one (const char *expect, const char *fmt, ...)
     va_list ap;
 
     va_start(ap, fmt);
-    char *output = JS_vsmprintf (fmt, ap);
+    JS::UniqueChars output = JS_vsmprintf (fmt, ap);
     va_end(ap);
 
-    bool result = output && !strcmp(output, expect);
-    JS_smprintf_free(output);
-
-    return result;
+    return output && !strcmp(output.get(), expect);
 }
 
 static const char *
@@ -54,9 +50,9 @@ BEGIN_TEST(testPrintf)
     CHECK(print_one("0xf0f0", "0x%lx", 0xf0f0ul));
     CHECK(print_one("0xF0F0", "0x%llX", 0xf0f0ull));
     CHECK(print_one("27270", "%zu", (size_t) 27270));
-    CHECK(print_one("27270", "%" PRIuSIZE, (size_t) 27270));
+    CHECK(print_one("27270", "%zu", (size_t) 27270));
     CHECK(print_one("hello", "he%so", "ll"));
-    CHECK(print_one("(null)", "%s", zero()));
+    CHECK(print_one("(null)", "%s", ::zero()));
     CHECK(print_one("0", "%p", (char *) 0));
     CHECK(print_one("h", "%c", 'h'));
     CHECK(print_one("1.500000", "%f", 1.5f));

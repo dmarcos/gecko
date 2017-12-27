@@ -11,6 +11,7 @@
 #include "mozilla/UniquePtr.h"
 #include "mozilla/WidgetUtils.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
+#include "mozilla/layers/CompositorOptions.h"
 #include "nsRect.h"
 #include "nsIWidget.h"
 #include "nsWidgetsCID.h"
@@ -168,7 +169,11 @@ public:
     return mSizeMode;
   }
 
-  virtual nsCursor        GetCursor() override;
+  virtual bool            IsFullyOccluded() const override
+  {
+    return mIsFullyOccluded;
+  }
+
   virtual void            SetCursor(nsCursor aCursor) override;
   virtual nsresult        SetCursor(imgIContainer* aCursor,
                                     uint32_t aHotspotX, uint32_t aHotspotY) override;
@@ -202,12 +207,13 @@ public:
   //
   // A reference to the session object is held until this function has
   // returned.
-  void NotifyRemoteCompositorSessionLost(mozilla::layers::CompositorSession* aSession);
+  void NotifyCompositorSessionLost(mozilla::layers::CompositorSession* aSession);
 
-  mozilla::CompositorVsyncDispatcher* GetCompositorVsyncDispatcher();
+  already_AddRefed<mozilla::CompositorVsyncDispatcher> GetCompositorVsyncDispatcher();
   void            CreateCompositorVsyncDispatcher();
   virtual void            CreateCompositor();
   virtual void            CreateCompositor(int aWidth, int aHeight);
+  virtual void            SetCompositorWidgetDelegate(CompositorWidgetDelegate* delegate) {}
   virtual void            PrepareWindowEffects() override {}
   virtual void            UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeometries) override {}
   virtual void            SetModal(bool aModal) override {}
@@ -243,6 +249,7 @@ public:
   virtual nsresult        SetNonClientMargins(LayoutDeviceIntMargin& aMargins) override;
   virtual LayoutDeviceIntPoint GetClientOffset() override;
   virtual void            EnableDragDrop(bool aEnable) override {};
+  virtual nsresult        AsyncEnableDragDrop(bool aEnable) override;
   virtual MOZ_MUST_USE nsresult
                           GetAttention(int32_t aCycleCount) override
                           { return NS_OK; }
@@ -279,14 +286,8 @@ public:
                             const mozilla::WidgetPluginEvent& aEvent) override
                           { }
   virtual MOZ_MUST_USE nsresult AttachNativeKeyEvent(mozilla::WidgetKeyboardEvent& aEvent) override { return NS_ERROR_NOT_IMPLEMENTED; }
-  virtual bool            ExecuteNativeKeyBinding(
-                            NativeKeyBindingsType aType,
-                            const mozilla::WidgetKeyboardEvent& aEvent,
-                            DoCommandCallback aCallback,
-                            void* aCallbackData) override { return false; }
   bool                    ComputeShouldAccelerate();
   virtual bool            WidgetTypeSupportsAcceleration() { return true; }
-  virtual IMENotificationRequests GetIMENotificationRequests() override;
   virtual MOZ_MUST_USE nsresult OnDefaultButtonLoaded(const LayoutDeviceIntRect& aButtonRect) override { return NS_ERROR_NOT_IMPLEMENTED; }
   virtual already_AddRefed<nsIWidget>
   CreateChild(const LayoutDeviceIntRect& aRect,
@@ -366,6 +367,11 @@ public:
 
   virtual void StartAsyncScrollbarDrag(const AsyncDragMetrics& aDragMetrics) override;
 
+  virtual bool StartAsyncAutoscroll(const ScreenPoint& aAnchorLocation,
+                                    const ScrollableLayerGuid& aGuid) override;
+
+  virtual void StopAsyncAutoscroll(const ScrollableLayerGuid& aGuid) override;
+
   /**
    * Use this when GetLayerManager() returns a BasicLayerManager
    * (nsBaseWidget::GetLayerManager() does). This sets up the widget's
@@ -404,6 +410,18 @@ public:
   // displayport during the live resize to avoid unneccessary overpainting.
   void NotifyLiveResizeStarted();
   void NotifyLiveResizeStopped();
+
+#if defined(MOZ_WIDGET_ANDROID)
+  void RecvToolbarAnimatorMessageFromCompositor(int32_t) override {};
+  void UpdateRootFrameMetrics(const ScreenPoint& aScrollOffset, const CSSToScreenScale& aZoom) override {};
+  void RecvScreenPixels(mozilla::ipc::Shmem&& aMem, const ScreenIntSize& aSize) override {};
+#endif
+
+  /**
+   * Whether context menus should only appear on mouseup instead of mousedown,
+   * on OSes where they normally appear on mousedown (macOS, *nix).
+   */
+  static bool ShowContextMenuAfterMouseUp();
 
 protected:
   // These are methods for CompositorWidgetWrapper, and should only be
@@ -515,9 +533,6 @@ protected:
     return NS_ERROR_UNEXPECTED;
   }
 
-  virtual nsresult NotifyIMEInternal(const IMENotification& aIMENotification)
-  { return NS_ERROR_NOT_IMPLEMENTED; }
-
   /**
    * GetPseudoIMEContext() returns pseudo IME context when TextEventDispatcher
    * has non-native input transaction.  Otherwise, returns nullptr.
@@ -543,6 +558,8 @@ protected:
   LayerManager* CreateBasicLayerManager();
 
   nsPopupType PopupType() const { return mPopupType; }
+
+  bool HasRemoteContent() const { return mHasRemoteContent; }
 
   void NotifyRollupGeometryChange()
   {
@@ -581,7 +598,7 @@ protected:
   void EnsureTextEventDispatcher();
 
   // Notify the compositor that a device reset has occurred.
-  void OnRenderingDeviceReset(uint64_t aSeqNo);
+  void OnRenderingDeviceReset();
 
   bool UseAPZ();
 
@@ -678,15 +695,12 @@ protected:
   nsPopupLevel      mPopupLevel;
   nsPopupType       mPopupType;
   SizeConstraints   mSizeConstraints;
-
-  CompositorWidgetDelegate* mCompositorWidgetDelegate;
+  bool              mHasRemoteContent;
 
   bool              mUpdateCursor;
   bool              mUseAttachedEvents;
   bool              mIMEHasFocus;
-#if defined(XP_WIN) || defined(XP_MACOSX) || defined(MOZ_WIDGET_GTK)
-  bool              mAccessibilityInUseFlag;
-#endif
+  bool              mIsFullyOccluded;
   static nsIRollupListener* gRollupListener;
 
   struct InitialZoomConstraints {
@@ -734,6 +748,11 @@ protected:
 
   static bool debug_GetCachedBoolPref(const char* aPrefName);
 #endif
+
+private:
+  already_AddRefed<LayerManager>
+  CreateCompositorSession(int aWidth, int aHeight,
+                          mozilla::layers::CompositorOptions* aOptionsOut);
 };
 
 #endif // nsBaseWidget_h__

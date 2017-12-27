@@ -73,7 +73,7 @@ this.PropertyListUtils = Object.freeze({
   /**
    * Asynchronously reads a file as a property list.
    *
-   * @param aFile (nsIDOMBlob/nsILocalFile)
+   * @param aFile (nsIDOMBlob/nsIFile)
    *        the file to be read as a property list.
    * @param aCallback
    *        If the property list is read successfully, aPropertyListRoot is set
@@ -83,14 +83,14 @@ this.PropertyListUtils = Object.freeze({
    *        The reaon for failure is reported to the Error Console.
    */
   read: function PLU_read(aFile, aCallback) {
-    if (!(aFile instanceof Ci.nsILocalFile || aFile instanceof File))
+    if (!(aFile instanceof Ci.nsIFile || aFile instanceof File))
       throw new Error("aFile is not a file object");
     if (typeof(aCallback) != "function")
       throw new Error("Invalid value for aCallback");
 
     // We guarantee not to throw directly for any other exceptions, and always
     // call aCallback.
-    Services.tm.dispatchToMainThread(function() {
+    Services.tm.dispatchToMainThread(() => {
       let self = this;
       function readDOMFile(aFile) {
         let fileReader = new FileReader();
@@ -105,13 +105,13 @@ this.PropertyListUtils = Object.freeze({
           } finally {
             aCallback(root);
           }
-        }
+        };
         fileReader.addEventListener("loadend", onLoadEnd);
         fileReader.readAsArrayBuffer(aFile);
       }
 
       try {
-        if (aFile instanceof Ci.nsILocalFile) {
+        if (aFile instanceof Ci.nsIFile) {
           if (!aFile.exists()) {
             throw new Error("The file pointed by aFile does not exist");
           }
@@ -126,7 +126,7 @@ this.PropertyListUtils = Object.freeze({
         aCallback(null);
         throw ex;
       }
-    }.bind(this));
+    });
   },
 
   /**
@@ -203,6 +203,9 @@ this.PropertyListUtils = Object.freeze({
     if (typeof(aPrimitive) != "string" && typeof(aPrimitive) != "number")
       throw new Error("aPrimitive should be a string primitive");
 
+    // The function converts string or number to object
+    // So eslint rule is disabled
+    // eslint-disable-next-line no-new-wrappers
     let wrapped = new String(aPrimitive);
     Object.defineProperty(wrapped, "__INT_64_WRAPPER__", { value: true });
     return wrapped;
@@ -813,5 +816,5 @@ function LazyMapProxyHandler() {
           return target[name];
       }
     }
-  }
+  };
 }

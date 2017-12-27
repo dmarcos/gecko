@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,12 +10,13 @@
 #include "nsIContent.h"
 #include "nsCSSProps.h"
 #include "nsContentUtils.h"
-#include "nsRuleNode.h"
 #include "nsROCSSPrimitiveValue.h"
 #include "nsStyleStruct.h"
 #include "nsIContentPolicy.h"
 #include "nsIContentSecurityPolicy.h"
 #include "nsIURI.h"
+#include "nsISupportsPrimitives.h"
+#include "nsLayoutUtils.h"
 #include "nsPrintfCString.h"
 #include <cctype>
 
@@ -53,8 +55,8 @@ bool nsStyleUtil::DashMatchCompare(const nsAString& aAttributeValue,
 }
 
 bool
-nsStyleUtil::ValueIncludes(const nsSubstring& aValueList,
-                           const nsSubstring& aValue,
+nsStyleUtil::ValueIncludes(const nsAString& aValueList,
+                           const nsAString& aValue,
                            const nsStringComparator& aComparator)
 {
   const char16_t *p = aValueList.BeginReading(),
@@ -93,8 +95,8 @@ void nsStyleUtil::AppendEscapedCSSString(const nsAString& aString,
   const char16_t* in = aString.BeginReading();
   const char16_t* const end = aString.EndReading();
   for (; in != end; in++) {
-    if (*in < 0x20 || (*in >= 0x7F && *in < 0xA0)) {
-      // Escape U+0000 through U+001F and U+007F through U+009F numerically.
+    if (*in < 0x20 || *in == 0x7F) {
+      // Escape U+0000 through U+001F and U+007F numerically.
       aReturn.AppendPrintf("\\%x ", *in);
     } else {
       if (*in == '"' || *in == '\'' || *in == '\\') {
@@ -157,8 +159,8 @@ nsStyleUtil::AppendEscapedCSSIdent(const nsAString& aIdent, nsAString& aReturn)
     char16_t ch = *in;
     if (ch == 0x00) {
       aReturn.Append(char16_t(0xFFFD));
-    } else if (ch < 0x20 || (0x7F <= ch && ch < 0xA0)) {
-      // Escape U+0000 through U+001F and U+007F through U+009F numerically.
+    } else if (ch < 0x20 || 0x7F == ch) {
+      // Escape U+0000 through U+001F and U+007F numerically.
       aReturn.AppendPrintf("\\%x ", *in);
     } else {
       // Escape ASCII non-identifier printables as a backslash plus
@@ -205,16 +207,15 @@ AppendUnquotedFamilyName(const nsAString& aFamilyName, nsAString& aResult)
 
 /* static */ void
 nsStyleUtil::AppendEscapedCSSFontFamilyList(
-  const mozilla::FontFamilyList& aFamilyList,
+  const nsTArray<mozilla::FontFamilyName>& aNames,
   nsAString& aResult)
 {
-  const nsTArray<FontFamilyName>& fontlist = aFamilyList.GetFontlist();
-  size_t i, len = fontlist.Length();
+  size_t i, len = aNames.Length();
   for (i = 0; i < len; i++) {
     if (i != 0) {
-      aResult.Append(',');
+      aResult.AppendLiteral(", ");
     }
-    const FontFamilyName& name = fontlist[i];
+    const FontFamilyName& name = aNames[i];
     switch (name.mType) {
       case eFamily_named:
         AppendUnquotedFamilyName(name.mName, aResult);
@@ -226,6 +227,26 @@ nsStyleUtil::AppendEscapedCSSFontFamilyList(
         name.AppendToString(aResult);
     }
   }
+}
+
+/* static */ void
+nsStyleUtil::AppendEscapedCSSFontFamilyList(
+  const mozilla::FontFamilyList& aFamilyList,
+  nsAString& aResult)
+{
+  if (aFamilyList.IsEmpty()) {
+    FontFamilyType defaultGeneric = aFamilyList.GetDefaultFontType();
+    // If the font list is empty, then serialize the default generic.
+    // See also: gfxFontGroup::BuildFontList()
+    if (defaultGeneric != eFamily_none) {
+      FontFamilyName(defaultGeneric).AppendToString(aResult);
+    } else {
+      NS_NOTREACHED("No fonts to serialize");
+    }
+    return;
+  }
+
+  AppendEscapedCSSFontFamilyList(aFamilyList.GetFontlist().get(), aResult);
 }
 
 
@@ -386,7 +407,7 @@ nsStyleUtil::AppendFontFeatureSettings(const nsCSSValue& aSrc,
                   "improper value unit for font-feature-settings:");
 
   nsTArray<gfxFontFeature> featureSettings;
-  nsRuleNode::ComputeFontFeatures(aSrc.GetPairListValue(), featureSettings);
+  nsLayoutUtils::ComputeFontFeatures(aSrc.GetPairListValue(), featureSettings);
   AppendFontFeatureSettings(featureSettings, aResult);
 }
 
@@ -425,7 +446,8 @@ nsStyleUtil::AppendFontVariationSettings(const nsCSSValue& aSrc,
                   "improper value unit for font-variation-settings:");
 
   nsTArray<gfxFontVariation> variationSettings;
-  nsRuleNode::ComputeFontVariations(aSrc.GetPairListValue(), variationSettings);
+  nsLayoutUtils::ComputeFontVariations(aSrc.GetPairListValue(),
+                                       variationSettings);
   AppendFontVariationSettings(variationSettings, aResult);
 }
 
@@ -814,9 +836,10 @@ nsStyleUtil::ObjectPropsMightCauseOverflow(const nsStylePosition* aStylePos)
 /* static */ bool
 nsStyleUtil::CSPAllowsInlineStyle(nsIContent* aContent,
                                   nsIPrincipal* aPrincipal,
+                                  nsIPrincipal* aTriggeringPrincipal,
                                   nsIURI* aSourceURI,
                                   uint32_t aLineNumber,
-                                  const nsSubstring& aStyleText,
+                                  const nsAString& aStyleText,
                                   nsresult* aRv)
 {
   nsresult rv;
@@ -829,8 +852,14 @@ nsStyleUtil::CSPAllowsInlineStyle(nsIContent* aContent,
       "aContent passed to CSPAllowsInlineStyle "
       "for an element that is not <style>");
 
+  nsIPrincipal* principal = aPrincipal;
+  if (aTriggeringPrincipal &&
+      BasePrincipal::Cast(aTriggeringPrincipal)->OverridesCSP(aPrincipal)) {
+    principal = aTriggeringPrincipal;
+  }
+
   nsCOMPtr<nsIContentSecurityPolicy> csp;
-  rv = aPrincipal->GetCsp(getter_AddRefs(csp));
+  rv = principal->GetCsp(getter_AddRefs(csp));
 
   if (NS_FAILED(rv)) {
     if (aRv)
@@ -849,11 +878,16 @@ nsStyleUtil::CSPAllowsInlineStyle(nsIContent* aContent,
     aContent->GetAttr(kNameSpaceID_None, nsGkAtoms::nonce, nonce);
   }
 
+  nsCOMPtr<nsISupportsString> styleText(do_CreateInstance(NS_SUPPORTS_STRING_CONTRACTID));
+  if (styleText) {
+    styleText->SetData(aStyleText);
+  }
+
   bool allowInlineStyle = true;
   rv = csp->GetAllowsInline(nsIContentPolicy::TYPE_STYLESHEET,
                             nonce,
                             false, // aParserCreated only applies to scripts
-                            aStyleText, aLineNumber,
+                            styleText, aLineNumber,
                             &allowInlineStyle);
   NS_ENSURE_SUCCESS(rv, false);
 

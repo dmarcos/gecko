@@ -25,16 +25,22 @@ function test() {
     executeSoon(function() {
       waitForFocus(function() {
         middleClickTest(win);
-        finish();
       }, win);
     });
   });
 }
 
-function middleClickTest(win) {
+async function middleClickTest(win) {
   let browser = win.gBrowser.selectedBrowser;
+  /* eslint-disable mozilla/no-cpows-in-tests */
+  let tabsToggle = browser.contentDocument.getElementById("tabsToggle");
+  EventUtils.synthesizeMouseAtCenter(tabsToggle, { button: 0 }, browser.contentWindow);
+  let treeContainer = browser.contentDocument.querySelector(".tree-container");
+  await BrowserTestUtils.waitForCondition(() => win.getComputedStyle(treeContainer).visibility == "visible");
+
   let tree = browser.contentDocument.getElementById("tabList");
   is(tree.view.rowCount, 3, "There should be three items");
+  /* eslint-enable mozilla/no-cpows-in-tests */
 
   // click on the first tab item
   var rect = tree.treeBoxObject.getCoordsForCellItem(1, tree.columns[1], "text");
@@ -49,6 +55,7 @@ function middleClickTest(win) {
      "The total number of tabs should be 3 after restoring 2 tabs by middle click.");
   is(win.gBrowser.visibleTabs.length, 3,
      "The total number of visible tabs should be 3 after restoring 2 tabs by middle click");
+  finish();
 }
 
 function newWindowWithState(state, callback) {
@@ -56,13 +63,16 @@ function newWindowWithState(state, callback) {
   let win = window.openDialog(getBrowserURL(), "_blank", opts);
 
   win.addEventListener("load", function() {
-    let tab = win.gBrowser.selectedTab;
-
     // The form data will be restored before SSTabRestored, so we want to listen
-    // for that on the currently selected tab (it will be reused)
-    tab.addEventListener("SSTabRestored", function() {
-      callback(win);
-    }, {capture: true, once: true});
+    // for that on the currently selected tab
+    let onSSTabRestored = event => {
+      let tab = event.target;
+      if (tab.selected) {
+        win.gBrowser.tabContainer.removeEventListener("SSTabRestored", onSSTabRestored, true);
+        callback(win);
+      }
+    };
+    win.gBrowser.tabContainer.addEventListener("SSTabRestored", onSSTabRestored, true);
 
     executeSoon(function() {
       ss.setWindowState(win, JSON.stringify(state), true);

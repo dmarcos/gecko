@@ -4,18 +4,14 @@
 
 "use strict";
 
-const { addons, createClass, createFactory, DOM: dom, PropTypes } =
-  require("devtools/client/shared/vendor/react");
+const { createFactory, PureComponent } = require("devtools/client/shared/vendor/react");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
 const { findDOMNode } = require("devtools/client/shared/vendor/react-dom");
 const { KeyCodes } = require("devtools/client/shared/keycodes");
-
 const { LocalizationHelper } = require("devtools/shared/l10n");
 
 const BoxModelEditable = createFactory(require("./BoxModelEditable"));
-
-// Reps
-const { REPS, MODE } = require("devtools/client/shared/components/reps/reps");
-const Rep = createFactory(REPS.Rep);
 
 const Types = require("../types");
 
@@ -25,28 +21,39 @@ const BOXMODEL_L10N = new LocalizationHelper(BOXMODEL_STRINGS_URI);
 const SHARED_STRINGS_URI = "devtools/client/locales/shared.properties";
 const SHARED_L10N = new LocalizationHelper(SHARED_STRINGS_URI);
 
-module.exports = createClass({
-
-  displayName: "BoxModelMain",
-
-  propTypes: {
-    boxModel: PropTypes.shape(Types.boxModel).isRequired,
-    boxModelContainer: PropTypes.object,
-    setSelectedNode: PropTypes.func.isRequired,
-    onHideBoxModelHighlighter: PropTypes.func.isRequired,
-    onShowBoxModelEditor: PropTypes.func.isRequired,
-    onShowBoxModelHighlighter: PropTypes.func.isRequired,
-    onShowBoxModelHighlighterForNode: PropTypes.func.isRequired,
-  },
-
-  mixins: [ addons.PureRenderMixin ],
-
-  getInitialState() {
+class BoxModelMain extends PureComponent {
+  static get propTypes() {
     return {
+      boxModel: PropTypes.shape(Types.boxModel).isRequired,
+      boxModelContainer: PropTypes.object,
+      onHideBoxModelHighlighter: PropTypes.func.isRequired,
+      onShowBoxModelEditor: PropTypes.func.isRequired,
+      onShowBoxModelHighlighter: PropTypes.func.isRequired,
+    };
+  }
+
+  constructor(props) {
+    super(props);
+
+    this.state = {
       activeDescendant: null,
       focusable: false,
     };
-  },
+
+    this.getAriaActiveDescendant = this.getAriaActiveDescendant.bind(this);
+    this.getBorderOrPaddingValue = this.getBorderOrPaddingValue.bind(this);
+    this.getContextBox = this.getContextBox.bind(this);
+    this.getDisplayPosition = this.getDisplayPosition.bind(this);
+    this.getHeightValue = this.getHeightValue.bind(this);
+    this.getMarginValue = this.getMarginValue.bind(this);
+    this.getPositionValue = this.getPositionValue.bind(this);
+    this.getWidthValue = this.getWidthValue.bind(this);
+    this.moveFocus = this.moveFocus.bind(this);
+    this.setAriaActive = this.setAriaActive.bind(this);
+    this.onHighlightMouseOver = this.onHighlightMouseOver.bind(this);
+    this.onKeyDown = this.onKeyDown.bind(this);
+    this.onLevelClick = this.onLevelClick.bind(this);
+  }
 
   componentDidUpdate() {
     let displayPosition = this.getDisplayPosition();
@@ -89,7 +96,7 @@ module.exports = createClass({
         ["click", this.contentLayout]
       ])
     };
-  },
+  }
 
   getAriaActiveDescendant() {
     let { activeDescendant } = this.state;
@@ -102,12 +109,12 @@ module.exports = createClass({
     }
 
     return activeDescendant;
-  },
+  }
 
   getBorderOrPaddingValue(property) {
     let { layout } = this.props.boxModel;
     return layout[property] ? parseFloat(layout[property]) : "-";
-  },
+  }
 
   /**
    * Returns true if the layout box sizing is context box and false otherwise.
@@ -115,7 +122,7 @@ module.exports = createClass({
   getContextBox() {
     let { layout } = this.props.boxModel;
     return layout["box-sizing"] == "content-box";
-  },
+  }
 
   /**
    * Returns true if the position is displayed and false otherwise.
@@ -123,14 +130,14 @@ module.exports = createClass({
   getDisplayPosition() {
     let { layout } = this.props.boxModel;
     return layout.position && layout.position != "static";
-  },
+  }
 
   getHeightValue(property) {
-    let { layout } = this.props.boxModel;
-
     if (property == undefined) {
       return "-";
     }
+
+    let { layout } = this.props.boxModel;
 
     property -= parseFloat(layout["border-top-width"]) +
                 parseFloat(layout["border-bottom-width"]) +
@@ -139,23 +146,7 @@ module.exports = createClass({
     property = parseFloat(property.toPrecision(6));
 
     return property;
-  },
-
-  getWidthValue(property) {
-    let { layout } = this.props.boxModel;
-
-    if (property == undefined) {
-      return "-";
-    }
-
-    property -= parseFloat(layout["border-left-width"]) +
-                parseFloat(layout["border-right-width"]) +
-                parseFloat(layout["padding-left"]) +
-                parseFloat(layout["padding-right"]);
-    property = parseFloat(property.toPrecision(6));
-
-    return property;
-  },
+  }
 
   getMarginValue(property, direction) {
     let { layout } = this.props.boxModel;
@@ -178,7 +169,7 @@ module.exports = createClass({
     }
 
     return value;
-  },
+  }
 
   getPositionValue(property) {
     let { layout } = this.props.boxModel;
@@ -198,7 +189,23 @@ module.exports = createClass({
     }
 
     return value;
-  },
+  }
+
+  getWidthValue(property) {
+    if (property == undefined) {
+      return "-";
+    }
+
+    let { layout } = this.props.boxModel;
+
+    property -= parseFloat(layout["border-left-width"]) +
+                parseFloat(layout["border-right-width"]) +
+                parseFloat(layout["padding-left"]) +
+                parseFloat(layout["padding-right"]);
+    property = parseFloat(property.toPrecision(6));
+
+    return property;
+  }
 
   /**
    * Move the focus to the next/previous editable element of the current layout.
@@ -210,7 +217,7 @@ module.exports = createClass({
    * @param  {String} level
    *         Current active layout
    */
-  moveFocus: function ({ target, shiftKey }, level) {
+  moveFocus({ target, shiftKey }, level) {
     let editBoxes = [
       ...findDOMNode(this).querySelectorAll(`[data-box="${level}"].boxmodel-editable`)
     ];
@@ -233,7 +240,7 @@ module.exports = createClass({
     if (editingMode) {
       editBox.click();
     }
-  },
+  }
 
   /**
    * Active aria-level set to current layout.
@@ -252,39 +259,7 @@ module.exports = createClass({
     this.setState({
       activeDescendant: nextLayout.getAttribute("data-box"),
     });
-  },
-
-  /**
-   * While waiting for a reps fix in https://github.com/devtools-html/reps/issues/92,
-   * translate nodeFront to a grip-like object that can be used with an ElementNode rep.
-   *
-   * @param  {NodeFront} nodeFront
-   *         The NodeFront for which we want to create a grip-like object.
-   * @return {Object} a grip-like object that can be used with Reps.
-   */
-  translateNodeFrontToGrip(nodeFront) {
-    let {
-      attributes
-    } = nodeFront;
-
-    // The main difference between NodeFront and grips is that attributes are treated as
-    // a map in grips and as an array in NodeFronts.
-    let attributesMap = {};
-    for (let { name, value } of attributes) {
-      attributesMap[name] = value;
-    }
-
-    return {
-      actor: nodeFront.actorID,
-      preview: {
-        attributes: attributesMap,
-        attributesLength: attributes.length,
-        // nodeName is already lowerCased in Node grips
-        nodeName: nodeFront.nodeName.toLowerCase(),
-        nodeType: nodeFront.nodeType,
-      }
-    };
-  },
+  }
 
   onHighlightMouseOver(event) {
     let region = event.target.getAttribute("data-box");
@@ -304,18 +279,12 @@ module.exports = createClass({
       this.props.onHideBoxModelHighlighter();
     }
 
-    if (region === "offset-parent") {
-      this.props.onHideBoxModelHighlighter();
-      this.props.onShowBoxModelHighlighterForNode(this.props.boxModel.offsetParent);
-      return;
-    }
-
     this.props.onShowBoxModelHighlighter({
       region,
       showOnly: region,
       onlyRegionArea: true,
     });
-  },
+  }
 
   /**
    * Handle keyboard navigation and focus for box model layouts.
@@ -378,7 +347,7 @@ module.exports = createClass({
       default:
         break;
     }
-  },
+  }
 
   /**
    * Update aria-active on mouse click.
@@ -404,19 +373,16 @@ module.exports = createClass({
     if (target && target._editable) {
       target.blur();
     }
-  },
+  }
 
   render() {
     let {
       boxModel,
-      setSelectedNode,
       onShowBoxModelEditor,
     } = this.props;
-    let { layout, offsetParent } = boxModel;
-    let { height, width, position } = layout;
+    let { layout } = boxModel;
+    let { height, width } = layout;
     let { activeDescendant: level, focusable } = this.state;
-
-    let displayOffsetParent = offsetParent && layout.position === "absolute";
 
     let borderTop = this.getBorderOrPaddingValue("border-top-width");
     let borderRight = this.getBorderOrPaddingValue("border-right-width");
@@ -486,7 +452,7 @@ module.exports = createClass({
 
     return dom.div(
       {
-        className: "boxmodel-main",
+        className: "boxmodel-main devtools-monospace",
         "data-box": "position",
         ref: div => {
           this.positionLayout = div;
@@ -496,34 +462,6 @@ module.exports = createClass({
         onMouseOver: this.onHighlightMouseOver,
         onMouseOut: this.props.onHideBoxModelHighlighter,
       },
-      displayOffsetParent ?
-        dom.span(
-          {
-            className: "boxmodel-offset-parent",
-            "data-box": "offset-parent",
-          },
-          Rep(
-            {
-              defaultRep: offsetParent,
-              mode: MODE.TINY,
-              object: this.translateNodeFrontToGrip(offsetParent),
-              onInspectIconClick: () => setSelectedNode(offsetParent, "box-model"),
-            }
-          )
-        )
-        :
-        null,
-      displayPosition ?
-        dom.span(
-          {
-            className: "boxmodel-legend",
-            "data-box": "position",
-            title: BOXMODEL_L10N.getFormatStr("boxmodel.position", position),
-          },
-          BOXMODEL_L10N.getFormatStr("boxmodel.position", position)
-        )
-        :
-        null,
       dom.div(
         {
           className: "boxmodel-box"
@@ -761,6 +699,7 @@ module.exports = createClass({
       }),
       contentBox
     );
-  },
+  }
+}
 
-});
+module.exports = BoxModelMain;

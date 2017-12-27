@@ -11,6 +11,7 @@
 #include "nsThreadUtils.h"
 
 #include "TelemetryCommon.h"
+#include "TelemetryProcessData.h"
 
 #include <cstring>
 
@@ -78,12 +79,18 @@ CanRecordInProcess(RecordedProcessType processes, GeckoProcessType processType)
          ((processType != GeckoProcessType_Default) && recordAllChild);
 }
 
+bool
+CanRecordInProcess(RecordedProcessType processes, ProcessID processId)
+{
+  return CanRecordInProcess(processes, GetGeckoProcessType(processId));
+}
+
 nsresult
 MsSinceProcessStart(double* aResult)
 {
   bool error;
   *aResult = (TimeStamp::NowLoRes() -
-              TimeStamp::ProcessCreation(error)).ToMilliseconds();
+              TimeStamp::ProcessCreation(&error)).ToMilliseconds();
   if (error) {
     return NS_ERROR_NOT_AVAILABLE;
   }
@@ -95,8 +102,9 @@ LogToBrowserConsole(uint32_t aLogLevel, const nsAString& aMsg)
 {
   if (!NS_IsMainThread()) {
     nsString msg(aMsg);
-    nsCOMPtr<nsIRunnable> task =
-      NS_NewRunnableFunction([aLogLevel, msg]() { LogToBrowserConsole(aLogLevel, msg); });
+    nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction(
+      "Telemetry::Common::LogToBrowserConsole",
+      [aLogLevel, msg]() { LogToBrowserConsole(aLogLevel, msg); });
     NS_DispatchToMainThread(task.forget(), NS_DISPATCH_NORMAL);
     return;
   }
@@ -110,6 +118,56 @@ LogToBrowserConsole(uint32_t aLogLevel, const nsAString& aMsg)
   nsCOMPtr<nsIScriptError> error(do_CreateInstance(NS_SCRIPTERROR_CONTRACTID));
   error->Init(aMsg, EmptyString(), EmptyString(), 0, 0, aLogLevel, "chrome javascript");
   console->LogMessage(error);
+}
+
+const char*
+GetNameForProcessID(ProcessID process)
+{
+  MOZ_ASSERT(process < ProcessID::Count);
+  return ProcessIDToString[static_cast<uint32_t>(process)];
+}
+
+GeckoProcessType
+GetGeckoProcessType(ProcessID process)
+{
+  MOZ_ASSERT(process < ProcessID::Count);
+  return ProcessIDToGeckoProcessType[static_cast<uint32_t>(process)];
+}
+
+bool
+IsStringCharValid(const char aChar, const bool aAllowInfixPeriod,
+                  const bool aAllowInfixUnderscore)
+{
+  return (aChar >= 'A' && aChar <= 'Z')
+      || (aChar >= 'a' && aChar <= 'z')
+      || (aChar >= '0' && aChar <= '9')
+      || (aAllowInfixPeriod && (aChar == '.'))
+      || (aAllowInfixUnderscore && (aChar == '_'));
+}
+
+bool
+IsValidIdentifierString(const nsACString& aStr, const size_t aMaxLength,
+                        const bool aAllowInfixPeriod, const bool aAllowInfixUnderscore)
+{
+  // Check string length.
+  if (aStr.Length() > aMaxLength) {
+    return false;
+  }
+
+  // Check string characters.
+  const char* first = aStr.BeginReading();
+  const char* end = aStr.EndReading();
+
+  for (const char* cur = first; cur < end; ++cur) {
+      const bool infix = (cur != first) && (cur != (end - 1));
+      if (!IsStringCharValid(*cur,
+                             aAllowInfixPeriod && infix,
+                             aAllowInfixUnderscore && infix)) {
+        return false;
+      }
+  }
+
+  return true;
 }
 
 } // namespace Common

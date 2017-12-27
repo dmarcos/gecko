@@ -28,7 +28,7 @@
 #ifndef nsHtml5ElementName_h
 #define nsHtml5ElementName_h
 
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsHtml5AtomTable.h"
 #include "nsHtml5String.h"
 #include "nsNameSpaceManager.h"
@@ -37,19 +37,19 @@
 #include "jArray.h"
 #include "nsHtml5ArrayCopy.h"
 #include "nsAHtml5TreeBuilderState.h"
-#include "nsHtml5Atoms.h"
+#include "nsGkAtoms.h"
 #include "nsHtml5ByteReadable.h"
-#include "nsIUnicodeDecoder.h"
 #include "nsHtml5Macros.h"
 #include "nsIContentHandle.h"
+#include "nsHtml5Portability.h"
+#include "nsHtml5ContentCreatorFunction.h"
 
 class nsHtml5StreamParser;
 
+class nsHtml5AttributeName;
 class nsHtml5Tokenizer;
 class nsHtml5TreeBuilder;
 class nsHtml5MetaScanner;
-class nsHtml5AttributeName;
-class nsHtml5HtmlAttributes;
 class nsHtml5UTF16Buffer;
 class nsHtml5StateSnapshot;
 class nsHtml5Portability;
@@ -57,19 +57,94 @@ class nsHtml5Portability;
 
 class nsHtml5ElementName
 {
-  public:
-    static nsHtml5ElementName* ELT_NULL_ELEMENT_NAME;
-    nsIAtom* name;
-    nsIAtom* camelCaseName;
-    int32_t flags;
-    inline int32_t getFlags()
-    {
-      return flags;
+public:
+  static const int32_t GROUP_MASK = 127;
+
+  static const int32_t NOT_INTERNED = (1 << 30);
+
+  static const int32_t SPECIAL = (1 << 29);
+
+  static const int32_t FOSTER_PARENTING = (1 << 28);
+
+  static const int32_t SCOPING = (1 << 27);
+
+  static const int32_t SCOPING_AS_SVG = (1 << 26);
+
+  static const int32_t SCOPING_AS_MATHML = (1 << 25);
+
+  static const int32_t HTML_INTEGRATION_POINT = (1 << 24);
+
+  static const int32_t OPTIONAL_END_TAG = (1 << 23);
+
+private:
+  nsAtom* name;
+  nsAtom* camelCaseName;
+  mozilla::dom::HTMLContentCreatorFunction htmlCreator;
+  mozilla::dom::SVGContentCreatorFunction svgCreator;
+
+public:
+  int32_t flags;
+  inline nsAtom* getName() { return name; }
+
+  inline nsAtom* getCamelCaseName() { return camelCaseName; }
+
+  inline mozilla::dom::HTMLContentCreatorFunction getHtmlCreator()
+  {
+    return htmlCreator;
+  }
+
+  inline mozilla::dom::SVGContentCreatorFunction getSvgCreator()
+  {
+    return svgCreator;
+  }
+
+  inline int32_t getFlags() { return flags; }
+
+  inline int32_t getGroup() { return flags & nsHtml5ElementName::GROUP_MASK; }
+
+  inline bool isInterned()
+  {
+    return !(flags & nsHtml5ElementName::NOT_INTERNED);
+  }
+
+  inline static int32_t levelOrderBinarySearch(jArray<int32_t, int32_t> data,
+                                               int32_t key)
+  {
+    int32_t n = data.length;
+    int32_t i = 0;
+    while (i < n) {
+      int32_t val = data[i];
+      if (val < key) {
+        i = 2 * i + 2;
+      } else if (val > key) {
+        i = 2 * i + 1;
+      } else {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  inline static nsHtml5ElementName*
+  elementNameByBuffer(char16_t* buf, int32_t length, nsHtml5AtomTable* interner)
+  {
+    uint32_t hash = nsHtml5ElementName::bufToHash(buf, length);
+    jArray<int32_t, int32_t> hashes;
+    hashes = nsHtml5ElementName::ELEMENT_HASHES;
+    int32_t index = levelOrderBinarySearch(hashes, hash);
+    if (index < 0) {
+      return nullptr;
+    } else {
+      nsHtml5ElementName* elementName =
+        nsHtml5ElementName::ELEMENT_NAMES[index];
+      nsAtom* name = elementName->name;
+      if (!nsHtml5Portability::localEqualsBuffer(name, buf, length)) {
+        return nullptr;
+      }
+      return elementName;
+    }
     }
 
-    int32_t getGroup();
-    bool isCustom();
-    static nsHtml5ElementName* elementNameByBuffer(char16_t* buf, int32_t offset, int32_t length, nsHtml5AtomTable* interner);
   private:
     inline static uint32_t bufToHash(char16_t* buf, int32_t length)
     {
@@ -101,13 +176,30 @@ class nsHtml5ElementName
       return len + first + second + third + fourth + fifth;
     }
 
-    nsHtml5ElementName(nsIAtom* name, nsIAtom* camelCaseName, int32_t flags);
-  protected:
-    explicit nsHtml5ElementName(nsIAtom* name);
+    nsHtml5ElementName(nsAtom* name,
+                       nsAtom* camelCaseName,
+                       mozilla::dom::HTMLContentCreatorFunction htmlCreator,
+                       mozilla::dom::SVGContentCreatorFunction svgCreator,
+                       int32_t flags);
+
   public:
-    virtual void release();
-    virtual ~nsHtml5ElementName();
-    virtual nsHtml5ElementName* cloneElementName(nsHtml5AtomTable* interner);
+    nsHtml5ElementName();
+    ~nsHtml5ElementName();
+    inline void setNameForNonInterned(nsAtom* name, bool custom)
+    {
+      this->name = name;
+      this->camelCaseName = name;
+      if (custom) {
+        this->htmlCreator = NS_NewCustomElement;
+      } else {
+        this->htmlCreator = NS_NewHTMLUnknownElement;
+      }
+      MOZ_ASSERT(this->flags == nsHtml5ElementName::NOT_INTERNED);
+    }
+
+    inline bool isCustom() { return this->htmlCreator == NS_NewCustomElement; }
+
+    static nsHtml5ElementName* ELT_ANNOTATION_XML;
     static nsHtml5ElementName* ELT_BIG;
     static nsHtml5ElementName* ELT_BDO;
     static nsHtml5ElementName* ELT_COL;
@@ -145,6 +237,7 @@ class nsHtml5ElementName
     static nsHtml5ElementName* ELT_H5;
     static nsHtml5ElementName* ELT_H6;
     static nsHtml5ElementName* ELT_AREA;
+    static nsHtml5ElementName* ELT_DATA;
     static nsHtml5ElementName* ELT_FEFUNCA;
     static nsHtml5ElementName* ELT_METADATA;
     static nsHtml5ElementName* ELT_META;
@@ -217,7 +310,6 @@ class nsHtml5ElementName
     static nsHtml5ElementName* ELT_MASK;
     static nsHtml5ElementName* ELT_TRACK;
     static nsHtml5ElementName* ELT_DL;
-    static nsHtml5ElementName* ELT_ANNOTATION_XML;
     static nsHtml5ElementName* ELT_HTML;
     static nsHtml5ElementName* ELT_OL;
     static nsHtml5ElementName* ELT_LABEL;
@@ -279,6 +371,7 @@ class nsHtml5ElementName
     static nsHtml5ElementName* ELT_DT;
     static nsHtml5ElementName* ELT_APPLET;
     static nsHtml5ElementName* ELT_BASEFONT;
+    static nsHtml5ElementName* ELT_DATALIST;
     static nsHtml5ElementName* ELT_FOREIGNOBJECT;
     static nsHtml5ElementName* ELT_FIELDSET;
     static nsHtml5ElementName* ELT_FRAMESET;
@@ -299,6 +392,7 @@ class nsHtml5ElementName
     static nsHtml5ElementName* ELT_RECT;
     static nsHtml5ElementName* ELT_RADIALGRADIENT;
     static nsHtml5ElementName* ELT_SELECT;
+    static nsHtml5ElementName* ELT_SLOT;
     static nsHtml5ElementName* ELT_SCRIPT;
     static nsHtml5ElementName* ELT_TFOOT;
     static nsHtml5ElementName* ELT_TEXT;
@@ -307,13 +401,11 @@ class nsHtml5ElementName
     static nsHtml5ElementName* ELT_VIEW;
     static nsHtml5ElementName* ELT_FECOLORMATRIX;
     static nsHtml5ElementName* ELT_FECONVOLVEMATRIX;
-    static nsHtml5ElementName* ELT_ISINDEX;
     static nsHtml5ElementName* ELT_BODY;
     static nsHtml5ElementName* ELT_FEMORPHOLOGY;
     static nsHtml5ElementName* ELT_RUBY;
     static nsHtml5ElementName* ELT_SUMMARY;
     static nsHtml5ElementName* ELT_TBODY;
-
   private:
     static nsHtml5ElementName** ELEMENT_NAMES;
     static staticJArray<int32_t,int32_t> ELEMENT_HASHES;
@@ -321,17 +413,6 @@ class nsHtml5ElementName
     static void initializeStatics();
     static void releaseStatics();
 };
-
-#define NS_HTML5ELEMENT_NAME_GROUP_MASK 127
-#define NS_HTML5ELEMENT_NAME_CUSTOM (1 << 30)
-#define NS_HTML5ELEMENT_NAME_SPECIAL (1 << 29)
-#define NS_HTML5ELEMENT_NAME_FOSTER_PARENTING (1 << 28)
-#define NS_HTML5ELEMENT_NAME_SCOPING (1 << 27)
-#define NS_HTML5ELEMENT_NAME_SCOPING_AS_SVG (1 << 26)
-#define NS_HTML5ELEMENT_NAME_SCOPING_AS_MATHML (1 << 25)
-#define NS_HTML5ELEMENT_NAME_HTML_INTEGRATION_POINT (1 << 24)
-#define NS_HTML5ELEMENT_NAME_OPTIONAL_END_TAG (1 << 23)
-
 
 #endif
 

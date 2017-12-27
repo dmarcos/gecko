@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim:cindent:ts=2:et:sw=2:
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -44,6 +44,8 @@ class nsBlockInFlowLineIterator;
 class nsBulletFrame;
 namespace mozilla {
 class BlockReflowInput;
+class ServoRestyleState;
+class StyleSetHandle;
 } // namespace mozilla
 
 /**
@@ -80,8 +82,7 @@ class nsBlockFrame : public nsContainerFrame
   using BlockReflowInput = mozilla::BlockReflowInput;
 
 public:
-  NS_DECL_QUERYFRAME_TARGET(nsBlockFrame)
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsBlockFrame)
 
   typedef nsLineList::iterator LineIterator;
   typedef nsLineList::const_iterator ConstLineIterator;
@@ -135,13 +136,11 @@ public:
                                  BaselineSharingGroup aBaselineGroup,
                                  nscoord*             aBaseline) const override;
   nscoord GetCaretBaseline() const override;
-  void DestroyFrom(nsIFrame* aDestructRoot) override;
+  void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
   nsSplittableType GetSplittableType() const override;
   bool IsFloatContainingBlock() const override;
   void BuildDisplayList(nsDisplayListBuilder* aBuilder,
-                        const nsRect& aDirtyRect,
                         const nsDisplayListSet& aLists) override;
-  nsIAtom* GetType() const override;
   bool IsFrameOfType(uint32_t aFlags) const override
   {
     return nsContainerFrame::IsFrameOfType(aFlags &
@@ -215,7 +214,7 @@ public:
     ~AutoLineCursorSetup()
     {
       if (mOrigCursor) {
-        mFrame->Properties().Set(LineCursorProperty(), mOrigCursor);
+        mFrame->SetProperty(LineCursorProperty(), mOrigCursor);
       } else {
         mFrame->ClearLineCursor();
       }
@@ -272,16 +271,26 @@ public:
     return outside ? outside : GetInsideBullet();
   }
 
+  /**
+   * @return the first-letter frame or nullptr if we don't have one.
+   */
+  nsIFrame* GetFirstLetter() const;
+
+  /**
+   * @return the ::first-line frame or nullptr if we don't have one.
+   */
+  nsIFrame* GetFirstLineFrame() const;
+
   void MarkIntrinsicISizesDirty() override;
 private:
   void CheckIntrinsicCacheAgainstShrinkWrapState();
 public:
-  nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
-  nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
+  nscoord GetMinISize(gfxContext *aRenderingContext) override;
+  nscoord GetPrefISize(gfxContext *aRenderingContext) override;
 
   nsRect ComputeTightBounds(DrawTarget* aDrawTarget) const override;
 
-  nsresult GetPrefWidthTightBounds(nsRenderingContext* aContext,
+  nsresult GetPrefWidthTightBounds(gfxContext* aContext,
                                    nscoord* aX,
                                    nscoord* aXMost) override;
 
@@ -315,7 +324,7 @@ public:
               nsReflowStatus& aStatus) override;
 
   nsresult AttributeChanged(int32_t aNameSpaceID,
-                            nsIAtom* aAttribute,
+                            nsAtom* aAttribute,
                             int32_t aModType) override;
 
   /**
@@ -382,9 +391,9 @@ public:
    * Must only be called while this block frame is in reflow.
    * aFloatStatus must be the float's true, unmodified reflow status.
    */
-  nsresult SplitFloat(BlockReflowInput& aState,
-                      nsIFrame* aFloat,
-                      nsReflowStatus aFloatStatus);
+  void SplitFloat(BlockReflowInput& aState,
+                  nsIFrame* aFloat,
+                  const nsReflowStatus& aFloatStatus);
 
   /**
    * Walks up the frame tree, starting with aCandidate, and returns the first
@@ -397,9 +406,19 @@ public:
     nsFrameList mFrames;
   };
 
+  /**
+   * Update the styles of our various pseudo-elements (bullets, first-line,
+   * etc, but _not_ first-letter).
+   */
+  void UpdatePseudoElementStyles(mozilla::ServoRestyleState& aRestyleState);
+
+  // Update our first-letter styles during stylo post-traversal.  This needs to
+  // be done at a slightly different time than our other pseudo-elements.
+  void UpdateFirstLetterStyle(mozilla::ServoRestyleState& aRestyleState);
+
 protected:
-  explicit nsBlockFrame(nsStyleContext* aContext)
-    : nsContainerFrame(aContext)
+  explicit nsBlockFrame(nsStyleContext* aContext, ClassID aID = kClassID)
+    : nsContainerFrame(aContext, aID)
     , mMinWidth(NS_INTRINSIC_WIDTH_UNKNOWN)
     , mPrefWidth(NS_INTRINSIC_WIDTH_UNKNOWN)
   {
@@ -407,6 +426,7 @@ protected:
   InitDebugFlags();
 #endif
   }
+
   virtual ~nsBlockFrame();
 
 #ifdef DEBUG
@@ -416,20 +436,20 @@ protected:
   NS_DECLARE_FRAME_PROPERTY_WITHOUT_DTOR(LineCursorProperty, nsLineBox)
   bool HasLineCursor() { return GetStateBits() & NS_BLOCK_HAS_LINE_CURSOR; }
   nsLineBox* GetLineCursor() {
-    return HasLineCursor() ? Properties().Get(LineCursorProperty()) : nullptr;
+    return HasLineCursor() ? GetProperty(LineCursorProperty()) : nullptr;
   }
 
   nsLineBox* NewLineBox(nsIFrame* aFrame, bool aIsBlock) {
-    return NS_NewLineBox(PresContext()->PresShell(), aFrame, aIsBlock);
+    return NS_NewLineBox(PresShell(), aFrame, aIsBlock);
   }
   nsLineBox* NewLineBox(nsLineBox* aFromLine, nsIFrame* aFrame, int32_t aCount) {
-    return NS_NewLineBox(PresContext()->PresShell(), aFromLine, aFrame, aCount);
+    return NS_NewLineBox(PresShell(), aFromLine, aFrame, aCount);
   }
   void FreeLineBox(nsLineBox* aLine) {
     if (aLine == GetLineCursor()) {
       ClearLineCursor();
     }
-    aLine->Destroy(PresContext()->PresShell());
+    aLine->Destroy(PresShell());
   }
   /**
    * Helper method for StealFrame.
@@ -514,7 +534,11 @@ public:
     REMOVE_FIXED_CONTINUATIONS = 0x02,
     FRAMES_ARE_EMPTY = 0x04
   };
-  void DoRemoveFrame(nsIFrame* aDeletedFrame, uint32_t aFlags);
+  void DoRemoveFrame(nsIFrame* aDeletedFrame, uint32_t aFlags)
+  {
+    AutoPostDestroyData data(PresContext());
+    DoRemoveFrameInternal(aDeletedFrame, aFlags, data.mData);
+  }
 
   void ReparentFloats(nsIFrame* aFirstFrame, nsBlockFrame* aOldParent,
                       bool aReparentSiblings);
@@ -557,6 +581,14 @@ public:
         "pushed floats must be at the beginning of the float list");
     }
 #endif
+
+    // We may have a pending push of pushed floats too:
+    if (HasPushedFloats()) {
+      // XXX we can return 'true' here once we make HasPushedFloats
+      // not lie.  (see nsBlockFrame::RemoveFloat)
+      auto* pushedFloats = GetPushedFloats();
+      return pushedFloats && !pushedFloats->IsEmpty();
+    }
     return false;
   }
 
@@ -565,6 +597,9 @@ public:
                                    int32_t aIncrement,
                                    bool aForCounting) override;
 protected:
+  /** @see DoRemoveFrame */
+  void DoRemoveFrameInternal(nsIFrame* aDeletedFrame, uint32_t aFlags,
+                             PostDestroyData& data);
 
   /** grab overflow lines from this block's prevInFlow, and make them
     * part of this block's mLines list.
@@ -903,6 +938,13 @@ protected:
   nsFrameList* EnsurePushedFloats();
   // Remove and return the pushed floats list.
   nsFrameList* RemovePushedFloats();
+
+  // Resolve a style context for our bullet frame.  aType should be
+  // mozListBullet or mozListNumber.  Passing in the style set is an
+  // optimization, because all callsites have it.
+  already_AddRefed<nsStyleContext> ResolveBulletStyle(
+    mozilla::CSSPseudoElementType aType,
+    mozilla::StyleSetHandle aStyleSet);
 
 #ifdef DEBUG
   void VerifyLines(bool aFinalCheckOK);

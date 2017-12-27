@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -9,7 +10,9 @@
 #include <stdint.h>                     // for uint32_t
 
 #include "Units.h"
+#include "mozilla/DefineEnum.h"         // for MOZ_DEFINE_ENUM
 #include "mozilla/gfx/Point.h"          // for IntPoint
+#include "mozilla/Maybe.h"
 #include "mozilla/TypedEnumBits.h"
 #include "nsRegion.h"
 
@@ -25,6 +28,8 @@
   do { if (layer->AsShadowableLayer()) { MOZ_LOG(LayerManager::GetLog(), LogLevel::Debug, _args); } } while (0)
 
 #define INVALID_OVERLAY -1
+
+//#define ENABLE_FRAME_LATENCY_LOG
 
 namespace IPC {
 template <typename T> struct ParamTraits;
@@ -69,12 +74,12 @@ enum class SurfaceMode : int8_t {
   SURFACE_COMPONENT_ALPHA
 };
 
-enum class ScaleMode : int8_t {
-  SCALE_NONE,
-  STRETCH,
-  SENTINEL
+MOZ_DEFINE_ENUM_CLASS_WITH_BASE(
+  ScaleMode, int8_t, (
+    SCALE_NONE,
+    STRETCH
 // Unimplemented - PRESERVE_ASPECT_RATIO_CONTAIN
-};
+));
 
 struct EventRegions {
   // The hit region for a layer contains all areas on the layer that are
@@ -103,6 +108,16 @@ struct EventRegions {
     : mHitRegion(aHitRegion)
   {
   }
+
+  // This constructor takes the maybe-hit region and uses it to update the
+  // hit region and dispatch-to-content region. It is useful from converting
+  // from the display item representation to the layer representation.
+  EventRegions(const nsIntRegion& aHitRegion,
+               const nsIntRegion& aMaybeHitRegion,
+               const nsIntRegion& aDispatchToContentRegion,
+               const nsIntRegion& aNoActionRegion,
+               const nsIntRegion& aHorizontalPanRegion,
+               const nsIntRegion& aVerticalPanRegion);
 
   bool operator==(const EventRegions& aRegions) const
   {
@@ -141,6 +156,26 @@ struct EventRegions {
     mVerticalPanRegion.Transform(aTransform);
   }
 
+  void OrWith(const EventRegions& aOther)
+  {
+    mHitRegion.OrWith(aOther.mHitRegion);
+    mDispatchToContentHitRegion.OrWith(aOther.mDispatchToContentHitRegion);
+    // See the comment in nsDisplayList::AddFrame, where the touch action regions
+    // are handled. The same thing applies here.
+    bool alreadyHadRegions = !mNoActionRegion.IsEmpty() ||
+        !mHorizontalPanRegion.IsEmpty() ||
+        !mVerticalPanRegion.IsEmpty();
+    mNoActionRegion.OrWith(aOther.mNoActionRegion);
+    mHorizontalPanRegion.OrWith(aOther.mHorizontalPanRegion);
+    mVerticalPanRegion.OrWith(aOther.mVerticalPanRegion);
+    if (alreadyHadRegions) {
+      nsIntRegion combinedActionRegions;
+      combinedActionRegions.Or(mHorizontalPanRegion, mVerticalPanRegion);
+      combinedActionRegions.OrWith(mNoActionRegion);
+      mDispatchToContentHitRegion.OrWith(combinedActionRegions);
+    }
+  }
+
   bool IsEmpty() const
   {
     return mHitRegion.IsEmpty()
@@ -148,6 +183,15 @@ struct EventRegions {
         && mNoActionRegion.IsEmpty()
         && mHorizontalPanRegion.IsEmpty()
         && mVerticalPanRegion.IsEmpty();
+  }
+
+  void SetEmpty()
+  {
+    mHitRegion.SetEmpty();
+    mDispatchToContentHitRegion.SetEmpty();
+    mNoActionRegion.SetEmpty();
+    mHorizontalPanRegion.SetEmpty();
+    mVerticalPanRegion.SetEmpty();
   }
 
   nsCString ToString() const
@@ -159,7 +203,7 @@ struct EventRegions {
   }
 };
 
-// Bit flags that go on a ContainerLayer (or RefLayer) and override the
+// Bit flags that go on a RefLayer and override the
 // event regions in the entire subtree below. This is needed for propagating
 // various flags across processes since the child-process layout code doesn't
 // know about parent-process listeners or CSS rules.
@@ -213,6 +257,8 @@ typedef Array<gfx::Color, 4> BorderColors;
 typedef Array<LayerSize, 4> BorderCorners;
 typedef Array<LayerCoord, 4> BorderWidths;
 typedef Array<uint8_t, 4> BorderStyles;
+
+typedef Maybe<LayerRect> MaybeLayerRect;
 
 // This is used to communicate Layers across IPC channels. The Handle is valid
 // for layers in the same PLayerTransaction. Handles are created by ClientLayerManager,
@@ -299,11 +345,10 @@ private:
   uint64_t mHandle;
 };
 
-enum class ScrollDirection : uint32_t {
-  NONE,
-  VERTICAL,
-  HORIZONTAL
-};
+MOZ_DEFINE_ENUM_CLASS_WITH_BASE(ScrollDirection, uint32_t, (
+  eVertical,
+  eHorizontal
+));
 
 } // namespace layers
 } // namespace mozilla

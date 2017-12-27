@@ -7,7 +7,6 @@
 #include "BroadcastChannelChild.h"
 #include "BroadcastChannel.h"
 #include "jsapi.h"
-#include "mozilla/dom/ipc/BlobChild.h"
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/MessageEvent.h"
 #include "mozilla/dom/MessageEventBinding.h"
@@ -81,10 +80,10 @@ BroadcastChannelChild::RecvNotify(const ClonedMessageData& aData)
   JSContext* cx = jsapi.cx();
   JS::Rooted<JS::Value> value(cx, JS::NullValue());
   if (cloneData.DataLength()) {
-    ErrorResult rv;
+    IgnoredErrorResult rv;
     cloneData.Read(cx, &value, rv);
     if (NS_WARN_IF(rv.Failed())) {
-      rv.SuppressException();
+      DispatchError(cx);
       return IPC_OK();
     }
   }
@@ -110,6 +109,22 @@ void
 BroadcastChannelChild::ActorDestroy(ActorDestroyReason aWhy)
 {
   mActorDestroyed = true;
+}
+
+void
+BroadcastChannelChild::DispatchError(JSContext* aCx)
+{
+  RootedDictionary<MessageEventInit> init(aCx);
+  init.mBubbles = false;
+  init.mCancelable = false;
+  init.mOrigin = mOrigin;
+
+  RefPtr<Event> event =
+    MessageEvent::Constructor(mBC, NS_LITERAL_STRING("messageerror"), init);
+  event->SetTrusted(true);
+
+  bool dummy;
+  mBC->DispatchEvent(event, &dummy);
 }
 
 } // namespace dom

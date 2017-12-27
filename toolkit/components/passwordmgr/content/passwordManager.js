@@ -51,6 +51,7 @@ let signonReloadDisplay = {
           if (filterField && filterField.value != "") {
             FilterPasswords();
           }
+          signonsTree.treeBoxObject.ensureRowIsVisible(signonsTree.view.selection.currentIndex);
           break;
       }
       Services.obs.notifyObservers(null, "passwordmgr-dialog-updated");
@@ -79,7 +80,7 @@ function Startup() {
 
   togglePasswordsButton.label = kSignonBundle.getString("showPasswords");
   togglePasswordsButton.accessKey = kSignonBundle.getString("showPasswordsAccessKey");
-  signonsIntro.textContent = kSignonBundle.getString("loginsDescriptionAll");
+  signonsIntro.textContent = kSignonBundle.getString("loginsDescriptionAll2");
   removeAllButton.setAttribute("label", kSignonBundle.getString("removeAll.label"));
   removeAllButton.setAttribute("accesskey", kSignonBundle.getString("removeAll.accesskey"));
   document.getElementsByTagName("treecols")[0].addEventListener("click", (event) => {
@@ -126,7 +127,7 @@ let signonsTreeView = {
   // Coalesce invalidations to avoid repeated flickering.
   _invalidateTask: new DeferredTask(() => {
     signonsTree.treeBoxObject.invalidateColumn(signonsTree.columns.siteCol);
-  }, 10),
+  }, 10, 0),
   _lastSelectedRanges: [],
   selection: null,
 
@@ -389,7 +390,6 @@ function DeleteSignon() {
     // update selection
     let nextSelection = (selections[0] < table.length) ? selections[0] : table.length - 1;
     tree.view.selection.select(nextSelection);
-    tree.treeBoxObject.ensureRowIsVisible(nextSelection);
   } else {
     // disable buttons
     removeButton.setAttribute("disabled", "true");
@@ -400,16 +400,13 @@ function DeleteSignon() {
 }
 
 function DeleteAllSignons() {
-  let prompter = Cc["@mozilla.org/embedcomp/prompt-service;1"]
-                           .getService(Ci.nsIPromptService);
-
   // Confirm the user wants to remove all passwords
   let dummy = { value: false };
-  if (prompter.confirmEx(window,
-                         kSignonBundle.getString("removeAllPasswordsTitle"),
-                         kSignonBundle.getString("removeAllPasswordsPrompt"),
-                         prompter.STD_YES_NO_BUTTONS + prompter.BUTTON_POS_1_DEFAULT,
-                         null, null, null, null, dummy) == 1) // 1 == "No" button
+  if (Services.prompt.confirmEx(window,
+    kSignonBundle.getString("removeAllPasswordsTitle"),
+    kSignonBundle.getString("removeAllPasswordsPrompt"),
+    Services.prompt.STD_YES_NO_BUTTONS + Services.prompt.BUTTON_POS_1_DEFAULT,
+    null, null, null, null, dummy) == 1) // 1 == "No" button
     return;
 
   let syncNeeded = signonsTreeView._filterSet.length != 0;
@@ -455,14 +452,13 @@ function TogglePasswordVisible() {
 }
 
 function AskUserShowPasswords() {
-  let prompter = Cc["@mozilla.org/embedcomp/prompt-service;1"].getService(Ci.nsIPromptService);
   let dummy = { value: false };
 
   // Confirm the user wants to display passwords
-  return prompter.confirmEx(window,
+  return Services.prompt.confirmEx(window,
           null,
-          kSignonBundle.getString("noMasterPasswordPrompt"), prompter.STD_YES_NO_BUTTONS,
-          null, null, null, null, dummy) == 0;    // 0=="Yes" button
+          kSignonBundle.getString("noMasterPasswordPrompt"), Services.prompt.STD_YES_NO_BUTTONS,
+          null, null, null, null, dummy) == 0; // 0=="Yes" button
 }
 
 function FinalizeSignonDeletions(syncNeeded) {
@@ -491,6 +487,7 @@ function HandleSignonKeyPress(e) {
       (AppConstants.platform == "macosx" &&
        e.keyCode == KeyboardEvent.DOM_VK_BACK_SPACE)) {
     DeleteSignon();
+    e.preventDefault();
   }
 }
 
@@ -557,7 +554,7 @@ function SignonClearFilter() {
   }
   signonsTreeView._lastSelectedRanges = [];
 
-  signonsIntro.textContent = kSignonBundle.getString("loginsDescriptionAll");
+  signonsIntro.textContent = kSignonBundle.getString("loginsDescriptionAll2");
   removeAllButton.setAttribute("label", kSignonBundle.getString("removeAll.label"));
   removeAllButton.setAttribute("accesskey", kSignonBundle.getString("removeAll.accesskey"));
 }
@@ -632,6 +629,15 @@ function FilterPasswords() {
   removeAllButton.setAttribute("accesskey", kSignonBundle.getString("removeAllShown.accesskey"));
 }
 
+function CopySiteUrl() {
+  // Copy selected site url to clipboard
+  let clipboard = Cc["@mozilla.org/widget/clipboardhelper;1"].
+                  getService(Ci.nsIClipboardHelper);
+  let row = signonsTree.currentIndex;
+  let url = signonsTreeView.getCellText(row, {id: "siteCol"});
+  clipboard.copyString(url);
+}
+
 function CopyPassword() {
   // Don't copy passwords if we aren't already showing the passwords & a master
   // password hasn't been entered.
@@ -662,6 +668,12 @@ function EditCellInSelectedRow(columnName) {
   signonsTree.startEditing(row, signonsTree.columns.getColumnFor(columnElement));
 }
 
+function LaunchSiteUrl() {
+  let row = signonsTree.currentIndex;
+  let url = signonsTreeView.getCellText(row, {id: "siteCol"});
+  window.openUILinkIn(url, "tab");
+}
+
 function UpdateContextMenu() {
   let singleSelection = (signonsTreeView.selection.count == 1);
   let menuItems = new Map();
@@ -679,6 +691,14 @@ function UpdateContextMenu() {
 
   let selectedRow = signonsTree.currentIndex;
 
+  // Don't display "Launch Site URL" if we're not a browser.
+  if (window.openUILinkIn) {
+    menuItems.get("context-launchsiteurl").removeAttribute("disabled");
+  } else {
+    menuItems.get("context-launchsiteurl").setAttribute("disabled", "true");
+    menuItems.get("context-launchsiteurl").setAttribute("hidden", "true");
+  }
+
   // Disable "Copy Username" if the username is empty.
   if (signonsTreeView.getCellText(selectedRow, { id: "userCol" }) != "") {
     menuItems.get("context-copyusername").removeAttribute("disabled");
@@ -686,6 +706,7 @@ function UpdateContextMenu() {
     menuItems.get("context-copyusername").setAttribute("disabled", "true");
   }
 
+  menuItems.get("context-copysiteurl").removeAttribute("disabled");
   menuItems.get("context-editusername").removeAttribute("disabled");
   menuItems.get("context-copypassword").removeAttribute("disabled");
 
@@ -710,7 +731,7 @@ function masterPasswordLogin(noPasswordCallback) {
   // So there's a master password. But since checkPassword didn't succeed, we're logged out (per nsIPK11Token.idl).
   try {
     // Relogin and ask for the master password.
-    token.login(true);  // 'true' means always prompt for token password. User will be prompted until
+    token.login(true); // 'true' means always prompt for token password. User will be prompted until
                         // clicking 'Cancel' or entering the correct password.
   } catch (e) {
     // An exception will be thrown if the user cancels the login prompt dialog.

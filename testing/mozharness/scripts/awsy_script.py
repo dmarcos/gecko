@@ -8,32 +8,60 @@
 run awsy tests in a virtualenv
 """
 
+import copy
 import json
 import os
+import re
 import sys
-import copy
 
 # load modules from parent dir
 sys.path.insert(1, os.path.dirname(sys.path[0]))
 
 from mozharness.base.script import PreScriptAction
-from mozharness.base.log import INFO, ERROR, WARNING, CRITICAL
+from mozharness.base.log import INFO, ERROR
 from mozharness.mozilla.testing.testbase import TestingMixin, testing_config_options
 from mozharness.base.vcs.vcsbase import MercurialScript
 from mozharness.mozilla.blob_upload import BlobUploadMixin, blobupload_config_options
 from mozharness.mozilla.tooltool import TooltoolMixin
 from mozharness.mozilla.structuredlog import StructuredOutputParser
+from mozharness.mozilla.testing.codecoverage import (
+    CodeCoverageMixin,
+    code_coverage_config_options
+)
 
 
-class AWSY(TestingMixin, MercurialScript, BlobUploadMixin,TooltoolMixin):
+class AWSY(TestingMixin, MercurialScript, BlobUploadMixin, TooltoolMixin, CodeCoverageMixin):
     config_options = [
         [["--e10s"],
-        {"action": "store_true",
-         "dest": "e10s",
-         "default": False,
-         "help": "Run tests with multiple processes. (Desktop builds only)",
-         }]
-    ] + testing_config_options + copy.deepcopy(blobupload_config_options)
+         {"action": "store_true",
+          "dest": "e10s",
+          "default": False,
+          "help": "Run tests with multiple processes. (Desktop builds only)",
+          }],
+        [["--enable-stylo"],
+         {"action": "store_true",
+          "dest": "enable_stylo",
+          "default": False,
+          "help": "Run tests with Stylo enabled.",
+          }],
+        [["--disable-stylo"],
+         {"action": "store_true",
+          "dest": "disable_stylo",
+          "default": False,
+          "help": "Run tests with Stylo disabled.",
+          }],
+        [["--single-stylo-traversal"],
+         {"action": "store_true",
+          "dest": "single_stylo_traversal",
+          "default": False,
+          "help": "Set STYLO_THREADS=1.",
+          }]
+    ] + testing_config_options + copy.deepcopy(blobupload_config_options) \
+                               + copy.deepcopy(code_coverage_config_options)
+
+    error_list = [
+        {'regex': re.compile(r'''(TEST-UNEXPECTED|PROCESS-CRASH)'''), 'level': ERROR},
+    ]
 
     def __init__(self, **kwargs):
 
@@ -94,7 +122,6 @@ class AWSY(TestingMixin, MercurialScript, BlobUploadMixin,TooltoolMixin):
 
         self.register_virtualenv_module('awsy', self.awsy_path)
 
-
     def populate_webroot(self):
         """Populate the production test slaves' webroots"""
         self.info("Downloading pageset with tooltool...")
@@ -112,7 +139,6 @@ class AWSY(TestingMixin, MercurialScript, BlobUploadMixin,TooltoolMixin):
         unzip_cmd = [unzip, '-q', '-o', archive, '-d', page_load_test_dir]
         self.run_command(unzip_cmd, halt_on_failure=True)
         self.run_command("ls %s" % page_load_test_dir)
-
 
     def run_tests(self, args=None, **kw):
         '''
@@ -142,16 +168,40 @@ class AWSY(TestingMixin, MercurialScript, BlobUploadMixin,TooltoolMixin):
             cmd.append('--disable-e10s')
         cmd.append('--gecko-log=%s' % os.path.join(dirs["abs_blob_upload_dir"],
                                                    'gecko.log'))
+        # TestingMixin._download_and_extract_symbols() should set
+        # self.symbols_path
+        cmd.append('--symbols-path=%s' % self.symbols_path)
 
         test_file = os.path.join(self.awsy_libdir, 'test_memory_usage.py')
         cmd.append(test_file)
 
+        if self.config['disable_stylo']:
+            if self.config['single_stylo_traversal']:
+                self.fatal("--disable-stylo conflicts with --single-stylo-traversal")
+            if self.config['enable_stylo']:
+                self.fatal("--disable-stylo conflicts with --enable-stylo")
+
+        if self.config['single_stylo_traversal']:
+            env['STYLO_THREADS'] = '1'
+        else:
+            env['STYLO_THREADS'] = '4'
+
+        if self.config['enable_stylo']:
+            env['STYLO_FORCE_ENABLED'] = '1'
+        if self.config['disable_stylo']:
+            env['STYLO_FORCE_DISABLED'] = '1'
+
         env['MOZ_UPLOAD_DIR'] = dirs['abs_blob_upload_dir']
         if not os.path.isdir(env['MOZ_UPLOAD_DIR']):
             self.mkdir_p(env['MOZ_UPLOAD_DIR'])
+        if self.query_minidump_stackwalk():
+            env['MINIDUMP_STACKWALK'] = self.minidump_stackwalk_path
+        env['MINIDUMP_SAVE_PATH'] = dirs['abs_blob_upload_dir']
+        env['RUST_BACKTRACE'] = '1'
         env = self.query_env(partial_env=env)
         parser = StructuredOutputParser(config=self.config,
                                         log_obj=self.log_obj,
+                                        error_list=self.error_list,
                                         strict=False)
         return_code = self.run_command(command=cmd,
                                        cwd=self.awsy_path,

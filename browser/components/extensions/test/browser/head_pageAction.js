@@ -3,9 +3,22 @@
 "use strict";
 
 /* exported runTests */
-/* globals getListStyleImage */
+// This file is imported into the same scope as head.js.
+/* import-globals-from head.js */
 
-function* runTests(options) {
+{
+  const chromeRegistry = Cc["@mozilla.org/chrome/chrome-registry;1"].getService(Ci.nsIChromeRegistry);
+
+  let localeDir = new URL("locale/", gTestPath).href;
+  let {file} = chromeRegistry.convertChromeURL(Services.io.newURI(localeDir)).QueryInterface(Ci.nsIFileURL);
+
+  Components.manager.addBootstrappedManifestLocation(file);
+  registerCleanupFunction(() => {
+    Components.manager.removeBootstrappedManifestLocation(file);
+  });
+}
+
+async function runTests(options) {
   function background(getTests) {
     let tabs;
     let tests;
@@ -92,7 +105,7 @@ function* runTests(options) {
   function checkDetails(details) {
     let image = currentWindow.document.getElementById(pageActionId);
     if (details == null) {
-      ok(image == null || image.hidden, "image is hidden");
+      ok(image == null || image.getAttribute("disabled") == "true", "image is disabled");
     } else {
       ok(image, "image exists");
 
@@ -108,10 +121,12 @@ function* runTests(options) {
   let testNewWindows = 1;
 
   let awaitFinish = new Promise(resolve => {
-    extension.onMessage("nextTest", (expecting, testsRemaining) => {
+    extension.onMessage("nextTest", async (expecting, testsRemaining) => {
       if (!pageActionId) {
-        pageActionId = `${makeWidgetId(extension.id)}-page-action`;
+        pageActionId = BrowserPageActions.urlbarButtonNodeIDForActionID(makeWidgetId(extension.id));
       }
+
+      await promiseAnimationFrame(currentWindow);
 
       checkDetails(expecting);
 
@@ -136,11 +151,11 @@ function* runTests(options) {
   let reqLoc = Services.locale.getRequestedLocales();
   Services.locale.setRequestedLocales(["es-ES"]);
 
-  yield extension.startup();
+  await extension.startup();
 
-  yield awaitFinish;
+  await awaitFinish;
 
-  yield extension.unload();
+  await extension.unload();
 
   Services.locale.setRequestedLocales(reqLoc);
 
@@ -152,7 +167,6 @@ function* runTests(options) {
     node = win.document.getElementById(pageActionId);
     is(node, null, "pageAction image removed from second document");
 
-    yield BrowserTestUtils.closeWindow(win);
+    await BrowserTestUtils.closeWindow(win);
   }
 }
-

@@ -10,7 +10,7 @@
 #include "nsSVGElement.h"
 #include "nsCOMPtr.h"
 #include "nsSVGString.h"
-#include "nsScriptElement.h"
+#include "mozilla/dom/ScriptElement.h"
 
 class nsIDocument;
 
@@ -24,7 +24,7 @@ namespace dom {
 typedef nsSVGElement SVGScriptElementBase;
 
 class SVGScriptElement final : public SVGScriptElementBase,
-                               public nsScriptElement
+                               public ScriptElement
 {
 protected:
   friend nsresult (::NS_NewSVGScriptElement(nsIContent **aResult,
@@ -47,21 +47,26 @@ public:
   virtual void FreezeUriAsyncDefer() override;
   virtual CORSMode GetCORSMode() const override;
 
-  // nsScriptElement
+  // ScriptElement
   virtual bool HasScriptContent() override;
 
   // nsIContent specializations:
   virtual nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                               nsIContent* aBindingParent,
                               bool aCompileEventHandlers) override;
-  virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsIAtom* aName,
-                                const nsAttrValue* aValue, bool aNotify) override;
+  virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
+                                const nsAttrValue* aValue,
+                                const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
+                                bool aNotify) override;
   virtual bool ParseAttribute(int32_t aNamespaceID,
-                              nsIAtom* aAttribute,
+                              nsAtom* aAttribute,
                               const nsAString& aValue,
+                              nsIPrincipal* aMaybeScriptedPrincipal,
                               nsAttrValue& aResult) override;
 
-  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+                         bool aPreallocateChildren) const override;
 
   // WebIDL
   void GetType(nsAString & aType);
@@ -74,6 +79,13 @@ protected:
   ~SVGScriptElement();
 
   virtual StringAttributesInfo GetStringInfo() override;
+
+  // SVG Script elements don't have the ability to set async properties on
+  // themselves, so this will always return false.
+  virtual bool GetAsyncState() override
+  {
+    return false;
+  }
 
   enum { HREF, XLINK_HREF };
   nsSVGString mStringAttributes[2];

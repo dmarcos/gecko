@@ -26,7 +26,6 @@
 */
 //-----------------------------------------------------------------------------
 var SECTION = "15.9.5.7";
-var VERSION = "ECMA_3"; 
 var TITLE   = "Date.prototype.toLocaleTimeString()";
   
 var status = '';
@@ -40,7 +39,6 @@ var reducedDateString = '';
 var hopeThisIsLocaleTimeString = '';
 var cnERR ='OOPS! FATAL ERROR: no regexp match in extractLocaleTimeString()';
 
-startTest();
 writeHeaderToLog( SECTION + " "+ TITLE);
 
 // first, a couple generic tests -
@@ -86,7 +84,6 @@ test();
 function addTestCase()
 {
   new TestCase(
-    SECTION,
     status,
     expect,
     actual);

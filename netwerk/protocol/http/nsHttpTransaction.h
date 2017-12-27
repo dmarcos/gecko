@@ -19,11 +19,6 @@
 #include "ARefBase.h"
 #include "AlternateServices.h"
 
-#ifdef MOZ_WIDGET_GONK
-#include "nsINetworkInterface.h"
-#include "nsProxyRelease.h"
-#endif
-
 //-----------------------------------------------------------------------------
 
 class nsIHttpActivityObserver;
@@ -86,12 +81,15 @@ public:
                                nsHttpConnectionInfo  *connInfo,
                                nsHttpRequestHead     *reqHeaders,
                                nsIInputStream        *reqBody,
+                               uint64_t               reqContentLength,
                                bool                   reqBodyIncludesHeaders,
                                nsIEventTarget        *consumerTarget,
                                nsIInterfaceRequestor *callbacks,
                                nsITransportEventSink *eventsink,
                                uint64_t               topLevelOuterContentWindowId,
                                nsIAsyncInputStream  **responseBody);
+
+    void OnActivated(bool h2) override;
 
     // attributes
     nsHttpResponseHead    *ResponseHead()   { return mHaveAllHeaders ? mResponseHead : nullptr; }
@@ -135,8 +133,6 @@ public:
     void DispatchedAsBlocking();
     void RemoveDispatchedAsBlocking();
 
-    void DisableSpdy() override;
-
     nsHttpTransaction *QueryHttpTransaction() override { return this; }
 
     Http2PushedStream *GetPushedStream() { return mPushedStream; }
@@ -152,6 +148,7 @@ public:
 
     // Locked methods to get and set timing info
     const TimingStruct Timings();
+    void BootstrapTimings(TimingStruct times);
     void SetDomainLookupStart(mozilla::TimeStamp timeStamp, bool onlyIfNull = false);
     void SetDomainLookupEnd(mozilla::TimeStamp timeStamp, bool onlyIfNull = false);
     void SetConnectStart(mozilla::TimeStamp timeStamp, bool onlyIfNull = false);
@@ -163,6 +160,9 @@ public:
     mozilla::TimeStamp GetDomainLookupStart();
     mozilla::TimeStamp GetDomainLookupEnd();
     mozilla::TimeStamp GetConnectStart();
+    mozilla::TimeStamp GetTcpConnectEnd();
+    mozilla::TimeStamp GetSecureConnectionStart();
+
     mozilla::TimeStamp GetConnectEnd();
     mozilla::TimeStamp GetRequestStart();
     mozilla::TimeStamp GetResponseStart();
@@ -177,10 +177,15 @@ public:
     // restart - this indicates that state for dev tools
     void Refused0RTT();
 
+    MOZ_MUST_USE bool CanDo0RTT() override;
+    MOZ_MUST_USE nsresult RestartOnFastOpenError() override;
+
     uint64_t TopLevelOuterContentWindowId() override
     {
         return mTopLevelOuterContentWindowId;
     }
+
+    void SetFastOpenStatus(uint8_t aStatus) override;
 private:
     friend class DeleteHttpTransaction;
     virtual ~nsHttpTransaction();
@@ -211,6 +216,7 @@ private:
 
     bool ResponseTimeoutEnabled() const final;
 
+    void DisableSpdy() override;
     void ReuseConnectionOnRestartOK(bool reuseOk) override { mReuseOnRestart = reuseOk; }
 
     // Called right after we parsed the response head.  Checks for connection based
@@ -221,13 +227,21 @@ private:
     void CheckForStickyAuthScheme();
     void CheckForStickyAuthSchemeAt(nsHttpAtom const& header);
 
+    // Called from WriteSegments.  Checks for conditions whether to throttle reading
+    // the content.  When this returns true, WriteSegments returns WOULD_BLOCK.
+    bool ShouldThrottle();
+
 private:
     class UpdateSecurityCallbacks : public Runnable
     {
       public:
         UpdateSecurityCallbacks(nsHttpTransaction* aTrans,
                                 nsIInterfaceRequestor* aCallbacks)
-        : mTrans(aTrans), mCallbacks(aCallbacks) {}
+          : Runnable("net::nsHttpTransaction::UpdateSecurityCallbacks")
+          , mTrans(aTrans)
+          , mCallbacks(aCallbacks)
+        {
+        }
 
         NS_IMETHOD Run() override
         {
@@ -297,6 +311,19 @@ private:
 
     uint32_t                        mCurrentHttpResponseHeaderSize;
 
+    int32_t const THROTTLE_NO_LIMIT = -1;
+    // This can have 3 possible values:
+    // * THROTTLE_NO_LIMIT - this means the transaction is not in any way limited
+    //                       to read the response, this is the default
+    // * a positive number - a limit is set because the transaction is obligated
+    //                       to throttle the response read, this is decresed with
+    //                       every piece of data the transaction receives
+    // * zero - when the transaction depletes the limit for reading, this makes it
+    //          stop reading and return WOULD_BLOCK from WriteSegments; transaction
+    //          then waits for a call of ResumeReading that resets this member back
+    //          to THROTTLE_NO_LIMIT
+    int32_t                         mThrottlingReadAllowance;
+
     // mCapsToClear holds flags that should be cleared in mCaps, e.g. unset
     // NS_HTTP_REFRESH_DNS when DNS refresh request has completed to avoid
     // redundant requests on the network. The member itself is atomic, but
@@ -307,13 +334,17 @@ private:
     Atomic<uint32_t>                mCapsToClear;
     Atomic<bool, ReleaseAcquire>    mResponseIsComplete;
 
-    // If true, this transaction was asked to stop receiving the response.
-    bool                            mThrottleResponse;
+    // True iff WriteSegments was called while this transaction should be throttled (stop reading)
+    // Used to resume read on unblock of reading.  Conn manager is responsible for calling back
+    // to resume reading.
+    bool                            mReadingStopped;
 
     // state flags, all logically boolean, but not packed together into a
     // bitfield so as to avoid bitfield-induced races.  See bug 560579.
     bool                            mClosed;
     bool                            mConnected;
+    bool                            mActivated;
+    bool                            mActivatedAsH2;
     bool                            mHaveStatusLine;
     bool                            mHaveAllHeaders;
     bool                            mTransactionDone;
@@ -372,9 +403,13 @@ public:
     // but later can be dispatched via spdy (not subject to rate pacing).
     void CancelPacing(nsresult reason);
 
-    // Forwards to the connection's ThrottleResponse.  If there is no connection
-    // at the time, we set a flag to do it on connection assignment.
-    void ThrottleResponse(bool aThrottle);
+    // Called by the connetion manager on the socket thread when reading for this
+    // previously throttled transaction has to be resumed.
+    void ResumeReading();
+
+    // This examins classification of this transaction whether the Throttleable class
+    // has been set while Leader, Unblocked, DontThrottle has not.
+    bool EligibleForThrottling() const;
 
 private:
     bool mSubmittedRatePacing;
@@ -382,7 +417,7 @@ private:
     bool mSynchronousRatePaceRequest;
     nsCOMPtr<nsICancelable> mTokenBucketCancel;
 public:
-    void     SetClassOfService(uint32_t cos) { mClassOfService = cos; }
+    void     SetClassOfService(uint32_t cos);
     uint32_t ClassOfService() { return mClassOfService; }
 private:
     uint32_t mClassOfService;
@@ -414,14 +449,16 @@ private:
     NetAddr                         mPeerAddr;
 
     bool                            m0RTTInProgress;
+    bool                            mDoNotTryEarlyData;
     enum
     {
         EARLY_NONE,
         EARLY_SENT,
-        EARLY_ACCEPTED
+        EARLY_ACCEPTED,
+        EARLY_425
     } mEarlyDataDisposition;
 
-    nsresult                        mTransportStatus;
+    uint8_t mFastOpenStatus;
 };
 
 } // namespace net

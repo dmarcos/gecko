@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim:cindent:ts=2:et:sw=2:
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -106,8 +106,6 @@ BlockReflowInput::BlockReflowInput(const ReflowInput& aReflowInput,
   FloatManager()->GetTranslation(mFloatManagerI, mFloatManagerB);
   FloatManager()->PushState(&mFloatManagerStateBefore); // never popped
 
-  mReflowStatus.Reset();
-
   mNextInFlow = static_cast<nsBlockFrame*>(mBlock->GetNextInFlow());
 
   LAYOUT_WARN_IF_FALSE(NS_UNCONSTRAINEDSIZE != aReflowInput.ComputedISize(),
@@ -201,7 +199,7 @@ BlockReflowInput::ComputeReplacedBlockOffsetsForFloats(
 
 static nscoord
 GetBEndMarginClone(nsIFrame* aFrame,
-                   nsRenderingContext* aRenderingContext,
+                   gfxContext* aRenderingContext,
                    const LogicalRect& aContentArea,
                    WritingMode aWritingMode)
 {
@@ -251,7 +249,7 @@ BlockReflowInput::ComputeBlockAvailSpace(nsIFrame* aFrame,
   // nsBlockFrame::ISizeToClearPastFloats would need to use the
   // shrink-wrap formula, max(MIN_ISIZE, min(avail width, PREF_ISIZE))
   // rather than just using MIN_ISIZE.
-  NS_ASSERTION(nsBlockFrame::BlockCanIntersectFloats(aFrame) == 
+  NS_ASSERTION(nsBlockFrame::BlockCanIntersectFloats(aFrame) ==
                  !aBlockAvoidsFloats,
                "unexpected replaced width");
   if (!aBlockAvoidsFloats) {
@@ -718,6 +716,8 @@ FloatMarginISize(const ReflowInput& aCBReflowInput,
 bool
 BlockReflowInput::FlowAndPlaceFloat(nsIFrame* aFloat)
 {
+  MOZ_ASSERT(aFloat->GetParent() == mBlock);
+
   WritingMode wm = mReflowInput.GetWritingMode();
   // Save away the Y coordinate before placing the float. We will
   // restore mBCoord at the end after placing the float. This is
@@ -771,8 +771,7 @@ BlockReflowInput::FlowAndPlaceFloat(nsIFrame* aFloat)
   // an unconstrained inline-size, which can occur if the float had an
   // orthogonal writing mode and 'auto' block-size (in its mode).
   bool earlyFloatReflow =
-    aFloat->GetType() == nsGkAtoms::letterFrame ||
-    floatMarginISize == NS_UNCONSTRAINEDSIZE;
+    aFloat->IsLetterFrame() || floatMarginISize == NS_UNCONSTRAINEDSIZE;
   if (earlyFloatReflow) {
     mBlock->ReflowFloat(*this, adjustedAvailableSpace, aFloat, floatMargin,
                         floatOffsets, false, reflowStatus);
@@ -836,16 +835,16 @@ BlockReflowInput::FlowAndPlaceFloat(nsIFrame* aFloat)
         prevFrame = fc->mFloat;
         fc = fc->Next();
       }
-      
+
       if(prevFrame) {
         //get the frame type
-        if (nsGkAtoms::tableWrapperFrame == prevFrame->GetType()) {
+        if (prevFrame->IsTableWrapperFrame()) {
           //see if it has "align="
           // IE makes a difference between align and he float property
           nsIContent* content = prevFrame->GetContent();
           if (content) {
             // we're interested only if previous frame is align=left
-            // IE messes things up when "right" (overlapping frames) 
+            // IE messes things up when "right" (overlapping frames)
             if (content->AttrValueIs(kNameSpaceID_None, nsGkAtoms::align,
                                      NS_LITERAL_STRING("left"), eIgnoreCase)) {
               keepFloatOnSameLine = true;
@@ -858,7 +857,7 @@ BlockReflowInput::FlowAndPlaceFloat(nsIFrame* aFloat)
         }
       }
 
-      // the table does not fit anymore in this line so advance to next band 
+      // the table does not fit anymore in this line so advance to next band
       mBCoord += floatAvailableSpace.mRect.BSize(wm);
       // To match nsBlockFrame::AdjustFloatAvailableSpace, we have to
       // get a new width for the new band.

@@ -15,6 +15,7 @@
 #include "Database.h"
 
 #include "mozilla/dom/Link.h"
+#include "mozilla/ipc/URIParams.h"
 #include "nsTHashtable.h"
 #include "nsString.h"
 #include "nsURIHashKey.h"
@@ -41,6 +42,10 @@ class ConcurrentStatementsHolder;
 // A commonly found case is to reload a page every 5 minutes, so we pick a time
 // larger than that.
 #define RECENTLY_VISITED_URIS_MAX_AGE 6 * 60 * PR_USEC_PER_SEC
+// When notifying the main thread after inserting visits, we chunk the visits
+// into medium-sized groups so that we can amortize the cost of the runnable
+// without janking the main thread by expecting it to process hundreds at once.
+#define NOTIFY_VISITS_CHUNK_SIZE 100
 
 class History final : public IHistory
                     , public nsIDownloadHistory
@@ -107,16 +112,16 @@ public:
   static History* GetService();
 
   /**
-   * Obtains a pointer that has had AddRef called on it.  Used by the service
-   * manager only.
+   * Used by the service manager only.
    */
-  static History* GetSingleton();
+  static already_AddRefed<History> GetSingleton();
 
   template<int N>
   already_AddRefed<mozIStorageStatement>
   GetStatement(const char (&aQuery)[N])
   {
-    mozIStorageConnection* dbConn = GetDBConn();
+    // May be invoked on both threads.
+    const mozIStorageConnection* dbConn = GetConstDBConn();
     NS_ENSURE_TRUE(dbConn, nullptr);
     return mDB->GetStatement(aQuery);
   }
@@ -124,7 +129,8 @@ public:
   already_AddRefed<mozIStorageStatement>
   GetStatement(const nsACString& aQuery)
   {
-    mozIStorageConnection* dbConn = GetDBConn();
+    // May be invoked on both threads.
+    const mozIStorageConnection* dbConn = GetConstDBConn();
     NS_ENSURE_TRUE(dbConn, nullptr);
     return mDB->GetStatement(aQuery);
   }
@@ -142,15 +148,36 @@ public:
    */
   void AppendToRecentlyVisitedURIs(nsIURI* aURI);
 
+  void NotifyVisitedParent(const nsTArray<mozilla::ipc::URIParams>& aURIs);
 private:
   virtual ~History();
 
   void InitMemoryReporter();
 
   /**
-   * Obtains a read-write database connection.
+   * Obtains a read-write database connection, initializing the connection
+   * if needed. Must be invoked on the main thread.
    */
   mozIStorageConnection* GetDBConn();
+
+  /**
+   * Obtains a read-write database connection, but won't try to initialize it.
+   * May be invoked on both threads, but first one must invoke GetDBConn() on
+   * the main-thread at least once.
+   */
+  const mozIStorageConnection* GetConstDBConn();
+
+  /**
+   * Mark all links for the given URI in the given document as visited. Used
+   * within NotifyVisited.
+   */
+  void NotifyVisitedForDocument(nsIURI* aURI, nsIDocument* aDocument);
+
+  /**
+   * Dispatch a runnable for the document passed in which will call
+   * NotifyVisitedForDocument with the correct URI and Document.
+   */
+  void DispatchNotifyVisited(nsIURI* aURI, nsIDocument* aDocument);
 
   /**
    * The database handle.  This is initialized lazily by the first call to
@@ -196,6 +223,7 @@ private:
       return array.ShallowSizeOfExcludingThis(aMallocSizeOf);
     }
     ObserverArray array;
+    bool mVisited = false;
   };
 
   nsTHashtable<KeyClass> mObservers;

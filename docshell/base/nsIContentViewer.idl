@@ -21,6 +21,9 @@ class nsIPresShell;
 class nsPresContext;
 class nsView;
 class nsDOMNavigationTiming;
+namespace mozilla {
+class Encoding;
+}
 %}
 
 [ptr] native nsIWidgetPtr(nsIWidget);
@@ -30,6 +33,7 @@ class nsDOMNavigationTiming;
 [ptr] native nsViewPtr(nsView);
 [ptr] native nsDOMNavigationTimingPtr(nsDOMNavigationTiming);
 [ref] native nsIContentViewerTArray(nsTArray<nsCOMPtr<nsIContentViewer> >);
+[ptr] native Encoding(const mozilla::Encoding);
 
 [scriptable, builtinclass, uuid(2da17016-7851-4a45-a7a8-00b360e01595)]
 interface nsIContentViewer : nsISupports
@@ -46,10 +50,35 @@ interface nsIContentViewer : nsISupports
   [noscript] readonly attribute boolean isStopped;
 
   /**
-   * Checks if the document wants to prevent unloading by firing beforeunload on
-   * the document, and if it does, prompts the user. The result is returned.
+   * aPermitUnloadFlags are passed to PermitUnload to indicate what action to take
+   * if a beforeunload handler wants to prompt the user.  It is also used by
+   * permitUnloadInternal to ensure we only prompt once.
+   *
+   * ePrompt: Prompt and return the user's choice (default).
+   * eDontPromptAndDontUnload: Don't prompt and return false (unload not permitted)
+   *                           if the document (or its children) asks us to prompt.
+   * eDontPromptAndUnload: Don't prompt and return true (unload permitted) no matter what.
    */
-  boolean permitUnload();
+  const unsigned long ePrompt = 0;
+  const unsigned long eDontPromptAndDontUnload = 1;
+  const unsigned long eDontPromptAndUnload = 2;
+
+  /**
+   * Overload PermitUnload method for C++ consumers with no aPermitUnloadFlags
+   * argument.
+   */
+  %{C++
+    nsresult PermitUnload(bool* canUnload) {
+      return PermitUnload(ePrompt, canUnload);
+    }
+  %}
+
+  /**
+   * Checks if the document wants to prevent unloading by firing beforeunload on
+   * the document, and if it does, takes action directed by aPermitUnloadFlags.
+   * The result is returned.
+   */
+  boolean permitUnload([optional] in unsigned long aPermitUnloadFlags);
 
   /**
    * Exposes whether we're blocked in a call to permitUnload.
@@ -57,11 +86,11 @@ interface nsIContentViewer : nsISupports
   readonly attribute boolean inPermitUnload;
 
   /**
-   * As above, but this passes around the aShouldPrompt argument to keep
+   * As above, but this passes around the aPermitUnloadFlags argument to keep
    * track of whether the user has responded to a prompt.
    * Used internally by the scriptable version to ensure we only prompt once.
    */
-  [noscript,nostdcall] boolean permitUnloadInternal(inout boolean aShouldPrompt);
+  [noscript,nostdcall] boolean permitUnloadInternal(inout unsigned long aPermitUnloadFlags);
 
   /**
    * Exposes whether we're in the process of firing the beforeunload event.
@@ -209,6 +238,18 @@ interface nsIContentViewer : nsISupports
   attribute float fullZoom;
 
   /**
+   * The actual full zoom in effect, as modified by the device context.
+   * For a requested full zoom, the device context may choose a slightly
+   * different effectiveFullZoom to accomodate integer rounding of app units
+   * per dev pixel. This property returns the actual zoom amount in use,
+   * though it may not be good user experience to report that a requested zoom
+   * of 90% is actually 89.1%, for example. This value is provided primarily to
+   * support media queries of dppx values, because those queries are matched
+   * against the actual native device pixel ratio and the actual full zoom.
+   */
+  readonly attribute float deviceFullZoom;
+
+  /**
    * The value used to override devicePixelRatio and media queries dppx.
    * Default is 0.0, that means no overriding is done (only a positive value
    * is applied).
@@ -282,4 +323,9 @@ interface nsIContentViewer : nsISupports
    * Restore the viewer's natural media type
    */
   void stopEmulatingMedium();
+
+  [noscript, notxpcom] Encoding getHintCharset();
+  [noscript, notxpcom] void setHintCharset(in Encoding aEncoding);
+  [noscript, notxpcom] Encoding getForceCharset();
+  [noscript, notxpcom] void setForceCharset(in Encoding aEncoding);
 };

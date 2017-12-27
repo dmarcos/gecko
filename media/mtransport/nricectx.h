@@ -272,6 +272,8 @@ class NrIceCtx {
     return streams_.size();
   }
 
+  bool HasStreamsToConnect() const;
+
   // The name of the ctx
   const std::string& name() const { return name_; }
 
@@ -323,6 +325,8 @@ class NrIceCtx {
   // Provide the proxy address. Must be called before
   // StartGathering.
   nsresult SetProxyServer(const NrIceProxyServer& proxy_server);
+
+  void SetCtxFlags(bool default_route_only, bool proxy_only);
 
   // Start ICE gathering
   nsresult StartGathering(bool default_route_only, bool proxy_only);

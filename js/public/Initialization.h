@@ -13,7 +13,12 @@
 namespace JS {
 namespace detail {
 
-enum class InitState { Uninitialized = 0, Running, ShutDown };
+enum class InitState {
+    Uninitialized = 0,
+    Initializing,
+    Running,
+    ShutDown
+};
 
 /**
  * SpiderMonkey's initialization status is tracked here, and it controls things
@@ -50,7 +55,7 @@ JS_SetICUMemoryFunctions(JS_ICUAllocFn allocFn,
 
 /**
  * Initialize SpiderMonkey, returning true only if initialization succeeded.
- * Once this method has succeeded, it is safe to call JS_NewRuntime and other
+ * Once this method has succeeded, it is safe to call JS_NewContext and other
  * JSAPI methods.
  *
  * This method must be called before any other JSAPI method is used on any
@@ -99,7 +104,7 @@ JS_InitWithFailureDiagnostic(void)
 inline bool
 JS_IsInitialized(void)
 {
-  return JS::detail::libraryInitState != JS::detail::InitState::Uninitialized;
+  return JS::detail::libraryInitState >= JS::detail::InitState::Running;
 }
 
 /**

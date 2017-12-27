@@ -41,7 +41,7 @@ public:
   virtual void SetLastModified(int64_t aLastModified) override;
   virtual void GetMozFullPathInternal(nsAString& aFullPath,
                                       ErrorResult& aRv) const override;
-  virtual void GetInternalStream(nsIInputStream** aInputStream,
+  virtual void CreateInputStream(nsIInputStream** aInputStream,
                                  ErrorResult& aRv) override;
 
   virtual bool IsDirectory() const override;
@@ -60,10 +60,19 @@ public:
     mContentType = aType;
   }
 
+  int64_t GetFileId() override
+  {
+    return mFileId;
+  }
+
+  void SetFileId(int64_t aFileId)
+  {
+    mFileId = aFileId;
+  }
+
 protected:
   virtual ~FileBlobImpl() = default;
 
-private:
   // Create slice
   FileBlobImpl(const FileBlobImpl* aOther, uint64_t aStart,
                uint64_t aLength, const nsAString& aContentType);
@@ -74,6 +83,7 @@ private:
 
   nsCOMPtr<nsIFile> mFile;
   bool mWholeFile;
+  int64_t mFileId;
 };
 
 } // namespace dom

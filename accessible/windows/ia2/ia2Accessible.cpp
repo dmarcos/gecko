@@ -42,11 +42,15 @@ ia2Accessible::QueryInterface(REFIID iid, void** ppv)
 
   *ppv = nullptr;
 
+  // NOTE: If any new versions of IAccessible2 are added here, they should
+  // also be added to the IA2 Handler in
+  // /accessible/ipc/win/handler/AccessibleHandler.cpp
+
   if (IID_IAccessible2_3 == iid)
     *ppv = static_cast<IAccessible2_3*>(this);
   else if (IID_IAccessible2_2 == iid)
     *ppv = static_cast<IAccessible2_2*>(this);
-  else if (IID_IAccessible2 == iid && !Compatibility::IsIA2Off())
+  else if (IID_IAccessible2 == iid)
     *ppv = static_cast<IAccessible2*>(this);
 
   if (*ppv) {
@@ -518,7 +522,7 @@ ia2Accessible::get_accessibleWithCaret(IUnknown** aAccessible,
 
   int32_t caretOffset = -1;
   Accessible* accWithCaret = SelectionMgr()->AccessibleWithCaret(&caretOffset);
-  if (acc->Document() != accWithCaret->Document())
+  if (!accWithCaret || acc->Document() != accWithCaret->Document())
     return S_FALSE;
 
   Accessible* child = accWithCaret;

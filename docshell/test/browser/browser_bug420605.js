@@ -103,8 +103,6 @@ function test() {
     historyService.addObserver(historyObserver);
 
     function onPageLoad() {
-      gBrowser.selectedBrowser
-              .removeEventListener("DOMContentLoaded", arguments.callee, true);
       clickLinkIfReady();
     }
 
@@ -115,8 +113,7 @@ function test() {
     ok(!info, "The fragment test page must not have been visited already.");
 
     // Now open the test page in a new tab.
-    gBrowser.selectedTab = gBrowser.addTab();
-    gBrowser.selectedBrowser.addEventListener(
-        "DOMContentLoaded", onPageLoad, true);
-    content.location = pageurl;
+    gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
+    BrowserTestUtils.waitForContentEvent(gBrowser.selectedBrowser, "DOMContentLoaded", true).then(onPageLoad);
+    gBrowser.selectedBrowser.loadURI(pageurl);
 }

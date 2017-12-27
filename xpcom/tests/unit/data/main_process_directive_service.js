@@ -1,7 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-Components.utils.import("resource:///modules/XPCOMUtils.jsm");
+Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 function TestProcessDirective() {}
 TestProcessDirective.prototype = {
@@ -13,7 +13,7 @@ TestProcessDirective.prototype = {
 
   type: Components.interfaces.nsISupportsString.TYPE_STRING,
   data: "main process",
-  toString: function() {
+  toString() {
     return this.data;
   }
 };

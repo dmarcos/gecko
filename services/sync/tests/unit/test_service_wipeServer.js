@@ -4,7 +4,7 @@ Cu.import("resource://services-sync/resource.js");
 Cu.import("resource://testing-common/services/sync/fakeservices.js");
 Cu.import("resource://testing-common/services/sync/utils.js");
 
-Svc.DefaultPrefs.set("registerEngines", "");
+Svc.Prefs.set("registerEngines", "");
 Cu.import("resource://services-sync/service.js");
 
 // configure the identity we use for this test.
@@ -60,16 +60,16 @@ add_task(async function test_wipeServer_list_success() {
     await SyncTestingInfrastructure(server, "johndoe", "irrelevant");
 
     _("Confirm initial environment.");
-    do_check_false(steam_coll.deleted);
-    do_check_false(diesel_coll.deleted);
+    Assert.ok(!steam_coll.deleted);
+    Assert.ok(!diesel_coll.deleted);
 
     _("wipeServer() will happily ignore the non-existent collection and use the timestamp of the last DELETE that was successful.");
-    let timestamp = Service.wipeServer(["steam", "diesel", "petrol"]);
-    do_check_eq(timestamp, diesel_coll.timestamp);
+    let timestamp = await Service.wipeServer(["steam", "diesel", "petrol"]);
+    Assert.equal(timestamp, diesel_coll.timestamp);
 
     _("wipeServer stopped deleting after encountering an error with the 'petrol' collection, thus only 'steam' has been deleted.");
-    do_check_true(steam_coll.deleted);
-    do_check_true(diesel_coll.deleted);
+    Assert.ok(steam_coll.deleted);
+    Assert.ok(diesel_coll.deleted);
 
   } finally {
     await promiseStopServer(server);
@@ -94,23 +94,23 @@ add_task(async function test_wipeServer_list_503() {
     await SyncTestingInfrastructure(server, "johndoe", "irrelevant");
 
     _("Confirm initial environment.");
-    do_check_false(steam_coll.deleted);
-    do_check_false(diesel_coll.deleted);
+    Assert.ok(!steam_coll.deleted);
+    Assert.ok(!diesel_coll.deleted);
 
     _("wipeServer() will happily ignore the non-existent collection, delete the 'steam' collection and abort after an receiving an error on the 'petrol' collection.");
     let error;
     try {
-      Service.wipeServer(["non-existent", "steam", "petrol", "diesel"]);
+      await Service.wipeServer(["non-existent", "steam", "petrol", "diesel"]);
       do_throw("Should have thrown!");
     } catch (ex) {
       error = ex;
     }
     _("wipeServer() threw this exception: " + error);
-    do_check_eq(error.status, 503);
+    Assert.equal(error.status, 503);
 
     _("wipeServer stopped deleting after encountering an error with the 'petrol' collection, thus only 'steam' has been deleted.");
-    do_check_true(steam_coll.deleted);
-    do_check_false(diesel_coll.deleted);
+    Assert.ok(steam_coll.deleted);
+    Assert.ok(!diesel_coll.deleted);
 
   } finally {
     await promiseStopServer(server);
@@ -127,8 +127,8 @@ add_task(async function test_wipeServer_all_success() {
   let deleted = false;
   let serverTimestamp;
   function storageHandler(request, response) {
-    do_check_eq("DELETE", request.method);
-    do_check_true(request.hasHeader("X-Confirm-Delete"));
+    Assert.equal("DELETE", request.method);
+    Assert.ok(request.hasHeader("X-Confirm-Delete"));
     deleted = true;
     serverTimestamp = return_timestamp(request, response);
   }
@@ -140,9 +140,9 @@ add_task(async function test_wipeServer_all_success() {
 
   _("Try deletion.");
   await SyncTestingInfrastructure(server, "johndoe", "irrelevant");
-  let returnedTimestamp = Service.wipeServer();
-  do_check_true(deleted);
-  do_check_eq(returnedTimestamp, serverTimestamp);
+  let returnedTimestamp = await Service.wipeServer();
+  Assert.ok(deleted);
+  Assert.equal(returnedTimestamp, serverTimestamp);
 
   await promiseStopServer(server);
   Svc.Prefs.resetBranch("");
@@ -157,8 +157,8 @@ add_task(async function test_wipeServer_all_404() {
   let deleted = false;
   let serverTimestamp;
   function storageHandler(request, response) {
-    do_check_eq("DELETE", request.method);
-    do_check_true(request.hasHeader("X-Confirm-Delete"));
+    Assert.equal("DELETE", request.method);
+    Assert.ok(request.hasHeader("X-Confirm-Delete"));
     deleted = true;
     serverTimestamp = new_timestamp();
     response.setHeader("X-Weave-Timestamp", "" + serverTimestamp);
@@ -172,9 +172,9 @@ add_task(async function test_wipeServer_all_404() {
 
   _("Try deletion.");
   await SyncTestingInfrastructure(server, "johndoe", "irrelevant");
-  let returnedTimestamp = Service.wipeServer();
-  do_check_true(deleted);
-  do_check_eq(returnedTimestamp, serverTimestamp);
+  let returnedTimestamp = await Service.wipeServer();
+  Assert.ok(deleted);
+  Assert.equal(returnedTimestamp, serverTimestamp);
 
   await promiseStopServer(server);
   Svc.Prefs.resetBranch("");
@@ -187,8 +187,8 @@ add_task(async function test_wipeServer_all_503() {
    * Handle the bulk DELETE request sent by wipeServer. Returns a 503.
    */
   function storageHandler(request, response) {
-    do_check_eq("DELETE", request.method);
-    do_check_true(request.hasHeader("X-Confirm-Delete"));
+    Assert.equal("DELETE", request.method);
+    Assert.ok(request.hasHeader("X-Confirm-Delete"));
     response.setStatusLine(request.httpVersion, 503, "Service Unavailable");
   }
 
@@ -201,12 +201,12 @@ add_task(async function test_wipeServer_all_503() {
   let error;
   try {
     await SyncTestingInfrastructure(server, "johndoe", "irrelevant");
-    Service.wipeServer();
+    await Service.wipeServer();
     do_throw("Should have thrown!");
   } catch (ex) {
     error = ex;
   }
-  do_check_eq(error.status, 503);
+  Assert.equal(error.status, 503);
 
   await promiseStopServer(server);
   Svc.Prefs.resetBranch("");
@@ -221,10 +221,10 @@ add_task(async function test_wipeServer_all_connectionRefused() {
 
   _("Try deletion.");
   try {
-    Service.wipeServer();
+    await Service.wipeServer();
     do_throw("Should have thrown!");
   } catch (ex) {
-    do_check_eq(ex.result, Cr.NS_ERROR_CONNECTION_REFUSED);
+    Assert.equal(ex.result, Cr.NS_ERROR_CONNECTION_REFUSED);
   }
 
   Svc.Prefs.resetBranch("");

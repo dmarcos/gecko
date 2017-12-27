@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=8 et ft=cpp : */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -35,7 +35,7 @@ NS_IMPL_ISUPPORTS(PresentationIPCService,
 PresentationIPCService::PresentationIPCService()
 {
   ContentChild* contentChild = ContentChild::GetSingleton();
-  if (NS_WARN_IF(!contentChild)) {
+  if (NS_WARN_IF(!contentChild || contentChild->IsShuttingDown())) {
     return;
   }
   sPresentationChild = new PresentationChild(this);
@@ -73,7 +73,7 @@ PresentationIPCService::StartSession(
   }
 
   nsPIDOMWindowInner* window =
-    nsGlobalWindow::GetInnerWindowWithId(aWindowId)->AsInner();
+    nsGlobalWindowInner::GetInnerWindowWithId(aWindowId)->AsInner();
   TabId tabId = TabParent::GetTabIdFrom(window->GetDocShell());
 
   return SendRequest(aCallback, StartSessionRequest(aUrls,
@@ -485,13 +485,15 @@ PresentationIPCService::UntrackSessionInfo(const nsAString& aSessionId,
     if (NS_SUCCEEDED(GetWindowIdBySessionIdInternal(aSessionId,
                                                     aRole,
                                                     &windowId))) {
-      NS_DispatchToMainThread(NS_NewRunnableFunction([windowId]() -> void {
-        PRES_DEBUG("Attempt to close window[%" PRIu64 "]\n", windowId);
+      NS_DispatchToMainThread(NS_NewRunnableFunction(
+        "dom::PresentationIPCService::UntrackSessionInfo",
+        [windowId]() -> void {
+          PRES_DEBUG("Attempt to close window[%" PRIu64 "]\n", windowId);
 
-        if (auto* window = nsGlobalWindow::GetInnerWindowWithId(windowId)) {
-          window->Close();
-        }
-      }));
+          if (auto* window = nsGlobalWindowInner::GetInnerWindowWithId(windowId)) {
+            window->Close();
+          }
+        }));
     }
   }
 

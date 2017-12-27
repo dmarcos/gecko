@@ -7,13 +7,12 @@
 
 #include "nsRDFXMLSerializer.h"
 
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsIOutputStream.h"
 #include "nsIRDFService.h"
 #include "nsIRDFContainerUtils.h"
 #include "nsIServiceManager.h"
 #include "nsString.h"
-#include "nsXPIDLString.h"
 #include "nsTArray.h"
 #include "rdf.h"
 #include "rdfutil.h"
@@ -119,10 +118,10 @@ nsRDFXMLSerializer::Init(nsIRDFDataSource* aDataSource)
         return NS_ERROR_NULL_POINTER;
 
     mDataSource = aDataSource;
-    mDataSource->GetURI(getter_Copies(mBaseURLSpec));
+    mDataSource->GetURI(mBaseURLSpec);
 
     // Add the ``RDF'' prefix, by default.
-    nsCOMPtr<nsIAtom> prefix;
+    RefPtr<nsAtom> prefix;
 
     prefix = NS_Atomize("RDF");
     AddNameSpace(prefix, NS_LITERAL_STRING("http://www.w3.org/1999/02/22-rdf-syntax-ns#"));
@@ -136,9 +135,9 @@ nsRDFXMLSerializer::Init(nsIRDFDataSource* aDataSource)
 }
 
 NS_IMETHODIMP
-nsRDFXMLSerializer::AddNameSpace(nsIAtom* aPrefix, const nsAString& aURI)
+nsRDFXMLSerializer::AddNameSpace(nsAtom* aPrefix, const nsAString& aURI)
 {
-    nsCOMPtr<nsIAtom> prefix = aPrefix;
+    RefPtr<nsAtom> prefix = aPrefix;
     if (!prefix) {
         // Make up a prefix, we don't want default namespaces, so
         // that we can use QNames for elements and attributes alike.
@@ -167,7 +166,7 @@ rdf_BlockingWrite(nsIOutputStream* stream, const char* buf, uint32_t size)
 }
 
 static nsresult
-rdf_BlockingWrite(nsIOutputStream* stream, const nsCSubstring& s)
+rdf_BlockingWrite(nsIOutputStream* stream, const nsACString& s)
 {
     return rdf_BlockingWrite(stream, s.BeginReading(), s.Length());
 }
@@ -179,11 +178,11 @@ rdf_BlockingWrite(nsIOutputStream* stream, const nsAString& s)
     return rdf_BlockingWrite(stream, utf8.get(), utf8.Length());
 }
 
-already_AddRefed<nsIAtom>
+already_AddRefed<nsAtom>
 nsRDFXMLSerializer::EnsureNewPrefix()
 {
     nsAutoString qname;
-    nsCOMPtr<nsIAtom> prefix;
+    RefPtr<nsAtom> prefix;
     bool isNewPrefix;
     do {
         isNewPrefix = true;
@@ -194,7 +193,7 @@ nsRDFXMLSerializer::EnsureNewPrefix()
         while (iter != mNameSpaces.last() && isNewPrefix) {
             isNewPrefix = (iter->mPrefix != prefix);
             ++iter;
-        } 
+        }
     } while (!isNewPrefix);
     return prefix.forget();
 }
@@ -234,7 +233,7 @@ nsRDFXMLSerializer::RegisterQName(nsIRDFResource* aResource)
 
     // Take whatever is to the right of the '#' or '/' and call it the
     // local name, make up a prefix.
-    nsCOMPtr<nsIAtom> prefix = EnsureNewPrefix();
+    RefPtr<nsAtom> prefix = EnsureNewPrefix();
     mNameSpaces.Put(StringHead(uri, i+1), prefix);
     prefix->ToUTF8String(qname);
     qname.Append(':');
@@ -267,7 +266,7 @@ nsRDFXMLSerializer::IsContainerProperty(nsIRDFResource* aProperty)
         return true;
 
     return false;
-} 
+}
 
 
 // convert '&', '<', and '>' into "&amp;", "&lt;", and "&gt", respectively.
@@ -439,7 +438,7 @@ nsRDFXMLSerializer::SerializeChildAssertion(nsIOutputStream* aStream,
         nsAutoCString n;
         n.AppendInt(value);
 
-        rv = rdf_BlockingWrite(aStream, kRDFParseTypeInteger, 
+        rv = rdf_BlockingWrite(aStream, kRDFParseTypeInteger,
                                sizeof(kRDFParseTypeInteger) - 1);
         if (NS_FAILED(rv)) return rv;
         rv = rdf_BlockingWrite(aStream, n);
@@ -452,7 +451,7 @@ nsRDFXMLSerializer::SerializeChildAssertion(nsIOutputStream* aStream,
         nsAutoCString s;
         rdf_FormatDate(value, s);
 
-        rv = rdf_BlockingWrite(aStream, kRDFParseTypeDate, 
+        rv = rdf_BlockingWrite(aStream, kRDFParseTypeDate,
                                sizeof(kRDFParseTypeDate) - 1);
         if (NS_FAILED(rv)) return rv;
         rv = rdf_BlockingWrite(aStream, s);
@@ -562,8 +561,8 @@ nsRDFXMLSerializer::SerializeDescription(nsIOutputStream* aStream,
         nsCOMPtr<nsIRDFResource> type = do_QueryInterface(typeNode, &rv);
         if (type) {
             // Try to get a namespace prefix.  If none is available,
-            // just treat the description as if it weren't a typed node 
-            // after all and emit rdf:type as a normal property.  This 
+            // just treat the description as if it weren't a typed node
+            // after all and emit rdf:type as a normal property.  This
             // seems preferable to using a bogus (invented) prefix.
             isTypedNode = NS_SUCCEEDED(GetQName(type, typeQName));
         }
@@ -733,7 +732,7 @@ nsRDFXMLSerializer::SerializeMember(nsIOutputStream* aStream,
 
 static const char kRDFLIOpen[] = "    <RDF:li";
     nsresult rv = rdf_BlockingWrite(aStream, kRDFLIOpen,
-                                    sizeof(kRDFLIOpen) - 1); 
+                                    sizeof(kRDFLIOpen) - 1);
     if (NS_FAILED(rv)) return rv;
 
     if ((resource = do_QueryInterface(aMember)) != nullptr) {
@@ -776,7 +775,7 @@ static const char kRDFLIOpenGT[] = ">";
         nsAutoCString n;
         n.AppendInt(value);
 
-        rv = rdf_BlockingWrite(aStream, kRDFParseTypeInteger, 
+        rv = rdf_BlockingWrite(aStream, kRDFParseTypeInteger,
                                sizeof(kRDFParseTypeInteger) - 1);
         if (NS_FAILED(rv)) return rv;
         rv = rdf_BlockingWrite(aStream, n);
@@ -789,7 +788,7 @@ static const char kRDFLIOpenGT[] = ">";
         nsAutoCString s;
         rdf_FormatDate(value, s);
 
-        rv = rdf_BlockingWrite(aStream, kRDFParseTypeDate, 
+        rv = rdf_BlockingWrite(aStream, kRDFParseTypeDate,
                                sizeof(kRDFParseTypeDate) - 1);
         if (NS_FAILED(rv)) return rv;
         rv = rdf_BlockingWrite(aStream, s);
@@ -867,7 +866,7 @@ nsRDFXMLSerializer::SerializeContainer(nsIOutputStream* aStream,
         }
         else {
             // We need to cheat and spit out an illegal 'about=' on
-            // the sequence. 
+            // the sequence.
             rv = rdf_BlockingWrite(aStream, kAboutAttr,
                                    sizeof(kAboutAttr) - 1);
             if (NS_FAILED(rv)) return rv;
@@ -1048,13 +1047,13 @@ QNameCollector::Visit(nsIRDFNode* aSubject, nsIRDFResource* aPredicate,
 
     return NS_OK;
 }
-    
+
 nsresult
 nsRDFXMLSerializer::CollectNamespaces()
 {
     // Iterate over all Triples to get namespaces for subject resource types
     // and Predicates and cache all the QNames we want to use.
-    nsCOMPtr<rdfITripleVisitor> collector = 
+    nsCOMPtr<rdfITripleVisitor> collector =
         new QNameCollector(this);
     nsCOMPtr<rdfIDataSource> ds = do_QueryInterface(mDataSource); // XXX API
     NS_ENSURE_TRUE(collector && ds, NS_ERROR_FAILURE);

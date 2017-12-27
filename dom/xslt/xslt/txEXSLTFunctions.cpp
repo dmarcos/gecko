@@ -6,7 +6,7 @@
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/FloatingPoint.h"
 
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsGkAtoms.h"
 #include "txExecutionState.h"
 #include "txExpr.h"
@@ -24,7 +24,7 @@
 #include "txMozillaXMLOutput.h"
 #include "nsTextNode.h"
 #include "mozilla/dom/DocumentFragment.h"
-#include "prtime.h" 
+#include "prtime.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -38,7 +38,7 @@ class txStylesheetCompilerState;
 static nsresult
 convertRtfToNode(txIEvalContext *aContext, txResultTreeFragment *aRtf)
 {
-    txExecutionState* es = 
+    txExecutionState* es =
         static_cast<txExecutionState*>(aContext->getPrivateContext());
     if (!es) {
         NS_ERROR("Need txExecutionState!");
@@ -75,7 +75,7 @@ static nsresult
 createTextNode(txIEvalContext *aContext, nsString& aValue,
                txXPathNode* *aResult)
 {
-    txExecutionState* es = 
+    txExecutionState* es =
         static_cast<txExecutionState*>(aContext->getPrivateContext());
     if (!es) {
         NS_ERROR("Need txExecutionState!");
@@ -100,7 +100,7 @@ createTextNode(txIEvalContext *aContext, nsString& aValue,
 static already_AddRefed<DocumentFragment>
 createDocFragment(txIEvalContext *aContext)
 {
-    txExecutionState* es = 
+    txExecutionState* es =
         static_cast<txExecutionState*>(aContext->getPrivateContext());
     if (!es) {
         NS_ERROR("Need txExecutionState!");
@@ -117,7 +117,7 @@ createDocFragment(txIEvalContext *aContext)
 }
 
 static nsresult
-createAndAddToResult(nsIAtom* aName, const nsSubstring& aValue,
+createAndAddToResult(nsAtom* aName, const nsAString& aValue,
                      txNodeSet* aResultSet, nsIContent* aResultHolder)
 {
     NS_ASSERTION(aResultHolder->IsNodeOfType(nsINode::eDOCUMENT_FRAGMENT) &&
@@ -169,7 +169,7 @@ struct txEXSLTFunctionDescriptor
     int8_t mMaxParams;
     Expr::ResultType mReturnType;
     int32_t mNamespaceID;
-    nsIAtom** mName;
+    nsStaticAtom** mName;
     const char* mNamespaceURI;
 };
 
@@ -639,20 +639,20 @@ txEXSLTFunctionCall::evaluate(txIEvalContext *aContext,
         case DATE_TIME:
         {
             // http://exslt.org/date/functions/date-time/
-            
+
             PRExplodedTime prtime;
             PR_ExplodeTime(PR_Now(), PR_LocalTimeParameters, &prtime);
-            
+
             int32_t offset = (prtime.tm_params.tp_gmt_offset +
               prtime.tm_params.tp_dst_offset) / 60;
-              
+
             bool isneg = offset < 0;
             if (isneg) offset = -offset;
-            
+
             StringResult* strRes;
             rv = aContext->recycler()->getStringResult(&strRes);
             NS_ENSURE_SUCCESS(rv, rv);
-            
+
             // format: YYYY-MM-DDTTHH:MM:SS.sss+00:00
             CopyASCIItoUTF16(nsPrintfCString("%04hd-%02" PRId32 "-%02" PRId32
                                              "T%02" PRId32 ":%02" PRId32 ":%02" PRId32
@@ -661,7 +661,7 @@ txEXSLTFunctionCall::evaluate(txIEvalContext *aContext,
               prtime.tm_hour, prtime.tm_min, prtime.tm_sec,
               prtime.tm_usec / 10000,
               isneg ? '-' : '+', offset / 60, offset % 60), strRes->mValue);
-              
+
             *aResult = strRes;
 
             return NS_OK;
@@ -690,7 +690,7 @@ txEXSLTFunctionCall::isSensitiveTo(ContextSensitivity aContext)
 
 #ifdef TX_TO_STRING
 nsresult
-txEXSLTFunctionCall::getNameAtom(nsIAtom **aAtom)
+txEXSLTFunctionCall::getNameAtom(nsAtom **aAtom)
 {
     NS_ADDREF(*aAtom = *descriptTable[mType].mName);
     return NS_OK;
@@ -698,7 +698,7 @@ txEXSLTFunctionCall::getNameAtom(nsIAtom **aAtom)
 #endif
 
 extern nsresult
-TX_ConstructEXSLTFunction(nsIAtom *aName,
+TX_ConstructEXSLTFunction(nsAtom *aName,
                           int32_t aNamespaceID,
                           txStylesheetCompilerState* aState,
                           FunctionCall **aResult)

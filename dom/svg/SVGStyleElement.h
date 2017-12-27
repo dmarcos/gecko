@@ -44,22 +44,21 @@ public:
                               bool aCompileEventHandlers) override;
   virtual void UnbindFromTree(bool aDeep = true,
                               bool aNullParent = true) override;
-  nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                   const nsAString& aValue, bool aNotify)
-  {
-    return SetAttr(aNameSpaceID, aName, nullptr, aValue, aNotify);
-  }
-  virtual nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                           nsIAtom* aPrefix, const nsAString& aValue,
+  using Element::SetAttr;
+  virtual nsresult SetAttr(int32_t aNameSpaceID, nsAtom* aName,
+                           nsAtom* aPrefix, const nsAString& aValue,
+                           nsIPrincipal* aSubjectPrincipal,
                            bool aNotify) override;
-  virtual nsresult UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
+  virtual nsresult UnsetAttr(int32_t aNameSpaceID, nsAtom* aAttribute,
                              bool aNotify) override;
   virtual bool ParseAttribute(int32_t aNamespaceID,
-                              nsIAtom* aAttribute,
+                              nsAtom* aAttribute,
                               const nsAString& aValue,
+                              nsIPrincipal* aMaybeScriptedPrincipal,
                               nsAttrValue& aResult) override;
 
-  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+                         bool aPreallocateChildren) const override;
 
   // nsIMutationObserver
   NS_DECL_NSIMUTATIONOBSERVER_CHARACTERDATACHANGED
@@ -89,7 +88,7 @@ protected:
   }
 
   // nsStyleLinkElement overrides
-  already_AddRefed<nsIURI> GetStyleSheetURL(bool* aIsInline) override;
+  already_AddRefed<nsIURI> GetStyleSheetURL(bool* aIsInline, nsIPrincipal** aTriggeringPrincipal) override;
 
   void GetStyleSheetInfo(nsAString& aTitle,
                          nsAString& aType,

@@ -16,6 +16,7 @@
 
 #include "nsIMIMEInfo.h"
 #include "nsIMIMEService.h"
+#include "nsINamed.h"
 #include "nsIStreamListener.h"
 #include "nsIFile.h"
 #include "nsIFileStreams.h"
@@ -24,7 +25,6 @@
 #include "nsIInterfaceRequestor.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIChannel.h"
-#include "nsITimer.h"
 #include "nsIBackgroundFileSaver.h"
 
 #include "nsIHandlerService.h"
@@ -39,7 +39,7 @@
 class nsExternalAppHandler;
 class nsIMIMEInfo;
 class nsITransfer;
-class nsPIDOMWindowOuter;
+class MaybeCloseWindowHelper;
 
 /**
  * The helper app service. Responsible for handling content that Mozilla
@@ -107,6 +107,15 @@ public:
 
   virtual nsresult OSProtocolHandlerExists(const char *aScheme,
                                                        bool *aExists) = 0;
+
+  /**
+   * Given an extension, get a MIME type string. If not overridden by
+   * the OS-specific nsOSHelperAppService, will call into GetMIMEInfoFromOS
+   * with an empty mimetype.
+   * @return true if we successfully found a mimetype.
+   */
+  virtual bool GetMIMETypeFromOSForExtension(const nsACString& aExtension,
+                                             nsACString& aMIMEType);
 
 protected:
   virtual ~nsExternalHelperAppService();
@@ -201,8 +210,8 @@ private:
  */
 class nsExternalAppHandler final : public nsIStreamListener,
                                    public nsIHelperAppLauncher,
-                                   public nsITimerCallback,
-                                   public nsIBackgroundFileSaverObserver
+                                   public nsIBackgroundFileSaverObserver,
+                                   public nsINamed
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -210,8 +219,8 @@ public:
   NS_DECL_NSIREQUESTOBSERVER
   NS_DECL_NSIHELPERAPPLAUNCHER
   NS_DECL_NSICANCELABLE
-  NS_DECL_NSITIMERCALLBACK
   NS_DECL_NSIBACKGROUNDFILESAVEROBSERVER
+  NS_DECL_NSINAMED
 
   /**
    * @param aMIMEInfo       MIMEInfo object, representing the type of the
@@ -228,7 +237,7 @@ public:
    * @param aReason         A constant from nsIHelperAppLauncherDialog indicating
    *                        why the request is handled by a helper app.
    */
-  nsExternalAppHandler(nsIMIMEInfo * aMIMEInfo, const nsCSubstring& aFileExtension,
+  nsExternalAppHandler(nsIMIMEInfo * aMIMEInfo, const nsACString& aFileExtension,
                        nsIInterfaceRequestor * aContentContext,
                        nsIInterfaceRequestor * aWindowContext,
                        nsExternalHelperAppService * aExtProtSvc,
@@ -285,8 +294,7 @@ protected:
    * Used to close the window on a timer, to avoid any exceptions that are
    * thrown if we try to close the window before it's fully loaded.
    */
-  nsCOMPtr<nsPIDOMWindowOuter> mWindowToClose;
-  nsCOMPtr<nsITimer> mTimer;
+  RefPtr<MaybeCloseWindowHelper> mMaybeCloseWindowHelper;
 
   /**
    * The following field is set if we were processing an http channel that had
@@ -307,13 +315,6 @@ protected:
    * application before we finished saving the data to a temp file.
    */
   bool mCanceled;
-
-  /**
-   * This is set based on whether the channel indicates that a new window
-   * was opened specifically for this download.  If so, then we
-   * close it.
-   */
-  bool mShouldCloseWindow;
 
   /**
    * True if a stop request has been issued.
@@ -408,8 +409,8 @@ protected:
    * This is called by SaveToDisk to decide what's the final
    * file destination chosen by the user or by auto-download settings.
    */
-  void RequestSaveDestination(const nsAFlatString &aDefaultFile,
-                              const nsAFlatString &aDefaultFileExt);
+  void RequestSaveDestination(const nsString& aDefaultFile,
+                              const nsString& aDefaultFileExt);
 
   /**
    * When SaveToDisk is called, it possibly delegates to RequestSaveDestination
@@ -455,14 +456,7 @@ protected:
   /**
    * Utility function to send proper error notification to web progress listener
    */
-  void SendStatusChange(ErrorType type, nsresult aStatus, nsIRequest *aRequest, const nsAFlatString &path);
-
-  /**
-   * Closes the window context if it does not have a refresh header
-   * and it never displayed content before the external helper app
-   * service was invoked.
-   */
-  nsresult MaybeCloseWindow();
+  void SendStatusChange(ErrorType type, nsresult aStatus, nsIRequest *aRequest, const nsString& path);
 
   /**
    * Set in nsHelperDlgApp.js. This is always null after the user has chosen an

@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -15,12 +16,12 @@
 /******************************************************************************
  * nsSubDocumentFrame
  *****************************************************************************/
-class nsSubDocumentFrame : public nsAtomicContainerFrame,
-                           public nsIReflowCallback
+class nsSubDocumentFrame final
+  : public nsAtomicContainerFrame
+  , public nsIReflowCallback
 {
 public:
-  NS_DECL_QUERYFRAME_TARGET(nsSubDocumentFrame)
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsSubDocumentFrame)
 
   explicit nsSubDocumentFrame(nsStyleContext* aContext);
 
@@ -30,8 +31,6 @@ public:
 #endif
 
   NS_DECL_QUERYFRAME
-
-  nsIAtom* GetType() const override;
 
   bool IsFrameOfType(uint32_t aFlags) const override
   {
@@ -45,16 +44,16 @@ public:
             nsContainerFrame* aParent,
             nsIFrame*         aPrevInFlow) override;
 
-  void DestroyFrom(nsIFrame* aDestructRoot) override;
+  void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
-  nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
-  nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
+  nscoord GetMinISize(gfxContext *aRenderingContext) override;
+  nscoord GetPrefISize(gfxContext *aRenderingContext) override;
 
   mozilla::IntrinsicSize GetIntrinsicSize() override;
   nsSize  GetIntrinsicRatio() override;
 
   mozilla::LogicalSize
-  ComputeAutoSize(nsRenderingContext*         aRenderingContext,
+  ComputeAutoSize(gfxContext*                 aRenderingContext,
                   mozilla::WritingMode        aWritingMode,
                   const mozilla::LogicalSize& aCBSize,
                   nscoord                     aAvailableISize,
@@ -64,7 +63,7 @@ public:
                   ComputeSizeFlags            aFlags) override;
 
   mozilla::LogicalSize
-  ComputeSize(nsRenderingContext*         aRenderingContext,
+  ComputeSize(gfxContext*                 aRenderingContext,
               mozilla::WritingMode        aWritingMode,
               const mozilla::LogicalSize& aCBSize,
               nscoord                     aAvailableISize,
@@ -79,11 +78,10 @@ public:
               nsReflowStatus&    aStatus) override;
 
   void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                        const nsRect&           aDirtyRect,
                         const nsDisplayListSet& aLists) override;
 
   nsresult AttributeChanged(int32_t aNameSpaceID,
-                            nsIAtom* aAttribute,
+                            nsAtom* aAttribute,
                             int32_t aModType) override;
 
   // if the content is "visibility:hidden", then just hide the view
@@ -129,6 +127,13 @@ public:
    */
   bool PassPointerEventsToChildren();
 
+  void MaybeShowViewer()
+  {
+    if (!mDidCreateDoc && !mCallingShow) {
+      ShowViewer();
+    }
+  }
+
 protected:
   friend class AsyncFrameInit;
 
@@ -148,7 +153,7 @@ protected:
   void ShowViewer();
 
   /* Obtains the frame we should use for intrinsic size information if we are
-   * an HTML <object>, <embed> or <applet> (a replaced element - not <iframe>)
+   * an HTML <object> or <embed>  (a replaced element - not <iframe>)
    * and our sub-document has an intrinsic size. The frame returned is the
    * frame for the document element of the document we're embedding.
    *
@@ -163,10 +168,12 @@ protected:
   RefPtr<nsFrameLoader> mFrameLoader;
   nsView* mOuterView;
   nsView* mInnerView;
+  Maybe<bool> mPreviouslyNeededLayer;
   bool mIsInline;
   bool mPostedReflowCallback;
   bool mDidCreateDoc;
   bool mCallingShow;
+  WeakFrame mPreviousCaret;
 };
 
 #endif /* NSSUBDOCUMENTFRAME_H_ */

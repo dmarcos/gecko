@@ -8,11 +8,11 @@
 
 const chromeRegistry = Cc["@mozilla.org/chrome/chrome-registry;1"].getService(Ci.nsIChromeRegistry);
 const env = Cc["@mozilla.org/process/environment;1"].getService(Ci.nsIEnvironment);
-const EXTENSION_DIR = "chrome://mochitests/content/extensions/mozscreenshots/browser/";
+const EXTENSION_DIR = "chrome://mochitests/content/browser/browser/tools/mozscreenshots/mozscreenshots/extension/mozscreenshots/browser/";
 
 let TestRunner;
 
-function* setup() {
+async function setup() {
   // This timeout doesn't actually end the job even if it is hit - the buildbot timeout will
   // handle things for us if the test actually hangs.
   requestLongerTimeout(100);
@@ -20,13 +20,14 @@ function* setup() {
   info("installing extension temporarily");
   let chromeURL = Services.io.newURI(EXTENSION_DIR);
   let dir = chromeRegistry.convertChromeURL(chromeURL).QueryInterface(Ci.nsIFileURL).file;
-  yield AddonManager.installTemporaryAddon(dir);
+  await AddonManager.installTemporaryAddon(dir);
 
   info("Checking for mozscreenshots extension");
   return new Promise((resolve) => {
-    AddonManager.getAddonByID("mozscreenshots@mozilla.org", function(aAddon) {
+    AddonManager.getAddonByID("mozscreenshots@mozilla.org", (aAddon) => {
       isnot(aAddon, null, "The mozscreenshots extension should be installed");
       TestRunner = Cu.import("chrome://mozscreenshots/content/TestRunner.jsm", {}).TestRunner;
+      TestRunner.initTest(this);
       resolve();
     });
   });
@@ -49,14 +50,7 @@ function shouldCapture() {
     return false;
   }
 
-  // Don't run pre-defined sets (e.g. primaryUI) on try, require MOZSCREENSHOTS_SETS.
-  // The job is only scheduled on specific repos:
-  // https://dxr.mozilla.org/build-central/search?q=MOCHITEST_BC_SCREENSHOTS
-  let capture = !AppConstants.SOURCE_REVISION_URL.includes("/try/rev/");
-  if (!capture) {
-    ok(true, "Capturing is disabled for this REPO. You may need to use MOZSCREENSHOTS_SETS");
-  }
-  return capture;
+  return true;
 }
 
 add_task(setup);

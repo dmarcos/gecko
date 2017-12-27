@@ -33,6 +33,7 @@
 #include "nsContentUtils.h"
 
 #include "plstr.h" // PL_strcasestr(...)
+#include "prtime.h" // for PR_Now
 #include "nsNetUtil.h"
 #include "nsIProtocolHandler.h"
 #include "imgIRequest.h"
@@ -69,7 +70,9 @@ imgRequest::imgRequest(imgLoader* aLoader, const ImageCacheKey& aCacheKey)
  , mDecodeRequested(false)
  , mNewPartPending(false)
  , mHadInsecureRedirect(false)
-{ }
+{
+  LOG_FUNC(gImgLog, "imgRequest::imgRequest()");
+}
 
 imgRequest::~imgRequest()
 {
@@ -87,13 +90,13 @@ imgRequest::~imgRequest()
 
 nsresult
 imgRequest::Init(nsIURI *aURI,
-                 nsIURI *aCurrentURI,
+                 nsIURI *aFinalURI,
                  bool aHadInsecureRedirect,
                  nsIRequest *aRequest,
                  nsIChannel *aChannel,
                  imgCacheEntry *aCacheEntry,
                  nsISupports* aCX,
-                 nsIPrincipal* aLoadingPrincipal,
+                 nsIPrincipal* aTriggeringPrincipal,
                  int32_t aCORSMode,
                  ReferrerPolicy aReferrerPolicy)
 {
@@ -103,7 +106,7 @@ imgRequest::Init(nsIURI *aURI,
 
   MOZ_ASSERT(!mImage, "Multiple calls to init");
   MOZ_ASSERT(aURI, "No uri");
-  MOZ_ASSERT(aCurrentURI, "No current uri");
+  MOZ_ASSERT(aFinalURI, "No final uri");
   MOZ_ASSERT(aRequest, "No request");
   MOZ_ASSERT(aChannel, "No channel");
 
@@ -114,20 +117,20 @@ imgRequest::Init(nsIURI *aURI,
   mURI = new ImageURL(aURI, rv);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  mCurrentURI = aCurrentURI;
+  mFinalURI = aFinalURI;
   mRequest = aRequest;
   mChannel = aChannel;
   mTimedChannel = do_QueryInterface(mChannel);
 
-  mLoadingPrincipal = aLoadingPrincipal;
+  mTriggeringPrincipal = aTriggeringPrincipal;
   mCORSMode = aCORSMode;
   mReferrerPolicy = aReferrerPolicy;
 
-  // If the original URI and the current URI are different, check whether the
-  // original URI is secure. We deliberately don't take the current URI into
+  // If the original URI and the final URI are different, check whether the
+  // original URI is secure. We deliberately don't take the final URI into
   // account, as it needs to be handled using more complicated rules than
   // earlier elements of the redirect chain.
-  if (aURI != aCurrentURI) {
+  if (aURI != aFinalURI) {
     bool isHttps = false;
     bool isChrome = false;
     bool schemeLocal = false;
@@ -288,12 +291,6 @@ imgRequest::RemoveProxy(imgRequestProxy* proxy, nsresult aStatus)
     mCacheEntry = nullptr;
   }
 
-  // If a proxy is removed for a reason other than its owner being
-  // changed, remove the proxy from the loadgroup.
-  if (aStatus != NS_IMAGELIB_CHANGING_OWNER) {
-    proxy->RemoveFromLoadGroup(true);
-  }
-
   return NS_OK;
 }
 
@@ -317,7 +314,8 @@ class imgRequestMainThreadCancel : public Runnable
 {
 public:
   imgRequestMainThreadCancel(imgRequest* aImgRequest, nsresult aStatus)
-    : mImgRequest(aImgRequest)
+    : Runnable("imgRequestMainThreadCancel")
+    , mImgRequest(aImgRequest)
     , mStatus(aStatus)
   {
     MOZ_ASSERT(!NS_IsMainThread(), "Create me off main thread only!");
@@ -344,7 +342,10 @@ imgRequest::Cancel(nsresult aStatus)
   if (NS_IsMainThread()) {
     ContinueCancel(aStatus);
   } else {
-    NS_DispatchToMainThread(new imgRequestMainThreadCancel(this, aStatus));
+    RefPtr<ProgressTracker> progressTracker = GetProgressTracker();
+    nsCOMPtr<nsIEventTarget> eventTarget = progressTracker->GetEventTarget();
+    nsCOMPtr<nsIRunnable> ev = new imgRequestMainThreadCancel(this, aStatus);
+    eventTarget->Dispatch(ev.forget(), NS_DISPATCH_NORMAL);
   }
 }
 
@@ -354,7 +355,7 @@ imgRequest::ContinueCancel(nsresult aStatus)
   MOZ_ASSERT(NS_IsMainThread());
 
   RefPtr<ProgressTracker> progressTracker = GetProgressTracker();
-  progressTracker->SyncNotifyProgress(FLAG_HAS_ERROR | FLAG_ONLOAD_UNBLOCKED);
+  progressTracker->SyncNotifyProgress(FLAG_HAS_ERROR);
 
   RemoveFromCache();
 
@@ -367,7 +368,8 @@ class imgRequestMainThreadEvict : public Runnable
 {
 public:
   explicit imgRequestMainThreadEvict(imgRequest* aImgRequest)
-    : mImgRequest(aImgRequest)
+    : Runnable("imgRequestMainThreadEvict")
+    , mImgRequest(aImgRequest)
   {
     MOZ_ASSERT(!NS_IsMainThread(), "Create me off main thread only!");
     MOZ_ASSERT(aImgRequest);
@@ -436,14 +438,14 @@ nsresult imgRequest::GetURI(ImageURL** aURI)
 }
 
 nsresult
-imgRequest::GetCurrentURI(nsIURI** aURI)
+imgRequest::GetFinalURI(nsIURI** aURI)
 {
   MOZ_ASSERT(aURI);
 
-  LOG_FUNC(gImgLog, "imgRequest::GetCurrentURI");
+  LOG_FUNC(gImgLog, "imgRequest::GetFinalURI");
 
-  if (mCurrentURI) {
-    *aURI = mCurrentURI;
+  if (mFinalURI) {
+    *aURI = mFinalURI;
     NS_ADDREF(*aURI);
     return NS_OK;
   }
@@ -452,13 +454,26 @@ imgRequest::GetCurrentURI(nsIURI** aURI)
 }
 
 bool
-imgRequest::IsChrome() const
+imgRequest::IsScheme(const char* aScheme) const
 {
-  bool isChrome = false;
-  if (NS_WARN_IF(NS_FAILED(mURI->SchemeIs("chrome", &isChrome)))) {
+  MOZ_ASSERT(aScheme);
+  bool isScheme = false;
+  if (NS_WARN_IF(NS_FAILED(mURI->SchemeIs(aScheme, &isScheme)))) {
     return false;
   }
-  return isChrome;
+  return isScheme;
+}
+
+bool
+imgRequest::IsChrome() const
+{
+  return IsScheme("chrome");
+}
+
+bool
+imgRequest::IsData() const
+{
+  return IsScheme("data");
 }
 
 nsresult
@@ -541,10 +556,52 @@ imgRequest::AdjustPriority(imgRequestProxy* proxy, int32_t delta)
     return;
   }
 
+  AdjustPriorityInternal(delta);
+}
+
+void
+imgRequest::AdjustPriorityInternal(int32_t aDelta)
+{
   nsCOMPtr<nsISupportsPriority> p = do_QueryInterface(mChannel);
   if (p) {
-    p->AdjustPriority(delta);
+    p->AdjustPriority(aDelta);
   }
+}
+
+void
+imgRequest::BoostPriority(uint32_t aCategory)
+{
+  if (!gfxPrefs::ImageLayoutNetworkPriority()) {
+    return;
+  }
+
+  uint32_t newRequestedCategory =
+    (mBoostCategoriesRequested & aCategory) ^ aCategory;
+  if (!newRequestedCategory) {
+    // priority boost for each category can only apply once.
+    return;
+  }
+
+  MOZ_LOG(gImgLog, LogLevel::Debug,
+         ("[this=%p] imgRequest::BoostPriority for category %x",
+          this, newRequestedCategory));
+
+  int32_t delta = 0;
+
+  if (newRequestedCategory & imgIRequest::CATEGORY_FRAME_INIT) {
+    --delta;
+  }
+
+  if (newRequestedCategory & imgIRequest::CATEGORY_SIZE_QUERY) {
+    --delta;
+  }
+
+  if (newRequestedCategory & imgIRequest::CATEGORY_DISPLAY) {
+    delta += nsISupportsPriority::PRIORITY_HIGH;
+  }
+
+  AdjustPriorityInternal(delta);
+  mBoostCategoriesRequested |= newRequestedCategory;
 }
 
 bool
@@ -571,7 +628,8 @@ imgRequest::UpdateCacheEntrySize()
   }
 
   RefPtr<Image> image = GetImage();
-  size_t size = image->SizeOfSourceWithComputedFallback(moz_malloc_size_of);
+  SizeOfState state(moz_malloc_size_of);
+  size_t size = image->SizeOfSourceWithComputedFallback(state);
   mCacheEntry->SetDataSize(size);
 }
 
@@ -580,17 +638,21 @@ imgRequest::SetCacheValidation(imgCacheEntry* aCacheEntry, nsIRequest* aRequest)
 {
   /* get the expires info */
   if (aCacheEntry) {
-    nsCOMPtr<nsICacheInfoChannel> cacheChannel(do_QueryInterface(aRequest));
-    if (cacheChannel) {
+    // Expiration time defaults to 0. We set the expiration time on our
+    // entry if it hasn't been set yet.
+    if (aCacheEntry->GetExpiryTime() == 0) {
       uint32_t expiration = 0;
-      /* get the expiration time from the caching channel's token */
-      if (NS_SUCCEEDED(cacheChannel->GetCacheTokenExpirationTime(&expiration))) {
-        // Expiration time defaults to 0. We set the expiration time on our
-        // entry if it hasn't been set yet.
-        if (aCacheEntry->GetExpiryTime() == 0) {
-          aCacheEntry->SetExpiryTime(expiration);
-        }
+      nsCOMPtr<nsICacheInfoChannel> cacheChannel(do_QueryInterface(aRequest));
+      if (cacheChannel) {
+        /* get the expiration time from the caching channel's token */
+        cacheChannel->GetCacheTokenExpirationTime(&expiration);
       }
+      if (expiration == 0) {
+        // If the channel doesn't support caching, then ensure this expires the
+        // next time it is used.
+        expiration = imgCacheEntry::SecondsFromPRTime(PR_Now()) - 1;
+      }
+      aCacheEntry->SetExpiryTime(expiration);
     }
 
     // Determine whether the cache entry must be revalidated when we try to use
@@ -769,13 +831,17 @@ imgRequest::OnStartRequest(nsIRequest* aRequest, nsISupports* ctxt)
     this->Cancel(NS_IMAGELIB_ERROR_FAILURE);
   }
 
-  // Try to retarget OnDataAvailable to a decode thread.
-  nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(aRequest);
+  // Try to retarget OnDataAvailable to a decode thread. We must process data
+  // URIs synchronously as per the spec however.
+  if (!channel || IsData()) {
+    return NS_OK;
+  }
+
   nsCOMPtr<nsIThreadRetargetableRequest> retargetable =
     do_QueryInterface(aRequest);
-  if (httpChannel && retargetable) {
+  if (retargetable) {
     nsAutoCString mimeType;
-    nsresult rv = httpChannel->GetContentType(mimeType);
+    nsresult rv = channel->GetContentType(mimeType);
     if (NS_SUCCEEDED(rv) && !mimeType.EqualsLiteral(IMAGE_SVG_XML)) {
       // Retarget OnDataAvailable to the DecodePool's IO thread.
       nsCOMPtr<nsIEventTarget> target =
@@ -1015,7 +1081,8 @@ class FinishPreparingForNewPartRunnable final : public Runnable
 public:
   FinishPreparingForNewPartRunnable(imgRequest* aImgRequest,
                                     NewPartResult&& aResult)
-    : mImgRequest(aImgRequest)
+    : Runnable("FinishPreparingForNewPartRunnable")
+    , mImgRequest(aImgRequest)
     , mResult(aResult)
   {
     MOZ_ASSERT(aImgRequest);
@@ -1093,22 +1160,35 @@ imgRequest::OnDataAvailable(nsIRequest* aRequest, nsISupports* aContext,
 
     if (result.mImage) {
       image = result.mImage;
+      nsCOMPtr<nsIEventTarget> eventTarget;
 
       // Update our state to reflect this new part.
       {
         MutexAutoLock lock(mMutex);
         mImage = image;
+
+        // We only get an event target if we are not on the main thread, because
+        // we have to dispatch in that case. If we are on the main thread, but
+        // on a different scheduler group than ProgressTracker would give us,
+        // that is okay because nothing in imagelib requires that, just our
+        // listeners (which have their own checks).
+        if (!NS_IsMainThread()) {
+          eventTarget = mProgressTracker->GetEventTarget();
+          MOZ_ASSERT(eventTarget);
+        }
+
         mProgressTracker = nullptr;
       }
 
       // Some property objects are not threadsafe, and we need to send
       // OnImageAvailable on the main thread, so finish on the main thread.
-      if (NS_IsMainThread()) {
+      if (!eventTarget) {
+        MOZ_ASSERT(NS_IsMainThread());
         FinishPreparingForNewPart(result);
       } else {
         nsCOMPtr<nsIRunnable> runnable =
           new FinishPreparingForNewPartRunnable(this, Move(result));
-        NS_DispatchToMainThread(runnable);
+        eventTarget->Dispatch(runnable.forget(), NS_DISPATCH_NORMAL);
       }
     }
 
@@ -1247,8 +1327,8 @@ imgRequest::OnRedirectVerifyCallback(nsresult result)
   if (LOG_TEST(LogLevel::Debug)) {
     LOG_MSG_WITH_PARAM(gImgLog,
                        "imgRequest::OnChannelRedirect", "old",
-                       mCurrentURI ? mCurrentURI->GetSpecOrDefault().get()
-                                   : "");
+                       mFinalURI ? mFinalURI->GetSpecOrDefault().get()
+                                 : "");
   }
 
   // If the previous URI is a non-HTTPS URI, record that fact for later use by
@@ -1257,9 +1337,9 @@ imgRequest::OnRedirectVerifyCallback(nsresult result)
   bool isHttps = false;
   bool isChrome = false;
   bool schemeLocal = false;
-  if (NS_FAILED(mCurrentURI->SchemeIs("https", &isHttps)) ||
-      NS_FAILED(mCurrentURI->SchemeIs("chrome", &isChrome)) ||
-      NS_FAILED(NS_URIChainHasFlags(mCurrentURI,
+  if (NS_FAILED(mFinalURI->SchemeIs("https", &isHttps)) ||
+      NS_FAILED(mFinalURI->SchemeIs("chrome", &isChrome)) ||
+      NS_FAILED(NS_URIChainHasFlags(mFinalURI,
                                     nsIProtocolHandler::URI_IS_LOCAL_RESOURCE,
                                     &schemeLocal))  ||
       (!isHttps && !isChrome && !schemeLocal)) {
@@ -1277,20 +1357,20 @@ imgRequest::OnRedirectVerifyCallback(nsresult result)
     }
   }
 
-  // Update the current URI.
-  mChannel->GetURI(getter_AddRefs(mCurrentURI));
+  // Update the final URI.
+  mChannel->GetURI(getter_AddRefs(mFinalURI));
 
   if (LOG_TEST(LogLevel::Debug)) {
     LOG_MSG_WITH_PARAM(gImgLog, "imgRequest::OnChannelRedirect", "new",
-                       mCurrentURI ? mCurrentURI->GetSpecOrDefault().get()
-                                   : "");
+                       mFinalURI ? mFinalURI->GetSpecOrDefault().get()
+                                 : "");
   }
 
   // Make sure we have a protocol that returns data rather than opens an
   // external application, e.g. 'mailto:'.
   bool doesNotReturnData = false;
   nsresult rv =
-    NS_URIChainHasFlags(mCurrentURI,
+    NS_URIChainHasFlags(mFinalURI,
                         nsIProtocolHandler::URI_DOES_NOT_RETURN_DATA,
                         &doesNotReturnData);
 

@@ -12,13 +12,13 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(PARAMS_URL);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let { L10N } = windowRequire("devtools/client/netmonitor/src/utils/l10n");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
-  let wait = waitForNetworkEvents(monitor, 1, 6);
+  let wait = waitForNetworkEvents(monitor, 7);
   yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
     content.wrappedJSObject.performRequests();
   });

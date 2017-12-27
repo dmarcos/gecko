@@ -46,6 +46,7 @@ public:
   virtual void GetTextContentInternal(nsAString& aTextContent,
                                       OOMReporter& aError) override;
   virtual void SetTextContentInternal(const nsAString& aTextContent,
+                                      nsIPrincipal* aSubjectPrincipal,
                                       ErrorResult& aError) override;
   virtual void GetNodeValueInternal(nsAString& aNodeValue) override;
   virtual void SetNodeValueInternal(const nsAString& aNodeValue,
@@ -65,12 +66,12 @@ public:
   virtual bool IsNodeOfType(uint32_t aFlags) const override;
   virtual uint32_t GetChildCount() const override;
   virtual nsIContent *GetChildAt(uint32_t aIndex) const override;
-  virtual nsIContent * const * GetChildArray(uint32_t* aChildCount) const override;
   virtual int32_t IndexOf(const nsINode* aPossibleChild) const override;
   virtual nsresult InsertChildAt(nsIContent* aKid, uint32_t aIndex,
                                  bool aNotify) override;
   virtual void RemoveChildAt(uint32_t aIndex, bool aNotify) override;
-  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+                         bool aPreallocateChildren) const override;
   virtual already_AddRefed<nsIURI> GetBaseURI(bool aTryUseXHRDocBaseURI = false) const override;
 
   static void Initialize();
@@ -85,9 +86,10 @@ public:
   virtual JSObject* WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   // XPCOM GetName() is OK
+
   // XPCOM GetValue() is OK
 
-  void SetValue(const nsAString& aValue, ErrorResult& aRv);
+  void SetValue(const nsAString& aValue, nsIPrincipal* aTriggeringPrincipal, ErrorResult& aRv);
 
   bool Specified() const;
 

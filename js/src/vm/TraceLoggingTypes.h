@@ -23,7 +23,6 @@
     _(InlinedScripts)                                 \
     _(IonAnalysis)                                    \
     _(IonCompilation)                                 \
-    _(IonCompilationPaused)                           \
     _(IonLinking)                                     \
     _(IonMonkey)                                      \
     _(IrregexpCompile)                                \
@@ -260,6 +259,10 @@ class ContinuousSpace {
 
     void clear() {
         size_ = 0;
+    }
+
+    size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const {
+        return mallocSizeOf(data_);
     }
 };
 

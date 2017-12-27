@@ -37,34 +37,15 @@ HTMLIFrameElement::~HTMLIFrameElement()
 {
 }
 
-NS_IMPL_ISUPPORTS_INHERITED(HTMLIFrameElement, nsGenericHTMLFrameElement,
-                            nsIDOMHTMLIFrameElement)
+NS_IMPL_ISUPPORTS_INHERITED0(HTMLIFrameElement, nsGenericHTMLFrameElement)
 
 NS_IMPL_ELEMENT_CLONE(HTMLIFrameElement)
 
-NS_IMPL_STRING_ATTR(HTMLIFrameElement, Align, align)
-NS_IMPL_STRING_ATTR(HTMLIFrameElement, FrameBorder, frameborder)
-NS_IMPL_STRING_ATTR(HTMLIFrameElement, Height, height)
-NS_IMPL_URI_ATTR(HTMLIFrameElement, LongDesc, longdesc)
-NS_IMPL_STRING_ATTR(HTMLIFrameElement, MarginHeight, marginheight)
-NS_IMPL_STRING_ATTR(HTMLIFrameElement, MarginWidth, marginwidth)
-NS_IMPL_STRING_ATTR(HTMLIFrameElement, Name, name)
-NS_IMPL_STRING_ATTR(HTMLIFrameElement, Scrolling, scrolling)
-NS_IMPL_URI_ATTR(HTMLIFrameElement, Src, src)
-NS_IMPL_STRING_ATTR(HTMLIFrameElement, Width, width)
-NS_IMPL_BOOL_ATTR(HTMLIFrameElement, AllowFullscreen, allowfullscreen)
-NS_IMPL_STRING_ATTR(HTMLIFrameElement, Srcdoc, srcdoc)
-
-NS_IMETHODIMP
-HTMLIFrameElement::GetContentDocument(nsIDOMDocument** aContentDocument)
-{
-  return nsGenericHTMLFrameElement::GetContentDocument(aContentDocument);
-}
-
 bool
 HTMLIFrameElement::ParseAttribute(int32_t aNamespaceID,
-                                  nsIAtom* aAttribute,
+                                  nsAtom* aAttribute,
                                   const nsAString& aValue,
+                                  nsIPrincipal* aMaybeScriptedPrincipal,
                                   nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None) {
@@ -96,7 +77,9 @@ HTMLIFrameElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return nsGenericHTMLFrameElement::ParseAttribute(aNamespaceID, aAttribute,
-                                                   aValue, aResult);
+                                                   aValue,
+                                                   aMaybeScriptedPrincipal,
+                                                   aResult);
 }
 
 void
@@ -127,7 +110,7 @@ HTMLIFrameElement::MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
 }
 
 NS_IMETHODIMP_(bool)
-HTMLIFrameElement::IsAttributeMapped(const nsIAtom* aAttribute) const
+HTMLIFrameElement::IsAttributeMapped(const nsAtom* aAttribute) const
 {
   static const MappedAttributeEntry attributes[] = {
     { &nsGkAtoms::width },
@@ -141,7 +124,7 @@ HTMLIFrameElement::IsAttributeMapped(const nsIAtom* aAttribute) const
     sImageAlignAttributeMap,
     sCommonAttributeMap,
   };
-  
+
   return FindAttributeDependence(aAttribute, map);
 }
 
@@ -154,54 +137,53 @@ HTMLIFrameElement::GetAttributeMappingFunction() const
 }
 
 nsresult
-HTMLIFrameElement::SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                           nsIAtom* aPrefix, const nsAString& aValue,
-                           bool aNotify)
-{
-  nsresult rv = nsGenericHTMLFrameElement::SetAttr(aNameSpaceID, aName,
-                                                   aPrefix, aValue, aNotify);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  if (aNameSpaceID == kNameSpaceID_None && aName == nsGkAtoms::srcdoc) {
-    // Don't propagate error here. The attribute was successfully set, that's
-    // what we should reflect.
-    LoadSrc();
-  }
-
-  return NS_OK;
-}
-
-nsresult
-HTMLIFrameElement::AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
+HTMLIFrameElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                                 const nsAttrValue* aValue,
+                                const nsAttrValue* aOldValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 bool aNotify)
 {
-  if (aName == nsGkAtoms::sandbox &&
-      aNameSpaceID == kNameSpaceID_None && mFrameLoader) {
-    // If we have an nsFrameLoader, apply the new sandbox flags.
-    // Since this is called after the setter, the sandbox flags have
-    // alreay been updated.
-    mFrameLoader->ApplySandboxFlags(GetSandboxFlags());
+  AfterMaybeChangeAttr(aNameSpaceID, aName, aNotify);
+
+  if (aNameSpaceID == kNameSpaceID_None) {
+    if (aName == nsGkAtoms::sandbox) {
+      if (mFrameLoader) {
+        // If we have an nsFrameLoader, apply the new sandbox flags.
+        // Since this is called after the setter, the sandbox flags have
+        // alreay been updated.
+        mFrameLoader->ApplySandboxFlags(GetSandboxFlags());
+      }
+    }
   }
-  return nsGenericHTMLFrameElement::AfterSetAttr(aNameSpaceID, aName, aValue,
+  return nsGenericHTMLFrameElement::AfterSetAttr(aNameSpaceID, aName,
+                                                 aValue, aOldValue,
+                                                 aMaybeScriptedPrincipal,
                                                  aNotify);
 }
 
 nsresult
-HTMLIFrameElement::UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
-                             bool aNotify)
+HTMLIFrameElement::OnAttrSetButNotChanged(int32_t aNamespaceID, nsAtom* aName,
+                                          const nsAttrValueOrString& aValue,
+                                          bool aNotify)
 {
-  // Invoke on the superclass.
-  nsresult rv = nsGenericHTMLFrameElement::UnsetAttr(aNameSpaceID, aAttribute, aNotify);
-  NS_ENSURE_SUCCESS(rv, rv);
+  AfterMaybeChangeAttr(aNamespaceID, aName, aNotify);
 
-  if (aNameSpaceID == kNameSpaceID_None &&
-      aAttribute == nsGkAtoms::srcdoc) {
-    // Fall back to the src attribute, if any
-    LoadSrc();
+  return nsGenericHTMLFrameElement::OnAttrSetButNotChanged(aNamespaceID, aName,
+                                                           aValue, aNotify);
+}
+
+void
+HTMLIFrameElement::AfterMaybeChangeAttr(int32_t aNamespaceID,
+                                        nsAtom* aName,
+                                        bool aNotify)
+{
+  if (aNamespaceID == kNameSpaceID_None) {
+    if (aName == nsGkAtoms::srcdoc) {
+      // Don't propagate errors from LoadSrc. The attribute was successfully
+      // set/unset, that's what we should reflect.
+      LoadSrc();
+    }
   }
-
-  return NS_OK;
 }
 
 uint32_t

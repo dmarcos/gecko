@@ -3,8 +3,31 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 [features/activity-stream@mozilla.org] chrome.jar:
-% resource activity-stream %content/
+% resource activity-stream %content/ contentaccessible=yes
   content/lib/ (./lib/*)
   content/common/ (./common/*)
   content/vendor/Redux.jsm (./vendor/Redux.jsm)
+  content/vendor/react.js (./vendor/react.js)
+  content/vendor/react-dom.js (./vendor/react-dom.js)
+#ifndef RELEASE_OR_BETA
+  content/vendor/react-dev.js (./vendor/react-dev.js)
+  content/vendor/react-dom-dev.js (./vendor/react-dom-dev.js)
+#endif
+  content/vendor/prop-types.js (./vendor/prop-types.js)
+  content/vendor/react-intl.js (./vendor/react-intl.js)
+  content/vendor/redux.js (./vendor/redux.js)
+  content/vendor/react-redux.js (./vendor/react-redux.js)
   content/data/ (./data/*)
+#ifdef XP_MACOSX
+  content/css/activity-stream.css (./css/activity-stream-mac.css)
+#elifdef XP_WIN
+  content/css/activity-stream.css (./css/activity-stream-windows.css)
+#else
+  content/css/activity-stream.css (./css/activity-stream-linux.css)
+#endif
+  content/prerendered/static/activity-stream-initial-state.js (./prerendered/static/activity-stream-initial-state.js)
+#ifndef RELEASE_OR_BETA
+  content/prerendered/static/activity-stream-debug.html (./prerendered/static/activity-stream-debug.html)
+  content/prerendered/static/activity-stream-prerendered-debug.html (./prerendered/static/activity-stream-prerendered-debug.html)
+#endif
+  content/prerendered/ (./prerendered/locales/*)

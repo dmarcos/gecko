@@ -2,8 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-add_task(function* test() {
-  yield new Promise(resolve => {
+add_task(async function test() {
+  await new Promise(resolve => {
     Services.logins.removeAllLogins();
 
     // Add some initial logins
@@ -39,6 +39,8 @@ add_task(function* test() {
         function copyField() {
             info("Select all");
             selection.selectAll();
+            assertMenuitemEnabled("copysiteurl", false);
+            assertMenuitemEnabled("launchsiteurl", false);
             assertMenuitemEnabled("copyusername", false);
             assertMenuitemEnabled("editusername", false);
             assertMenuitemEnabled("copypassword", false);
@@ -46,6 +48,8 @@ add_task(function* test() {
 
             info("Select the first row (with an empty username)");
             selection.select(0);
+            assertMenuitemEnabled("copysiteurl", true);
+            assertMenuitemEnabled("launchsiteurl", true);
             assertMenuitemEnabled("copyusername", false, "empty username");
             assertMenuitemEnabled("editusername", true);
             assertMenuitemEnabled("copypassword", true);
@@ -53,6 +57,8 @@ add_task(function* test() {
 
             info("Clear the selection");
             selection.clearSelection();
+            assertMenuitemEnabled("copysiteurl", false);
+            assertMenuitemEnabled("launchsiteurl", false);
             assertMenuitemEnabled("copyusername", false);
             assertMenuitemEnabled("editusername", false);
             assertMenuitemEnabled("copypassword", false);
@@ -61,10 +67,13 @@ add_task(function* test() {
             info("Select the third row and making the password column visible");
             selection.select(2);
             doc.getElementById("passwordCol").hidden = false;
+            assertMenuitemEnabled("copysiteurl", true);
+            assertMenuitemEnabled("launchsiteurl", true);
             assertMenuitemEnabled("copyusername", true);
             assertMenuitemEnabled("editusername", true);
             assertMenuitemEnabled("copypassword", true);
             assertMenuitemEnabled("editpassword", true, "password column visible");
+
             menuitem.doCommand();
         }
 
@@ -76,8 +85,8 @@ add_task(function* test() {
         }
 
         function cleanUp() {
-            Services.ww.registerNotification(function(aSubject, aTopic, aData) {
-                Services.ww.unregisterNotification(arguments.callee);
+            Services.ww.registerNotification(function notification(aSubject, aTopic, aData) {
+                Services.ww.unregisterNotification(notification);
                 Services.logins.removeAllLogins();
                 doc.getElementById("passwordCol").hidden = true;
                 resolve();
@@ -85,12 +94,20 @@ add_task(function* test() {
             pwmgrdlg.close();
         }
 
+        function testSiteUrl() {
+            info("Testing Copy Site URL");
+            waitForClipboard("http://mozilla.org/", function copySiteUrl() {
+                menuitem = doc.getElementById("context-copysiteurl");
+                menuitem.doCommand();
+            }, cleanUp, cleanUp);
+        }
+
         function testPassword() {
             info("Testing Copy Password");
             waitForClipboard("coded", function copyPassword() {
                 menuitem = doc.getElementById("context-copypassword");
                 menuitem.doCommand();
-            }, cleanUp, cleanUp);
+            }, testSiteUrl, testSiteUrl);
         }
 
         info("Testing Copy Username");

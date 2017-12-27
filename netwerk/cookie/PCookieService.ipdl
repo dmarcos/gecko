@@ -7,6 +7,7 @@
 
 include protocol PNecko;
 include URIParams;
+include NeckoChannelParams;
 
 using mozilla::OriginAttributes from "mozilla/ipc/BackgroundUtils.h";
 
@@ -19,7 +20,7 @@ namespace net {
  * Provides IPDL methods for setting and getting cookies. These are stored on
  * and managed by the parent; the child process goes through the parent for
  * all cookie operations. Lower-level programmatic operations (i.e. those
- * provided by the nsICookieManager and nsICookieManager2 interfaces) are not
+ * provided by the nsICookieManager interface) are not
  * currently implemented and requesting these interfaces in the child will fail.
  *
  * @see nsICookieService
@@ -97,9 +98,30 @@ parent:
                                             bool isForeign,
                                             nsCString cookieString,
                                             nsCString serverTime,
-                                            OriginAttributes attrs);
+                                            OriginAttributes attrs,
+                                            bool aFromHttp);
+
+  async PrepareCookieList(URIParams host,
+                          bool isForeign,
+                          OriginAttributes attrs);
 
   async __delete__();
+
+child:
+  async TrackCookiesLoad(CookieStruct[] cookiesList,
+                         OriginAttributes attrs);
+
+  async RemoveCookie(CookieStruct cookie,
+                     OriginAttributes attrs);
+
+  async RemoveBatchDeletedCookies(CookieStruct[] cookiesList,
+                                  OriginAttributes[] attrsList);
+
+  async RemoveAll();
+
+  async AddCookie(CookieStruct cookie,
+                  OriginAttributes attrs);
+
 };
 
 }

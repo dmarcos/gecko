@@ -22,6 +22,7 @@
                  xbl:inherits="value=label,accesskey,crop,wrap"/>
       <xul:label class="toolbarbutton-multiline-text" flex="1"
                  xbl:inherits="xbl:text=label,accesskey,wrap"/>
+      <children includes="box"/>
     </content>
   </binding>
 
@@ -86,8 +87,9 @@
     <content>
       <children includes="observes|template|menupopup|panel|tooltip"/>
       <xul:stack class="toolbarbutton-badge-stack">
+        <children/>
         <xul:image class="toolbarbutton-icon" xbl:inherits="validate,src=image,label,consumeanchor"/>
-        <xul:label class="toolbarbutton-badge" xbl:inherits="value=badge" top="0" end="0" crop="none"/>
+        <xul:label class="toolbarbutton-badge" xbl:inherits="value=badge,style=badgeStyle" top="0" end="0" crop="none"/>
       </xul:stack>
       <xul:label class="toolbarbutton-text" crop="right" flex="1"
                  xbl:inherits="value=label,accesskey,crop,wrap"/>

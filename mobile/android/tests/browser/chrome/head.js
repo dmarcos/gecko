@@ -36,7 +36,7 @@ function promiseTabEvent(container, eventType) {
   });
 }
 
-function promiseNotification(topic) {
+function promiseNotification(aTopic) {
   Cu.import("resource://gre/modules/Services.jsm");
 
   return new Promise((resolve, reject) => {
@@ -45,15 +45,15 @@ function promiseNotification(topic) {
       Services.obs.removeObserver(observe, topic);
       resolve();
     }
-    Services.obs.addObserver(observe, topic);
-    info("Now waiting for " + topic + " notification from Gecko");
+    Services.obs.addObserver(observe, aTopic);
+    info("Now waiting for " + aTopic + " notification from Gecko");
   });
 }
 
 function promiseLinkVisit(url) {
   Cu.import("resource://gre/modules/Services.jsm");
 
-  var topic = "link-visited";
+  var linkVisitedTopic = "link-visited";
   return new Promise((resolve, reject) => {
     function observe(subject, topic, data) {
       info("Received " + topic + " notification from Gecko");
@@ -65,9 +65,9 @@ function promiseLinkVisit(url) {
       info("Visited URL " + uri.spec + " is desired URL " + url);
       Services.obs.removeObserver(observe, topic);
       resolve();
-    };
-    Services.obs.addObserver(observe, topic);
-    info("Now waiting for " + topic + " notification from Gecko with URL " + url);
+    }
+    Services.obs.addObserver(observe, linkVisitedTopic);
+    info("Now waiting for " + linkVisitedTopic + " notification from Gecko with URL " + url);
   });
 }
 
@@ -78,7 +78,7 @@ function makeObserver(observerId) {
     id: observerId,
     count: 0,
     promise: deferred.promise,
-    observe: function (subject, topic, data) {
+    observe: function(subject, topic, data) {
       ret.count += 1;
       let msg = { subject: subject,
                   topic: topic,
@@ -88,5 +88,5 @@ function makeObserver(observerId) {
   };
 
   return ret;
-};
+}
 

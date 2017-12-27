@@ -30,18 +30,18 @@ versionAttr.setPropertyAsUint32("version", LATEST_VERSION);
 var registrar = Cm.QueryInterface(Ci.nsIComponentRegistrar);
 
 function sleep(aMs) {
-  let deferred = Promise.defer();
+  return new Promise(resolve => {
 
-  let timer = Cc["@mozilla.org/timer;1"]
-                .createInstance(Ci.nsITimer);
+    let timer = Cc["@mozilla.org/timer;1"]
+                  .createInstance(Ci.nsITimer);
 
-  timer.initWithCallback({
-    notify: function () {
-      deferred.resolve();
-    },
-  }, aMs, timer.TYPE_ONE_SHOT);
+    timer.initWithCallback({
+      notify: function () {
+        resolve();
+      },
+    }, aMs, timer.TYPE_ONE_SHOT);
 
-  return deferred.promise;
+  });
 }
 
 function MockFactory(aClass) {
@@ -92,7 +92,7 @@ ContractHook.prototype = {
                               this._contractID,
                               this._newFactory);
 
-    do_register_cleanup(() => { this.cleanup.apply(this); });
+    registerCleanupFunction(() => { this.cleanup.apply(this); });
   },
 
   reset: function() {},
@@ -239,9 +239,9 @@ function registerService() {
       this.serviceRegistered++;
       return {
         QueryInterface: XPCOMUtils.generateQI([Ci.nsICancelable]),
-        cancel: function() {
+        cancel: () => {
           this.serviceUnregistered++;
-        }.bind(this)
+        }
       };
     },
     resolveService: function(serviceInfo, listener) {},
@@ -328,9 +328,9 @@ function registerServiceDynamically() {
       this.serviceRegistered++;
       return {
         QueryInterface: XPCOMUtils.generateQI([Ci.nsICancelable]),
-        cancel: function() {
+        cancel: () => {
           this.serviceUnregistered++;
-        }.bind(this)
+        }
       };
     },
     resolveService: function(serviceInfo, listener) {},
@@ -1176,9 +1176,9 @@ function serverClosed() {
       this.serviceRegistered++;
       return {
         QueryInterface: XPCOMUtils.generateQI([Ci.nsICancelable]),
-        cancel: function() {
+        cancel: () => {
           this.serviceUnregistered++;
-        }.bind(this)
+        }
       };
     },
     resolveService: function(serviceInfo, listener) {
@@ -1295,7 +1295,7 @@ function run_test() {
 
   let infoHook = new ContractHook(INFO_CONTRACT_ID, MockDNSServiceInfo);
 
-  do_register_cleanup(() => {
+  registerCleanupFunction(() => {
     Services.prefs.clearUserPref(PREF_DISCOVERY);
     Services.prefs.clearUserPref(PREF_DISCOVERABLE);
   });

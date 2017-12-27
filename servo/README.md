@@ -4,7 +4,7 @@
 
 Servo is a prototype web browser engine written in the
 [Rust](https://github.com/rust-lang/rust) language. It is currently developed on
-64bit OS X, 64bit Linux, and Android.
+64-bit OS X, 64-bit Linux, 64-bit Windows, and Android.
 
 Servo welcomes contribution from everyone.  See
 [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`HACKING_QUICKSTART.md`](docs/HACKING_QUICKSTART.md)
@@ -52,11 +52,14 @@ If you've already partially compiled servo but forgot to do this step, run `./ma
 #### On Debian-based Linuxes
 
 ``` sh
-sudo apt install git curl freeglut3-dev autoconf \
+sudo apt install git curl freeglut3-dev autoconf libx11-dev \
     libfreetype6-dev libgl1-mesa-dri libglib2.0-dev xorg-dev \
     gperf g++ build-essential cmake virtualenv python-pip \
     libssl1.0-dev libbz2-dev libosmesa6-dev libxmu6 libxmu-dev \
-    libglu1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev
+    libglu1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
+    pulseaudio dbus-x11 libavcodec-dev libavformat-dev \
+    libavutil-dev libswresample-dev  libswscale-dev libdbus-1-dev \
+    libpulse-dev clang
 ```
 
 If you using a version prior to **Ubuntu 17.04** or **Debian Sid**, replace `libssl1.0-dev` with `libssl-dev`.
@@ -72,14 +75,34 @@ sudo dnf install curl freeglut-devel libtool gcc-c++ libXi-devel \
     freetype-devel mesa-libGL-devel mesa-libEGL-devel glib2-devel libX11-devel libXrandr-devel gperf \
     fontconfig-devel cabextract ttmkfdir python python-virtualenv python-pip expat-devel \
     rpm-build openssl-devel cmake bzip2-devel libXcursor-devel libXmu-devel mesa-libOSMesa-devel \
-    dbus-devel ncurses-devel
+    dbus-devel ncurses-devel pulseaudio-libs-devel clang clang-libs
 ```
+#### On CentOS
+
+``` sh
+sudo yum install curl freeglut-devel libtool gcc-c++ libXi-devel \
+    freetype-devel mesa-libGL-devel mesa-libEGL-devel glib2-devel libX11-devel libXrandr-devel gperf \
+    fontconfig-devel cabextract ttmkfdir python python-virtualenv python-pip expat-devel \
+    rpm-build openssl-devel cmake3 bzip2-devel libXcursor-devel libXmu-devel mesa-libOSMesa-devel \
+    dbus-devel ncurses-devel python34 pulseaudio-libs-devel clang clang-libs llvm-toolset-7
+```
+
+Build inside `llvm-toolset` and `devtoolset`:
+```
+scl enable devtoolset-7 llvm-toolset-7 bash
+```
+with the following environmental variables set:
+```
+export CMAKE=cmake3
+export LIBCLANG_PATH=/opt/rh/llvm-toolset-7/root/usr/lib64
+```
+
 #### On openSUSE Linux
 ``` sh
 sudo zypper install libX11-devel libexpat-devel libbz2-devel Mesa-libEGL-devel Mesa-libGL-devel cabextract cmake \
     dbus-1-devel fontconfig-devel freetype-devel gcc-c++ git glib2-devel gperf \
     harfbuzz-devel libOSMesa-devel libXcursor-devel libXi-devel libXmu-devel libXrandr-devel libopenssl-devel \
-    python-pip python-virtualenv rpm-build glu-devel
+    python-pip python-virtualenv rpm-build glu-devel llvm-clang libclang
 ```
 #### On Arch Linux
 
@@ -96,7 +119,7 @@ sudo emerge net-misc/curl media-libs/freeglut \
 ```
 #### On Windows (MSVC)
 
-1. Install Python for Windows (https://www.python.org/downloads/release/python-2711/). The windows x86-64 MSI installer is fine.
+1. Install Python for Windows (https://www.python.org/downloads/release/python-2714/). The Windows x86-64 MSI installer is fine.
 You should change the installation to install the "Add python.exe to Path" feature.
 
 2. Install virtualenv.
@@ -110,8 +133,17 @@ pip install virtualenv
 3. Install Git for Windows (https://git-scm.com/download/win). DO allow it to add git.exe to the PATH (default
 settings for the installer are fine).
 
-4. Install Visual Studio 2015 Community Edition (https://www.visualstudio.com/). You MUST add "Visual C++" to the
-list of installed components. It is not on by default.
+4. Install Visual Studio Community 2017 (https://www.visualstudio.com/vs/community/). You MUST add "Visual C++" to the
+list of installed components. It is not on by default. Visual Studio 2017 MUST installed to the default location or mach.bat will not find it.
+> If you encountered errors with the environment above, do the following for a workaround:
+> 1.  Download and install [Build Tools for Visual Studio 2017](https://www.visualstudio.com/thank-you-downloading-visual-studio/?sku=BuildTools&rel=15)
+> 2.  Install `python2.7 x86-x64` and `virtualenv`
+> 3.  Run `mach.bat build -d`. 
+
+>If you have troubles with `x64 type` prompt as `mach.bat` set by default:  
+> 1. you may need to choose and launch the type manually, such as `x86_x64 Cross Tools Command Prompt for VS 2017` in the Windows menu.)
+> 2. `cd to/the/path/servo`
+> 3. `python mach build -d`
 
 #### Cross-compilation for Android
 
@@ -124,15 +156,14 @@ Servo's build system automatically downloads a Rust compiler to build itself.
 This is normally a specific revision of Rust upstream, but sometimes has a
 backported patch or two.
 If you'd like to know which nightly build of Rust we use, see
-[`rust-commit-hash`](https://github.com/servo/servo/blob/master/rust-commit-hash).
+[`rust-toolchain`](https://github.com/servo/servo/blob/master/rust-toolchain).
 
 ## Building
 
-Servo is built with Cargo, the Rust package manager. We also use Mozilla's
+Servo is built with [Cargo](https://crates.io/), the Rust package manager. We also use Mozilla's
 Mach tools to orchestrate the build and other tasks.
 
 ### Normal build
-
 
 To build Servo in development mode.  This is useful for development, but
 the resulting binary is very slow.
@@ -158,6 +189,20 @@ real-world use, add the `--release` flag to create an optimized build:
 ./mach build --release
 ./mach run --release tests/html/about-mozilla.html
 ```
+
+### Checking for build errors, without building
+
+If you’re making changes to one crate that cause build errors in another crate,
+consider this instead of a full build:
+
+```sh
+./mach check
+```
+
+It will run `cargo check`, which runs the analysis phase of the compiler
+(and so shows build errors if any) but skips the code generation phase.
+This can be a lot faster than a full build,
+though of course it doesn’t produce a binary you can run.
 
 ### Building for Android target
 

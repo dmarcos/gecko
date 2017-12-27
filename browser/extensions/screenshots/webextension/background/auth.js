@@ -1,9 +1,9 @@
-/* globals browser, log */
+/* globals log */
 /* globals main, makeUuid, deviceInfo, analytics, catcher, buildSettings, communication */
 
 "use strict";
 
-this.auth = (function () {
+this.auth = (function() {
   let exports = {};
 
   let registrationInfo;
@@ -12,7 +12,7 @@ this.auth = (function () {
   let sentryPublicDSN = null;
   let abTests = {};
 
-  catcher.watchPromise(browser.storage.local.get(["registrationInfo", "abTests"]).then((result) => {
+  let registrationInfoFetched = catcher.watchPromise(browser.storage.local.get(["registrationInfo", "abTests"]).then((result) => {
     if (result.abTests) {
       abTests = result.abTests;
     }
@@ -25,7 +25,7 @@ this.auth = (function () {
     }
   }));
 
-  exports.getDeviceId = function () {
+  exports.getDeviceId = function() {
     return registrationInfo && registrationInfo.deviceId;
   };
 
@@ -146,68 +146,73 @@ this.auth = (function () {
     }
   }
 
-  exports.getDeviceId = function () {
+  exports.getDeviceId = function() {
     return registrationInfo.deviceId;
   };
 
-  exports.authHeaders = function () {
+  exports.authHeaders = function() {
     let initPromise = Promise.resolve();
-    if (! initialized) {
+    if (!initialized) {
       initPromise = login();
     }
     return initPromise.then(() => {
       if (authHeader) {
         return {"x-screenshots-auth": authHeader};
-      } else {
-        log.warn("No auth header available");
-        return {};
       }
+      log.warn("No auth header available");
+      return {};
     });
   };
 
-  exports.getSentryPublicDSN = function () {
+  exports.getSentryPublicDSN = function() {
     return sentryPublicDSN || buildSettings.defaultSentryDsn;
   };
 
-  exports.getAbTests = function () {
+  exports.getAbTests = function() {
     return abTests;
   };
 
-  exports.isRegistered = function () {
+  exports.isRegistered = function() {
     return registrationInfo.registered;
   };
 
-  exports.setDeviceInfoFromOldAddon = function (newDeviceInfo) {
-    if (! (newDeviceInfo.deviceId && newDeviceInfo.secret)) {
-      throw new Error("Bad deviceInfo");
-    }
-    if (registrationInfo.deviceId === newDeviceInfo.deviceId &&
-      registrationInfo.secret === newDeviceInfo.secret) {
-      // Probably we already imported the information
-      return Promise.resolve(false);
-    }
-    registrationInfo = {
-      deviceId: newDeviceInfo.deviceId,
-      secret: newDeviceInfo.secret,
-      registered: true
-    };
-    initialized = false;
-    return browser.storage.local.set({registrationInfo}).then(() => {
-      return true;
+  exports.setDeviceInfoFromOldAddon = function(newDeviceInfo) {
+    return registrationInfoFetched.then(() => {
+      if (!(newDeviceInfo.deviceId && newDeviceInfo.secret)) {
+        throw new Error("Bad deviceInfo");
+      }
+      if (registrationInfo.deviceId === newDeviceInfo.deviceId &&
+        registrationInfo.secret === newDeviceInfo.secret) {
+        // Probably we already imported the information
+        return Promise.resolve(false);
+      }
+      registrationInfo = {
+        deviceId: newDeviceInfo.deviceId,
+        secret: newDeviceInfo.secret,
+        registered: true
+      };
+      initialized = false;
+      return browser.storage.local.set({registrationInfo}).then(() => {
+        return true;
+      });
     });
   };
 
   communication.register("getAuthInfo", (sender, ownershipCheck) => {
-    let info = registrationInfo;
-    let done = Promise.resolve();
-    if (info.registered) {
-      done = login({ownershipCheck}).then((result) => {
-        if (result && result.isOwner) {
-          info.isOwner = true;
-        }
-      });
-    }
-    return done.then(() => {
+    return registrationInfoFetched.then(() => {
+      return exports.authHeaders();
+    }).then((authHeaders) => {
+      let info = registrationInfo;
+      if (info.registered) {
+        return login({ownershipCheck}).then((result) => {
+          return {
+            isOwner: result && result.isOwner,
+            deviceId: registrationInfo.deviceId,
+            authHeaders
+          };
+        });
+      }
+      info = Object.assign({authHeaders}, info);
       return info;
     });
   });

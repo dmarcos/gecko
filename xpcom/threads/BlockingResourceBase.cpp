@@ -20,8 +20,10 @@
 
 #include "mozilla/CondVar.h"
 #include "mozilla/DeadlockDetector.h"
+#include "mozilla/RecursiveMutex.h"
 #include "mozilla/ReentrantMonitor.h"
 #include "mozilla/Mutex.h"
+#include "mozilla/RWLock.h"
 
 #if defined(MOZILLA_INTERNAL_API)
 #include "GeckoProfiler.h"
@@ -37,7 +39,7 @@ namespace mozilla {
 // static members
 const char* const BlockingResourceBase::kResourceTypeName[] = {
   // needs to be kept in sync with BlockingResourceType
-  "Mutex", "ReentrantMonitor", "CondVar"
+  "Mutex", "ReentrantMonitor", "CondVar", "RecursiveMutex"
 };
 
 #ifdef DEBUG
@@ -68,7 +70,7 @@ BlockingResourceBase::GetStackTrace(AcquisitionState& aState)
 
   // NB: Ignore the return value, there's nothing useful we can do if this
   //     this fails.
-  MozStackWalk(StackWalkCallback, kSkipFrames, 24, &aState, 0, nullptr);
+  MozStackWalk(StackWalkCallback, kSkipFrames, 24, &aState);
 #endif
 }
 
@@ -269,7 +271,7 @@ void
 BlockingResourceBase::CheckAcquire()
 {
   if (mType == eCondVar) {
-    NS_NOTYETIMPLEMENTED(
+    MOZ_ASSERT_UNREACHABLE(
       "FIXME bug 456272: annots. to allow CheckAcquire()ing condvars");
     return;
   }
@@ -300,11 +302,12 @@ BlockingResourceBase::CheckAcquire()
     out.AppendLiteral("\nDeadlock may happen for some other execution\n\n");
   }
 
-  // XXX can customize behavior on whether we /think/ deadlock is
-  // XXX about to happen.  for example:
-  // XXX   if (maybeImminent)
-  //           NS_RUNTIMEABORT(out.get());
-  NS_ERROR(out.get());
+  // Only error out if we think a deadlock is imminent.
+  if (maybeImminent) {
+    NS_ERROR(out.get());
+  } else {
+    NS_WARNING(out.get());
+  }
 }
 
 
@@ -312,7 +315,7 @@ void
 BlockingResourceBase::Acquire()
 {
   if (mType == eCondVar) {
-    NS_NOTYETIMPLEMENTED(
+    MOZ_ASSERT_UNREACHABLE(
       "FIXME bug 456272: annots. to allow Acquire()ing condvars");
     return;
   }
@@ -337,7 +340,7 @@ void
 BlockingResourceBase::Release()
 {
   if (mType == eCondVar) {
-    NS_NOTYETIMPLEMENTED(
+    MOZ_ASSERT_UNREACHABLE(
       "FIXME bug 456272: annots. to allow Release()ing condvars");
     return;
   }
@@ -396,6 +399,44 @@ void
 OffTheBooksMutex::AssertCurrentThreadOwns() const
 {
   MOZ_ASSERT(IsAcquired() && mOwningThread == PR_GetCurrentThread());
+}
+
+//
+// Debug implementation of RWLock
+//
+
+void
+RWLock::ReadLock()
+{
+  // All we want to ensure here is that we're not attempting to acquire the
+  // read lock while this thread is holding the write lock.
+  CheckAcquire();
+  this->ReadLockInternal();
+  MOZ_ASSERT(mOwningThread == nullptr);
+}
+
+void
+RWLock::ReadUnlock()
+{
+  MOZ_ASSERT(mOwningThread == nullptr);
+  this->ReadUnlockInternal();
+}
+
+void
+RWLock::WriteLock()
+{
+  CheckAcquire();
+  this->WriteLockInternal();
+  mOwningThread = PR_GetCurrentThread();
+  Acquire();
+}
+
+void
+RWLock::WriteUnlock()
+{
+  Release();
+  mOwningThread = nullptr;
+  this->WriteUnlockInternal();
 }
 
 //
@@ -465,18 +506,14 @@ ReentrantMonitor::Wait(PRIntervalTime aInterval)
   mChainPrev = 0;
 
   nsresult rv;
-#if defined(MOZILLA_INTERNAL_API)
   {
-    GeckoProfilerThreadSleepRAII sleep;
-#endif //MOZILLA_INTERNAL_API
-
+#if defined(MOZILLA_INTERNAL_API)
+    AUTO_PROFILER_THREAD_SLEEP;
+#endif
     // give up the monitor until we're back from Wait()
     rv = PR_Wait(mReentrantMonitor, aInterval) == PR_SUCCESS ? NS_OK :
                                                                NS_ERROR_FAILURE;
-
-#if defined(MOZILLA_INTERNAL_API)
   }
-#endif //MOZILLA_INTERNAL_API
 
   // restore saved state
   mEntryCount = savedEntryCount;
@@ -486,6 +523,66 @@ ReentrantMonitor::Wait(PRIntervalTime aInterval)
   return rv;
 }
 
+
+//
+// Debug implementation of RecursiveMutex
+void
+RecursiveMutex::Lock()
+{
+  BlockingResourceBase* chainFront = ResourceChainFront();
+
+  // the code below implements mutex reentrancy semantics
+
+  if (this == chainFront) {
+    // immediately re-entered the mutex: acceptable
+    LockInternal();
+    ++mEntryCount;
+    return;
+  }
+
+  // this is sort of a hack around not recording the thread that
+  // owns this monitor
+  if (chainFront) {
+    for (BlockingResourceBase* br = ResourceChainPrev(chainFront);
+         br;
+         br = ResourceChainPrev(br)) {
+      if (br == this) {
+        NS_WARNING(
+          "Re-entering RecursiveMutex after acquiring other resources.");
+
+        // show the caller why this is potentially bad
+        CheckAcquire();
+
+        LockInternal();
+        ++mEntryCount;
+        return;
+      }
+    }
+  }
+
+  CheckAcquire();
+  LockInternal();
+  NS_ASSERTION(mEntryCount == 0, "RecursiveMutex isn't free!");
+  Acquire();       // protected by us
+  mOwningThread = PR_GetCurrentThread();
+  mEntryCount = 1;
+}
+
+void
+RecursiveMutex::Unlock()
+{
+  if (--mEntryCount == 0) {
+    Release();              // protected by us
+    mOwningThread = nullptr;
+  }
+  UnlockInternal();
+}
+
+void
+RecursiveMutex::AssertCurrentThreadIn()
+{
+  MOZ_ASSERT(IsAcquired() && mOwningThread == PR_GetCurrentThread());
+}
 
 //
 // Debug implementation of CondVar

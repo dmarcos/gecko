@@ -9,7 +9,7 @@
 #include "nsHttp.h"
 #include "nsHttpHeaderArray.h"
 #include "nsString.h"
-#include "mozilla/ReentrantMonitor.h"
+#include "mozilla/RecursiveMutex.h"
 
 class nsIHttpHeaderVisitor;
 
@@ -30,15 +30,15 @@ public:
     // copying headers. If you use it be careful to do it only under
     // nsHttpRequestHead lock!!!
     const nsHttpHeaderArray &Headers() const;
-    void Enter() { mReentrantMonitor.Enter(); }
-    void Exit() { mReentrantMonitor.Exit(); }
+    void Enter() { mRecursiveMutex.Lock(); }
+    void Exit() { mRecursiveMutex.Unlock(); }
 
     void SetHeaders(const nsHttpHeaderArray& aHeaders);
 
     void SetMethod(const nsACString &method);
     void SetVersion(nsHttpVersion version);
-    void SetRequestURI(const nsCSubstring &s);
-    void SetPath(const nsCSubstring &s);
+    void SetRequestURI(const nsACString& s);
+    void SetPath(const nsACString& s);
     uint32_t HeaderCount();
 
     // Using this function it is possible to itereate through all headers
@@ -58,11 +58,13 @@ public:
                    int32_t port);
     void Origin(nsACString &aOrigin);
 
+    MOZ_MUST_USE nsresult SetHeader(const nsACString &h, const nsACString &v,
+                                    bool m=false);
     MOZ_MUST_USE nsresult SetHeader(nsHttpAtom h, const nsACString &v,
                                     bool m=false);
     MOZ_MUST_USE nsresult SetHeader(nsHttpAtom h, const nsACString &v, bool m,
                                     nsHttpHeaderArray::HeaderVariety variety);
-    MOZ_MUST_USE nsresult SetEmptyHeader(nsHttpAtom h);
+    MOZ_MUST_USE nsresult SetEmptyHeader(const nsACString &h);
     MOZ_MUST_USE nsresult GetHeader(nsHttpAtom h, nsACString &v);
 
     MOZ_MUST_USE nsresult ClearHeader(nsHttpAtom h);
@@ -117,9 +119,9 @@ private:
     ParsedMethodType  mParsedMethod;
     bool              mHTTPS;
 
-    // We are using ReentrantMonitor instead of a Mutex because VisitHeader
+    // We are using RecursiveMutex instead of a Mutex because VisitHeader
     // function calls nsIHttpHeaderVisitor::VisitHeader while under lock.
-    ReentrantMonitor  mReentrantMonitor;
+    RecursiveMutex  mRecursiveMutex;
 
     // During VisitHeader we sould not allow cal to SetHeader.
     bool mInVisitHeaders;

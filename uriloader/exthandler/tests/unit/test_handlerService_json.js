@@ -1,35 +1,138 @@
-/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-/**
- * Tests the handlerService interfaces using JSON backend.
+/*
+ * Tests the nsIHandlerService interface using the JSON backend.
  */
 
-XPCOMUtils.defineLazyServiceGetter(this, "gHandlerService",
-                                   "@mozilla.org/uriloader/handler-service-json;1",
-                                   "nsIHandlerService");
+let gHandlerService = gHandlerServiceJSON;
+let unloadHandlerStore = unloadHandlerStoreJSON;
+let deleteHandlerStore = deleteHandlerStoreJSON;
+let copyTestDataToHandlerStore = copyTestDataToHandlerStoreJSON;
 
 var scriptFile = do_get_file("common_test_handlerService.js");
 Services.scriptloader.loadSubScript(NetUtil.newURI(scriptFile).spec);
 
-var prepareImportDB = Task.async(function* () {
-  yield reloadData();
+/**
+ * Ensures forward compatibility by checking that the "store" method preserves
+ * unknown properties in the test data. This is specific to the JSON back-end.
+ */
+add_task(async function test_store_keeps_unknown_properties() {
+  // Create a new nsIHandlerInfo instance before loading the test data.
+  await deleteHandlerStore();
+  let handlerInfo =
+      HandlerServiceTestUtils.getHandlerInfo("example/type.handleinternally");
 
-  yield OS.File.copy(do_get_file("handlers.json").path, jsonPath);
+  await copyTestDataToHandlerStore();
+  gHandlerService.store(handlerInfo);
+
+  await unloadHandlerStore();
+  let data = JSON.parse(new TextDecoder().decode(await OS.File.read(jsonPath)));
+  Assert.equal(data.mimeTypes["example/type.handleinternally"].unknownProperty,
+               "preserved");
 });
 
-var removeImportDB = Task.async(function* () {
-  yield reloadData();
+/**
+ * Runs the asyncInit method, ensuring that it successfully inits the store
+ * and calls the handlersvc-store-initialized topic.
+ */
+add_task(async function test_async_init() {
+  await deleteHandlerStore();
+  await copyTestDataToHandlerStore();
+  gHandlerService.asyncInit();
+  await TestUtils.topicObserved("handlersvc-store-initialized");
+  await assertAllHandlerInfosMatchTestData();
 
-  yield OS.File.remove(jsonPath, { ignoreAbsent: true });
+  await unloadHandlerStore();
 });
 
-var reloadData = Task.async(function* () {
-  // Force the initialization of handlerService to prevent observer is not initialized yet.
-  let svc = gHandlerService;
-  let promise = TestUtils.topicObserved("handlersvc-json-replace-complete");
-  Services.obs.notifyObservers(null, "handlersvc-json-replace");
-  yield promise;
+/**
+ * Races the asyncInit method against the sync init (implicit in enumerate),
+ * to ensure that the store will be synchronously initialized without any
+ * ill effects.
+ */
+add_task(async function test_race_async_init() {
+  await deleteHandlerStore();
+  await copyTestDataToHandlerStore();
+  let storeInitialized = false;
+  // Pass a callback to synchronously observe the topic, as a promise would
+  // resolve asynchronously
+  TestUtils.topicObserved("handlersvc-store-initialized", () => {
+    storeInitialized = true;
+    return true;
+  });
+  gHandlerService.asyncInit();
+  Assert.ok(!storeInitialized);
+  gHandlerService.enumerate();
+  Assert.ok(storeInitialized);
+  await assertAllHandlerInfosMatchTestData();
+
+  await unloadHandlerStore();
+});
+
+/**
+ * Tests the migration from an existing RDF data source.
+ */
+add_task(async function test_migration_rdf_present() {
+  // Perform the most common migration, with the JSON file missing.
+  await deleteHandlerStore();
+  await copyTestDataToHandlerStoreRDF();
+  Services.prefs.setBoolPref("gecko.handlerService.migrated", false);
+  await assertAllHandlerInfosMatchTestData();
+  Assert.ok(Services.prefs.getBoolPref("gecko.handlerService.migrated"));
+
+  // Repeat the migration with the JSON file present.
+  await unloadHandlerStore();
+  await unloadHandlerStoreRDF();
+  Services.prefs.setBoolPref("gecko.handlerService.migrated", false);
+  await assertAllHandlerInfosMatchTestData();
+  Assert.ok(Services.prefs.getBoolPref("gecko.handlerService.migrated"));
+});
+
+/**
+ * Tests that new entries are preserved if migration is triggered manually.
+ */
+add_task(async function test_migration_rdf_present_keeps_new_data() {
+  await deleteHandlerStore();
+
+  let handlerInfo = getKnownHandlerInfo("example/new");
+  gHandlerService.store(handlerInfo);
+
+  // Perform the migration with the JSON file present.
+  await unloadHandlerStore();
+  await copyTestDataToHandlerStoreRDF();
+  Services.prefs.setBoolPref("gecko.handlerService.migrated", false);
+
+  let actualHandlerInfo = HandlerServiceTestUtils.getHandlerInfo("example/new");
+  HandlerServiceTestUtils.assertHandlerInfoMatches(actualHandlerInfo, {
+    type: "example/new",
+    preferredAction: Ci.nsIHandlerInfo.saveToDisk,
+    alwaysAskBeforeHandling: false,
+  });
+
+  Assert.ok(Services.prefs.getBoolPref("gecko.handlerService.migrated"));
+});
+
+/**
+ * Tests the injection of default protocol handlers when the RDF does not exist.
+ */
+add_task(async function test_migration_rdf_absent() {
+  if (!Services.prefs.getPrefType("gecko.handlerService.defaultHandlersVersion")) {
+    info("This platform or locale does not have default handlers.");
+    return;
+  }
+
+  // Perform the most common migration, with the JSON file missing.
+  await deleteHandlerStore();
+  await deleteHandlerStoreRDF();
+  Services.prefs.setBoolPref("gecko.handlerService.migrated", false);
+  await assertAllHandlerInfosMatchDefaultHandlers();
+  Assert.ok(Services.prefs.getBoolPref("gecko.handlerService.migrated"));
+
+  // Repeat the migration with the JSON file present.
+  await unloadHandlerStore();
+  await unloadHandlerStoreRDF();
+  Services.prefs.setBoolPref("gecko.handlerService.migrated", false);
+  await assertAllHandlerInfosMatchDefaultHandlers();
+  Assert.ok(Services.prefs.getBoolPref("gecko.handlerService.migrated"));
 });

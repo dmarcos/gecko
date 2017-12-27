@@ -19,6 +19,7 @@ class nsIWidget;
 
 class nsBaseFilePicker : public nsIFilePicker
 {
+  class AsyncShowFilePicker;
 public:
   nsBaseFilePicker(); 
   virtual ~nsBaseFilePicker();
@@ -34,6 +35,8 @@ public:
   NS_IMETHOD GetFiles(nsISimpleEnumerator **aFiles);
   NS_IMETHOD GetDisplayDirectory(nsIFile * *aDisplayDirectory);
   NS_IMETHOD SetDisplayDirectory(nsIFile * aDisplayDirectory);
+  NS_IMETHOD GetDisplaySpecialDirectory(nsAString& aDisplayDirectory);
+  NS_IMETHOD SetDisplaySpecialDirectory(const nsAString& aDisplayDirectory);
   NS_IMETHOD GetAddToRecentDocs(bool *aFlag);
   NS_IMETHOD SetAddToRecentDocs(bool aFlag);
   NS_IMETHOD GetMode(int16_t *aMode);
@@ -46,9 +49,11 @@ public:
 protected:
 
   virtual void InitNative(nsIWidget *aParent, const nsAString& aTitle) = 0;
+  virtual nsresult Show(int16_t *_retval) = 0;
 
   bool mAddToRecentDocs;
   nsCOMPtr<nsIFile> mDisplayDirectory;
+  nsString mDisplaySpecialDirectory;
 
   nsCOMPtr<nsPIDOMWindowOuter> mParent;
   int16_t mMode;

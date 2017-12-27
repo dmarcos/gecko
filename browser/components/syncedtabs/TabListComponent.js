@@ -15,6 +15,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "BrowserUITelemetry",
   "resource:///modules/BrowserUITelemetry.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUIUtils",
   "resource:///modules/PlacesUIUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Services",
+  "resource://gre/modules/Services.jsm");
 
 this.EXPORTED_SYMBOLS = [
   "TabListComponent"
@@ -126,8 +128,12 @@ TabListComponent.prototype = {
       this._window.openDialog(this._window.getBrowserURL(), "_blank",
                               "chrome,dialog=no,all", urls.join("|"));
     } else {
-      let loadInBackground = where == "tabshifted" ? true : false;
-      this._getChromeWindow(this._window).gBrowser.loadTabs(urls, loadInBackground, false);
+      let loadInBackground = where == "tabshifted";
+      this._getChromeWindow(this._window).gBrowser.loadTabs(urls, {
+        inBackground: loadInBackground,
+        replace: false,
+        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+      });
     }
     BrowserUITelemetry.countSyncedTabEvent("openmultiple", "sidebar");
   },

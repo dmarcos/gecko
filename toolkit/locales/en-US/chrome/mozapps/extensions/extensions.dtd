@@ -3,7 +3,7 @@
    - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
 <!ENTITY addons.windowTitle                   "Add-ons Manager">
 
-<!ENTITY search.placeholder                   "Search all add-ons">
+<!ENTITY search.placeholder2                  "Search on addons.mozilla.org">
 <!ENTITY search.buttonlabel                   "Search">
 <!-- LOCALIZATION NOTE (search.commandKey):
      The search command key should match findOnCmd.commandkey from browser.dtd -->
@@ -14,7 +14,6 @@
 <!ENTITY listEmpty.availableUpdates.label     "No updates found">
 <!ENTITY listEmpty.recentUpdates.label        "You haven’t recently updated any add-ons">
 <!ENTITY listEmpty.findUpdates.label          "Check For Updates">
-<!ENTITY listEmpty.search.label               "Could not find any matching add-ons">
 <!ENTITY listEmpty.button.label               "Learn more about add-ons">
 <!ENTITY installAddonFromFile.label           "Install Add-on From File…">
 <!ENTITY installAddonFromFile.accesskey       "I">
@@ -23,8 +22,6 @@
 <!ENTITY getThemes.description                "Looking to personalize your browser?">
 <!ENTITY getThemes.learnMore                  "Choose from thousands of themes.">
 
-<!ENTITY cmd.back.tooltip                     "Go back one page">
-<!ENTITY cmd.forward.tooltip                  "Go forward one page">
 
 <!ENTITY showUnsignedExtensions.button.label  "Some extensions could not be verified">
 <!ENTITY showAllExtensions.button.label       "Show all extensions">
@@ -41,7 +38,6 @@
 <!ENTITY warning.updatesecurity.enable.tooltip     "Enable add-on update security checking">
 
 <!-- categories / views -->
-<!ENTITY view.search.label                    "Search">
 <!ENTITY view.discover.label                  "Get Add-ons">
 <!ENTITY view.recentUpdates.label             "Recent Updates">
 <!ENTITY view.availableUpdates.label          "Available Updates">
@@ -118,6 +114,7 @@
 <!ENTITY cmd.showReleaseNotes.tooltip         "Show the release notes for this update">
 <!ENTITY cmd.hideReleaseNotes.label           "Hide Release Notes">
 <!ENTITY cmd.hideReleaseNotes.tooltip         "Hide the release notes for this update">
+<!ENTITY cmd.findReplacement.label            "Find a Replacement">
 
 <!-- discovery view -->
 <!-- LOCALIZATION NOTE (discover.title,discover.description,discover.footer):
@@ -173,21 +170,15 @@
 <!ENTITY sort.name.tooltip                    "Sort by name">
 <!ENTITY sort.dateUpdated.label               "Last Updated">
 <!ENTITY sort.dateUpdated.tooltip             "Sort by date updated">
-<!ENTITY sort.relevance.label                 "Best match">
-<!ENTITY sort.relevance.tooltip               "Sort by relevance">
-<!ENTITY sort.price.label                     "Price">
-<!ENTITY sort.price.tooltip                   "Sort by price">
-
-<!ENTITY search.filter2.label                 "Search:">
-<!ENTITY search.filter2.installed.label       "My Add-ons">
-<!ENTITY search.filter2.installed.tooltip     "Show installed add-ons">
-<!ENTITY search.filter2.available.label       "Available Add-ons">
-<!ENTITY search.filter2.available.tooltip     "Show add-ons available to install">
 
 <!ENTITY addon.homepage                       "Homepage">
 <!ENTITY addon.details.label                  "More">
 <!ENTITY addon.details.tooltip                "Show more details about this add-on">
 <!ENTITY addon.unknownDate                    "Unknown">
+<!-- LOCALIZATION NOTE (addon.legacy.label): This appears in a badge next
+     to the add-on name for extensions that are not webextensions, which
+     will stop working in Firefox 57. -->
+<!ENTITY addon.legacy.label                   "LEGACY">
 <!-- LOCALIZATION NOTE (addon.disabled.postfix): This is used in a normal list
      to signify that an add-on is disabled, in the form
      "<Addon name> <1.0> (disabled)" -->
@@ -252,3 +243,8 @@
 
 <!ENTITY pluginDeprecation.description "Missing something? Some plugins are no longer supported by &brandShortName;.">
 <!ENTITY pluginDeprecation.learnMore "Learn More.">
+
+<!ENTITY legacyWarning.showLegacy "Show legacy extensions">
+<!ENTITY legacyExtensions.title "Legacy Extensions">
+<!ENTITY legacyExtensions.description "These extensions do not meet current &brandShortName; standards so they have been deactivated.">
+<!ENTITY legacyExtensions.learnMore "Learn about the changes to add-ons">

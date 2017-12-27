@@ -95,6 +95,7 @@ class CheckTidiness(unittest.TestCase):
 
     def test_rust(self):
         errors = tidy.collect_errors_for_files(iterFile('rust_tidy.rs'), [], [tidy.check_rust], print_text=False)
+        self.assertEqual('extra space after use', errors.next()[2])
         self.assertEqual('extra space after {', errors.next()[2])
         self.assertEqual('extra space before }', errors.next()[2])
         self.assertEqual('use statement spans multiple lines', errors.next()[2])
@@ -106,6 +107,7 @@ class CheckTidiness(unittest.TestCase):
         self.assertTrue('mod declaration is not in alphabetical order' in errors.next()[2])
         self.assertEqual('mod declaration spans multiple lines', errors.next()[2])
         self.assertTrue('extern crate declaration is not in alphabetical order' in errors.next()[2])
+        self.assertTrue('derivable traits list is not in alphabetical order' in errors.next()[2])
         self.assertEqual('found an empty line following a {', errors.next()[2])
         self.assertEqual('missing space before ->', errors.next()[2])
         self.assertEqual('missing space after ->', errors.next()[2])
@@ -131,6 +133,9 @@ class CheckTidiness(unittest.TestCase):
         self.assertEqual('extra space after (', errors.next()[2])
         self.assertEqual('extra space after test_fun', errors.next()[2])
         self.assertEqual('no = in the beginning of line', errors.next()[2])
+        self.assertEqual('space before { is not a multiple of 4', errors.next()[2])
+        self.assertEqual('space before } is not a multiple of 4', errors.next()[2])
+        self.assertEqual('extra space after if', errors.next()[2])
         self.assertNoMoreErrors(errors)
 
         feature_errors = tidy.collect_errors_for_files(iterFile('lib.rs'), [], [tidy.check_rust], print_text=False)
@@ -142,16 +147,17 @@ class CheckTidiness(unittest.TestCase):
         self.assertNoMoreErrors(feature_errors)
 
         ban_errors = tidy.collect_errors_for_files(iterFile('ban.rs'), [], [tidy.check_rust], print_text=False)
-        self.assertEqual('Banned type Cell<JSVal> detected. Use MutJS<JSVal> instead', ban_errors.next()[2])
+        self.assertEqual('Banned type Cell<JSVal> detected. Use MutDom<JSVal> instead', ban_errors.next()[2])
         self.assertNoMoreErrors(ban_errors)
 
         ban_errors = tidy.collect_errors_for_files(iterFile('ban-domrefcell.rs'), [], [tidy.check_rust], print_text=False)
-        self.assertEqual('Banned type DOMRefCell<JS<T>> detected. Use MutJS<JS<T>> instead', ban_errors.next()[2])
+        self.assertEqual('Banned type DomRefCell<Dom<T>> detected. Use MutDom<T> instead', ban_errors.next()[2])
         self.assertNoMoreErrors(ban_errors)
 
     def test_spec_link(self):
         tidy.SPEC_BASE_PATH = base_path
         errors = tidy.collect_errors_for_files(iterFile('speclink.rs'), [], [tidy.check_spec], print_text=False)
+        self.assertEqual('method declared in webidl is missing a comment with a specification link', errors.next()[2])
         self.assertEqual('method declared in webidl is missing a comment with a specification link', errors.next()[2])
         self.assertNoMoreErrors(errors)
 
@@ -227,6 +233,24 @@ class CheckTidiness(unittest.TestCase):
         self.assertEqual(msg2, errors.next()[2])
         self.assertNoMoreErrors(errors)
 
+    def test_lock_ignore_without_duplicates(self):
+        tidy.config["ignore"]["packages"] = ["test", "test2", "test3", "test5"]
+        errors = tidy.collect_errors_for_files(iterFile('duplicated_package.lock'), [tidy.check_lock], [], print_text=False)
+
+        msg = (
+            "duplicates for `test2` are allowed, but only single version found"
+            "\n\t\x1b[93mThe following packages depend on version 0.1.0 from 'https://github.com/user/test2':\x1b[0m"
+        )
+        self.assertEqual(msg, errors.next()[2])
+
+        msg2 = (
+            "duplicates for `test5` are allowed, but only single version found"
+            "\n\t\x1b[93mThe following packages depend on version 0.1.0 from 'https://github.com/':\x1b[0m"
+        )
+        self.assertEqual(msg2, errors.next()[2])
+
+        self.assertNoMoreErrors(errors)
+
     def test_lint_runner(self):
         test_path = base_path + 'lints/'
         runner = tidy.LintRunner(only_changed_files=False, progress=False)
@@ -259,6 +283,11 @@ class CheckTidiness(unittest.TestCase):
                                   exclude_dirs=[os.path.join(base_path, 'whee', 'foo')])
         lst = list(file_list)
         self.assertEqual([os.path.join(base_path, 'whee', 'test.rs')], lst)
+
+    def test_multiline_string(self):
+        errors = tidy.collect_errors_for_files(iterFile('multiline_string.rs'), [], [tidy.check_rust], print_text=True)
+        self.assertNoMoreErrors(errors)
+
 
 def do_tests():
     suite = unittest.TestLoader().loadTestsFromTestCase(CheckTidiness)

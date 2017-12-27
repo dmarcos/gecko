@@ -9,6 +9,8 @@ import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.support.annotation.Nullable;
 import android.support.v4.content.ContextCompat;
 import android.support.v4.widget.TextViewCompat;
 import android.view.LayoutInflater;
@@ -18,10 +20,12 @@ import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Tabs;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
+import org.mozilla.gecko.util.EventCallback;
 import org.mozilla.gecko.util.GeckoBundle;
 
 import java.util.Locale;
@@ -40,7 +44,16 @@ public abstract class DoorHanger extends LinearLayout {
     }
 
     // Doorhanger types created from Gecko are checked against enum strings to determine type.
-    public static enum Type { DEFAULT, LOGIN, TRACKING, GEOLOCATION, DESKTOPNOTIFICATION2, WEBRTC, VIBRATION, FLYWEBPUBLISHSERVER }
+    public enum Type {
+        DEFAULT,
+        LOGIN,
+        TRACKING,
+        GEOLOCATION,
+        DESKTOPNOTIFICATION2,
+        WEBRTC,
+        VIBRATION,
+        ADDON
+    }
 
     public interface OnButtonClickListener {
         public void onButtonClick(GeckoBundle response, DoorHanger doorhanger);
@@ -75,6 +88,9 @@ public abstract class DoorHanger extends LinearLayout {
     protected boolean mPersistWhileVisible;
     protected int mPersistenceCount;
     protected long mTimeout;
+
+    public EventCallback callback;
+    public Integer defaultCallback;
 
     protected DoorHanger(Context context, DoorhangerConfig config, Type type) {
         super(context);
@@ -142,6 +158,10 @@ public abstract class DoorHanger extends LinearLayout {
         }
    }
 
+    public Type getType() {
+        return mType;
+    }
+
     public int getTabId() {
         return mTabId;
     }
@@ -206,10 +226,15 @@ public abstract class DoorHanger extends LinearLayout {
         return true;
     }
 
-    public void showTitle(Bitmap favicon, String title) {
+    public void showTitle(@Nullable Bitmap favicon, String title) {
         mDoorhangerTitle.setText(title);
-        TextViewCompat.setCompoundDrawablesRelativeWithIntrinsicBounds(mDoorhangerTitle, new BitmapDrawable(getResources(), favicon), null, null, null);
+
         if (favicon != null) {
+            final Drawable faviconDrawable = new BitmapDrawable(mResources, favicon);
+            final int dimen = (int) mResources.getDimension(R.dimen.browser_toolbar_favicon_size);
+            faviconDrawable.setBounds(0, 0, dimen, dimen);
+
+            TextViewCompat.setCompoundDrawablesRelative(mDoorhangerTitle, faviconDrawable, null, null, null);
             mDoorhangerTitle.setCompoundDrawablePadding((int) mContext.getResources().getDimension(R.dimen.doorhanger_drawable_padding));
         }
         mDoorhangerTitle.setVisibility(VISIBLE);

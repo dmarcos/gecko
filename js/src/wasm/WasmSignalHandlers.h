@@ -48,6 +48,13 @@ EnsureSignalHandlers(JSContext* cx);
 bool
 HaveSignalHandlers();
 
+class CodeSegment;
+
+// Returns true if wasm code is on top of the activation stack (and fills out
+// the code segment outparam in this case), or false otherwise.
+bool
+InInterruptibleCode(JSContext* cx, uint8_t* pc, const CodeSegment** cs);
+
 #if defined(XP_DARWIN)
 // On OSX we are forced to use the lower-level Mach exception mechanism instead
 // of Unix signals. Mach exceptions are not handled on the victim's stack but
@@ -71,10 +78,6 @@ class MachExceptionHandler
     bool install(JSContext* cx);
 };
 #endif
-
-// Test whether the given PC is within the innermost wasm activation. Return
-// false if it is not, or it cannot be determined.
-bool IsPCInWasmCode(void *pc);
 
 } // namespace wasm
 } // namespace js

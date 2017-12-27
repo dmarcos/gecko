@@ -71,7 +71,7 @@ nsDefaultURIFixup::CreateExposableURI(nsIURI* aURI, nsIURI** aReturn)
   nsCOMPtr<nsIURI> uri;
   if (isWyciwyg) {
     nsAutoCString path;
-    nsresult rv = aURI->GetPath(path);
+    nsresult rv = aURI->GetPathQueryRef(path);
     NS_ENSURE_SUCCESS(rv, rv);
 
     uint32_t pathLength = path.Length();
@@ -87,14 +87,8 @@ nsDefaultURIFixup::CreateExposableURI(nsIURI* aURI, nsIURI** aReturn)
       return NS_ERROR_FAILURE;
     }
 
-    // Get the charset of the original URI so we can pass it to our fixed up
-    // URI.
-    nsAutoCString charset;
-    aURI->GetOriginCharset(charset);
-
     rv = NS_NewURI(getter_AddRefs(uri),
-                   Substring(path, slashIndex + 1, pathLength - slashIndex - 1),
-                   charset.get());
+                   Substring(path, slashIndex + 1, pathLength - slashIndex - 1));
     NS_ENSURE_SUCCESS(rv, rv);
   } else {
     // clone the URI so zapping user:pass doesn't change the original
@@ -167,7 +161,7 @@ nsDefaultURIFixup::GetFixupURIInfo(const nsACString& aStringURI,
   nsAutoCString uriString(aStringURI);
 
   // Eliminate embedded newlines, which single-line text fields now allow:
-  uriString.StripChars("\r\n");
+  uriString.StripCRLF();
   // Cleanup the empty spaces that might be on each end:
   uriString.Trim(" ");
 
@@ -264,32 +258,42 @@ nsDefaultURIFixup::GetFixupURIInfo(const nsACString& aStringURI,
       // Do nothing.
     } else if (scheme.LowerCaseEqualsLiteral("ttp")) {
       // ttp -> http.
-      uriString.Replace(0, 3, "http");
+      uriString.ReplaceLiteral(0, 3, "http");
+      scheme.AssignLiteral("http");
+      info->mFixupChangedProtocol = true;
+    } else if (scheme.LowerCaseEqualsLiteral("htp")) {
+      // htp -> http.
+      uriString.ReplaceLiteral(0, 3, "http");
       scheme.AssignLiteral("http");
       info->mFixupChangedProtocol = true;
     } else if (scheme.LowerCaseEqualsLiteral("ttps")) {
       // ttps -> https.
-      uriString.Replace(0, 4, "https");
+      uriString.ReplaceLiteral(0, 4, "https");
       scheme.AssignLiteral("https");
       info->mFixupChangedProtocol = true;
     } else if (scheme.LowerCaseEqualsLiteral("tps")) {
       // tps -> https.
-      uriString.Replace(0, 3, "https");
+      uriString.ReplaceLiteral(0, 3, "https");
       scheme.AssignLiteral("https");
       info->mFixupChangedProtocol = true;
     } else if (scheme.LowerCaseEqualsLiteral("ps")) {
       // ps -> https.
-      uriString.Replace(0, 2, "https");
+      uriString.ReplaceLiteral(0, 2, "https");
+      scheme.AssignLiteral("https");
+      info->mFixupChangedProtocol = true;
+    } else if (scheme.LowerCaseEqualsLiteral("htps")) {
+      // htps -> https.
+      uriString.ReplaceLiteral(0, 4, "https");
       scheme.AssignLiteral("https");
       info->mFixupChangedProtocol = true;
     } else if (scheme.LowerCaseEqualsLiteral("ile")) {
       // ile -> file.
-      uriString.Replace(0, 3, "file");
+      uriString.ReplaceLiteral(0, 3, "file");
       scheme.AssignLiteral("file");
       info->mFixupChangedProtocol = true;
     } else if (scheme.LowerCaseEqualsLiteral("le")) {
       // le -> file.
-      uriString.Replace(0, 2, "file");
+      uriString.ReplaceLiteral(0, 2, "file");
       scheme.AssignLiteral("file");
       info->mFixupChangedProtocol = true;
     }
@@ -545,11 +549,22 @@ nsDefaultURIFixup::MakeAlternateURI(nsIURI* aURI)
   if (!userpass.IsEmpty()) {
     return false;
   }
+  // Don't fix up hosts with ports
+  int32_t port;
+  aURI->GetPort(&port);
+  if (port != -1) {
+    return false;
+  }
 
   nsAutoCString oldHost;
-  nsAutoCString newHost;
   aURI->GetHost(oldHost);
 
+  // Don't fix up 'localhost' because that's confusing:
+  if (oldHost.EqualsLiteral("localhost")) {
+    return false;
+  }
+
+  nsAutoCString newHost;
   // Count the dots
   int32_t numDots = 0;
   nsReadingIterator<char> iter;
@@ -567,16 +582,17 @@ nsDefaultURIFixup::MakeAlternateURI(nsIURI* aURI)
   // are www. & .com but they could be any other value, e.g. www. & .org
 
   nsAutoCString prefix("www.");
-  nsAdoptingCString prefPrefix =
-    Preferences::GetCString("browser.fixup.alternate.prefix");
-  if (prefPrefix) {
+  nsAutoCString prefPrefix;
+  nsresult rv =
+    Preferences::GetCString("browser.fixup.alternate.prefix", prefPrefix);
+  if (NS_SUCCEEDED(rv)) {
     prefix.Assign(prefPrefix);
   }
 
   nsAutoCString suffix(".com");
-  nsAdoptingCString prefSuffix =
-    Preferences::GetCString("browser.fixup.alternate.suffix");
-  if (prefSuffix) {
+  nsAutoCString prefSuffix;
+  rv = Preferences::GetCString("browser.fixup.alternate.suffix", prefSuffix);
+  if (NS_SUCCEEDED(rv)) {
     suffix.Assign(prefSuffix);
   }
 
@@ -681,7 +697,7 @@ nsDefaultURIFixup::FixupURIProtocol(const nsACString& aURIString,
   //   no-scheme.com/query?foo=http://www.foo.com
   //   user:pass@no-scheme.com
   //
-  int32_t schemeDelim = uriString.Find("://", 0);
+  int32_t schemeDelim = uriString.Find("://");
   int32_t firstDelim = uriString.FindCharInSet("/:");
   if (schemeDelim <= 0 ||
       (firstDelim != -1 && schemeDelim > firstDelim)) {
@@ -918,17 +934,17 @@ nsDefaultURIFixup::KeywordURIFixup(const nsACString& aURIString,
   }
 
   nsAutoCString asciiHost;
-  nsAutoCString host;
+  nsAutoCString displayHost;
 
-  bool isValidAsciiHost =
+  bool isValidHost =
     aFixupInfo->mFixedURI &&
     NS_SUCCEEDED(aFixupInfo->mFixedURI->GetAsciiHost(asciiHost)) &&
     !asciiHost.IsEmpty();
 
-  bool isValidHost =
+  bool isValidDisplayHost =
     aFixupInfo->mFixedURI &&
-    NS_SUCCEEDED(aFixupInfo->mFixedURI->GetHost(host)) &&
-    !host.IsEmpty();
+    NS_SUCCEEDED(aFixupInfo->mFixedURI->GetDisplayHost(displayHost)) &&
+    !displayHost.IsEmpty();
 
   nsresult rv = NS_OK;
   // We do keyword lookups if a space or quote preceded the dot, colon
@@ -940,10 +956,10 @@ nsDefaultURIFixup::KeywordURIFixup(const nsACString& aURIString,
       firstQMarkLoc == 0) {
     rv = TryKeywordFixupForURIInfo(aFixupInfo->mOriginalInput, aFixupInfo,
                                    aPostData);
-    // ... or when the host is the same as asciiHost and there are no
+    // ... or when the asciiHost is the same as displayHost and there are no
     // characters from [a-z][A-Z]
-  } else if (isValidAsciiHost && isValidHost && !hasAsciiAlpha &&
-             host.EqualsIgnoreCase(asciiHost.get())) {
+  } else if (isValidHost && isValidDisplayHost && !hasAsciiAlpha &&
+             asciiHost.EqualsIgnoreCase(displayHost.get())) {
     if (!sDNSFirstForSingleWords) {
       rv = TryKeywordFixupForURIInfo(aFixupInfo->mOriginalInput, aFixupInfo,
                                      aPostData);
@@ -956,7 +972,7 @@ nsDefaultURIFixup::KeywordURIFixup(const nsACString& aURIString,
                                 firstDotLoc == aURIString.Length() - 1))) &&
            firstColonLoc == uint32_t(kNotFound) &&
            firstQMarkLoc == uint32_t(kNotFound)) {
-    if (isValidAsciiHost && IsDomainWhitelisted(asciiHost, firstDotLoc)) {
+    if (isValidHost && IsDomainWhitelisted(asciiHost, firstDotLoc)) {
       return NS_OK;
     }
 
@@ -964,7 +980,7 @@ nsDefaultURIFixup::KeywordURIFixup(const nsACString& aURIString,
     // this is a valid host:
     if (firstDotLoc == uint32_t(kNotFound) &&
         lastSlashLoc != uint32_t(kNotFound) &&
-        hasAsciiAlpha && isValidAsciiHost) {
+        hasAsciiAlpha && isValidHost) {
       return NS_OK;
     }
 

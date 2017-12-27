@@ -20,6 +20,7 @@
 #include "mozilla/Casting.h"
 #include "mozilla/IntegerPrintfMacros.h"
 #include "nsNSSComponent.h"
+#include "nsPromiseFlatString.h"
 #include "nsServiceManagerUtils.h"
 #include "pk11pub.h"
 #include "pkix/pkix.h"
@@ -136,6 +137,10 @@ IsCertChainRootBuiltInRoot(const UniqueCERTCertList& chain, bool& result)
 Result
 IsCertBuiltInRoot(CERTCertificate* cert, bool& result)
 {
+  if (NS_FAILED(BlockUntilLoadableRootsLoaded())) {
+    return Result::FATAL_ERROR_LIBRARY_FAILURE;
+  }
+
   result = false;
 #ifdef DEBUG
   nsCOMPtr<nsINSSComponent> component(do_GetService(PSM_COMPONENT_CONTRACTID));
@@ -461,6 +466,13 @@ CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
   MOZ_ASSERT(usage == certificateUsageSSLServer || !(flags & FLAG_MUST_BE_EV));
   MOZ_ASSERT(usage == certificateUsageSSLServer || !keySizeStatus);
   MOZ_ASSERT(usage == certificateUsageSSLServer || !sha1ModeResult);
+
+  if (NS_FAILED(BlockUntilLoadableRootsLoaded())) {
+    return Result::FATAL_ERROR_LIBRARY_FAILURE;
+  }
+  if (NS_FAILED(CheckForSmartCardChanges())) {
+    return Result::FATAL_ERROR_LIBRARY_FAILURE;
+  }
 
   if (evOidPolicy) {
     *evOidPolicy = SEC_OID_UNKNOWN;
@@ -834,93 +846,6 @@ CertVerifier::VerifyCert(CERTCertificate* cert, SECCertificateUsage usage,
       break;
     }
 
-    case certificateUsageObjectSigner: {
-      NSSCertDBTrustDomain trustDomain(trustObjectSigning, defaultOCSPFetching,
-                                       mOCSPCache, pinArg, ocspGETConfig,
-                                       mOCSPTimeoutSoft, mOCSPTimeoutHard,
-                                       mCertShortLifetimeInDays,
-                                       pinningDisabled, MIN_RSA_BITS_WEAK,
-                                       ValidityCheckingMode::CheckingOff,
-                                       SHA1Mode::Allowed,
-                                       NetscapeStepUpPolicy::NeverMatch,
-                                       originAttributes, builtChain, nullptr,
-                                       nullptr);
-      rv = BuildCertChain(trustDomain, certDER, time,
-                          EndEntityOrCA::MustBeEndEntity,
-                          KeyUsage::digitalSignature,
-                          KeyPurposeId::id_kp_codeSigning,
-                          CertPolicyId::anyPolicy, stapledOCSPResponse);
-      break;
-    }
-
-    case certificateUsageVerifyCA:
-    case certificateUsageStatusResponder: {
-      // XXX This is a pretty useless way to verify a certificate. It is used
-      // by the certificate viewer UI. Because we don't know what trust bit is
-      // interesting, we just try them all.
-      mozilla::pkix::EndEntityOrCA endEntityOrCA;
-      mozilla::pkix::KeyUsage keyUsage;
-      KeyPurposeId eku;
-      if (usage == certificateUsageVerifyCA) {
-        endEntityOrCA = EndEntityOrCA::MustBeCA;
-        keyUsage = KeyUsage::keyCertSign;
-        eku = KeyPurposeId::anyExtendedKeyUsage;
-      } else {
-        endEntityOrCA = EndEntityOrCA::MustBeEndEntity;
-        keyUsage = KeyUsage::digitalSignature;
-        eku = KeyPurposeId::id_kp_OCSPSigning;
-      }
-
-      NSSCertDBTrustDomain sslTrust(trustSSL, defaultOCSPFetching, mOCSPCache,
-                                    pinArg, ocspGETConfig, mOCSPTimeoutSoft,
-                                    mOCSPTimeoutHard, mCertShortLifetimeInDays,
-                                    pinningDisabled, MIN_RSA_BITS_WEAK,
-                                    ValidityCheckingMode::CheckingOff,
-                                    SHA1Mode::Allowed,
-                                    NetscapeStepUpPolicy::NeverMatch,
-                                    originAttributes, builtChain, nullptr,
-                                    nullptr);
-      rv = BuildCertChain(sslTrust, certDER, time, endEntityOrCA,
-                          keyUsage, eku, CertPolicyId::anyPolicy,
-                          stapledOCSPResponse);
-      if (rv == Result::ERROR_UNKNOWN_ISSUER) {
-        NSSCertDBTrustDomain emailTrust(trustEmail, defaultOCSPFetching,
-                                        mOCSPCache, pinArg, ocspGETConfig,
-                                        mOCSPTimeoutSoft, mOCSPTimeoutHard,
-                                        mCertShortLifetimeInDays,
-                                        pinningDisabled, MIN_RSA_BITS_WEAK,
-                                        ValidityCheckingMode::CheckingOff,
-                                        SHA1Mode::Allowed,
-                                        NetscapeStepUpPolicy::NeverMatch,
-                                        originAttributes, builtChain, nullptr,
-                                        nullptr);
-        rv = BuildCertChain(emailTrust, certDER, time, endEntityOrCA,
-                            keyUsage, eku, CertPolicyId::anyPolicy,
-                            stapledOCSPResponse);
-        if (rv == Result::ERROR_UNKNOWN_ISSUER) {
-          NSSCertDBTrustDomain objectSigningTrust(trustObjectSigning,
-                                                  defaultOCSPFetching,
-                                                  mOCSPCache, pinArg,
-                                                  ocspGETConfig,
-                                                  mOCSPTimeoutSoft,
-                                                  mOCSPTimeoutHard,
-                                                  mCertShortLifetimeInDays,
-                                                  pinningDisabled,
-                                                  MIN_RSA_BITS_WEAK,
-                                                  ValidityCheckingMode::CheckingOff,
-                                                  SHA1Mode::Allowed,
-                                                  NetscapeStepUpPolicy::NeverMatch,
-                                                  originAttributes, builtChain,
-                                                  nullptr, nullptr);
-          rv = BuildCertChain(objectSigningTrust, certDER, time,
-                              endEntityOrCA, keyUsage, eku,
-                              CertPolicyId::anyPolicy, stapledOCSPResponse);
-        }
-      }
-
-      break;
-    }
-
     default:
       rv = Result::FATAL_ERROR_INVALID_ARGS;
   }
@@ -938,7 +863,7 @@ CertVerifier::VerifySSLServerCert(const UniqueCERTCertificate& peerCert,
                      /*optional*/ const SECItem* sctsFromTLS,
                                   Time time,
                      /*optional*/ void* pinarg,
-                                  const char* hostname,
+                                  const nsACString& hostname,
                           /*out*/ UniqueCERTCertList& builtChain,
                      /*optional*/ bool saveIntermediatesInPermanentDatabase,
                      /*optional*/ Flags flags,
@@ -952,24 +877,24 @@ CertVerifier::VerifySSLServerCert(const UniqueCERTCertificate& peerCert,
 {
   MOZ_ASSERT(peerCert);
   // XXX: MOZ_ASSERT(pinarg);
-  MOZ_ASSERT(hostname);
-  MOZ_ASSERT(hostname[0]);
+  MOZ_ASSERT(!hostname.IsEmpty());
 
   if (evOidPolicy) {
     *evOidPolicy = SEC_OID_UNKNOWN;
   }
 
-  if (!hostname || !hostname[0]) {
+  if (hostname.IsEmpty()) {
     return Result::ERROR_BAD_CERT_DOMAIN;
   }
 
   // CreateCertErrorRunnable assumes that CheckCertHostname is only called
   // if VerifyCert succeeded.
   Result rv = VerifyCert(peerCert.get(), certificateUsageSSLServer, time,
-                         pinarg, hostname, builtChain, flags,
-                         stapledOCSPResponse, sctsFromTLS, originAttributes,
-                         evOidPolicy, ocspStaplingStatus, keySizeStatus,
-                         sha1ModeResult, pinningTelemetryInfo, ctInfo);
+                         pinarg, PromiseFlatCString(hostname).get(), builtChain,
+                         flags, stapledOCSPResponse, sctsFromTLS,
+                         originAttributes, evOidPolicy, ocspStaplingStatus,
+                         keySizeStatus, sha1ModeResult, pinningTelemetryInfo,
+                         ctInfo);
   if (rv != Success) {
     return rv;
   }
@@ -1000,8 +925,9 @@ CertVerifier::VerifySSLServerCert(const UniqueCERTCertificate& peerCert,
   }
 
   Input hostnameInput;
-  rv = hostnameInput.Init(BitwiseCast<const uint8_t*, const char*>(hostname),
-                          strlen(hostname));
+  rv = hostnameInput.Init(
+    BitwiseCast<const uint8_t*, const char*>(hostname.BeginReading()),
+    hostname.Length());
   if (rv != Success) {
     return Result::FATAL_ERROR_INVALID_ARGS;
   }

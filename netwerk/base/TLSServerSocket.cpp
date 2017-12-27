@@ -69,7 +69,7 @@ void
 TLSServerSocket::CreateClientTransport(PRFileDesc* aClientFD,
                                        const NetAddr& aClientAddr)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   nsresult rv;
 
   RefPtr<nsSocketTransport> trans = new nsSocketTransport;
@@ -276,7 +276,8 @@ class TLSServerSecurityObserverProxy final : public nsITLSServerSecurityObserver
 
 public:
   explicit TLSServerSecurityObserverProxy(nsITLSServerSecurityObserver* aListener)
-    : mListener(new nsMainThreadPtrHolder<nsITLSServerSecurityObserver>(aListener))
+    : mListener(new nsMainThreadPtrHolder<nsITLSServerSecurityObserver>(
+        "TLSServerSecurityObserverProxy::mListener", aListener))
   { }
 
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -285,10 +286,12 @@ public:
   class OnHandshakeDoneRunnable : public Runnable
   {
   public:
-    OnHandshakeDoneRunnable(const nsMainThreadPtrHandle<nsITLSServerSecurityObserver>& aListener,
-                            nsITLSServerSocket* aServer,
-                            nsITLSClientStatus* aStatus)
-      : mListener(aListener)
+    OnHandshakeDoneRunnable(
+      const nsMainThreadPtrHandle<nsITLSServerSecurityObserver>& aListener,
+      nsITLSServerSocket* aServer,
+      nsITLSClientStatus* aStatus)
+      : Runnable("net::TLSServerSecurityObserverProxy::OnHandshakeDoneRunnable")
+      , mListener(aListener)
       , mServer(aServer)
       , mStatus(aStatus)
     { }
@@ -355,7 +358,8 @@ TLSServerConnectionInfo::~TLSServerConnectionInfo()
   }
 
   if (observer) {
-    NS_ReleaseOnMainThread(observer.forget());
+    NS_ReleaseOnMainThreadSystemGroup(
+      "TLSServerConnectionInfo::mSecurityObserver", observer.forget());
   }
 }
 

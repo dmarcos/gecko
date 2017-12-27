@@ -10,7 +10,7 @@
 #include "nsISupports.h"
 #include "nsColor.h"
 #include "nsRect.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 
 #include "nsCOMPtr.h"
 #include "nsWidgetInitData.h"
@@ -18,6 +18,7 @@
 #include "nsITheme.h"
 #include "nsITimer.h"
 #include "nsRegionFwd.h"
+#include "nsStyleConsts.h"
 #include "nsXULAppAPI.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/EventForwards.h"
@@ -42,6 +43,11 @@ class   nsIRunnable;
 class   nsIKeyEventInPluginCallback;
 
 namespace mozilla {
+#if defined(MOZ_WIDGET_ANDROID)
+namespace ipc {
+class Shmem;
+}
+#endif // defined(MOZ_WIDGET_ANDROID)
 namespace dom {
 class TabChild;
 } // namespace dom
@@ -55,6 +61,7 @@ class CompositorBridgeChild;
 class LayerManager;
 class LayerManagerComposite;
 class PLayerTransactionChild;
+class WebRenderBridgeChild;
 struct ScrollableLayerGuid;
 } // namespace layers
 namespace gfx {
@@ -67,6 +74,10 @@ class TextEventDispatcherListener;
 class CompositorWidget;
 class CompositorWidgetInitData;
 } // namespace widget
+namespace wr {
+class DisplayListBuilder;
+class IpcResourceUpdateQueue;
+} // namespace wr
 } // namespace mozilla
 
 /**
@@ -143,16 +154,6 @@ typedef void* nsNativeWidget;
 { 0x06396bf6, 0x2dd8, 0x45e5, \
   { 0xac, 0x45, 0x75, 0x26, 0x53, 0xb1, 0xc9, 0x80 } }
 
-/*
- * Window shadow styles
- * Also used for the -moz-window-shadow CSS property
- */
-
-#define NS_STYLE_WINDOW_SHADOW_NONE             0
-#define NS_STYLE_WINDOW_SHADOW_DEFAULT          1
-#define NS_STYLE_WINDOW_SHADOW_MENU             2
-#define NS_STYLE_WINDOW_SHADOW_TOOLTIP          3
-#define NS_STYLE_WINDOW_SHADOW_SHEET            4
 
 /**
  * Transparency modes
@@ -210,8 +211,12 @@ enum nsCursor {   ///(normal cursor,       usually rendered as an arrow)
                 eCursor_ns_resize,
                 eCursor_ew_resize,
                 eCursor_none,
-                // This one better be the last one in this list.
-                eCursorCount
+                // This one is used for array sizing, and so better be the last
+                // one in this list...
+                eCursorCount,
+
+                // ...except for this one.
+                eCursorInvalid = eCursorCount + 1
                 };
 
 enum nsTopLevelWidgetZPlacement { // for PlaceBehind()
@@ -340,6 +345,7 @@ class nsIWidget : public nsISupports
     typedef mozilla::layers::LayerManagerComposite LayerManagerComposite;
     typedef mozilla::layers::LayersBackend LayersBackend;
     typedef mozilla::layers::PLayerTransactionChild PLayerTransactionChild;
+    typedef mozilla::layers::ScrollableLayerGuid ScrollableLayerGuid;
     typedef mozilla::layers::ZoomConstraints ZoomConstraints;
     typedef mozilla::widget::IMEMessage IMEMessage;
     typedef mozilla::widget::IMENotification IMENotification;
@@ -358,7 +364,11 @@ class nsIWidget : public nsISupports
     typedef mozilla::LayoutDeviceIntRegion LayoutDeviceIntRegion;
     typedef mozilla::LayoutDeviceIntSize LayoutDeviceIntSize;
     typedef mozilla::ScreenIntPoint ScreenIntPoint;
+    typedef mozilla::ScreenIntSize ScreenIntSize;
+    typedef mozilla::ScreenPoint ScreenPoint;
+    typedef mozilla::CSSToScreenScale CSSToScreenScale;
     typedef mozilla::DesktopIntRect DesktopIntRect;
+    typedef mozilla::CSSPoint CSSPoint;
     typedef mozilla::CSSRect CSSRect;
 
     // Used in UpdateThemeGeometries.
@@ -832,10 +842,20 @@ class nsIWidget : public nsISupports
     virtual void SetSizeMode(nsSizeMode aMode) = 0;
 
     /**
+     * Suppress animations that are applied to a window by OS.
+     */
+    virtual void SuppressAnimation(bool aSuppress) {}
+
+    /**
      * Return size mode (minimized, maximized, normalized).
      * Returns a value from nsSizeMode (see nsIWidgetListener.h)
      */
     virtual nsSizeMode SizeMode() = 0;
+
+    /**
+     * Ask wether the widget is fully occluded
+     */
+    virtual bool IsFullyOccluded() const = 0;
 
     /**
      * Enable or disable this Widget
@@ -939,14 +959,6 @@ class nsIWidget : public nsISupports
      */
 
     virtual void SetBackgroundColor(const nscolor &aColor) { }
-
-    /**
-     * Get the cursor for this widget.
-     *
-     * @return this widget's cursor.
-     */
-
-    virtual nsCursor GetCursor(void) = 0;
 
     /**
      * Set the cursor for this widget
@@ -1106,6 +1118,22 @@ class nsIWidget : public nsISupports
      */
     virtual void SetWindowShadowStyle(int32_t aStyle) = 0;
 
+    /**
+     * Set the opacity of the window.
+     * Values need to be between 0.0f (invisible) and 1.0f (fully opaque).
+     *
+     * Ignored on child widgets and on non-Mac platforms.
+     */
+    virtual void SetWindowOpacity(float aOpacity) {}
+
+    /**
+     * Set the transform of the window. Values are in device pixels,
+     * the origin is the top left corner of the window.
+     *
+     * Ignored on child widgets and on non-Mac platforms.
+     */
+    virtual void SetWindowTransform(const mozilla::gfx::Matrix& aTransform) {}
+
     /*
      * On Mac OS X, this method shows or hides the pill button in the titlebar
      * that's used to collapse the toolbar.
@@ -1260,6 +1288,13 @@ class nsIWidget : public nsISupports
     virtual void PrepareWindowEffects() = 0;
 
     /**
+     * Called on the main thread at the end of WebRender display list building.
+     */
+    virtual void AddWindowOverlayWebRenderCommands(mozilla::layers::WebRenderBridgeChild* aWrBridge,
+                                                   mozilla::wr::DisplayListBuilder& aBuilder,
+                                                   mozilla::wr::IpcResourceUpdateQueue& aResources) {}
+
+    /**
      * Called when Gecko knows which themed widgets exist in this window.
      * The passed array contains an entry for every themed widget of the right
      * type (currently only NS_THEME_TOOLBAR) within the window, except for
@@ -1361,7 +1396,7 @@ class nsIWidget : public nsISupports
      * not need a layers update to process the event.
      */
     virtual void SetConfirmedTargetAPZC(uint64_t aInputBlockId,
-                                        const nsTArray<mozilla::layers::ScrollableLayerGuid>& aTargets) const = 0;
+                                        const nsTArray<ScrollableLayerGuid>& aTargets) const = 0;
 
     /**
      * Returns true if APZ is in use, false otherwise.
@@ -1372,6 +1407,7 @@ class nsIWidget : public nsISupports
      * Enables the dropping of files to a widget.
      */
     virtual void EnableDragDrop(bool aEnable) = 0;
+    virtual nsresult AsyncEnableDragDrop(bool aEnable) = 0;
 
     /**
      * Enables/Disables system mouse capture.
@@ -1645,6 +1681,21 @@ class nsIWidget : public nsISupports
 
     virtual void StartAsyncScrollbarDrag(const AsyncDragMetrics& aDragMetrics) = 0;
 
+    /**
+     * Notify APZ to start autoscrolling.
+     * @param aAnchorLocation the location of the autoscroll anchor
+     * @param aGuid identifies the scroll frame to be autoscrolled
+     * @return true if APZ has been successfully notified
+     */
+    virtual bool StartAsyncAutoscroll(const ScreenPoint& aAnchorLocation,
+                                      const ScrollableLayerGuid& aGuid) = 0;
+
+    /**
+     * Notify APZ to stop autoscrolling.
+     * @param aGuid identifies the scroll frame which is being autoscrolled.
+     */
+    virtual void StopAsyncAutoscroll(const ScrollableLayerGuid& aGuid) = 0;
+
     // If this widget supports out-of-process compositing, it can override
     // this method to provide additional information to the compositor.
     virtual void GetCompositorWidgetInitData(mozilla::widget::CompositorWidgetInitData* aInitData)
@@ -1679,6 +1730,14 @@ private:
   static int32_t sPointerIdCounter;
 
 public:
+    /**
+     * If key events have not been handled by content or XBL handlers, they can
+     * be offered to the system (for custom application shortcuts set in system
+     * preferences, for example).
+     */
+    virtual void
+    PostHandleKeyEvent(mozilla::WidgetKeyboardEvent* aEvent);
+
     /**
      * Activates a native menu item at the position specified by the index
      * string. The index string is a string of positive integers separated
@@ -1801,26 +1860,27 @@ public:
     virtual MOZ_MUST_USE nsresult
     AttachNativeKeyEvent(mozilla::WidgetKeyboardEvent& aEvent) = 0;
 
-    /*
-     * Execute native key bindings for aType.
+    /**
+     * Retrieve edit commands when the key combination of aEvent is used
+     * in platform native applications.
      */
-    typedef void (*DoCommandCallback)(mozilla::Command, void*);
-    enum NativeKeyBindingsType
+    enum NativeKeyBindingsType : uint8_t
     {
       NativeKeyBindingsForSingleLineEditor,
       NativeKeyBindingsForMultiLineEditor,
       NativeKeyBindingsForRichTextEditor
     };
-    virtual bool ExecuteNativeKeyBinding(
-                        NativeKeyBindingsType aType,
-                        const mozilla::WidgetKeyboardEvent& aEvent,
-                        DoCommandCallback aCallback,
-                        void* aCallbackData) = 0;
+    virtual void GetEditCommands(NativeKeyBindingsType aType,
+                                 const mozilla::WidgetKeyboardEvent& aEvent,
+                                 nsTArray<mozilla::CommandInt>& aCommands);
 
     /*
-     * Retrieves preference for IME updates
+     * Retrieves a reference to notification requests of IME.  Note that the
+     * reference is valid while the nsIWidget instance is alive.  So, if you
+     * need to store the reference for a long time, you need to grab the widget
+     * instance too.
      */
-    virtual IMENotificationRequests GetIMENotificationRequests() = 0;
+    const IMENotificationRequests& IMENotificationRequestsRef();
 
     /*
      * Call this method when a dialog is opened which has a default button.
@@ -1940,6 +2000,13 @@ public:
     { return nullptr; }
 
     /**
+     * Returns true if the widget requires synchronous repaints on resize,
+     * false otherwise.
+     */
+    virtual bool SynchronouslyRepaintOnResize()
+    { return true; }
+
+    /**
      * Some platforms (only cocoa right now) round widget coordinates to the
      * nearest even pixels (see bug 892994), this function allows us to
      * determine how widget coordinates will be rounded.
@@ -2006,6 +2073,31 @@ public:
                    const bool aIsVertical,
                    const LayoutDeviceIntPoint& aPoint)
     { }
+
+#if defined(MOZ_WIDGET_ANDROID)
+    /**
+     * RecvToolbarAnimatorMessageFromCompositor receive message from compositor thread.
+     *
+     * @param aMessage message being sent to Android UI thread.
+     */
+    virtual void RecvToolbarAnimatorMessageFromCompositor(int32_t aMessage) = 0;
+
+    /**
+     * UpdateRootFrameMetrics steady state frame metrics send from compositor thread
+     *
+     * @param aScrollOffset  page scroll offset value in screen pixels.
+     * @param aZoom          current page zoom.
+     */
+    virtual void UpdateRootFrameMetrics(const ScreenPoint& aScrollOffset, const CSSToScreenScale& aZoom) = 0;
+
+    /**
+     * RecvScreenPixels Buffer containing the pixel from the frame buffer. Used for android robocop tests.
+     *
+     * @param aMem  shared memory containing the frame buffer pixels.
+     * @param aSize size of the buffer in screen pixels.
+     */
+    virtual void RecvScreenPixels(mozilla::ipc::Shmem&& aMem, const ScreenIntSize& aSize) = 0;
+#endif
 
 protected:
     /**

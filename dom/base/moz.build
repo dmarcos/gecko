@@ -4,6 +4,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+with Files('*Selection*'):
+    BUG_COMPONENT = ('Core', 'Selection')
+
 with Files("**"):
     BUG_COMPONENT = ("Core", "DOM")
 
@@ -12,7 +15,6 @@ TEST_DIRS += ['test']
 XPIDL_SOURCES += [
     'mozIDOMWindow.idl',
     'nsIContentPolicy.idl',
-    'nsIContentPolicyBase.idl',
     'nsIDocumentEncoder.idl',
     'nsIDOMDataChannel.idl',
     'nsIDOMDOMCursor.idl',
@@ -27,13 +29,11 @@ XPIDL_SOURCES += [
     'nsIObjectLoadingContent.idl',
     'nsIRemoteWindowContext.idl',
     'nsIScriptChannel.idl',
-    'nsIScriptLoaderObserver.idl',
     'nsISelection.idl',
     'nsISelectionController.idl',
     'nsISelectionDisplay.idl',
     'nsISelectionListener.idl',
     'nsISelectionPrivate.idl',
-    'nsISimpleContentPolicy.idl',
     'nsISlowScriptDebug.idl',
 ]
 
@@ -71,6 +71,7 @@ EXPORTS += [
     'nsDOMJSUtils.h',
     'nsDOMNavigationTiming.h',
     'nsDOMString.h',
+    'nsDOMTokenList.h',
     'nsFocusManager.h',
     'nsFrameMessageManager.h',
     'nsGenericDOMDataNode.h',
@@ -82,6 +83,7 @@ EXPORTS += [
     'nsIContentInlines.h',
     'nsIContentIterator.h',
     'nsIContentSerializer.h',
+    'nsIdentifierMapEntry.h',
     'nsIDocument.h',
     'nsIDocumentInlines.h',
     'nsIDocumentObserver.h',
@@ -92,7 +94,6 @@ EXPORTS += [
     'nsINode.h',
     'nsINodeList.h',
     'nsIScriptContext.h',
-    'nsIScriptElement.h',
     'nsIScriptGlobalObject.h',
     'nsIScriptNameSpaceManager.h',
     'nsIScriptObjectPrincipal.h',
@@ -111,22 +112,23 @@ EXPORTS += [
     'nsPIWindowRoot.h',
     'nsPropertyTable.h',
     'nsRange.h',
-    'nsReferencedElement.h',
     'nsSandboxFlags.h',
-    'nsScriptLoader.h',
     'nsStructuredCloneContainer.h',
     'nsStubAnimationObserver.h',
     'nsStubDocumentObserver.h',
     'nsStubMutationObserver.h',
     'nsStyledElement.h',
+    'nsStyleLinkElement.h',
     'nsTextFragment.h',
     'nsTraversal.h',
     'nsTreeSanitizer.h',
     'nsViewportInfo.h',
     'nsWindowMemoryReporter.h',
+    'nsWindowSizes.h',
     'nsWrapperCache.h',
     'nsWrapperCacheInlines.h',
     'nsXMLNameSpaceMap.h',
+    'XPathGenerator.h',
 ]
 
 if CONFIG['MOZ_WEBRTC']:
@@ -139,6 +141,7 @@ EXPORTS.mozilla += [
     'CORSMode.h',
     'FeedWriterEnabled.h',
     'FlushType.h',
+    'RangeBoundary.h',
     'TextInputProcessor.h',
     'UseCounter.h',
 ]
@@ -182,9 +185,10 @@ EXPORTS.mozilla.dom += [
     'GroupedSHistory.h',
     'IdleDeadline.h',
     'IdleRequest.h',
+    'IDTracker.h',
     'ImageEncoder.h',
     'ImageTracker.h',
-    'ImportManager.h',
+    'IntlUtils.h',
     'Link.h',
     'Location.h',
     'NameSpaceConstants.h',
@@ -198,10 +202,12 @@ EXPORTS.mozilla.dom += [
     'ResponsiveImageSelector.h',
     'SameProcessMessageQueue.h',
     'ScreenOrientation.h',
-    'ScriptSettings.h',
+    'Selection.h',
     'ShadowRoot.h',
+    'StructuredCloneBlob.h',
     'StructuredCloneHolder.h',
     'StructuredCloneTags.h',
+    'StyleScope.h',
     'StyleSheetList.h',
     'SubtleCrypto.h',
     'TabGroup.h',
@@ -211,7 +217,6 @@ EXPORTS.mozilla.dom += [
     'TimeoutManager.h',
     'TreeWalker.h',
     'WebKitCSSMatrix.h',
-    'WebSocket.h',
     'WindowOrientationObserver.h',
 ]
 
@@ -255,9 +260,10 @@ UNIFIED_SOURCES += [
     'GroupedSHistory.cpp',
     'IdleDeadline.cpp',
     'IdleRequest.cpp',
+    'IDTracker.cpp',
     'ImageEncoder.cpp',
     'ImageTracker.cpp',
-    'ImportManager.cpp',
+    'IntlUtils.cpp',
     'Link.cpp',
     'Location.cpp',
     'Navigator.cpp',
@@ -313,10 +319,7 @@ UNIFIED_SOURCES += [
     'nsPropertyTable.cpp',
     'nsQueryContentEventResult.cpp',
     'nsRange.cpp',
-    'nsReferencedElement.cpp',
     'nsScreen.cpp',
-    'nsScriptElement.cpp',
-    'nsScriptLoader.cpp',
     'nsScriptNameSpaceManager.cpp',
     'nsStructuredCloneContainer.cpp',
     'nsStubAnimationObserver.cpp',
@@ -343,9 +346,12 @@ UNIFIED_SOURCES += [
     'ResponsiveImageSelector.cpp',
     'SameProcessMessageQueue.cpp',
     'ScreenOrientation.cpp',
-    'ScriptSettings.cpp',
+    'Selection.cpp',
+    'SelectionChangeListener.cpp',
     'ShadowRoot.cpp',
+    'StructuredCloneBlob.cpp',
     'StructuredCloneHolder.cpp',
+    'StyleScope.cpp',
     'StyleSheetList.cpp',
     'SubtleCrypto.cpp',
     'TabGroup.cpp',
@@ -353,13 +359,16 @@ UNIFIED_SOURCES += [
     'TextInputProcessor.cpp',
     'ThirdPartyUtil.cpp',
     'Timeout.cpp',
+    'TimeoutBudgetManager.cpp',
+    'TimeoutExecutor.cpp',
     'TimeoutHandler.cpp',
     'TimeoutManager.cpp',
     'TreeWalker.cpp',
     'WebKitCSSMatrix.cpp',
-    'WebSocket.cpp',
+    'WindowDestroyedEvent.cpp',
     'WindowNamedPropertiesHandler.cpp',
     'WindowOrientationObserver.cpp',
+    'XPathGenerator.cpp',
 ]
 
 if CONFIG['MOZ_WEBRTC']:
@@ -372,14 +381,6 @@ if CONFIG['FUZZING']:
         'FuzzingFunctions.cpp',
     ]
 
-if CONFIG['ENABLE_INTL_API']:
-    UNIFIED_SOURCES += [
-        'IntlUtils.cpp',
-    ]
-    EXPORTS.mozilla.dom += [
-        'IntlUtils.h',
-    ]
-
 # these files couldn't be in UNIFIED_SOURCES for now for reasons given below:
 SOURCES += [
     # Several conflicts with other bindings.
@@ -390,8 +391,9 @@ SOURCES += [
     'nsDOMWindowUtils.cpp',
     # Conflicts with windows.h's definition of SendMessage.
     'nsFrameMessageManager.cpp',
-    # This file has a #error "Never include windows.h in this file!"
-    'nsGlobalWindow.cpp',
+    # These files have a #error "Never include windows.h in this file!"
+    'nsGlobalWindowInner.cpp',
+    'nsGlobalWindowOuter.cpp',
     # Conflicts with windows.h's definition of LoadImage.
     'nsImageLoadingContent.cpp',
     # Because of OS X headers.
@@ -409,8 +411,6 @@ if CONFIG['INTEL_ARCHITECTURE']:
 EXTRA_COMPONENTS += [
     'contentAreaDropListener.js',
     'contentAreaDropListener.manifest',
-    'messageWakeupService.js',
-    'messageWakeupService.manifest',
     'ProcessSelector.js',
     'ProcessSelector.manifest',
     'SlowScriptDebug.js',
@@ -459,11 +459,6 @@ LOCAL_INCLUDES += [
     '/xpcom/ds',
 ]
 
-if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
-    LOCAL_INCLUDES += [
-        '../system/gonk',
-    ]
-
 if CONFIG['MOZ_WEBRTC']:
     LOCAL_INCLUDES += [
         '/netwerk/sctp/datachannel',
@@ -492,5 +487,5 @@ counterlist = GENERATED_FILES['UseCounterList.h']
 counterlist.script = 'gen-usecounters.py:use_counter_list'
 counterlist.inputs = ['UseCounters.conf']
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

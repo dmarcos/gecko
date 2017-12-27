@@ -20,7 +20,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(VRMockDisplay,
                                                 DOMEventTargetHelper)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(VRMockDisplay)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(VRMockDisplay)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 NS_IMPL_ADDREF_INHERITED(VRMockDisplay, DOMEventTargetHelper)
@@ -28,6 +28,8 @@ NS_IMPL_RELEASE_INHERITED(VRMockDisplay, DOMEventTargetHelper)
 
 VRMockDisplay::VRMockDisplay(const nsCString& aID, uint32_t aDeviceID)
  : mDeviceID(aDeviceID)
+ , mDisplayInfo{}
+ , mSensorState{}
  , mTimestamp(TimeStamp::Now())
 {
   mDisplayInfo.mDisplayName = aID;
@@ -158,7 +160,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(VRMockController,
                                                 DOMEventTargetHelper)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(VRMockController)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(VRMockController)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 NS_IMPL_ADDREF_INHERITED(VRMockController, DOMEventTargetHelper)
@@ -212,6 +214,7 @@ VRMockController::NewPoseMove(const Nullable<Float32Array>& aPosition,
     poseState.orientation[1] = value.Data()[1];
     poseState.orientation[2] = value.Data()[2];
     poseState.orientation[3] = value.Data()[3];
+    poseState.isOrientationValid = true;
   }
   if (!aPosition.IsNull()) {
     const Float32Array& value = aPosition.Value();
@@ -220,6 +223,7 @@ VRMockController::NewPoseMove(const Nullable<Float32Array>& aPosition,
     poseState.position[0] = value.Data()[0];
     poseState.position[1] = value.Data()[1];
     poseState.position[2] = value.Data()[2];
+    poseState.isPositionValid = true;
   }
   if (!aAngularVelocity.IsNull()) {
     const Float32Array& value = aAngularVelocity.Value();
@@ -266,7 +270,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(VRServiceTest,
                                                 DOMEventTargetHelper)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(VRServiceTest)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(VRServiceTest)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 NS_IMPL_ADDREF_INHERITED(VRServiceTest, DOMEventTargetHelper)
@@ -295,9 +299,6 @@ VRServiceTest::VRServiceTest(nsPIDOMWindowInner* aWindow)
   gfx::VRManagerChild* vm = gfx::VRManagerChild::Get();
   vm->SendCreateVRTestSystem();
 }
-
-VRServiceTest::~VRServiceTest()
-{}
 
 void
 VRServiceTest::Shutdown()

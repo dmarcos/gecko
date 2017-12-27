@@ -15,6 +15,7 @@
 #include "nsIUrlClassifierHashCompleter.h"
 #include "nsIUrlListManager.h"
 #include "nsIUrlClassifierDBService.h"
+#include "nsIUrlClassifierInfo.h"
 #include "nsIURIClassifier.h"
 #include "nsToolkitCompsCID.h"
 #include "nsICryptoHMAC.h"
@@ -41,6 +42,27 @@
 // The hash length of a complete hash entry.
 #define COMPLETE_LENGTH 32
 
+// Prefs for implementing nsIURIClassifier to block page loads
+#define CHECK_MALWARE_PREF      "browser.safebrowsing.malware.enabled"
+#define CHECK_MALWARE_DEFAULT   false
+
+#define CHECK_PHISHING_PREF     "browser.safebrowsing.phishing.enabled"
+#define CHECK_PHISHING_DEFAULT  false
+
+#define CHECK_BLOCKED_PREF      "browser.safebrowsing.blockedURIs.enabled"
+#define CHECK_BLOCKED_DEFAULT   false
+
+// Comma-separated lists
+#define MALWARE_TABLE_PREF              "urlclassifier.malwareTable"
+#define PHISH_TABLE_PREF                "urlclassifier.phishTable"
+#define TRACKING_TABLE_PREF             "urlclassifier.trackingTable"
+#define TRACKING_WHITELIST_TABLE_PREF   "urlclassifier.trackingWhitelistTable"
+#define BLOCKED_TABLE_PREF              "urlclassifier.blockedTable"
+#define DOWNLOAD_BLOCK_TABLE_PREF       "urlclassifier.downloadBlockTable"
+#define DOWNLOAD_ALLOW_TABLE_PREF       "urlclassifier.downloadAllowTable"
+#define DISALLOW_COMPLETION_TABLE_PREF  "urlclassifier.disallow_completions"
+#define PASSWORD_ALLOW_TABLE_PREF       "urlclassifier.passwordAllowTable"
+
 using namespace mozilla::safebrowsing;
 
 class nsUrlClassifierDBServiceWorker;
@@ -59,10 +81,11 @@ TablesToResponse(const nsACString& tables);
 } // namespace safebrowsing
 } // namespace mozilla
 
-// This is a proxy class that just creates a background thread and delagates
+// This is a proxy class that just creates a background thread and delegates
 // calls to the background thread.
 class nsUrlClassifierDBService final : public nsIUrlClassifierDBService,
                                        public nsIURIClassifier,
+                                       public nsIUrlClassifierInfo,
                                        public nsIObserver
 {
 public:
@@ -78,18 +101,34 @@ public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIURLCLASSIFIERDBSERVICE
   NS_DECL_NSIURICLASSIFIER
+  NS_DECL_NSIURLCLASSIFIERINFO
   NS_DECL_NSIOBSERVER
 
+  bool CanComplete(const nsACString &tableName);
   bool GetCompleter(const nsACString& tableName,
-                      nsIUrlClassifierHashCompleter** completer);
+                    nsIUrlClassifierHashCompleter** completer);
   nsresult CacheCompletions(mozilla::safebrowsing::CacheResultArray *results);
-  nsresult CacheMisses(mozilla::safebrowsing::PrefixArray *results);
 
   static nsIThread* BackgroundThread();
 
   static bool ShutdownHasStarted();
 
 private:
+
+  const nsTArray<nsCString> kObservedPrefs = {
+    NS_LITERAL_CSTRING(CHECK_MALWARE_PREF),
+    NS_LITERAL_CSTRING(CHECK_PHISHING_PREF),
+    NS_LITERAL_CSTRING(CHECK_BLOCKED_PREF),
+    NS_LITERAL_CSTRING(MALWARE_TABLE_PREF),
+    NS_LITERAL_CSTRING(PHISH_TABLE_PREF),
+    NS_LITERAL_CSTRING(TRACKING_TABLE_PREF),
+    NS_LITERAL_CSTRING(TRACKING_WHITELIST_TABLE_PREF),
+    NS_LITERAL_CSTRING(BLOCKED_TABLE_PREF),
+    NS_LITERAL_CSTRING(DOWNLOAD_BLOCK_TABLE_PREF),
+    NS_LITERAL_CSTRING(DOWNLOAD_ALLOW_TABLE_PREF),
+    NS_LITERAL_CSTRING(DISALLOW_COMPLETION_TABLE_PREF)
+  };
+
   // No subclassing
   ~nsUrlClassifierDBService();
 
@@ -101,6 +140,9 @@ private:
                      nsIUrlClassifierCallback* c,
                      bool forceCheck, bool *didCheck);
 
+  // Post an event to worker thread to release objects when receive 'quit-application'
+  nsresult PreShutdown();
+
   // Close db connection and join the background thread if it exists.
   nsresult Shutdown();
 
@@ -108,11 +150,7 @@ private:
   nsresult CheckClean(const nsACString &lookupKey,
                       bool *clean);
 
-  // Read everything into mGethashTables and mDisallowCompletionTables
   nsresult ReadTablesFromPrefs();
-
-  // Build a comma-separated list of tables to check
-  void BuildTables(bool trackingProtectionEnabled, nsCString& tables);
 
   RefPtr<nsUrlClassifierDBServiceWorker> mWorker;
   RefPtr<UrlClassifierDBServiceWorkerProxy> mWorkerProxy;
@@ -143,6 +181,10 @@ private:
   // The list of tables that should never be hash completed.
   nsTArray<nsCString> mDisallowCompletionsTables;
 
+  // Comma-separated list of tables to use in lookups.
+  nsCString mTrackingProtectionTables;
+  nsCString mBaseTables;
+
   // Thread that we do the updates on.
   static nsIThread* gDbBackgroundThread;
 };
@@ -155,7 +197,9 @@ public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIURLCLASSIFIERDBSERVICE
 
-  nsresult Init(uint32_t aGethashNoise, nsCOMPtr<nsIFile> aCacheDir);
+  nsresult Init(uint32_t aGethashNoise,
+                nsCOMPtr<nsIFile> aCacheDir,
+                nsUrlClassifierDBService* aDBService);
 
   // Queue a lookup for the worker to perform, called in the main thread.
   // tables is a comma-separated list of tables to query
@@ -179,13 +223,17 @@ public:
   // Provide a way to forcibly close the db connection.
   nsresult GCC_MANGLING_WORKAROUND CloseDb();
 
+  nsresult GCC_MANGLING_WORKAROUND PreShutdown();
+
   nsresult CacheCompletions(CacheResultArray * aEntries);
-  nsresult CacheMisses(PrefixArray * aEntries);
 
   // Used to probe the state of the worker thread. When the update begins,
   // mUpdateObserver will be set. When the update finished, mUpdateObserver
   // will be nulled out in NotifyUpdateObserver.
   bool IsBusyUpdating() const { return !!mUpdateObserver; }
+
+  // Check the DB ready state of the worker thread
+  bool IsDBOpened() const { return !!mClassifier; }
 
   // Delegate Classifier to disable async update. If there is an
   // ongoing update on the update thread, we will be blocked until
@@ -193,6 +241,10 @@ public:
   // Should be called on the worker thread.
   void FlushAndDisableAsyncUpdate();
 
+  // A synchronous call to get cache information for the given table.
+  // This is only used by about:url-classifier now.
+  nsresult GetCacheInfo(const nsACString& aTable,
+                        nsIUrlClassifierCacheInfo** aCache);
 private:
   // No subclassing
   ~nsUrlClassifierDBServiceWorker();
@@ -223,9 +275,6 @@ private:
 
   bool IsSameAsLastResults(CacheResultArray& aResult);
 
-  // Can only be used on the background thread
-  nsCOMPtr<nsICryptoHash> mCryptoHash;
-
   nsAutoPtr<mozilla::safebrowsing::Classifier> mClassifier;
   // The class that actually parses the update chunks.
   nsAutoPtr<ProtocolParser> mProtocolParser;
@@ -233,15 +282,13 @@ private:
   // Directory where to store the SB databases.
   nsCOMPtr<nsIFile> mCacheDir;
 
+  RefPtr<nsUrlClassifierDBService> mDBService;
+
   // XXX: maybe an array of autoptrs.  Or maybe a class specifically
   // storing a series of updates.
   nsTArray<mozilla::safebrowsing::TableUpdate*> mTableUpdates;
 
   uint32_t mUpdateWaitSec;
-
-  // Entries that cannot be completed. We expect them to die at
-  // the next update
-  PrefixArray mMissCache;
 
   // Stores the last results that triggered a table update.
   nsAutoPtr<CacheResultArray> mLastResults;

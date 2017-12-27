@@ -132,58 +132,8 @@ var validGradientAndElementValues = [
   "linear-gradient(to right bottom, red, 50%, green 50%, 50%, blue)",
   "linear-gradient(to right bottom, red, 0%, green 50%, 100%, blue)",
 
-  "-moz-linear-gradient(red, blue)",
-  "-moz-linear-gradient(red, yellow, blue)",
-  "-moz-linear-gradient(red 1px, yellow 20%, blue 24em, green)",
-  "-moz-linear-gradient(red, yellow, green, blue 50%)",
-  "-moz-linear-gradient(red -50%, yellow -25%, green, blue)",
-  "-moz-linear-gradient(red -99px, yellow, green, blue 120%)",
-  "-moz-linear-gradient(#ffff00, #ef3, rgba(10, 20, 30, 0.4))",
-  "-moz-linear-gradient(rgba(10, 20, 30, 0.4), #ffff00, #ef3)",
-
-  "-moz-linear-gradient(to top, red, blue)",
-  "-moz-linear-gradient(to bottom, red, blue)",
-  "-moz-linear-gradient(to left, red, blue)",
-  "-moz-linear-gradient(to right, red, blue)",
-  "-moz-linear-gradient(to top left, red, blue)",
-  "-moz-linear-gradient(to top right, red, blue)",
-  "-moz-linear-gradient(to bottom left, red, blue)",
-  "-moz-linear-gradient(to bottom right, red, blue)",
-  "-moz-linear-gradient(to left top, red, blue)",
-  "-moz-linear-gradient(to left bottom, red, blue)",
-  "-moz-linear-gradient(to right top, red, blue)",
-  "-moz-linear-gradient(to right bottom, red, blue)",
-
-  "-moz-linear-gradient(top left, red, blue)",
-  "-moz-linear-gradient(0 0, red, blue)",
-  "-moz-linear-gradient(20% bottom, red, blue)",
-  "-moz-linear-gradient(center 20%, red, blue)",
-  "-moz-linear-gradient(left 35px, red, blue)",
-  "-moz-linear-gradient(10% 10em, red, blue)",
-  "-moz-linear-gradient(44px top, red, blue)",
-
-  "-moz-linear-gradient(0px, red, blue)",
-  "-moz-linear-gradient(0, red, blue)",
-  "-moz-linear-gradient(top left 45deg, red, blue)",
-  "-moz-linear-gradient(20% bottom -300deg, red, blue)",
-  "-moz-linear-gradient(center 20% 1.95929rad, red, blue)",
-  "-moz-linear-gradient(left 35px 30grad, red, blue)",
-  "-moz-linear-gradient(left 35px 0.1turn, red, blue)",
-  "-moz-linear-gradient(10% 10em 99999deg, red, blue)",
-  "-moz-linear-gradient(44px top -33deg, red, blue)",
-
-  "-moz-linear-gradient(-33deg, red, blue)",
-  "-moz-linear-gradient(30grad left 35px, red, blue)",
-  "-moz-linear-gradient(10deg 20px, red, blue)",
-  "-moz-linear-gradient(1turn 20px, red, blue)",
-  "-moz-linear-gradient(.414rad bottom, red, blue)",
-
-  "-moz-linear-gradient(blue calc(0px) ,green calc(25%) ,red calc(40px) ,blue calc(60px) , yellow  calc(100px))",
-  "-moz-linear-gradient(-33deg, blue calc(-25%) ,red 40px)",
-  "-moz-linear-gradient(10deg, blue calc(100px + -25%),red calc(40px))",
-  "-moz-linear-gradient(10deg, blue calc(-25px),red calc(100%))",
-  "-moz-linear-gradient(.414rad, blue calc(100px + -25px) ,green calc(100px + -25px) ,red calc(100px + -25%) ,blue calc(-25px) , yellow  calc(-25px))",
-  "-moz-linear-gradient(1turn, blue calc(-25%) ,green calc(25px) ,red calc(25%),blue calc(0px),white 50px, yellow  calc(-25px))",
+  /* Unitless 0 is valid as an <angle> */
+  "linear-gradient(0, red, blue)",
 
   "radial-gradient(red, blue)",
   "radial-gradient(red, yellow, blue)",
@@ -208,12 +158,13 @@ var validGradientAndElementValues = [
   "radial-gradient(circle, red, blue)",
   "radial-gradient(ellipse closest-corner, red, blue)",
   "radial-gradient(closest-corner ellipse, red, blue)",
+  "radial-gradient(farthest-side circle, red, blue)",
 
-  "radial-gradient(43px, red, blue)",
-  "radial-gradient(43px 43px, red, blue)",
-  "radial-gradient(50% 50%, red, blue)",
-  "radial-gradient(43px 50%, red, blue)",
-  "radial-gradient(50% 43px, red, blue)",
+  "radial-gradient(at 43px, red, blue)",
+  "radial-gradient(at 43px 43px, red, blue)",
+  "radial-gradient(at 50% 50%, red, blue)",
+  "radial-gradient(at 43px 50%, red, blue)",
+  "radial-gradient(at 50% 43px, red, blue)",
   "radial-gradient(circle 43px, red, blue)",
   "radial-gradient(43px circle, red, blue)",
   "radial-gradient(ellipse 43px 43px, red, blue)",
@@ -232,108 +183,16 @@ var validGradientAndElementValues = [
   "radial-gradient(50px 60px at 15% 20%, red, blue)",
   "radial-gradient(7em 8em at 45px, red, blue)",
 
-  "-moz-radial-gradient(red, blue)",
-  "-moz-radial-gradient(red, yellow, blue)",
-  "-moz-radial-gradient(red 1px, yellow 20%, blue 24em, green)",
-  "-moz-radial-gradient(red, yellow, green, blue 50%)",
-  "-moz-radial-gradient(red -50%, yellow -25%, green, blue)",
-  "-moz-radial-gradient(red -99px, yellow, green, blue 120%)",
-  "-moz-radial-gradient(#ffff00, #ef3, rgba(10, 20, 30, 0.4))",
+  "radial-gradient(circle at 15% 20%, red, blue)",
 
-  "-moz-radial-gradient(top left, red, blue)",
-  "-moz-radial-gradient(20% bottom, red, blue)",
-  "-moz-radial-gradient(center 20%, red, blue)",
-  "-moz-radial-gradient(left 35px, red, blue)",
-  "-moz-radial-gradient(10% 10em, red, blue)",
-  "-moz-radial-gradient(44px top, red, blue)",
-
-  "-moz-radial-gradient(top left 45deg, red, blue)",
-  "-moz-radial-gradient(0 0, red, blue)",
-  "-moz-radial-gradient(20% bottom -300deg, red, blue)",
-  "-moz-radial-gradient(center 20% 1.95929rad, red, blue)",
-  "-moz-radial-gradient(left 35px 30grad, red, blue)",
-  "-moz-radial-gradient(10% 10em 99999deg, red, blue)",
-  "-moz-radial-gradient(44px top -33deg, red, blue)",
-  "-moz-radial-gradient(rgba(10, 20, 30, 0.4), #ffff00, #ef3)",
-
-  "-moz-radial-gradient(-33deg, red, blue)",
-  "-moz-radial-gradient(30grad left 35px, red, blue)",
-  "-moz-radial-gradient(10deg 20px, red, blue)",
-  "-moz-radial-gradient(.414rad bottom, red, blue)",
-
-  "-moz-radial-gradient(cover, red, blue)",
-  "-moz-radial-gradient(cover circle, red, blue)",
-  "-moz-radial-gradient(contain, red, blue)",
-  "-moz-radial-gradient(contain ellipse, red, blue)",
-  "-moz-radial-gradient(circle, red, blue)",
-  "-moz-radial-gradient(ellipse closest-corner, red, blue)",
-  "-moz-radial-gradient(farthest-side circle, red, blue)",
-
-  "-moz-radial-gradient(top left, cover, red, blue)",
-  "-moz-radial-gradient(15% 20%, circle, red, blue)",
-  "-moz-radial-gradient(45px, ellipse closest-corner, red, blue)",
-  "-moz-radial-gradient(45px, farthest-side circle, red, blue)",
-
-  "-moz-radial-gradient(99deg, cover, red, blue)",
-  "-moz-radial-gradient(-1.2345rad, circle, red, blue)",
-  "-moz-radial-gradient(399grad, ellipse closest-corner, red, blue)",
-  "-moz-radial-gradient(399grad, farthest-side circle, red, blue)",
-
-  "-moz-radial-gradient(top left 99deg, cover, red, blue)",
-  "-moz-radial-gradient(15% 20% -1.2345rad, circle, red, blue)",
-  "-moz-radial-gradient(45px 399grad, ellipse closest-corner, red, blue)",
-  "-moz-radial-gradient(45px 399grad, farthest-side circle, red, blue)",
-
-  "-moz-repeating-linear-gradient(red, blue)",
-  "-moz-repeating-linear-gradient(red, yellow, blue)",
-  "-moz-repeating-linear-gradient(red 1px, yellow 20%, blue 24em, green)",
-  "-moz-repeating-linear-gradient(red, yellow, green, blue 50%)",
-  "-moz-repeating-linear-gradient(red -50%, yellow -25%, green, blue)",
-  "-moz-repeating-linear-gradient(red -99px, yellow, green, blue 120%)",
-  "-moz-repeating-linear-gradient(#ffff00, #ef3, rgba(10, 20, 30, 0.4))",
-  "-moz-repeating-linear-gradient(rgba(10, 20, 30, 0.4), #ffff00, #ef3)",
-
-  "-moz-repeating-linear-gradient(to top, red, blue)",
-  "-moz-repeating-linear-gradient(to bottom, red, blue)",
-  "-moz-repeating-linear-gradient(to left, red, blue)",
-  "-moz-repeating-linear-gradient(to right, red, blue)",
-  "-moz-repeating-linear-gradient(to top left, red, blue)",
-  "-moz-repeating-linear-gradient(to top right, red, blue)",
-  "-moz-repeating-linear-gradient(to bottom left, red, blue)",
-  "-moz-repeating-linear-gradient(to bottom right, red, blue)",
-  "-moz-repeating-linear-gradient(to left top, red, blue)",
-  "-moz-repeating-linear-gradient(to left bottom, red, blue)",
-  "-moz-repeating-linear-gradient(to right top, red, blue)",
-  "-moz-repeating-linear-gradient(to right bottom, red, blue)",
-
-  "-moz-repeating-linear-gradient(top left, red, blue)",
-  "-moz-repeating-linear-gradient(0 0, red, blue)",
-  "-moz-repeating-linear-gradient(20% bottom, red, blue)",
-  "-moz-repeating-linear-gradient(center 20%, red, blue)",
-  "-moz-repeating-linear-gradient(left 35px, red, blue)",
-  "-moz-repeating-linear-gradient(10% 10em, red, blue)",
-  "-moz-repeating-linear-gradient(44px top, red, blue)",
-
-  "-moz-repeating-linear-gradient(top left 45deg, red, blue)",
-  "-moz-repeating-linear-gradient(20% bottom -300deg, red, blue)",
-  "-moz-repeating-linear-gradient(center 20% 1.95929rad, red, blue)",
-  "-moz-repeating-linear-gradient(left 35px 30grad, red, blue)",
-  "-moz-repeating-linear-gradient(10% 10em 99999deg, red, blue)",
-  "-moz-repeating-linear-gradient(44px top -33deg, red, blue)",
-
-  "-moz-repeating-linear-gradient(-33deg, red, blue)",
-  "-moz-repeating-linear-gradient(30grad left 35px, red, blue)",
-  "-moz-repeating-linear-gradient(10deg 20px, red, blue)",
-  "-moz-repeating-linear-gradient(.414rad bottom, red, blue)",
-
-  "-moz-repeating-radial-gradient(red, blue)",
-  "-moz-repeating-radial-gradient(red, yellow, blue)",
-  "-moz-repeating-radial-gradient(red 1px, yellow 20%, blue 24em, green)",
-  "-moz-repeating-radial-gradient(red, yellow, green, blue 50%)",
-  "-moz-repeating-radial-gradient(red -50%, yellow -25%, green, blue)",
-  "-moz-repeating-radial-gradient(red -99px, yellow, green, blue 120%)",
-  "-moz-repeating-radial-gradient(#ffff00, #ef3, rgba(10, 20, 30, 0.4))",
-  "-moz-repeating-radial-gradient(rgba(10, 20, 30, 0.4), #ffff00, #ef3)",
+  "repeating-radial-gradient(red, blue)",
+  "repeating-radial-gradient(red, yellow, blue)",
+  "repeating-radial-gradient(red 1px, yellow 20%, blue 24em, green)",
+  "repeating-radial-gradient(red, yellow, green, blue 50%)",
+  "repeating-radial-gradient(red -50%, yellow -25%, green, blue)",
+  "repeating-radial-gradient(red -99px, yellow, green, blue 120%)",
+  "repeating-radial-gradient(#ffff00, #ef3, rgba(10, 20, 30, 0.4))",
+  "repeating-radial-gradient(rgba(10, 20, 30, 0.4), #ffff00, #ef3)",
 
   "repeating-radial-gradient(at top left, red, blue)",
   "repeating-radial-gradient(at 0 0, red, blue)",
@@ -342,10 +201,6 @@ var validGradientAndElementValues = [
   "repeating-radial-gradient(at left 35px, red, blue)",
   "repeating-radial-gradient(at 10% 10em, red, blue)",
   "repeating-radial-gradient(at 44px top, red, blue)",
-
-  "-moz-repeating-radial-gradient(farthest-corner, red, blue)",
-  "-moz-repeating-radial-gradient(circle, red, blue)",
-  "-moz-repeating-radial-gradient(ellipse closest-corner, red, blue)",
 
   "repeating-radial-gradient(farthest-corner at top left, red, blue)",
   "repeating-radial-gradient(closest-corner ellipse at 45px, red, blue)",
@@ -361,18 +216,18 @@ var validGradientAndElementValues = [
   "-moz-image-rect(url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==), 10%, 50%, 30%, 0%)",
   "-moz-image-rect(url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==), 10, 50%, 30%, 0)",
 
-  "-moz-radial-gradient(calc(25%) top, red, blue)",
-  "-moz-radial-gradient(left calc(25%), red, blue)",
-  "-moz-radial-gradient(calc(25px) top, red, blue)",
-  "-moz-radial-gradient(left calc(25px), red, blue)",
-  "-moz-radial-gradient(calc(-25%) top, red, blue)",
-  "-moz-radial-gradient(left calc(-25%), red, blue)",
-  "-moz-radial-gradient(calc(-25px) top, red, blue)",
-  "-moz-radial-gradient(left calc(-25px), red, blue)",
-  "-moz-radial-gradient(calc(100px + -25%) top, red, blue)",
-  "-moz-radial-gradient(left calc(100px + -25%), red, blue)",
-  "-moz-radial-gradient(calc(100px + -25px) top, red, blue)",
-  "-moz-radial-gradient(left calc(100px + -25px), red, blue)"
+  "radial-gradient(at calc(25%) top, red, blue)",
+  "radial-gradient(at left calc(25%), red, blue)",
+  "radial-gradient(at calc(25px) top, red, blue)",
+  "radial-gradient(at left calc(25px), red, blue)",
+  "radial-gradient(at calc(-25%) top, red, blue)",
+  "radial-gradient(at left calc(-25%), red, blue)",
+  "radial-gradient(at calc(-25px) top, red, blue)",
+  "radial-gradient(at left calc(-25px), red, blue)",
+  "radial-gradient(at calc(100px + -25%) top, red, blue)",
+  "radial-gradient(at left calc(100px + -25%), red, blue)",
+  "radial-gradient(at calc(100px + -25px) top, red, blue)",
+  "radial-gradient(at left calc(100px + -25px), red, blue)"
 ];
 var invalidGradientAndElementValues = [
   "-moz-element(#a:1)",
@@ -383,155 +238,19 @@ var invalidGradientAndElementValues = [
   /* no quirks mode colors */
   "linear-gradient(red, ff00ff)",
   /* no quirks mode colors */
-  "-moz-radial-gradient(10% bottom, ffffff, black) scroll no-repeat",
+  "radial-gradient(at 10% bottom, ffffff, black) scroll no-repeat",
   /* no quirks mode lengths */
-  "-moz-linear-gradient(10 10px -45deg, red, blue) repeat",
-  "-moz-linear-gradient(10px 10 -45deg, red, blue) repeat",
   "linear-gradient(red -99, yellow, green, blue 120%)",
-  /* Unitless 0 is invalid as an <angle> */
-  "-moz-linear-gradient(top left 0, red, blue)",
-  "-moz-linear-gradient(5px 5px 0, red, blue)",
-  "linear-gradient(0, red, blue)",
+  /* Unitless nonzero numbers are valid as an <angle> */
+  "linear-gradient(30, red, blue)",
+  /* There must be a comma between gradient-line (e.g. <angle>) and colors */
+  "linear-gradient(30deg red, blue)",
+  "linear-gradient(to top left red, blue)",
+  "linear-gradient(to right red, blue)",
   /* Invalid color, calc() or -moz-image-rect() function */
   "linear-gradient(red, rgb(0, rubbish, 0) 50%, red)",
   "linear-gradient(red, red calc(50% + rubbish), red)",
   "linear-gradient(to top calc(50% + rubbish), red, blue)",
-  /* Old syntax */
-  "-moz-linear-gradient(10px 10px, 20px, 30px 30px, 40px, from(blue), to(red))",
-  "-moz-radial-gradient(20px 20px, 10px 10px, from(green), to(#ff00ff))",
-  "-moz-radial-gradient(10px 10px, 20%, 40px 40px, 10px, from(green), to(#ff00ff))",
-  "-moz-linear-gradient(10px, 20px, 30px, 40px, color-stop(0.5, #00ccff))",
-  "-moz-linear-gradient(20px 20px, from(blue), to(red))",
-  "-moz-linear-gradient(40px 40px, 10px 10px, from(blue) to(red) color-stop(10%, fuchsia))",
-  "-moz-linear-gradient(20px 20px 30px, 10px 10px, from(red), to(#ff0000))",
-  "-moz-radial-gradient(left top, center, 20px 20px, 10px, from(blue), to(red))",
-  "-moz-linear-gradient(left left, top top, from(blue))",
-  "-moz-linear-gradient(inherit, 10px 10px, from(blue))",
-  /* New syntax */
-  "-moz-linear-gradient(10px 10px, 20px, 30px 30px, 40px, blue 0, red 100%)",
-  "-moz-radial-gradient(20px 20px, 10px 10px, from(green), to(#ff00ff))",
-  "-moz-radial-gradient(10px 10px, 20%, 40px 40px, 10px, from(green), to(#ff00ff))",
-  "-moz-linear-gradient(10px, 20px, 30px, 40px, #00ccff 50%)",
-  "-moz-linear-gradient(40px 40px, 10px 10px, blue 0 fuchsia 10% red 100%)",
-  "-moz-linear-gradient(20px 20px 30px, 10px 10px, red 0, #ff0000 100%)",
-  "-moz-radial-gradient(left top, center, 20px 20px, 10px, from(blue), to(red))",
-  "-moz-linear-gradient(left left, top top, blue 0)",
-  "-moz-linear-gradient(inherit, 10px 10px, blue 0)",
-  "-moz-linear-gradient(left left blue red)",
-  "-moz-linear-gradient(left left blue, red)",
-  "-moz-linear-gradient()",
-  "-moz-linear-gradient(cover, red, blue)",
-  "-moz-linear-gradient(auto, red, blue)",
-  "-moz-linear-gradient(22 top, red, blue)",
-  "-moz-linear-gradient(10% red blue)",
-  "-moz-linear-gradient(10%, red blue)",
-  "-moz-linear-gradient(10%,, red, blue)",
-  "-moz-linear-gradient(45px, center, red, blue)",
-  "-moz-linear-gradient(45px, center red, blue)",
-  "-moz-radial-gradient(contain, ellipse, red, blue)",
-  "-moz-radial-gradient(10deg contain, red, blue)",
-  "-moz-radial-gradient(10deg, contain,, red, blue)",
-  "-moz-radial-gradient(contain contain, red, blue)",
-  "-moz-radial-gradient(ellipse circle, red, blue)",
-  "-moz-radial-gradient(to top left, red, blue)",
-  "-moz-radial-gradient(center, 10%, red, blue)",
-  "-moz-radial-gradient(5rad, 20px, red, blue)",
-  "-moz-radial-gradient(40%, -100px -10%, red, blue)",
-
-  "-moz-radial-gradient(at top left to cover, red, blue)",
-  "-moz-radial-gradient(at 15% 20% circle, red, blue)",
-
-  "-moz-radial-gradient(to cover, red, blue)",
-  "-moz-radial-gradient(to contain, red, blue)",
-  "-moz-radial-gradient(to closest-side circle, red, blue)",
-  "-moz-radial-gradient(to farthest-corner ellipse, red, blue)",
-
-  "-moz-radial-gradient(ellipse at 45px closest-corner, red, blue)",
-  "-moz-radial-gradient(circle at 45px farthest-side, red, blue)",
-  "-moz-radial-gradient(ellipse 45px, closest-side, red, blue)",
-  "-moz-radial-gradient(circle 45px, farthest-corner, red, blue)",
-  "-moz-radial-gradient(ellipse, ellipse closest-side, red, blue)",
-  "-moz-radial-gradient(circle, circle farthest-corner, red, blue)",
-
-  "-moz-radial-gradient(99deg to farthest-corner, red, blue)",
-  "-moz-radial-gradient(-1.2345rad circle, red, blue)",
-  "-moz-radial-gradient(ellipse 399grad to closest-corner, red, blue)",
-  "-moz-radial-gradient(circle 399grad to farthest-side, red, blue)",
-
-  "-moz-radial-gradient(at top left 99deg, to farthest-corner, red, blue)",
-  "-moz-radial-gradient(circle at 15% 20% -1.2345rad, red, blue)",
-  "-moz-radial-gradient(to top left at 30% 40%, red, blue)",
-  "-moz-radial-gradient(ellipse at 45px 399grad, to closest-corner, red, blue)",
-  "-moz-radial-gradient(at 45px 399grad to farthest-side circle, red, blue)",
-
-  "-moz-radial-gradient(to 50%, red, blue)",
-  "-moz-radial-gradient(circle to 50%, red, blue)",
-  "-moz-radial-gradient(circle to 43px 43px, red, blue)",
-  "-moz-radial-gradient(circle to 50% 50%, red, blue)",
-  "-moz-radial-gradient(circle to 43px 50%, red, blue)",
-  "-moz-radial-gradient(circle to 50% 43px, red, blue)",
-  "-moz-radial-gradient(ellipse to 43px, red, blue)",
-  "-moz-radial-gradient(ellipse to 50%, red, blue)",
-
-  "-moz-linear-gradient(to 0 0, red, blue)",
-  "-moz-linear-gradient(to 20% bottom, red, blue)",
-  "-moz-linear-gradient(to center 20%, red, blue)",
-  "-moz-linear-gradient(to left 35px, red, blue)",
-  "-moz-linear-gradient(to 10% 10em, red, blue)",
-  "-moz-linear-gradient(to 44px top, red, blue)",
-  "-moz-linear-gradient(to top left 45deg, red, blue)",
-  "-moz-linear-gradient(to 20% bottom -300deg, red, blue)",
-  "-moz-linear-gradient(to center 20% 1.95929rad, red, blue)",
-  "-moz-linear-gradient(to left 35px 30grad, red, blue)",
-  "-moz-linear-gradient(to 10% 10em 99999deg, red, blue)",
-  "-moz-linear-gradient(to 44px top -33deg, red, blue)",
-  "-moz-linear-gradient(to -33deg, red, blue)",
-  "-moz-linear-gradient(to 30grad left 35px, red, blue)",
-  "-moz-linear-gradient(to 10deg 20px, red, blue)",
-  "-moz-linear-gradient(to .414rad bottom, red, blue)",
-
-  "-moz-linear-gradient(to top top, red, blue)",
-  "-moz-linear-gradient(to bottom bottom, red, blue)",
-  "-moz-linear-gradient(to left left, red, blue)",
-  "-moz-linear-gradient(to right right, red, blue)",
-
-  "-moz-repeating-linear-gradient(10px 10px, 20px, 30px 30px, 40px, blue 0, red 100%)",
-  "-moz-repeating-radial-gradient(20px 20px, 10px 10px, from(green), to(#ff00ff))",
-  "-moz-repeating-radial-gradient(10px 10px, 20%, 40px 40px, 10px, from(green), to(#ff00ff))",
-  "-moz-repeating-linear-gradient(10px, 20px, 30px, 40px, #00ccff 50%)",
-  "-moz-repeating-linear-gradient(40px 40px, 10px 10px, blue 0 fuchsia 10% red 100%)",
-  "-moz-repeating-linear-gradient(20px 20px 30px, 10px 10px, red 0, #ff0000 100%)",
-  "-moz-repeating-radial-gradient(left top, center, 20px 20px, 10px, from(blue), to(red))",
-  "-moz-repeating-linear-gradient(left left, top top, blue 0)",
-  "-moz-repeating-linear-gradient(inherit, 10px 10px, blue 0)",
-  "-moz-repeating-linear-gradient(left left blue red)",
-  "-moz-repeating-linear-gradient()",
-
-  "-moz-repeating-linear-gradient(to 0 0, red, blue)",
-  "-moz-repeating-linear-gradient(to 20% bottom, red, blue)",
-  "-moz-repeating-linear-gradient(to center 20%, red, blue)",
-  "-moz-repeating-linear-gradient(to left 35px, red, blue)",
-  "-moz-repeating-linear-gradient(to 10% 10em, red, blue)",
-  "-moz-repeating-linear-gradient(to 44px top, red, blue)",
-  "-moz-repeating-linear-gradient(to top left 45deg, red, blue)",
-  "-moz-repeating-linear-gradient(to 20% bottom -300deg, red, blue)",
-  "-moz-repeating-linear-gradient(to center 20% 1.95929rad, red, blue)",
-  "-moz-repeating-linear-gradient(to left 35px 30grad, red, blue)",
-  "-moz-repeating-linear-gradient(to 10% 10em 99999deg, red, blue)",
-  "-moz-repeating-linear-gradient(to 44px top -33deg, red, blue)",
-  "-moz-repeating-linear-gradient(to -33deg, red, blue)",
-  "-moz-repeating-linear-gradient(to 30grad left 35px, red, blue)",
-  "-moz-repeating-linear-gradient(to 10deg 20px, red, blue)",
-  "-moz-repeating-linear-gradient(to .414rad bottom, red, blue)",
-
-  "-moz-repeating-linear-gradient(to top top, red, blue)",
-  "-moz-repeating-linear-gradient(to bottom bottom, red, blue)",
-  "-moz-repeating-linear-gradient(to left left, red, blue)",
-  "-moz-repeating-linear-gradient(to right right, red, blue)",
-
-  "-moz-repeating-radial-gradient(to top left at 30% 40%, red, blue)",
-  "-moz-repeating-radial-gradient(ellipse at 45px closest-corner, red, blue)",
-  "-moz-repeating-radial-gradient(circle at 45px farthest-side, red, blue)",
 
   "radial-gradient(circle 175px 20px, black, white)",
   "radial-gradient(175px 20px circle, black, white)",
@@ -541,7 +260,7 @@ var invalidGradientAndElementValues = [
   "radial-gradient(circle 50%, red, blue)",
   "radial-gradient(50% circle, red, blue)",
 
-  /* Valid only when prefixed */
+  /* Used to be valid only when prefixed */
   "linear-gradient(top left, red, blue)",
   "linear-gradient(0 0, red, blue)",
   "linear-gradient(20% bottom, red, blue)",
@@ -599,36 +318,215 @@ var invalidGradientAndElementValues = [
   "radial-gradient(top left 99deg, cover, red, blue)",
   "radial-gradient(15% 20% -1.2345rad, circle, red, blue)",
   "radial-gradient(45px 399grad, ellipse closest-corner, red, blue)",
-  "radial-gradient(45px 399grad, farthest-side circle, red, blue)",
-
-  /* Valid only when unprefixed */
-  "-moz-radial-gradient(at top left, red, blue)",
-  "-moz-radial-gradient(at 20% bottom, red, blue)",
-  "-moz-radial-gradient(at center 20%, red, blue)",
-  "-moz-radial-gradient(at left 35px, red, blue)",
-  "-moz-radial-gradient(at 10% 10em, red, blue)",
-  "-moz-radial-gradient(at 44px top, red, blue)",
-  "-moz-radial-gradient(at 0 0, red, blue)",
-
-  "-moz-radial-gradient(circle 43px, red, blue)",
-  "-moz-radial-gradient(ellipse 43px 43px, red, blue)",
-  "-moz-radial-gradient(ellipse 50% 50%, red, blue)",
-  "-moz-radial-gradient(ellipse 43px 50%, red, blue)",
-  "-moz-radial-gradient(ellipse 50% 43px, red, blue)",
-
-  "-moz-radial-gradient(farthest-corner at top left, red, blue)",
-  "-moz-radial-gradient(ellipse closest-corner at 45px, red, blue)",
-  "-moz-radial-gradient(circle farthest-side at 45px, red, blue)",
-  "-moz-radial-gradient(closest-side ellipse at 50%, red, blue)",
-  "-moz-radial-gradient(farthest-corner circle at 4em, red, blue)",
-
-  "-moz-radial-gradient(30% 40% at top left, red, blue)",
-  "-moz-radial-gradient(50px 60px at 15% 20%, red, blue)",
-  "-moz-radial-gradient(7em 8em at 45px, red, blue)"
+  "radial-gradient(45px 399grad, farthest-side circle, red, blue)"
 ];
 var unbalancedGradientAndElementValues = [
   "-moz-element(#a()",
 ];
+
+var basicShapeSVGBoxValues = [
+  "fill-box",
+  "stroke-box",
+  "view-box",
+
+  "polygon(evenodd, 20pt 20cm) fill-box",
+  "polygon(evenodd, 20ex 20pc) stroke-box",
+  "polygon(evenodd, 20rem 20in) view-box",
+];
+
+var basicShapeOtherValues = [
+  "polygon(20px 20px)",
+  "polygon(20px 20%)",
+  "polygon(20% 20%)",
+  "polygon(20rem 20em)",
+  "polygon(20cm 20mm)",
+  "polygon(20px 20px, 30px 30px)",
+  "polygon(20px 20px, 30% 30%, 30px 30px)",
+  "polygon(nonzero, 20px 20px, 30% 30%, 30px 30px)",
+  "polygon(evenodd, 20px 20px, 30% 30%, 30px 30px)",
+
+  "content-box",
+  "padding-box",
+  "border-box",
+  "margin-box",
+
+  "polygon(0 0) content-box",
+  "border-box polygon(0 0)",
+  "padding-box    polygon(   0  20px ,  30px    20% )  ",
+  "polygon(evenodd, 20% 20em) content-box",
+  "polygon(evenodd, 20vh 20em) padding-box",
+  "polygon(evenodd, 20vh calc(20% + 20em)) border-box",
+  "polygon(evenodd, 20vh 20vw) margin-box",
+
+  "circle()",
+  "circle(at center)",
+  "circle(at top left 20px)",
+  "circle(at bottom right)",
+  "circle(20%)",
+  "circle(300px)",
+  "circle(calc(20px + 30px))",
+  "circle(farthest-side)",
+  "circle(closest-side)",
+  "circle(closest-side at center)",
+  "circle(farthest-side at top)",
+  "circle(20px at top right)",
+  "circle(40% at 50% 100%)",
+  "circle(calc(20% + 20%) at right bottom)",
+  "circle() padding-box",
+
+  "ellipse()",
+  "ellipse(at center)",
+  "ellipse(at top left 20px)",
+  "ellipse(at bottom right)",
+  "ellipse(20% 20%)",
+  "ellipse(300px 50%)",
+  "ellipse(calc(20px + 30px) 10%)",
+  "ellipse(farthest-side closest-side)",
+  "ellipse(closest-side farthest-side)",
+  "ellipse(farthest-side farthest-side)",
+  "ellipse(closest-side closest-side)",
+  "ellipse(closest-side closest-side at center)",
+  "ellipse(20% farthest-side at top)",
+  "ellipse(20px 50% at top right)",
+  "ellipse(closest-side 40% at 50% 100%)",
+  "ellipse(calc(20% + 20%) calc(20px + 20cm) at right bottom)",
+
+  "inset(1px)",
+  "inset(20% -20px)",
+  "inset(20em 4rem calc(20% + 20px))",
+  "inset(20vh 20vw 20pt 3%)",
+  "inset(5px round 3px)",
+  "inset(1px 2px round 3px / 3px)",
+  "inset(1px 2px 3px round 3px 2em / 20%)",
+  "inset(1px 2px 3px 4px round 3px 2vw 20% / 20px 3em 2vh 20%)",
+];
+
+var basicShapeInvalidValues = [
+  "url(#test) url(#tes2)",
+  "polygon (0 0)",
+  "polygon(20px, 40px)",
+  "border-box content-box",
+  "polygon(0 0) polygon(0 0)",
+  "polygon(nonzero 0 0)",
+  "polygon(evenodd 20px 20px)",
+  "polygon(20px 20px, evenodd)",
+  "polygon(20px 20px, nonzero)",
+  "polygon(0 0) conten-box content-box",
+  "content-box polygon(0 0) conten-box",
+  "padding-box polygon(0 0) conten-box",
+  "polygon(0 0) polygon(0 0) content-box",
+  "polygon(0 0) content-box polygon(0 0)",
+  "polygon(0 0), content-box",
+  "polygon(0 0), polygon(0 0)",
+  "content-box polygon(0 0) polygon(0 0)",
+  "content-box polygon(0 0) none",
+  "none content-box polygon(0 0)",
+  "inherit content-box polygon(0 0)",
+  "initial polygon(0 0)",
+  "polygon(0 0) farthest-side",
+  "farthest-corner polygon(0 0)",
+  "polygon(0 0) farthest-corner",
+  "polygon(0 0) conten-box",
+  "polygon(0 0) polygon(0 0) farthest-corner",
+  "polygon(0 0) polygon(0 0) polygon(0 0)",
+  "border-box polygon(0, 0)",
+  "border-box padding-box",
+  "margin-box farthest-side",
+  "nonsense() border-box",
+  "border-box nonsense()",
+
+  "circle(at)",
+  "circle(at 20% 20% 30%)",
+  "circle(20px 2px at center)",
+  "circle(2at center)",
+  "circle(closest-corner)",
+  "circle(at center top closest-side)",
+  "circle(-20px)",
+  "circle(farthest-side closest-side)",
+  "circle(20% 20%)",
+  "circle(at farthest-side)",
+  "circle(calc(20px + rubbish))",
+
+  "ellipse(at)",
+  "ellipse(at 20% 20% 30%)",
+  "ellipse(20px at center)",
+  "ellipse(-20px 20px)",
+  "ellipse(closest-corner farthest-corner)",
+  "ellipse(20px -20px)",
+  "ellipse(-20px -20px)",
+  "ellipse(farthest-side)",
+  "ellipse(20%)",
+  "ellipse(at farthest-side farthest-side)",
+  "ellipse(at top left calc(20px + rubbish))",
+
+  "polygon(at)",
+  "polygon(at 20% 20% 30%)",
+  "polygon(20px at center)",
+  "polygon(2px 2at center)",
+  "polygon(closest-corner farthest-corner)",
+  "polygon(at center top closest-side closest-side)",
+  "polygon(40% at 50% 100%)",
+  "polygon(40% farthest-side 20px at 50% 100%)",
+
+  "inset()",
+  "inset(round)",
+  "inset(round 3px)",
+  "inset(1px round 1px 2px 3px 4px 5px)",
+  "inset(1px 2px 3px 4px 5px)",
+  "inset(1px, round 3px)",
+  "inset(1px, 2px)",
+  "inset(1px 2px, 3px)",
+  "inset(1px at 3px)",
+  "inset(1px round 1px // 2px)",
+  "inset(1px round)",
+  "inset(1px calc(2px + rubbish))",
+  "inset(1px round 2px calc(3px + rubbish))",
+];
+
+var basicShapeUnbalancedValues = [
+  "polygon(30% 30%",
+  "polygon(nonzero, 20% 20px",
+  "polygon(evenodd, 20px 20px",
+
+  "circle(",
+  "circle(40% at 50% 100%",
+  "ellipse(",
+  "ellipse(40% at 50% 100%",
+
+  "inset(1px",
+  "inset(1px 2px",
+  "inset(1px 2px 3px",
+  "inset(1px 2px 3px 4px",
+  "inset(1px 2px 3px 4px round 5px",
+  "inset(1px 2px 3px 4px round 5px / 6px",
+];
+
+
+// Gradient values that are incorrectly accepted in Gecko, but are correctly
+// rejected with Servo's style-system backend (stylo):
+let gradientsNewlyRejectedInStylo = [
+  "radial-gradient(circle red, blue)",
+];
+
+// Gradient values that are consistently serialized in Stylo but not
+// in Gecko. Gecko drops the prefix during roundtrip.
+let gradientsValidInStyloBrokenInGecko = [
+  "-webkit-linear-gradient(top, red, blue)",
+  "-moz-linear-gradient(top, red, blue)",
+  "-moz-linear-gradient(center 0%, red, blue)",
+  "-moz-linear-gradient(50% top, red, blue)",
+  "-moz-linear-gradient(50% 0%, red, blue)",
+];
+
+if (SpecialPowers.DOMWindowUtils.isStyledByServo) {
+  invalidGradientAndElementValues.push(...gradientsNewlyRejectedInStylo);
+  validGradientAndElementValues.push(...gradientsValidInStyloBrokenInGecko);
+} else {
+  // NOTE: These are technically invalid, but Gecko's CSS parser thinks they're
+  // valid. So, if we're using Gecko's style system, we add them to the
+  // "valid" list, so we can at least detect if the behavior changes.
+  validGradientAndElementValues.push(...gradientsNewlyRejectedInStylo);
+}
 
 if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
   // Extend gradient lists with valid/invalid webkit-prefixed expressions:
@@ -707,12 +605,29 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
 
     // Angled linear-gradients (valid when prefixed or unprefixed):
     "-webkit-linear-gradient(135deg, red, blue)",
+    "-webkit-linear-gradient( 135deg  , red  , blue )",
     "-webkit-linear-gradient(280deg, red 60%, blue)",
 
     // Linear-gradient with unitless-0 <angle> (normally invalid for <angle>
     // but accepted here for better webkit emulation):
     "-webkit-linear-gradient(0, red, blue)",
-    "-webkit-linear-gradient(0 red, blue)",
+
+    // Linear-gradient with calc expression (bug 1363349)
+    "-webkit-gradient(linear, calc(5 + 5) top, calc(10 + 10) top, from(blue), to(lime))",
+    "-webkit-gradient(linear, calc(5 - 5) top, calc(10 + 10) top, from(blue), to(lime))",
+    "-webkit-gradient(linear, calc(5 * 5) top, calc(10 + 10) top, from(blue), to(lime))",
+    "-webkit-gradient(linear, calc(5 / 5) top, calc(10 + 10) top, from(blue), to(lime))",
+    "-webkit-gradient(linear, left calc(25% - 10%), right calc(75% + 10%), from(blue), to(lime))",
+    "-webkit-gradient(linear, calc(1) 2, 3 4)",
+
+    // Radial-gradient with calc expression (bug 1363349)
+    "-webkit-gradient(radial, 1 2, 0, 3 4, calc(1 + 5), from(blue), to(lime))",
+    "-webkit-gradient(radial, 1 2, calc(1 + 2), 3 4, calc(1 + 5), from(blue), to(lime))",
+    "-webkit-gradient(radial, 1 2, calc(1 - 2), 3 4, calc(1 + 5), from(blue), to(lime))",
+    "-webkit-gradient(radial, 1 2, calc(1 * 2), 3 4, calc(1 + 5), from(blue), to(lime))",
+    "-webkit-gradient(radial, 1 2, calc(1 / 2), 3 4, calc(1 + 5), from(blue), to(lime))",
+    "-webkit-gradient(radial, calc(0 + 1) calc(1 + 1), calc(1 + 2), calc(1 + 2) 4, calc(1 + 5), from(blue), to(lime))",
+    "-webkit-gradient(radial, 1 2, calc(8), 3 4, 9)",
 
     // Basic radial-gradient syntax (valid when prefixed or unprefixed):
     "-webkit-radial-gradient(circle, white, black)",
@@ -728,6 +643,7 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
 
     // Initial side/corner/point (valid only for -moz/-webkit prefixed):
     "-webkit-linear-gradient(left, red, blue)",
+    "-webkit-linear-gradient(bottom, red, blue)",
     "-webkit-linear-gradient(right top, red, blue)",
     "-webkit-linear-gradient(top right, red, blue)",
     "-webkit-radial-gradient(right, red, blue)",
@@ -789,7 +705,6 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     "-webkit-gradient(linear, 1px 2, 3 4)",
     "-webkit-gradient(linear, 1 2, 3 4px)",
     "-webkit-gradient(linear, 1px 2px, 3px 4px)",
-    "-webkit-gradient(linear, calc(1) 2, 3 4)",
     "-webkit-gradient(linear, 1 2em, 3 4)",
 
     // linear w/ <radius> (only valid for radial)
@@ -839,7 +754,6 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     // radial w/ incorrect units on radius (invalid; expecting <number>)
     "-webkit-gradient(radial, 1 2, 8%,      3 4, 9)",
     "-webkit-gradient(radial, 1 2, 8px,     3 4, 9)",
-    "-webkit-gradient(radial, 1 2, calc(8), 3 4, 9)",
     "-webkit-gradient(radial, 1 2, 8em,     3 4, 9)",
     "-webkit-gradient(radial, 1 2, top,     3 4, 9)",
 
@@ -857,6 +771,25 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     "-webkit-radial-gradient()",
     "-webkit-repeating-linear-gradient()",
     "-webkit-repeating-radial-gradient()",
+
+    // * missing comma between <legacy-gradient-line> and color list:
+    "-webkit-linear-gradient(0 red, blue)",
+    "-webkit-linear-gradient(30deg red, blue)",
+    "-webkit-linear-gradient(top right red, blue)",
+    "-webkit-linear-gradient(bottom red, blue)",
+
+    // Linear-gradient with calc expression containing mixed units or division
+    // by zero (bug 1363349)
+    "-webkit-gradient(linear, calc(5 + 5%) top, calc(10 + 10) top, from(blue), to(lime))",
+    "-webkit-gradient(linear, left calc(25 - 10%), right calc(75% + 10%), from(blue), to(lime))",
+    "-webkit-gradient(linear, calc(1 / 0) 2, 3 4)",
+
+    // Radial-gradient with calc expression containing mixed units, division
+    // by zero, or a percentage in the radius (bug 1363349)
+    "-webkit-gradient(radial, 1 2, 0, 3 4, calc(1% + 5%), from(blue), to(lime))",
+    "-webkit-gradient(radial, 1 2, calc(1 + 2), 3 4, calc(1 + 5%), from(blue), to(lime))",
+    "-webkit-gradient(radial, calc(0 + 1) calc(1 + 1), calc(1% + 2%), calc(1 + 2) 4, calc(1 + 5), from(blue), to(lime))",
+    "-webkit-gradient(radial, 1 2, calc(8 / 0), 3 4, 9)",
 
     // Linear syntax that's invalid for both -webkit & unprefixed, but valid
     // for -moz:
@@ -897,6 +830,363 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     "-webkit-radial-gradient(top 30deg, red, blue)",
     "-webkit-radial-gradient(left top 30deg, red, blue)",
     "-webkit-radial-gradient(10px 20px 30deg, red, blue)"
+  );
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.prefixes.gradients")) {
+  // Extend gradient lists with valid/invalid moz-prefixed expressions:
+  validGradientAndElementValues.push(
+    "-moz-linear-gradient(red, blue)",
+    "-moz-linear-gradient(red, yellow, blue)",
+    "-moz-linear-gradient(red 1px, yellow 20%, blue 24em, green)",
+    "-moz-linear-gradient(red, yellow, green, blue 50%)",
+    "-moz-linear-gradient(red -50%, yellow -25%, green, blue)",
+    "-moz-linear-gradient(red -99px, yellow, green, blue 120%)",
+    "-moz-linear-gradient(#ffff00, #ef3, rgba(10, 20, 30, 0.4))",
+    "-moz-linear-gradient(rgba(10, 20, 30, 0.4), #ffff00, #ef3)",
+
+    "-moz-linear-gradient(to top, red, blue)",
+    "-moz-linear-gradient(to bottom, red, blue)",
+    "-moz-linear-gradient(to left, red, blue)",
+    "-moz-linear-gradient(to right, red, blue)",
+    "-moz-linear-gradient(to top left, red, blue)",
+    "-moz-linear-gradient(to top right, red, blue)",
+    "-moz-linear-gradient(to bottom left, red, blue)",
+    "-moz-linear-gradient(to bottom right, red, blue)",
+    "-moz-linear-gradient(to left top, red, blue)",
+    "-moz-linear-gradient(to left bottom, red, blue)",
+    "-moz-linear-gradient(to right top, red, blue)",
+    "-moz-linear-gradient(to right bottom, red, blue)",
+
+    "-moz-linear-gradient(top left, red, blue)",
+    "-moz-linear-gradient(0 0, red, blue)",
+    "-moz-linear-gradient(20% bottom, red, blue)",
+    "-moz-linear-gradient(center 20%, red, blue)",
+    "-moz-linear-gradient(left 35px, red, blue)",
+    "-moz-linear-gradient(10% 10em, red, blue)",
+    "-moz-linear-gradient(44px top, red, blue)",
+    "-moz-linear-gradient(left, red, blue)",
+    "-moz-linear-gradient(bottom, red, blue)",
+
+    "-moz-linear-gradient(0px, red, blue)",
+    "-moz-linear-gradient(0, red, blue)",
+    "-moz-linear-gradient(top left 45deg, red, blue)",
+    "-moz-linear-gradient(20% bottom -300deg, red, blue)",
+    "-moz-linear-gradient(center 20% 1.95929rad, red, blue)",
+    "-moz-linear-gradient(left 35px 30grad, red, blue)",
+    "-moz-linear-gradient(left 35px 0.1turn, red, blue)",
+    "-moz-linear-gradient(10% 10em 99999deg, red, blue)",
+    "-moz-linear-gradient(44px top -33deg, red, blue)",
+
+    "-moz-linear-gradient(-33deg, red, blue)",
+    "-moz-linear-gradient(30grad left 35px, red, blue)",
+    "-moz-linear-gradient(10deg 20px, red, blue)",
+    "-moz-linear-gradient(1turn 20px, red, blue)",
+    "-moz-linear-gradient(.414rad bottom, red, blue)",
+
+    "-moz-linear-gradient(blue calc(0px) ,green calc(25%) ,red calc(40px) ,blue calc(60px) , yellow  calc(100px))",
+    "-moz-linear-gradient(-33deg, blue calc(-25%) ,red 40px)",
+    "-moz-linear-gradient(10deg, blue calc(100px + -25%),red calc(40px))",
+    "-moz-linear-gradient(10deg, blue calc(-25px),red calc(100%))",
+    "-moz-linear-gradient(.414rad, blue calc(100px + -25px) ,green calc(100px + -25px) ,red calc(100px + -25%) ,blue calc(-25px) , yellow  calc(-25px))",
+    "-moz-linear-gradient(1turn, blue calc(-25%) ,green calc(25px) ,red calc(25%),blue calc(0px),white 50px, yellow  calc(-25px))",
+
+    "-moz-radial-gradient(red, blue)",
+    "-moz-radial-gradient(red, yellow, blue)",
+    "-moz-radial-gradient(red 1px, yellow 20%, blue 24em, green)",
+    "-moz-radial-gradient(red, yellow, green, blue 50%)",
+    "-moz-radial-gradient(red -50%, yellow -25%, green, blue)",
+    "-moz-radial-gradient(red -99px, yellow, green, blue 120%)",
+    "-moz-radial-gradient(#ffff00, #ef3, rgba(10, 20, 30, 0.4))",
+
+    "-moz-radial-gradient(top left, red, blue)",
+    "-moz-radial-gradient(20% bottom, red, blue)",
+    "-moz-radial-gradient(center 20%, red, blue)",
+    "-moz-radial-gradient(left 35px, red, blue)",
+    "-moz-radial-gradient(10% 10em, red, blue)",
+    "-moz-radial-gradient(44px top, red, blue)",
+
+    "-moz-radial-gradient(top left 45deg, red, blue)",
+    "-moz-radial-gradient(0 0, red, blue)",
+    "-moz-radial-gradient(20% bottom -300deg, red, blue)",
+    "-moz-radial-gradient(center 20% 1.95929rad, red, blue)",
+    "-moz-radial-gradient(left 35px 30grad, red, blue)",
+    "-moz-radial-gradient(10% 10em 99999deg, red, blue)",
+    "-moz-radial-gradient(44px top -33deg, red, blue)",
+    "-moz-radial-gradient(rgba(10, 20, 30, 0.4), #ffff00, #ef3)",
+
+    "-moz-radial-gradient(-33deg, red, blue)",
+    "-moz-radial-gradient(30grad left 35px, red, blue)",
+    "-moz-radial-gradient(10deg 20px, red, blue)",
+    "-moz-radial-gradient(.414rad bottom, red, blue)",
+
+    "-moz-radial-gradient(cover, red, blue)",
+    "-moz-radial-gradient(cover circle, red, blue)",
+    "-moz-radial-gradient(contain, red, blue)",
+    "-moz-radial-gradient(contain ellipse, red, blue)",
+    "-moz-radial-gradient(circle, red, blue)",
+    "-moz-radial-gradient(ellipse closest-corner, red, blue)",
+    "-moz-radial-gradient(farthest-side circle, red, blue)",
+
+    "-moz-radial-gradient(top left, cover, red, blue)",
+    "-moz-radial-gradient(15% 20%, circle, red, blue)",
+    "-moz-radial-gradient(45px, ellipse closest-corner, red, blue)",
+    "-moz-radial-gradient(45px, farthest-side circle, red, blue)",
+
+    "-moz-radial-gradient(99deg, cover, red, blue)",
+    "-moz-radial-gradient(-1.2345rad, circle, red, blue)",
+    "-moz-radial-gradient(399grad, ellipse closest-corner, red, blue)",
+    "-moz-radial-gradient(399grad, farthest-side circle, red, blue)",
+
+    "-moz-radial-gradient(top left 99deg, cover, red, blue)",
+    "-moz-radial-gradient(15% 20% -1.2345rad, circle, red, blue)",
+    "-moz-radial-gradient(45px 399grad, ellipse closest-corner, red, blue)",
+    "-moz-radial-gradient(45px 399grad, farthest-side circle, red, blue)",
+
+    "-moz-repeating-linear-gradient(red, blue)",
+    "-moz-repeating-linear-gradient(red, yellow, blue)",
+    "-moz-repeating-linear-gradient(red 1px, yellow 20%, blue 24em, green)",
+    "-moz-repeating-linear-gradient(red, yellow, green, blue 50%)",
+    "-moz-repeating-linear-gradient(red -50%, yellow -25%, green, blue)",
+    "-moz-repeating-linear-gradient(red -99px, yellow, green, blue 120%)",
+    "-moz-repeating-linear-gradient(#ffff00, #ef3, rgba(10, 20, 30, 0.4))",
+    "-moz-repeating-linear-gradient(rgba(10, 20, 30, 0.4), #ffff00, #ef3)",
+
+    "-moz-repeating-linear-gradient(to top, red, blue)",
+    "-moz-repeating-linear-gradient(to bottom, red, blue)",
+    "-moz-repeating-linear-gradient(to left, red, blue)",
+    "-moz-repeating-linear-gradient(to right, red, blue)",
+    "-moz-repeating-linear-gradient(to top left, red, blue)",
+    "-moz-repeating-linear-gradient(to top right, red, blue)",
+    "-moz-repeating-linear-gradient(to bottom left, red, blue)",
+    "-moz-repeating-linear-gradient(to bottom right, red, blue)",
+    "-moz-repeating-linear-gradient(to left top, red, blue)",
+    "-moz-repeating-linear-gradient(to left bottom, red, blue)",
+    "-moz-repeating-linear-gradient(to right top, red, blue)",
+    "-moz-repeating-linear-gradient(to right bottom, red, blue)",
+
+    "-moz-repeating-linear-gradient(top left, red, blue)",
+    "-moz-repeating-linear-gradient(0 0, red, blue)",
+    "-moz-repeating-linear-gradient(20% bottom, red, blue)",
+    "-moz-repeating-linear-gradient(center 20%, red, blue)",
+    "-moz-repeating-linear-gradient(left 35px, red, blue)",
+    "-moz-repeating-linear-gradient(10% 10em, red, blue)",
+    "-moz-repeating-linear-gradient(44px top, red, blue)",
+
+    "-moz-repeating-linear-gradient(top left 45deg, red, blue)",
+    "-moz-repeating-linear-gradient(20% bottom -300deg, red, blue)",
+    "-moz-repeating-linear-gradient(center 20% 1.95929rad, red, blue)",
+    "-moz-repeating-linear-gradient(left 35px 30grad, red, blue)",
+    "-moz-repeating-linear-gradient(10% 10em 99999deg, red, blue)",
+    "-moz-repeating-linear-gradient(44px top -33deg, red, blue)",
+
+    "-moz-repeating-linear-gradient(-33deg, red, blue)",
+    "-moz-repeating-linear-gradient(30grad left 35px, red, blue)",
+    "-moz-repeating-linear-gradient(10deg 20px, red, blue)",
+    "-moz-repeating-linear-gradient(.414rad bottom, red, blue)",
+
+    "-moz-repeating-radial-gradient(red, blue)",
+    "-moz-repeating-radial-gradient(red, yellow, blue)",
+    "-moz-repeating-radial-gradient(red 1px, yellow 20%, blue 24em, green)",
+    "-moz-repeating-radial-gradient(red, yellow, green, blue 50%)",
+    "-moz-repeating-radial-gradient(red -50%, yellow -25%, green, blue)",
+    "-moz-repeating-radial-gradient(red -99px, yellow, green, blue 120%)",
+    "-moz-repeating-radial-gradient(#ffff00, #ef3, rgba(10, 20, 30, 0.4))",
+    "-moz-repeating-radial-gradient(rgba(10, 20, 30, 0.4), #ffff00, #ef3)",
+
+    "-moz-repeating-radial-gradient(farthest-corner, red, blue)",
+    "-moz-repeating-radial-gradient(circle, red, blue)",
+    "-moz-repeating-radial-gradient(ellipse closest-corner, red, blue)",
+
+    "-moz-radial-gradient(calc(25%) top, red, blue)",
+    "-moz-radial-gradient(left calc(25%), red, blue)",
+    "-moz-radial-gradient(calc(25px) top, red, blue)",
+    "-moz-radial-gradient(left calc(25px), red, blue)",
+    "-moz-radial-gradient(calc(-25%) top, red, blue)",
+    "-moz-radial-gradient(left calc(-25%), red, blue)",
+    "-moz-radial-gradient(calc(-25px) top, red, blue)",
+    "-moz-radial-gradient(left calc(-25px), red, blue)",
+    "-moz-radial-gradient(calc(100px + -25%) top, red, blue)",
+    "-moz-radial-gradient(left calc(100px + -25%), red, blue)",
+    "-moz-radial-gradient(calc(100px + -25px) top, red, blue)",
+    "-moz-radial-gradient(left calc(100px + -25px), red, blue)",
+  );
+  invalidGradientAndElementValues.push(
+    /* no quirks mode colors */
+    "-moz-radial-gradient(10% bottom, ffffff, black) scroll no-repeat",
+    /* no quirks mode lengths */
+    "-moz-linear-gradient(10 10px -45deg, red, blue) repeat",
+    "-moz-linear-gradient(10px 10 -45deg, red, blue) repeat",
+    /* Unitless 0 is invalid as an <angle> */
+    "-moz-linear-gradient(top left 0, red, blue)",
+    "-moz-linear-gradient(5px 5px 0, red, blue)",
+    /* There must be a comma between gradient-line (e.g. <angle>) and colors */
+    "-moz-linear-gradient(30deg red, blue)",
+    "-moz-linear-gradient(5px 5px 30deg red, blue)",
+    "-moz-linear-gradient(5px 5px red, blue)",
+    "-moz-linear-gradient(top left 30deg red, blue)",
+
+    /* Old syntax */
+    "-moz-linear-gradient(10px 10px, 20px, 30px 30px, 40px, from(blue), to(red))",
+    "-moz-radial-gradient(20px 20px, 10px 10px, from(green), to(#ff00ff))",
+    "-moz-radial-gradient(10px 10px, 20%, 40px 40px, 10px, from(green), to(#ff00ff))",
+    "-moz-linear-gradient(10px, 20px, 30px, 40px, color-stop(0.5, #00ccff))",
+    "-moz-linear-gradient(20px 20px, from(blue), to(red))",
+    "-moz-linear-gradient(40px 40px, 10px 10px, from(blue) to(red) color-stop(10%, fuchsia))",
+    "-moz-linear-gradient(20px 20px 30px, 10px 10px, from(red), to(#ff0000))",
+    "-moz-radial-gradient(left top, center, 20px 20px, 10px, from(blue), to(red))",
+    "-moz-linear-gradient(left left, top top, from(blue))",
+    "-moz-linear-gradient(inherit, 10px 10px, from(blue))",
+    /* New syntax */
+    "-moz-linear-gradient(10px 10px, 20px, 30px 30px, 40px, blue 0, red 100%)",
+    "-moz-radial-gradient(20px 20px, 10px 10px, from(green), to(#ff00ff))",
+    "-moz-radial-gradient(10px 10px, 20%, 40px 40px, 10px, from(green), to(#ff00ff))",
+    "-moz-linear-gradient(10px, 20px, 30px, 40px, #00ccff 50%)",
+    "-moz-linear-gradient(40px 40px, 10px 10px, blue 0 fuchsia 10% red 100%)",
+    "-moz-linear-gradient(20px 20px 30px, 10px 10px, red 0, #ff0000 100%)",
+    "-moz-radial-gradient(left top, center, 20px 20px, 10px, from(blue), to(red))",
+    "-moz-linear-gradient(left left, top top, blue 0)",
+    "-moz-linear-gradient(inherit, 10px 10px, blue 0)",
+    "-moz-linear-gradient(left left blue red)",
+    "-moz-linear-gradient(left left blue, red)",
+    "-moz-linear-gradient()",
+    "-moz-linear-gradient(cover, red, blue)",
+    "-moz-linear-gradient(auto, red, blue)",
+    "-moz-linear-gradient(22 top, red, blue)",
+    "-moz-linear-gradient(10% red blue)",
+    "-moz-linear-gradient(10%, red blue)",
+    "-moz-linear-gradient(10%,, red, blue)",
+    "-moz-linear-gradient(45px, center, red, blue)",
+    "-moz-linear-gradient(45px, center red, blue)",
+    "-moz-radial-gradient(contain, ellipse, red, blue)",
+    "-moz-radial-gradient(10deg contain, red, blue)",
+    "-moz-radial-gradient(10deg, contain,, red, blue)",
+    "-moz-radial-gradient(contain contain, red, blue)",
+    "-moz-radial-gradient(ellipse circle, red, blue)",
+    "-moz-radial-gradient(to top left, red, blue)",
+    "-moz-radial-gradient(center, 10%, red, blue)",
+    "-moz-radial-gradient(5rad, 20px, red, blue)",
+    "-moz-radial-gradient(40%, -100px -10%, red, blue)",
+
+    "-moz-radial-gradient(at top left to cover, red, blue)",
+    "-moz-radial-gradient(at 15% 20% circle, red, blue)",
+
+    "-moz-radial-gradient(to cover, red, blue)",
+    "-moz-radial-gradient(to contain, red, blue)",
+    "-moz-radial-gradient(to closest-side circle, red, blue)",
+    "-moz-radial-gradient(to farthest-corner ellipse, red, blue)",
+
+    "-moz-radial-gradient(ellipse at 45px closest-corner, red, blue)",
+    "-moz-radial-gradient(circle at 45px farthest-side, red, blue)",
+    "-moz-radial-gradient(ellipse 45px, closest-side, red, blue)",
+    "-moz-radial-gradient(circle 45px, farthest-corner, red, blue)",
+    "-moz-radial-gradient(ellipse, ellipse closest-side, red, blue)",
+    "-moz-radial-gradient(circle, circle farthest-corner, red, blue)",
+
+    "-moz-radial-gradient(99deg to farthest-corner, red, blue)",
+    "-moz-radial-gradient(-1.2345rad circle, red, blue)",
+    "-moz-radial-gradient(ellipse 399grad to closest-corner, red, blue)",
+    "-moz-radial-gradient(circle 399grad to farthest-side, red, blue)",
+
+    "-moz-radial-gradient(at top left 99deg, to farthest-corner, red, blue)",
+    "-moz-radial-gradient(circle at 15% 20% -1.2345rad, red, blue)",
+    "-moz-radial-gradient(to top left at 30% 40%, red, blue)",
+    "-moz-radial-gradient(ellipse at 45px 399grad, to closest-corner, red, blue)",
+    "-moz-radial-gradient(at 45px 399grad to farthest-side circle, red, blue)",
+
+    "-moz-radial-gradient(to 50%, red, blue)",
+    "-moz-radial-gradient(circle to 50%, red, blue)",
+    "-moz-radial-gradient(circle to 43px 43px, red, blue)",
+    "-moz-radial-gradient(circle to 50% 50%, red, blue)",
+    "-moz-radial-gradient(circle to 43px 50%, red, blue)",
+    "-moz-radial-gradient(circle to 50% 43px, red, blue)",
+    "-moz-radial-gradient(ellipse to 43px, red, blue)",
+    "-moz-radial-gradient(ellipse to 50%, red, blue)",
+
+    "-moz-linear-gradient(to 0 0, red, blue)",
+    "-moz-linear-gradient(to 20% bottom, red, blue)",
+    "-moz-linear-gradient(to center 20%, red, blue)",
+    "-moz-linear-gradient(to left 35px, red, blue)",
+    "-moz-linear-gradient(to 10% 10em, red, blue)",
+    "-moz-linear-gradient(to 44px top, red, blue)",
+    "-moz-linear-gradient(to top left 45deg, red, blue)",
+    "-moz-linear-gradient(to 20% bottom -300deg, red, blue)",
+    "-moz-linear-gradient(to center 20% 1.95929rad, red, blue)",
+    "-moz-linear-gradient(to left 35px 30grad, red, blue)",
+    "-moz-linear-gradient(to 10% 10em 99999deg, red, blue)",
+    "-moz-linear-gradient(to 44px top -33deg, red, blue)",
+    "-moz-linear-gradient(to -33deg, red, blue)",
+    "-moz-linear-gradient(to 30grad left 35px, red, blue)",
+    "-moz-linear-gradient(to 10deg 20px, red, blue)",
+    "-moz-linear-gradient(to .414rad bottom, red, blue)",
+
+    "-moz-linear-gradient(to top top, red, blue)",
+    "-moz-linear-gradient(to bottom bottom, red, blue)",
+    "-moz-linear-gradient(to left left, red, blue)",
+    "-moz-linear-gradient(to right right, red, blue)",
+
+    "-moz-repeating-linear-gradient(10px 10px, 20px, 30px 30px, 40px, blue 0, red 100%)",
+    "-moz-repeating-radial-gradient(20px 20px, 10px 10px, from(green), to(#ff00ff))",
+    "-moz-repeating-radial-gradient(10px 10px, 20%, 40px 40px, 10px, from(green), to(#ff00ff))",
+    "-moz-repeating-linear-gradient(10px, 20px, 30px, 40px, #00ccff 50%)",
+    "-moz-repeating-linear-gradient(40px 40px, 10px 10px, blue 0 fuchsia 10% red 100%)",
+    "-moz-repeating-linear-gradient(20px 20px 30px, 10px 10px, red 0, #ff0000 100%)",
+    "-moz-repeating-radial-gradient(left top, center, 20px 20px, 10px, from(blue), to(red))",
+    "-moz-repeating-linear-gradient(left left, top top, blue 0)",
+    "-moz-repeating-linear-gradient(inherit, 10px 10px, blue 0)",
+    "-moz-repeating-linear-gradient(left left blue red)",
+    "-moz-repeating-linear-gradient()",
+
+    "-moz-repeating-linear-gradient(to 0 0, red, blue)",
+    "-moz-repeating-linear-gradient(to 20% bottom, red, blue)",
+    "-moz-repeating-linear-gradient(to center 20%, red, blue)",
+    "-moz-repeating-linear-gradient(to left 35px, red, blue)",
+    "-moz-repeating-linear-gradient(to 10% 10em, red, blue)",
+    "-moz-repeating-linear-gradient(to 44px top, red, blue)",
+    "-moz-repeating-linear-gradient(to top left 45deg, red, blue)",
+    "-moz-repeating-linear-gradient(to 20% bottom -300deg, red, blue)",
+    "-moz-repeating-linear-gradient(to center 20% 1.95929rad, red, blue)",
+    "-moz-repeating-linear-gradient(to left 35px 30grad, red, blue)",
+    "-moz-repeating-linear-gradient(to 10% 10em 99999deg, red, blue)",
+    "-moz-repeating-linear-gradient(to 44px top -33deg, red, blue)",
+    "-moz-repeating-linear-gradient(to -33deg, red, blue)",
+    "-moz-repeating-linear-gradient(to 30grad left 35px, red, blue)",
+    "-moz-repeating-linear-gradient(to 10deg 20px, red, blue)",
+    "-moz-repeating-linear-gradient(to .414rad bottom, red, blue)",
+
+    "-moz-repeating-linear-gradient(to top top, red, blue)",
+    "-moz-repeating-linear-gradient(to bottom bottom, red, blue)",
+    "-moz-repeating-linear-gradient(to left left, red, blue)",
+    "-moz-repeating-linear-gradient(to right right, red, blue)",
+
+    "-moz-repeating-radial-gradient(to top left at 30% 40%, red, blue)",
+    "-moz-repeating-radial-gradient(ellipse at 45px closest-corner, red, blue)",
+    "-moz-repeating-radial-gradient(circle at 45px farthest-side, red, blue)",
+
+    /* Valid only when unprefixed */
+    "-moz-radial-gradient(at top left, red, blue)",
+    "-moz-radial-gradient(at 20% bottom, red, blue)",
+    "-moz-radial-gradient(at center 20%, red, blue)",
+    "-moz-radial-gradient(at left 35px, red, blue)",
+    "-moz-radial-gradient(at 10% 10em, red, blue)",
+    "-moz-radial-gradient(at 44px top, red, blue)",
+    "-moz-radial-gradient(at 0 0, red, blue)",
+
+    "-moz-radial-gradient(circle 43px, red, blue)",
+    "-moz-radial-gradient(ellipse 43px 43px, red, blue)",
+    "-moz-radial-gradient(ellipse 50% 50%, red, blue)",
+    "-moz-radial-gradient(ellipse 43px 50%, red, blue)",
+    "-moz-radial-gradient(ellipse 50% 43px, red, blue)",
+
+    "-moz-radial-gradient(farthest-corner at top left, red, blue)",
+    "-moz-radial-gradient(ellipse closest-corner at 45px, red, blue)",
+    "-moz-radial-gradient(circle farthest-side at 45px, red, blue)",
+    "-moz-radial-gradient(closest-side ellipse at 50%, red, blue)",
+    "-moz-radial-gradient(farthest-corner circle at 4em, red, blue)",
+
+    "-moz-radial-gradient(30% 40% at top left, red, blue)",
+    "-moz-radial-gradient(50px 60px at 15% 20%, red, blue)",
+    "-moz-radial-gradient(7em 8em at 45px, red, blue)"
   );
 }
 
@@ -973,8 +1263,16 @@ var gCSSProperties = {
     inherited: false,
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "ease" ],
-    other_values: [ "cubic-bezier(0.25, 0.1, 0.25, 1.0)", "linear", "ease-in", "ease-out", "ease-in-out", "linear, ease-in, cubic-bezier(0.1, 0.2, 0.8, 0.9)", "cubic-bezier(0.5, 0.5, 0.5, 0.5)", "cubic-bezier(0.25, 1.5, 0.75, -0.5)", "step-start", "step-end", "steps(1)", "steps(2, start)", "steps(386)", "steps(3, end)", "frames(2)", "frames(1000)", "frames( 2 )" ],
-    invalid_values: [ "none", "auto", "cubic-bezier(0.25, 0.1, 0.25)", "cubic-bezier(0.25, 0.1, 0.25, 0.25, 1.0)", "cubic-bezier(-0.5, 0.5, 0.5, 0.5)", "cubic-bezier(1.5, 0.5, 0.5, 0.5)", "cubic-bezier(0.5, 0.5, -0.5, 0.5)", "cubic-bezier(0.5, 0.5, 1.5, 0.5)", "steps(2, step-end)", "steps(0)", "steps(-2)", "steps(0, step-end, 1)", "frames(1)", "frames(-2)", "frames", "frames()", "frames(,)", "frames(a)", "frames(2.0)", "frames(2.5)", "frames(2 3)" ]
+    other_values: [ "cubic-bezier(0.25, 0.1, 0.25, 1.0)", "linear", "ease-in", "ease-out", "ease-in-out", "linear, ease-in, cubic-bezier(0.1, 0.2, 0.8, 0.9)", "cubic-bezier(0.5, 0.5, 0.5, 0.5)", "cubic-bezier(0.25, 1.5, 0.75, -0.5)", "step-start", "step-end", "steps(1)", "steps(2, start)", "steps(386)", "steps(3, end)" ],
+    invalid_values: [ "none", "auto", "cubic-bezier(0.25, 0.1, 0.25)", "cubic-bezier(0.25, 0.1, 0.25, 0.25, 1.0)", "cubic-bezier(-0.5, 0.5, 0.5, 0.5)", "cubic-bezier(1.5, 0.5, 0.5, 0.5)", "cubic-bezier(0.5, 0.5, -0.5, 0.5)", "cubic-bezier(0.5, 0.5, 1.5, 0.5)", "steps(2, step-end)", "steps(0)", "steps(-2)", "steps(0, step-end, 1)" ]
+  },
+  "-moz-appearance": {
+    domProp: "MozAppearance",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "none" ],
+    other_values: [ "radio", "menulist" ],
+    invalid_values: []
   },
   "-moz-binding": {
     domProp: "MozBinding",
@@ -983,14 +1281,6 @@ var gCSSProperties = {
     initial_values: [ "none" ],
     other_values: [ "url(foo.xml)" ],
     invalid_values: []
-  },
-  "-moz-border-bottom-colors": {
-    domProp: "MozBorderBottomColors",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "none" ],
-    other_values: [ "red green", "red #fc3", "#ff00cc", "currentColor", "blue currentColor orange currentColor" ],
-    invalid_values: [ "red none", "red inherit", "red, green", "none red", "inherit red", "ff00cc" ]
   },
   "border-inline-end": {
     domProp: "borderInlineEnd",
@@ -1005,6 +1295,7 @@ var gCSSProperties = {
     domProp: "borderInlineEndColor",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     logical: true,
     get_computed: logical_box_prop_get_computed,
     initial_values: [ "currentColor" ],
@@ -1015,6 +1306,7 @@ var gCSSProperties = {
     domProp: "borderInlineEndStyle",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     logical: true,
     get_computed: logical_box_prop_get_computed,
     /* XXX hidden is sometimes the same as initial */
@@ -1026,6 +1318,7 @@ var gCSSProperties = {
     domProp: "borderInlineEndWidth",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     logical: true,
     get_computed: logical_box_prop_get_computed,
     prerequisites: { "border-inline-end-style": "solid" },
@@ -1083,6 +1376,7 @@ var gCSSProperties = {
     domProp: "borderImageSource",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     initial_values: [ "none" ],
     other_values: [
     "url('border.png')"
@@ -1097,6 +1391,7 @@ var gCSSProperties = {
     domProp: "borderImageSlice",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     initial_values: [ "100%", "100% 100% 100% 100%" ],
     other_values: [ "0%", "10", "10 100% 0 2", "0 0 0 0", "fill 10 10", "10 10 fill" ],
     invalid_values: [ "-10%", "-10", "10 10 10 10 10", "10 10 10 10 -10", "10px", "-10px", "fill", "fill fill 10px", "10px fill fill" ]
@@ -1105,6 +1400,7 @@ var gCSSProperties = {
     domProp: "borderImageWidth",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     initial_values: [ "1", "1 1 1 1" ],
     other_values: [ "0", "0%", "0px", "auto auto auto auto", "10 10% auto 15px", "10px 10px 10px 10px", "10", "10 10", "10 10 10" ],
     invalid_values: [ "-10", "-10px", "-10%", "10 10 10 10 10", "10 10 10 10 auto", "auto auto auto auto auto", "10px calc(nonsense)", "1px red" ],
@@ -1114,6 +1410,7 @@ var gCSSProperties = {
     domProp: "borderImageOutset",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     initial_values: [ "0", "0 0 0 0" ],
     other_values: [ "10px", "10", "10 10", "10 10 10", "10 10 10 10", "10px 10 10 10px" ],
     invalid_values: [ "-10", "-10px", "-10%", "10%", "10 10 10 10 10", "10px calc(nonsense)", "1px red" ],
@@ -1123,18 +1420,11 @@ var gCSSProperties = {
     domProp: "borderImageRepeat",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     initial_values: [ "stretch", "stretch stretch" ],
     other_values: [ "round", "repeat", "stretch round", "repeat round", "stretch repeat", "round round", "repeat repeat",
                     "space", "stretch space", "repeat space", "round space", "space space" ],
     invalid_values: [ "none", "stretch stretch stretch", "0", "10", "0%", "0px" ]
-  },
-  "-moz-border-left-colors": {
-    domProp: "MozBorderLeftColors",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "none" ],
-    other_values: [ "red green", "red #fc3", "#ff00cc", "currentColor", "blue currentColor orange currentColor" ],
-    invalid_values: [ "red none", "red inherit", "red, green", "none red", "inherit red", "ff00cc" ]
   },
   "border-radius": {
     domProp: "borderRadius",
@@ -1163,6 +1453,7 @@ var gCSSProperties = {
     domProp: "borderBottomLeftRadius",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     prerequisites: { "width": "200px", "height": "100px", "display": "inline-block"},
     initial_values: [ "0", "0px", "calc(-2px)" ],
     other_values: [ "0%", "3%", "1px", "2em", // circular
@@ -1183,6 +1474,7 @@ var gCSSProperties = {
     domProp: "borderBottomRightRadius",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     prerequisites: { "width": "200px", "height": "100px", "display": "inline-block"},
     initial_values: [ "0", "0px", "calc(-2px)" ],
     other_values: [ "0%", "3%", "1px", "2em", // circular
@@ -1203,6 +1495,7 @@ var gCSSProperties = {
     domProp: "borderTopLeftRadius",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     prerequisites: { "width": "200px", "height": "100px", "display": "inline-block"},
     initial_values: [ "0", "0px", "calc(-2px)" ],
     other_values: [ "0%", "3%", "1px", "2em", // circular
@@ -1223,6 +1516,7 @@ var gCSSProperties = {
     domProp: "borderTopRightRadius",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     prerequisites: { "width": "200px", "height": "100px", "display": "inline-block"},
     initial_values: [ "0", "0px", "calc(-2px)" ],
     other_values: [ "0%", "3%", "1px", "2em", // circular
@@ -1239,14 +1533,6 @@ var gCSSProperties = {
             ],
     invalid_values: [ "-1px", "4px -2px", "inherit 2px", "2px inherit", "2", "2px 2", "2 2px", "2px calc(0px + rubbish)" ]
   },
-  "-moz-border-right-colors": {
-    domProp: "MozBorderRightColors",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "none" ],
-    other_values: [ "red green", "red #fc3", "#ff00cc", "currentColor", "blue currentColor orange currentColor" ],
-    invalid_values: [ "red none", "red inherit", "red, green", "none red", "inherit red", "ff00cc" ]
-  },
   "border-inline-start": {
     domProp: "borderInlineStart",
     inherited: false,
@@ -1260,6 +1546,7 @@ var gCSSProperties = {
     domProp: "borderInlineStartColor",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     logical: true,
     get_computed: logical_box_prop_get_computed,
     initial_values: [ "currentColor" ],
@@ -1270,6 +1557,7 @@ var gCSSProperties = {
     domProp: "borderInlineStartStyle",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     logical: true,
     get_computed: logical_box_prop_get_computed,
     /* XXX hidden is sometimes the same as initial */
@@ -1281,6 +1569,7 @@ var gCSSProperties = {
     domProp: "borderInlineStartWidth",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     logical: true,
     get_computed: logical_box_prop_get_computed,
     prerequisites: { "border-inline-start-style": "solid" },
@@ -1296,14 +1585,6 @@ var gCSSProperties = {
       "calc(3*25px + 5em)",
     ],
     invalid_values: [ "5%", "5" ]
-  },
-  "-moz-border-top-colors": {
-    domProp: "MozBorderTopColors",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "none" ],
-    other_values: [ "red green", "red #fc3", "#ff00cc", "currentColor", "blue currentColor orange currentColor" ],
-    invalid_values: [ "red none", "red inherit", "red, green", "none red", "inherit red", "ff00cc" ]
   },
   "-moz-box-align": {
     domProp: "MozBoxAlign",
@@ -1428,13 +1709,14 @@ var gCSSProperties = {
     domProp: "columnGap",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
-    initial_values: [ "normal", "1em", "calc(-2em + 3em)" ],
-    other_values: [ "2px", "4em",
+    initial_values: [ "normal" ],
+    other_values: [ "2px", "1em", "4em",
       "calc(2px)",
       "calc(-2px)",
       "calc(0px)",
       "calc(0pt)",
       "calc(5em)",
+      "calc(-2em + 3em)",
       "calc(3*25px)",
       "calc(25px*3)",
       "calc(3*25px + 5em)",
@@ -1713,6 +1995,7 @@ var gCSSProperties = {
     domProp: "marginInlineEnd",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     logical: true,
     get_computed: logical_box_prop_get_computed,
     /* no subproperties */
@@ -1732,6 +2015,7 @@ var gCSSProperties = {
     domProp: "marginInlineStart",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     logical: true,
     get_computed: logical_box_prop_get_computed,
     /* no subproperties */
@@ -1746,6 +2030,265 @@ var gCSSProperties = {
       "calc(3*25px + 50%)",
     ],
     invalid_values: [ "5", "..25px", ".+5px", ".px", "-.px", "++5px", "-+4px", "+-3px", "--7px", "+-.6px", "-+.5px", "++.7px", "--.4px" ],
+  },
+  "mask": {
+    domProp: "mask",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    /* FIXME: All mask-border-* should be added when we implement them. */
+    subproperties: ["mask-clip", "mask-image", "mask-mode", "mask-origin", "mask-position-x", "mask-position-y", "mask-repeat", "mask-size" , "mask-composite"],
+    initial_values: [ "match-source", "none", "repeat", "add", "0% 0%", "top left", "0% 0% / auto", "top left / auto", "left top / auto", "0% 0% / auto auto",
+      "top left none", "left top none", "none left top", "none top left", "none 0% 0%", "top left / auto none", "left top / auto none",
+      "top left / auto auto none",
+      "match-source none repeat add top left", "top left repeat none add", "none repeat add top left / auto", "top left / auto repeat none add match-source", "none repeat add 0% 0% / auto auto match-source",
+      "border-box", "border-box border-box" ],
+    other_values: [
+      "none alpha repeat add left top",
+      "url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==)",
+      "no-repeat url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==') alpha left top add",
+      "repeat-x",
+      "repeat-y",
+      "no-repeat",
+      "none repeat-y alpha add 0% 0%",
+      "subtract",
+      "0% top subtract alpha repeat none",
+      "top",
+      "left",
+      "50% 50%",
+      "center",
+      "top / 100px",
+      "left / contain",
+      "left / cover",
+      "10px / 10%",
+      "10em / calc(20px)",
+      "top left / 100px 100px",
+      "top left / 100px auto",
+      "top left / 100px 10%",
+      "top left / 100px calc(20px)",
+      "bottom right add none alpha repeat",
+      "50% alpha",
+      "alpha 50%",
+      "50%",
+      "url(#mymask)",
+      "radial-gradient(at 10% bottom, #ffffff, black) add no-repeat",
+      "repeating-radial-gradient(at 10% bottom, #ffffff, black) no-repeat",
+      "-moz-element(#test) alpha",
+      /* multiple mask-image */
+      "url(404.png), url(404.png)",
+      "repeat-x, subtract, none",
+      "0% top url(404.png), url(404.png) 50% top",
+      "subtract repeat-y top left url(404.png), repeat-x alpha",
+      "top left / contain, bottom right / cover",
+      /* test cases with clip+origin in the shorthand */
+      "url(404.png) alpha padding-box",
+      "url(404.png) border-box alpha",
+      "content-box url(404.png)",
+      "url(404.png) alpha padding-box padding-box",
+      "url(404.png) alpha padding-box border-box",
+      "content-box border-box url(404.png)",
+      "alpha padding-box url(404.png) border-box",
+      "alpha padding-box url(404.png) padding-box",
+    ],
+    invalid_values: [
+      /* mixes with keywords have to be in correct order */
+      "50% left", "top 50%",
+      /* no quirks mode colors */
+      "radial-gradient(at 10% bottom, ffffff, black) add no-repeat",
+      /* no quirks mode lengths */
+      "linear-gradient(red -99, yellow, green, blue 120%)",
+      /* bug 258080: don't accept background-position separated */
+      "left url(404.png) top", "top url(404.png) left",
+      "-moz-element(#a rubbish)",
+      "left top / match-source"
+    ]
+  },
+  "mask-clip": {
+    domProp: "maskClip",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "border-box" ],
+    other_values: [ "content-box", "fill-box", "stroke-box", "view-box", "no-clip", "padding-box", "border-box, padding-box", "padding-box, padding-box, padding-box", "border-box, border-box" ],
+    invalid_values: [ "content-box content-box", "margin-box" ]
+  },
+  "mask-composite": {
+    domProp: "maskComposite",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "add" ],
+    other_values: [ "subtract", "intersect", "exclude", "add, add", "subtract, intersect", "subtract, subtract, add"],
+    invalid_values: [ "add subtract", "intersect exclude" ]
+  },
+  "mask-image": {
+    domProp: "maskImage",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "none" ],
+    other_values: [
+    "url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==)", "url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==')", 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==")',
+    "none, none",
+    "none, none, none, none, none",
+    "url(#mymask)",
+    "url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==), none",
+    "none, url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==), none",
+    "url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==), url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==)",
+    ].concat(validGradientAndElementValues),
+    invalid_values: [
+    ].concat(invalidGradientAndElementValues),
+    unbalanced_values: [
+    ].concat(unbalancedGradientAndElementValues)
+  },
+  "mask-mode": {
+    domProp: "maskMode",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "match-source" ],
+    other_values: [ "alpha", "luminance", "match-source, match-source", "match-source, alpha", "alpha, luminance, match-source"],
+    invalid_values: [ "match-source match-source", "alpha match-source" ]
+  },
+  "mask-origin": {
+    domProp: "maskOrigin",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "border-box" ],
+    other_values: [ "padding-box", "content-box", "fill-box", "stroke-box", "view-box", "border-box, padding-box", "padding-box, padding-box, padding-box", "border-box, border-box" ],
+    invalid_values: [ "padding-box padding-box", "no-clip", "margin-box" ]
+  },
+  "mask-position": {
+    domProp: "maskPosition",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    initial_values: [ "top 0% left 0%", "top 0% left", "top left", "left top", "0% 0%", "0% top", "left 0%" ],
+    other_values: [ "top", "left", "right", "bottom", "center", "center bottom", "bottom center", "center right", "right center", "center top", "top center", "center left", "left center", "right bottom", "bottom right", "50%", "top left, top left", "top left, top right", "top right, top left", "left top, 0% 0%", "10% 20%, 30%, 40%", "top left, bottom right", "right bottom, left top", "0%", "0px", "30px", "0%, 10%, 20%, 30%", "top, top, top, top, top",
+      "calc(20px)",
+      "calc(20px) 10px",
+      "10px calc(20px)",
+      "calc(20px) 25%",
+      "25% calc(20px)",
+      "calc(20px) calc(20px)",
+      "calc(20px + 1em) calc(20px / 2)",
+      "calc(20px + 50%) calc(50% - 10px)",
+      "calc(-20px) calc(-50%)",
+      "calc(-20%) calc(-50%)",
+      "0px 0px",
+      "right 20px top 60px",
+      "right 20px bottom 60px",
+      "left 20px top 60px",
+      "left 20px bottom 60px",
+      "right -50px top -50px",
+      "left -50px bottom -50px",
+      "right 20px top -50px",
+      "right -20px top 50px",
+      "right 3em bottom 10px",
+      "bottom 3em right 10px",
+      "top 3em right 10px",
+      "left 15px",
+      "10px top",
+      "left top 15px",
+      "left 10px top",
+      "left 20%",
+      "right 20%"
+    ],
+    subproperties: [ "mask-position-x", "mask-position-y" ],
+    invalid_values: [ "center 10px center 4px", "center 10px center",
+                      "top 20%", "bottom 20%", "50% left", "top 50%",
+                      "50% bottom 10%", "right 10% 50%", "left right",
+                      "top bottom", "left 10% right",
+                      "top 20px bottom 20px", "left left",
+                      "0px calc(0px + rubbish)"],
+  },
+  "mask-position-x": {
+    domProp: "maskPositionX",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "left", "0%" ],
+    other_values: [ "right", "center", "50%", "center, center", "center, right", "right, center", "center, 50%", "10%, 20%, 40%", "1px", "30px", "50%, 10%, 20%, 30%", "center, center, center, center, center",
+      "calc(20px)",
+      "calc(20px + 1em)",
+      "calc(20px / 2)",
+      "calc(20px + 50%)",
+      "calc(50% - 10px)",
+      "calc(-20px)",
+      "calc(-50%)",
+      "calc(-20%)",
+      "right 20px",
+      "left 20px",
+      "right -50px",
+      "left -50px",
+      "right 20px",
+      "right 3em",
+    ],
+    invalid_values: [ "center 10px", "right 10% 50%", "left right", "left left",
+                      "bottom 20px", "top 10%", "bottom 3em",
+                      "top", "bottom", "top, top", "top, bottom", "bottom, top", "top, 0%", "top, top, top, top, top",
+                      "calc(0px + rubbish)", "center 0%"],
+  },
+  "mask-position-y": {
+    domProp: "maskPositionY",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "top", "0%" ],
+    other_values: [ "bottom", "center", "50%", "center, center", "center, bottom", "bottom, center", "center, 0%", "10%, 20%, 40%", "1px", "30px", "50%, 10%, 20%, 30%", "center, center, center, center, center",
+      "calc(20px)",
+      "calc(20px + 1em)",
+      "calc(20px / 2)",
+      "calc(20px + 50%)",
+      "calc(50% - 10px)",
+      "calc(-20px)",
+      "calc(-50%)",
+      "calc(-20%)",
+      "bottom 20px",
+      "top 20px",
+      "bottom -50px",
+      "top -50px",
+      "bottom 20px",
+      "bottom 3em",
+    ],
+    invalid_values: [ "center 10px", "bottom 10% 50%", "top bottom", "top top",
+                      "right 20px", "left 10%", "right 3em",
+                      "left", "right", "left, left", "left, right", "right, left", "left, 0%", "left, left, left, left, left",
+                      "calc(0px + rubbish)", "center 0%"],
+  },
+  "mask-repeat": {
+    domProp: "maskRepeat",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "repeat", "repeat repeat" ],
+    other_values: [ "repeat-x", "repeat-y", "no-repeat",
+      "repeat-x, repeat-x",
+      "repeat, no-repeat",
+      "repeat-y, no-repeat, repeat-y",
+      "repeat, repeat, repeat",
+      "repeat no-repeat",
+      "no-repeat repeat",
+      "no-repeat no-repeat",
+      "repeat no-repeat",
+      "no-repeat no-repeat, no-repeat no-repeat",
+    ],
+    invalid_values: [ "repeat repeat repeat",
+                      "repeat-x repeat-y",
+                      "repeat repeat-x",
+                      "repeat repeat-y",
+                      "repeat-x repeat",
+                      "repeat-y repeat" ]
+  },
+  "mask-size": {
+    domProp: "maskSize",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "auto", "auto auto" ],
+    other_values: [ "contain", "cover", "100px auto", "auto 100px", "100% auto", "auto 100%", "25% 50px", "3em 40%",
+      "calc(20px)",
+      "calc(20px) 10px",
+      "10px calc(20px)",
+      "calc(20px) 25%",
+      "25% calc(20px)",
+      "calc(20px) calc(20px)",
+      "calc(20px + 1em) calc(20px / 2)",
+      "calc(20px + 50%) calc(50% - 10px)",
+      "calc(-20px) calc(-50%)",
+      "calc(-20%) calc(-50%)"
+    ],
+    invalid_values: [ "contain contain", "cover cover", "cover auto", "auto cover", "contain cover", "cover contain", "-5px 3px", "3px -5px", "auto -5px", "-5px auto", "5 3", "10px calc(10px + rubbish)" ]
   },
   "mask-type": {
     domProp: "maskType",
@@ -1862,6 +2405,8 @@ var gCSSProperties = {
     domProp: "paddingInlineEnd",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    // No applies_to_placeholder because we have a !important rule in forms.css.
     logical: true,
     get_computed: logical_box_prop_get_computed,
     /* no subproperties */
@@ -1879,6 +2424,8 @@ var gCSSProperties = {
     domProp: "paddingInlineStart",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    // No applies_to_placeholder because we have a !important rule in forms.css.
     logical: true,
     get_computed: logical_box_prop_get_computed,
     /* no subproperties */
@@ -1896,6 +2443,7 @@ var gCSSProperties = {
     domProp: "resize",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    // No applies_to_placeholder because we have a !important rule in forms.css.
     prerequisites: { "display": "block", "overflow": "auto" },
     initial_values: [ "none" ],
     other_values: [ "both", "horizontal", "vertical" ],
@@ -1906,7 +2454,7 @@ var gCSSProperties = {
     inherited: false,
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "stretch-to-fit" ],
-    other_values: [ "ignore" ],
+    other_values: [ "ignore", "ignore-horizontal", "ignore-vertical" ],
     invalid_values: []
   },
   "-moz-tab-size": {
@@ -1958,7 +2506,7 @@ var gCSSProperties = {
       "scale3d(4, 4, 4)", "scale3d(-2, 3, -7)", "scalez(4)",
       "scalez(-6)", "rotate3d(2, 3, 4, 45deg)",
       "rotate3d(-3, 7, 0, 12rad)", "rotatex(15deg)", "rotatey(-12grad)",
-      "rotatez(72rad)", "rotatex(0.125turn)",
+      "rotatez(72rad)", "rotatex(0.125turn)", "rotate3d(0, 0, 0, 0rad)",
       "perspective(0px)", "perspective(1000px)",
       "matrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)",
     ],
@@ -2141,37 +2689,41 @@ var gCSSProperties = {
       "50% transparent",
       "transparent 50%",
       "50%",
-      "-moz-radial-gradient(10% bottom, #ffffff, black) scroll no-repeat",
-      "-moz-linear-gradient(10px 10px -45deg, red, blue) repeat",
-      "-moz-linear-gradient(10px 10px -0.125turn, red, blue) repeat",
-      "-moz-repeating-radial-gradient(10% bottom, #ffffff, black) scroll no-repeat",
-      "-moz-repeating-linear-gradient(10px 10px -45deg, red, blue) repeat",
+      "radial-gradient(at 10% bottom, #ffffff, black) scroll no-repeat",
+      "repeating-radial-gradient(at 10% bottom, #ffffff, black) scroll no-repeat",
       "-moz-element(#test) lime",
-        /* multiple backgrounds */
-        "url(404.png), url(404.png)",
-        "url(404.png), url(404.png) transparent",
-        "url(404.png), url(404.png) red",
-        "repeat-x, fixed, none",
-        "0% top url(404.png), url(404.png) 0% top",
-        "fixed repeat-y top left url(404.png), repeat-x green",
-        "url(404.png), -moz-linear-gradient(20px 20px -45deg, blue, green), -moz-element(#a) black",
-        "top left / contain, bottom right / cover",
-        /* test cases with clip+origin in the shorthand */
-        "url(404.png) green padding-box",
-        "url(404.png) border-box transparent",
-        "content-box url(404.png) blue",
-        "url(404.png) green padding-box padding-box",
-        "url(404.png) green padding-box border-box",
-        "content-box border-box url(404.png) blue",
+      /* multiple backgrounds */
+      "url(404.png), url(404.png)",
+      "url(404.png), url(404.png) transparent",
+      "url(404.png), url(404.png) red",
+      "repeat-x, fixed, none",
+      "0% top url(404.png), url(404.png) 0% top",
+      "fixed repeat-y top left url(404.png), repeat-x green",
+      "top left / contain, bottom right / cover",
+      /* test cases with clip+origin in the shorthand */
+      "url(404.png) green padding-box",
+      "url(404.png) border-box transparent",
+      "content-box url(404.png) blue",
+      "url(404.png) green padding-box padding-box",
+      "url(404.png) green padding-box border-box",
+      "content-box border-box url(404.png) blue",
+      "url(404.png) green padding-box text",
+      "content-box text url(404.png) blue",
+      /* clip and origin separated in the shorthand */
+      "url(404.png) padding-box green border-box",
+      "url(404.png) padding-box green padding-box",
+      "transparent padding-box url(404.png) border-box",
+      "transparent padding-box url(404.png) padding-box",
+      /* text */
+      "text",
+      "text border-box",
     ],
     invalid_values: [
       /* mixes with keywords have to be in correct order */
       "50% left", "top 50%",
       /* no quirks mode colors */
-      "-moz-radial-gradient(10% bottom, ffffff, black) scroll no-repeat",
+      "radial-gradient(at 10% bottom, ffffff, black) scroll no-repeat",
       /* no quirks mode lengths */
-      "-moz-linear-gradient(10 10px -45deg, red, blue) repeat",
-      "-moz-linear-gradient(10px 10 -45deg, red, blue) repeat",
       "linear-gradient(red -99, yellow, green, blue 120%)",
       /* bug 258080: don't accept background-position separated */
       "left url(404.png) top", "top url(404.png) left",
@@ -2186,19 +2738,9 @@ var gCSSProperties = {
       "url(404.png) rgba(0, 0, 0, 0), url(404.png) rgba(0, 0, 0, 0)",
       "url(404.png) rgba(0, 0, 0, 0) rgb(255, 0, 0), url(404.png) rgba(0, 0, 0, 0) rgb(255, 0, 0)",
       "url(404.png) rgb(255, 0, 0), url(404.png) rgb(255, 0, 0)",
-      /* bug 513395: old syntax for gradients */
-      "-moz-radial-gradient(10% bottom, 30px, 20px 20px, 10px, from(#ffffff), to(black)) scroll no-repeat",
-      "-moz-linear-gradient(10px 10px, 20px 20px, from(red), to(blue)) repeat",
-      /* clip and origin separated in the shorthand */
-      "url(404.png) padding-box green border-box",
-      "url(404.png) padding-box green padding-box",
-      "transparent padding-box url(404.png) border-box",
-      "transparent padding-box url(404.png) padding-box",
       /* error inside functions */
       "-moz-image-rect(url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==), rubbish, 50%, 30%, 0) transparent",
       "-moz-element(#a rubbish) black",
-      "text",
-      "text border-box",
       "content-box text text",
       "padding-box text url(404.png) text",
     ]
@@ -2207,6 +2749,9 @@ var gCSSProperties = {
     domProp: "backgroundAttachment",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "scroll" ],
     other_values: [ "fixed", "local", "scroll,scroll", "fixed, scroll", "scroll, fixed, local, scroll", "fixed, fixed" ],
     invalid_values: []
@@ -2219,14 +2764,20 @@ var gCSSProperties = {
     domProp: "backgroundClip",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "border-box" ],
-    other_values: [ "content-box", "padding-box", "border-box, padding-box", "padding-box, padding-box, padding-box", "border-box, border-box" ],
+    other_values: [ "content-box", "padding-box", "border-box, padding-box", "padding-box, padding-box, padding-box", "border-box, border-box", "text", "content-box, text", "text, border-box", "text, text" ],
     invalid_values: [ "margin-box", "border-box border-box", "fill-box", "stroke-box", "view-box", "no-clip" ]
   },
   "background-color": {
     domProp: "backgroundColor",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "transparent", "rgba(0, 0, 0, 0)" ],
     other_values: [ "green", "rgb(255, 0, 128)", "#fc2", "#96ed2a", "black", "rgba(255,255,0,3)", "hsl(240, 50%, 50%)", "rgb(50%, 50%, 50%)", "-moz-default-background-color", "rgb(100, 100.0, 100)", "rgba(255, 127, 15, 0)", "hsla(240, 97%, 50%, 0.0)", "rgba(255,255,255,-3.7)" ],
     invalid_values: [ "#0", "#00", "#00000", "#0000000", "#000000000", "rgb(100, 100%, 100)" ],
@@ -2236,6 +2787,9 @@ var gCSSProperties = {
     domProp: "backgroundImage",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "none" ],
     other_values: [
     "url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==)", "url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==')", 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==")',
@@ -2254,6 +2808,9 @@ var gCSSProperties = {
     domProp: "backgroundOrigin",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "padding-box" ],
     other_values: [ "border-box", "content-box", "border-box, padding-box", "padding-box, padding-box, padding-box", "border-box, border-box" ],
     invalid_values: [ "margin-box", "padding-box padding-box", "fill-box", "stroke-box", "view-box", "no-clip" ]
@@ -2262,6 +2819,9 @@ var gCSSProperties = {
     domProp: "backgroundPosition",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "top 0% left 0%", "top 0% left", "top left", "left top", "0% 0%", "0% top", "left 0%" ],
     other_values: [ "top", "left", "right", "bottom", "center", "center bottom", "bottom center", "center right", "right center", "center top", "top center", "center left", "left center", "right bottom", "bottom right", "50%", "top left, top left", "top left, top right", "top right, top left", "left top, 0% 0%", "10% 20%, 30%, 40%", "top left, bottom right", "right bottom, left top", "0%", "0px", "30px", "0%, 10%, 20%, 30%", "top, top, top, top, top",
       "calc(20px)",
@@ -2310,6 +2870,9 @@ var gCSSProperties = {
     domProp: "backgroundPositionX",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "left 0%", "left", "0%" ],
     other_values: [ "right", "center", "50%", "left, left", "left, right", "right, left", "left, 0%", "10%, 20%, 40%", "0px", "30px", "0%, 10%, 20%, 30%", "left, left, left, left, left",
       "calc(20px)",
@@ -2336,6 +2899,9 @@ var gCSSProperties = {
     domProp: "backgroundPositionY",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "top 0%", "top", "0%" ],
     other_values: [ "bottom", "center", "50%", "top, top", "top, bottom", "bottom, top", "top, 0%", "10%, 20%, 40%", "0px", "30px", "0%, 10%, 20%, 30%", "top, top, top, top, top",
       "calc(20px)",
@@ -2362,6 +2928,9 @@ var gCSSProperties = {
     domProp: "backgroundRepeat",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "repeat", "repeat repeat" ],
     other_values: [ "repeat-x", "repeat-y", "no-repeat",
       "repeat-x, repeat-x",
@@ -2403,6 +2972,9 @@ var gCSSProperties = {
     domProp: "backgroundSize",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "auto", "auto auto" ],
     other_values: [ "contain", "cover", "100px auto", "auto 100px", "100% auto", "auto 100%", "25% 50px", "3em 40%",
       "calc(20px)",
@@ -2422,7 +2994,7 @@ var gCSSProperties = {
     domProp: "border",
     inherited: false,
     type: CSS_TYPE_TRUE_SHORTHAND,
-    subproperties: [ "border-bottom-color", "border-bottom-style", "border-bottom-width", "border-left-color", "border-left-style", "border-left-width", "border-right-color", "border-right-style", "border-right-width", "border-top-color", "border-top-style", "border-top-width", "-moz-border-top-colors", "-moz-border-right-colors", "-moz-border-bottom-colors", "-moz-border-left-colors", "border-image-source", "border-image-slice", "border-image-width", "border-image-outset", "border-image-repeat" ],
+    subproperties: [ "border-bottom-color", "border-bottom-style", "border-bottom-width", "border-left-color", "border-left-style", "border-left-width", "border-right-color", "border-right-style", "border-right-width", "border-top-color", "border-top-style", "border-top-width", "border-image-source", "border-image-slice", "border-image-width", "border-image-outset", "border-image-repeat" ],
     initial_values: [ "none", "medium", "currentColor", "thin", "none medium currentcolor", "calc(4px - 1px) none" ],
     other_values: [ "solid", "medium solid", "green solid", "10px solid", "thick solid", "calc(2px) solid blue" ],
     invalid_values: [ "5%", "medium solid ff00ff", "5 solid green" ]
@@ -2440,6 +3012,7 @@ var gCSSProperties = {
     domProp: "borderBottomColor",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     prerequisites: { "color": "black" },
     initial_values: [ "currentColor" ],
     other_values: [ "green", "rgba(255,128,0,0.5)", "transparent" ],
@@ -2450,6 +3023,7 @@ var gCSSProperties = {
     domProp: "borderBottomStyle",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     /* XXX hidden is sometimes the same as initial */
     initial_values: [ "none" ],
     other_values: [ "solid", "dashed", "dotted", "double", "outset", "inset", "groove", "ridge" ],
@@ -2459,6 +3033,7 @@ var gCSSProperties = {
     domProp: "borderBottomWidth",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     prerequisites: { "border-bottom-style": "solid" },
     initial_values: [ "medium", "3px", "calc(4px - 1px)" ],
     other_values: [ "thin", "thick", "1px", "2em",
@@ -2506,6 +3081,7 @@ var gCSSProperties = {
     domProp: "borderLeftColor",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     prerequisites: { "color": "black" },
     initial_values: [ "currentColor" ],
     other_values: [ "green", "rgba(255,128,0,0.5)", "transparent" ],
@@ -2516,6 +3092,7 @@ var gCSSProperties = {
     domProp: "borderLeftStyle",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     /* XXX hidden is sometimes the same as initial */
     initial_values: [ "none" ],
     other_values: [ "solid", "dashed", "dotted", "double", "outset", "inset", "groove", "ridge" ],
@@ -2525,6 +3102,7 @@ var gCSSProperties = {
     domProp: "borderLeftWidth",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     prerequisites: { "border-left-style": "solid" },
     initial_values: [ "medium", "3px", "calc(4px - 1px)" ],
     other_values: [ "thin", "thick", "1px", "2em",
@@ -2553,6 +3131,7 @@ var gCSSProperties = {
     domProp: "borderRightColor",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     prerequisites: { "color": "black" },
     initial_values: [ "currentColor" ],
     other_values: [ "green", "rgba(255,128,0,0.5)", "transparent" ],
@@ -2563,6 +3142,7 @@ var gCSSProperties = {
     domProp: "borderRightStyle",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     /* XXX hidden is sometimes the same as initial */
     initial_values: [ "none" ],
     other_values: [ "solid", "dashed", "dotted", "double", "outset", "inset", "groove", "ridge" ],
@@ -2572,6 +3152,7 @@ var gCSSProperties = {
     domProp: "borderRightWidth",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     prerequisites: { "border-right-style": "solid" },
     initial_values: [ "medium", "3px", "calc(4px - 1px)" ],
     other_values: [ "thin", "thick", "1px", "2em",
@@ -2623,6 +3204,7 @@ var gCSSProperties = {
     domProp: "borderTopColor",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     prerequisites: { "color": "black" },
     initial_values: [ "currentColor" ],
     other_values: [ "green", "rgba(255,128,0,0.5)", "transparent" ],
@@ -2633,6 +3215,7 @@ var gCSSProperties = {
     domProp: "borderTopStyle",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     /* XXX hidden is sometimes the same as initial */
     initial_values: [ "none" ],
     other_values: [ "solid", "dashed", "dotted", "double", "outset", "inset", "groove", "ridge" ],
@@ -2642,6 +3225,7 @@ var gCSSProperties = {
     domProp: "borderTopWidth",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     prerequisites: { "border-top-style": "solid" },
     initial_values: [ "medium", "3px", "calc(4px - 1px)" ],
     other_values: [ "thin", "thick", "1px", "2em",
@@ -2692,6 +3276,7 @@ var gCSSProperties = {
     domProp: "boxShadow",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     initial_values: [ "none" ],
     prerequisites: { "color": "blue" },
     other_values: [ "2px 2px", "2px 2px 1px", "2px 2px 2px 2px", "blue 3px 2px", "2px 2px 1px 5px green", "2px 2px red", "green 2px 2px 1px", "green 2px 2px, blue 1px 3px 4px", "currentColor 3px 3px", "blue 2px 2px, currentColor 1px 2px, 1px 2px 3px 2px orange", "3px 0 0 0", "inset 2px 2px 3px 4px black", "2px -2px green inset, 4px 4px 3px blue, inset 2px 2px",
@@ -2751,6 +3336,9 @@ var gCSSProperties = {
     domProp: "color",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     /* XXX should test currentColor, but may or may not be initial */
     initial_values: [ "black", "#000", "#000f", "#000000ff", "-moz-default-color", "rgb(0, 0, 0)", "rgb(0%, 0%, 0%)",
       /* css-color-4: */
@@ -2771,7 +3359,7 @@ var gCSSProperties = {
     other_values: [ "green", "#f3c", "#fed292", "rgba(45,300,12,2)", "transparent", "-moz-nativehyperlinktext", "rgba(255,128,0,0.5)", "#e0fc", "#10fcee72",
       /* css-color-4: */
       "rgb(100, 100.0, 100)", "rgb(300 300 300 / 200%)", "rgb(300.0 300.0 300.0 / 2.0)", "hsl(720, 200%, 200%, 2.0)", "hsla(720 200% 200% / 200%)",
-      "hsl(480deg, 20%, 30%, 0.3)", "hsl(55grad, 400%, 30%)", "hsl(0.5grad 400% 500% / 9.0)", "hsl(33rad 100% 90% / 4)", "hsl(0.33turn, 40%, 40%, 10%)",
+      "hsl(480deg, 20%, 30%, 0.3)", "hsl(55grad, 400%, 30%)", "hsl(0.5grad 400% 500% / 9.0)", "hsl(33rad 100% 90% / 4)", "hsl(0.33turn, 40%, 40%, 10%)", "hsl(63e292, 41%, 34%)",
     ],
     invalid_values: [ "#f", "#ff", "#fffff", "#fffffff", "#fffffffff",
       "rgb(100%, 0, 100%)", "rgba(100, 0, 100%, 30%)",
@@ -2835,6 +3423,7 @@ var gCSSProperties = {
     domProp: "display",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    // No applies_to_placeholder because we have a !important rule in forms.css.
     initial_values: [ "inline" ],
     /* XXX none will really mess with other properties */
     prerequisites: { "float": "none", "position": "static", "contain": "none" },
@@ -2876,6 +3465,7 @@ var gCSSProperties = {
     domProp: "cssFloat",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     initial_values: [ "none" ],
     other_values: [ "left", "right" ],
     invalid_values: []
@@ -2913,6 +3503,9 @@ var gCSSProperties = {
     domProp: "fontFamily",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ (gInitialFontFamilyIsSansSerif ? "sans-serif" : "serif") ],
     other_values: [ (gInitialFontFamilyIsSansSerif ? "serif" : "sans-serif"), "Times New Roman, serif", "'Times New Roman', serif", "cursive", "fantasy", "\\\"Times New Roman", "\"Times New Roman\"", "Times, \\\"Times New Roman", "Times, \"Times New Roman\"", "-no-such-font-installed", "inherit roman", "roman inherit", "Times, inherit roman", "inherit roman, Times", "roman inherit, Times", "Times, roman inherit" ],
     invalid_values: [ "\"Times New\" Roman", "\"Times New Roman\n", "Times, \"Times New Roman\n" ]
@@ -2921,6 +3514,9 @@ var gCSSProperties = {
     domProp: "fontFeatureSettings",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "normal" ],
     other_values: [
       "'liga' on", "'liga'", "\"liga\" 1", "'liga', 'clig' 1",
@@ -2941,6 +3537,9 @@ var gCSSProperties = {
     domProp: "fontKerning",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "auto" ],
     other_values: [ "normal", "none" ],
     invalid_values: [ "on" ]
@@ -2949,6 +3548,9 @@ var gCSSProperties = {
     domProp: "fontLanguageOverride",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "normal" ],
     other_values: [ "'ENG'", "'TRK'", "\"TRK\"", "'N\\'Ko'" ],
     invalid_values: [ "TRK", "ja" ]
@@ -2957,6 +3559,9 @@ var gCSSProperties = {
     domProp: "fontSize",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "medium",
       "1rem",
       "calc(1rem)",
@@ -2978,6 +3583,9 @@ var gCSSProperties = {
     domProp: "fontSizeAdjust",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "none" ],
     other_values: [ "0.3", "0.5", "0.7", "0.0", "0", "3" ],
     invalid_values: [ "-0.3", "-1" ]
@@ -2986,6 +3594,9 @@ var gCSSProperties = {
     domProp: "fontStretch",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "normal" ],
     other_values: [ "ultra-condensed", "extra-condensed", "condensed", "semi-condensed", "semi-expanded", "expanded", "extra-expanded", "ultra-expanded" ],
     invalid_values: [ "narrower", "wider" ]
@@ -2994,6 +3605,9 @@ var gCSSProperties = {
     domProp: "fontStyle",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "normal" ],
     other_values: [ "italic", "oblique" ],
     invalid_values: []
@@ -3002,6 +3616,9 @@ var gCSSProperties = {
     domProp: "fontSynthesis",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "weight style" ],
     other_values: [ "none", "weight", "style" ],
     invalid_values: [ "weight none", "style none", "none style", "weight 10px", "weight weight", "style style" ]
@@ -3025,6 +3642,9 @@ var gCSSProperties = {
     domProp: "fontVariantAlternates",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "normal" ],
     other_values: [ "historical-forms",
                         "styleset(alt-a, alt-b)", "character-variant(a, b, c)", "annotation(circled)",
@@ -3037,6 +3657,9 @@ var gCSSProperties = {
     domProp: "fontVariantCaps",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "normal" ],
     other_values: [ "small-caps", "all-small-caps", "petite-caps", "all-petite-caps", "titling-caps", "unicase" ],
     invalid_values: [ "normal small-caps", "petite-caps normal", "unicase unicase" ]
@@ -3045,6 +3668,9 @@ var gCSSProperties = {
     domProp: "fontVariantEastAsian",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "normal" ],
     other_values: [ "jis78", "jis83", "jis90", "jis04", "simplified", "traditional", "full-width", "proportional-width", "ruby",
                     "jis78 full-width", "jis78 full-width ruby", "simplified proportional-width", "ruby simplified" ],
@@ -3055,6 +3681,9 @@ var gCSSProperties = {
     domProp: "fontVariantLigatures",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "normal" ],
     other_values: [ "none", "common-ligatures", "no-common-ligatures", "discretionary-ligatures", "no-discretionary-ligatures",
                     "historical-ligatures", "no-historical-ligatures", "contextual", "no-contextual",
@@ -3070,6 +3699,9 @@ var gCSSProperties = {
     domProp: "fontVariantNumeric",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "normal" ],
     other_values: [ "lining-nums", "oldstyle-nums", "proportional-nums", "tabular-nums", "diagonal-fractions",
                     "stacked-fractions", "slashed-zero", "ordinal", "lining-nums diagonal-fractions",
@@ -3083,6 +3715,9 @@ var gCSSProperties = {
     domProp: "fontVariantPosition",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "normal" ],
     other_values: [ "super", "sub" ],
     invalid_values: [ "normal sub", "super sub" ]
@@ -3091,6 +3726,9 @@ var gCSSProperties = {
     domProp: "fontWeight",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "normal", "400" ],
     other_values: [ "bold", "100", "200", "300", "500", "600", "700", "800", "900", "bolder", "lighter" ],
     invalid_values: [ "0", "100.0", "107", "399", "401", "699", "710", "1000" ]
@@ -3148,6 +3786,9 @@ var gCSSProperties = {
     domProp: "letterSpacing",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "normal" ],
     other_values: [ "0", "0px", "1em", "2px", "-3px",
       "calc(0px)", "calc(1em)", "calc(1em + 3px)",
@@ -3160,6 +3801,9 @@ var gCSSProperties = {
     domProp: "lineHeight",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     /*
      * Inheritance tests require consistent font size, since
      * getComputedStyle (which uses the CSS2 computed value, or
@@ -3279,6 +3923,7 @@ var gCSSProperties = {
     domProp: "marginBottom",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     /* XXX testing auto has prerequisites */
     initial_values: [ "0", "0px", "0%", "calc(0pt)", "calc(0% + 0px)" ],
     other_values: [ "1px", "2em", "5%",
@@ -3296,6 +3941,7 @@ var gCSSProperties = {
     domProp: "marginLeft",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     /* XXX testing auto has prerequisites */
     initial_values: [ "0", "0px", "0%", "calc(0pt)", "calc(0% + 0px)" ],
     other_values: [ "1px", "2em", "5%", ".5px", "+32px", "+.789px", "-.328px", "+0.56px", "-0.974px", "237px", "-289px", "-056px", "1987.45px", "-84.32px",
@@ -3313,6 +3959,7 @@ var gCSSProperties = {
     domProp: "marginRight",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     /* XXX testing auto has prerequisites */
     initial_values: [ "0", "0px", "0%", "calc(0pt)", "calc(0% + 0px)" ],
     other_values: [ "1px", "2em", "5%",
@@ -3330,6 +3977,7 @@ var gCSSProperties = {
     domProp: "marginTop",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     /* XXX testing auto has prerequisites */
     initial_values: [ "0", "0px", "0%", "calc(0pt)", "calc(0% + 0px)" ],
     other_values: [ "1px", "2em", "5%",
@@ -3482,6 +4130,7 @@ var gCSSProperties = {
     domProp: "opacity",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_placeholder: true,
     initial_values: [ "1", "17", "397.376", "3e1", "3e+1", "3e0", "3e+0", "3e-0" ],
     other_values: [ "0", "0.4", "0.0000", "-3", "3e-1" ],
     invalid_values: [ "0px", "1px" ]
@@ -3566,6 +4215,7 @@ var gCSSProperties = {
     domProp: "overflowX",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    // No applies_to_placeholder because we have a !important rule in forms.css.
     prerequisites: { "display": "block", "overflow-y": "visible", "contain": "none" },
     initial_values: [ "visible" ],
     other_values: [ "auto", "scroll", "hidden", "-moz-hidden-unscrollable" ],
@@ -3575,6 +4225,7 @@ var gCSSProperties = {
     domProp: "overflowY",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    // No applies_to_placeholder because we have a !important rule in forms.css.
     prerequisites: { "display": "block", "overflow-x": "visible", "contain": "none" },
     initial_values: [ "visible" ],
     other_values: [ "auto", "scroll", "hidden", "-moz-hidden-unscrollable" ],
@@ -3587,7 +4238,7 @@ var gCSSProperties = {
     subproperties: [ "padding-top", "padding-right", "padding-bottom", "padding-left" ],
     initial_values: [ "0", "0px 0 0em", "0% 0px 0em 0pt", "calc(0px) calc(0em) calc(-2px) calc(-1%)" ],
     other_values: [ "3px 0", "2em 4px 2pt", "1em 2em 3px 4px" ],
-    invalid_values: [ "1px calc(nonsense)", "1px red" ],
+    invalid_values: [ "1px calc(nonsense)", "1px red", "-1px" ],
     unbalanced_values: [ "1px calc(" ],
     quirks_values: { "5": "5px", "3px 6px 2 5px": "3px 6px 2px 5px" },
   },
@@ -3595,6 +4246,8 @@ var gCSSProperties = {
     domProp: "paddingBottom",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    // No applies_to_placeholder because we have a !important rule in forms.css.
     initial_values: [ "0", "0px", "0%", "calc(0pt)", "calc(0% + 0px)", "calc(-3px)", "calc(-1%)" ],
     other_values: [ "1px", "2em", "5%",
       "calc(2px)",
@@ -3610,6 +4263,8 @@ var gCSSProperties = {
     domProp: "paddingLeft",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    // No applies_to_placeholder because we have a !important rule in forms.css.
     initial_values: [ "0", "0px", "0%", "calc(0pt)", "calc(0% + 0px)", "calc(-3px)", "calc(-1%)" ],
     other_values: [ "1px", "2em", "5%",
       "calc(2px)",
@@ -3625,6 +4280,8 @@ var gCSSProperties = {
     domProp: "paddingRight",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    // No applies_to_placeholder because we have a !important rule in forms.css.
     initial_values: [ "0", "0px", "0%", "calc(0pt)", "calc(0% + 0px)", "calc(-3px)", "calc(-1%)" ],
     other_values: [ "1px", "2em", "5%",
       "calc(2px)",
@@ -3640,6 +4297,8 @@ var gCSSProperties = {
     domProp: "paddingTop",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    // No applies_to_placeholder because we have a !important rule in forms.css.
     initial_values: [ "0", "0px", "0%", "calc(0pt)", "calc(0% + 0px)", "calc(-3px)", "calc(-1%)" ],
     other_values: [ "1px", "2em", "5%",
       "calc(2px)",
@@ -3679,6 +4338,7 @@ var gCSSProperties = {
     domProp: "pointerEvents",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    // No applies_to_placeholder because we have a !important rule in forms.css.
     initial_values: [ "auto" ],
     other_values: [ "visiblePainted", "visibleFill", "visibleStroke", "visible",
             "painted", "fill", "stroke", "all", "none" ],
@@ -3753,6 +4413,7 @@ var gCSSProperties = {
     domProp: "textAlign",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_placeholder: true,
     // don't know whether left and right are same as start
     initial_values: [ "start" ],
     other_values: [ "center", "justify", "end", "match-parent" ],
@@ -3770,6 +4431,9 @@ var gCSSProperties = {
     domProp: "textDecoration",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     subproperties: [ "text-decoration-color", "text-decoration-line", "text-decoration-style" ],
     initial_values: [ "none" ],
     other_values: [ "underline", "overline", "line-through", "blink", "blink line-through underline", "underline overline line-through blink",
@@ -3780,6 +4444,9 @@ var gCSSProperties = {
     domProp: "textDecorationColor",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     prerequisites: { "color": "black" },
     initial_values: [ "currentColor" ],
     other_values: [ "green", "rgba(255,128,0,0.5)", "transparent" ],
@@ -3789,6 +4456,9 @@ var gCSSProperties = {
     domProp: "textDecorationLine",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "none" ],
     other_values: [ "underline", "overline", "line-through", "blink", "blink line-through underline", "underline overline line-through blink" ],
     invalid_values: [ "none none", "underline none", "none underline", "line-through blink line-through", "underline overline line-through blink none", "underline overline line-throuh blink blink" ]
@@ -3797,6 +4467,9 @@ var gCSSProperties = {
     domProp: "textDecorationStyle",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "solid" ],
     other_values: [ "double", "dotted", "dashed", "wavy", "-moz-none" ],
     invalid_values: [ "none", "groove", "ridge", "inset", "outset", "solid dashed", "wave" ]
@@ -3860,6 +4533,7 @@ var gCSSProperties = {
     domProp: "textOverflow",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_placeholder: true,
     initial_values: [ "clip" ],
     other_values: [ "ellipsis", '""', "''", '"hello"', 'clip clip', 'ellipsis ellipsis', 'clip ellipsis', 'clip ""', '"hello" ""', '"" ellipsis' ],
     invalid_values: [ "none", "auto", '"hello" inherit', 'inherit "hello"', 'clip initial', 'initial clip', 'initial inherit', 'inherit initial', 'inherit none']
@@ -3868,6 +4542,9 @@ var gCSSProperties = {
     domProp: "textShadow",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     prerequisites: { "color": "blue" },
     initial_values: [ "none" ],
     other_values: [ "2px 2px", "2px 2px 1px", "2px 2px green", "2px 2px 1px green", "green 2px 2px", "green 2px 2px 1px", "green 2px 2px, blue 1px 3px 4px", "currentColor 3px 3px", "blue 2px 2px, currentColor 1px 2px",
@@ -3891,6 +4568,9 @@ var gCSSProperties = {
     domProp: "textTransform",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "none" ],
     other_values: [ "capitalize", "uppercase", "lowercase", "full-width" ],
     invalid_values: []
@@ -3920,7 +4600,7 @@ var gCSSProperties = {
     type: CSS_TYPE_TRUE_SHORTHAND,
     subproperties: [ "transition-property", "transition-duration", "transition-timing-function", "transition-delay" ],
     initial_values: [ "all 0s ease 0s", "all", "0s", "0s 0s", "ease" ],
-    other_values: [ "all 0s cubic-bezier(0.25, 0.1, 0.25, 1.0) 0s", "width 1s linear 2s", "width 1s 2s linear", "width linear 1s 2s", "linear width 1s 2s", "linear 1s width 2s", "linear 1s 2s width", "1s width linear 2s", "1s width 2s linear", "1s 2s width linear", "1s linear width 2s", "1s linear 2s width", "1s 2s linear width", "width linear 1s", "width 1s linear", "linear width 1s", "linear 1s width", "1s width linear", "1s linear width", "1s 2s width", "1s width 2s", "width 1s 2s", "1s 2s linear", "1s linear 2s", "linear 1s 2s", "width 1s", "1s width", "linear 1s", "1s linear", "1s 2s", "2s 1s", "width", "linear", "1s", "height", "2s", "ease-in-out", "2s ease-in", "opacity linear", "ease-out 2s", "2s color, 1s width, 500ms height linear, 1s opacity 4s cubic-bezier(0.0, 0.1, 1.0, 1.0)", "1s \\32width linear 2s", "1s -width linear 2s", "1s -\\32width linear 2s", "1s \\32 0width linear 2s", "1s -\\32 0width linear 2s", "1s \\2width linear 2s", "1s -\\2width linear 2s", "2s, 1s width", "1s width, 2s", "2s all, 1s width", "1s width, 2s all", "2s all, 1s width", "2s width, 1s all", "3s --my-color" ],
+    other_values: [ "all 0s cubic-bezier(0.25, 0.1, 0.25, 1.0) 0s", "width 1s linear 2s", "width 1s 2s linear", "width linear 1s 2s", "linear width 1s 2s", "linear 1s width 2s", "linear 1s 2s width", "1s width linear 2s", "1s width 2s linear", "1s 2s width linear", "1s linear width 2s", "1s linear 2s width", "1s 2s linear width", "width linear 1s", "width 1s linear", "linear width 1s", "linear 1s width", "1s width linear", "1s linear width", "1s 2s width", "1s width 2s", "width 1s 2s", "1s 2s linear", "1s linear 2s", "linear 1s 2s", "width 1s", "1s width", "linear 1s", "1s linear", "1s 2s", "2s 1s", "width", "linear", "1s", "height", "2s", "ease-in-out", "2s ease-in", "opacity linear", "ease-out 2s", "2s color, 1s width, 500ms height linear, 1s opacity 4s cubic-bezier(0.0, 0.1, 1.0, 1.0)", "1s \\32width linear 2s", "1s -width linear 2s", "1s -\\32width linear 2s", "1s \\32 0width linear 2s", "1s -\\32 0width linear 2s", "1s \\2width linear 2s", "1s -\\2width linear 2s", "2s, 1s width", "1s width, 2s", "2s all, 1s width", "1s width, 2s all", "2s all, 1s width", "2s width, 1s all", "3s --my-color", "none", "none 2s linear 2s" ],
     invalid_values: [ "1s width, 2s none", "2s none, 1s width", "2s inherit", "inherit 2s", "2s width, 1s inherit", "2s inherit, 1s width", "2s initial", "1s width,,2s color", "1s width, ,2s color", "bounce 1s cubic-bezier(0, rubbish) 2s", "bounce 1s steps(rubbish) 2s" ]
   },
   "transition-delay": {
@@ -3967,6 +4647,9 @@ var gCSSProperties = {
     domProp: "verticalAlign",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "baseline" ],
     other_values: [ "sub", "super", "top", "text-top", "middle", "bottom", "text-bottom", "-moz-middle-with-baseline", "15%", "3px", "0.2em", "-5px", "-3%",
       "calc(2px)",
@@ -3991,6 +4674,7 @@ var gCSSProperties = {
     domProp: "whiteSpace",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_placeholder: true,
     initial_values: [ "normal" ],
     other_values: [ "pre", "nowrap", "pre-wrap", "pre-line", "-moz-pre-space" ],
     invalid_values: []
@@ -4099,6 +4783,9 @@ var gCSSProperties = {
     domProp: "wordSpacing",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "normal", "0", "0px", "-0em",
       "calc(-0px)", "calc(0em)"
     ],
@@ -4142,8 +4829,11 @@ var gCSSProperties = {
     inherited: false,
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "none" ],
-    other_values: [ "url(#mypath)", "url('404.svg#mypath')" ],
-    invalid_values: []
+    other_values: [
+      "url(#mypath)", "url('404.svg#mypath')", "url(#my-clip-path)"
+    ].concat(basicShapeSVGBoxValues).concat(basicShapeOtherValues),
+    invalid_values: basicShapeInvalidValues,
+    unbalanced_values: basicShapeUnbalancedValues
   },
   "clip-rule": {
     domProp: "clipRule",
@@ -4315,7 +5005,7 @@ var gCSSProperties = {
     inherited: true,
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "none", "context-value" ],
-    other_values: [ "5px,3px,2px", "5px 3px 2px", "  5px ,3px\t, 2px ", "1px", "5%", "3em" ],
+    other_values: [ "5px,3px,2px", "5px 3px 2px", "  5px ,3px\t, 2px ", "1px", "5%", "3em", "0.0002" ],
     invalid_values: [ "-5px,3px,2px", "5px,3px,-2px" ]
   },
   "stroke-dashoffset": {
@@ -4323,7 +5013,7 @@ var gCSSProperties = {
     inherited: true,
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "0", "-0px", "0em", "context-value" ],
-    other_values: [ "3px", "3%", "1em" ],
+    other_values: [ "3px", "3%", "1em", "0.0002" ],
     invalid_values: []
   },
   "stroke-linecap": {
@@ -4363,7 +5053,7 @@ var gCSSProperties = {
     inherited: true,
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "1px", "context-value" ],
-    other_values: [ "0", "0px", "-0em", "17px", "0.2em" ],
+    other_values: [ "0", "0px", "-0em", "17px", "0.2em", "0.0002" ],
     invalid_values: [ "-0.1px", "-3px" ]
   },
   "text-anchor": {
@@ -4927,6 +5617,9 @@ var gCSSProperties = {
     domProp: "MozFontFeatureSettings",
     inherited: true,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     alias_for: "font-feature-settings",
     subproperties: [ "font-feature-settings" ],
   },
@@ -4934,6 +5627,9 @@ var gCSSProperties = {
     domProp: "MozFontLanguageOverride",
     inherited: true,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     alias_for: "font-language-override",
     subproperties: [ "font-language-override" ],
   },
@@ -4993,6 +5689,7 @@ var gCSSProperties = {
     domProp: "borderBlockEndColor",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     logical: true,
     get_computed: logical_box_prop_get_computed,
     initial_values: [ "currentColor" ],
@@ -5003,6 +5700,7 @@ var gCSSProperties = {
     domProp: "borderBlockEndStyle",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     logical: true,
     get_computed: logical_box_prop_get_computed,
     /* XXX hidden is sometimes the same as initial */
@@ -5014,6 +5712,7 @@ var gCSSProperties = {
     domProp: "borderBlockEndWidth",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     logical: true,
     get_computed: logical_box_prop_get_computed,
     prerequisites: { "border-block-end-style": "solid" },
@@ -5043,6 +5742,7 @@ var gCSSProperties = {
     domProp: "borderBlockStartColor",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     logical: true,
     get_computed: logical_box_prop_get_computed,
     initial_values: [ "currentColor" ],
@@ -5053,6 +5753,7 @@ var gCSSProperties = {
     domProp: "borderBlockStartStyle",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     logical: true,
     get_computed: logical_box_prop_get_computed,
     /* XXX hidden is sometimes the same as initial */
@@ -5064,6 +5765,7 @@ var gCSSProperties = {
     domProp: "borderBlockStartWidth",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     logical: true,
     get_computed: logical_box_prop_get_computed,
     prerequisites: { "border-block-start-style": "solid" },
@@ -5091,6 +5793,7 @@ var gCSSProperties = {
     domProp: "MozBorderEndColor",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
     alias_for: "border-inline-end-color",
     subproperties: [ "border-inline-end-color" ],
     get_computed: logical_box_prop_get_computed,
@@ -5099,6 +5802,7 @@ var gCSSProperties = {
     domProp: "MozBorderEndStyle",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
     alias_for: "border-inline-end-style",
     subproperties: [ "border-inline-end-style" ],
     get_computed: logical_box_prop_get_computed,
@@ -5107,6 +5811,7 @@ var gCSSProperties = {
     domProp: "MozBorderEndWidth",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
     alias_for: "border-inline-end-width",
     subproperties: [ "border-inline-end-width" ],
     get_computed: logical_box_prop_get_computed,
@@ -5122,6 +5827,7 @@ var gCSSProperties = {
     domProp: "MozBorderStartColor",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
     alias_for: "border-inline-start-color",
     subproperties: [ "border-inline-start-color" ],
     get_computed: logical_box_prop_get_computed,
@@ -5130,6 +5836,7 @@ var gCSSProperties = {
     domProp: "MozBorderStartStyle",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
     alias_for: "border-inline-start-style",
     subproperties: [ "border-inline-start-style" ],
     get_computed: logical_box_prop_get_computed,
@@ -5138,6 +5845,7 @@ var gCSSProperties = {
     domProp: "MozBorderStartWidth",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
     alias_for: "border-inline-start-width",
     subproperties: [ "border-inline-start-width" ],
     get_computed: logical_box_prop_get_computed,
@@ -5178,6 +5886,7 @@ var gCSSProperties = {
     domProp: "marginBlockEnd",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     logical: true,
     get_computed: logical_box_prop_get_computed,
     /* XXX testing auto has prerequisites */
@@ -5196,6 +5905,7 @@ var gCSSProperties = {
     domProp: "marginBlockStart",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     logical: true,
     get_computed: logical_box_prop_get_computed,
     /* XXX testing auto has prerequisites */
@@ -5214,6 +5924,7 @@ var gCSSProperties = {
     domProp: "MozMarginEnd",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
     alias_for: "margin-inline-end",
     subproperties: [ "margin-inline-end" ],
     get_computed: logical_box_prop_get_computed,
@@ -5222,6 +5933,7 @@ var gCSSProperties = {
     domProp: "MozMarginStart",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
     alias_for: "margin-inline-start",
     subproperties: [ "margin-inline-start" ],
     get_computed: logical_box_prop_get_computed,
@@ -5392,6 +6104,8 @@ var gCSSProperties = {
     domProp: "paddingBlockEnd",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    // No applies_to_placeholder because we have a !important rule in forms.css.
     logical: true,
     get_computed: logical_box_prop_get_computed,
     initial_values: [ "0", "0px", "0%", "calc(0pt)", "calc(0% + 0px)", "calc(-3px)", "calc(-1%)" ],
@@ -5408,6 +6122,8 @@ var gCSSProperties = {
     domProp: "paddingBlockStart",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    // No applies_to_placeholder because we have a !important rule in forms.css.
     logical: true,
     get_computed: logical_box_prop_get_computed,
     initial_values: [ "0", "0px", "0%", "calc(0pt)", "calc(0% + 0px)", "calc(-3px)", "calc(-1%)" ],
@@ -5424,6 +6140,7 @@ var gCSSProperties = {
     domProp: "MozPaddingEnd",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
     alias_for: "padding-inline-end",
     subproperties: [ "padding-inline-end" ],
     get_computed: logical_box_prop_get_computed,
@@ -5432,6 +6149,7 @@ var gCSSProperties = {
     domProp: "MozPaddingStart",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
     alias_for: "padding-inline-start",
     subproperties: [ "padding-inline-start" ],
     get_computed: logical_box_prop_get_computed,
@@ -5615,6 +6333,7 @@ if (IsCSSPropertyPrefEnabled("layout.css.text-justify.enabled")) {
     domProp: "textJustify",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_placeholder: true,
     initial_values: [ "auto" ],
     other_values: [ "none", "inter-word", "inter-character", "distribute" ],
     invalid_values: []
@@ -5626,6 +6345,9 @@ if (IsCSSPropertyPrefEnabled("layout.css.font-variations.enabled")) {
     domProp: "fontVariationSettings",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "normal" ],
     other_values: [
       "'wdth' 0", "'wdth' -.1", "\"wdth\" 1", "'wdth' 2, 'wght' 3", "\"XXXX\" 0"
@@ -5644,6 +6366,14 @@ if (IsCSSPropertyPrefEnabled("layout.css.font-variations.enabled")) {
       "'wdth\" 1", "\"wdth' 1" // mismatched quotes
     ]
   }
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.frames-timing.enabled")) {
+  gCSSProperties["animation-timing-function"].other_values.push(
+    "frames(2)", "frames(1000)", "frames( 2 )");
+  gCSSProperties["animation-timing-function"].invalid_values.push(
+    "frames(1)", "frames(-2)", "frames", "frames()", "frames(,)",
+    "frames(a)", "frames(2.0)", "frames(2.5)", "frames(2 3)");
 }
 
 if (IsCSSPropertyPrefEnabled("svg.paint-order.enabled")) {
@@ -5668,209 +6398,37 @@ if (IsCSSPropertyPrefEnabled("svg.transform-box.enabled")) {
   };
 }
 
-var basicShapeSVGBoxValues = [
-  "fill-box",
-  "stroke-box",
-  "view-box",
-
-  "polygon(evenodd, 20pt 20cm) fill-box",
-  "polygon(evenodd, 20ex 20pc) stroke-box",
-  "polygon(evenodd, 20rem 20in) view-box",
-];
-
-var basicShapeOtherValues = [
-  "polygon(20px 20px)",
-  "polygon(20px 20%)",
-  "polygon(20% 20%)",
-  "polygon(20rem 20em)",
-  "polygon(20cm 20mm)",
-  "polygon(20px 20px, 30px 30px)",
-  "polygon(20px 20px, 30% 30%, 30px 30px)",
-  "polygon(nonzero, 20px 20px, 30% 30%, 30px 30px)",
-  "polygon(evenodd, 20px 20px, 30% 30%, 30px 30px)",
-
-  "content-box",
-  "padding-box",
-  "border-box",
-  "margin-box",
-
-  "polygon(0 0) content-box",
-  "border-box polygon(0 0)",
-  "padding-box    polygon(   0  20px ,  30px    20% )  ",
-  "polygon(evenodd, 20% 20em) content-box",
-  "polygon(evenodd, 20vh 20em) padding-box",
-  "polygon(evenodd, 20vh calc(20% + 20em)) border-box",
-  "polygon(evenodd, 20vh 20vw) margin-box",
-
-  "circle()",
-  "circle(at center)",
-  "circle(at top left 20px)",
-  "circle(at bottom right)",
-  "circle(20%)",
-  "circle(300px)",
-  "circle(calc(20px + 30px))",
-  "circle(farthest-side)",
-  "circle(closest-side)",
-  "circle(closest-side at center)",
-  "circle(farthest-side at top)",
-  "circle(20px at top right)",
-  "circle(40% at 50% 100%)",
-  "circle(calc(20% + 20%) at right bottom)",
-  "circle() padding-box",
-
-  "ellipse()",
-  "ellipse(at center)",
-  "ellipse(at top left 20px)",
-  "ellipse(at bottom right)",
-  "ellipse(20% 20%)",
-  "ellipse(300px 50%)",
-  "ellipse(calc(20px + 30px) 10%)",
-  "ellipse(farthest-side closest-side)",
-  "ellipse(closest-side farthest-side)",
-  "ellipse(farthest-side farthest-side)",
-  "ellipse(closest-side closest-side)",
-  "ellipse(closest-side closest-side at center)",
-  "ellipse(20% farthest-side at top)",
-  "ellipse(20px 50% at top right)",
-  "ellipse(closest-side 40% at 50% 100%)",
-  "ellipse(calc(20% + 20%) calc(20px + 20cm) at right bottom)",
-
-  "inset(1px)",
-  "inset(20% -20px)",
-  "inset(20em 4rem calc(20% + 20px))",
-  "inset(20vh 20vw 20pt 3%)",
-  "inset(5px round 3px)",
-  "inset(1px 2px round 3px / 3px)",
-  "inset(1px 2px 3px round 3px 2em / 20%)",
-  "inset(1px 2px 3px 4px round 3px 2vw 20% / 20px 3em 2vh 20%)",
-];
-
-var basicShapeInvalidValues = [
-  "url(#test) url(#tes2)",
-  "polygon (0 0)",
-  "polygon(20px, 40px)",
-  "border-box content-box",
-  "polygon(0 0) polygon(0 0)",
-  "polygon(nonzero 0 0)",
-  "polygon(evenodd 20px 20px)",
-  "polygon(20px 20px, evenodd)",
-  "polygon(20px 20px, nonzero)",
-  "polygon(0 0) conten-box content-box",
-  "content-box polygon(0 0) conten-box",
-  "padding-box polygon(0 0) conten-box",
-  "polygon(0 0) polygon(0 0) content-box",
-  "polygon(0 0) content-box polygon(0 0)",
-  "polygon(0 0), content-box",
-  "polygon(0 0), polygon(0 0)",
-  "content-box polygon(0 0) polygon(0 0)",
-  "content-box polygon(0 0) none",
-  "none content-box polygon(0 0)",
-  "inherit content-box polygon(0 0)",
-  "initial polygon(0 0)",
-  "polygon(0 0) farthest-side",
-  "farthest-corner polygon(0 0)",
-  "polygon(0 0) farthest-corner",
-  "polygon(0 0) conten-box",
-  "polygon(0 0) polygon(0 0) farthest-corner",
-  "polygon(0 0) polygon(0 0) polygon(0 0)",
-  "border-box polygon(0, 0)",
-  "border-box padding-box",
-  "margin-box farthest-side",
-  "nonsense() border-box",
-  "border-box nonsense()",
-
-  "circle(at)",
-  "circle(at 20% 20% 30%)",
-  "circle(20px 2px at center)",
-  "circle(2at center)",
-  "circle(closest-corner)",
-  "circle(at center top closest-side)",
-  "circle(-20px)",
-  "circle(farthest-side closest-side)",
-  "circle(20% 20%)",
-  "circle(at farthest-side)",
-  "circle(calc(20px + rubbish))",
-
-  "ellipse(at)",
-  "ellipse(at 20% 20% 30%)",
-  "ellipse(20px at center)",
-  "ellipse(-20px 20px)",
-  "ellipse(closest-corner farthest-corner)",
-  "ellipse(20px -20px)",
-  "ellipse(-20px -20px)",
-  "ellipse(farthest-side)",
-  "ellipse(20%)",
-  "ellipse(at farthest-side farthest-side)",
-  "ellipse(at top left calc(20px + rubbish))",
-
-  "polygon(at)",
-  "polygon(at 20% 20% 30%)",
-  "polygon(20px at center)",
-  "polygon(2px 2at center)",
-  "polygon(closest-corner farthest-corner)",
-  "polygon(at center top closest-side closest-side)",
-  "polygon(40% at 50% 100%)",
-  "polygon(40% farthest-side 20px at 50% 100%)",
-
-  "inset()",
-  "inset(round)",
-  "inset(round 3px)",
-  "inset(1px round 1px 2px 3px 4px 5px)",
-  "inset(1px 2px 3px 4px 5px)",
-  "inset(1px, round 3px)",
-  "inset(1px, 2px)",
-  "inset(1px 2px, 3px)",
-  "inset(1px at 3px)",
-  "inset(1px round 1px // 2px)",
-  "inset(1px round)",
-  "inset(1px calc(2px + rubbish))",
-  "inset(1px round 2px calc(3px + rubbish))",
-];
-
-var basicShapeUnbalancedValues = [
-  "polygon(30% 30%",
-  "polygon(nonzero, 20% 20px",
-  "polygon(evenodd, 20px 20px",
-
-  "circle(",
-  "circle(40% at 50% 100%",
-  "ellipse(",
-  "ellipse(40% at 50% 100%",
-
-  "inset(1px",
-  "inset(1px 2px",
-  "inset(1px 2px 3px",
-  "inset(1px 2px 3px 4px",
-  "inset(1px 2px 3px 4px round 5px",
-  "inset(1px 2px 3px 4px round 5px / 6px",
-];
-
-if (IsCSSPropertyPrefEnabled("layout.css.clip-path-shapes.enabled")) {
-  gCSSProperties["clip-path"] = {
-    domProp: "clipPath",
+if (IsCSSPropertyPrefEnabled("layout.css.shape-outside.enabled")) {
+  gCSSProperties["shape-image-threshold"] = {
+    domProp: "shapeImageThreshold",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
-    initial_values: [ "none" ],
-    other_values: [
-      // SVG reference clip-path
-      "url(#my-clip-path)",
-    ].concat(basicShapeSVGBoxValues).concat(basicShapeOtherValues),
-    invalid_values: basicShapeInvalidValues,
-    unbalanced_values: basicShapeUnbalancedValues,
+    initial_values: [ "0", "0.0000", "-3", ],
+    other_values: [ "0.4", "1", "17", "397.376", "3e1", "3e+1", "3e-1", "3e0", "3e+0", "3e-0" ],
+    invalid_values: [ "0px", "1px", "20%", "default", "auto" ]
   };
-}
 
-if (IsCSSPropertyPrefEnabled("layout.css.shape-outside.enabled")) {
   gCSSProperties["shape-outside"] = {
     domProp: "shapeOutside",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     initial_values: [ "none" ],
     other_values: [
       "url(#my-shape-outside)",
-    ].concat(basicShapeOtherValues),
-    invalid_values: basicShapeSVGBoxValues.concat(basicShapeInvalidValues),
-    unbalanced_values: basicShapeUnbalancedValues,
+    ].concat(
+      basicShapeOtherValues,
+      validGradientAndElementValues
+    ),
+    invalid_values: [].concat(
+      basicShapeSVGBoxValues,
+      basicShapeInvalidValues,
+      invalidGradientAndElementValues
+    ),
+    unbalanced_values: [].concat(
+      basicShapeUnbalancedValues,
+      unbalancedGradientAndElementValues
+    )
   };
 }
 
@@ -6066,7 +6624,6 @@ if (IsCSSPropertyPrefEnabled("layout.css.filters.enabled")) {
       "grayscale(-1)",
 
       "hue-rotate()",
-      "hue-rotate(0)",
       "hue-rotate(0.5 0.5)",
       "hue-rotate(0.5,)",
       "hue-rotate(0.5, 0.5)",
@@ -6108,558 +6665,568 @@ if (IsCSSPropertyPrefEnabled("layout.css.filters.enabled")) {
       "sepia(-1)",
     ]
   };
+
+  // See https://github.com/w3c/fxtf-drafts/issues/228.
+  //
+  // This is updated in Stylo but not Gecko.
+  if (SpecialPowers.DOMWindowUtils.isStyledByServo) {
+    gCSSProperties["filter"].other_values.push("hue-rotate(0)");
+  } else {
+    gCSSProperties["filter"].invalid_values.push("hue-rotate(0)");
+  }
 }
 
-if (IsCSSPropertyPrefEnabled("layout.css.grid.enabled")) {
-  var isGridTemplateSubgridValueEnabled =
-    IsCSSPropertyPrefEnabled("layout.css.grid-template-subgrid-value.enabled");
+var isGridTemplateSubgridValueEnabled =
+  IsCSSPropertyPrefEnabled("layout.css.grid-template-subgrid-value.enabled");
 
-  gCSSProperties["display"].other_values.push("grid", "inline-grid");
-  gCSSProperties["grid-auto-flow"] = {
-    domProp: "gridAutoFlow",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "row" ],
-    other_values: [
-      "column",
-      "column dense",
-      "row dense",
-      "dense column",
-      "dense row",
-      "dense",
-    ],
-    invalid_values: [
-      "",
-      "auto",
-      "none",
-      "10px",
-      "column row",
-      "dense row dense",
-    ]
-  };
-
-  gCSSProperties["grid-auto-columns"] = {
-    domProp: "gridAutoColumns",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "auto" ],
-    other_values: [
-      "40px",
-      "2em",
-      "2.5fr",
-      "12%",
-      "min-content",
-      "max-content",
-      "calc(2px - 99%)",
-      "minmax(20px, max-content)",
-      "minmax(min-content, auto)",
-      "minmax(auto, max-content)",
-      "m\\69nmax(20px, 4Fr)",
-      "MinMax(min-content, calc(20px + 10%))",
-      "fit-content(1px)",
-      "fit-content(calc(1px - 99%))",
-      "fit-content(10%)",
-    ],
-    invalid_values: [
-      "",
-      "normal",
-      "40ms",
-      "-40px",
-      "-12%",
-      "-2em",
-      "-2.5fr",
-      "minmax()",
-      "minmax(20px)",
-      "mİnmax(20px, 100px)",
-      "minmax(20px, 100px, 200px)",
-      "maxmin(100px, 20px)",
-      "minmax(min-content, minmax(30px, max-content))",
-      "fit-content(-1px)",
-      "fit-content(auto)",
-      "fit-content(min-content)",
-    ]
-  };
-  gCSSProperties["grid-auto-rows"] = {
-    domProp: "gridAutoRows",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: gCSSProperties["grid-auto-columns"].initial_values,
-    other_values: gCSSProperties["grid-auto-columns"].other_values,
-    invalid_values: gCSSProperties["grid-auto-columns"].invalid_values
-  };
-
-  gCSSProperties["grid-template-columns"] = {
-    domProp: "gridTemplateColumns",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "none" ],
-    other_values: [
-      "auto",
-      "40px",
-      "2.5fr",
-      "[normal] 40px [] auto [ ] 12%",
-      "[foo] 40px min-content [ bar ] calc(2px - 99%) max-content",
-      "40px min-content calc(20px + 10%) max-content",
-      "minmax(min-content, auto)",
-      "minmax(auto, max-content)",
-      "m\\69nmax(20px, 4Fr)",
-      "40px MinMax(min-content, calc(20px + 10%)) max-content",
-      "40px 2em",
-      "[] 40px [-foo] 2em [bar baz This\ is\ one\ ident]",
-      // TODO bug 978478: "[a] repeat(3, [b] 20px [c] 40px [d]) [e]",
-      "repeat(1, 20px)",
-      "repeat(1, [a] 20px)",
-      "[a] Repeat(4, [a] 20px [] auto [b c]) [d]",
-      "[a] 2.5fr Repeat(4, [a] 20px [] auto [b c]) [d]",
-      "[a] 2.5fr [z] Repeat(4, [a] 20px [] auto [b c]) [d]",
-      "[a] 2.5fr [z] Repeat(4, [a] 20px [] auto) [d]",
-      "[a] 2.5fr [z] Repeat(4, 20px [b c] auto [b c]) [d]",
-      "[a] 2.5fr [z] Repeat(4, 20px auto) [d]",
-      "repeat(auto-fill, 0)",
-      "[a] repeat( Auto-fill,1%)",
-      "minmax(auto,0) [a] repeat(Auto-fit, 0) minmax(0,auto)",
-      "minmax(calc(1% + 1px),auto) repeat(Auto-fit,[] 1%) minmax(auto,1%)",
-      "[a] repeat( auto-fit,[a b] minmax(0,0) )",
-      "[a] 40px repeat(auto-fit,[a b] minmax(1px, 0) [])",
-      "[a] calc(1px - 99%) [b] repeat(auto-fit,[a b] minmax(1mm, 1%) [c]) [c]",
-      "repeat(auto-fill,minmax(1%,auto))",
-      "repeat(auto-fill,minmax(1em,min-content)) minmax(min-content,0)",
-      "repeat(auto-fill,minmax(max-content,1mm))",
-      "fit-content(1px) 1fr",
-      "[a] fit-content(calc(1px - 99%)) [b]",
-      "[a] fit-content(10%) [b c] fit-content(1em)",
-    ],
-    invalid_values: [
-      "",
-      "normal",
-      "40ms",
-      "-40px",
-      "-12%",
-      "-2fr",
-      "[foo]",
-      "[inherit] 40px",
-      "[initial] 40px",
-      "[unset] 40px",
-      "[default] 40px",
-      "[span] 40px",
-      "[6%] 40px",
-      "[5th] 40px",
-      "[foo[] bar] 40px",
-      "[foo]] 40px",
-      "(foo) 40px",
-      "[foo] [bar] 40px",
-      "40px [foo] [bar]",
-      "minmax()",
-      "minmax(20px)",
-      "mİnmax(20px, 100px)",
-      "minmax(20px, 100px, 200px)",
-      "maxmin(100px, 20px)",
-      "minmax(min-content, minmax(30px, max-content))",
-      "repeat(0, 20px)",
-      "repeat(-3, 20px)",
-      "rêpeat(1, 20px)",
-      "repeat(1)",
-      "repeat(1, )",
-      "repeat(3px, 20px)",
-      "repeat(2.0, 20px)",
-      "repeat(2.5, 20px)",
-      "repeat(2, (foo))",
-      "repeat(2, foo)",
-      "40px calc(0px + rubbish)",
-      "repeat(1, repeat(1, 20px))",
-      "repeat(auto-fill, auto)",
-      "repeat(auto-fit,auto)",
-      "repeat(auto-fit,[])",
-      "repeat(auto-fill, 0) repeat(auto-fit, 0) ",
-      "repeat(auto-fit, 0) repeat(auto-fill, 0) ",
-      "[a] repeat(auto-fit, 0) repeat(auto-fit, 0) ",
-      "[a] repeat(auto-fill, 0) [a] repeat(auto-fill, 0) ",
-      "repeat(auto-fill, 0 0)",
-      "repeat(auto-fill, 0 [] 0)",
-      "repeat(auto-fill, min-content)",
-      "repeat(auto-fit,max-content)",
-      "repeat(auto-fit,1fr)",
-      "repeat(auto-fit,minmax(auto,auto))",
-      "repeat(auto-fit,minmax(min-content,1fr))",
-      "repeat(auto-fit,minmax(1fr,auto))",
-      "repeat(auto-fill,minmax(1fr,1em))",
-      "repeat(auto-fill, 10px) auto",
-      "auto repeat(auto-fit, 10px)",
-      "minmax(min-content,max-content) repeat(auto-fit, 0)",
-      "10px [a] 10px [b a] 1fr [b] repeat(auto-fill, 0)",
-      "fit-content(-1px)",
-      "fit-content(auto)",
-      "fit-content(min-content)",
-    ],
-    unbalanced_values: [
-      "(foo] 40px",
-    ]
-  };
-  if (isGridTemplateSubgridValueEnabled) {
-    gCSSProperties["grid-template-columns"].other_values.push(
-      // See https://bugzilla.mozilla.org/show_bug.cgi?id=981300
-      "[none auto subgrid min-content max-content foo] 40px",
-
-      "subgrid",
-      "subgrid [] [foo bar]",
-      "subgrid repeat(1, [])",
-      "subgrid Repeat(4, [a] [b c] [] [d])",
-      "subgrid repeat(auto-fill, [])",
-      "subgrid [x] repeat( Auto-fill, [a b c]) []",
-      "subgrid [x] repeat(auto-fill, []) [y z]"
-    );
-    gCSSProperties["grid-template-columns"].invalid_values.push(
-      "subgrid [inherit]",
-      "subgrid [initial]",
-      "subgrid [unset]",
-      "subgrid [default]",
-      "subgrid [span]",
-      "subgrid [foo] 40px",
-      "subgrid [foo 40px]",
-      "[foo] subgrid",
-      "subgrid rêpeat(1, [])",
-      "subgrid repeat(0, [])",
-      "subgrid repeat(-3, [])",
-      "subgrid repeat(2.0, [])",
-      "subgrid repeat(2.5, [])",
-      "subgrid repeat(3px, [])",
-      "subgrid repeat(1)",
-      "subgrid repeat(1, )",
-      "subgrid repeat(2, [40px])",
-      "subgrid repeat(2, foo)",
-      "subgrid repeat(1, repeat(1, []))",
-      "subgrid repeat(auto-fit,[])",
-      "subgrid [] repeat(auto-fit,[])",
-      "subgrid [a] repeat(auto-fit,[])",
-      "subgrid repeat(auto-fill, 1px)",
-      "subgrid repeat(auto-fill, 1px [])",
-      "subgrid repeat(Auto-fill, [a] [b c] [] [d])",
-      "subgrid repeat(auto-fill, []) repeat(auto-fill, [])"
-    );
-  }
-  gCSSProperties["grid-template-rows"] = {
-    domProp: "gridTemplateRows",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: gCSSProperties["grid-template-columns"].initial_values,
-    other_values: gCSSProperties["grid-template-columns"].other_values,
-    invalid_values: gCSSProperties["grid-template-columns"].invalid_values
-  };
-  gCSSProperties["grid-template-areas"] = {
-    domProp: "gridTemplateAreas",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "none" ],
-    other_values: [
-      "''",
-      "'' ''",
-      "'1a-é_ .' \"b .\"",
-      "' Z\t\\aZ' 'Z Z'",
-      " '. . a b'  '. .a b' ",
-      "'a.b' '. . .'",
-      "'.' '..'",
-      "'...' '.'",
-      "'...-blah' '. .'",
-      "'.. ..' '.. ...'",
-    ],
-    invalid_values: [
-      "'a b' 'a/b'",
-      "'a . a'",
-      "'. a a' 'a a a'",
-      "'a a .' 'a a a'",
-      "'a a' 'a .'",
-      "'a a'\n'..'\n'a a'",
-    ]
-  };
-
-  gCSSProperties["grid-template"] = {
-    domProp: "gridTemplate",
-    inherited: false,
-    type: CSS_TYPE_TRUE_SHORTHAND,
-    subproperties: [
-      "grid-template-areas",
-      "grid-template-rows",
-      "grid-template-columns",
-    ],
-    initial_values: [
-      "none",
-      "none / none",
-    ],
-    other_values: [
-      // <'grid-template-rows'> / <'grid-template-columns'>
-      "40px / 100px",
-      "[foo] 40px [bar] / [baz] repeat(auto-fill,100px) [fizz]",
-      " none/100px",
-      "40px/none",
-      // [ <line-names>? <string> <track-size>? <line-names>? ]+ [ / <explicit-track-list> ]?
-      "'fizz'",
-      "[bar] 'fizz'",
-      "'fizz' / [foo] 40px",
-      "[bar] 'fizz' / [foo] 40px",
-      "'fizz' 100px / [foo] 40px",
-      "[bar] 'fizz' 100px / [foo] 40px",
-      "[bar] 'fizz' 100px [buzz] / [foo] 40px",
-      "[bar] 'fizz' 100px [buzz] \n [a] '.' 200px [b] / [foo] 40px",
-    ],
-    invalid_values: [
-      "'fizz' / repeat(1, 100px)",
-      "'fizz' repeat(1, 100px) / 0px",
-      "[foo] [bar] 40px / 100px",
-      "[fizz] [buzz] 100px / 40px",
-      "[fizz] [buzz] 'foo' / 40px",
-      "'foo' / none"
-    ]
-  };
-  if (isGridTemplateSubgridValueEnabled) {
-    gCSSProperties["grid-template"].other_values.push(
-      "subgrid",
-      "subgrid/40px 20px",
-      "subgrid [foo] [] [bar baz] / 40px 20px",
-      "40px 20px/subgrid",
-      "40px 20px/subgrid  [foo] [] repeat(3, [a] [b]) [bar baz]",
-      "subgrid/subgrid",
-      "subgrid [foo] [] [bar baz]/subgrid [foo] [] [bar baz]"
-    );
-    gCSSProperties["grid-template"].invalid_values.push(
-      "subgrid []",
-      "subgrid [] / 'fizz'",
-      "subgrid / 'fizz'"
-    );
-  }
-
-  gCSSProperties["grid"] = {
-    domProp: "grid",
-    inherited: false,
-    type: CSS_TYPE_TRUE_SHORTHAND,
-    subproperties: [
-      "grid-template-areas",
-      "grid-template-rows",
-      "grid-template-columns",
-      "grid-auto-flow",
-      "grid-auto-rows",
-      "grid-auto-columns",
-      "grid-column-gap",
-      "grid-row-gap",
-    ],
-    initial_values: [
-      "none",
-      "none / none",
-    ],
-    other_values: [
-      "auto-flow 40px / none",
-      "auto-flow / 40px",
-      "auto-flow dense auto / auto",
-      "dense auto-flow minmax(min-content, 2fr) / auto",
-      "dense auto-flow / 100px",
-      "none / auto-flow 40px",
-      "40px / auto-flow",
-      "none / dense auto-flow auto",
-    ].concat(
-      gCSSProperties["grid-template"].other_values
-    ),
-    invalid_values: [
-      "auto-flow",
-      " / auto-flow",
-      "dense 0 / 0",
-      "dense dense 40px / 0",
-      "auto-flow / auto-flow",
-      "auto-flow / dense",
-      "auto-flow [a] 0 / 0",
-      "0 / auto-flow [a] 0",
-      "auto-flow -20px / 0",
-      "auto-flow 200ms / 0",
-      "auto-flow 40px 100px / 0",
-    ].concat(
-      gCSSProperties["grid-template"].invalid_values,
-      gCSSProperties["grid-auto-flow"].other_values,
-      gCSSProperties["grid-auto-flow"].invalid_values
-        .filter((v) => v != 'none')
-    )
-  };
-
-  var gridLineOtherValues = [
-    "foo",
-    "2",
-    "2 foo",
-    "foo 2",
-    "-3",
-    "-3 bar",
-    "bar -3",
-    "span 2",
-    "2 span",
-    "span foo",
-    "foo span",
-    "span 2 foo",
-    "span foo 2",
-    "2 foo span",
-    "foo 2 span",
-  ];
-  var gridLineInvalidValues = [
+gCSSProperties["display"].other_values.push("grid", "inline-grid");
+gCSSProperties["grid-auto-flow"] = {
+  domProp: "gridAutoFlow",
+  inherited: false,
+  type: CSS_TYPE_LONGHAND,
+  initial_values: [ "row" ],
+  other_values: [
+    "column",
+    "column dense",
+    "row dense",
+    "dense column",
+    "dense row",
+    "dense",
+  ],
+  invalid_values: [
     "",
-    "4th",
-    "span",
-    "inherit 2",
-    "2 inherit",
-    "20px",
-    "2 3",
-    "2.5",
-    "2.0",
-    "0",
-    "0 foo",
-    "span 0",
-    "2 foo 3",
-    "foo 2 foo",
-    "2 span foo",
-    "foo span 2",
-    "span -3",
-    "span -3 bar",
-    "span 2 span",
-    "span foo span",
-    "span 2 foo span",
-  ];
+    "auto",
+    "none",
+    "10px",
+    "column row",
+    "dense row dense",
+  ]
+};
 
-  gCSSProperties["grid-column-start"] = {
-    domProp: "gridColumnStart",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "auto" ],
-    other_values: gridLineOtherValues,
-    invalid_values: gridLineInvalidValues
-  };
-  gCSSProperties["grid-column-end"] = {
-    domProp: "gridColumnEnd",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "auto" ],
-    other_values: gridLineOtherValues,
-    invalid_values: gridLineInvalidValues
-  };
-  gCSSProperties["grid-row-start"] = {
-    domProp: "gridRowStart",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "auto" ],
-    other_values: gridLineOtherValues,
-    invalid_values: gridLineInvalidValues
-  };
-  gCSSProperties["grid-row-end"] = {
-    domProp: "gridRowEnd",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "auto" ],
-    other_values: gridLineOtherValues,
-    invalid_values: gridLineInvalidValues
-  };
+gCSSProperties["grid-auto-columns"] = {
+  domProp: "gridAutoColumns",
+  inherited: false,
+  type: CSS_TYPE_LONGHAND,
+  initial_values: [ "auto" ],
+  other_values: [
+    "40px",
+    "2em",
+    "2.5fr",
+    "12%",
+    "min-content",
+    "max-content",
+    "calc(2px - 99%)",
+    "minmax(20px, max-content)",
+    "minmax(min-content, auto)",
+    "minmax(auto, max-content)",
+    "m\\69nmax(20px, 4Fr)",
+    "MinMax(min-content, calc(20px + 10%))",
+    "fit-content(1px)",
+    "fit-content(calc(1px - 99%))",
+    "fit-content(10%)",
+  ],
+  invalid_values: [
+    "",
+    "normal",
+    "40ms",
+    "-40px",
+    "-12%",
+    "-2em",
+    "-2.5fr",
+    "minmax()",
+    "minmax(20px)",
+    "mİnmax(20px, 100px)",
+    "minmax(20px, 100px, 200px)",
+    "maxmin(100px, 20px)",
+    "minmax(min-content, minmax(30px, max-content))",
+    "fit-content(-1px)",
+    "fit-content(auto)",
+    "fit-content(min-content)",
+  ]
+};
+gCSSProperties["grid-auto-rows"] = {
+  domProp: "gridAutoRows",
+  inherited: false,
+  type: CSS_TYPE_LONGHAND,
+  initial_values: gCSSProperties["grid-auto-columns"].initial_values,
+  other_values: gCSSProperties["grid-auto-columns"].other_values,
+  invalid_values: gCSSProperties["grid-auto-columns"].invalid_values
+};
 
-  // The grid-column and grid-row shorthands take values of the form
-  //   <grid-line> [ / <grid-line> ]?
-  var gridColumnRowOtherValues = [].concat(gridLineOtherValues);
-  gridLineOtherValues.concat([ "auto" ]).forEach(function(val) {
-    gridColumnRowOtherValues.push(" foo / " + val);
-    gridColumnRowOtherValues.push(val + "/2");
-  });
-  var gridColumnRowInvalidValues = [
-    "foo, bar",
-    "foo / bar / baz",
-  ].concat(gridLineInvalidValues);
-  gridLineInvalidValues.forEach(function(val) {
-    gridColumnRowInvalidValues.push("span 3 / " + val);
-    gridColumnRowInvalidValues.push(val + " / foo");
-  });
-  gCSSProperties["grid-column"] = {
-    domProp: "gridColumn",
-    inherited: false,
-    type: CSS_TYPE_TRUE_SHORTHAND,
-    subproperties: [
-      "grid-column-start",
-      "grid-column-end"
-    ],
-    initial_values: [ "auto", "auto / auto" ],
-    other_values: gridColumnRowOtherValues,
-    invalid_values: gridColumnRowInvalidValues
-  };
-  gCSSProperties["grid-row"] = {
-    domProp: "gridRow",
-    inherited: false,
-    type: CSS_TYPE_TRUE_SHORTHAND,
-    subproperties: [
-      "grid-row-start",
-      "grid-row-end"
-    ],
-    initial_values: [ "auto", "auto / auto" ],
-    other_values: gridColumnRowOtherValues,
-    invalid_values: gridColumnRowInvalidValues
-  };
+gCSSProperties["grid-template-columns"] = {
+  domProp: "gridTemplateColumns",
+  inherited: false,
+  type: CSS_TYPE_LONGHAND,
+  initial_values: [ "none" ],
+  other_values: [
+    "auto",
+    "40px",
+    "2.5fr",
+    "[normal] 40px [] auto [ ] 12%",
+    "[foo] 40px min-content [ bar ] calc(2px - 99%) max-content",
+    "40px min-content calc(20px + 10%) max-content",
+    "minmax(min-content, auto)",
+    "minmax(auto, max-content)",
+    "m\\69nmax(20px, 4Fr)",
+    "40px MinMax(min-content, calc(20px + 10%)) max-content",
+    "40px 2em",
+    "[] 40px [-foo] 2em [bar baz This\ is\ one\ ident]",
+    // TODO bug 978478: "[a] repeat(3, [b] 20px [c] 40px [d]) [e]",
+    "repeat(1, 20px)",
+    "repeat(1, [a] 20px)",
+    "[a] Repeat(4, [a] 20px [] auto [b c]) [d]",
+    "[a] 2.5fr Repeat(4, [a] 20px [] auto [b c]) [d]",
+    "[a] 2.5fr [z] Repeat(4, [a] 20px [] auto [b c]) [d]",
+    "[a] 2.5fr [z] Repeat(4, [a] 20px [] auto) [d]",
+    "[a] 2.5fr [z] Repeat(4, 20px [b c] auto [b c]) [d]",
+    "[a] 2.5fr [z] Repeat(4, 20px auto) [d]",
+    "repeat(auto-fill, 0)",
+    "[a] repeat( Auto-fill,1%)",
+    "minmax(auto,0) [a] repeat(Auto-fit, 0) minmax(0,auto)",
+    "minmax(calc(1% + 1px),auto) repeat(Auto-fit,[] 1%) minmax(auto,1%)",
+    "[a] repeat( auto-fit,[a b] minmax(0,0) )",
+    "[a] 40px repeat(auto-fit,[a b] minmax(1px, 0) [])",
+    "[a] calc(1px - 99%) [b] repeat(auto-fit,[a b] minmax(1mm, 1%) [c]) [c]",
+    "repeat(auto-fill,minmax(1%,auto))",
+    "repeat(auto-fill,minmax(1em,min-content)) minmax(min-content,0)",
+    "repeat(auto-fill,minmax(max-content,1mm))",
+    "repeat(2, fit-content(1px))",
+    "fit-content(1px) 1fr",
+    "[a] fit-content(calc(1px - 99%)) [b]",
+    "[a] fit-content(10%) [b c] fit-content(1em)",
+  ],
+  invalid_values: [
+    "",
+    "normal",
+    "40ms",
+    "-40px",
+    "-12%",
+    "-2fr",
+    "[foo]",
+    "[inherit] 40px",
+    "[initial] 40px",
+    "[unset] 40px",
+    "[default] 40px",
+    "[span] 40px",
+    "[6%] 40px",
+    "[5th] 40px",
+    "[foo[] bar] 40px",
+    "[foo]] 40px",
+    "(foo) 40px",
+    "[foo] [bar] 40px",
+    "40px [foo] [bar]",
+    "minmax()",
+    "minmax(20px)",
+    "mİnmax(20px, 100px)",
+    "minmax(20px, 100px, 200px)",
+    "maxmin(100px, 20px)",
+    "minmax(min-content, minmax(30px, max-content))",
+    "repeat(0, 20px)",
+    "repeat(-3, 20px)",
+    "rêpeat(1, 20px)",
+    "repeat(1)",
+    "repeat(1, )",
+    "repeat(3px, 20px)",
+    "repeat(2.0, 20px)",
+    "repeat(2.5, 20px)",
+    "repeat(2, (foo))",
+    "repeat(2, foo)",
+    "40px calc(0px + rubbish)",
+    "repeat(1, repeat(1, 20px))",
+    "repeat(auto-fill, auto)",
+    "repeat(auto-fit,auto)",
+    "repeat(auto-fill, fit-content(1px))",
+    "repeat(auto-fit, fit-content(1px))",
+    "repeat(auto-fit,[])",
+    "repeat(auto-fill, 0) repeat(auto-fit, 0) ",
+    "repeat(auto-fit, 0) repeat(auto-fill, 0) ",
+    "[a] repeat(auto-fit, 0) repeat(auto-fit, 0) ",
+    "[a] repeat(auto-fill, 0) [a] repeat(auto-fill, 0) ",
+    "repeat(auto-fill, 0 0)",
+    "repeat(auto-fill, 0 [] 0)",
+    "repeat(auto-fill, min-content)",
+    "repeat(auto-fit,max-content)",
+    "repeat(auto-fit,1fr)",
+    "repeat(auto-fit,minmax(auto,auto))",
+    "repeat(auto-fit,minmax(min-content,1fr))",
+    "repeat(auto-fit,minmax(1fr,auto))",
+    "repeat(auto-fill,minmax(1fr,1em))",
+    "repeat(auto-fill, 10px) auto",
+    "auto repeat(auto-fit, 10px)",
+    "minmax(min-content,max-content) repeat(auto-fit, 0)",
+    "10px [a] 10px [b a] 1fr [b] repeat(auto-fill, 0)",
+    "fit-content(-1px)",
+    "fit-content(auto)",
+    "fit-content(min-content)",
+    "fit-content(1px) repeat(auto-fit, 1px)",
+    "fit-content(1px) repeat(auto-fill, 1px)",
+  ],
+  unbalanced_values: [
+    "(foo] 40px",
+  ]
+};
+if (isGridTemplateSubgridValueEnabled) {
+  gCSSProperties["grid-template-columns"].other_values.push(
+    // See https://bugzilla.mozilla.org/show_bug.cgi?id=981300
+    "[none auto subgrid min-content max-content foo] 40px",
 
-  var gridAreaOtherValues = gridLineOtherValues.slice();
-  gridLineOtherValues.forEach(function(val) {
-    gridAreaOtherValues.push("foo / " + val);
-    gridAreaOtherValues.push(val + "/2/3");
-    gridAreaOtherValues.push("foo / bar / " + val + " / baz");
-  });
-  var gridAreaInvalidValues = [
-    "foo, bar",
-    "foo / bar / baz / fizz / buzz",
-    "default / foo / bar / baz",
-    "foo / initial / bar / baz",
-    "foo / bar / inherit / baz",
-    "foo / bar / baz / unset",
-  ].concat(gridLineInvalidValues);
-  gridLineInvalidValues.forEach(function(val) {
-    gridAreaInvalidValues.push("foo / " + val);
-    gridAreaInvalidValues.push("foo / bar / " + val);
-    gridAreaInvalidValues.push("foo / 4 / bar / " + val);
-  });
-
-  gCSSProperties["grid-area"] = {
-    domProp: "gridArea",
-    inherited: false,
-    type: CSS_TYPE_TRUE_SHORTHAND,
-    subproperties: [
-      "grid-row-start",
-      "grid-column-start",
-      "grid-row-end",
-      "grid-column-end"
-    ],
-    initial_values: [
-      "auto",
-      "auto / auto",
-      "auto / auto / auto",
-      "auto / auto / auto / auto"
-    ],
-    other_values: gridAreaOtherValues,
-    invalid_values: gridAreaInvalidValues
-  };
-
-  gCSSProperties["grid-column-gap"] = {
-    domProp: "gridColumnGap",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "0" ],
-    other_values: [ "2px", "2%", "1em", "calc(1px + 1em)", "calc(1%)",
-                    "calc(1% + 1ch)" , "calc(1px - 99%)" ],
-    invalid_values: [ "-1px", "auto", "none", "1px 1px", "-1%", "fit-content(1px)" ],
-  };
-  gCSSProperties["grid-row-gap"] = {
-    domProp: "gridRowGap",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "0" ],
-    other_values: [ "2px", "2%", "1em", "calc(1px + 1em)", "calc(1%)",
-                    "calc(1% + 1ch)" , "calc(1px - 99%)" ],
-    invalid_values: [ "-1px", "auto", "none", "1px 1px", "-1%", "min-content" ],
-  };
-  gCSSProperties["grid-gap"] = {
-    domProp: "gridGap",
-    inherited: false,
-    type: CSS_TYPE_TRUE_SHORTHAND,
-    subproperties: [ "grid-column-gap", "grid-row-gap" ],
-    initial_values: [ "0", "0 0" ],
-    other_values: [ "1ch 0", "1px 1%", "1em 1px", "calc(1px) calc(1%)" ],
-    invalid_values: [ "-1px", "1px -1px", "1px 1px 1px", "inherit 1px",
-                      "1px auto" ]
-  };
+    "subgrid",
+    "subgrid [] [foo bar]",
+    "subgrid repeat(1, [])",
+    "subgrid Repeat(4, [a] [b c] [] [d])",
+    "subgrid repeat(auto-fill, [])",
+    "subgrid [x] repeat( Auto-fill, [a b c]) []",
+    "subgrid [x] repeat(auto-fill, []) [y z]"
+  );
+  gCSSProperties["grid-template-columns"].invalid_values.push(
+    "subgrid [inherit]",
+    "subgrid [initial]",
+    "subgrid [unset]",
+    "subgrid [default]",
+    "subgrid [span]",
+    "subgrid [foo] 40px",
+    "subgrid [foo 40px]",
+    "[foo] subgrid",
+    "subgrid rêpeat(1, [])",
+    "subgrid repeat(0, [])",
+    "subgrid repeat(-3, [])",
+    "subgrid repeat(2.0, [])",
+    "subgrid repeat(2.5, [])",
+    "subgrid repeat(3px, [])",
+    "subgrid repeat(1)",
+    "subgrid repeat(1, )",
+    "subgrid repeat(2, [40px])",
+    "subgrid repeat(2, foo)",
+    "subgrid repeat(1, repeat(1, []))",
+    "subgrid repeat(auto-fit,[])",
+    "subgrid [] repeat(auto-fit,[])",
+    "subgrid [a] repeat(auto-fit,[])",
+    "subgrid repeat(auto-fill, 1px)",
+    "subgrid repeat(auto-fill, 1px [])",
+    "subgrid repeat(Auto-fill, [a] [b c] [] [d])",
+    "subgrid repeat(auto-fill, []) repeat(auto-fill, [])"
+  );
 }
+gCSSProperties["grid-template-rows"] = {
+  domProp: "gridTemplateRows",
+  inherited: false,
+  type: CSS_TYPE_LONGHAND,
+  initial_values: gCSSProperties["grid-template-columns"].initial_values,
+  other_values: gCSSProperties["grid-template-columns"].other_values,
+  invalid_values: gCSSProperties["grid-template-columns"].invalid_values
+};
+gCSSProperties["grid-template-areas"] = {
+  domProp: "gridTemplateAreas",
+  inherited: false,
+  type: CSS_TYPE_LONGHAND,
+  initial_values: [ "none" ],
+  other_values: [
+    "''",
+    "'' ''",
+    "'1a-é_ .' \"b .\"",
+    "' Z\t\\aZ' 'Z Z'",
+    " '. . a b'  '. .a b' ",
+    "'a.b' '. . .'",
+    "'.' '..'",
+    "'...' '.'",
+    "'...-blah' '. .'",
+    "'.. ..' '.. ...'",
+  ],
+  invalid_values: [
+    "'a b' 'a/b'",
+    "'a . a'",
+    "'. a a' 'a a a'",
+    "'a a .' 'a a a'",
+    "'a a' 'a .'",
+    "'a a'\n'..'\n'a a'",
+  ]
+};
+
+gCSSProperties["grid-template"] = {
+  domProp: "gridTemplate",
+  inherited: false,
+  type: CSS_TYPE_TRUE_SHORTHAND,
+  subproperties: [
+    "grid-template-areas",
+    "grid-template-rows",
+    "grid-template-columns",
+  ],
+  initial_values: [
+    "none",
+    "none / none",
+  ],
+  other_values: [
+    // <'grid-template-rows'> / <'grid-template-columns'>
+    "40px / 100px",
+    "[foo] 40px [bar] / [baz] repeat(auto-fill,100px) [fizz]",
+    " none/100px",
+    "40px/none",
+    // [ <line-names>? <string> <track-size>? <line-names>? ]+ [ / <explicit-track-list> ]?
+    "'fizz'",
+    "[bar] 'fizz'",
+    "'fizz' / [foo] 40px",
+    "[bar] 'fizz' / [foo] 40px",
+    "'fizz' 100px / [foo] 40px",
+    "[bar] 'fizz' 100px / [foo] 40px",
+    "[bar] 'fizz' 100px [buzz] / [foo] 40px",
+    "[bar] 'fizz' 100px [buzz] \n [a] '.' 200px [b] / [foo] 40px",
+  ],
+  invalid_values: [
+    "'fizz' / repeat(1, 100px)",
+    "'fizz' repeat(1, 100px) / 0px",
+    "[foo] [bar] 40px / 100px",
+    "[fizz] [buzz] 100px / 40px",
+    "[fizz] [buzz] 'foo' / 40px",
+    "'foo' / none"
+  ]
+};
+if (isGridTemplateSubgridValueEnabled) {
+  gCSSProperties["grid-template"].other_values.push(
+    "subgrid",
+    "subgrid/40px 20px",
+    "subgrid [foo] [] [bar baz] / 40px 20px",
+    "40px 20px/subgrid",
+    "40px 20px/subgrid  [foo] [] repeat(3, [a] [b]) [bar baz]",
+    "subgrid/subgrid",
+    "subgrid [foo] [] [bar baz]/subgrid [foo] [] [bar baz]"
+  );
+  gCSSProperties["grid-template"].invalid_values.push(
+    "subgrid []",
+    "subgrid [] / 'fizz'",
+    "subgrid / 'fizz'"
+  );
+}
+
+gCSSProperties["grid"] = {
+  domProp: "grid",
+  inherited: false,
+  type: CSS_TYPE_TRUE_SHORTHAND,
+  subproperties: [
+    "grid-template-areas",
+    "grid-template-rows",
+    "grid-template-columns",
+    "grid-auto-flow",
+    "grid-auto-rows",
+    "grid-auto-columns",
+  ],
+  initial_values: [
+    "none",
+    "none / none",
+  ],
+  other_values: [
+    "auto-flow 40px / none",
+    "auto-flow / 40px",
+    "auto-flow dense auto / auto",
+    "dense auto-flow minmax(min-content, 2fr) / auto",
+    "dense auto-flow / 100px",
+    "none / auto-flow 40px",
+    "40px / auto-flow",
+    "none / dense auto-flow auto",
+  ].concat(
+    gCSSProperties["grid-template"].other_values
+  ),
+  invalid_values: [
+    "auto-flow",
+    " / auto-flow",
+    "dense 0 / 0",
+    "dense dense 40px / 0",
+    "auto-flow / auto-flow",
+    "auto-flow / dense",
+    "auto-flow [a] 0 / 0",
+    "0 / auto-flow [a] 0",
+    "auto-flow -20px / 0",
+    "auto-flow 200ms / 0",
+    "auto-flow 40px 100px / 0",
+  ].concat(
+    gCSSProperties["grid-template"].invalid_values,
+    gCSSProperties["grid-auto-flow"].other_values,
+    gCSSProperties["grid-auto-flow"].invalid_values
+      .filter((v) => v != 'none')
+  )
+};
+
+var gridLineOtherValues = [
+  "foo",
+  "2",
+  "2 foo",
+  "foo 2",
+  "-3",
+  "-3 bar",
+  "bar -3",
+  "span 2",
+  "2 span",
+  "span foo",
+  "foo span",
+  "span 2 foo",
+  "span foo 2",
+  "2 foo span",
+  "foo 2 span",
+];
+var gridLineInvalidValues = [
+  "",
+  "4th",
+  "span",
+  "inherit 2",
+  "2 inherit",
+  "20px",
+  "2 3",
+  "2.5",
+  "2.0",
+  "0",
+  "0 foo",
+  "span 0",
+  "2 foo 3",
+  "foo 2 foo",
+  "2 span foo",
+  "foo span 2",
+  "span -3",
+  "span -3 bar",
+  "span 2 span",
+  "span foo span",
+  "span 2 foo span",
+];
+
+gCSSProperties["grid-column-start"] = {
+  domProp: "gridColumnStart",
+  inherited: false,
+  type: CSS_TYPE_LONGHAND,
+  initial_values: [ "auto" ],
+  other_values: gridLineOtherValues,
+  invalid_values: gridLineInvalidValues
+};
+gCSSProperties["grid-column-end"] = {
+  domProp: "gridColumnEnd",
+  inherited: false,
+  type: CSS_TYPE_LONGHAND,
+  initial_values: [ "auto" ],
+  other_values: gridLineOtherValues,
+  invalid_values: gridLineInvalidValues
+};
+gCSSProperties["grid-row-start"] = {
+  domProp: "gridRowStart",
+  inherited: false,
+  type: CSS_TYPE_LONGHAND,
+  initial_values: [ "auto" ],
+  other_values: gridLineOtherValues,
+  invalid_values: gridLineInvalidValues
+};
+gCSSProperties["grid-row-end"] = {
+  domProp: "gridRowEnd",
+  inherited: false,
+  type: CSS_TYPE_LONGHAND,
+  initial_values: [ "auto" ],
+  other_values: gridLineOtherValues,
+  invalid_values: gridLineInvalidValues
+};
+
+// The grid-column and grid-row shorthands take values of the form
+//   <grid-line> [ / <grid-line> ]?
+var gridColumnRowOtherValues = [].concat(gridLineOtherValues);
+gridLineOtherValues.concat([ "auto" ]).forEach(function(val) {
+  gridColumnRowOtherValues.push(" foo / " + val);
+  gridColumnRowOtherValues.push(val + "/2");
+});
+var gridColumnRowInvalidValues = [
+  "foo, bar",
+  "foo / bar / baz",
+].concat(gridLineInvalidValues);
+gridLineInvalidValues.forEach(function(val) {
+  gridColumnRowInvalidValues.push("span 3 / " + val);
+  gridColumnRowInvalidValues.push(val + " / foo");
+});
+gCSSProperties["grid-column"] = {
+  domProp: "gridColumn",
+  inherited: false,
+  type: CSS_TYPE_TRUE_SHORTHAND,
+  subproperties: [
+    "grid-column-start",
+    "grid-column-end"
+  ],
+  initial_values: [ "auto", "auto / auto" ],
+  other_values: gridColumnRowOtherValues,
+  invalid_values: gridColumnRowInvalidValues
+};
+gCSSProperties["grid-row"] = {
+  domProp: "gridRow",
+  inherited: false,
+  type: CSS_TYPE_TRUE_SHORTHAND,
+  subproperties: [
+    "grid-row-start",
+    "grid-row-end"
+  ],
+  initial_values: [ "auto", "auto / auto" ],
+  other_values: gridColumnRowOtherValues,
+  invalid_values: gridColumnRowInvalidValues
+};
+
+var gridAreaOtherValues = gridLineOtherValues.slice();
+gridLineOtherValues.forEach(function(val) {
+  gridAreaOtherValues.push("foo / " + val);
+  gridAreaOtherValues.push(val + "/2/3");
+  gridAreaOtherValues.push("foo / bar / " + val + " / baz");
+});
+var gridAreaInvalidValues = [
+  "foo, bar",
+  "foo / bar / baz / fizz / buzz",
+  "default / foo / bar / baz",
+  "foo / initial / bar / baz",
+  "foo / bar / inherit / baz",
+  "foo / bar / baz / unset",
+].concat(gridLineInvalidValues);
+gridLineInvalidValues.forEach(function(val) {
+  gridAreaInvalidValues.push("foo / " + val);
+  gridAreaInvalidValues.push("foo / bar / " + val);
+  gridAreaInvalidValues.push("foo / 4 / bar / " + val);
+});
+
+gCSSProperties["grid-area"] = {
+  domProp: "gridArea",
+  inherited: false,
+  type: CSS_TYPE_TRUE_SHORTHAND,
+  subproperties: [
+    "grid-row-start",
+    "grid-column-start",
+    "grid-row-end",
+    "grid-column-end"
+  ],
+  initial_values: [
+    "auto",
+    "auto / auto",
+    "auto / auto / auto",
+    "auto / auto / auto / auto"
+  ],
+  other_values: gridAreaOtherValues,
+  invalid_values: gridAreaInvalidValues
+};
+
+gCSSProperties["grid-column-gap"] = {
+  domProp: "gridColumnGap",
+  inherited: false,
+  type: CSS_TYPE_LONGHAND,
+  initial_values: [ "0" ],
+  other_values: [ "2px", "2%", "1em", "calc(1px + 1em)", "calc(1%)",
+                  "calc(1% + 1ch)" , "calc(1px - 99%)" ],
+  invalid_values: [ "-1px", "auto", "none", "1px 1px", "-1%", "fit-content(1px)" ],
+};
+gCSSProperties["grid-row-gap"] = {
+  domProp: "gridRowGap",
+  inherited: false,
+  type: CSS_TYPE_LONGHAND,
+  initial_values: [ "0" ],
+  other_values: [ "2px", "2%", "1em", "calc(1px + 1em)", "calc(1%)",
+                  "calc(1% + 1ch)" , "calc(1px - 99%)" ],
+  invalid_values: [ "-1px", "auto", "none", "1px 1px", "-1%", "min-content" ],
+};
+gCSSProperties["grid-gap"] = {
+  domProp: "gridGap",
+  inherited: false,
+  type: CSS_TYPE_TRUE_SHORTHAND,
+  subproperties: [ "grid-column-gap", "grid-row-gap" ],
+  initial_values: [ "0", "0 0" ],
+  other_values: [ "1ch 0", "1px 1%", "1em 1px", "calc(1px) calc(1%)" ],
+  invalid_values: [ "-1px", "1px -1px", "1px 1px 1px", "inherit 1px",
+                    "1px auto" ]
+};
 
 if (IsCSSPropertyPrefEnabled("layout.css.contain.enabled")) {
   gCSSProperties["contain"] = {
@@ -6713,11 +7280,11 @@ if (IsCSSPropertyPrefEnabled("layout.css.image-orientation.enabled")) {
       "0turn",
 
       // Rounded initial values.
-      "-90deg",
       "15deg",
       "360deg",
     ],
     other_values: [
+      "-90deg",
       "0deg flip",
       "90deg",
       "90deg flip",
@@ -6781,6 +7348,7 @@ if (IsCSSPropertyPrefEnabled("layout.css.initial-letter.enabled")) {
     domProp: "initialLetter",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
     initial_values: [ "normal" ],
     other_values: [ "2", "2.5", "3.7 2", "4 3" ],
     invalid_values: [ "-3", "3.7 -2", "25%", "16px", "1 0", "0", "0 1" ]
@@ -6792,6 +7360,9 @@ if (IsCSSPropertyPrefEnabled("layout.css.osx-font-smoothing.enabled")) {
     domProp: "MozOsxFontSmoothing",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "auto" ],
     other_values: [ "grayscale" ],
     invalid_values: [ "none", "subpixel-antialiased", "antialiased" ]
@@ -6826,6 +7397,9 @@ if (IsCSSPropertyPrefEnabled("layout.css.background-blend-mode.enabled")) {
     domProp: "backgroundBlendMode",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "normal" ],
     other_values: [ "multiply", "screen", "overlay", "darken", "lighten", "color-dodge", "color-burn",
       "hard-light", "soft-light", "difference", "exclusion", "hue", "saturation", "color", "luminosity" ],
@@ -6834,13 +7408,34 @@ if (IsCSSPropertyPrefEnabled("layout.css.background-blend-mode.enabled")) {
 }
 
 if (IsCSSPropertyPrefEnabled("layout.css.overflow-clip-box.enabled")) {
+  gCSSProperties["overflow-clip-box-block"] = {
+    domProp: "overflowClipBoxBlock",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    applies_to_placeholder: true,
+    initial_values: [ "padding-box" ],
+    other_values: [ "content-box" ],
+    invalid_values: [ "auto", "border-box", "0", "padding-box padding-box" ]
+  };
+  gCSSProperties["overflow-clip-box-inline"] = {
+    domProp: "overflowClipBoxInline",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    applies_to_placeholder: true,
+    initial_values: [ "padding-box" ],
+    other_values: [ "content-box" ],
+    invalid_values: [ "none", "border-box", "0", "content-box content-box" ]
+  };
   gCSSProperties["overflow-clip-box"] = {
     domProp: "overflowClipBox",
     inherited: false,
-    type: CSS_TYPE_LONGHAND,
+    type: CSS_TYPE_TRUE_SHORTHAND,
+    subproperties: [ "overflow-clip-box-block", "overflow-clip-box-inline" ],
     initial_values: [ "padding-box" ],
-    other_values: [ "content-box" ],
-    invalid_values: [ "none", "auto", "border-box", "0" ]
+    other_values: [ "content-box", "padding-box content-box", "content-box padding-box",
+                    "content-box content-box" ],
+    invalid_values: [ "none", "auto", "content-box none", "border-box", "0",
+                      "content-box, content-box" ]
   };
 }
 
@@ -6863,6 +7458,34 @@ if (IsCSSPropertyPrefEnabled("layout.css.scroll-behavior.property-enabled")) {
     initial_values: [ "auto" ],
     other_values: [ "smooth" ],
     invalid_values: [ "none",  "1px" ]
+  };
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.overscroll-behavior.enabled")) {
+  gCSSProperties["overscroll-behavior-x"] = {
+    domProp: "overscrollBehaviorX",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "auto" ],
+    other_values: [ "contain", "none" ],
+    invalid_values: [ "left", "1px" ]
+  };
+  gCSSProperties["overscroll-behavior-y"] = {
+    domProp: "overscrollBehaviorY",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "auto" ],
+    other_values: [ "contain", "none" ],
+    invalid_values: [ "left", "1px" ]
+  };
+  gCSSProperties["overscroll-behavior"] = {
+    domProp: "overscrollBehavior",
+    inherited: false,
+    type: CSS_TYPE_TRUE_SHORTHAND,
+    subproperties: [ "overscroll-behavior-x", "overscroll-behavior-y" ],
+    initial_values: [ "auto" ],
+    other_values: [ "contain", "none", "contain contain", "contain auto", "none contain" ],
+    invalid_values: [ "left", "1px", "contain auto none", "contain nonsense" ]
   };
 }
 
@@ -6945,287 +7568,6 @@ if (IsCSSPropertyPrefEnabled("layout.css.scroll-snap.enabled")) {
   };
 }
 
-function SupportsMaskShorthand() {
-  return "maskImage" in document.documentElement.style;
-}
-
-if (SupportsMaskShorthand()) {
-  gCSSProperties["mask"] = {
-    domProp: "mask",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    /* FIXME: All mask-border-* should be added when we implement them. */
-    subproperties: ["mask-clip", "mask-image", "mask-mode", "mask-origin", "mask-position-x", "mask-position-y", "mask-repeat", "mask-size" , "mask-composite"],
-    initial_values: [ "match-source", "none", "repeat", "add", "0% 0%", "top left", "0% 0% / auto", "top left / auto", "left top / auto", "0% 0% / auto auto",
-      "top left none", "left top none", "none left top", "none top left", "none 0% 0%", "top left / auto none", "left top / auto none",
-      "top left / auto auto none",
-      "match-source none repeat add top left", "top left repeat none add", "none repeat add top left / auto", "top left / auto repeat none add match-source", "none repeat add 0% 0% / auto auto match-source",
-      "border-box", "border-box border-box" ],
-    other_values: [
-      "none alpha repeat add left top",
-      "url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==)",
-      "no-repeat url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==') alpha left top add",
-      "repeat-x",
-      "repeat-y",
-      "no-repeat",
-      "none repeat-y alpha add 0% 0%",
-      "subtract",
-      "0% top subtract alpha repeat none",
-      "top",
-      "left",
-      "50% 50%",
-      "center",
-      "top / 100px",
-      "left / contain",
-      "left / cover",
-      "10px / 10%",
-      "10em / calc(20px)",
-      "top left / 100px 100px",
-      "top left / 100px auto",
-      "top left / 100px 10%",
-      "top left / 100px calc(20px)",
-      "bottom right add none alpha repeat",
-      "50% alpha",
-      "alpha 50%",
-      "50%",
-      "url(#mymask)",
-      "-moz-radial-gradient(10% bottom, #ffffff, black) add no-repeat",
-      "-moz-linear-gradient(10px 10px -45deg, red, blue) repeat",
-      "-moz-linear-gradient(10px 10px -0.125turn, red, blue) repeat",
-      "-moz-repeating-radial-gradient(10% bottom, #ffffff, black) add no-repeat",
-      "-moz-repeating-linear-gradient(10px 10px -45deg, red, blue) repeat",
-      "-moz-element(#test) alpha",
-      /* multiple mask-image */
-      "url(404.png), url(404.png)",
-      "repeat-x, subtract, none",
-      "0% top url(404.png), url(404.png) 50% top",
-      "subtract repeat-y top left url(404.png), repeat-x alpha",
-      "url(404.png), -moz-linear-gradient(20px 20px -45deg, blue, green), -moz-element(#a) alpha",
-      "top left / contain, bottom right / cover",
-      /* test cases with clip+origin in the shorthand */
-      "url(404.png) alpha padding-box",
-      "url(404.png) border-box alpha",
-      "content-box url(404.png)",
-      "url(404.png) alpha padding-box padding-box",
-      "url(404.png) alpha padding-box border-box",
-      "content-box border-box url(404.png)",
-    ],
-    invalid_values: [
-      /* mixes with keywords have to be in correct order */
-      "50% left", "top 50%",
-      /* no quirks mode colors */
-      "-moz-radial-gradient(10% bottom, ffffff, black) add no-repeat",
-      /* no quirks mode lengths */
-      "-moz-linear-gradient(10 10px -45deg, red, blue) repeat",
-      "-moz-linear-gradient(10px 10 -45deg, red, blue) repeat",
-      "linear-gradient(red -99, yellow, green, blue 120%)",
-      /* bug 258080: don't accept background-position separated */
-      "left url(404.png) top", "top url(404.png) left",
-      "alpha padding-box url(404.png) border-box",
-      "alpha padding-box url(404.png) padding-box",
-      "-moz-element(#a rubbish)",
-      "left top / match-source"
-    ]
-  };
-  gCSSProperties["mask-clip"] = {
-    domProp: "maskClip",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "border-box" ],
-    other_values: [ "content-box", "fill-box", "stroke-box", "view-box", "no-clip", "padding-box", "border-box, padding-box", "padding-box, padding-box, padding-box", "border-box, border-box" ],
-    invalid_values: [ "content-box content-box", "margin-box" ]
-  };
-  gCSSProperties["mask-image"] = {
-    domProp: "maskImage",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "none" ],
-    other_values: [
-    "url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==)", "url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==')", 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==")',
-    "none, none",
-    "none, none, none, none, none",
-    "url(#mymask)",
-    "url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==), none",
-    "none, url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==), none",
-    "url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==), url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR42u3NQQ0AAAgEoNP+nTWFDzcoQE1udQQCgUAgEAgEAsGTYAGjxAE/G/Q2tQAAAABJRU5ErkJggg==)",
-    ].concat(validGradientAndElementValues),
-    invalid_values: [
-    ].concat(invalidGradientAndElementValues),
-    unbalanced_values: [
-    ].concat(unbalancedGradientAndElementValues)
-  };
-  gCSSProperties["mask-mode"] = {
-    domProp: "maskMode",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "match-source" ],
-    other_values: [ "alpha", "luminance", "match-source, match-source", "match-source, alpha", "alpha, luminance, match-source"],
-    invalid_values: [ "match-source match-source", "alpha match-source" ]
-  };
-  gCSSProperties["mask-composite"] = {
-    domProp: "maskComposite",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "add" ],
-    other_values: [ "subtract", "intersect", "exclude", "add, add", "subtract, intersect", "subtract, subtract, add"],
-    invalid_values: [ "add subtract", "intersect exclude" ]
-  };
-  gCSSProperties["mask-origin"] = {
-    domProp: "maskOrigin",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "border-box" ],
-    other_values: [ "padding-box", "content-box", "fill-box", "stroke-box", "view-box", "border-box, padding-box", "padding-box, padding-box, padding-box", "border-box, border-box" ],
-    invalid_values: [ "padding-box padding-box", "no-clip", "margin-box" ]
-  };
-  gCSSProperties["mask-position"] = {
-    domProp: "maskPosition",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    initial_values: [ "top 0% left 0%", "top 0% left", "top left", "left top", "0% 0%", "0% top", "left 0%" ],
-    other_values: [ "top", "left", "right", "bottom", "center", "center bottom", "bottom center", "center right", "right center", "center top", "top center", "center left", "left center", "right bottom", "bottom right", "50%", "top left, top left", "top left, top right", "top right, top left", "left top, 0% 0%", "10% 20%, 30%, 40%", "top left, bottom right", "right bottom, left top", "0%", "0px", "30px", "0%, 10%, 20%, 30%", "top, top, top, top, top",
-      "calc(20px)",
-      "calc(20px) 10px",
-      "10px calc(20px)",
-      "calc(20px) 25%",
-      "25% calc(20px)",
-      "calc(20px) calc(20px)",
-      "calc(20px + 1em) calc(20px / 2)",
-      "calc(20px + 50%) calc(50% - 10px)",
-      "calc(-20px) calc(-50%)",
-      "calc(-20%) calc(-50%)",
-      "0px 0px",
-      "right 20px top 60px",
-      "right 20px bottom 60px",
-      "left 20px top 60px",
-      "left 20px bottom 60px",
-      "right -50px top -50px",
-      "left -50px bottom -50px",
-      "right 20px top -50px",
-      "right -20px top 50px",
-      "right 3em bottom 10px",
-      "bottom 3em right 10px",
-      "top 3em right 10px",
-      "left 15px",
-      "10px top",
-      "left top 15px",
-      "left 10px top",
-      "left 20%",
-      "right 20%"
-    ],
-    subproperties: [ "mask-position-x", "mask-position-y" ],
-    invalid_values: [ "center 10px center 4px", "center 10px center",
-                      "top 20%", "bottom 20%", "50% left", "top 50%",
-                      "50% bottom 10%", "right 10% 50%", "left right",
-                      "top bottom", "left 10% right",
-                      "top 20px bottom 20px", "left left",
-                      "0px calc(0px + rubbish)"],
-  };
-  gCSSProperties["mask-position-x"] = {
-    domProp: "maskPositionX",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "left", "0%" ],
-    other_values: [ "right", "center", "50%", "center, center", "center, right", "right, center", "center, 50%", "10%, 20%, 40%", "1px", "30px", "50%, 10%, 20%, 30%", "center, center, center, center, center",
-      "calc(20px)",
-      "calc(20px + 1em)",
-      "calc(20px / 2)",
-      "calc(20px + 50%)",
-      "calc(50% - 10px)",
-      "calc(-20px)",
-      "calc(-50%)",
-      "calc(-20%)",
-      "right 20px",
-      "left 20px",
-      "right -50px",
-      "left -50px",
-      "right 20px",
-      "right 3em",
-    ],
-    invalid_values: [ "center 10px", "right 10% 50%", "left right", "left left",
-                      "bottom 20px", "top 10%", "bottom 3em",
-                      "top", "bottom", "top, top", "top, bottom", "bottom, top", "top, 0%", "top, top, top, top, top",
-                      "calc(0px + rubbish)", "center 0%"],
-  };
-  gCSSProperties["mask-position-y"] = {
-    domProp: "maskPositionY",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "top", "0%" ],
-    other_values: [ "bottom", "center", "50%", "center, center", "center, bottom", "bottom, center", "center, 0%", "10%, 20%, 40%", "1px", "30px", "50%, 10%, 20%, 30%", "center, center, center, center, center",
-      "calc(20px)",
-      "calc(20px + 1em)",
-      "calc(20px / 2)",
-      "calc(20px + 50%)",
-      "calc(50% - 10px)",
-      "calc(-20px)",
-      "calc(-50%)",
-      "calc(-20%)",
-      "bottom 20px",
-      "top 20px",
-      "bottom -50px",
-      "top -50px",
-      "bottom 20px",
-      "bottom 3em",
-    ],
-    invalid_values: [ "center 10px", "bottom 10% 50%", "top bottom", "top top",
-                      "right 20px", "left 10%", "right 3em",
-                      "left", "right", "left, left", "left, right", "right, left", "left, 0%", "left, left, left, left, left",
-                      "calc(0px + rubbish)", "center 0%"],
-  };
-  gCSSProperties["mask-repeat"] = {
-    domProp: "maskRepeat",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "repeat", "repeat repeat" ],
-    other_values: [ "repeat-x", "repeat-y", "no-repeat",
-      "repeat-x, repeat-x",
-      "repeat, no-repeat",
-      "repeat-y, no-repeat, repeat-y",
-      "repeat, repeat, repeat",
-      "repeat no-repeat",
-      "no-repeat repeat",
-      "no-repeat no-repeat",
-      "repeat no-repeat",
-      "no-repeat no-repeat, no-repeat no-repeat",
-    ],
-    invalid_values: [ "repeat repeat repeat",
-                      "repeat-x repeat-y",
-                      "repeat repeat-x",
-                      "repeat repeat-y",
-                      "repeat-x repeat",
-                      "repeat-y repeat" ]
-  };
-  gCSSProperties["mask-size"] = {
-    domProp: "maskSize",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "auto", "auto auto" ],
-    other_values: [ "contain", "cover", "100px auto", "auto 100px", "100% auto", "auto 100%", "25% 50px", "3em 40%",
-      "calc(20px)",
-      "calc(20px) 10px",
-      "10px calc(20px)",
-      "calc(20px) 25%",
-      "25% calc(20px)",
-      "calc(20px) calc(20px)",
-      "calc(20px + 1em) calc(20px / 2)",
-      "calc(20px + 50%) calc(50% - 10px)",
-      "calc(-20px) calc(-50%)",
-      "calc(-20%) calc(-50%)"
-    ],
-    invalid_values: [ "contain contain", "cover cover", "cover auto", "auto cover", "contain cover", "cover contain", "-5px 3px", "3px -5px", "auto -5px", "-5px auto", "5 3", "10px calc(10px + rubbish)" ]
-  };
-} else {
-  gCSSProperties["mask"] = {
-    domProp: "mask",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "none" ],
-    other_values: [ "url(#mymask)" ],
-    invalid_values: []
-  };
-}
-
 if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
   gCSSProperties["-webkit-animation"] = {
     domProp: "webkitAnimation",
@@ -7301,6 +7643,9 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     domProp: "webkitTextFillColor",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     prerequisites: { "color": "black" },
     initial_values: [ "currentColor", "black", "#000", "#000000", "rgb(0,0,0)" ],
     other_values: [ "red", "rgba(255,255,255,0.5)", "transparent" ],
@@ -7320,6 +7665,9 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     domProp: "webkitTextStrokeColor",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     prerequisites: { "color": "black" },
     initial_values: [ "currentColor", "black", "#000", "#000000", "rgb(0,0,0)" ],
     other_values: [ "red", "rgba(255,255,255,0.5)", "transparent" ],
@@ -7329,6 +7677,9 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     domProp: "webkitTextStrokeWidth",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     initial_values: [ "0", "0px", "0em", "0ex", "calc(0pt)", "calc(4px - 8px)" ],
     other_values: [ "thin", "medium", "thick", "17px", "0.2em", "calc(3*25px + 5em)", "calc(5px - 1px)" ],
     invalid_values: [ "5%", "1px calc(nonsense)", "1px red", "-0.1px", "-3px", "30%" ]
@@ -7428,6 +7779,7 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     domProp: "webkitBorderTopLeftRadius",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
     alias_for: "border-top-left-radius",
     subproperties: [ "border-top-left-radius" ],
   };
@@ -7435,6 +7787,7 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     domProp: "webkitBorderTopRightRadius",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
     alias_for: "border-top-right-radius",
     subproperties: [ "border-top-right-radius" ],
   };
@@ -7442,6 +7795,7 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     domProp: "webkitBorderBottomLeftRadius",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
     alias_for: "border-bottom-left-radius",
     subproperties: [ "border-bottom-left-radius" ],
   };
@@ -7449,6 +7803,7 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     domProp: "webkitBorderBottomRightRadius",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
     alias_for: "border-bottom-right-radius",
     subproperties: [ "border-bottom-right-radius" ],
   };
@@ -7456,6 +7811,9 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     domProp: "webkitBackgroundClip",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     alias_for: "background-clip",
     subproperties: [ "background-clip" ],
   };
@@ -7463,6 +7821,9 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     domProp: "webkitBackgroundOrigin",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     alias_for: "background-origin",
     subproperties: [ "background-origin" ],
   };
@@ -7470,6 +7831,9 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     domProp: "webkitBackgroundSize",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
     alias_for: "background-size",
     subproperties: [ "background-size" ],
   };
@@ -7484,6 +7848,7 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     domProp: "webkitBoxShadow",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    applies_to_first_letter: true,
     alias_for: "box-shadow",
     subproperties: [ "box-shadow" ],
   };
@@ -7627,115 +7992,120 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     alias_for: "-moz-user-select",
     subproperties: [ "-moz-user-select" ],
   };
+  gCSSProperties["-webkit-mask"] = {
+    domProp: "webkitMask",
+    inherited: false,
+    type: CSS_TYPE_TRUE_SHORTHAND,
+    alias_for: "mask",
+    subproperties: [ "mask-clip", "mask-image", "mask-mode", "mask-origin", "mask-position", "mask-repeat", "mask-size" , "mask-composite" ],
+  };
+  gCSSProperties["-webkit-mask-clip"] = {
+    domProp: "webkitMaskClip",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "mask-clip",
+    subproperties: [ "mask-clip" ],
+  };
 
-  if (SupportsMaskShorthand()) {
-    gCSSProperties["-webkit-mask"] = {
-      domProp: "webkitMask",
-      inherited: false,
-      type: CSS_TYPE_TRUE_SHORTHAND,
-      alias_for: "mask",
-      subproperties: [ "mask-clip", "mask-image", "mask-mode", "mask-origin", "mask-position", "mask-repeat", "mask-size" , "mask-composite" ],
-    };
-    gCSSProperties["-webkit-mask-clip"] = {
-      domProp: "webkitMaskClip",
-      inherited: false,
-      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-      alias_for: "mask-clip",
-      subproperties: [ "mask-clip" ],
-    };
+  gCSSProperties["-webkit-mask-composite"] = {
+    domProp: "webkitMaskComposite",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "mask-composite",
+    subproperties: [ "mask-composite" ],
+  };
 
-    gCSSProperties["-webkit-mask-composite"] = {
-      domProp: "webkitMaskComposite",
-      inherited: false,
-      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-      alias_for: "mask-composite",
-      subproperties: [ "mask-composite" ],
-    };
-
-    gCSSProperties["-webkit-mask-image"] = {
-      domProp: "webkitMaskImage",
-      inherited: false,
-      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-      alias_for: "mask-image",
-      subproperties: [ "mask-image" ],
-    };
-    gCSSProperties["-webkit-mask-origin"] = {
-      domProp: "webkitMaskOrigin",
-      inherited: false,
-      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-      alias_for: "mask-origin",
-      subproperties: [ "mask-origin" ],
-    };
-    gCSSProperties["-webkit-mask-position"] = {
-      domProp: "webkitMaskPosition",
-      inherited: false,
-      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-      alias_for: "mask-position",
-      subproperties: [ "mask-position" ],
-    };
-    gCSSProperties["-webkit-mask-position-x"] = {
-      domProp: "webkitMaskPositionX",
-      inherited: false,
-      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-      alias_for: "mask-position-x",
-      subproperties: [ "mask-position-x" ],
-    };
-    gCSSProperties["-webkit-mask-position-y"] = {
-      domProp: "webkitMaskPositionY",
-      inherited: false,
-      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-      alias_for: "mask-position-y",
-      subproperties: [ "mask-position-y" ],
-    };
-    gCSSProperties["-webkit-mask-repeat"] = {
-      domProp: "webkitMaskRepeat",
-      inherited: false,
-      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-      alias_for: "mask-repeat",
-      subproperties: [ "mask-repeat" ],
-    };
-    gCSSProperties["-webkit-mask-size"] = {
-      domProp: "webkitMaskSize",
-      inherited: false,
-      type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-      alias_for: "mask-size",
-      subproperties: [ "mask-size" ],
-    };
-  }
+  gCSSProperties["-webkit-mask-image"] = {
+    domProp: "webkitMaskImage",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "mask-image",
+    subproperties: [ "mask-image" ],
+  };
+  gCSSProperties["-webkit-mask-origin"] = {
+    domProp: "webkitMaskOrigin",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "mask-origin",
+    subproperties: [ "mask-origin" ],
+  };
+  gCSSProperties["-webkit-mask-position"] = {
+    domProp: "webkitMaskPosition",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "mask-position",
+    subproperties: [ "mask-position" ],
+  };
+  gCSSProperties["-webkit-mask-position-x"] = {
+    domProp: "webkitMaskPositionX",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "mask-position-x",
+    subproperties: [ "mask-position-x" ],
+  };
+  gCSSProperties["-webkit-mask-position-y"] = {
+    domProp: "webkitMaskPositionY",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "mask-position-y",
+    subproperties: [ "mask-position-y" ],
+  };
+  gCSSProperties["-webkit-mask-repeat"] = {
+    domProp: "webkitMaskRepeat",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "mask-repeat",
+    subproperties: [ "mask-repeat" ],
+  };
+  gCSSProperties["-webkit-mask-size"] = {
+    domProp: "webkitMaskSize",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "mask-size",
+    subproperties: [ "mask-size" ],
+  };
 }
 
-if (IsCSSPropertyPrefEnabled("layout.css.unset-value.enabled")) {
-  gCSSProperties["animation"].invalid_values.push("2s unset");
-  gCSSProperties["animation-direction"].invalid_values.push("normal, unset", "unset, normal");
-  gCSSProperties["animation-name"].invalid_values.push("bounce, unset", "unset, bounce");
-  gCSSProperties["-moz-border-bottom-colors"].invalid_values.push("red unset", "unset red");
-  gCSSProperties["-moz-border-left-colors"].invalid_values.push("red unset", "unset red");
-  gCSSProperties["border-radius"].invalid_values.push("unset 2px", "unset / 2px", "2px unset", "2px / unset");
-  gCSSProperties["border-bottom-left-radius"].invalid_values.push("unset 2px", "2px unset");
-  gCSSProperties["border-bottom-right-radius"].invalid_values.push("unset 2px", "2px unset");
-  gCSSProperties["border-top-left-radius"].invalid_values.push("unset 2px", "2px unset");
-  gCSSProperties["border-top-right-radius"].invalid_values.push("unset 2px", "2px unset");
-  gCSSProperties["-moz-border-right-colors"].invalid_values.push("red unset", "unset red");
-  gCSSProperties["-moz-border-top-colors"].invalid_values.push("red unset", "unset red");
-  gCSSProperties["-moz-outline-radius"].invalid_values.push("unset 2px", "unset / 2px", "2px unset", "2px / unset");
-  gCSSProperties["-moz-outline-radius-bottomleft"].invalid_values.push("unset 2px", "2px unset");
-  gCSSProperties["-moz-outline-radius-bottomright"].invalid_values.push("unset 2px", "2px unset");
-  gCSSProperties["-moz-outline-radius-topleft"].invalid_values.push("unset 2px", "2px unset");
-  gCSSProperties["-moz-outline-radius-topright"].invalid_values.push("unset 2px", "2px unset");
-  gCSSProperties["background-image"].invalid_values.push("-moz-linear-gradient(unset, 10px 10px, from(blue))", "-moz-linear-gradient(unset, 10px 10px, blue 0)", "-moz-repeating-linear-gradient(unset, 10px 10px, blue 0)");
-  gCSSProperties["box-shadow"].invalid_values.push("unset, 2px 2px", "2px 2px, unset", "inset unset");
-  gCSSProperties["text-overflow"].invalid_values.push('"hello" unset', 'unset "hello"', 'clip unset', 'unset clip', 'unset inherit', 'unset none', 'initial unset');
-  gCSSProperties["text-shadow"].invalid_values.push("unset, 2px 2px", "2px 2px, unset");
-  gCSSProperties["transition"].invalid_values.push("2s unset");
-  gCSSProperties["transition-property"].invalid_values.push("unset, color", "color, unset");
-  if (IsCSSPropertyPrefEnabled("layout.css.filters.enabled")) {
-    gCSSProperties["filter"].invalid_values.push("drop-shadow(unset, 2px 2px)", "drop-shadow(2px 2px, unset)");
-  }
-  if (IsCSSPropertyPrefEnabled("layout.css.text-align-unsafe-value.enabled")) {
-    gCSSProperties["text-align"].other_values.push("true left");
-  } else {
-    gCSSProperties["text-align"].invalid_values.push("true left");
-  }
+if (IsCSSPropertyPrefEnabled("layout.css.prefixes.gradients")) {
+  gCSSProperties["background"].other_values.push(
+    "-moz-radial-gradient(10% bottom, #ffffff, black) scroll no-repeat",
+    "-moz-linear-gradient(10px 10px -45deg, red, blue) repeat",
+    "-moz-linear-gradient(10px 10px -0.125turn, red, blue) repeat",
+    "-moz-repeating-radial-gradient(10% bottom, #ffffff, black) scroll no-repeat",
+    "-moz-repeating-linear-gradient(10px 10px -45deg, red, blue) repeat",
+    "url(404.png), -moz-linear-gradient(20px 20px -45deg, blue, green), -moz-element(#a) black",
+  );
+  gCSSProperties["background"].invalid_values.push(
+    /* no quirks mode colors */
+    "-moz-radial-gradient(10% bottom, ffffff, black) scroll no-repeat",
+    /* no quirks mode lengths */
+    "-moz-linear-gradient(10 10px -45deg, red, blue) repeat",
+    "-moz-linear-gradient(10px 10 -45deg, red, blue) repeat",
+    /* bug 513395: old syntax for gradients */
+    "-moz-radial-gradient(10% bottom, 30px, 20px 20px, 10px, from(#ffffff), to(black)) scroll no-repeat",
+    "-moz-linear-gradient(10px 10px, 20px 20px, from(red), to(blue)) repeat",
+  );
+  gCSSProperties["mask"].other_values.push(
+    "-moz-radial-gradient(10% bottom, #ffffff, black) add no-repeat",
+    "-moz-linear-gradient(10px 10px -45deg, red, blue) repeat",
+    "-moz-linear-gradient(10px 10px -0.125turn, red, blue) repeat",
+    "-moz-repeating-radial-gradient(10% bottom, #ffffff, black) add no-repeat",
+    "-moz-repeating-linear-gradient(10px 10px -45deg, red, blue) repeat",
+    "url(404.png), -moz-linear-gradient(20px 20px -45deg, blue, green), -moz-element(#a) alpha",
+  );
+  gCSSProperties["mask"].invalid_values.push(
+    /* no quirks mode colors */
+    "-moz-radial-gradient(10% bottom, ffffff, black) add no-repeat",
+    /* no quirks mode lengths */
+    "-moz-linear-gradient(10 10px -45deg, red, blue) repeat",
+    "-moz-linear-gradient(10px 10 -45deg, red, blue) repeat",
+  );
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.text-align-unsafe-value.enabled")) {
+  gCSSProperties["text-align"].other_values.push("true left");
+} else {
+  gCSSProperties["text-align"].invalid_values.push("true left");
 }
 
 if (IsCSSPropertyPrefEnabled("layout.css.float-logical-values.enabled")) {
@@ -7750,64 +8120,7 @@ if (IsCSSPropertyPrefEnabled("layout.css.float-logical-values.enabled")) {
   gCSSProperties["clear"].invalid_values.push("inline-end");
 }
 
-if (IsCSSPropertyPrefEnabled("layout.css.background-clip-text.enabled")) {
-  gCSSProperties["background-clip"].other_values.push(
-    "text",
-    "content-box, text",
-    "text, border-box",
-    "text, text"
-  );
-  gCSSProperties["background"].other_values.push(
-    "url(404.png) green padding-box text",
-    "content-box text url(404.png) blue"
-  );
-} else {
-  gCSSProperties["background-clip"].invalid_values.push(
-    "text",
-    "content-box, text",
-    "text, border-box",
-    "text, text"
-  );
-  gCSSProperties["background"].invalid_values.push(
-    "url(404.png) green padding-box text",
-    "content-box text url(404.png) blue"
-  );
-}
-
-if (IsCSSPropertyPrefEnabled("layout.css.display-flow-root.enabled")) {
-  gCSSProperties["display"].other_values.push("flow-root");
-}
-
-if (IsCSSPropertyPrefEnabled("layout.css.appearance.enabled")) {
-  gCSSProperties["appearance"] = {
-    domProp: "appearance",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "auto" ],
-    other_values: [ "none" ],
-    invalid_values: [ "button" ]
-  };
-  gCSSProperties["-webkit-appearance"] = {
-    domProp: "webkitAppearance",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "appearance",
-    subproperties: [ "appearance" ],
-  };
-}
-if (IsCSSPropertyPrefEnabled("layout.css.moz-appearance.enabled")) {
-  gCSSProperties["-moz-appearance"] = {
-    domProp: "MozAppearance",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "none" ],
-    other_values: [ "radio", "menulist", "button", "checkbox", "textfield",
-                    "textfield-multiline", "meterbar", "progressbar", "range",
-                    "range-thumb", "spinner-upbutton", "spinner-downbutton",
-                    "number-input", "listbox", "menulist-button" ],
-    invalid_values: [ "auto" ]
-  };
-}
+gCSSProperties["display"].other_values.push("flow-root");
 
 // Copy aliased properties' fields from their alias targets.
 for (var prop in gCSSProperties) {
@@ -7846,6 +8159,13 @@ if (IsCSSPropertyPrefEnabled("layout.css.column-span.enabled")) {
     other_values: [ "all" ],
     invalid_values: [ "-1", "0", "auto", "2px" ]
   };
+  gCSSProperties["-moz-column-span"] = {
+    domProp: "MozColumnSpan",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "column-span",
+    subproperties: [ "column-span" ]
+  };
 }
 
 if (false) {
@@ -7859,4 +8179,207 @@ if (false) {
     other_values: [ "none", "menu", "tooltip", "sheet" ],
     invalid_values: []
   };
+
+  gCSSProperties["-moz-window-opacity"] = {
+    // domProp: "MozWindowOpacity",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "1", "17", "397.376", "3e1", "3e+1", "3e0", "3e+0", "3e-0" ],
+    other_values: [ "0", "0.4", "0.0000", "-3", "3e-1" ],
+    invalid_values: [ "0px", "1px", "20%", "default", "auto" ]
+  };
+
+  gCSSProperties["-moz-window-transform"] = {
+    // domProp: "MozWindowTransform",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    prerequisites: { "width": "300px", "height": "50px" },
+    initial_values: [ "none" ],
+    other_values: [ "translatex(1px)", "translatex(4em)",
+      "translatex(-4px)", "translatex(3px)",
+      "translatex(0px) translatex(1px) translatex(2px) translatex(3px) translatex(4px)",
+      "translatey(4em)", "translate(3px)", "translate(10px, -3px)",
+      "rotate(45deg)", "rotate(45grad)", "rotate(45rad)",
+      "rotate(0.25turn)", "rotate(0)", "scalex(10)", "scaley(10)",
+      "scale(10)", "scale(10, 20)", "skewx(30deg)", "skewx(0)",
+      "skewy(0)", "skewx(30grad)", "skewx(30rad)", "skewx(0.08turn)",
+      "skewy(30deg)", "skewy(30grad)", "skewy(30rad)", "skewy(0.08turn)",
+      "rotate(45deg) scale(2, 1)", "skewx(45deg) skewx(-50grad)",
+      "translate(0, 0) scale(1, 1) skewx(0) skewy(0) matrix(1, 0, 0, 1, 0, 0)",
+      "translatex(50%)", "translatey(50%)", "translate(50%)",
+      "translate(3%, 5px)", "translate(5px, 3%)",
+      "matrix(1, 2, 3, 4, 5, 6)",
+      /* valid calc() values */
+      "translatex(calc(5px + 10%))",
+      "translatey(calc(0.25 * 5px + 10% / 3))",
+      "translate(calc(5px - 10% * 3))",
+      "translate(calc(5px - 3 * 10%), 50px)",
+      "translate(-50px, calc(5px - 10% * 3))",
+      "translatez(1px)", "translatez(4em)", "translatez(-4px)",
+      "translatez(0px)", "translatez(2px) translatez(5px)",
+      "translate3d(3px, 4px, 5px)", "translate3d(2em, 3px, 1em)",
+      "translatex(2px) translate3d(4px, 5px, 6px) translatey(1px)",
+      "scale3d(4, 4, 4)", "scale3d(-2, 3, -7)", "scalez(4)",
+      "scalez(-6)", "rotate3d(2, 3, 4, 45deg)",
+      "rotate3d(-3, 7, 0, 12rad)", "rotatex(15deg)", "rotatey(-12grad)",
+      "rotatez(72rad)", "rotatex(0.125turn)",
+      "perspective(0px)", "perspective(1000px)",
+      "matrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)",
+    ],
+    invalid_values: ["1px", "#0000ff", "red", "auto",
+      "translatex(1)", "translatey(1)", "translate(2)",
+      "translate(-3, -4)",
+      "translatex(1px 1px)", "translatex(translatex(1px))",
+      "translatex(#0000ff)", "translatex(red)", "translatey()",
+      "matrix(1px, 2px, 3px, 4px, 5px, 6px)", "scale(150%)",
+      "skewx(red)", "matrix(1%, 0, 0, 0, 0px, 0px)",
+      "matrix(0, 1%, 2, 3, 4px,5px)", "matrix(0, 1, 2%, 3, 4px, 5px)",
+      "matrix(0, 1, 2, 3%, 4%, 5%)", "matrix(1, 2, 3, 4, 5px, 6%)",
+      "matrix(1, 2, 3, 4, 5%, 6px)", "matrix(1, 2, 3, 4, 5%, 6%)",
+      "matrix(1, 2, 3, 4, 5px, 6em)",
+      /* invalid calc() values */
+      "translatey(-moz-min(5px,10%))",
+      "translatex(-moz-max(5px,10%))",
+      "translate(10px, calc(min(5px,10%)))",
+      "translate(calc(max(5px,10%)), 10%)",
+      "matrix(1, 0, 0, 1, max(5px * 3), calc(10% - 3px))",
+      "perspective(-10px)", "matrix3d(dinosaur)",
+      "matrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)",
+      "matrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)",
+      "matrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15%, 16)",
+      "matrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16px)",
+      "rotatey(words)", "rotatex(7)", "translate3d(3px, 4px, 1px, 7px)",
+      "matrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13px, 14em, 15px, 16)",
+      "matrix3d(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 20%, 10%, 15, 16)"
+    ],
+  };
+
+  gCSSProperties["-moz-window-transform-origin"] = {
+    // domProp: "MozWindowTransformOrigin",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    /* no subproperties */
+    prerequisites: { "width": "10px", "height": "10px", "display": "block"},
+    initial_values: [ "50% 50%", "center", "center center" ],
+    other_values: [ "25% 25%", "6px 5px", "20% 3em", "0 0", "0in 1in",
+            "top", "bottom","top left", "top right",
+            "top center", "center left", "center right",
+            "bottom left", "bottom right", "bottom center",
+            "20% center", "6px center", "13in bottom",
+            "left 50px", "right 13%", "center 40px",
+      "calc(20px)",
+      "calc(20px) 10px",
+      "10px calc(20px)",
+      "calc(20px) 25%",
+      "25% calc(20px)",
+      "calc(20px) calc(20px)",
+      "calc(20px + 1em) calc(20px / 2)",
+      "calc(20px + 50%) calc(50% - 10px)",
+      "calc(-20px) calc(-50%)",
+      "calc(-20%) calc(-50%)"
+    ],
+    invalid_values: ["red", "auto", "none", "0.5 0.5", "40px #0000ff",
+             "border", "center red", "right diagonal",
+             "#00ffff bottom", "0px calc(0px + rubbish)",
+             "0px 0px calc(0px + rubbish)", "6px 5px 5px",
+             "top center 10px"]
+  };
+
+  gCSSProperties["-moz-context-properties"] = {
+    //domProp: "MozContextProperties",
+    inherited: true,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "none" ],
+    other_values: [ "fill", "stroke", "fill, stroke", "fill, stroke, fill", "fill, foo", "foo" ],
+    invalid_values: [ "default", "fill, auto", "all, stroke", "none, fill", "fill, none", "fill, default", "2px" ]
+  };
+
+  gCSSProperties["-moz-font-smoothing-background-color"] = {
+    // domProp: "MozFontSmoothingBackgroundColor",
+    inherited: true,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "transparent" ],
+    other_values: [ "green", "#fc3" ],
+    invalid_values: [ "000000", "ff00ff" ]
+  };
+
+  gCSSProperties["-moz-border-bottom-colors"] = {
+    domProp: "MozBorderBottomColors",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    initial_values: [ "none" ],
+    other_values: [ "red green", "red #fc3", "#ff00cc", "currentColor", "blue currentColor orange currentColor" ],
+    invalid_values: [ "red none", "red inherit", "red, green", "none red", "inherit red", "ff00cc" ]
+  };
+
+  gCSSProperties["-moz-border-left-colors"] = {
+    domProp: "MozBorderLeftColors",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    initial_values: [ "none" ],
+    other_values: [ "red green", "red #fc3", "#ff00cc", "currentColor", "blue currentColor orange currentColor" ],
+    invalid_values: [ "red none", "red inherit", "red, green", "none red", "inherit red", "ff00cc" ]
+  };
+
+  gCSSProperties["-moz-border-right-colors"] = {
+    domProp: "MozBorderRightColors",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    initial_values: [ "none" ],
+    other_values: [ "red green", "red #fc3", "#ff00cc", "currentColor", "blue currentColor orange currentColor" ],
+    invalid_values: [ "red none", "red inherit", "red, green", "none red", "inherit red", "ff00cc" ]
+  };
+
+  gCSSProperties["-moz-border-top-colors"] = {
+    domProp: "MozBorderTopColors",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    initial_values: [ "none" ],
+    other_values: [ "red green", "red #fc3", "#ff00cc", "currentColor", "blue currentColor orange currentColor" ],
+    invalid_values: [ "red none", "red inherit", "red, green", "none red", "inherit red", "ff00cc" ]
+  };
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.unset-value.enabled")) {
+  gCSSProperties["animation"].invalid_values.push("2s unset");
+  gCSSProperties["animation-direction"].invalid_values.push("normal, unset", "unset, normal");
+  gCSSProperties["animation-name"].invalid_values.push("bounce, unset", "unset, bounce");
+  if (gCSSProperties["-moz-border-bottom-colors"])
+    gCSSProperties["-moz-border-bottom-colors"].invalid_values.push("red unset", "unset red");
+  if (gCSSProperties["-moz-border-left-colors"])
+    gCSSProperties["-moz-border-left-colors"].invalid_values.push("red unset", "unset red");
+  if (gCSSProperties["-moz-border-right-colors"])
+    gCSSProperties["-moz-border-right-colors"].invalid_values.push("red unset", "unset red");
+  if (gCSSProperties["-moz-border-top-colors"])
+    gCSSProperties["-moz-border-top-colors"].invalid_values.push("red unset", "unset red");
+  gCSSProperties["border-radius"].invalid_values.push("unset 2px", "unset / 2px", "2px unset", "2px / unset");
+  gCSSProperties["border-bottom-left-radius"].invalid_values.push("unset 2px", "2px unset");
+  gCSSProperties["border-bottom-right-radius"].invalid_values.push("unset 2px", "2px unset");
+  gCSSProperties["border-top-left-radius"].invalid_values.push("unset 2px", "2px unset");
+  gCSSProperties["border-top-right-radius"].invalid_values.push("unset 2px", "2px unset");
+  gCSSProperties["-moz-outline-radius"].invalid_values.push("unset 2px", "unset / 2px", "2px unset", "2px / unset");
+  gCSSProperties["-moz-outline-radius-bottomleft"].invalid_values.push("unset 2px", "2px unset");
+  gCSSProperties["-moz-outline-radius-bottomright"].invalid_values.push("unset 2px", "2px unset");
+  gCSSProperties["-moz-outline-radius-topleft"].invalid_values.push("unset 2px", "2px unset");
+  gCSSProperties["-moz-outline-radius-topright"].invalid_values.push("unset 2px", "2px unset");
+  gCSSProperties["background-image"].invalid_values.push("linear-gradient(unset, 10px 10px, from(blue))", "linear-gradient(unset, 10px 10px, blue 0)", "repeating-linear-gradient(unset, 10px 10px, blue 0)");
+  gCSSProperties["box-shadow"].invalid_values.push("unset, 2px 2px", "2px 2px, unset", "inset unset");
+  gCSSProperties["text-overflow"].invalid_values.push('"hello" unset', 'unset "hello"', 'clip unset', 'unset clip', 'unset inherit', 'unset none', 'initial unset');
+  gCSSProperties["text-shadow"].invalid_values.push("unset, 2px 2px", "2px 2px, unset");
+  gCSSProperties["transition"].invalid_values.push("2s unset");
+  gCSSProperties["transition-property"].invalid_values.push("unset, color", "color, unset");
+  if (IsCSSPropertyPrefEnabled("layout.css.filters.enabled")) {
+    gCSSProperties["filter"].invalid_values.push("drop-shadow(unset, 2px 2px)", "drop-shadow(2px 2px, unset)");
+  }
+  if (IsCSSPropertyPrefEnabled("layout.css.prefixes.gradients")) {
+    gCSSProperties["background-image"].invalid_values.push(
+      "-moz-linear-gradient(unset, 10px 10px, from(blue))",
+      "-moz-linear-gradient(unset, 10px 10px, blue 0)",
+      "-moz-repeating-linear-gradient(unset, 10px 10px, blue 0)",
+    );
+  }
 }

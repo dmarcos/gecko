@@ -31,7 +31,7 @@ var {interfaces: Ci, utils: Cu} = Components;
 Cu.import("resource://services-crypto/utils.js");
 Cu.import("resource://services-common/hawkrequest.js");
 Cu.import("resource://services-common/observers.js");
-Cu.import("resource://gre/modules/Promise.jsm");
+Cu.import("resource://gre/modules/PromiseUtils.jsm");
 Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
@@ -96,7 +96,7 @@ this.HawkClient = function(host) {
   // Clock offset in milliseconds between our client's clock and the date
   // reported in responses from our host.
   this._localtimeOffsetMsec = 0;
-}
+};
 
 this.HawkClient.prototype = {
 
@@ -207,7 +207,7 @@ this.HawkClient.prototype = {
                     retryOK = true) {
     method = method.toLowerCase();
 
-    let deferred = Promise.defer();
+    let deferred = PromiseUtils.defer();
     let uri = this.host + path;
     let self = this;
 
@@ -244,7 +244,7 @@ this.HawkClient.prototype = {
         return;
       }
 
-      self._updateClockOffset(restResponse.headers["date"]);
+      self._updateClockOffset(restResponse.headers.date);
 
       if (status === 401 && retryOK && !("retry-after" in restResponse.headers)) {
         // Retry once if we were rejected due to a bad timestamp.
@@ -346,4 +346,4 @@ this.HawkClient.prototype = {
     return new HAWKAuthenticatedRESTRequest(uri, credentials, extra);
   },
 
-}
+};

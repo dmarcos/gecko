@@ -23,6 +23,10 @@ namespace mozilla {
 
 class ContentCacheInParent;
 
+namespace dom {
+class TabParent;
+} // namespace dom
+
 /**
  * ContentCache stores various information of the child content.
  * This class has members which are necessary both in parent process and
@@ -318,7 +322,7 @@ private:
 class ContentCacheInParent final : public ContentCache
 {
 public:
-  ContentCacheInParent();
+  explicit ContentCacheInParent(dom::TabParent& aTabParent);
 
   /**
    * AssignContent() is called when TabParent receives ContentCache from
@@ -406,6 +410,53 @@ private:
   IMENotification mPendingLayoutChange;
   IMENotification mPendingCompositionUpdate;
 
+#if MOZ_DIAGNOSTIC_ASSERT_ENABLED
+  // Log of event messages to be output to crash report.
+  nsTArray<EventMessage> mDispatchedEventMessages;
+  nsTArray<EventMessage> mReceivedEventMessages;
+  // Log of RequestIMEToCommitComposition() in the last 2 compositions.
+  enum class RequestIMEToCommitCompositionResult : uint8_t
+  {
+    eToOldCompositionReceived,
+    eToCommittedCompositionReceived,
+    eReceivedAfterTabParentBlur,
+    eReceivedButNoTextComposition,
+    eHandledAsynchronously,
+    eHandledSynchronously,
+  };
+  const char* ToReadableText(RequestIMEToCommitCompositionResult aResult) const
+  {
+    switch (aResult) {
+      case RequestIMEToCommitCompositionResult::eToOldCompositionReceived:
+        return "Commit request is not handled because it's for "
+               "older composition";
+      case RequestIMEToCommitCompositionResult::eToCommittedCompositionReceived:
+        return "Commit request is not handled because TabParent has already "
+               "sent commit event for the composition";
+      case RequestIMEToCommitCompositionResult::eReceivedAfterTabParentBlur:
+        return "Commit request is handled with stored composition string "
+               "because TabParent has already lost focus";
+      case RequestIMEToCommitCompositionResult::eReceivedButNoTextComposition:
+        return "Commit request is not handled because there is no "
+               "TextCompsition instance";
+      case RequestIMEToCommitCompositionResult::eHandledAsynchronously:
+        return "Commit request is handled but IME doesn't commit current "
+               "composition synchronously";
+      case RequestIMEToCommitCompositionResult::eHandledSynchronously:
+        return "Commit reqeust is handled synchronously";
+      default:
+        return "Unknown reason";
+    }
+  }
+  nsTArray<RequestIMEToCommitCompositionResult>
+    mRequestIMEToCommitCompositionResults;
+#endif // MOZ_DIAGNOSTIC_ASSERT_ENABLED
+
+  // mTabParent is owner of the instance.
+  dom::TabParent& MOZ_NON_OWNING_REF mTabParent;
+  // mCompositionString is composition string which were sent to the remote
+  // process but not yet committed in the remote process.
+  nsString mCompositionString;
   // This is not nullptr only while the instance is requesting IME to
   // composition.  Then, data value of dispatched composition events should
   // be stored into the instance.
@@ -417,13 +468,29 @@ private:
   // mCompositionStartInChild stores current composition start offset in the
   // remote process.
   uint32_t mCompositionStartInChild;
+  // mPendingCommitLength is commit string length of the first pending
+  // composition.  This is used by relative offset query events when querying
+  // new composition start offset.
+  // Note that when mPendingCompositionCount is not 0, i.e., there are 2 or
+  // more pending compositions, this cache won't be used because in such case,
+  // anyway ContentCacheInParent cannot return proper character rect.
+  uint32_t mPendingCommitLength;
   // mPendingCompositionCount is number of compositions which started in widget
   // but not yet handled in the child process.
   uint8_t mPendingCompositionCount;
+  // mPendingCommitCount is number of eCompositionCommit(AsIs) events which
+  // were sent to the child process but not yet handled in it.
+  uint8_t mPendingCommitCount;
   // mWidgetHasComposition is true when the widget in this process thinks that
   // IME has composition.  So, this is set to true when eCompositionStart is
   // dispatched and set to false when eCompositionCommit(AsIs) is dispatched.
   bool mWidgetHasComposition;
+  // mIsChildIgnoringCompositionEvents is set to true if the child process
+  // requests commit composition whose commit has already been sent to it.
+  // Then, set to false when the child process ignores the commit event.
+  bool mIsChildIgnoringCompositionEvents;
+
+  ContentCacheInParent() = delete;
 
   /**
    * When following methods' aRoundToExistingOffset is true, even if specified
@@ -442,6 +509,19 @@ private:
                          LayoutDeviceIntRect& aUnionTextRect) const;
 
   void FlushPendingNotifications(nsIWidget* aWidget);
+
+#if MOZ_DIAGNOSTIC_ASSERT_ENABLED
+  /**
+   * Remove unnecessary messages from mDispatchedEventMessages and
+   * mReceivedEventMessages.
+   */
+  void RemoveUnnecessaryEventMessageLog();
+
+  /**
+   * Append event message log to aLog.
+   */
+  void AppendEventMessageLog(nsACString& aLog) const;
+#endif // #if MOZ_DIAGNOSTIC_ASSERT_ENABLED
 };
 
 } // namespace mozilla

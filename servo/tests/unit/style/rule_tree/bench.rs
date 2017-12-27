@@ -2,29 +2,27 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use cssparser::{Parser, SourcePosition};
+use cssparser::SourceLocation;
 use rayon;
+use servo_arc::Arc;
 use servo_url::ServoUrl;
-use std::sync::Arc;
-use style::error_reporting::ParseErrorReporter;
+use style::context::QuirksMode;
+use style::error_reporting::{ParseErrorReporter, ContextualParseError};
 use style::media_queries::MediaList;
 use style::properties::{longhands, Importance, PropertyDeclaration, PropertyDeclarationBlock};
 use style::rule_tree::{CascadeLevel, RuleTree, StrongRuleNode, StyleSource};
 use style::shared_lock::SharedRwLock;
 use style::stylesheets::{Origin, Stylesheet, CssRule};
+use style::thread_state::{self, ThreadState};
 use test::{self, Bencher};
 
 struct ErrorringErrorReporter;
 impl ParseErrorReporter for ErrorringErrorReporter {
     fn report_error(&self,
-                    input: &mut Parser,
-                    position: SourcePosition,
-                    message: &str,
                     url: &ServoUrl,
-                    line_number_offset: u64) {
-        let location = input.source_location(position);
-        let line_offset = location.line + line_number_offset as usize;
-        panic!("CSS error: {}\t\n{}:{} {}", url.as_str(), line_offset, location.column, message);
+                    location: SourceLocation,
+                    error: ContextualParseError) {
+        panic!("CSS error: {}\t\n{}:{} {}", url.as_str(), location.line, location.column, error);
     }
 }
 
@@ -58,9 +56,10 @@ fn parse_rules(css: &str) -> Vec<(StyleSource, CascadeLevel)> {
                                  lock,
                                  None,
                                  &ErrorringErrorReporter,
-                                 0u64);
+                                 QuirksMode::NoQuirks,
+                                 0);
     let guard = s.shared_lock.read();
-    let rules = s.rules.read_with(&guard);
+    let rules = s.contents.rules.read_with(&guard);
     rules.0.iter().filter_map(|rule| {
         match *rule {
             CssRule::Style(ref style_rule) => Some(style_rule),
@@ -81,7 +80,7 @@ fn test_insertion_style_attribute(rule_tree: &RuleTree, rules: &[(StyleSource, C
     let mut rules = rules.to_vec();
     rules.push((StyleSource::Declarations(Arc::new(shared_lock.wrap(PropertyDeclarationBlock::with_one(
         PropertyDeclaration::Display(
-            longhands::display::SpecifiedValue::block),
+            longhands::display::SpecifiedValue::Block),
         Importance::Normal
     )))), CascadeLevel::UserNormal));
     test_insertion(rule_tree, rules)
@@ -90,6 +89,7 @@ fn test_insertion_style_attribute(rule_tree: &RuleTree, rules: &[(StyleSource, C
 #[bench]
 fn bench_insertion_basic(b: &mut Bencher) {
     let r = RuleTree::new();
+    thread_state::initialize(ThreadState::SCRIPT);
 
     let rules_matched = parse_rules(
         ".foo { width: 200px; } \
@@ -108,6 +108,7 @@ fn bench_insertion_basic(b: &mut Bencher) {
 #[bench]
 fn bench_insertion_basic_per_element(b: &mut Bencher) {
     let r = RuleTree::new();
+    thread_state::initialize(ThreadState::SCRIPT);
 
     let rules_matched = parse_rules(
         ".foo { width: 200px; } \
@@ -124,6 +125,7 @@ fn bench_insertion_basic_per_element(b: &mut Bencher) {
 #[bench]
 fn bench_expensive_insertion(b: &mut Bencher) {
     let r = RuleTree::new();
+    thread_state::initialize(ThreadState::SCRIPT);
 
     // This test case tests a case where you style a bunch of siblings
     // matching the same rules, with a different style attribute each
@@ -146,6 +148,7 @@ fn bench_expensive_insertion(b: &mut Bencher) {
 #[bench]
 fn bench_insertion_basic_parallel(b: &mut Bencher) {
     let r = RuleTree::new();
+    thread_state::initialize(ThreadState::SCRIPT);
 
     let rules_matched = parse_rules(
         ".foo { width: 200px; } \
@@ -175,8 +178,9 @@ fn bench_insertion_basic_parallel(b: &mut Bencher) {
 }
 
 #[bench]
-fn bench_expensive_insersion_parallel(b: &mut Bencher) {
+fn bench_expensive_insertion_parallel(b: &mut Bencher) {
     let r = RuleTree::new();
+    thread_state::initialize(ThreadState::SCRIPT);
 
     let rules_matched = parse_rules(
         ".foo { width: 200px; } \

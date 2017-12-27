@@ -24,14 +24,11 @@ limitations under the License.
   <script type="application/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
   <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
 </head>
-<body onload="next()">
+<body onload="onLoad()">
 <a target="_blank" href="https://bugzilla.mozilla.org/show_bug.cgi?id=1243846">Mozilla Bug 1243846</a>
 <p id="display"></p>
 <pre id="test">
 <script type="application/javascript">
-
-  SpecialPowers.setIntPref("layout.visibility.min-notify-intersection-observers-interval-ms", 0);
-
   var tests = [];
   var curDescribeMsg = '';
   var curItMsg = '';
@@ -325,7 +322,7 @@ limitations under the License.
       });
 
 
-      it('does not trigger if target does not intersect when observing begins',
+      it('does trigger if target does not intersect when observing begins',
           function(done) {
 
         var spy = sinon.spy();
@@ -334,7 +331,7 @@ limitations under the License.
         targetEl2.style.top = '-40px';
         io.observe(targetEl2);
         callDelayed(function() {
-          expect(spy.callCount).to.be(0);
+          expect(spy.callCount).to.be(1);
           done();
         }, ASYNC_TIMEOUT);
       });
@@ -528,7 +525,7 @@ limitations under the License.
             spy.waitForNotification(function() {
               expect(spy.callCount).to.be(1);
               var records = sortRecords(spy.lastCall.args[0]);
-              expect(records.length).to.be(2);
+              expect(records.length).to.be(3);
               expect(records[0].target).to.be(targetEl1);
               expect(records[0].intersectionRatio).to.be(0.25);
               expect(records[1].target).to.be(targetEl2);
@@ -633,13 +630,13 @@ limitations under the License.
           function(done) {
             io = new IntersectionObserver(function(records) {
               records = sortRecords(records);
-              expect(records.length).to.be(3);
+              expect(records.length).to.be(4);
               expect(records[0].target).to.be(targetEl1);
               expect(records[0].intersectionRatio).to.be(0.5);
-              expect(records[1].target).to.be(targetEl3);
-              expect(records[1].intersectionRatio).to.be(0.5);
-              expect(records[2].target).to.be(targetEl4);
+              expect(records[2].target).to.be(targetEl3);
               expect(records[2].intersectionRatio).to.be(0.5);
+              expect(records[3].target).to.be(targetEl4);
+              expect(records[3].intersectionRatio).to.be(0.5);
               io.disconnect();
               done();
             }, {root: rootEl, rootMargin: '-10px 10%'});
@@ -652,11 +649,11 @@ limitations under the License.
           function(done) {
             io = new IntersectionObserver(function(records) {
               records = sortRecords(records);
-              expect(records.length).to.be(2);
+              expect(records.length).to.be(4);
               expect(records[0].target).to.be(targetEl1);
               expect(records[0].intersectionRatio).to.be(0.5);
-              expect(records[1].target).to.be(targetEl4);
-              expect(records[1].intersectionRatio).to.be(0.5);
+              expect(records[3].target).to.be(targetEl4);
+              expect(records[3].intersectionRatio).to.be(0.5);
               io.disconnect();
               done();
             }, {root: rootEl, rootMargin: '-5% -2.5% 0px'});
@@ -669,13 +666,13 @@ limitations under the License.
           function(done) {
             io = new IntersectionObserver(function(records) {
               records = sortRecords(records);
-              expect(records.length).to.be(3);
+              expect(records.length).to.be(4);
               expect(records[0].target).to.be(targetEl1);
               expect(records[0].intersectionRatio).to.be(0.5);
               expect(records[1].target).to.be(targetEl2);
               expect(records[1].intersectionRatio).to.be(0.5);
-              expect(records[2].target).to.be(targetEl4);
-              expect(records[2].intersectionRatio).to.be(0.25);
+              expect(records[3].target).to.be(targetEl4);
+              expect(records[3].intersectionRatio).to.be(0.25);
               io.disconnect();
               done();
             }, {root: rootEl, rootMargin: '5% -2.5% -10px -190px'});
@@ -705,9 +702,9 @@ limitations under the License.
             spy.waitForNotification(function() {
               expect(spy.callCount).to.be(1);
               var records = sortRecords(spy.lastCall.args[0]);
-              expect(records.length).to.be(1);
-              expect(records[0].intersectionRatio).to.be(0);
-              expect(records[0].target).to.be(targetEl2);
+              expect(records.length).to.be(2);
+              expect(records[1].intersectionRatio).to.be(0);
+              expect(records[1].target).to.be(targetEl2);
               done();
             });
           },
@@ -782,7 +779,7 @@ limitations under the License.
             spy.waitForNotification(function() {
               var records = sortRecords(spy.lastCall.args[0]);
               expect(records.length).to.be(1);
-              expect(records[0].intersectionRatio).to.be(0);
+              expect(records[0].intersectionRatio).to.be(1);
               expect(records[0].isIntersecting).to.be.ok();
               done();
             });
@@ -817,14 +814,14 @@ limitations under the License.
           function(done) {
             document.getElementById('fixtures').appendChild(rootEl);
             callDelayed(function() {
-              expect(spy.callCount).to.be(0);
+              expect(spy.callCount).to.be(1);
               done();
             }, ASYNC_TIMEOUT);
           },
           function(done) {
             parentEl.insertBefore(targetEl1, targetEl2);
             spy.waitForNotification(function() {
-              expect(spy.callCount).to.be(1);
+              expect(spy.callCount).to.be(2);
               var records = sortRecords(spy.lastCall.args[0]);
               expect(records.length).to.be(1);
               expect(records[0].intersectionRatio).to.be(1);
@@ -835,7 +832,7 @@ limitations under the License.
           function(done) {
             grandParentEl.remove();
             spy.waitForNotification(function() {
-              expect(spy.callCount).to.be(2);
+              expect(spy.callCount).to.be(3);
               var records = sortRecords(spy.lastCall.args[0]);
               expect(records.length).to.be(1);
               expect(records[0].intersectionRatio).to.be(0);
@@ -846,7 +843,7 @@ limitations under the License.
           function(done) {
             rootEl.appendChild(targetEl1);
             spy.waitForNotification(function() {
-              expect(spy.callCount).to.be(3);
+              expect(spy.callCount).to.be(4);
               var records = sortRecords(spy.lastCall.args[0]);
               expect(records.length).to.be(1);
               expect(records[0].intersectionRatio).to.be(1);
@@ -857,7 +854,7 @@ limitations under the License.
           function(done) {
             rootEl.remove();
             spy.waitForNotification(function() {
-              expect(spy.callCount).to.be(4);
+              expect(spy.callCount).to.be(5);
               var records = sortRecords(spy.lastCall.args[0]);
               expect(records.length).to.be(1);
               expect(records[0].intersectionRatio).to.be(0);
@@ -888,7 +885,13 @@ limitations under the License.
         targetEl1.style.top = '220px';
         targetEl1.style.left = '220px';
 
+        var callCount = 0;
+
         io = new IntersectionObserver(function(records) {
+          callCount++;
+          if (callCount <= 1) {
+            return;
+          }
           expect(records.length).to.be(1);
           expect(records[0].intersectionRatio).to.be(1);
           done();
@@ -1240,6 +1243,10 @@ limitations under the License.
     targetEl2 = null;
     targetEl3 = null;
     targetEl4 = null;
+  }
+
+  function onLoad() {
+    SpecialPowers.pushPrefEnv({"set": [["dom.IntersectionObserver.enabled", true]]}, next);
   }
 
   SimpleTest.waitForExplicitFinish();

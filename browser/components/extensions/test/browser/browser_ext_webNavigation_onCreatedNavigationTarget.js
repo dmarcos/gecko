@@ -2,9 +2,8 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-const BASE_URL = "http://mochi.test:8888/browser/browser/components/extensions/test/browser";
-const SOURCE_PAGE = `${BASE_URL}/webNav_createdTargetSource.html`;
-const OPENED_PAGE = `${BASE_URL}/webNav_createdTarget.html`;
+Services.scriptloader.loadSubScript(new URL("head_webNavigation.js", gTestPath).href,
+                                    this);
 
 async function background() {
   const tabs = await browser.tabs.query({active: true, currentWindow: true});
@@ -34,26 +33,8 @@ async function background() {
   });
 }
 
-async function runTestCase({extension, openNavTarget, expectedWebNavProps}) {
-  await openNavTarget();
-
-  const webNavMsg = await extension.awaitMessage("webNavOnCreated");
-  const createdTabId = await extension.awaitMessage("tabsOnCreated");
-  const completedNavMsg = await extension.awaitMessage("webNavOnCompleted");
-
-  let {sourceTabId, sourceFrameId, url} = expectedWebNavProps;
-
-  is(webNavMsg.tabId, createdTabId, "Got the expected tabId property");
-  is(webNavMsg.sourceTabId, sourceTabId, "Got the expected sourceTabId property");
-  is(webNavMsg.sourceFrameId, sourceFrameId, "Got the expected sourceFrameId property");
-  is(webNavMsg.url, url, "Got the expected url property");
-
-  is(completedNavMsg.tabId, createdTabId, "Got the expected webNavigation.onCompleted tabId property");
-  is(completedNavMsg.url, url, "Got the expected webNavigation.onCompleted url property");
-}
-
-add_task(function* test_on_created_navigation_target_from_mouse_click() {
-  const tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, SOURCE_PAGE);
+add_task(async function test_on_created_navigation_target_from_mouse_click() {
+  const tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, SOURCE_PAGE);
 
   const extension = ExtensionTestUtils.loadExtension({
     background,
@@ -62,13 +43,13 @@ add_task(function* test_on_created_navigation_target_from_mouse_click() {
     },
   });
 
-  yield extension.startup();
+  await extension.startup();
 
-  const expectedSourceTab = yield extension.awaitMessage("expectedSourceTab");
+  const expectedSourceTab = await extension.awaitMessage("expectedSourceTab");
 
   info("Open link in a new tab using Ctrl-click");
 
-  yield runTestCase({
+  await runCreatedNavigationTargetTest({
     extension,
     openNavTarget() {
       BrowserTestUtils.synthesizeMouseAtCenter("#test-create-new-tab-from-mouse-click",
@@ -84,7 +65,7 @@ add_task(function* test_on_created_navigation_target_from_mouse_click() {
 
   info("Open link in a new window using Shift-click");
 
-  yield runTestCase({
+  await runCreatedNavigationTargetTest({
     extension,
     openNavTarget() {
       BrowserTestUtils.synthesizeMouseAtCenter("#test-create-new-window-from-mouse-click",
@@ -100,7 +81,7 @@ add_task(function* test_on_created_navigation_target_from_mouse_click() {
 
   info("Open link with target=\"_blank\" in a new tab using click");
 
-  yield runTestCase({
+  await runCreatedNavigationTargetTest({
     extension,
     openNavTarget() {
       BrowserTestUtils.synthesizeMouseAtCenter("#test-create-new-tab-from-targetblank-click",
@@ -114,13 +95,13 @@ add_task(function* test_on_created_navigation_target_from_mouse_click() {
     },
   });
 
-  yield BrowserTestUtils.removeTab(tab);
+  await BrowserTestUtils.removeTab(tab);
 
-  yield extension.unload();
+  await extension.unload();
 });
 
-add_task(function* test_on_created_navigation_target_from_mouse_click_subframe() {
-  const tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, SOURCE_PAGE);
+add_task(async function test_on_created_navigation_target_from_mouse_click_subframe() {
+  const tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, SOURCE_PAGE);
 
   const extension = ExtensionTestUtils.loadExtension({
     background,
@@ -129,13 +110,13 @@ add_task(function* test_on_created_navigation_target_from_mouse_click_subframe()
     },
   });
 
-  yield extension.startup();
+  await extension.startup();
 
-  const expectedSourceTab = yield extension.awaitMessage("expectedSourceTab");
+  const expectedSourceTab = await extension.awaitMessage("expectedSourceTab");
 
   info("Open a subframe link in a new tab using Ctrl-click");
 
-  yield runTestCase({
+  await runCreatedNavigationTargetTest({
     extension,
     openNavTarget() {
       BrowserTestUtils.synthesizeMouseAtCenter(function() {
@@ -154,7 +135,7 @@ add_task(function* test_on_created_navigation_target_from_mouse_click_subframe()
 
   info("Open a subframe link in a new window using Shift-click");
 
-  yield runTestCase({
+  await runCreatedNavigationTargetTest({
     extension,
     openNavTarget() {
       BrowserTestUtils.synthesizeMouseAtCenter(function() {
@@ -173,7 +154,7 @@ add_task(function* test_on_created_navigation_target_from_mouse_click_subframe()
 
   info("Open a subframe link with target=\"_blank\" in a new tab using click");
 
-  yield runTestCase({
+  await runCreatedNavigationTargetTest({
     extension,
     openNavTarget() {
       BrowserTestUtils.synthesizeMouseAtCenter(function() {
@@ -190,8 +171,7 @@ add_task(function* test_on_created_navigation_target_from_mouse_click_subframe()
     },
   });
 
-  yield BrowserTestUtils.removeTab(tab);
+  await BrowserTestUtils.removeTab(tab);
 
-  yield extension.unload();
+  await extension.unload();
 });
-

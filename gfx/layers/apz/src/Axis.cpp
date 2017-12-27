@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=8 et tw=80 : */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -491,6 +491,21 @@ const FrameMetrics& Axis::GetFrameMetrics() const {
   return mAsyncPanZoomController->GetFrameMetrics();
 }
 
+const ScrollMetadata& Axis::GetScrollMetadata() const {
+  return mAsyncPanZoomController->GetScrollMetadata();
+}
+
+bool Axis::OverscrollBehaviorAllowsHandoff() const {
+  // Scroll handoff is a "non-local" overscroll behavior, so it's allowed
+  // with "auto" and disallowed with "contain" and "none".
+  return GetOverscrollBehavior() == OverscrollBehavior::Auto;
+}
+
+bool Axis::OverscrollBehaviorAllowsOverscrollEffect() const {
+  // An overscroll effect is a "local" overscroll behavior, so it's allowed
+  // with "auto" and "contain" and disallowed with "none".
+  return GetOverscrollBehavior() != OverscrollBehavior::None;
+}
 
 AxisX::AxisX(AsyncPanZoomController* aAsyncPanZoomController)
   : Axis(aAsyncPanZoomController)
@@ -505,12 +520,12 @@ ParentLayerCoord AxisX::GetPointOffset(const ParentLayerPoint& aPoint) const
 
 ParentLayerCoord AxisX::GetRectLength(const ParentLayerRect& aRect) const
 {
-  return aRect.width;
+  return aRect.Width();
 }
 
 ParentLayerCoord AxisX::GetRectOffset(const ParentLayerRect& aRect) const
 {
-  return aRect.x;
+  return aRect.X();
 }
 
 CSSToParentLayerScale AxisX::GetScaleForAxis(const CSSToParentLayerScale2D& aScale) const
@@ -528,6 +543,11 @@ const char* AxisX::Name() const
   return "X";
 }
 
+OverscrollBehavior AxisX::GetOverscrollBehavior() const
+{
+  return GetScrollMetadata().GetOverscrollBehavior().mBehaviorX;
+}
+
 AxisY::AxisY(AsyncPanZoomController* aAsyncPanZoomController)
   : Axis(aAsyncPanZoomController)
 {
@@ -541,12 +561,12 @@ ParentLayerCoord AxisY::GetPointOffset(const ParentLayerPoint& aPoint) const
 
 ParentLayerCoord AxisY::GetRectLength(const ParentLayerRect& aRect) const
 {
-  return aRect.height;
+  return aRect.Height();
 }
 
 ParentLayerCoord AxisY::GetRectOffset(const ParentLayerRect& aRect) const
 {
-  return aRect.y;
+  return aRect.Y();
 }
 
 CSSToParentLayerScale AxisY::GetScaleForAxis(const CSSToParentLayerScale2D& aScale) const
@@ -562,6 +582,11 @@ ScreenPoint AxisY::MakePoint(ScreenCoord aCoord) const
 const char* AxisY::Name() const
 {
   return "Y";
+}
+
+OverscrollBehavior AxisY::GetOverscrollBehavior() const
+{
+  return GetScrollMetadata().GetOverscrollBehavior().mBehaviorY;
 }
 
 } // namespace layers

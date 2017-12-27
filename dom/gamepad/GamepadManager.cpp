@@ -20,6 +20,7 @@
 #include "mozilla/StaticPtr.h"
 
 #include "nsAutoPtr.h"
+#include "nsContentUtils.h"
 #include "nsGlobalWindow.h"
 #include "nsIDOMEvent.h"
 #include "nsIDOMDocument.h"
@@ -45,8 +46,8 @@ const char* kGamepadEnabledPref = "dom.gamepad.enabled";
 const char* kGamepadEventsEnabledPref =
   "dom.gamepad.non_standard_events.enabled";
 
-const nsTArray<RefPtr<nsGlobalWindow>>::index_type NoIndex =
-  nsTArray<RefPtr<nsGlobalWindow>>::NoIndex;
+const nsTArray<RefPtr<nsGlobalWindowInner>>::index_type NoIndex =
+  nsTArray<RefPtr<nsGlobalWindowInner>>::NoIndex;
 
 bool sShutdown = false;
 
@@ -109,13 +110,12 @@ GamepadManager::StopMonitoring()
   for (uint32_t i = 0; i < mChannelChildren.Length(); ++i) {
     mChannelChildren[i]->SendGamepadListenerRemoved();
   }
+  if (gfx::VRManagerChild::IsCreated()) {
+    gfx::VRManagerChild* vm = gfx::VRManagerChild::Get();
+    vm->SendControllerListenerRemoved();
+  }
   mChannelChildren.Clear();
   mGamepads.Clear();
-
-#if defined(XP_WIN) || defined(XP_MACOSX) || defined(XP_LINUX)
-  gfx::VRManagerChild* vm = gfx::VRManagerChild::Get();
-  vm->SendControllerListenerRemoved();
-#endif
 }
 
 void
@@ -132,13 +132,40 @@ GamepadManager::BeginShutdown()
 }
 
 void
-GamepadManager::AddListener(nsGlobalWindow* aWindow)
+GamepadManager::AddListener(nsGlobalWindowInner* aWindow)
 {
   MOZ_ASSERT(aWindow);
-  MOZ_ASSERT(aWindow->IsInnerWindow());
   MOZ_ASSERT(NS_IsMainThread());
 
-  if (!mEnabled || mShuttingDown) {
+  // IPDL child has not been created
+  if (mChannelChildren.IsEmpty()) {
+    PBackgroundChild* actor = BackgroundChild::GetOrCreateForCurrentThread();
+    if (NS_WARN_IF(!actor)) {
+      // We are probably shutting down.
+      return;
+    }
+
+    GamepadEventChannelChild *child = new GamepadEventChannelChild();
+    PGamepadEventChannelChild *initedChild =
+      actor->SendPGamepadEventChannelConstructor(child);
+    if (NS_WARN_IF(!initedChild)) {
+      // We are probably shutting down.
+      return;
+    }
+
+    MOZ_ASSERT(initedChild == child);
+    child->SendGamepadListenerAdded();
+    mChannelChildren.AppendElement(child);
+
+    if (gfx::VRManagerChild::IsCreated()) {
+      // Construct VRManagerChannel and ask adding the connected
+      // VR controllers to GamepadManager
+      gfx::VRManagerChild* vm = gfx::VRManagerChild::Get();
+      vm->SendControllerListenerAdded();
+    }
+  }
+
+  if (!mEnabled || mShuttingDown || nsContentUtils::ShouldResistFingerprinting()) {
     return;
   }
 
@@ -147,26 +174,12 @@ GamepadManager::AddListener(nsGlobalWindow* aWindow)
   }
 
   mListeners.AppendElement(aWindow);
-
-  // IPDL child has been created
-  if (!mChannelChildren.IsEmpty()) {
-    return;
-  }
-
-  PBackgroundChild *actor = BackgroundChild::GetForCurrentThread();
-  //Try to get the PBackground Child actor
-  if (actor) {
-    ActorCreated(actor);
-  } else {
-    Unused << BackgroundChild::GetOrCreateForCurrentThread(this);
-  }
 }
 
 void
-GamepadManager::RemoveListener(nsGlobalWindow* aWindow)
+GamepadManager::RemoveListener(nsGlobalWindowInner* aWindow)
 {
   MOZ_ASSERT(aWindow);
-  MOZ_ASSERT(aWindow->IsInnerWindow());
 
   if (mShuttingDown) {
     // Doesn't matter at this point. It's possible we're being called
@@ -227,6 +240,7 @@ GamepadManager::AddGamepad(uint32_t aIndex,
                            GamepadMappingType aMapping,
                            GamepadHand aHand,
                            GamepadServiceType aServiceType,
+                           uint32_t aDisplayID,
                            uint32_t aNumButtons,
                            uint32_t aNumAxes,
                            uint32_t aNumHaptics)
@@ -241,6 +255,7 @@ GamepadManager::AddGamepad(uint32_t aIndex,
                 newIndex,
                 aMapping,
                 aHand,
+                aDisplayID,
                 aNumButtons,
                 aNumAxes,
                 aNumHaptics);
@@ -268,55 +283,6 @@ GamepadManager::RemoveGamepad(uint32_t aIndex, GamepadServiceType aServiceType)
 }
 
 void
-GamepadManager::NewButtonEvent(uint32_t aIndex, GamepadServiceType aServiceType,
-                               uint32_t aButton, bool aPressed, bool aTouched,
-                               double aValue)
-{
-  if (mShuttingDown) {
-    return;
-  }
-
-  uint32_t newIndex = GetGamepadIndexWithServiceType(aIndex, aServiceType);
-
-  RefPtr<Gamepad> gamepad = GetGamepad(newIndex);
-  if (!gamepad) {
-    return;
-  }
-
-  gamepad->SetButton(aButton, aPressed, aTouched, aValue);
-
-  // Hold on to listeners in a separate array because firing events
-  // can mutate the mListeners array.
-  nsTArray<RefPtr<nsGlobalWindow>> listeners(mListeners);
-  MOZ_ASSERT(!listeners.IsEmpty());
-
-  for (uint32_t i = 0; i < listeners.Length(); i++) {
-
-    MOZ_ASSERT(listeners[i]->IsInnerWindow());
-
-    // Only send events to non-background windows
-    if (!listeners[i]->AsInner()->IsCurrentInnerWindow() ||
-        listeners[i]->GetOuterWindow()->IsBackground()) {
-      continue;
-    }
-
-    bool firstTime = MaybeWindowHasSeenGamepad(listeners[i], newIndex);
-
-    RefPtr<Gamepad> listenerGamepad = listeners[i]->GetGamepad(newIndex);
-    if (listenerGamepad) {
-      listenerGamepad->SetButton(aButton, aPressed, aTouched, aValue);
-      if (firstTime) {
-        FireConnectionEvent(listeners[i], listenerGamepad, true);
-      }
-      if (mNonstandardEventsEnabled) {
-        // Fire event
-        FireButtonEvent(listeners[i], listenerGamepad, aButton, aValue);
-      }
-    }
-  }
-}
-
-void
 GamepadManager::FireButtonEvent(EventTarget* aTarget,
                                 Gamepad* aGamepad,
                                 uint32_t aButton,
@@ -336,53 +302,6 @@ GamepadManager::FireButtonEvent(EventTarget* aTarget,
 
   bool defaultActionEnabled = true;
   aTarget->DispatchEvent(event, &defaultActionEnabled);
-}
-
-void
-GamepadManager::NewAxisMoveEvent(uint32_t aIndex, GamepadServiceType aServiceType,
-                                 uint32_t aAxis, double aValue)
-{
-  if (mShuttingDown) {
-    return;
-  }
-
-  uint32_t newIndex = GetGamepadIndexWithServiceType(aIndex, aServiceType);
-
-  RefPtr<Gamepad> gamepad = GetGamepad(newIndex);
-  if (!gamepad) {
-    return;
-  }
-  gamepad->SetAxis(aAxis, aValue);
-
-  // Hold on to listeners in a separate array because firing events
-  // can mutate the mListeners array.
-  nsTArray<RefPtr<nsGlobalWindow>> listeners(mListeners);
-  MOZ_ASSERT(!listeners.IsEmpty());
-
-  for (uint32_t i = 0; i < listeners.Length(); i++) {
-
-    MOZ_ASSERT(listeners[i]->IsInnerWindow());
-
-    // Only send events to non-background windows
-    if (!listeners[i]->AsInner()->IsCurrentInnerWindow() ||
-        listeners[i]->GetOuterWindow()->IsBackground()) {
-      continue;
-    }
-
-    bool firstTime = MaybeWindowHasSeenGamepad(listeners[i], newIndex);
-
-    RefPtr<Gamepad> listenerGamepad = listeners[i]->GetGamepad(newIndex);
-    if (listenerGamepad) {
-      listenerGamepad->SetAxis(aAxis, aValue);
-      if (firstTime) {
-        FireConnectionEvent(listeners[i], listenerGamepad, true);
-      }
-      if (mNonstandardEventsEnabled) {
-        // Fire event
-        FireAxisMoveEvent(listeners[i], listenerGamepad, aAxis, aValue);
-      }
-    }
-  }
 }
 
 void
@@ -409,51 +328,14 @@ GamepadManager::FireAxisMoveEvent(EventTarget* aTarget,
 }
 
 void
-GamepadManager::NewPoseEvent(uint32_t aIndex, GamepadServiceType aServiceType,
-                             const GamepadPoseState& aPose)
-{
-  if (mShuttingDown) {
-    return;
-  }
-
-  uint32_t newIndex = GetGamepadIndexWithServiceType(aIndex, aServiceType);
-
-  RefPtr<Gamepad> gamepad = GetGamepad(newIndex);
-  if (!gamepad) {
-    return;
-  }
-  gamepad->SetPose(aPose);
-
-  // Hold on to listeners in a separate array because firing events
-  // can mutate the mListeners array.
-  nsTArray<RefPtr<nsGlobalWindow>> listeners(mListeners);
-  MOZ_ASSERT(!listeners.IsEmpty());
-
-  for (uint32_t i = 0; i < listeners.Length(); i++) {
-
-    MOZ_ASSERT(listeners[i]->IsInnerWindow());
-
-    // Only send events to non-background windows
-    if (!listeners[i]->AsInner()->IsCurrentInnerWindow() ||
-        listeners[i]->GetOuterWindow()->IsBackground()) {
-      continue;
-    }
-
-    bool firstTime = MaybeWindowHasSeenGamepad(listeners[i], newIndex);
-
-    RefPtr<Gamepad> listenerGamepad = listeners[i]->GetGamepad(newIndex);
-    if (listenerGamepad) {
-      listenerGamepad->SetPose(aPose);
-      if (firstTime) {
-        FireConnectionEvent(listeners[i], listenerGamepad, true);
-      }
-    }
-  }
-}
-
-void
 GamepadManager::NewConnectionEvent(uint32_t aIndex, bool aConnected)
 {
+  // Do not fire gamepadconnected and gamepaddisconnected events when
+  // privacy.resistFingerprinting is true.
+  if (nsContentUtils::ShouldResistFingerprinting()) {
+    return;
+  }
+
   if (mShuttingDown) {
     return;
   }
@@ -465,14 +347,10 @@ GamepadManager::NewConnectionEvent(uint32_t aIndex, bool aConnected)
 
   // Hold on to listeners in a separate array because firing events
   // can mutate the mListeners array.
-  nsTArray<RefPtr<nsGlobalWindow>> listeners(mListeners);
-  MOZ_ASSERT(!listeners.IsEmpty());
+  nsTArray<RefPtr<nsGlobalWindowInner>> listeners(mListeners);
 
   if (aConnected) {
     for (uint32_t i = 0; i < listeners.Length(); i++) {
-
-      MOZ_ASSERT(listeners[i]->IsInnerWindow());
-
       // Only send events to non-background windows
       if (!listeners[i]->AsInner()->IsCurrentInnerWindow() ||
           listeners[i]->GetOuterWindow()->IsBackground()) {
@@ -537,7 +415,7 @@ GamepadManager::FireConnectionEvent(EventTarget* aTarget,
 void
 GamepadManager::SyncGamepadState(uint32_t aIndex, Gamepad* aGamepad)
 {
-  if (mShuttingDown || !mEnabled) {
+  if (mShuttingDown || !mEnabled || nsContentUtils::ShouldResistFingerprinting()) {
     return;
   }
 
@@ -585,7 +463,7 @@ GamepadManager::IsAPIEnabled() {
 }
 
 bool
-GamepadManager::MaybeWindowHasSeenGamepad(nsGlobalWindow* aWindow, uint32_t aIndex)
+GamepadManager::MaybeWindowHasSeenGamepad(nsGlobalWindowInner* aWindow, uint32_t aIndex)
 {
   if (!WindowHasSeenGamepad(aWindow, aIndex)) {
     // This window hasn't seen this gamepad before, so
@@ -597,19 +475,18 @@ GamepadManager::MaybeWindowHasSeenGamepad(nsGlobalWindow* aWindow, uint32_t aInd
 }
 
 bool
-GamepadManager::WindowHasSeenGamepad(nsGlobalWindow* aWindow, uint32_t aIndex) const
+GamepadManager::WindowHasSeenGamepad(nsGlobalWindowInner* aWindow, uint32_t aIndex) const
 {
   RefPtr<Gamepad> gamepad = aWindow->GetGamepad(aIndex);
   return gamepad != nullptr;
 }
 
 void
-GamepadManager::SetWindowHasSeenGamepad(nsGlobalWindow* aWindow,
+GamepadManager::SetWindowHasSeenGamepad(nsGlobalWindowInner* aWindow,
                                         uint32_t aIndex,
                                         bool aHasSeen)
 {
   MOZ_ASSERT(aWindow);
-  MOZ_ASSERT(aWindow->IsInnerWindow());
 
   if (mListeners.IndexOf(aWindow) == NoIndex) {
     // This window isn't even listening for gamepad events.
@@ -633,40 +510,137 @@ GamepadManager::SetWindowHasSeenGamepad(nsGlobalWindow* aWindow,
 void
 GamepadManager::Update(const GamepadChangeEvent& aEvent)
 {
-  if (aEvent.type() == GamepadChangeEvent::TGamepadAdded) {
-    const GamepadAdded& a = aEvent.get_GamepadAdded();
-    AddGamepad(a.index(), a.id(),
+  if (!mEnabled || mShuttingDown || nsContentUtils::ShouldResistFingerprinting()) {
+    return;
+  }
+
+  const uint32_t index = aEvent.index();
+  GamepadServiceType serviceType = aEvent.service_type();
+  GamepadChangeEventBody body = aEvent.body();
+
+  if (body.type() == GamepadChangeEventBody::TGamepadAdded) {
+    const GamepadAdded& a = body.get_GamepadAdded();
+    AddGamepad(index, a.id(),
                static_cast<GamepadMappingType>(a.mapping()),
                static_cast<GamepadHand>(a.hand()),
-               a.service_type(),
+               serviceType,
+               a.display_id(),
                a.num_buttons(), a.num_axes(),
                a.num_haptics());
     return;
   }
-  if (aEvent.type() == GamepadChangeEvent::TGamepadRemoved) {
-    const GamepadRemoved& a = aEvent.get_GamepadRemoved();
-    RemoveGamepad(a.index(), a.service_type());
-    return;
-  }
-  if (aEvent.type() == GamepadChangeEvent::TGamepadButtonInformation) {
-    const GamepadButtonInformation& a = aEvent.get_GamepadButtonInformation();
-    NewButtonEvent(a.index(), a.service_type(), a.button(),
-                   a.pressed(), a.touched(), a.value());
-    return;
-  }
-  if (aEvent.type() == GamepadChangeEvent::TGamepadAxisInformation) {
-    const GamepadAxisInformation& a = aEvent.get_GamepadAxisInformation();
-    NewAxisMoveEvent(a.index(), a.service_type(), a.axis(), a.value());
-    return;
-  }
-  if (aEvent.type() == GamepadChangeEvent::TGamepadPoseInformation) {
-    const GamepadPoseInformation& a = aEvent.get_GamepadPoseInformation();
-    NewPoseEvent(a.index(), a.service_type(), a.pose_state());
+  if (body.type() == GamepadChangeEventBody::TGamepadRemoved) {
+    RemoveGamepad(index, serviceType);
     return;
   }
 
-  MOZ_CRASH("We shouldn't be here!");
+  if (!SetGamepadByEvent(aEvent)) {
+    return;
+  }
 
+  // Hold on to listeners in a separate array because firing events
+  // can mutate the mListeners array.
+  nsTArray<RefPtr<nsGlobalWindowInner>> listeners(mListeners);
+
+  for (uint32_t i = 0; i < listeners.Length(); i++) {
+    // Only send events to non-background windows
+    if (!listeners[i]->AsInner()->IsCurrentInnerWindow() ||
+        listeners[i]->GetOuterWindow()->IsBackground()) {
+      continue;
+    }
+
+    SetGamepadByEvent(aEvent, listeners[i]);
+    MaybeConvertToNonstandardGamepadEvent(aEvent, listeners[i]);
+  }
+}
+
+void
+GamepadManager::MaybeConvertToNonstandardGamepadEvent(const GamepadChangeEvent& aEvent,
+                                                      nsGlobalWindowInner* aWindow)
+{
+  MOZ_ASSERT(aWindow);
+
+  if (!mNonstandardEventsEnabled) {
+    return;
+  }
+
+  const uint32_t index = GetGamepadIndexWithServiceType(aEvent.index(),
+                                                        aEvent.service_type());
+  RefPtr<Gamepad> gamepad = aWindow->GetGamepad(index);
+  const GamepadChangeEventBody& body = aEvent.body();
+
+  if (gamepad) {
+    switch (body.type()) {
+      case GamepadChangeEventBody::TGamepadButtonInformation:
+      {
+        const GamepadButtonInformation& a = body.get_GamepadButtonInformation();
+        FireButtonEvent(aWindow, gamepad, a.button(), a.value());
+        break;
+      }
+      case GamepadChangeEventBody::TGamepadAxisInformation:
+      {
+        const GamepadAxisInformation& a = body.get_GamepadAxisInformation();
+        FireAxisMoveEvent(aWindow, gamepad, a.axis(), a.value());
+        break;
+      }
+      default:
+        break;
+    }
+  }
+}
+
+bool
+GamepadManager::SetGamepadByEvent(const GamepadChangeEvent& aEvent, nsGlobalWindowInner *aWindow)
+{
+  bool ret = false;
+  bool firstTime = false;
+  const uint32_t index = GetGamepadIndexWithServiceType(aEvent.index(),
+                                                        aEvent.service_type());
+  if (aWindow) {
+    firstTime = MaybeWindowHasSeenGamepad(aWindow, index);
+  }
+
+  RefPtr<Gamepad> gamepad = aWindow ? aWindow->GetGamepad(index) : GetGamepad(index);
+  const GamepadChangeEventBody& body = aEvent.body();
+
+  if (gamepad) {
+    switch (body.type()) {
+      case GamepadChangeEventBody::TGamepadButtonInformation:
+      {
+        const GamepadButtonInformation& a = body.get_GamepadButtonInformation();
+        gamepad->SetButton(a.button(), a.pressed(), a.touched(), a.value());
+        break;
+      }
+      case GamepadChangeEventBody::TGamepadAxisInformation:
+      {
+        const GamepadAxisInformation& a = body.get_GamepadAxisInformation();
+        gamepad->SetAxis(a.axis(), a.value());
+        break;
+      }
+      case GamepadChangeEventBody::TGamepadPoseInformation:
+      {
+        const GamepadPoseInformation& a = body.get_GamepadPoseInformation();
+        gamepad->SetPose(a.pose_state());
+        break;
+      }
+      case GamepadChangeEventBody::TGamepadHandInformation:
+      {
+        const GamepadHandInformation& a = body.get_GamepadHandInformation();
+        gamepad->SetHand(a.hand());
+        break;
+      }
+      default:
+        MOZ_ASSERT(false);
+        break;
+    }
+    ret = true;
+  }
+
+  if (aWindow && firstTime) {
+    FireConnectionEvent(aWindow, gamepad, true);
+  }
+
+  return ret;
 }
 
 already_AddRefed<Promise>
@@ -674,25 +648,29 @@ GamepadManager::VibrateHaptic(uint32_t aControllerIdx, uint32_t aHapticIndex,
                               double aIntensity, double aDuration,
                               nsIGlobalObject* aGlobal, ErrorResult& aRv)
 {
+  const char* kGamepadHapticEnabledPref = "dom.gamepad.haptic_feedback.enabled";
   RefPtr<Promise> promise = Promise::Create(aGlobal, aRv);
   if (NS_WARN_IF(aRv.Failed())) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
   }
-
-  if (aControllerIdx >= VR_GAMEPAD_IDX_OFFSET) {
-    uint32_t index = aControllerIdx - VR_GAMEPAD_IDX_OFFSET;
-    gfx::VRManagerChild* vm = gfx::VRManagerChild::Get();
-    vm->AddPromise(mPromiseID, promise);
-    vm->SendVibrateHaptic(index, aHapticIndex,
-                          aIntensity, aDuration,
-                          mPromiseID);
-  } else {
-    for (const auto& channelChild: mChannelChildren) {
-      channelChild->AddPromise(mPromiseID, promise);
-      channelChild->SendVibrateHaptic(aControllerIdx, aHapticIndex,
-                                      aIntensity, aDuration,
-                                      mPromiseID);
+  if (Preferences::GetBool(kGamepadHapticEnabledPref)) {
+    if (aControllerIdx >= VR_GAMEPAD_IDX_OFFSET) {
+      if (gfx::VRManagerChild::IsCreated()) {
+        const uint32_t index = aControllerIdx - VR_GAMEPAD_IDX_OFFSET;
+        gfx::VRManagerChild* vm = gfx::VRManagerChild::Get();
+        vm->AddPromise(mPromiseID, promise);
+        vm->SendVibrateHaptic(index, aHapticIndex,
+                              aIntensity, aDuration,
+                              mPromiseID);
+      }
+    } else {
+      for (const auto& channelChild: mChannelChildren) {
+        channelChild->AddPromise(mPromiseID, promise);
+        channelChild->SendVibrateHaptic(aControllerIdx, aHapticIndex,
+                                        aIntensity, aDuration,
+                                        mPromiseID);
+      }
     }
   }
 
@@ -703,49 +681,25 @@ GamepadManager::VibrateHaptic(uint32_t aControllerIdx, uint32_t aHapticIndex,
 void
 GamepadManager::StopHaptics()
 {
+  const char* kGamepadHapticEnabledPref = "dom.gamepad.haptic_feedback.enabled";
+  if (!Preferences::GetBool(kGamepadHapticEnabledPref)) {
+    return;
+  }
+
   for (auto iter = mGamepads.Iter(); !iter.Done(); iter.Next()) {
     const uint32_t gamepadIndex = iter.UserData()->HashKey();
     if (gamepadIndex >= VR_GAMEPAD_IDX_OFFSET) {
-      const uint32_t index = gamepadIndex - VR_GAMEPAD_IDX_OFFSET;
-      gfx::VRManagerChild* vm = gfx::VRManagerChild::Get();
-      vm->SendStopVibrateHaptic(index);
+      if (gfx::VRManagerChild::IsCreated()) {
+        const uint32_t index = gamepadIndex - VR_GAMEPAD_IDX_OFFSET;
+        gfx::VRManagerChild* vm = gfx::VRManagerChild::Get();
+        vm->SendStopVibrateHaptic(index);
+      }
     } else {
       for (auto& channelChild : mChannelChildren) {
         channelChild->SendStopVibrateHaptic(gamepadIndex);
       }
     }
   }
-}
-
-//Override nsIIPCBackgroundChildCreateCallback
-void
-GamepadManager::ActorCreated(PBackgroundChild *aActor)
-{
-  MOZ_ASSERT(aActor);
-  GamepadEventChannelChild *child = new GamepadEventChannelChild();
-  PGamepadEventChannelChild *initedChild =
-    aActor->SendPGamepadEventChannelConstructor(child);
-  if (NS_WARN_IF(!initedChild)) {
-    ActorFailed();
-    return;
-  }
-  MOZ_ASSERT(initedChild == child);
-  child->SendGamepadListenerAdded();
-  mChannelChildren.AppendElement(child);
-
-#if defined(XP_WIN) || defined(XP_MACOSX) || defined(XP_LINUX)
-  // Construct VRManagerChannel and ask adding the connected
-  // VR controllers to GamepadManager
-  gfx::VRManagerChild* vm = gfx::VRManagerChild::Get();
-  vm->SendControllerListenerAdded();
-#endif
-}
-
-//Override nsIIPCBackgroundChildCreateCallback
-void
-GamepadManager::ActorFailed()
-{
-  MOZ_CRASH("Gamepad IPC actor create failed!");
 }
 
 } // namespace dom

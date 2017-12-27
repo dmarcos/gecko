@@ -11,6 +11,8 @@
 
 #include "ds/LifoAlloc.h"
 
+#include "js/HashTable.h"
+
 #include "vm/Printer.h"
 
 struct JSCompartment;
@@ -28,16 +30,18 @@ class LCovCompartment;
 class LCovSource
 {
   public:
-    explicit LCovSource(LifoAlloc* alloc, JSObject* sso);
+    LCovSource(LifoAlloc* alloc, const char* name);
+    LCovSource(LCovSource&& src);
+    ~LCovSource();
 
-    // Whether the given script source object matches this LCovSource.
-    bool match(JSObject* sso) const {
-        return sso == source_;
+    // Whether the given script name matches this LCovSource.
+    bool match(const char* name) const {
+        return strcmp(name_, name) == 0;
     }
 
     // Whether the current source is complete and if it can be flushed.
     bool isComplete() const {
-        return hasFilename_ && hasTopLevelScript_;
+        return hasTopLevelScript_;
     }
 
     // Iterate over the bytecode and collect the lcov output based on the
@@ -48,19 +52,13 @@ class LCovSource
     // the runtime code coverage trace file.
     void exportInto(GenericPrinter& out) const;
 
-    // Write the script name in out.
-    bool writeSourceFilename(ScriptSourceObject* sso);
-
   private:
     // Write the script name in out.
     bool writeScriptName(LSprinter& out, JSScript* script);
 
   private:
-    // Weak pointer of the Script Source Object used by the current source.
-    JSObject *source_;
-
-    // LifoAlloc string which hold the filename of the source.
-    LSprinter outSF_;
+    // Name of the source file.
+    const char* name_;
 
     // LifoAlloc strings which hold the filename of each function as
     // well as the number of hits for each function.
@@ -74,13 +72,16 @@ class LCovSource
     size_t numBranchesFound_;
     size_t numBranchesHit_;
 
-    // LifoAlloc string which hold lines statistics.
-    LSprinter outDA_;
+    // Holds lines statistics. When processing a line hit count, the hit count
+    // is added to any hit count already in the hash map so that we handle
+    // lines that belong to more than one JSScript or function in the same
+    // source file.
+    HashMap<size_t, uint64_t, DefaultHasher<size_t>, SystemAllocPolicy> linesHit_;
     size_t numLinesInstrumented_;
     size_t numLinesHit_;
+    size_t maxLineHit_;
 
     // Status flags.
-    bool hasFilename_ : 1;
     bool hasTopLevelScript_ : 1;
 };
 
@@ -90,10 +91,7 @@ class LCovCompartment
     LCovCompartment();
 
     // Collect code coverage information for the given source.
-    void collectCodeCoverageInfo(JSCompartment* comp, JSObject* sso, JSScript* topLevel);
-
-    // Create an ebtry for the current ScriptSourceObject.
-    void collectSourceFile(JSCompartment* comp, ScriptSourceObject* sso);
+    void collectCodeCoverageInfo(JSCompartment* comp, JSScript* topLevel, const char* name);
 
     // Write the Lcov output in a buffer, such as the one associated with
     // the runtime code coverage trace file.
@@ -104,7 +102,7 @@ class LCovCompartment
     bool writeCompartmentName(JSCompartment* comp);
 
     // Return the LCovSource entry which matches the given ScriptSourceObject.
-    LCovSource* lookupOrAdd(JSCompartment* comp, JSObject* sso);
+    LCovSource* lookupOrAdd(JSCompartment* comp, const char* name);
 
   private:
     typedef mozilla::Vector<LCovSource, 16, LifoAllocPolicy<Fallible>> LCovSourceVector;

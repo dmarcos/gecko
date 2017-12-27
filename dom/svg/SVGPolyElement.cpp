@@ -54,12 +54,12 @@ SVGPolyElement::AnimatedPoints()
 // nsIContent methods
 
 NS_IMETHODIMP_(bool)
-SVGPolyElement::IsAttributeMapped(const nsIAtom* name) const
+SVGPolyElement::IsAttributeMapped(const nsAtom* name) const
 {
   static const MappedAttributeEntry* const map[] = {
     sMarkersMap
   };
-  
+
   return FindAttributeDependence(name, map) ||
     SVGPolyElementBase::IsAttributeMapped(name);
 }
@@ -77,7 +77,7 @@ SVGPolyElement::HasValidDimensions() const
 // SVGGeometryElement methods
 
 bool
-SVGPolyElement::AttributeDefinesGeometry(const nsIAtom *aName)
+SVGPolyElement::AttributeDefinesGeometry(const nsAtom *aName)
 {
   if (aName == nsGkAtoms::points)
     return true;

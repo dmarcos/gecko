@@ -12,6 +12,7 @@
 #include "nsAutoPtr.h"
 #include "nsCollationCID.h"
 #include "nsEmbedCID.h"
+#include "nsExceptionHandler.h"
 #include "nsThreadUtils.h"
 #include "mozStoragePrivateHelpers.h"
 #include "nsIXPConnect.h"
@@ -24,20 +25,14 @@
 #include "mozIStoragePendingStatement.h"
 
 #include "sqlite3.h"
+#include "mozilla/AutoSQLiteLifetime.h"
 
-#ifdef SQLITE_OS_WIN
+#ifdef XP_WIN
 // "windows.h" was included and it can #define lots of things we care about...
 #undef CompareString
 #endif
 
 #include "nsIPromptService.h"
-
-#ifdef MOZ_STORAGE_MEMORY
-#  include "mozmemory.h"
-#  ifdef MOZ_DMD
-#    include "DMD.h"
-#  endif
-#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 //// Defines
@@ -129,9 +124,11 @@ Service::CollectReports(nsIHandleReportCallback *aHandleReport,
       RefPtr<Connection> &conn = connections[i];
 
       // Someone may have closed the Connection, in which case we skip it.
-      bool isReady;
-      (void)conn->GetConnectionReady(&isReady);
-      if (!isReady) {
+      // Note that we have consumers of the synchronous API that are off the
+      // main-thread, like the DOM Cache and IndexedDB, and as such we must be
+      // sure that we have a connection.
+      MutexAutoLock lockedAsyncScope(conn->sharedAsyncExecutionMutex);
+      if (!conn->connectionReady()) {
           continue;
       }
 
@@ -193,12 +190,11 @@ NS_IMPL_ISUPPORTS(
 
 Service *Service::gService = nullptr;
 
-Service *
+already_AddRefed<Service>
 Service::getSingleton()
 {
   if (gService) {
-    NS_ADDREF(gService);
-    return gService;
+    return do_AddRef(gService);
   }
 
   // Ensure that we are using the same version of SQLite that we compiled with
@@ -222,34 +218,14 @@ Service::getSingleton()
   // The first reference to the storage service must be obtained on the
   // main thread.
   NS_ENSURE_TRUE(NS_IsMainThread(), nullptr);
-  gService = new Service();
-  if (gService) {
-    NS_ADDREF(gService);
-    if (NS_FAILED(gService->initialize()))
-      NS_RELEASE(gService);
+  RefPtr<Service> service = new Service();
+  gService = service.get();
+  if (NS_FAILED(service->initialize())) {
+    gService = nullptr;
+    return nullptr;
   }
 
-  return gService;
-}
-
-nsIXPConnect *Service::sXPConnect = nullptr;
-
-// static
-already_AddRefed<nsIXPConnect>
-Service::getXPConnect()
-{
-  NS_PRECONDITION(NS_IsMainThread(),
-                  "Must only get XPConnect on the main thread!");
-  NS_PRECONDITION(gService,
-                  "Can not get XPConnect without an instance of our service!");
-
-  // If we've been shutdown, sXPConnect will be null.  To prevent leaks, we do
-  // not cache the service after this point.
-  nsCOMPtr<nsIXPConnect> xpc(sXPConnect);
-  if (!xpc)
-    xpc = do_GetService(nsIXPConnect::GetCID());
-  NS_ASSERTION(xpc, "Could not get XPConnect!");
-  return xpc.forget();
+  return service.forget();
 }
 
 int32_t Service::sSynchronousPref;
@@ -280,15 +256,6 @@ Service::~Service()
   if (rc != SQLITE_OK)
     NS_WARNING("Failed to unregister sqlite vfs wrapper.");
 
-  // Shutdown the sqlite3 API.  Warn if shutdown did not turn out okay, but
-  // there is nothing actionable we can do in that case.
-  rc = ::sqlite3_shutdown();
-  if (rc != SQLITE_OK)
-    NS_WARNING("sqlite3 did not shutdown cleanly.");
-
-  DebugOnly<bool> shutdownObserved = !sXPConnect;
-  NS_ASSERTION(shutdownObserved, "Shutdown was not observed!");
-
   gService = nullptr;
   delete mSqliteVFS;
   mSqliteVFS = nullptr;
@@ -309,26 +276,38 @@ Service::unregisterConnection(Connection *aConnection)
   // alive.  So ensure that Service is destroyed only after the Connection is
   // cleanly unregistered and destroyed.
   RefPtr<Service> kungFuDeathGrip(this);
+  RefPtr<Connection> forgettingRef;
   {
     mRegistrationMutex.AssertNotCurrentThreadOwns();
     MutexAutoLock mutex(mRegistrationMutex);
 
     for (uint32_t i = 0 ; i < mConnections.Length(); ++i) {
       if (mConnections[i] == aConnection) {
-        nsCOMPtr<nsIThread> thread = mConnections[i]->threadOpenedOn;
-
-        // Ensure the connection is released on its opening thread.  Note, we
-        // must use .forget().take() so that we can manually cast to an
-        // unambiguous nsISupports type.
-        NS_ProxyRelease(thread, mConnections[i].forget());
-
+        // Because dropping the final reference can potentially result in
+        // spinning a nested event loop if the connection was not properly
+        // shutdown, we want to do that outside this loop so that we can finish
+        // mutating the array and drop our mutex.
+        forgettingRef = mConnections[i].forget();
         mConnections.RemoveElementAt(i);
-        return;
+        break;
       }
     }
-
-    MOZ_ASSERT_UNREACHABLE("Attempt to unregister unknown storage connection!");
   }
+
+  MOZ_ASSERT(forgettingRef,
+             "Attempt to unregister unknown storage connection!");
+
+  // Ensure the connection is released on its opening thread.  We explicitly use
+  // aAlwaysDispatch=false because at the time of writing this, LocalStorage's
+  // StorageDBThread uses a hand-rolled PRThread implementation that cannot
+  // handle us dispatching events at it during shutdown.  However, it is
+  // arguably also desirable for callers to not be aware of our connection
+  // tracking mechanism.  And by synchronously dropping the reference (when
+  // on the correct thread), this avoids surprises for the caller and weird
+  // shutdown edge cases.
+  nsCOMPtr<nsIThread> thread = forgettingRef->threadOpenedOn;
+  NS_ProxyRelease(
+    "storage::Service::mConnections", thread, forgettingRef.forget(), false);
 }
 
 void
@@ -348,6 +327,8 @@ Service::minimizeMemory()
 
   for (uint32_t i = 0; i < connections.Length(); i++) {
     RefPtr<Connection> conn = connections[i];
+    // For non-main-thread owning/opening threads, we may be racing against them
+    // closing their connection or their thread.  That's okay, see below.
     if (!conn->connectionReady())
       continue;
 
@@ -365,145 +346,35 @@ Service::minimizeMemory()
       MOZ_ASSERT(NS_SUCCEEDED(rv), "Should have purged sqlite caches");
     } else if (NS_SUCCEEDED(conn->threadOpenedOn->IsOnCurrentThread(&onOpenedThread)) &&
                onOpenedThread) {
-      // We are on the opener thread, so we can just proceed.
-      conn->ExecuteSimpleSQL(shrinkPragma);
+      if (conn->isAsyncExecutionThreadAvailable()) {
+        nsCOMPtr<mozIStoragePendingStatement> ps;
+        DebugOnly<nsresult> rv =
+          conn->ExecuteSimpleSQLAsync(shrinkPragma, nullptr, getter_AddRefs(ps));
+        MOZ_ASSERT(NS_SUCCEEDED(rv), "Should have purged sqlite caches");
+      } else {
+        conn->ExecuteSimpleSQL(shrinkPragma);
+      }
     } else {
       // We are on the wrong thread, the query should be executed on the
       // opener thread, so we must dispatch to it.
+      // It's possible the connection is already closed or will be closed by the
+      // time our runnable runs.  ExecuteSimpleSQL will safely return with a
+      // failure in that case.  If the thread is shutting down or shut down, the
+      // dispatch will fail and that's okay.
       nsCOMPtr<nsIRunnable> event =
         NewRunnableMethod<const nsCString>(
+          "Connection::ExecuteSimpleSQL",
           conn, &Connection::ExecuteSimpleSQL, shrinkPragma);
-      conn->threadOpenedOn->Dispatch(event, NS_DISPATCH_NORMAL);
+      Unused << conn->threadOpenedOn->Dispatch(event, NS_DISPATCH_NORMAL);
     }
   }
 }
 
-void
-Service::shutdown()
-{
-  NS_IF_RELEASE(sXPConnect);
-}
-
 sqlite3_vfs *ConstructTelemetryVFS();
-
-#ifdef MOZ_STORAGE_MEMORY
-
-namespace {
-
-// By default, SQLite tracks the size of all its heap blocks by adding an extra
-// 8 bytes at the start of the block to hold the size.  Unfortunately, this
-// causes a lot of 2^N-sized allocations to be rounded up by jemalloc
-// allocator, wasting memory.  For example, a request for 1024 bytes has 8
-// bytes added, becoming a request for 1032 bytes, and jemalloc rounds this up
-// to 2048 bytes, wasting 1012 bytes.  (See bug 676189 for more details.)
-//
-// So we register jemalloc as the malloc implementation, which avoids this
-// 8-byte overhead, and thus a lot of waste.  This requires us to provide a
-// function, sqliteMemRoundup(), which computes the actual size that will be
-// allocated for a given request.  SQLite uses this function before all
-// allocations, and may be able to use any excess bytes caused by the rounding.
-//
-// Note: the wrappers for malloc, realloc and moz_malloc_usable_size are
-// necessary because the sqlite_mem_methods type signatures differ slightly
-// from the standard ones -- they use int instead of size_t.  But we don't need
-// a wrapper for free.
-
-#ifdef MOZ_DMD
-
-// sqlite does its own memory accounting, and we use its numbers in our memory
-// reporters.  But we don't want sqlite's heap blocks to show up in DMD's
-// output as unreported, so we mark them as reported when they're allocated and
-// mark them as unreported when they are freed.
-//
-// In other words, we are marking all sqlite heap blocks as reported even
-// though we're not reporting them ourselves.  Instead we're trusting that
-// sqlite is fully and correctly accounting for all of its heap blocks via its
-// own memory accounting.  Well, we don't have to trust it entirely, because
-// it's easy to keep track (while doing this DMD-specific marking) of exactly
-// how much memory SQLite is using.  And we can compare that against what
-// SQLite reports it is using.
-
-MOZ_DEFINE_MALLOC_SIZE_OF_ON_ALLOC(SqliteMallocSizeOfOnAlloc)
-MOZ_DEFINE_MALLOC_SIZE_OF_ON_FREE(SqliteMallocSizeOfOnFree)
-
-#endif
-
-static void *sqliteMemMalloc(int n)
-{
-  void* p = ::malloc(n);
-#ifdef MOZ_DMD
-  gSqliteMemoryUsed += SqliteMallocSizeOfOnAlloc(p);
-#endif
-  return p;
-}
-
-static void sqliteMemFree(void *p)
-{
-#ifdef MOZ_DMD
-  gSqliteMemoryUsed -= SqliteMallocSizeOfOnFree(p);
-#endif
-  ::free(p);
-}
-
-static void *sqliteMemRealloc(void *p, int n)
-{
-#ifdef MOZ_DMD
-  gSqliteMemoryUsed -= SqliteMallocSizeOfOnFree(p);
-  void *pnew = ::realloc(p, n);
-  if (pnew) {
-    gSqliteMemoryUsed += SqliteMallocSizeOfOnAlloc(pnew);
-  } else {
-    // realloc failed;  undo the SqliteMallocSizeOfOnFree from above
-    gSqliteMemoryUsed += SqliteMallocSizeOfOnAlloc(p);
-  }
-  return pnew;
-#else
-  return ::realloc(p, n);
-#endif
-}
-
-static int sqliteMemSize(void *p)
-{
-  return ::moz_malloc_usable_size(p);
-}
-
-static int sqliteMemRoundup(int n)
-{
-  n = malloc_good_size(n);
-
-  // jemalloc can return blocks of size 2 and 4, but SQLite requires that all
-  // allocations be 8-aligned.  So we round up sub-8 requests to 8.  This
-  // wastes a small amount of memory but is obviously safe.
-  return n <= 8 ? 8 : n;
-}
-
-static int sqliteMemInit(void *p)
-{
-  return 0;
-}
-
-static void sqliteMemShutdown(void *p)
-{
-}
-
-const sqlite3_mem_methods memMethods = {
-  &sqliteMemMalloc,
-  &sqliteMemFree,
-  &sqliteMemRealloc,
-  &sqliteMemSize,
-  &sqliteMemRoundup,
-  &sqliteMemInit,
-  &sqliteMemShutdown,
-  nullptr
-};
-
-} // namespace
-
-#endif  // MOZ_STORAGE_MEMORY
+const char *GetVFSName();
 
 static const char* sObserverTopics[] = {
   "memory-pressure",
-  "xpcom-shutdown",
   "xpcom-shutdown-threads"
 };
 
@@ -512,36 +383,19 @@ Service::initialize()
 {
   MOZ_ASSERT(NS_IsMainThread(), "Must be initialized on the main thread");
 
-  int rc;
-
-#ifdef MOZ_STORAGE_MEMORY
-  rc = ::sqlite3_config(SQLITE_CONFIG_MALLOC, &memMethods);
-  if (rc != SQLITE_OK)
-    return convertResultCode(rc);
-#endif
-
-  // TODO (bug 1191405): do not preallocate the connections caches until we
-  // have figured the impact on our consumers and memory.
-  sqlite3_config(SQLITE_CONFIG_PAGECACHE, NULL, 0, 0);
-
-  // Explicitly initialize sqlite3.  Although this is implicitly called by
-  // various sqlite3 functions (and the sqlite3_open calls in our case),
-  // the documentation suggests calling this directly.  So we do.
-  rc = ::sqlite3_initialize();
+  int rc = AutoSQLiteLifetime::getInitResult();
   if (rc != SQLITE_OK)
     return convertResultCode(rc);
 
   mSqliteVFS = ConstructTelemetryVFS();
   if (mSqliteVFS) {
-    rc = sqlite3_vfs_register(mSqliteVFS, 1);
+    rc = sqlite3_vfs_register(mSqliteVFS, 0);
     if (rc != SQLITE_OK)
       return convertResultCode(rc);
   } else {
     NS_WARNING("Failed to register telemetry VFS");
   }
 
-  // Register for xpcom-shutdown so we can cleanup after ourselves.  The
-  // observer service can only be used on the main thread.
   nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
   NS_ENSURE_TRUE(os, NS_ERROR_FAILURE);
 
@@ -551,10 +405,6 @@ Service::initialize()
       return rv;
     }
   }
-
-  // We cache XPConnect for our language helpers.  XPConnect can only be
-  // used on the main thread.
-  (void)CallGetService(nsIXPConnect::GetCID(), &sXPConnect);
 
   // We need to obtain the toolkit.storage.synchronous preferences on the main
   // thread because the preference service can only be accessed there.  This
@@ -662,7 +512,8 @@ public:
                     nsIFile* aStorageFile,
                     int32_t aGrowthIncrement,
                     mozIStorageCompletionCallback* aCallback)
-    : mConnection(aConnection)
+    : Runnable("storage::AsyncInitDatabase")
+    , mConnection(aConnection)
     , mStorageFile(aStorageFile)
     , mGrowthIncrement(aGrowthIncrement)
     , mCallback(aCallback)
@@ -673,17 +524,8 @@ public:
   NS_IMETHOD Run() override
   {
     MOZ_ASSERT(!NS_IsMainThread());
-    nsresult rv = mStorageFile ? mConnection->initialize(mStorageFile)
-                               : mConnection->initialize();
+    nsresult rv = mConnection->initializeOnAsyncThread(mStorageFile);
     if (NS_FAILED(rv)) {
-      nsCOMPtr<nsIRunnable> closeRunnable =
-        NewRunnableMethod<mozIStorageCompletionCallback*>(
-          mConnection.get(),
-          &Connection::AsyncClose,
-          nullptr);
-      MOZ_ASSERT(closeRunnable);
-      MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(closeRunnable));
-
       return DispatchResult(rv, nullptr);
     }
 
@@ -707,13 +549,16 @@ private:
 
   ~AsyncInitDatabase()
   {
-    NS_ReleaseOnMainThread(mStorageFile.forget());
-    NS_ReleaseOnMainThread(mConnection.forget());
+    NS_ReleaseOnMainThreadSystemGroup(
+      "AsyncInitDatabase::mStorageFile", mStorageFile.forget());
+    NS_ReleaseOnMainThreadSystemGroup(
+      "AsyncInitDatabase::mConnection", mConnection.forget());
 
     // Generally, the callback will be released by CallbackComplete.
     // However, if for some reason Run() is not executed, we still
     // need to ensure that it is released here.
-    NS_ReleaseOnMainThread(mCallback.forget());
+    NS_ReleaseOnMainThreadSystemGroup(
+      "AsyncInitDatabase::mCallback", mCallback.forget());
   }
 
   RefPtr<Connection> mConnection;
@@ -921,9 +766,14 @@ Service::Observe(nsISupports *, const char *aTopic, const char16_t *)
 {
   if (strcmp(aTopic, "memory-pressure") == 0) {
     minimizeMemory();
-  } else if (strcmp(aTopic, "xpcom-shutdown") == 0) {
-    shutdown();
   } else if (strcmp(aTopic, "xpcom-shutdown-threads") == 0) {
+    // The Service is kept alive by our strong observer references and
+    // references held by Connection instances.  Since we're about to remove the
+    // former and then wait for the latter ones to go away, it behooves us to
+    // hold a strong reference to ourselves so our calls to getConnections() do
+    // not happen on a deleted object.
+    RefPtr<Service> kungFuDeathGrip = this;
+
     nsCOMPtr<nsIObserverService> os =
       mozilla::services::GetObserverService();
 
@@ -931,29 +781,32 @@ Service::Observe(nsISupports *, const char *aTopic, const char16_t *)
       (void)os->RemoveObserver(this, sObserverTopics[i]);
     }
 
-    bool anyOpen = false;
-    do {
-      nsTArray<RefPtr<Connection> > connections;
+    SpinEventLoopUntil([&]() -> bool {
+      // We must wait until all the closing connections are closed.
+      nsTArray<RefPtr<Connection>> connections;
       getConnections(connections);
-      anyOpen = false;
-      for (uint32_t i = 0; i < connections.Length(); i++) {
-        RefPtr<Connection> &conn = connections[i];
+      for (auto& conn : connections) {
         if (conn->isClosing()) {
-          anyOpen = true;
-          break;
+          return false;
         }
       }
-      if (anyOpen) {
-        nsCOMPtr<nsIThread> thread = do_GetCurrentThread();
-        NS_ProcessNextEvent(thread);
-      }
-    } while (anyOpen);
+      return true;
+    });
 
     if (gShutdownChecks == SCM_CRASH) {
       nsTArray<RefPtr<Connection> > connections;
       getConnections(connections);
       for (uint32_t i = 0, n = connections.Length(); i < n; i++) {
         if (!connections[i]->isClosed()) {
+          // getFilename is only the leaf name for the database file,
+          // so it shouldn't contain privacy-sensitive information.
+          CrashReporter::AnnotateCrashReport(
+            NS_LITERAL_CSTRING("StorageConnectionNotClosed"),
+            connections[i]->getFilename());
+#ifdef DEBUG
+          printf_stderr("Storage connection not closed: %s",
+                        connections[i]->getFilename().get());
+#endif
           MOZ_CRASH();
         }
       }

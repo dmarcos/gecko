@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,15 +14,18 @@ namespace {
 class GamepadUpdateRunnable final : public Runnable
 {
  public:
-  explicit GamepadUpdateRunnable(const GamepadChangeEvent& aGamepadEvent)
-             : mEvent(aGamepadEvent) {}
-  NS_IMETHOD Run() override
-  {
-    RefPtr<GamepadManager> svc(GamepadManager::GetService());
-    if (svc) {
-      svc->Update(mEvent);
-    }
-    return NS_OK;
+   explicit GamepadUpdateRunnable(const GamepadChangeEvent& aGamepadEvent)
+     : Runnable("dom::GamepadUpdateRunnable")
+     , mEvent(aGamepadEvent)
+   {
+   }
+   NS_IMETHOD Run() override
+   {
+     RefPtr<GamepadManager> svc(GamepadManager::GetService());
+     if (svc) {
+       svc->Update(mEvent);
+     }
+     return NS_OK;
   }
  protected:
   GamepadChangeEvent mEvent;

@@ -13,21 +13,23 @@
 #include "OmxPlatformLayer.h"
 
 #include "mozilla/IntegerPrintfMacros.h"
-#include "mozilla/SizePrintfMacros.h"
 
 #ifdef LOG
 #undef LOG
 #undef LOGL
 #endif
 
-#define LOG(arg, ...) MOZ_LOG(sPDMLog, mozilla::LogLevel::Debug, ("OmxDataDecoder(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
+#define LOG(arg, ...)                                                          \
+  DDMOZ_LOG(                                                                   \
+    sPDMLog, mozilla::LogLevel::Debug, "::%s: " arg, __func__, ##__VA_ARGS__)
 
-#define LOGL(arg, ...)                                                     \
-  {                                                                        \
-    void* p = self;                                              \
-    MOZ_LOG(sPDMLog, mozilla::LogLevel::Debug,                         \
-            ("OmxDataDecoder(%p)::%s: " arg, p, __func__, ##__VA_ARGS__)); \
-  }
+#define LOGL(arg, ...)                                                         \
+  DDMOZ_LOGEX(self.get(),                                                      \
+              sPDMLog,                                                         \
+              mozilla::LogLevel::Debug,                                        \
+              "::%s: " arg,                                                    \
+              __func__,                                                        \
+              ##__VA_ARGS__)
 
 #define CHECK_OMX_ERR(err)     \
   if (err != OMX_ErrorNone) {  \
@@ -99,7 +101,7 @@ protected:
 
 OmxDataDecoder::OmxDataDecoder(const TrackInfo& aTrackInfo,
                                layers::ImageContainer* aImageContainer)
-  : mOmxTaskQueue(CreateMediaDecodeTaskQueue())
+  : mOmxTaskQueue(CreateMediaDecodeTaskQueue("OmxDataDecoder::mOmxTaskQueue"))
   , mImageContainer(aImageContainer)
   , mWatchManager(this, mOmxTaskQueue)
   , mOmxState(OMX_STATETYPE::OMX_StateInvalid, "OmxDataDecoder::mOmxState")
@@ -205,9 +207,9 @@ OmxDataDecoder::Drain()
   LOG("");
 
   RefPtr<OmxDataDecoder> self = this;
-  return InvokeAsync(mOmxTaskQueue, __func__, [self, this]() {
-    RefPtr<DecodePromise> p = mDrainPromise.Ensure(__func__);
-    SendEosBuffer();
+  return InvokeAsync(mOmxTaskQueue, __func__, [self]() {
+    RefPtr<DecodePromise> p = self->mDrainPromise.Ensure(__func__);
+    self->SendEosBuffer();
     return p;
   });
 }
@@ -241,8 +243,9 @@ OmxDataDecoder::DoAsyncShutdown()
              LOGL("DoAsyncShutdown: flush complete");
              return self->mOmxLayer->SendCommand(OMX_CommandStateSet, OMX_StateIdle, nullptr);
            },
-           [self] () {
+           [self] (const OmxCommandFailureHolder& aError) {
              self->mOmxLayer->Shutdown();
+             return OmxCommandPromise::CreateAndReject(aError, __func__);
            })
     ->Then(mOmxTaskQueue, __func__,
            [self] () -> RefPtr<OmxCommandPromise> {
@@ -263,8 +266,9 @@ OmxDataDecoder::DoAsyncShutdown()
 
              return p;
            },
-           [self] () {
+           [self] (const OmxCommandFailureHolder& aError) {
              self->mOmxLayer->Shutdown();
+             return OmxCommandPromise::CreateAndReject(aError, __func__);
            })
     ->Then(mOmxTaskQueue, __func__,
            [self] () {
@@ -299,8 +303,8 @@ OmxDataDecoder::FillBufferDone(BufferData* aData)
   MOZ_ASSERT(!aData || aData->mStatus == BufferData::BufferStatus::OMX_CLIENT);
 
   // Don't output sample when flush or shutting down, especially for video
-  // decoded frame. Because video decoded frame has a promise in BufferData
-  // waiting for layer to resolve it via recycle callback on Gonk, if other
+  // decoded frame. Because video decoded frame can have a promise in
+  // BufferData waiting for layer to resolve it via recycle callback, if other
   // module doesn't send it to layer, it will cause a unresolved promise and
   // waiting for resolve infinitely.
   if (mFlushing || mShuttingDown) {
@@ -335,8 +339,7 @@ OmxDataDecoder::Output(BufferData* aData)
 
   if (isPlatformData) {
     // If the MediaData is platform dependnet data, it's mostly a kind of
-    // limited resource, for example, GraphicBuffer on Gonk. So we use promise
-    // to notify when the resource is free.
+    // limited resource, so we use promise to notify when the resource is free.
     aData->mStatus = BufferData::BufferStatus::OMX_CLIENT_OUTPUT;
 
     MOZ_RELEASE_ASSERT(aData->mPromise.IsEmpty());
@@ -384,18 +387,21 @@ OmxDataDecoder::EmptyBufferDone(BufferData* aData)
     mCheckingInputExhausted = true;
 
     RefPtr<OmxDataDecoder> self = this;
-    nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction([self, this]() {
-      mCheckingInputExhausted = false;
+    nsCOMPtr<nsIRunnable> r =
+      NS_NewRunnableFunction("OmxDataDecoder::EmptyBufferDone", [self, this]() {
+        mCheckingInputExhausted = false;
 
-      if (mMediaRawDatas.Length()) {
-        return;
-      }
+        if (mMediaRawDatas.Length()) {
+          return;
+        }
 
-      mDecodePromise.ResolveIfExists(mDecodedData, __func__);
-      mDecodedData.Clear();
-    });
+        mDecodePromise.ResolveIfExists(mDecodedData, __func__);
+        mDecodedData.Clear();
+      });
 
-    mOmxTaskQueue->Dispatch(r.forget());
+    nsresult rv = mOmxTaskQueue->Dispatch(r.forget());
+    MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+    Unused << rv;
   }
 }
 
@@ -408,8 +414,8 @@ OmxDataDecoder::EmptyBufferFailure(OmxBufferFailureHolder aFailureHolder)
 void
 OmxDataDecoder::NotifyError(OMX_ERRORTYPE aOmxError, const char* aLine, const MediaResult& aError)
 {
-  LOG("NotifyError %d (%" PRIu32 ") at %s", static_cast<int>(aOmxError),
-      static_cast<uint32_t>(aError.Code()), aLine);
+  LOG("NotifyError %d (%s) at %s", static_cast<int>(aOmxError),
+      aError.ErrorName().get(), aLine);
   mDecodedData.Clear();
   mDecodePromise.RejectIfExists(aError, __func__);
   mDrainPromise.RejectIfExists(aError, __func__);
@@ -445,7 +451,7 @@ OmxDataDecoder::FillAndEmptyBuffers()
     inbuf->mBuffer->nOffset = 0;
     inbuf->mBuffer->nFlags = inbuf->mBuffer->nAllocLen > data->Size() ?
                              OMX_BUFFERFLAG_ENDOFFRAME : 0;
-    inbuf->mBuffer->nTimeStamp = data->mTime;
+    inbuf->mBuffer->nTimeStamp = data->mTime.ToMicroseconds();
     if (data->Size()) {
       inbuf->mRawData = mMediaRawDatas[0];
     } else {
@@ -607,7 +613,7 @@ OmxDataDecoder::FillCodecConfigDataToOmx()
   if (mTrackInfo->IsAudio()) {
     csc = mTrackInfo->GetAsAudioInfo()->mCodecSpecificConfig;
   } else if (mTrackInfo->IsVideo()) {
-    csc = mTrackInfo->GetAsVideoInfo()->mCodecSpecificConfig;
+    csc = mTrackInfo->GetAsVideoInfo()->mExtraData;
   }
 
   MOZ_RELEASE_ASSERT(csc);
@@ -727,7 +733,7 @@ OmxDataDecoder::CollectBufferPromises(OMX_DIRTYPE aType)
     }
   }
 
-  LOG("CollectBufferPromises: type %d, total %" PRIuSIZE " promiese", aType, promises.Length());
+  LOG("CollectBufferPromises: type %d, total %zu promiese", aType, promises.Length());
   if (promises.Length()) {
     return OmxBufferPromise::All(mOmxTaskQueue, promises);
   }
@@ -786,8 +792,9 @@ OmxDataDecoder::PortSettingsChanged()
 
                return p;
              },
-             [self] () {
+             [self] (const OmxCommandFailureHolder& aError) {
                self->NotifyError(OMX_ErrorUndefined, __func__);
+               return OmxCommandPromise::CreateAndReject(aError, __func__);
              })
       ->Then(mOmxTaskQueue, __func__,
              [self] () {
@@ -994,16 +1001,22 @@ MediaDataHelper::CreateYUV420VideoData(BufferData* aBufferData)
     VideoData::CreateAndCopyData(info,
                                  mImageContainer,
                                  0, // Filled later by caller.
-                                 0, // Filled later by caller.
+                                 media::TimeUnit::Zero(), // Filled later by caller.
                                  media::TimeUnit::FromMicroseconds(1), // We don't know the duration.
                                  b,
                                  0, // Filled later by caller.
-                                 -1,
+                                 media::TimeUnit::FromMicroseconds(-1),
                                  info.ImageRect());
 
-  LOG("YUV420 VideoData: disp width %d, height %d, pic width %d, height %d, time %lld",
-      info.mDisplay.width, info.mDisplay.height, info.mImage.width,
-      info.mImage.height, aBufferData->mBuffer->nTimeStamp);
+  MOZ_LOG(sPDMLog,
+          mozilla::LogLevel::Debug,
+          ("YUV420 VideoData: disp width %d, height %d, pic width %d, height "
+           "%d, time %lld",
+           info.mDisplay.width,
+           info.mDisplay.height,
+           info.mImage.width,
+           info.mImage.height,
+           aBufferData->mBuffer->nTimeStamp));
 
   return data.forget();
 }

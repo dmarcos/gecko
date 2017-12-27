@@ -13,9 +13,11 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "E10SUtils",
-  "resource:///modules/E10SUtils.jsm");
+  "resource://gre/modules/E10SUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
   "resource://gre/modules/BrowserUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Utils",
+  "resource://gre/modules/sessionstore/Utils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
   "resource://gre/modules/PrivateBrowsingUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "AboutReader",
@@ -91,19 +93,6 @@ addMessageListener("MixedContent:ReenableProtection", function() {
   docShell.mixedContentChannel = null;
 });
 
-addMessageListener("SecondScreen:tab-mirror", function(message) {
-  if (!Services.prefs.getBoolPref("browser.casting.enabled")) {
-    return;
-  }
-  let app = SimpleServiceDiscovery.findAppForService(message.data.service);
-  if (app) {
-    let width = content.innerWidth;
-    let height = content.innerHeight;
-    let viewport = {cssWidth: width, cssHeight: height, width, height};
-    app.mirror(function() {}, content, viewport, function() {}, content);
-  }
-});
-
 var AboutHomeListener = {
   init(chromeGlobal) {
     chromeGlobal.addEventListener("AboutHomeLoad", this, false, true);
@@ -160,7 +149,7 @@ var AboutHomeListener = {
     addEventListener("click", this, true);
     addEventListener("pagehide", this, true);
 
-    sendAsyncMessage("AboutHome:MaybeShowAutoMigrationUndoNotification");
+    sendAsyncMessage("AboutHome:MaybeShowMigrateMessage");
     sendAsyncMessage("AboutHome:RequestUpdate");
   },
 
@@ -657,7 +646,7 @@ let PrerenderContentHandler = {
     }
   },
 
-  startPrerenderingDocument(aHref, aReferrer) {
+  startPrerenderingDocument(aHref, aReferrer, aTriggeringPrincipal) {
     // XXX: Make this constant a pref
     if (this._pending.length >= 2) {
       return;
@@ -668,6 +657,7 @@ let PrerenderContentHandler = {
       href: aHref.spec,
       referrer: aReferrer ? aReferrer.spec : null,
       id,
+      triggeringPrincipal: Utils.serializePrincipal(aTriggeringPrincipal),
     });
 
     this._pending.push({
@@ -729,9 +719,9 @@ var WebBrowserChrome = {
     return true;
   },
 
-  startPrerenderingDocument(aHref, aReferrer) {
+  startPrerenderingDocument(aHref, aReferrer, aTriggeringPrincipal) {
     if (PrerenderContentHandler.initialized) {
-      PrerenderContentHandler.startPrerenderingDocument(aHref, aReferrer);
+      PrerenderContentHandler.startPrerenderingDocument(aHref, aReferrer, aTriggeringPrincipal);
     }
   },
 
@@ -908,6 +898,7 @@ var RefreshBlocker = {
     this._filter = Cc["@mozilla.org/appshell/component/browser-status-filter;1"]
                      .createInstance(Ci.nsIWebProgress);
     this._filter.addProgressListener(this, Ci.nsIWebProgress.NOTIFY_ALL);
+    this._filter.target = tabEventTarget;
 
     let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
                               .getInterface(Ci.nsIWebProgress);
@@ -975,7 +966,6 @@ var RefreshBlocker = {
 
     let data = {
       URI: aURI.spec,
-      originCharset: aURI.originCharset,
       delay: aDelay,
       sameURI: aSameURI,
       outerWindowID,
@@ -1003,9 +993,9 @@ var RefreshBlocker = {
                           .getInterface(Ci.nsIDocShell)
                           .QueryInterface(Ci.nsIRefreshURI);
 
-      let URI = BrowserUtils.makeURI(data.URI, data.originCharset, null);
+      let URI = Services.io.newURI(data.URI);
 
-      refreshURI.forceRefreshURI(URI, data.delay, true);
+      refreshURI.forceRefreshURI(URI, null, data.delay, true);
     }
   },
 
@@ -1059,4 +1049,12 @@ addMessageListener("AllowScriptsToClose", () => {
 addEventListener("MozAfterPaint", function onFirstPaint() {
   removeEventListener("MozAfterPaint", onFirstPaint);
   sendAsyncMessage("Browser:FirstPaint");
+});
+
+// Remove this once bug 1397365 is fixed.
+addEventListener("MozAfterPaint", function onFirstNonBlankPaint() {
+  if (content.document.documentURI == "about:blank" && !content.opener)
+    return;
+  removeEventListener("MozAfterPaint", onFirstNonBlankPaint);
+  sendAsyncMessage("Browser:FirstNonBlankPaint");
 });

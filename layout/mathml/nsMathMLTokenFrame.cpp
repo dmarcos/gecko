@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -68,7 +69,7 @@ nsMathMLTokenFrame::MarkTextFramesAsTokenMathML()
        childFrame = childFrame->GetNextSibling()) {
     for (nsIFrame* childFrame2 = childFrame->PrincipalChildList().FirstChild();
          childFrame2; childFrame2 = childFrame2->GetNextSibling()) {
-      if (childFrame2->GetType() == nsGkAtoms::textFrame) {
+      if (childFrame2->IsTextFrame()) {
         childFrame2->AddStateBits(TEXT_IS_IN_TOKEN_MATHML);
         child = childFrame2;
         childCount++;
@@ -125,6 +126,8 @@ nsMathMLTokenFrame::Reflow(nsPresContext*          aPresContext,
                            nsReflowStatus&          aStatus)
 {
   MarkInReflow();
+  MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
+
   mPresentationData.flags &= ~NS_MATHML_ERROR;
 
   // initializations needed for empty markup like <mtag></mtag>
@@ -152,7 +155,7 @@ nsMathMLTokenFrame::Reflow(nsPresContext*          aPresContext,
   // place and size children
   FinalizeReflow(aReflowInput.mRenderingContext->GetDrawTarget(), aDesiredSize);
 
-  aStatus.Reset();
+  aStatus.Reset(); // This type of frame can't be split.
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowInput, aDesiredSize);
 }
 

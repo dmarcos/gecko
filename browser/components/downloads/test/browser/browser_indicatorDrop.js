@@ -6,28 +6,28 @@
 XPCOMUtils.defineLazyModuleGetter(this, "HttpServer",
   "resource://testing-common/httpd.js");
 
-registerCleanupFunction(function*() {
-  yield task_resetState();
-  yield task_clearHistory();
+registerCleanupFunction(async function() {
+  await task_resetState();
+  await PlacesUtils.history.clear();
 });
 
-add_task(function* test_indicatorDrop() {
+add_task(async function test_indicatorDrop() {
+  await SpecialPowers.pushPrefEnv({set: [["browser.download.autohideButton", false]]});
   let downloadButton = document.getElementById("downloads-button");
   ok(downloadButton, "download button present");
+  await promiseButtonShown(downloadButton.id);
 
-  let scriptLoader = Cc["@mozilla.org/moz/jssubscript-loader;1"].
-      getService(Ci.mozIJSSubScriptLoader);
   let EventUtils = {};
-  scriptLoader.loadSubScript("chrome://mochikit/content/tests/SimpleTest/EventUtils.js", EventUtils);
+  Services.scriptloader.loadSubScript("chrome://mochikit/content/tests/SimpleTest/EventUtils.js", EventUtils);
 
-  function* task_drop(urls) {
+  async function task_drop(urls) {
     let dragData = [[{type: "text/plain", data: urls.join("\n")}]];
 
-    let list = yield Downloads.getList(Downloads.ALL);
+    let list = await Downloads.getList(Downloads.ALL);
 
     let added = new Set();
     let succeeded = new Set();
-    yield new Promise(function(resolve) {
+    await new Promise(function(resolve) {
       let view = {
         onDownloadAdded(download) {
           added.add(download.source.url);
@@ -54,14 +54,14 @@ add_task(function* test_indicatorDrop() {
   }
 
   // Ensure that state is reset in case previous tests didn't finish.
-  yield task_resetState();
+  await task_resetState();
 
-  yield setDownloadDir();
+  await setDownloadDir();
 
   startServer();
 
-  yield* task_drop([httpUrl("file1.txt")]);
-  yield* task_drop([httpUrl("file1.txt"),
+  await task_drop([httpUrl("file1.txt")]);
+  await task_drop([httpUrl("file1.txt"),
                     httpUrl("file2.txt"),
                     httpUrl("file3.txt")]);
 });

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -50,6 +51,21 @@ enum class ScrollInputMethod {
 
   // Autoscrolling
   MainThreadAutoscrolling,    // autoscrolling
+
+  // === Additional input methods implemented in APZ ===
+
+  // Async Keyboard
+  ApzScrollLine,       // line scrolling
+                       // (generally triggered by up/down arrow keys)
+  ApzScrollCharacter,  // character scrolling
+                       // (generally triggered by left/right arrow keys)
+  ApzScrollPage,       // page scrolling
+                       // (generally triggered by PageUp/PageDown keys)
+  ApzCompleteScroll,   // scrolling to the end of the scroll range
+                       // (generally triggered by Home/End keys)
+
+  // Autoscrolling
+  ApzAutoscrolling,
 
   // New input methods can be added at the end, up to a maximum of 64.
   // They should only be added at the end, to preserve the numerical values

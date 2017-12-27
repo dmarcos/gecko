@@ -8,9 +8,13 @@
 
 #include "mozilla/Atomics.h"
 #include "mozilla/ClearOnShutdown.h"
+#include "mozilla/EventQueue.h"
 #include "mozilla/Mutex.h"
+#include "mozilla/Services.h"
 #include "mozilla/Unused.h"
-#include "nsEventQueue.h"
+#include "nsIObserver.h"
+#include "nsIObserverService.h"
+#include "nsThreadUtils.h"
 
 namespace mozilla {
 
@@ -65,7 +69,8 @@ class ThrottledEventQueue::Inner final : public nsIObserver
 
   public:
     explicit Executor(Inner* aInner)
-      : mInner(aInner)
+      : Runnable("ThrottledEventQueue::Inner::Executor")
+      , mInner(aInner)
     { }
 
     NS_IMETHODIMP
@@ -85,30 +90,22 @@ class ThrottledEventQueue::Inner final : public nsIObserver
   mutable Mutex mMutex;
   mutable CondVar mIdleCondVar;
 
-  mozilla::CondVar mEventsAvailable;
-
   // any thread, protected by mutex
-  nsEventQueue mEventQueue;
+  EventQueue mEventQueue;
 
   // written on main thread, read on any thread
-  nsCOMPtr<nsIEventTarget> mBaseTarget;
+  nsCOMPtr<nsISerialEventTarget> mBaseTarget;
 
   // any thread, protected by mutex
   nsCOMPtr<nsIRunnable> mExecutor;
 
-  // any thread, atomic
-  Atomic<uint32_t> mExecutionDepth;
-
   // any thread, protected by mutex
   bool mShutdownStarted;
 
-  explicit Inner(nsIEventTarget* aBaseTarget)
+  explicit Inner(nsISerialEventTarget* aBaseTarget)
     : mMutex("ThrottledEventQueue")
     , mIdleCondVar(mMutex, "ThrottledEventQueue:Idle")
-    , mEventsAvailable(mMutex, "[ThrottledEventQueue::Inner.mEventsAvailable]")
-    , mEventQueue(mEventsAvailable, nsEventQueue::eNormalQueue)
     , mBaseTarget(aBaseTarget)
-    , mExecutionDepth(0)
     , mShutdownStarted(false)
   {
   }
@@ -135,16 +132,12 @@ class ThrottledEventQueue::Inner final : public nsIObserver
 
       // We only check the name of an executor runnable when we know there is something
       // in the queue, so this should never fail.
-      MOZ_ALWAYS_TRUE(mEventQueue.PeekEvent(getter_AddRefs(event), lock));
+      event = mEventQueue.PeekEvent(lock);
+      MOZ_ALWAYS_TRUE(event);
     }
 
     if (nsCOMPtr<nsINamed> named = do_QueryInterface(event)) {
-      // Increase mExecutionDepth here so that GetName is allowed to call
-      // IsOnCurrentThread on us and have it be true (in the case when we are on
-      // the right thread).
-      mExecutionDepth++;
       nsresult rv = named->GetName(aName);
-      mExecutionDepth--;
       return rv;
     }
 
@@ -170,13 +163,14 @@ class ThrottledEventQueue::Inner final : public nsIObserver
 
       // We only dispatch an executor runnable when we know there is something
       // in the queue, so this should never fail.
-      MOZ_ALWAYS_TRUE(mEventQueue.GetPendingEvent(getter_AddRefs(event), lock));
+      event = mEventQueue.GetEvent(nullptr, lock);
+      MOZ_ASSERT(event);
 
       // If there are more events in the queue, then dispatch the next
       // executor.  We do this now, before running the event, because
       // the event might spin the event loop and we don't want to stall
       // the queue.
-      if (mEventQueue.HasPendingEvent(lock)) {
+      if (mEventQueue.HasReadyEvent(lock)) {
         // Dispatch the next base target runnable to attempt to execute
         // the next throttled event.  We must do this before executing
         // the event in case the event spins the event loop.
@@ -196,9 +190,7 @@ class ThrottledEventQueue::Inner final : public nsIObserver
     }
 
     // Execute the event now that we have unlocked.
-    ++mExecutionDepth;
     Unused << event->Run();
-    --mExecutionDepth;
 
     // If shutdown was started and the queue is now empty we can now
     // finalize the shutdown.  This is performed separately at the end
@@ -221,7 +213,7 @@ class ThrottledEventQueue::Inner final : public nsIObserver
 
 public:
   static already_AddRefed<Inner>
-  Create(nsIEventTarget* aBaseTarget)
+  Create(nsISerialEventTarget* aBaseTarget)
   {
     MOZ_ASSERT(NS_IsMainThread());
 
@@ -258,9 +250,9 @@ public:
     // Once shutdown begins we set the Atomic<bool> mShutdownStarted flag.
     // This prevents any new runnables from being dispatched into the
     // TaskQueue.  Therefore this loop should be finite.
-    while (!IsEmpty()) {
-      MOZ_ALWAYS_TRUE(NS_ProcessNextEvent());
-    }
+    MOZ_ALWAYS_TRUE(SpinEventLoopUntil([&]() -> bool {
+        return IsEmpty();
+    }));
 
     return NS_OK;
   }
@@ -362,7 +354,7 @@ public:
 
     // Only add the event to the underlying queue if are able to
     // dispatch to our base target.
-    mEventQueue.PutEvent(Move(aEvent), lock);
+    mEventQueue.PutEvent(Move(aEvent), EventPriority::Normal, lock);
     return NS_OK;
   }
 
@@ -374,30 +366,10 @@ public:
     return NS_ERROR_NOT_IMPLEMENTED;
   }
 
-  nsresult
-  IsOnCurrentThread(bool* aResult)
+  bool
+  IsOnCurrentThread()
   {
-    // Any thread
-
-    bool shutdownAndIdle = false;
-    {
-      MutexAutoLock lock(mMutex);
-      shutdownAndIdle = mShutdownStarted && mEventQueue.Count(lock) == 0;
-    }
-
-    bool onBaseTarget = false;
-    nsresult rv = mBaseTarget->IsOnCurrentThread(&onBaseTarget);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-
-    // We consider the current stack on this event target if are on
-    // the base target and one of the following is true
-    //  1) We are currently running an event OR
-    //  2) We are both shutting down and the queue is idle
-    *aResult = onBaseTarget && (mExecutionDepth || shutdownAndIdle);
-
-    return NS_OK;
+    return mBaseTarget->IsOnCurrentThread();
   }
 
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -405,7 +377,10 @@ public:
 
 NS_IMPL_ISUPPORTS(ThrottledEventQueue::Inner, nsIObserver);
 
-NS_IMPL_ISUPPORTS(ThrottledEventQueue, ThrottledEventQueue, nsIEventTarget);
+NS_IMPL_ISUPPORTS(ThrottledEventQueue,
+                  ThrottledEventQueue,
+                  nsIEventTarget,
+                  nsISerialEventTarget);
 
 ThrottledEventQueue::ThrottledEventQueue(already_AddRefed<Inner> aInner)
   : mInner(aInner)
@@ -425,7 +400,7 @@ ThrottledEventQueue::MaybeStartShutdown()
 }
 
 already_AddRefed<ThrottledEventQueue>
-ThrottledEventQueue::Create(nsIEventTarget* aBaseTarget)
+ThrottledEventQueue::Create(nsISerialEventTarget* aBaseTarget)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aBaseTarget);
@@ -481,7 +456,14 @@ ThrottledEventQueue::DelayedDispatch(already_AddRefed<nsIRunnable> aEvent,
 NS_IMETHODIMP
 ThrottledEventQueue::IsOnCurrentThread(bool* aResult)
 {
-  return mInner->IsOnCurrentThread(aResult);
+  *aResult = mInner->IsOnCurrentThread();
+  return NS_OK;
+}
+
+NS_IMETHODIMP_(bool)
+ThrottledEventQueue::IsOnCurrentThreadInfallible()
+{
+  return mInner->IsOnCurrentThread();
 }
 
 } // namespace mozilla

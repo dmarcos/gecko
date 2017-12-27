@@ -2,13 +2,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+const RESTRICT_TOKEN_OPENPAGE = "%";
+
 var stateBackup = ss.getBrowserState();
 
 function cleanup() {
-  // Reset the pref
-  try {
-    Services.prefs.clearUserPref("browser.sessionstore.restore_on_demand");
-  } catch (e) {}
+  // Reset the prefs
+  Services.prefs.clearUserPref("browser.sessionstore.restore_on_demand");
+  Services.prefs.clearUserPref("browser.sessionstore.restore_tabs_lazily");
   ss.setBrowserState(stateBackup);
   executeSoon(finish);
 }
@@ -20,6 +21,8 @@ function test() {
   // Set the pref to true so we know exactly how many tabs should be restoring at
   // any given time. This guarantees that a finishing load won't start another.
   Services.prefs.setBoolPref("browser.sessionstore.restore_on_demand", true);
+  // Don't restore tabs lazily.
+  Services.prefs.setBoolPref("browser.sessionstore.restore_tabs_lazily", false);
 
   let state = { windows: [{ tabs: [
     { entries: [{ url: "http://example.org/#1", triggeringPrincipal_base64 }] },
@@ -115,5 +118,5 @@ function checkAutocompleteResults(aExpected, aCallback) {
   };
 
   info("Searching open pages.");
-  gController.startSearch(Services.prefs.getCharPref("browser.urlbar.restrict.openpage"));
+  gController.startSearch(RESTRICT_TOKEN_OPENPAGE);
 }

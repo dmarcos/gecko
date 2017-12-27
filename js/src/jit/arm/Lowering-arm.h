@@ -89,7 +89,7 @@ class LIRGeneratorARM : public LIRGeneratorShared
     void lowerUDiv(MDiv* div);
     void lowerUMod(MMod* mod);
     void visitPowHalf(MPowHalf* ins);
-    void visitAsmJSNeg(MAsmJSNeg* ins);
+    void visitWasmNeg(MWasmNeg* ins);
 
     LTableSwitch* newLTableSwitch(const LAllocation& in, const LDefinition& inputCopy,
                                   MTableSwitch* ins);
@@ -109,9 +109,9 @@ class LIRGeneratorARM : public LIRGeneratorShared
     void visitWasmStore(MWasmStore* ins);
     void visitAsmJSLoadHeap(MAsmJSLoadHeap* ins);
     void visitAsmJSStoreHeap(MAsmJSStoreHeap* ins);
-    void visitAsmJSCompareExchangeHeap(MAsmJSCompareExchangeHeap* ins);
-    void visitAsmJSAtomicExchangeHeap(MAsmJSAtomicExchangeHeap* ins);
-    void visitAsmJSAtomicBinopHeap(MAsmJSAtomicBinopHeap* ins);
+    void visitWasmCompareExchangeHeap(MWasmCompareExchangeHeap* ins);
+    void visitWasmAtomicExchangeHeap(MWasmAtomicExchangeHeap* ins);
+    void visitWasmAtomicBinopHeap(MWasmAtomicBinopHeap* ins);
     void visitStoreTypedArrayElementStatic(MStoreTypedArrayElementStatic* ins);
     void visitCompareExchangeTypedArrayElement(MCompareExchangeTypedArrayElement* ins);
     void visitAtomicExchangeTypedArrayElement(MAtomicExchangeTypedArrayElement* ins);
@@ -122,6 +122,7 @@ class LIRGeneratorARM : public LIRGeneratorShared
     void visitInt64ToFloatingPoint(MInt64ToFloatingPoint* ins);
     void visitCopySign(MCopySign* ins);
     void visitExtendInt32ToInt64(MExtendInt32ToInt64* ins);
+    void visitSignExtendInt64(MSignExtendInt64* ins);
 };
 
 typedef LIRGeneratorARM LIRGeneratorSpecific;

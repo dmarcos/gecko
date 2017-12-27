@@ -45,9 +45,10 @@ public:
   virtual void RemoveChildAt(uint32_t aIndex, bool aNotify) override;
 
   // nsIContent
-  NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const override;
+  NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* aAttribute) const override;
 
-  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+                         bool aPreallocateChildren) const override;
 private:
   void UpdateActiveChild()
   { mActiveChild = FindActiveChild(); }

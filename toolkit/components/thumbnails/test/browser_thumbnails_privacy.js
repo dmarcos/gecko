@@ -59,10 +59,10 @@ function checkCombinations(aCombinations, aResult) {
 }
 
 function testCombination(combi, url, aCombinations, aResult) {
-  let tab = gBrowser.selectedTab = gBrowser.addTab(url);
+  let tab = gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser, url);
   let browser = gBrowser.selectedBrowser;
 
-  whenLoaded(browser, () => {
+  BrowserTestUtils.browserLoaded(browser).then(() => {
     let msg = JSON.stringify(combi) + " == " + aResult;
     PageThumbs.shouldStoreThumbnail(browser, (aIsSafeSite) => {
       is(aIsSafeSite, aResult, msg);

@@ -35,9 +35,6 @@ namespace gl {
 
 StaticMutex GLLibraryEGL::sMutex;
 GLLibraryEGL sEGLLibrary;
-#ifdef MOZ_B2G
-MOZ_THREAD_LOCAL(EGLContext) GLLibraryEGL::sCurrentContext;
-#endif
 
 // should match the order of EGLExtensions, and be null-terminated.
 static const char* sEGLExtensionNames[] = {
@@ -55,6 +52,13 @@ static const char* sEGLExtensionNames[] = {
     "EGL_ANGLE_platform_angle_d3d",
     "EGL_ANGLE_d3d_share_handle_client_buffer",
     "EGL_KHR_create_context",
+    "EGL_KHR_stream",
+    "EGL_KHR_stream_consumer_gltexture",
+    "EGL_EXT_device_query",
+    "EGL_NV_stream_consumer_gltexture_yuv",
+    "EGL_ANGLE_stream_producer_d3d_texture_nv12",
+    "EGL_ANGLE_device_creation",
+    "EGL_ANGLE_device_creation_d3d11",
 };
 
 #if defined(ANDROID)
@@ -72,8 +76,8 @@ static PRLibrary* LoadApitraceLibrary()
     if (sApitraceLibrary)
         return sApitraceLibrary;
 
-    nsCString logFile = Preferences::GetCString("gfx.apitrace.logfile");
-
+    nsAutoCString logFile;
+    Preferences::GetCString("gfx.apitrace.logfile", logFile);
     if (logFile.IsEmpty()) {
         logFile = "firefox.trace";
     }
@@ -142,6 +146,35 @@ GetAndInitWARPDisplay(GLLibraryEGL& egl, void* displayType)
     return display;
 }
 
+static EGLDisplay
+GetAndInitDisplayForWebRender(GLLibraryEGL& egl, void* displayType)
+{
+    const EGLint attrib_list[] = {  LOCAL_EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE,
+                                    LOCAL_EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE,
+                                    LOCAL_EGL_PLATFORM_ANGLE_TYPE_ANGLE,
+                                    LOCAL_EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE,
+                                    LOCAL_EGL_EXPERIMENTAL_PRESENT_PATH_ANGLE,
+                                    LOCAL_EGL_EXPERIMENTAL_PRESENT_PATH_FAST_ANGLE,
+                                    LOCAL_EGL_NONE };
+    EGLDisplay display = egl.fGetPlatformDisplayEXT(LOCAL_EGL_PLATFORM_ANGLE_ANGLE,
+                                                    displayType,
+                                                    attrib_list);
+
+    if (display == EGL_NO_DISPLAY) {
+        const EGLint err = egl.fGetError();
+        if (err != LOCAL_EGL_SUCCESS) {
+            gfxCriticalError() << "Unexpected GL error: " << gfx::hexa(err);
+            MOZ_CRASH("GFX: Unexpected GL error.");
+        }
+        return EGL_NO_DISPLAY;
+    }
+
+    if (!egl.fInitialize(display, nullptr, nullptr))
+        return EGL_NO_DISPLAY;
+
+    return display;
+}
+
 static bool
 IsAccelAngleSupported(const nsCOMPtr<nsIGfxInfo>& gfxInfo,
                       nsACString* const out_failureId)
@@ -184,7 +217,7 @@ GetAndInitDisplay(GLLibraryEGL& egl, void* displayType)
     return display;
 }
 
-class AngleErrorReporting: public angle::Platform {
+class AngleErrorReporting {
 public:
     AngleErrorReporting()
     {
@@ -196,7 +229,7 @@ public:
       mFailureId = aFailureId;
     }
 
-    void logError(const char *errorMessage) override
+    void logError(const char *errorMessage)
     {
         if (!mFailureId) {
             return;
@@ -237,7 +270,7 @@ GetAndInitDisplayForAccelANGLE(GLLibraryEGL& egl, nsACString* const out_failureI
     EGLDisplay ret = 0;
 
     if (wr::RenderThread::IsInRenderThread()) {
-        return GetAndInitDisplay(egl, LOCAL_EGL_D3D11_ONLY_DISPLAY_ANGLE);
+        return GetAndInitDisplayForWebRender(egl, EGL_DEFAULT_DISPLAY);
     }
 
     FeatureState& d3d11ANGLE = gfxConfig::GetFeature(Feature::D3D11_HW_ANGLE);
@@ -250,7 +283,6 @@ GetAndInitDisplayForAccelANGLE(GLLibraryEGL& egl, nsACString* const out_failureI
         d3d11ANGLE.UserForceEnable("User force-enabled D3D11 ANGLE on disabled hardware");
 
     gAngleErrorReporter.SetFailureId(out_failureId);
-    egl.fANGLEPlatformInitialize(&gAngleErrorReporter);
 
     auto guardShutdown = mozilla::MakeScopeExit([&] {
         gAngleErrorReporter.SetFailureId(nullptr);
@@ -314,11 +346,6 @@ GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString* const out_failureId
     }
 
     mozilla::ScopedGfxFeatureReporter reporter("EGL");
-
-#ifdef MOZ_B2G
-    if (!sCurrentContext.init())
-      MOZ_CRASH("GFX: Tls init failed");
-#endif
 
 #ifdef XP_WIN
     if (!mEGLLibrary) {
@@ -415,6 +442,7 @@ GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString* const out_failureId
         SYMBOL(QueryContext),
         SYMBOL(BindTexImage),
         SYMBOL(ReleaseTexImage),
+        SYMBOL(SwapInterval),
         SYMBOL(QuerySurface),
         END_OF_SYMBOLS
     };
@@ -457,8 +485,6 @@ GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString* const out_failureId
     if (mIsANGLE) {
         MOZ_ASSERT(IsExtensionSupported(ANGLE_platform_angle_d3d));
         const GLLibraryLoader::SymLoadStruct angleSymbols[] = {
-            { (PRFuncPtr*)&mSymbols.fANGLEPlatformInitialize, { "ANGLEPlatformInitialize", nullptr } },
-            { (PRFuncPtr*)&mSymbols.fANGLEPlatformShutdown, { "ANGLEPlatformShutdown", nullptr } },
             SYMBOL(GetPlatformDisplayEXT),
             END_OF_SYMBOLS
         };
@@ -593,6 +619,79 @@ GLLibraryEGL::EnsureInitialized(bool forceAccel, nsACString* const out_failureId
         if (!fnLoadSymbols(nativeFenceSymbols)) {
             NS_ERROR("EGL supports ANDROID_native_fence_sync without exposing its functions!");
             MarkExtensionUnsupported(ANDROID_native_fence_sync);
+        }
+    }
+
+    if (IsExtensionSupported(KHR_stream)) {
+        const GLLibraryLoader::SymLoadStruct streamSymbols[] = {
+            SYMBOL(CreateStreamKHR),
+            SYMBOL(DestroyStreamKHR),
+            SYMBOL(QueryStreamKHR),
+            END_OF_SYMBOLS
+        };
+        if (!fnLoadSymbols(streamSymbols)) {
+            NS_ERROR("EGL supports KHR_stream without exposing its functions!");
+            MarkExtensionUnsupported(KHR_stream);
+        }
+    }
+
+    if (IsExtensionSupported(KHR_stream_consumer_gltexture)) {
+        const GLLibraryLoader::SymLoadStruct streamConsumerSymbols[] = {
+            SYMBOL(StreamConsumerGLTextureExternalKHR),
+            SYMBOL(StreamConsumerAcquireKHR),
+            SYMBOL(StreamConsumerReleaseKHR),
+            END_OF_SYMBOLS
+        };
+        if (!fnLoadSymbols(streamConsumerSymbols)) {
+            NS_ERROR("EGL supports KHR_stream_consumer_gltexture without exposing its functions!");
+            MarkExtensionUnsupported(KHR_stream_consumer_gltexture);
+        }
+    }
+
+    if (IsExtensionSupported(EXT_device_query)) {
+        const GLLibraryLoader::SymLoadStruct queryDisplaySymbols[] = {
+            SYMBOL(QueryDisplayAttribEXT),
+            SYMBOL(QueryDeviceAttribEXT),
+            END_OF_SYMBOLS
+        };
+        if (!fnLoadSymbols(queryDisplaySymbols)) {
+            NS_ERROR("EGL supports EXT_device_query without exposing its functions!");
+            MarkExtensionUnsupported(EXT_device_query);
+        }
+    }
+
+    if (IsExtensionSupported(NV_stream_consumer_gltexture_yuv)) {
+        const GLLibraryLoader::SymLoadStruct nvStreamSymbols[] = {
+            SYMBOL(StreamConsumerGLTextureExternalAttribsNV),
+            END_OF_SYMBOLS
+        };
+        if (!fnLoadSymbols(nvStreamSymbols)) {
+            NS_ERROR("EGL supports NV_stream_consumer_gltexture_yuv without exposing its functions!");
+            MarkExtensionUnsupported(NV_stream_consumer_gltexture_yuv);
+        }
+    }
+
+    if (IsExtensionSupported(ANGLE_stream_producer_d3d_texture_nv12)) {
+        const GLLibraryLoader::SymLoadStruct nvStreamSymbols[] = {
+            SYMBOL(CreateStreamProducerD3DTextureNV12ANGLE),
+            SYMBOL(StreamPostD3DTextureNV12ANGLE),
+            END_OF_SYMBOLS
+        };
+        if (!fnLoadSymbols(nvStreamSymbols)) {
+            NS_ERROR("EGL supports ANGLE_stream_producer_d3d_texture_nv12 without exposing its functions!");
+            MarkExtensionUnsupported(ANGLE_stream_producer_d3d_texture_nv12);
+        }
+    }
+
+    if (IsExtensionSupported(ANGLE_device_creation)) {
+        const GLLibraryLoader::SymLoadStruct createDeviceSymbols[] = {
+            SYMBOL(CreateDeviceANGLE),
+            SYMBOL(ReleaseDeviceANGLE),
+            END_OF_SYMBOLS
+        };
+        if (!fnLoadSymbols(createDeviceSymbols)) {
+            NS_ERROR("EGL supports ANGLE_device_creation without exposing its functions!");
+            MarkExtensionUnsupported(ANGLE_device_creation);
         }
     }
 

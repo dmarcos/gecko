@@ -35,7 +35,9 @@ public:
 
     for (auto iter = mAudioNotificationSet->ConstIter(); !iter.Done(); iter.Next()) {
       PluginModuleParent* pluginModule = iter.Get()->GetKey();
-      pluginModule->SendNPP_SetValue_NPNVaudioDeviceChangeDetails(mChangeDetails);
+      if(!pluginModule->SendNPP_SetValue_NPNVaudioDeviceChangeDetails(mChangeDetails)) {
+        return NS_ERROR_FAILURE;
+      }
     }
     return NS_OK;
   }
@@ -45,12 +47,12 @@ protected:
   const PluginModuleSet* mAudioNotificationSet;
 };
 
-class AudioNotification : public IMMNotificationClient
+class AudioNotification final : public IMMNotificationClient
 {
 public:
   AudioNotification() :
-      mRefCt(1)
-    , mIsRegistered(false)
+      mIsRegistered(false)
+    , mRefCt(1)
   {
     HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator),
                                   NULL, CLSCTX_INPROC_SERVER,
@@ -70,15 +72,6 @@ public:
     mIsRegistered = true;
   }
 
-  ~AudioNotification()
-  {
-    MOZ_ASSERT(!mIsRegistered,
-      "Destroying AudioNotification without first calling Unregister");
-    if (mDeviceEnum) {
-      mDeviceEnum->Release();
-    }
-  }
-
   // IMMNotificationClient Implementation
   HRESULT STDMETHODCALLTYPE
   OnDefaultDeviceChanged(EDataFlow flow, ERole role, LPCWSTR device_id) override
@@ -86,7 +79,7 @@ public:
     NPAudioDeviceChangeDetailsIPC changeDetails;
     changeDetails.flow = (int32_t)flow;
     changeDetails.role = (int32_t)role;
-    changeDetails.defaultDevice = std::wstring(device_id);
+    changeDetails.defaultDevice = device_id ? std::wstring(device_id) : L"";
 
     // Make sure that plugin is notified on the main thread.
     RefPtr<AudioDeviceChangedRunnable> runnable =
@@ -195,6 +188,15 @@ private:
   // Set of plugin modules that have registered to be notified when the audio device
   // changes.
   PluginModuleSet mAudioNotificationSet;
+
+  ~AudioNotification()
+  {
+    MOZ_ASSERT(!mIsRegistered,
+      "Destroying AudioNotification without first calling Unregister");
+    if (mDeviceEnum) {
+      mDeviceEnum->Release();
+    }
+  }
 };  // class AudioNotification
 
 // callback that gets notified of audio device events, or NULL

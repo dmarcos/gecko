@@ -45,8 +45,11 @@ public:
   virtual void AsyncEventRunning(AsyncEventDispatcher* aEvent) override;
 
   // nsIContent interface
-  virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsIAtom* aName,
-                                const nsAttrValue* aValue, bool aNotify) override;
+  virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
+                                const nsAttrValue* aValue,
+                                const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
+                                bool aNotify) override;
   virtual nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                               nsIContent* aBindingParent,
                               bool aCompileEventHandlers) override;
@@ -54,7 +57,7 @@ public:
 
   virtual EventStates IntrinsicState() const override;
 
-  NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* name) const override;
+  NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* name) const override;
 
   // SVGGeometryElement methods:
   virtual bool GetGeometryBounds(Rect* aBounds, const StrokeOptions& aStrokeOptions,
@@ -65,9 +68,10 @@ public:
   // nsSVGSVGElement methods:
   virtual bool HasValidDimensions() const override;
 
-  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+                         bool aPreallocateChildren) const override;
 
-  nsresult CopyInnerTo(mozilla::dom::Element* aDest);
+  nsresult CopyInnerTo(mozilla::dom::Element* aDest, bool aPreallocateChildren);
 
   void MaybeLoadSVGImage();
 

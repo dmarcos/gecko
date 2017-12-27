@@ -9,7 +9,6 @@
 #include "nsIURI.h"
 #include "nsIChannel.h"
 #include "nsNetUtil.h"
-#include "nsScriptLoader.h"
 #include "nsThreadUtils.h"
 
 #include "jsapi.h"
@@ -18,6 +17,7 @@
 
 #include "mozilla/dom/ChromeUtils.h"
 #include "mozilla/dom/Promise.h"
+#include "mozilla/dom/ScriptLoader.h"
 #include "mozilla/HoldDropJSObjects.h"
 #include "mozilla/SystemGroup.h"
 #include "nsCycleCollectionParticipant.h"
@@ -37,18 +37,19 @@ public:
     NS_DECL_NSIINCREMENTALSTREAMLOADEROBSERVER
     NS_DECL_NSIRUNNABLE
 
-    AsyncScriptCompiler(JSContext* aCx, nsIGlobalObject* aGlobal,
+    AsyncScriptCompiler(JSContext* aCx,
+                        nsIGlobalObject* aGlobal,
                         const nsACString& aURL,
                         const CompileScriptOptionsDictionary& aOptions,
                         Promise* aPromise)
-        : mOptions(aCx)
-        , mURL(aURL)
-        , mGlobalObject(aGlobal)
-        , mPromise(aPromise)
-        , mCharset(aOptions.mCharset)
+      : mozilla::Runnable("AsyncScriptCompiler")
+      , mOptions(aCx)
+      , mURL(aURL)
+      , mGlobalObject(aGlobal)
+      , mPromise(aPromise)
+      , mCharset(aOptions.mCharset)
     {
-        mOptions.setVersion(JSVERSION_DEFAULT)
-                .setNoScriptRval(!aOptions.mHasReturnValue)
+        mOptions.setNoScriptRval(!aOptions.mHasReturnValue)
                 .setCanLazilyParse(aOptions.mLazilyParse)
                 .setFile(aCx, mURL.get());
     }
@@ -119,9 +120,7 @@ OffThreadScriptLoaderCallback(void* aToken, void* aCallbackData)
 
     scriptCompiler->SetToken(aToken);
 
-    SystemGroup::Dispatch("ScriptLoader::FinishCompile",
-                          TaskCategory::Other,
-                          scriptCompiler.forget());
+    SystemGroup::Dispatch(TaskCategory::Other, scriptCompiler.forget());
 }
 
 bool
@@ -241,7 +240,7 @@ AsyncScriptCompiler::OnStreamComplete(nsIIncrementalStreamLoader* aLoader,
         return NS_OK;
     }
 
-    nsresult rv = nsScriptLoader::ConvertToUTF16(
+    nsresult rv = ScriptLoader::ConvertToUTF16(
         nullptr, aBuf, aLength, mCharset, nullptr, mScriptText, mScriptLength);
     if (NS_FAILED(rv)) {
         Reject(cx, "Unable to decode script");

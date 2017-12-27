@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -10,12 +11,12 @@
 #include "nsMathMLContainerFrame.h"
 
 //
-// <mpadded> -- adjust space around content  
+// <mpadded> -- adjust space around content
 //
 
 class nsMathMLmpaddedFrame : public nsMathMLContainerFrame {
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsMathMLmpaddedFrame)
 
   friend nsIFrame* NS_NewMathMLmpaddedFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
@@ -32,7 +33,7 @@ public:
          ReflowOutput&     aDesiredSize,
          const ReflowInput& aReflowInput,
          nsReflowStatus&          aStatus) override;
-  
+
   virtual nsresult
   Place(DrawTarget*          aDrawTarget,
         bool                 aPlaceOrigin,
@@ -46,7 +47,7 @@ public:
 
 protected:
   explicit nsMathMLmpaddedFrame(nsStyleContext* aContext)
-    : nsMathMLContainerFrame(aContext)
+    : nsMathMLContainerFrame(aContext, kClassID)
     , mWidthSign(0)
     , mHeightSign(0)
     , mDepthSign(0)

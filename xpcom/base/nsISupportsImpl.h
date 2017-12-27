@@ -13,10 +13,9 @@
 #include "nsISupportsBase.h"
 #include "nsISupportsUtils.h"
 
-
 #if !defined(XPCOM_GLUE_AVOID_NSPR)
-#include "prthread.h" /* needed for thread-safety checks */
-#endif // !XPCOM_GLUE_AVOID_NSPR
+#include "prthread.h" /* needed for cargo-culting headers */
+#endif
 
 #include "nsDebug.h"
 #include "nsXPCOM.h"
@@ -51,27 +50,44 @@ ToCanonicalSupports(nsISupports* aSupports)
 
 #ifdef MOZ_THREAD_SAFETY_OWNERSHIP_CHECKS_SUPPORTED
 
+#include "prthread.h" /* needed for thread-safety checks */
+
 class nsAutoOwningThread
 {
 public:
-  nsAutoOwningThread() { mThread = PR_GetCurrentThread(); }
-  void* GetThread() const { return mThread; }
+  nsAutoOwningThread();
+
+  // We move the actual assertion checks out-of-line to minimize code bloat,
+  // but that means we have to pass a non-literal string to
+  // MOZ_CRASH_UNSAFE_OOL.  To make that more safe, the public interface
+  // requires a literal string and passes that to the private interface; we
+  // can then be assured that we effectively are passing a literal string
+  // to MOZ_CRASH_UNSAFE_OOL.
+  template<int N>
+  void AssertOwnership(const char (&aMsg)[N]) const
+  {
+    AssertCurrentThreadOwnsMe(aMsg);
+  }
+
+  bool IsCurrentThread() const;
 
 private:
+  void AssertCurrentThreadOwnsMe(const char* aMsg) const;
+
   void* mThread;
 };
 
 #define NS_DECL_OWNINGTHREAD            nsAutoOwningThread _mOwningThread;
 #define NS_ASSERT_OWNINGTHREAD_AGGREGATE(agg, _class) \
-  NS_CheckThreadSafe(agg->_mOwningThread.GetThread(), #_class " not thread-safe")
+  agg->_mOwningThread.AssertOwnership(#_class " not thread-safe")
 #define NS_ASSERT_OWNINGTHREAD(_class) NS_ASSERT_OWNINGTHREAD_AGGREGATE(this, _class)
-#else // !DEBUG && !(NIGHTLY_BUILD && !MOZ_PROFILING)
+#else // !MOZ_THREAD_SAFETY_OWNERSHIP_CHECKS_SUPPORTED
 
 #define NS_DECL_OWNINGTHREAD            /* nothing */
 #define NS_ASSERT_OWNINGTHREAD_AGGREGATE(agg, _class) ((void)0)
 #define NS_ASSERT_OWNINGTHREAD(_class)  ((void)0)
 
-#endif // DEBUG || (NIGHTLY_BUILD && !MOZ_PROFILING)
+#endif // MOZ_THREAD_SAFETY_OWNERSHIP_CHECKS_SUPPORTED
 
 
 // Macros for reference-count and constructor logging
@@ -174,6 +190,12 @@ do {                                     \
 class nsCycleCollectingAutoRefCnt
 {
 public:
+
+  typedef void (*Suspect)(void* aPtr,
+                          nsCycleCollectionParticipant* aCp,
+                          nsCycleCollectingAutoRefCnt* aRefCnt,
+                          bool* aShouldDelete);
+
   nsCycleCollectingAutoRefCnt() : mRefCntAndFlags(0) {}
 
   explicit nsCycleCollectingAutoRefCnt(uintptr_t aValue)
@@ -184,11 +206,13 @@ public:
   nsCycleCollectingAutoRefCnt(const nsCycleCollectingAutoRefCnt&) = delete;
   void operator=(const nsCycleCollectingAutoRefCnt&) = delete;
 
+  template<Suspect suspect = NS_CycleCollectorSuspect3>
   MOZ_ALWAYS_INLINE uintptr_t incr(nsISupports* aOwner)
   {
-    return incr(aOwner, nullptr);
+    return incr<suspect>(aOwner, nullptr);
   }
 
+  template<Suspect suspect = NS_CycleCollectorSuspect3>
   MOZ_ALWAYS_INLINE uintptr_t incr(void* aOwner,
                                    nsCycleCollectionParticipant* aCp)
   {
@@ -200,7 +224,7 @@ public:
       mRefCntAndFlags |= NS_IN_PURPLE_BUFFER;
       // Refcount isn't zero, so Suspect won't delete anything.
       MOZ_ASSERT(get() > 0);
-      NS_CycleCollectorSuspect3(aOwner, aCp, this, nullptr);
+      suspect(aOwner, aCp, this, nullptr);
     }
     return NS_REFCOUNT_VALUE(mRefCntAndFlags);
   }
@@ -212,12 +236,14 @@ public:
     mRefCntAndFlags = NS_REFCOUNT_CHANGE | NS_IN_PURPLE_BUFFER;
   }
 
+  template<Suspect suspect = NS_CycleCollectorSuspect3>
   MOZ_ALWAYS_INLINE uintptr_t decr(nsISupports* aOwner,
                                    bool* aShouldDelete = nullptr)
   {
-    return decr(aOwner, nullptr, aShouldDelete);
+    return decr<suspect>(aOwner, nullptr, aShouldDelete);
   }
 
+  template<Suspect suspect = NS_CycleCollectorSuspect3>
   MOZ_ALWAYS_INLINE uintptr_t decr(void* aOwner,
                                    nsCycleCollectionParticipant* aCp,
                                    bool* aShouldDelete = nullptr)
@@ -228,7 +254,7 @@ public:
       mRefCntAndFlags |= (NS_IN_PURPLE_BUFFER | NS_IS_PURPLE);
       uintptr_t retval = NS_REFCOUNT_VALUE(mRefCntAndFlags);
       // Suspect may delete 'aOwner' and 'this'!
-      NS_CycleCollectorSuspect3(aOwner, aCp, this, aShouldDelete);
+      suspect(aOwner, aCp, this, aShouldDelete);
       return retval;
     }
     mRefCntAndFlags -= NS_REFCOUNT_CHANGE;
@@ -331,7 +357,7 @@ public:
       // acquire semantics to synchronize with the memory released by
       // the last release on other threads, that is, to ensure that
       // writes prior to that release are now visible on this thread.
-      result = mValue.load(std::memory_order_acquire);
+      std::atomic_thread_fence(std::memory_order_acquire);
     }
     return result;
   }
@@ -421,6 +447,17 @@ public:
     NS_LOG_ADDREF(this, count, #_class, sizeof(*this));                       \
     return count;
 
+#define NS_IMPL_CC_MAIN_THREAD_ONLY_NATIVE_ADDREF_BODY(_class)     \
+    MOZ_ASSERT_TYPE_OK_FOR_REFCOUNTING(_class)                     \
+    MOZ_ASSERT(int32_t(mRefCnt) >= 0, "illegal refcnt");           \
+    NS_ASSERT_OWNINGTHREAD(_class);                                \
+    nsrefcnt count =                                               \
+      mRefCnt.incr<NS_CycleCollectorSuspectUsingNursery>(          \
+        static_cast<void*>(this),                                  \
+        _class::NS_CYCLE_COLLECTION_INNERCLASS::GetParticipant()); \
+    NS_LOG_ADDREF(this, count, #_class, sizeof(*this));            \
+    return count;
+
 #define NS_IMPL_CC_NATIVE_RELEASE_BODY(_class)                                \
     MOZ_ASSERT(int32_t(mRefCnt) > 0, "dup release");                          \
     NS_ASSERT_OWNINGTHREAD(_class);                                           \
@@ -428,6 +465,16 @@ public:
       mRefCnt.decr(static_cast<void*>(this),                                  \
                    _class::NS_CYCLE_COLLECTION_INNERCLASS::GetParticipant()); \
     NS_LOG_RELEASE(this, count, #_class);                                     \
+    return count;
+
+#define NS_IMPL_CC_MAIN_THREAD_ONLY_NATIVE_RELEASE_BODY(_class)    \
+    MOZ_ASSERT(int32_t(mRefCnt) > 0, "dup release");               \
+    NS_ASSERT_OWNINGTHREAD(_class);                                \
+    nsrefcnt count =                                               \
+      mRefCnt.decr<NS_CycleCollectorSuspectUsingNursery>(          \
+        static_cast<void*>(this),                                  \
+        _class::NS_CYCLE_COLLECTION_INNERCLASS::GetParticipant()); \
+    NS_LOG_RELEASE(this, count, #_class);                          \
     return count;
 
 #define NS_IMPL_CYCLE_COLLECTING_NATIVE_ADDREF(_class)                        \
@@ -481,6 +528,19 @@ protected:                                                                    \
   NS_DECL_OWNINGTHREAD                                                        \
 public:
 
+#define NS_INLINE_DECL_MAIN_THREAD_ONLY_CYCLE_COLLECTING_NATIVE_REFCOUNTING(_class) \
+public:                                                                             \
+  NS_METHOD_(MozExternalRefCountType) AddRef(void) {                                \
+    NS_IMPL_CC_MAIN_THREAD_ONLY_NATIVE_ADDREF_BODY(_class)                          \
+  }                                                                                 \
+  NS_METHOD_(MozExternalRefCountType) Release(void) {                               \
+    NS_IMPL_CC_MAIN_THREAD_ONLY_NATIVE_RELEASE_BODY(_class)                         \
+  }                                                                                 \
+  typedef mozilla::FalseType HasThreadSafeRefCnt;                                   \
+protected:                                                                          \
+  nsCycleCollectingAutoRefCnt mRefCnt;                                              \
+  NS_DECL_OWNINGTHREAD                                                              \
+public:
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -694,6 +754,18 @@ NS_IMETHODIMP_(MozExternalRefCountType) _class::AddRef(void)                  \
   return count;                                                               \
 }
 
+#define NS_IMPL_MAIN_THREAD_ONLY_CYCLE_COLLECTING_ADDREF(_class)              \
+NS_IMETHODIMP_(MozExternalRefCountType) _class::AddRef(void)                  \
+{                                                                             \
+  MOZ_ASSERT_TYPE_OK_FOR_REFCOUNTING(_class)                                  \
+  MOZ_ASSERT(int32_t(mRefCnt) >= 0, "illegal refcnt");                        \
+  NS_ASSERT_OWNINGTHREAD(_class);                                             \
+  nsISupports *base = NS_CYCLE_COLLECTION_CLASSNAME(_class)::Upcast(this);    \
+  nsrefcnt count = mRefCnt.incr<NS_CycleCollectorSuspectUsingNursery>(base);  \
+  NS_LOG_ADDREF(this, count, #_class, sizeof(*this));                         \
+  return count;                                                               \
+}
+
 #define NS_IMPL_CYCLE_COLLECTING_RELEASE_WITH_DESTROY(_class, _destroy)       \
 NS_IMETHODIMP_(MozExternalRefCountType) _class::Release(void)                 \
 {                                                                             \
@@ -737,6 +809,33 @@ NS_IMETHODIMP_(MozExternalRefCountType) _class::Release(void)                 \
 NS_IMETHODIMP_(void) _class::DeleteCycleCollectable(void)                     \
 {                                                                             \
   delete this;                                                                \
+}
+
+// _LAST_RELEASE can be useful when certain resources should be released
+// as soon as we know the object will be deleted.
+#define NS_IMPL_MAIN_THREAD_ONLY_CYCLE_COLLECTING_RELEASE_WITH_LAST_RELEASE(_class, _last)  \
+NS_IMETHODIMP_(MozExternalRefCountType) _class::Release(void)                               \
+{                                                                                           \
+  MOZ_ASSERT(int32_t(mRefCnt) > 0, "dup release");                                          \
+  NS_ASSERT_OWNINGTHREAD(_class);                                                           \
+  bool shouldDelete = false;                                                                \
+  nsISupports *base = NS_CYCLE_COLLECTION_CLASSNAME(_class)::Upcast(this);                  \
+  nsrefcnt count = mRefCnt.decr<NS_CycleCollectorSuspectUsingNursery>(base, &shouldDelete); \
+  NS_LOG_RELEASE(this, count, #_class);                                                     \
+  if (count == 0) {                                                                         \
+      mRefCnt.incr<NS_CycleCollectorSuspectUsingNursery>(base);                             \
+      _last;                                                                                \
+      mRefCnt.decr<NS_CycleCollectorSuspectUsingNursery>(base);                             \
+      if (shouldDelete) {                                                                   \
+          mRefCnt.stabilizeForDeletion();                                                   \
+          DeleteCycleCollectable();                                                         \
+      }                                                                                     \
+  }                                                                                         \
+  return count;                                                                             \
+}                                                                                           \
+NS_IMETHODIMP_(void) _class::DeleteCycleCollectable(void)                                   \
+{                                                                                           \
+  delete this;                                                                              \
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -946,7 +1045,8 @@ NS_IMETHODIMP _class::QueryInterface(REFNSIID aIID, void** aInstancePtr)      \
   NS_INTERFACE_TABLE_END
 
 #define NS_INTERFACE_TABLE(aClass, ...)                                       \
-  MOZ_STATIC_ASSERT_VALID_ARG_COUNT(__VA_ARGS__);                             \
+  static_assert(MOZ_ARG_COUNT(__VA_ARGS__) > 0,                               \
+                "Need more arguments to NS_INTERFACE_TABLE");                 \
   NS_INTERFACE_TABLE_BEGIN                                                    \
     MOZ_FOR_EACH(NS_INTERFACE_TABLE_ENTRY, (aClass,), (__VA_ARGS__))          \
     NS_INTERFACE_TABLE_ENTRY_AMBIGUOUS(aClass, nsISupports,                   \
@@ -1027,7 +1127,8 @@ NS_IMETHODIMP_(MozExternalRefCountType) Class::Release(void)                  \
 #define NS_INTERFACE_TABLE_INHERITED0(Class) /* Nothing to do here */
 
 #define NS_INTERFACE_TABLE_INHERITED(aClass, ...)                             \
-  MOZ_STATIC_ASSERT_VALID_ARG_COUNT(__VA_ARGS__);                             \
+  static_assert(MOZ_ARG_COUNT(__VA_ARGS__) > 0,                               \
+                "Need more arguments to NS_INTERFACE_TABLE_INHERITED");       \
   NS_INTERFACE_TABLE_BEGIN                                                    \
     MOZ_FOR_EACH(NS_INTERFACE_TABLE_ENTRY, (aClass,), (__VA_ARGS__))          \
   NS_INTERFACE_TABLE_END
@@ -1105,16 +1206,16 @@ _class::GetScriptableHelper(nsIXPCScriptable** _retval)                       \
 }                                                                             \
                                                                               \
 NS_IMETHODIMP                                                                 \
-_class::GetContractID(char** _contractID)                                     \
+_class::GetContractID(nsACString& _contractID)                                \
 {                                                                             \
-  *_contractID = nullptr;                                                     \
+  _contractID.SetIsVoid(true);                                                \
   return NS_OK;                                                               \
 }                                                                             \
                                                                               \
 NS_IMETHODIMP                                                                 \
-_class::GetClassDescription(char** _classDescription)                         \
+_class::GetClassDescription(nsACString& _classDescription)                    \
 {                                                                             \
-  *_classDescription = nullptr;                                               \
+  _classDescription.SetIsVoid(true);                                          \
   return NS_OK;                                                               \
 }                                                                             \
                                                                               \

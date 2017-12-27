@@ -26,8 +26,10 @@ class nsDisplayListBuilder;
 namespace mozilla {
 namespace layers {
 class CanvasLayer;
+class CanvasRenderer;
 class Layer;
 class LayerManager;
+class WebRenderCanvasData;
 } // namespace layers
 namespace gfx {
 class SourceSurface;
@@ -40,8 +42,10 @@ class nsICanvasRenderingContextInternal :
 {
 public:
   typedef mozilla::layers::CanvasLayer CanvasLayer;
+  typedef mozilla::layers::CanvasRenderer CanvasRenderer;
   typedef mozilla::layers::Layer Layer;
   typedef mozilla::layers::LayerManager LayerManager;
+  typedef mozilla::layers::WebRenderCanvasData WebRenderCanvasData;
 
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_ICANVASRENDERINGCONTEXTINTERNAL_IID)
 
@@ -126,7 +130,7 @@ public:
   // be created as opaque; all compositing operators should assume the
   // dst alpha is always 1.0.  If this is never called, the context
   // defaults to false (not opaque).
-  NS_IMETHOD SetIsOpaque(bool isOpaque) = 0;
+  virtual void SetIsOpaque(bool isOpaque) = 0;
   virtual bool GetIsOpaque() = 0;
 
   // Invalidate this context and release any held resources, in preperation
@@ -137,8 +141,11 @@ public:
   // one for the given layer manager if not available.
   virtual already_AddRefed<Layer> GetCanvasLayer(nsDisplayListBuilder* builder,
                                                  Layer *oldLayer,
-                                                 LayerManager *manager,
-                                                 bool aMirror = false) = 0;
+                                                 LayerManager *manager) = 0;
+  virtual bool UpdateWebRenderCanvasData(nsDisplayListBuilder* aBuilder,
+                                         WebRenderCanvasData* aCanvasData) { return false; }
+  virtual bool InitializeCanvasRenderer(nsDisplayListBuilder* aBuilder,
+                                        CanvasRenderer* aRenderer) { return true; }
 
   // Return true if the canvas should be forced to be "inactive" to ensure
   // it can be drawn to the screen even if it's too large to be blitted by

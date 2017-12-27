@@ -19,24 +19,32 @@ add_task(function* () {
   ];
 
   let { tab, monitor } = yield initNetMonitor(CUSTOM_GET_URL);
-  let { gStore, windowRequire } = monitor.panelWin;
+  let { store, windowRequire, connector } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let {
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   let wait = waitForNetworkEvents(monitor, EXPECTED_REQUESTS.length);
   yield performRequests(2, HSTS_SJS);
   yield wait;
 
+  // Fetch stack-trace data from the backend and wait till
+  // all packets are received.
+  let requests = getSortedRequests(store.getState())
+    .filter((req) => !req.stacktrace)
+    .map((req) => connector.requestData(req.id, "stackTrace"));
+
+  yield Promise.all(requests);
+
   EXPECTED_REQUESTS.forEach(({status, hasStack}, i) => {
-    let item = getSortedRequests(gStore.getState()).get(i);
+    let item = getSortedRequests(store.getState()).get(i);
 
     is(item.status, status, `Request #${i} has the expected status`);
 
-    let { stacktrace } = item.cause;
+    let { stacktrace } = item;
     let stackLen = stacktrace ? stacktrace.length : 0;
 
     if (hasStack) {

@@ -211,7 +211,7 @@ nsBaseDragService::InvokeDragSession(nsIDOMNode *aDOMNode,
                                      nsContentPolicyType aContentPolicyType =
                                        nsIContentPolicy::TYPE_OTHER)
 {
-  PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
+  AUTO_PROFILER_LABEL("nsBaseDragService::InvokeDragSession", OTHER);
 
   NS_ENSURE_TRUE(aDOMNode, NS_ERROR_INVALID_ARG);
   NS_ENSURE_TRUE(mSuppressLevel == 0, NS_ERROR_FAILURE);
@@ -402,6 +402,9 @@ nsBaseDragService::EndDragSession(bool aDoneDrag, uint32_t aKeyModifiers)
                                                               mUserCancelled,
                                                               mEndDragPoint,
                                                               aKeyModifiers);
+    // Continue sending input events with input priority when stopping the dnd
+    // session.
+    mChildProcesses[i]->SetInputPriorityEventEnabled(true);
   }
   mChildProcesses.Clear();
 
@@ -501,7 +504,7 @@ nsBaseDragService::DragMoved(int32_t aX, int32_t aY)
 {
   if (mDragPopup) {
     nsIFrame* frame = mDragPopup->GetPrimaryFrame();
-    if (frame && frame->GetType() == nsGkAtoms::menuPopupFrame) {
+    if (frame && frame->IsMenuPopupFrame()) {
       CSSIntPoint cssPos = RoundedToInt(LayoutDeviceIntPoint(aX, aY) /
           frame->PresContext()->CSSToDevPixelScale()) - mImageOffset;
       (static_cast<nsMenuPopupFrame *>(frame))->MoveTo(cssPos, true);
@@ -588,13 +591,13 @@ nsBaseDragService::DrawDrag(nsIDOMNode* aDOMNode,
   if (!enableDragImages || !mHasImage) {
     // if a region was specified, set the screen rectangle to the area that
     // the region occupies
-    nsIntRect dragRect;
+    CSSIntRect dragRect;
     if (aRegion) {
       // the region's coordinates are relative to the root frame
       aRegion->GetBoundingBox(&dragRect.x, &dragRect.y, &dragRect.width, &dragRect.height);
 
       nsIFrame* rootFrame = presShell->GetRootFrame();
-      nsIntRect screenRect = rootFrame->GetScreenRect();
+      CSSIntRect screenRect = rootFrame->GetScreenRect();
       dragRect.MoveBy(screenRect.TopLeft());
     }
     else {
@@ -607,9 +610,10 @@ nsBaseDragService::DrawDrag(nsIDOMNode* aDOMNode,
       }
     }
 
-    dragRect = ToAppUnits(dragRect, nsPresContext::AppUnitsPerCSSPixel()).
-                          ToOutsidePixels((*aPresContext)->AppUnitsPerDevPixel());
-    aScreenDragRect->SizeTo(dragRect.width, dragRect.height);
+    nsIntRect dragRectDev =
+      ToAppUnits(dragRect, nsPresContext::AppUnitsPerCSSPixel()).
+      ToOutsidePixels((*aPresContext)->AppUnitsPerDevPixel());
+    aScreenDragRect->SizeTo(dragRectDev.width, dragRectDev.height);
     return NS_OK;
   }
 
@@ -643,7 +647,7 @@ nsBaseDragService::DrawDrag(nsIDOMNode* aDOMNode,
     // XXXndeakin this should be chrome-only
 
     nsIFrame* frame = content->GetPrimaryFrame();
-    if (frame && frame->GetType() == nsGkAtoms::menuPopupFrame) {
+    if (frame && frame->IsMenuPopupFrame()) {
       mDragPopup = content;
     }
   }
@@ -663,17 +667,22 @@ nsBaseDragService::DrawDrag(nsIDOMNode* aDOMNode,
       uint32_t count = 0;
       nsAutoString childNodeName;
 
-      if (NS_SUCCEEDED(dragNode->GetChildNodes(getter_AddRefs(childList))) &&
+      // check if the dragged node itself is an img element
+      if (NS_SUCCEEDED(dragNode->GetNodeName(childNodeName)) &&
+          childNodeName.LowerCaseEqualsLiteral("img")) {
+        renderFlags = renderFlags | nsIPresShell::RENDER_IS_IMAGE;
+      } else if (
+          NS_SUCCEEDED(dragNode->GetChildNodes(getter_AddRefs(childList))) &&
           NS_SUCCEEDED(childList->GetLength(&length))) {
-        // check every childnode for being a img-tag
+        // check every childnode for being an img element
         while (count < length) {
           if (NS_FAILED(childList->Item(count, getter_AddRefs(child))) ||
               NS_FAILED(child->GetNodeName(childNodeName))) {
             break;
           }
-          // here the node is checked for being a img-tag
+          // here the node is checked for being an img element
           if (childNodeName.LowerCaseEqualsLiteral("img")) {
-            // if the dragnnode contains a image, set RENDER_IS_IMAGE flag
+            // if the dragnode contains an image, set RENDER_IS_IMAGE flag
             renderFlags = renderFlags | nsIPresShell::RENDER_IS_IMAGE;
             break;
           }
@@ -755,12 +764,12 @@ nsBaseDragService::DrawDragForImage(nsPresContext* aPresContext,
     if (!ctx)
       return NS_ERROR_FAILURE;
 
-    DrawResult res =
+    ImgDrawResult res =
       imgContainer->Draw(ctx, destSize, ImageRegion::Create(destSize),
                          imgIContainer::FRAME_CURRENT,
                          SamplingFilter::GOOD, /* no SVGImageContext */ Nothing(),
                          imgIContainer::FLAG_SYNC_DECODE, 1.0);
-    if (res == DrawResult::BAD_IMAGE || res == DrawResult::BAD_ARGS) {
+    if (res == ImgDrawResult::BAD_IMAGE || res == ImgDrawResult::BAD_ARGS) {
       return NS_ERROR_FAILURE;
     }
     *aSurface = dt->Snapshot();

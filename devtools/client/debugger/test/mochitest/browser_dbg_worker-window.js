@@ -3,9 +3,10 @@
 
 "use strict";
 
-// Whitelisting this test.
-// As part of bug 1077403, the leaking uncaught rejections should be fixed.
-thisTestLeaksUncaughtRejectionsAndShouldBeFixed("[object Object]");
+// The following "connectionClosed" rejection should not be left uncaught. This
+// test has been whitelisted until the issue is fixed.
+Cu.import("resource://testing-common/PromiseTestUtils.jsm", this);
+PromiseTestUtils.expectUncaughtRejection(/[object Object]/);
 
 var TAB_URL = EXAMPLE_URL + "doc_WorkerActor.attachThread-tab.html";
 var WORKER_URL = "code_WorkerActor.attachThread-worker.js";
@@ -14,7 +15,7 @@ add_task(function* () {
   yield pushPrefs(["devtools.scratchpad.enabled", true]);
 
   DebuggerServer.init();
-  DebuggerServer.addBrowserActors();
+  DebuggerServer.registerAllActors();
 
   let client = new DebuggerClient(DebuggerServer.connectPipe());
   yield connect(client);

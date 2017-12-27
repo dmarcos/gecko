@@ -9,14 +9,14 @@ const CSSCompleter =
 
 const source = [
   ".devtools-toolbar {",
-  "  -moz-appearance: none; appearance: none;",
+  "  -moz-appearance: none;",
   "           padding:4px 3px;border-bottom-width: 1px;",
   "  border-bottom-style: solid;",
   "}",
   "",
   "#devtools-menu.devtools-menulist,",
   ".devtools-toolbarbutton#devtools-menu {",
-  "  -moz-appearance: none; appearance: none;",
+  "  -moz-appearance: none;",
   "  -moz-box-align: center;",
   "  min-width: 78px;",
   "  min-height: 22px;",
@@ -126,10 +126,10 @@ const TEST_URI = "data:text/html;charset=UTF-8," + encodeURIComponent(
 let doc = null;
 function test() {
   waitForExplicitFinish();
-  gBrowser.selectedTab = gBrowser.addTab();
+  gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
   BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser).then(() => {
     /* eslint-disable mozilla/no-cpows-in-tests */
-    doc = content.document;
+    doc = gBrowser.contentDocumentAsCPOW;
     /* eslint-enable mozilla/no-cpows-in-tests */
     runTests();
   });

@@ -15,9 +15,10 @@
 #include "mozilla/dom/RegisterWorkletBindings.h"
 #include "mozilla/dom/Response.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "mozilla/dom/ScriptLoader.h"
+#include "nsIInputStreamPump.h"
 #include "nsIThreadRetargetableRequest.h"
 #include "nsNetUtil.h"
-#include "nsScriptLoader.h"
 #include "xpcprivate.h"
 
 namespace mozilla {
@@ -129,7 +130,7 @@ public:
     }
 
     nsCOMPtr<nsIInputStreamPump> pump;
-    rv = NS_NewInputStreamPump(getter_AddRefs(pump), inputStream);
+    rv = NS_NewInputStreamPump(getter_AddRefs(pump), inputStream.forget());
     if (NS_WARN_IF(NS_FAILED(rv))) {
       RejectPromises(rv);
       return;
@@ -174,9 +175,9 @@ public:
     char16_t* scriptTextBuf;
     size_t scriptTextLength;
     nsresult rv =
-      nsScriptLoader::ConvertToUTF16(nullptr, aString, aStringLen,
-                                     NS_LITERAL_STRING("UTF-8"), nullptr,
-                                     scriptTextBuf, scriptTextLength);
+      ScriptLoader::ConvertToUTF16(nullptr, aString, aStringLen,
+                                   NS_LITERAL_STRING("UTF-8"), nullptr,
+                                   scriptTextBuf, scriptTextLength);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       RejectPromises(rv);
       return NS_OK;
@@ -200,10 +201,11 @@ public:
 
     (void) new XPCWrappedNativeScope(cx, globalObj);
 
+    NS_ConvertUTF16toUTF8 url(mURL);
+
     JS::CompileOptions compileOptions(cx);
     compileOptions.setIntroductionType("Worklet");
-    compileOptions.setFileAndLine(NS_ConvertUTF16toUTF8(mURL).get(), 0);
-    compileOptions.setVersion(JSVERSION_DEFAULT);
+    compileOptions.setFileAndLine(url.get(), 0);
     compileOptions.setIsRunOnce(true);
     compileOptions.setNoScriptRval(true);
 

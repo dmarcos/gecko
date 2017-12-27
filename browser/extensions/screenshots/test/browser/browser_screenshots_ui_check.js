@@ -1,7 +1,6 @@
 "use strict";
 
-/* global add_task, is, promiseScreenshotsEnabled, promiseScreenshotsReset,
-   registerCleanupFunction */
+const BUTTON_ID = "pageAction-panel-screenshots";
 
 function checkElements(expectPresent, l) {
   for (let id of l) {
@@ -9,12 +8,17 @@ function checkElements(expectPresent, l) {
   }
 }
 
-add_task(function*() {
-  yield promiseScreenshotsEnabled();
+add_task(async function() {
+  await promiseScreenshotsEnabled();
 
-  registerCleanupFunction(function* () {
-    yield promiseScreenshotsReset();
+  registerCleanupFunction(async function() {
+    await promiseScreenshotsReset();
   });
 
-  checkElements(true, ["screenshots_mozilla_org-browser-action"]);
+
+  await BrowserTestUtils.waitForCondition(
+    () => document.getElementById(BUTTON_ID),
+    "Screenshots button should be present", 100, 100);
+
+  checkElements(true, [BUTTON_ID]);
 });

@@ -4,22 +4,58 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+const {utils: Cu} = Components;
 
 Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 
-Cu.import("chrome://marionette/content/error.js");
+const {
+  InvalidArgumentError,
+  InvalidSessionIDError,
+  JavaScriptError,
+  NoSuchWindowError,
+  UnexpectedAlertOpenError,
+  UnsupportedOperationError,
+} = Cu.import("chrome://marionette/content/error.js", {});
+const {pprint} = Cu.import("chrome://marionette/content/format.js", {});
 
 this.EXPORTED_SYMBOLS = ["assert"];
 
 const isFennec = () => AppConstants.platform == "android";
-const isB2G = () => AppConstants.MOZ_B2G;
-const isFirefox = () => Services.appinfo.name == "Firefox";
+const isFirefox = () =>
+    Services.appinfo.ID == "{ec8030f7-c20a-464f-9b0e-13a3a9e97384}";
 
-/** Shorthands for common assertions made in Marionette. */
+/**
+ * Shorthands for common assertions made in Marionette.
+ *
+ * @namespace
+ */
 this.assert = {};
+
+/**
+ * Asserts that an arbitrary object, <var>obj</var> is not acyclic.
+ *
+ * @param {*} obj
+ *     Object test.  This assertion is only meaningful if passed
+ *     an actual object or array.
+ * @param {Error=} [error=JavaScriptError] error
+ *     Error to throw if assertion fails.
+ * @param {string=} message
+ *     Message to use for <var>error</var> if assertion fails.  By default
+ *     it will use the error message provided by
+ *     <code>JSON.stringify</code>.
+ *
+ * @throws {JavaScriptError}
+ *     If <var>obj</var> is cyclic.
+ */
+assert.acyclic = function(obj, msg = "", error = JavaScriptError) {
+  try {
+    JSON.stringify(obj);
+  } catch (e) {
+    throw new error(msg || e);
+  }
+};
 
 /**
  * Asserts that Marionette has a session.
@@ -30,15 +66,15 @@ this.assert = {};
  *     Custom error message.
  *
  * @return {string}
- *     Session ID.
+ *     Current session's ID.
  *
  * @throws {InvalidSessionIDError}
- *     If |driver| does not have a session ID.
+ *     If <var>driver</var> does not have a session ID.
  */
-assert.session = function (driver, msg = "") {
+assert.session = function(driver, msg = "") {
   assert.that(sessionID => sessionID,
-      msg, InvalidSessionIDError)(driver.sessionId);
-  return driver.sessionId;
+      msg, InvalidSessionIDError)(driver.sessionID);
+  return driver.sessionID;
 };
 
 /**
@@ -50,7 +86,7 @@ assert.session = function (driver, msg = "") {
  * @throws {UnsupportedOperationError}
  *     If current browser is not Firefox.
  */
-assert.firefox = function (msg = "") {
+assert.firefox = function(msg = "") {
   msg = msg || "Only supported in Firefox";
   assert.that(isFirefox, msg, UnsupportedOperationError)();
 };
@@ -64,27 +100,13 @@ assert.firefox = function (msg = "") {
  * @throws {UnsupportedOperationError}
  *     If current browser is not Fennec.
  */
-assert.fennec = function (msg = "") {
+assert.fennec = function(msg = "") {
   msg = msg || "Only supported in Fennec";
   assert.that(isFennec, msg, UnsupportedOperationError)();
 };
 
 /**
- * Asserts that the current browser is B2G.
- *
- * @param {string=} msg
- *     Custom error message.
- *
- * @throws {UnsupportedOperationError}
- *     If the current browser is not B2G.
- */
-assert.b2g = function (msg = "") {
-  msg = msg || "Only supported in B2G";
-  assert.that(isB2G, msg, UnsupportedOperationError)();
-};
-
-/**
- * Asserts that the current |context| is content.
+ * Asserts that the current <var>context</var> is content.
  *
  * @param {string} context
  *     Context to test.
@@ -92,29 +114,14 @@ assert.b2g = function (msg = "") {
  *     Custom error message.
  *
  * @return {string}
- *     |context| is returned unaltered.
+ *     <var>context</var> is returned unaltered.
  *
  * @throws {UnsupportedOperationError}
- *     If |context| is not content.
+ *     If <var>context</var> is not content.
  */
-assert.content = function (context, msg = "") {
+assert.content = function(context, msg = "") {
   msg = msg || "Only supported in content context";
   assert.that(c => c.toString() == "content", msg, UnsupportedOperationError)(context);
-};
-
-/**
- * Asserts that the current browser is a mobile browser, that is either
- * B2G or Fennec.
- *
- * @param {string=} msg
- *     Custom error message.
- *
- * @throws {UnsupportedOperationError}
- *     If the current browser is not B2G or Fennec.
- */
-assert.mobile = function (msg = "") {
-  msg = msg || "Only supported in Fennec or B2G";
-  assert.that(() => isFennec() || isB2G(), msg, UnsupportedOperationError)();
 };
 
 /**
@@ -126,26 +133,60 @@ assert.mobile = function (msg = "") {
  *     Custom error message.
  *
  * @return {ChromeWindow}
- *     |win| is returned unaltered.
+ *     <var>win</var> is returned unaltered.
  *
  * @throws {NoSuchWindowError}
- *     If |win| has been closed.
+ *     If <var>win</var> has been closed.
  */
-assert.window = function (win, msg = "") {
+assert.window = function(win, msg = "") {
   msg = msg || "Unable to locate window";
-  return assert.that(w => {
-    try {
-      return w && w.document.defaultView;
-
-    // If the window is no longer available a TypeError is thrown.
-    } catch (e if e.name === "TypeError") {
-      return null;
-    }
-  }, msg, NoSuchWindowError)(win);
-}
+  return assert.that(w => w && !w.closed,
+      msg,
+      NoSuchWindowError)(win);
+};
 
 /**
- * Asserts that |obj| is defined.
+ * Asserts that |context| is a valid browsing context.
+ *
+ * @param {browser.Context} context
+ *     Browsing context to test.
+ * @param {string=} msg
+ *     Custom error message.
+ *
+ * @throws {NoSuchWindowError}
+ *     If |context| is invalid.
+ */
+assert.contentBrowser = function(context, msg = "") {
+  // TODO: The contentBrowser uses a cached tab, which is only updated when
+  // switchToTab is called. Because of that an additional check is needed to
+  // make sure that the chrome window has not already been closed.
+  assert.window(context && context.window);
+
+  msg = msg || "Current window does not have a content browser";
+  assert.that(c => c.contentBrowser,
+      msg,
+      NoSuchWindowError)(context);
+};
+
+/**
+ * Asserts that there is no current user prompt.
+ *
+ * @param {modal.Dialog} dialog
+ *     Reference to current dialogue.
+ * @param {string=} msg
+ *     Custom error message.
+ *
+ * @throws {UnexpectedAlertOpenError}
+ *     If there is a user prompt.
+ */
+assert.noUserPrompt = function(dialog, msg = "") {
+  assert.that(d => d === null || typeof d == "undefined",
+      msg,
+      UnexpectedAlertOpenError)(dialog);
+};
+
+/**
+ * Asserts that <var>obj</var> is defined.
  *
  * @param {?} obj
  *     Value to test.
@@ -153,18 +194,18 @@ assert.window = function (win, msg = "") {
  *     Custom error message.
  *
  * @return {?}
- *     |obj| is returned unaltered.
+ *     <var>obj</var> is returned unaltered.
  *
  * @throws {InvalidArgumentError}
- *     If |obj| is not defined.
+ *     If <var>obj</var> is not defined.
  */
-assert.defined = function (obj, msg = "") {
-  msg = msg || error.pprint`Expected ${obj} to be defined`;
+assert.defined = function(obj, msg = "") {
+  msg = msg || pprint`Expected ${obj} to be defined`;
   return assert.that(o => typeof o != "undefined", msg)(obj);
 };
 
 /**
- * Asserts that |obj| is a finite number.
+ * Asserts that <var>obj</var> is a finite number.
  *
  * @param {?} obj
  *     Value to test.
@@ -172,18 +213,18 @@ assert.defined = function (obj, msg = "") {
  *     Custom error message.
  *
  * @return {number}
- *     |obj| is returned unaltered.
+ *     <var>obj</var> is returned unaltered.
  *
  * @throws {InvalidArgumentError}
- *     If |obj| is not a number.
+ *     If <var>obj</var> is not a number.
  */
-assert.number = function (obj, msg = "") {
-  msg = msg || error.pprint`Expected ${obj} to be finite number`;
+assert.number = function(obj, msg = "") {
+  msg = msg || pprint`Expected ${obj} to be finite number`;
   return assert.that(Number.isFinite, msg)(obj);
 };
 
 /**
- * Asserts that |obj| is callable.
+ * Asserts that <var>obj</var> is callable.
  *
  * @param {?} obj
  *     Value to test.
@@ -191,18 +232,18 @@ assert.number = function (obj, msg = "") {
  *     Custom error message.
  *
  * @return {Function}
- *     |obj| is returned unaltered.
+ *     <var>obj</var> is returned unaltered.
  *
  * @throws {InvalidArgumentError}
- *     If |obj| is not callable.
+ *     If <var>obj</var> is not callable.
  */
-assert.callable = function (obj, msg = "") {
-  msg = msg || error.pprint`${obj} is not callable`;
+assert.callable = function(obj, msg = "") {
+  msg = msg || pprint`${obj} is not callable`;
   return assert.that(o => typeof o == "function", msg)(obj);
 };
 
 /**
- * Asserts that |obj| is an integer.
+ * Asserts that <var>obj</var> is an integer.
  *
  * @param {?} obj
  *     Value to test.
@@ -210,18 +251,18 @@ assert.callable = function (obj, msg = "") {
  *     Custom error message.
  *
  * @return {number}
- *     |obj| is returned unaltered.
+ *     <var>obj</var> is returned unaltered.
  *
  * @throws {InvalidArgumentError}
- *     If |obj| is not an integer.
+ *     If <var>obj</var> is not an integer.
  */
-assert.integer = function (obj, msg = "") {
-  msg = msg || error.pprint`Expected ${obj} to be an integer`;
-  return assert.that(Number.isInteger, msg)(obj);
+assert.integer = function(obj, msg = "") {
+  msg = msg || pprint`Expected ${obj} to be an integer`;
+  return assert.that(Number.isSafeInteger, msg)(obj);
 };
 
 /**
- * Asserts that |obj| is a positive integer.
+ * Asserts that <var>obj</var> is a positive integer.
  *
  * @param {?} obj
  *     Value to test.
@@ -229,19 +270,19 @@ assert.integer = function (obj, msg = "") {
  *     Custom error message.
  *
  * @return {number}
- *     |obj| is returned unaltered.
+ *     <var>obj</var> is returned unaltered.
  *
  * @throws {InvalidArgumentError}
- *     If |obj| is not a positive integer.
+ *     If <var>obj</var> is not a positive integer.
  */
-assert.positiveInteger = function (obj, msg = "") {
+assert.positiveInteger = function(obj, msg = "") {
   assert.integer(obj, msg);
-  msg = msg || error.pprint`Expected ${obj} to be >= 0`;
+  msg = msg || pprint`Expected ${obj} to be >= 0`;
   return assert.that(n => n >= 0, msg)(obj);
 };
 
 /**
- * Asserts that |obj| is a boolean.
+ * Asserts that <var>obj</var> is a boolean.
  *
  * @param {?} obj
  *     Value to test.
@@ -249,18 +290,18 @@ assert.positiveInteger = function (obj, msg = "") {
  *     Custom error message.
  *
  * @return {boolean}
- *     |obj| is returned unaltered.
+ *     <var>obj</var> is returned unaltered.
  *
  * @throws {InvalidArgumentError}
- *     If |obj| is not a boolean.
+ *     If <var>obj</var> is not a boolean.
  */
-assert.boolean = function (obj, msg = "") {
-  msg = msg || error.pprint`Expected ${obj} to be boolean`;
+assert.boolean = function(obj, msg = "") {
+  msg = msg || pprint`Expected ${obj} to be boolean`;
   return assert.that(b => typeof b == "boolean", msg)(obj);
 };
 
 /**
- * Asserts that |obj| is a string.
+ * Asserts that <var>obj</var> is a string.
  *
  * @param {?} obj
  *     Value to test.
@@ -268,18 +309,18 @@ assert.boolean = function (obj, msg = "") {
  *     Custom error message.
  *
  * @return {string}
- *     |obj| is returned unaltered.
+ *     <var>obj</var> is returned unaltered.
  *
  * @throws {InvalidArgumentError}
- *     If |obj| is not a string.
+ *     If <var>obj</var> is not a string.
  */
-assert.string = function (obj, msg = "") {
-  msg = msg || error.pprint`Expected ${obj} to be a string`;
+assert.string = function(obj, msg = "") {
+  msg = msg || pprint`Expected ${obj} to be a string`;
   return assert.that(s => typeof s == "string", msg)(obj);
 };
 
 /**
- * Asserts that |obj| is an object.
+ * Asserts that <var>obj</var> is an object.
  *
  * @param {?} obj
  *     Value to test.
@@ -287,46 +328,47 @@ assert.string = function (obj, msg = "") {
  *     Custom error message.
  *
  * @return {Object}
- *     |obj| is returned unaltered.
+ *     obj| is returned unaltered.
  *
  * @throws {InvalidArgumentError}
- *     If |obj| is not an object.
+ *     If <var>obj</var> is not an object.
  */
-assert.object = function (obj, msg = "") {
-  msg = msg || error.pprint`Expected ${obj} to be an object`;
+assert.object = function(obj, msg = "") {
+  msg = msg || pprint`Expected ${obj} to be an object`;
   return assert.that(o => {
     // unable to use instanceof because LHS and RHS may come from
     // different globals
     let s = Object.prototype.toString.call(o);
     return s == "[object Object]" || s == "[object nsJSIID]";
-  })(obj);
+  }, msg)(obj);
 };
 
 /**
- * Asserts that |prop| is in |obj|.
+ * Asserts that <var>prop</var> is in <var>obj</var>.
  *
  * @param {?} prop
- *     Own property to test if is in |obj|.
+ *     Own property to test if is in <var>obj</var>.
  * @param {?} obj
  *     Object.
  * @param {string=} msg
  *     Custom error message.
  *
  * @return {?}
- *     Value of |obj|'s own property |prop|.
+ *     Value of <var>obj</var>'s own property <var>prop</var>.
  *
  * @throws {InvalidArgumentError}
- *     If |prop| is not in |obj|, or |obj| is not an object.
+ *     If <var>prop</var> is not in <var>obj</var>, or <var>obj</var>
+ *     is not an object.
  */
-assert.in = function (prop, obj, msg = "") {
+assert.in = function(prop, obj, msg = "") {
   assert.object(obj, msg);
-  msg = msg || error.pprint`Expected ${prop} in ${obj}`;
+  msg = msg || pprint`Expected ${prop} in ${obj}`;
   assert.that(p => obj.hasOwnProperty(p), msg)(prop);
   return obj[prop];
 };
 
 /**
- * Asserts that |obj| is an Array.
+ * Asserts that <var>obj</var> is an Array.
  *
  * @param {?} obj
  *     Value to test.
@@ -334,13 +376,13 @@ assert.in = function (prop, obj, msg = "") {
  *     Custom error message.
  *
  * @return {Object}
- *     |obj| is returned unaltered.
+ *     <var>obj</var> is returned unaltered.
  *
  * @throws {InvalidArgumentError}
- *     If |obj| is not an Array.
+ *     If <var>obj</var> is not an Array.
  */
-assert.array = function (obj, msg = "") {
-  msg = msg || error.pprint`Expected ${obj} to be an Array`;
+assert.array = function(obj, msg = "") {
+  msg = msg || pprint`Expected ${obj} to be an Array`;
   return assert.that(Array.isArray, msg)(obj);
 };
 
@@ -349,19 +391,19 @@ assert.array = function (obj, msg = "") {
  *
  * @param {function(?): boolean} predicate
  *     Evaluated on calling the return value of this function.  If its
- *     return value of the inner function is false, |error| is thrown
- *     with |message|.
+ *     return value of the inner function is false, <var>error</var>
+ *     is thrown with <var>message</var>.
  * @param {string=} message
  *     Custom error message.
  * @param {Error=} error
  *     Custom error type by its class.
  *
  * @return {function(?): ?}
- *     Function that takes and returns the passed in value unaltered, and
- *     which may throw |error| with |message| if |predicate| evaluates
- *     to false.
+ *     Function that takes and returns the passed in value unaltered,
+ *     and which may throw <var>error</var> with <var>message</var>
+ *     if <var>predicate</var> evaluates to false.
  */
-assert.that = function (
+assert.that = function(
     predicate, message = "", error = InvalidArgumentError) {
   return obj => {
     if (!predicate(obj)) {

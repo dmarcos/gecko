@@ -6,19 +6,20 @@ use dom::bindings::codegen::Bindings::DissimilarOriginWindowBinding;
 use dom::bindings::codegen::Bindings::DissimilarOriginWindowBinding::DissimilarOriginWindowMethods;
 use dom::bindings::error::{Error, ErrorResult};
 use dom::bindings::inheritance::Castable;
-use dom::bindings::js::{JS, MutNullableJS, Root};
+use dom::bindings::root::{Dom, DomRoot, MutNullableDom};
 use dom::bindings::str::DOMString;
 use dom::bindings::structuredclone::StructuredCloneData;
-use dom::browsingcontext::BrowsingContext;
 use dom::dissimilaroriginlocation::DissimilarOriginLocation;
 use dom::globalscope::GlobalScope;
+use dom::windowproxy::WindowProxy;
 use dom_struct::dom_struct;
 use ipc_channel::ipc;
 use js::jsapi::{JSContext, HandleValue};
 use js::jsval::{JSVal, UndefinedValue};
 use msg::constellation_msg::PipelineId;
-use script_traits::ScriptMsg as ConstellationMsg;
+use script_traits::ScriptMsg;
 use servo_url::ImmutableOrigin;
+use servo_url::MutableOrigin;
 use servo_url::ServoUrl;
 
 /// Represents a dissimilar-origin `Window` that exists in another script thread.
@@ -27,7 +28,7 @@ use servo_url::ServoUrl;
 /// directly, but some of its accessors (for example `window.parent`)
 /// still need to function.
 ///
-/// In `browsingcontext.rs`, we create a custom window proxy for these windows,
+/// In `windowproxy.rs`, we create a custom window proxy for these windows,
 /// that throws security exceptions for most accessors. This is not a replacement
 /// for XOWs, but provides belt-and-braces security.
 #[dom_struct]
@@ -35,73 +36,86 @@ pub struct DissimilarOriginWindow {
     /// The global for this window.
     globalscope: GlobalScope,
 
-    /// The browsing context this window is part of.
-    browsing_context: JS<BrowsingContext>,
+    /// The window proxy for this window.
+    window_proxy: Dom<WindowProxy>,
 
     /// The location of this window, initialized lazily.
-    location: MutNullableJS<DissimilarOriginLocation>,
+    location: MutNullableDom<DissimilarOriginLocation>,
 }
 
 impl DissimilarOriginWindow {
     #[allow(unsafe_code)]
-    pub fn new(global_to_clone_from: &GlobalScope, browsing_context: &BrowsingContext) -> Root<DissimilarOriginWindow> {
+    pub fn new(
+        global_to_clone_from: &GlobalScope,
+        window_proxy: &WindowProxy,
+    ) -> DomRoot<Self> {
         let cx = global_to_clone_from.get_cx();
         // Any timer events fired on this window are ignored.
         let (timer_event_chan, _) = ipc::channel().unwrap();
-        let win = box DissimilarOriginWindow {
-            globalscope: GlobalScope::new_inherited(PipelineId::new(),
-                                                    global_to_clone_from.devtools_chan().cloned(),
-                                                    global_to_clone_from.mem_profiler_chan().clone(),
-                                                    global_to_clone_from.time_profiler_chan().clone(),
-                                                    global_to_clone_from.constellation_chan().clone(),
-                                                    global_to_clone_from.scheduler_chan().clone(),
-                                                    global_to_clone_from.resource_threads().clone(),
-                                                    timer_event_chan),
-            browsing_context: JS::from_ref(browsing_context),
-            location: MutNullableJS::new(None),
-        };
+        let win = Box::new(Self {
+            globalscope: GlobalScope::new_inherited(
+                PipelineId::new(),
+                global_to_clone_from.devtools_chan().cloned(),
+                global_to_clone_from.mem_profiler_chan().clone(),
+                global_to_clone_from.time_profiler_chan().clone(),
+                global_to_clone_from.script_to_constellation_chan().clone(),
+                global_to_clone_from.scheduler_chan().clone(),
+                global_to_clone_from.resource_threads().clone(),
+                timer_event_chan,
+                global_to_clone_from.origin().clone(),
+                // FIXME(nox): The microtask queue is probably not important
+                // here, but this whole DOM interface is a hack anyway.
+                global_to_clone_from.microtask_queue().clone(),
+            ),
+            window_proxy: Dom::from_ref(window_proxy),
+            location: Default::default(),
+        });
         unsafe { DissimilarOriginWindowBinding::Wrap(cx, win) }
+    }
+
+    pub fn origin(&self) -> &MutableOrigin {
+        self.upcast::<GlobalScope>().origin()
     }
 }
 
 impl DissimilarOriginWindowMethods for DissimilarOriginWindow {
     // https://html.spec.whatwg.org/multipage/#dom-window
-    fn Window(&self) -> Root<BrowsingContext> {
-        Root::from_ref(&*self.browsing_context)
+    fn Window(&self) -> DomRoot<WindowProxy> {
+        DomRoot::from_ref(&*self.window_proxy)
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-self
-    fn Self_(&self) -> Root<BrowsingContext> {
-        Root::from_ref(&*self.browsing_context)
+    fn Self_(&self) -> DomRoot<WindowProxy> {
+        DomRoot::from_ref(&*self.window_proxy)
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-frames
-    fn Frames(&self) -> Root<BrowsingContext> {
-        Root::from_ref(&*self.browsing_context)
+    fn Frames(&self) -> DomRoot<WindowProxy> {
+        DomRoot::from_ref(&*self.window_proxy)
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-parent
-    fn GetParent(&self) -> Option<Root<BrowsingContext>> {
+    fn GetParent(&self) -> Option<DomRoot<WindowProxy>> {
         // Steps 1-3.
-        if self.browsing_context.is_discarded() {
+        if self.window_proxy.is_browsing_context_discarded() {
             return None;
         }
         // Step 4.
-        if let Some(parent) = self.browsing_context.parent() {
-            return Some(Root::from_ref(parent));
+        if let Some(parent) = self.window_proxy.parent() {
+            return Some(DomRoot::from_ref(parent));
         }
         // Step 5.
-        Some(Root::from_ref(&*self.browsing_context))
+        Some(DomRoot::from_ref(&*self.window_proxy))
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-top
-    fn GetTop(&self) -> Option<Root<BrowsingContext>> {
+    fn GetTop(&self) -> Option<DomRoot<WindowProxy>> {
         // Steps 1-3.
-        if self.browsing_context.is_discarded() {
+        if self.window_proxy.is_browsing_context_discarded() {
             return None;
         }
         // Steps 4-5.
-        Some(Root::from_ref(self.browsing_context.top()))
+        Some(DomRoot::from_ref(self.window_proxy.top()))
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-length
@@ -139,7 +153,7 @@ impl DissimilarOriginWindowMethods for DissimilarOriginWindow {
 
         // Step 1-2, 6-8.
         // TODO(#12717): Should implement the `transfer` argument.
-        let data = try!(StructuredCloneData::write(cx, message));
+        let data = StructuredCloneData::write(cx, message)?;
 
         // Step 9.
         self.post_message(origin, data);
@@ -170,14 +184,16 @@ impl DissimilarOriginWindowMethods for DissimilarOriginWindow {
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-location
-    fn Location(&self) -> Root<DissimilarOriginLocation> {
+    fn Location(&self) -> DomRoot<DissimilarOriginLocation> {
         self.location.or_init(|| DissimilarOriginLocation::new(self))
     }
 }
 
 impl DissimilarOriginWindow {
     pub fn post_message(&self, origin: Option<ImmutableOrigin>, data: StructuredCloneData) {
-        let msg = ConstellationMsg::PostMessage(self.browsing_context.frame_id(), origin, data.move_to_arraybuffer());
-        let _ = self.upcast::<GlobalScope>().constellation_chan().send(msg);
+        let msg = ScriptMsg::PostMessage(self.window_proxy.browsing_context_id(),
+                                                origin,
+                                                data.move_to_arraybuffer());
+        let _ = self.upcast::<GlobalScope>().script_to_constellation_chan().send(msg);
     }
 }

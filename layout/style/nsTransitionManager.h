@@ -1,4 +1,5 @@
-/* vim: set shiftwidth=2 tabstop=8 autoindent cindent expandtab: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -24,8 +25,10 @@ class nsCSSPropertyIDSet;
 
 namespace mozilla {
 enum class CSSPseudoElementType : uint8_t;
+class GeckoStyleContext;
 struct Keyframe;
 struct StyleTransition;
+class ServoStyleContext;
 } // namespace mozilla
 
 /*****************************************************************************
@@ -136,8 +139,9 @@ public:
   void GetTransitionProperty(nsString& aRetVal) const;
 
   // Animation interface overrides
-  virtual AnimationPlayState PlayStateFromJS() const override;
-  virtual void PlayFromJS(ErrorResult& aRv) override;
+  AnimationPlayState PlayStateFromJS() const override;
+  bool PendingFromJS() const override;
+  void PlayFromJS(ErrorResult& aRv) override;
 
   // A variant of Play() that avoids posting style updates since this method
   // is expected to be called whilst already updating style.
@@ -283,15 +287,15 @@ protected:
 template <>
 struct AnimationTypeTraits<dom::CSSTransition>
 {
-  static nsIAtom* ElementPropertyAtom()
+  static nsAtom* ElementPropertyAtom()
   {
     return nsGkAtoms::transitionsProperty;
   }
-  static nsIAtom* BeforePropertyAtom()
+  static nsAtom* BeforePropertyAtom()
   {
     return nsGkAtoms::transitionsOfBeforeProperty;
   }
-  static nsIAtom* AfterPropertyAtom()
+  static nsAtom* AfterPropertyAtom()
   {
     return nsGkAtoms::transitionsOfAfterProperty;
   }
@@ -368,8 +372,8 @@ public:
    * take care of causing the necessary restyle afterwards.
    */
   void StyleContextChanged(mozilla::dom::Element *aElement,
-                           nsStyleContext *aOldStyleContext,
-                           RefPtr<nsStyleContext>* aNewStyleContext /* inout */);
+                           mozilla::GeckoStyleContext* aOldStyleContext,
+                           RefPtr<mozilla::GeckoStyleContext>* aNewStyleContext /* inout */);
 
   /**
    * Update transitions for stylo.
@@ -377,8 +381,8 @@ public:
   bool UpdateTransitions(
     mozilla::dom::Element *aElement,
     mozilla::CSSPseudoElementType aPseudoType,
-    const mozilla::ServoComputedValuesWithParent& aOldStyle,
-    const mozilla::ServoComputedValuesWithParent& aNewStyle);
+    const mozilla::ServoStyleContext* aOldStyle,
+    const mozilla::ServoStyleContext* aNewStyle);
 
   /**
    * When we're resolving style for an element that previously didn't have
@@ -390,7 +394,7 @@ public:
    */
   void PruneCompletedTransitions(mozilla::dom::Element* aElement,
                                  mozilla::CSSPseudoElementType aPseudoType,
-                                 nsStyleContext* aNewStyleContext);
+                                 mozilla::GeckoStyleContext* aNewStyleContext);
 
   void SetInAnimationOnlyStyleUpdate(bool aInAnimationOnlyUpdate) {
     mInAnimationOnlyStyleUpdate = aInAnimationOnlyUpdate;

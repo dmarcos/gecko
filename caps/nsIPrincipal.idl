@@ -42,7 +42,7 @@ interface nsIDOMDocument;
 
 [ptr] native JSContext(JSContext);
 [ptr] native JSPrincipals(JSPrincipals);
-[ptr] native PrincipalArray(nsTArray<nsCOMPtr<nsIPrincipal> >);
+[ref] native PrincipalArray(const nsTArray<nsCOMPtr<nsIPrincipal>>);
 [ref] native const_OriginAttributes(const mozilla::OriginAttributes);
 
 [scriptable, builtinclass, uuid(f75f502d-79fd-48be-a079-e5a7b8f80c8b)]
@@ -251,33 +251,6 @@ interface nsIPrincipal : nsISerializable
      */
     readonly attribute ACString baseDomain;
 
-    const short APP_STATUS_NOT_INSTALLED = 0;
-    const short APP_STATUS_INSTALLED     = 1;
-    const short APP_STATUS_PRIVILEGED    = 2;
-    const short APP_STATUS_CERTIFIED     = 3;
-
-    /**
-     * Gets the principal's app status, which indicates whether the principal
-     * corresponds to "app code", and if it does, how privileged that code is.
-     * This method returns one of the APP_STATUS constants above.
-     *
-     * Note that a principal may have
-     *
-     *   appId != nsIScriptSecurityManager::NO_APP_ID &&
-     *   appId != nsIScriptSecurityManager::UNKNOWN_APP_ID
-     *
-     * and still have appStatus == APP_STATUS_NOT_INSTALLED.  That's because
-     * appId identifies the app that contains this principal, but a window
-     * might be contained in an app and not be running code that the app has
-     * vouched for.  For example, the window might be inside an <iframe
-     * mozbrowser>, or the window's origin might not match the app's origin.
-     *
-     * If you're doing a check to determine "does this principal correspond to
-     * app code?", you must check appStatus; checking appId != NO_APP_ID is not
-     * sufficient.
-     */
-    [infallible] readonly attribute unsigned short appStatus;
-
     /**
      * Gets the id of the app this principal is inside.  If this principal is
      * not inside an app, returns nsIScriptSecurityManager::NO_APP_ID.
@@ -293,9 +266,6 @@ interface nsIPrincipal : nsISerializable
      * inside an app frame; in this case, the content inside the iframe should
      * not have any of the app's permissions, even if the iframe is at the same
      * origin as the app.
-     *
-     * If you're doing a security check based on appId, you must check
-     * appStatus as well.
      */
     [infallible] readonly attribute unsigned long appId;
 
@@ -303,6 +273,8 @@ interface nsIPrincipal : nsISerializable
      * Gets the ID of the add-on this principal belongs to.
      */
     readonly attribute AString addonId;
+
+    readonly attribute nsISupports addonPolicy;
 
     /**
      * Gets the id of the user context this principal is inside.  If this
@@ -326,13 +298,6 @@ interface nsIPrincipal : nsISerializable
      * containing document is chrome.
      */
     [infallible] readonly attribute boolean isInIsolatedMozBrowserElement;
-
-    /**
-     * Returns true if this principal has an unknown appId. This shouldn't
-     * generally be used. We only expose it due to not providing the correct
-     * appId everywhere where we construct principals.
-     */
-    [infallible] readonly attribute boolean unknownAppId;
 
     /**
      * Returns true iff this is a null principal (corresponding to an
@@ -372,8 +337,15 @@ interface nsIExpandedPrincipal : nsISupports
 {
   /**
    * An array of principals that the expanded principal subsumes.
+   *
+   * When an expanded principal is used as a triggering principal for a
+   * request that inherits a security context, one of its constitutent
+   * principals is inherited rather than the expanded principal itself. The
+   * last principal in the whitelist is the default principal to inherit.
+   *
    * Note: this list is not reference counted, it is shared, so
    * should not be changed and should only be used ephemerally.
    */
-  [noscript] readonly attribute PrincipalArray whiteList;
+  [noscript, notxpcom, nostdcall]
+  PrincipalArray WhiteList();
 };

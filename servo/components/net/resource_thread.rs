@@ -8,17 +8,20 @@ use cookie;
 use cookie_rs;
 use cookie_storage::CookieStorage;
 use devtools_traits::DevtoolsControlMsg;
-use fetch::methods::{FetchContext, fetch};
+use fetch::cors_cache::CorsCache;
+use fetch::methods::{CancellationListener, FetchContext, fetch};
 use filemanager_thread::{FileManager, TFDProvider};
 use hsts::HstsList;
-use http_loader::HttpState;
+use http_cache::HttpCache;
+use http_loader::{HttpState, http_redirect_fetch};
 use hyper_serde::Serde;
 use ipc_channel::ipc::{self, IpcReceiver, IpcReceiverSet, IpcSender};
 use net_traits::{CookieSource, CoreResourceThread};
-use net_traits::{CoreResourceMsg, FetchResponseMsg};
-use net_traits::{CustomResponseMediator, ResourceId};
-use net_traits::{ResourceThreads, WebSocketCommunicate, WebSocketConnectData};
+use net_traits::{CoreResourceMsg, CustomResponseMediator, FetchChannels};
+use net_traits::{FetchResponseMsg, ResourceThreads, WebSocketDomAction};
+use net_traits::WebSocketNetworkEvent;
 use net_traits::request::{Request, RequestInit};
+use net_traits::response::{Response, ResponseInit};
 use net_traits::storage_thread::StorageThreadMsg;
 use profile_traits::time::ProfilerChan;
 use serde::{Deserialize, Serialize};
@@ -33,7 +36,7 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::sync::mpsc::Sender;
 use std::thread;
 use storage_thread::StorageThreadFactory;
@@ -89,6 +92,7 @@ struct ResourceChannelManager {
 fn create_http_states(config_dir: Option<&Path>) -> (Arc<HttpState>, Arc<HttpState>) {
     let mut hsts_list = HstsList::from_servo_preload();
     let mut auth_cache = AuthCache::new();
+    let http_cache = HttpCache::new();
     let mut cookie_jar = CookieStorage::new(150);
     if let Some(config_dir) = config_dir {
         read_json_from_file(&mut auth_cache, config_dir, "auth_cache.json");
@@ -107,6 +111,7 @@ fn create_http_states(config_dir: Option<&Path>) -> (Arc<HttpState>, Arc<HttpSta
     let http_state = HttpState {
         cookie_jar: RwLock::new(cookie_jar),
         auth_cache: RwLock::new(auth_cache),
+        http_cache: RwLock::new(http_cache),
         hsts_list: RwLock::new(hsts_list),
         ssl_client: ssl_client.clone(),
         connector: create_http_connector(ssl_client),
@@ -153,10 +158,16 @@ impl ResourceChannelManager {
                    msg: CoreResourceMsg,
                    http_state: &Arc<HttpState>) -> bool {
         match msg {
-            CoreResourceMsg::Fetch(init, sender) =>
-                self.resource_manager.fetch(init, sender, http_state),
-            CoreResourceMsg::WebsocketConnect(connect, connect_data) =>
-                self.resource_manager.websocket_connect(connect, connect_data, http_state),
+            CoreResourceMsg::Fetch(req_init, channels) => {
+                match channels {
+                    FetchChannels::ResponseMsg(sender, cancel_chan) =>
+                        self.resource_manager.fetch(req_init, None, sender, http_state, cancel_chan),
+                    FetchChannels::WebSocket { event_sender, action_receiver } =>
+                        self.resource_manager.websocket_connect(req_init, event_sender, action_receiver, http_state),
+                }
+            }
+            CoreResourceMsg::FetchRedirect(req_init, res_init, sender, cancel_chan) =>
+                self.resource_manager.fetch(req_init, Some(res_init), sender, http_state, cancel_chan),
             CoreResourceMsg::SetCookieForUrl(request, cookie, source) =>
                 self.resource_manager.set_cookie_for_url(&request, cookie.into_inner(), source, http_state),
             CoreResourceMsg::SetCookiesForUrl(request, cookies, source) => {
@@ -175,12 +186,6 @@ impl ResourceChannelManager {
                 let mut cookie_jar = http_state.cookie_jar.write().unwrap();
                 let cookies = cookie_jar.cookies_data_for_url(&url, source).map(Serde).collect();
                 consumer.send(cookies).unwrap();
-            }
-            CoreResourceMsg::Cancel(res_id) => {
-                if let Some(cancel_sender) = self.resource_manager.cancel_load_map.get(&res_id) {
-                    let _ = cancel_sender.send(());
-                }
-                self.resource_manager.cancel_load_map.remove(&res_id);
             }
             CoreResourceMsg::Synchronize(sender) => {
                 let _ = sender.send(());
@@ -210,7 +215,7 @@ impl ResourceChannelManager {
 }
 
 pub fn read_json_from_file<T>(data: &mut T, config_dir: &Path, filename: &str)
-    where T: Deserialize
+    where T: for<'de> Deserialize<'de>
 {
     let path = config_dir.join(filename);
     let display = path.display();
@@ -291,7 +296,6 @@ pub struct CoreResourceManager {
     devtools_chan: Option<Sender<DevtoolsControlMsg>>,
     swmanager_chan: Option<IpcSender<CustomResponseMediator>>,
     filemanager: FileManager,
-    cancel_load_map: HashMap<ResourceId, Sender<()>>,
 }
 
 impl CoreResourceManager {
@@ -303,7 +307,6 @@ impl CoreResourceManager {
             devtools_chan: devtools_channel,
             swmanager_chan: None,
             filemanager: FileManager::new(),
-            cancel_load_map: HashMap::new(),
         }
     }
 
@@ -318,16 +321,18 @@ impl CoreResourceManager {
     }
 
     fn fetch(&self,
-             init: RequestInit,
+             req_init: RequestInit,
+             res_init_: Option<ResponseInit>,
              mut sender: IpcSender<FetchResponseMsg>,
-             http_state: &Arc<HttpState>) {
+             http_state: &Arc<HttpState>,
+             cancel_chan: Option<IpcReceiver<()>>) {
         let http_state = http_state.clone();
         let ua = self.user_agent.clone();
         let dc = self.devtools_chan.clone();
         let filemanager = self.filemanager.clone();
 
-        thread::Builder::new().name(format!("fetch thread for {}", init.url)).spawn(move || {
-            let mut request = Request::from_init(init);
+        thread::Builder::new().name(format!("fetch thread for {}", req_init.url)).spawn(move || {
+            let mut request = Request::from_init(req_init);
             // XXXManishearth: Check origin against pipeline id (also ensure that the mode is allowed)
             // todo load context / mimesniff in fetch
             // todo referrer policy?
@@ -337,15 +342,32 @@ impl CoreResourceManager {
                 user_agent: ua,
                 devtools_chan: dc,
                 filemanager: filemanager,
+                cancellation_listener: Arc::new(Mutex::new(CancellationListener::new(cancel_chan))),
             };
-            fetch(&mut request, &mut sender, &context);
+
+            match res_init_ {
+                Some(res_init) => {
+                    let response = Response::from_init(res_init);
+                    http_redirect_fetch(&mut request,
+                                        &mut CorsCache::new(),
+                                        response,
+                                        true,
+                                        &mut sender,
+                                        &mut None,
+                                        &context);
+                },
+                None => fetch(&mut request, &mut sender, &context),
+            };
         }).expect("Thread spawning failed");
     }
 
-    fn websocket_connect(&self,
-                         connect: WebSocketCommunicate,
-                         connect_data: WebSocketConnectData,
-                         http_state: &Arc<HttpState>) {
-        websocket_loader::init(connect, connect_data, http_state.clone());
+    fn websocket_connect(
+        &self,
+        request: RequestInit,
+        event_sender: IpcSender<WebSocketNetworkEvent>,
+        action_receiver: IpcReceiver<WebSocketDomAction>,
+        http_state: &Arc<HttpState>
+    ) {
+        websocket_loader::init(request, event_sender, action_receiver, http_state.clone());
     }
 }

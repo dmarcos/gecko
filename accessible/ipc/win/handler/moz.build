@@ -6,7 +6,10 @@
 
 SharedLibrary('AccessibleHandler')
 
-EXPORTS.mozilla.a11y += ['AccessibleHandler.h']
+EXPORTS.mozilla.a11y += [
+    'AccessibleHandler.h',
+    'HandlerDataCleanup.h',
+]
 
 LOCAL_INCLUDES += [
     '/accessible/interfaces/ia2',
@@ -20,7 +23,6 @@ SOURCES += [
     '!HandlerData_p.c',
     'AccessibleHandler.cpp',
     'AccessibleHandlerControl.cpp',
-    'AccessibleTextTearoff.cpp',
 ]
 
 GENERATED_FILES += [
@@ -49,6 +51,7 @@ RCINCLUDE = 'AccessibleHandler.rc'
 # we add the prefix "Proxy" to all of the generated counterparts.
 DEFINES['ENTRY_PREFIX'] = 'Proxy'
 DEFINES['REGISTER_PROXY_DLL'] = True
+LIBRARY_DEFINES['MOZ_MSCOM_REMARSHAL_NO_HANDLER'] = True
 
 # We want to generate distinct UUIDs on a per-channel basis, so we need
 # finer granularity than the standard preprocessor definitions offer.
@@ -66,5 +69,5 @@ USE_STATIC_LIBS = True
 LIBRARY_DEFINES['UNICODE'] = True
 LIBRARY_DEFINES['_UNICODE'] = True
 LIBRARY_DEFINES['MOZ_NO_MOZALLOC'] = True
-DISABLE_STL_WRAPPING = True
+DisableStlWrapping()
 

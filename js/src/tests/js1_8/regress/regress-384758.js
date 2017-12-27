@@ -1,3 +1,4 @@
+// |reftest| skip-if(!release_or_beta)
 /* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -16,11 +17,10 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
 
-  expect = 'SyntaxError: missing ; before statement';
+  expect = 'SyntaxError: unexpected token: identifier';
   try
   {
     eval('(function() { if(t) function x() foo() bar(); })');
@@ -31,6 +31,4 @@ function test()
   }
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

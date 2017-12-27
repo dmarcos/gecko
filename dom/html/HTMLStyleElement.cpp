@@ -41,42 +41,19 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(HTMLStyleElement,
   tmp->nsStyleLinkElement::Unlink();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
-NS_IMPL_ADDREF_INHERITED(HTMLStyleElement, Element)
-NS_IMPL_RELEASE_INHERITED(HTMLStyleElement, Element)
-
-
-// QueryInterface implementation for HTMLStyleElement
-NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(HTMLStyleElement)
-  NS_INTERFACE_TABLE_INHERITED(HTMLStyleElement,
-                               nsIDOMHTMLStyleElement,
-                               nsIStyleSheetLinkingElement,
-                               nsIMutationObserver)
-NS_INTERFACE_TABLE_TAIL_INHERITING(nsGenericHTMLElement)
+NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(HTMLStyleElement,
+                                             nsGenericHTMLElement,
+                                             nsIStyleSheetLinkingElement,
+                                             nsIMutationObserver)
 
 NS_IMPL_ELEMENT_CLONE(HTMLStyleElement)
 
-
-NS_IMETHODIMP
-HTMLStyleElement::GetMozDisabled(bool* aDisabled)
-{
-  NS_ENSURE_ARG_POINTER(aDisabled);
-
-  *aDisabled = Disabled();
-  return NS_OK;
-}
 
 bool
 HTMLStyleElement::Disabled()
 {
   StyleSheet* ss = GetSheet();
   return ss && ss->Disabled();
-}
-
-NS_IMETHODIMP
-HTMLStyleElement::SetMozDisabled(bool aDisabled)
-{
-  SetDisabled(aDisabled);
-  return NS_OK;
 }
 
 void
@@ -86,10 +63,6 @@ HTMLStyleElement::SetDisabled(bool aDisabled)
     ss->SetDisabled(aDisabled);
   }
 }
-
-NS_IMPL_STRING_ATTR(HTMLStyleElement, Media, media)
-NS_IMPL_BOOL_ATTR(HTMLStyleElement, Scoped, scoped)
-NS_IMPL_STRING_ATTR(HTMLStyleElement, Type, type)
 
 void
 HTMLStyleElement::CharacterDataChanged(nsIDocument* aDocument,
@@ -102,8 +75,7 @@ HTMLStyleElement::CharacterDataChanged(nsIDocument* aDocument,
 void
 HTMLStyleElement::ContentAppended(nsIDocument* aDocument,
                                   nsIContent* aContainer,
-                                  nsIContent* aFirstNewContent,
-                                  int32_t aNewIndexInContainer)
+                                  nsIContent* aFirstNewContent)
 {
   ContentChanged(aContainer);
 }
@@ -111,8 +83,7 @@ HTMLStyleElement::ContentAppended(nsIDocument* aDocument,
 void
 HTMLStyleElement::ContentInserted(nsIDocument* aDocument,
                                   nsIContent* aContainer,
-                                  nsIContent* aChild,
-                                  int32_t aIndexInContainer)
+                                  nsIContent* aChild)
 {
   ContentChanged(aChild);
 }
@@ -121,7 +92,6 @@ void
 HTMLStyleElement::ContentRemoved(nsIDocument* aDocument,
                                  nsIContent* aContainer,
                                  nsIContent* aChild,
-                                 int32_t aIndexInContainer,
                                  nsIContent* aPreviousSibling)
 {
   ContentChanged(aChild);
@@ -130,6 +100,7 @@ HTMLStyleElement::ContentRemoved(nsIDocument* aDocument,
 void
 HTMLStyleElement::ContentChanged(nsIContent* aContent)
 {
+  mTriggeringPrincipal = nullptr;
   if (nsContentUtils::IsInSameAnonymousTree(this, aContent)) {
     UpdateStyleSheetInternal(nullptr, nullptr);
   }
@@ -146,9 +117,10 @@ HTMLStyleElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
   NS_ENSURE_SUCCESS(rv, rv);
 
   void (HTMLStyleElement::*update)() = &HTMLStyleElement::UpdateStyleSheetInternal;
-  nsContentUtils::AddScriptRunner(NewRunnableMethod(this, update));
+  nsContentUtils::AddScriptRunner(
+    NewRunnableMethod("dom::HTMLStyleElement::BindToTree", this, update));
 
-  return rv;  
+  return rv;
 }
 
 void
@@ -170,22 +142,26 @@ HTMLStyleElement::UnbindFromTree(bool aDeep, bool aNullParent)
 }
 
 nsresult
-HTMLStyleElement::AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                               const nsAttrValue* aValue, bool aNotify)
+HTMLStyleElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
+                               const nsAttrValue* aValue,
+                               const nsAttrValue* aOldValue,
+                               nsIPrincipal* aSubjectPrincipal,
+                               bool aNotify)
 {
   if (aNameSpaceID == kNameSpaceID_None) {
     if (aName == nsGkAtoms::title ||
         aName == nsGkAtoms::media ||
         aName == nsGkAtoms::type) {
       UpdateStyleSheetInternal(nullptr, nullptr, true);
-    } else if (aName == nsGkAtoms::scoped) {
+    } else if (aName == nsGkAtoms::scoped &&
+               OwnerDoc()->IsScopedStyleEnabled()) {
       bool isScoped = aValue;
       UpdateStyleSheetScopedness(isScoped);
     }
   }
 
   return nsGenericHTMLElement::AfterSetAttr(aNameSpaceID, aName, aValue,
-                                            aNotify);
+                                            aOldValue, aSubjectPrincipal, aNotify);
 }
 
 NS_IMETHODIMP
@@ -199,21 +175,33 @@ HTMLStyleElement::GetInnerHTML(nsAString& aInnerHTML)
 
 void
 HTMLStyleElement::SetInnerHTML(const nsAString& aInnerHTML,
+                               nsIPrincipal& aScriptedPrincipal,
                                ErrorResult& aError)
+{
+  SetTextContentInternal(aInnerHTML, &aScriptedPrincipal, aError);
+}
+
+void
+HTMLStyleElement::SetTextContentInternal(const nsAString& aTextContent,
+                                         nsIPrincipal* aScriptedPrincipal,
+                                         ErrorResult& aError)
 {
   SetEnableUpdates(false);
 
-  aError = nsContentUtils::SetNodeTextContent(this, aInnerHTML, true);
+  aError = nsContentUtils::SetNodeTextContent(this, aTextContent, true);
 
   SetEnableUpdates(true);
+
+  mTriggeringPrincipal = aScriptedPrincipal;
 
   UpdateStyleSheetInternal(nullptr, nullptr);
 }
 
 already_AddRefed<nsIURI>
-HTMLStyleElement::GetStyleSheetURL(bool* aIsInline)
+HTMLStyleElement::GetStyleSheetURL(bool* aIsInline, nsIPrincipal** aTriggeringPrincipal)
 {
   *aIsInline = true;
+  *aTriggeringPrincipal = do_AddRef(mTriggeringPrincipal).take();
   return nullptr;
 }
 
@@ -241,7 +229,8 @@ HTMLStyleElement::GetStyleSheetInfo(nsAString& aTitle,
 
   GetAttr(kNameSpaceID_None, nsGkAtoms::type, aType);
 
-  *aIsScoped = HasAttr(kNameSpaceID_None, nsGkAtoms::scoped);
+  *aIsScoped = HasAttr(kNameSpaceID_None, nsGkAtoms::scoped) &&
+               OwnerDoc()->IsScopedStyleEnabled();
 
   nsAutoString mimeType;
   nsAutoString notUsed;

@@ -14,17 +14,13 @@
 #include "nsIAsyncOutputStream.h"
 #include "nsITimer.h"
 #include "nsIDNSListener.h"
+#include "nsINamed.h"
 #include "nsIObserver.h"
 #include "nsIProtocolProxyCallback.h"
 #include "nsIChannelEventSink.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsIStringStream.h"
 #include "BaseWebSocketChannel.h"
-
-#ifdef MOZ_WIDGET_GONK
-#include "nsINetworkInterface.h"
-#include "nsProxyRelease.h"
-#endif
 
 #include "nsCOMPtr.h"
 #include "nsString.h"
@@ -76,7 +72,8 @@ class WebSocketChannel : public BaseWebSocketChannel,
                          public nsIObserver,
                          public nsIProtocolProxyCallback,
                          public nsIInterfaceRequestor,
-                         public nsIChannelEventSink
+                         public nsIChannelEventSink,
+                         public nsINamed
 {
   friend class WebSocketFrame;
 
@@ -93,6 +90,7 @@ public:
   NS_DECL_NSIINTERFACEREQUESTOR
   NS_DECL_NSICHANNELEVENTSINK
   NS_DECL_NSIOBSERVER
+  NS_DECL_NSINAMED
 
   // nsIWebSocketChannel methods BaseWebSocketChannel didn't implement for us
   //

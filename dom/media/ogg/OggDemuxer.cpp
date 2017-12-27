@@ -6,7 +6,6 @@
 
 #include "nsError.h"
 #include "MediaDecoderStateMachine.h"
-#include "AbstractMediaDecoder.h"
 #include "OggDemuxer.h"
 #include "OggCodecState.h"
 #include "mozilla/AbstractThread.h"
@@ -23,7 +22,12 @@
 #include <algorithm>
 
 extern mozilla::LazyLogModule gMediaDemuxerLog;
-#define OGG_DEBUG(arg, ...) MOZ_LOG(gMediaDemuxerLog, mozilla::LogLevel::Debug, ("OggDemuxer(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
+#define OGG_DEBUG(arg, ...)                                                    \
+  DDMOZ_LOG(gMediaDemuxerLog,                                                  \
+            mozilla::LogLevel::Debug,                                          \
+            "::%s: " arg,                                                      \
+            __func__,                                                          \
+            ##__VA_ARGS__)
 
 // Un-comment to enable logging of seek bisections.
 //#define SEEK_LOGGING
@@ -117,6 +121,8 @@ OggDemuxer::OggDemuxer(MediaResource* aResource)
   , mOnSeekableEvent(nullptr)
 {
   MOZ_COUNT_CTOR(OggDemuxer);
+  // aResource is referenced through inner m{Audio,Video}OffState members.
+  DDLINKCHILD("resource", aResource);
 }
 
 OggDemuxer::~OggDemuxer()
@@ -129,17 +135,21 @@ OggDemuxer::~OggDemuxer()
     // a chained stream or not.
     bool isChained = mIsChained;
     void* ptr = this;
-    nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction([ptr, isChained]() -> void {
-      // We can't use OGG_DEBUG here because it implicitly refers to `this`,
-      // which we can't capture in this runnable.
-      MOZ_LOG(gMediaDemuxerLog, mozilla::LogLevel::Debug,
-              ("OggDemuxer(%p)::%s: Reporting telemetry MEDIA_OGG_LOADED_IS_CHAINED=%d",
-               ptr, __func__, isChained));
-      Telemetry::Accumulate(Telemetry::HistogramID::MEDIA_OGG_LOADED_IS_CHAINED, isChained);
-    });
-    SystemGroup::Dispatch("~OggDemuxer::report_telemetry",
-                          TaskCategory::Other,
-                          task.forget());
+    nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction(
+      "OggDemuxer::~OggDemuxer", [ptr, isChained]() -> void {
+        // We can't use OGG_DEBUG here because it implicitly refers to `this`,
+        // which we can't capture in this runnable.
+        MOZ_LOG(gMediaDemuxerLog,
+                mozilla::LogLevel::Debug,
+                ("OggDemuxer(%p)::%s: Reporting telemetry "
+                 "MEDIA_OGG_LOADED_IS_CHAINED=%d",
+                 ptr,
+                 __func__,
+                 isChained));
+        Telemetry::Accumulate(
+          Telemetry::HistogramID::MEDIA_OGG_LOADED_IS_CHAINED, isChained);
+      });
+    SystemGroup::Dispatch(TaskCategory::Other, task.forget());
   }
 }
 
@@ -188,7 +198,7 @@ OggDemuxer::HaveStartTime(TrackInfo::TrackType aType)
 int64_t
 OggDemuxer::StartTime(TrackInfo::TrackType aType)
 {
-  return OggState(aType).mStartTime.refOr(TimeUnit::FromMicroseconds(0)).ToMicroseconds();
+  return OggState(aType).mStartTime.refOr(TimeUnit::Zero()).ToMicroseconds();
 }
 
 RefPtr<OggDemuxer::InitPromise>
@@ -212,12 +222,6 @@ OggDemuxer::Init()
   }
 
   return InitPromise::CreateAndResolve(NS_OK, __func__);
-}
-
-bool
-OggDemuxer::HasTrackType(TrackInfo::TrackType aType) const
-{
-  return !!GetNumberTracks(aType);
 }
 
 OggCodecState*
@@ -287,6 +291,7 @@ OggDemuxer::GetTrackDemuxer(TrackInfo::TrackType aType, uint32_t aTrackNumber)
     return nullptr;
   }
   RefPtr<OggTrackDemuxer> e = new OggTrackDemuxer(this, aType, aTrackNumber);
+  DDLINKCHILD("track demuxer", e.get());
   mDemuxers.AppendElement(e);
 
   return e.forget();
@@ -402,7 +407,7 @@ OggDemuxer::SetupMediaTracksInfo(const nsTArray<uint32_t>& aSerials)
     OggCodecState* codecState = mCodecStore.Get(serial);
 
     MessageField* msgInfo = nullptr;
-    if (mSkeletonState && mSkeletonState->mMsgFieldStore.Contains(serial)) {
+    if (mSkeletonState) {
       mSkeletonState->mMsgFieldStore.Get(serial, &msgInfo);
     }
 
@@ -660,7 +665,7 @@ OggDemuxer::ReadOggChain(const media::TimeUnit& aLastEndTime)
   }
 
   MessageField* msgInfo = nullptr;
-  if (mSkeletonState && mSkeletonState->mMsgFieldStore.Contains(serial)) {
+  if (mSkeletonState) {
     mSkeletonState->mMsgFieldStore.Get(serial, &msgInfo);
   }
 
@@ -672,8 +677,7 @@ OggDemuxer::ReadOggChain(const media::TimeUnit& aLastEndTime)
        newVorbisState->GetInfo()->GetAsAudioInfo()->mChannels)) {
 
     SetupTarget(&mVorbisState, newVorbisState);
-    LOG(LogLevel::Debug,
-        ("New vorbis ogg link, serial=%d\n", mVorbisState->mSerial));
+    OGG_DEBUG("New vorbis ogg link, serial=%d\n", mVorbisState->mSerial);
 
     if (msgInfo) {
       InitTrack(msgInfo, &mInfo.mAudio, true);
@@ -708,8 +712,7 @@ OggDemuxer::ReadOggChain(const media::TimeUnit& aLastEndTime)
        newFlacState->GetInfo()->GetAsAudioInfo()->mChannels)) {
 
     SetupTarget(&mFlacState, newFlacState);
-    LOG(LogLevel::Debug,
-        ("New flac ogg link, serial=%d\n", mFlacState->mSerial));
+    OGG_DEBUG("New flac ogg link, serial=%d\n", mFlacState->mSerial);
 
     if (msgInfo) {
       InitTrack(msgInfo, &mInfo.mAudio, true);
@@ -1175,8 +1178,8 @@ OggDemuxer::SeekToKeyframeUsingIndex(TrackInfo::TrackType aType, int64_t aTarget
     // Index must be invalid.
     return RollbackIndexedSeek(aType, tell);
   }
-  LOG(LogLevel::Debug, ("Seeking using index to keyframe at offset %" PRId64 "\n",
-                     keyframe.mKeyPoint.mOffset));
+  OGG_DEBUG("Seeking using index to keyframe at offset %" PRId64 "\n",
+                     keyframe.mKeyPoint.mOffset);
   nsresult res = Resource(aType)->Seek(nsISeekableStream::NS_SEEK_SET,
                                        keyframe.mKeyPoint.mOffset);
   NS_ENSURE_SUCCESS(res, SEEK_FATAL_ERROR);
@@ -1198,8 +1201,8 @@ OggDemuxer::SeekToKeyframeUsingIndex(TrackInfo::TrackType aType, int64_t aTarget
                                     skippedBytes);
   NS_ENSURE_TRUE(syncres != PAGE_SYNC_ERROR, SEEK_FATAL_ERROR);
   if (syncres != PAGE_SYNC_OK || skippedBytes != 0) {
-    LOG(LogLevel::Debug, ("Indexed-seek failure: Ogg Skeleton Index is invalid "
-                       "or sync error after seek"));
+    OGG_DEBUG("Indexed-seek failure: Ogg Skeleton Index is invalid "
+              "or sync error after seek");
     return RollbackIndexedSeek(aType, tell);
   }
   uint32_t serial = ogg_page_serialno(&page);
@@ -1317,7 +1320,7 @@ OggTrackDemuxer::Seek(const TimeUnit& aTime)
 
     // Check what time we actually seeked to.
     if (sample != nullptr) {
-      seekTime = TimeUnit::FromMicroseconds(sample->mTime);
+      seekTime = sample->mTime;
       OGG_DEBUG("%p seeked to time %" PRId64, this, seekTime.ToMicroseconds());
     }
     mQueuedSample = sample;
@@ -1353,12 +1356,16 @@ OggTrackDemuxer::NextSample()
   if (mType == TrackInfo::kAudioTrack) {
     data->mTrackInfo = mParent->mSharedAudioTrackInfo;
   }
+  // mDecodedAudioDuration gets adjusted during ReadOggChain().
+  TimeUnit totalDuration = mParent->mDecodedAudioDuration;
   if (eos) {
     // We've encountered an end of bitstream packet; check for a chained
     // bitstream following this one.
     // This will also update mSharedAudioTrackInfo.
     mParent->ReadOggChain(data->GetEndTime());
   }
+  // We adjust the start time of the sample to account for the potential ogg chaining.
+  data->mTime += totalDuration;
   return data;
 }
 
@@ -1403,15 +1410,14 @@ OggTrackDemuxer::SkipToNextRandomAccessPoint(const TimeUnit& aTimeThreshold)
   OGG_DEBUG("TimeThreshold: %f", aTimeThreshold.ToSeconds());
   while (!found && (sample = NextSample())) {
     parsed++;
-    if (sample->mKeyframe && sample->mTime >= aTimeThreshold.ToMicroseconds()) {
+    if (sample->mKeyframe && sample->mTime >= aTimeThreshold) {
       found = true;
       mQueuedSample = sample;
     }
   }
   if (found) {
     OGG_DEBUG("next sample: %f (parsed: %d)",
-               TimeUnit::FromMicroseconds(sample->mTime).ToSeconds(),
-               parsed);
+               sample->mTime.ToSeconds(), parsed);
     return SkipAccessPointPromise::CreateAndResolve(parsed, __func__);
   } else {
     SkipFailureHolder failure(NS_ERROR_DOM_MEDIA_END_OF_STREAM, parsed);

@@ -39,8 +39,6 @@
 
 const Services = require("Services");
 
-const DEFAULT_HTTP_VERSION = "HTTP/1.1";
-
 const Curl = {
   /**
    * Generates a cURL command string which can be used from the command line etc.
@@ -81,14 +79,14 @@ const Curl = {
       postDataText = data.postDataText;
       postData.push("--data");
       postData.push(escapeString(utils.writePostDataTextParams(postDataText)));
-      ignoredHeaders.add("Content-Length");
+      ignoredHeaders.add("content-length");
     } else if (multipartRequest) {
       postDataText = data.postDataText;
       postData.push("--data-binary");
       let boundary = utils.getMultipartBoundary(data);
       let text = utils.removeBinaryDataFromMultipartText(postDataText, boundary);
       postData.push(escapeString(text));
-      ignoredHeaders.add("Content-Length");
+      ignoredHeaders.add("content-length");
     }
 
     // Add method.
@@ -106,11 +104,6 @@ const Curl = {
       command.push("-I");
     }
 
-    // Add http version.
-    if (data.httpVersion && data.httpVersion != DEFAULT_HTTP_VERSION) {
-      command.push("--" + data.httpVersion.split("/")[1]);
-    }
-
     // Add request headers.
     let headers = data.headers;
     if (multipartRequest) {
@@ -119,11 +112,11 @@ const Curl = {
     }
     for (let i = 0; i < headers.length; i++) {
       let header = headers[i];
-      if (header.name === "Accept-Encoding") {
+      if (header.name.toLowerCase() === "accept-encoding") {
         command.push("--compressed");
         continue;
       }
-      if (ignoredHeaders.has(header.name)) {
+      if (ignoredHeaders.has(header.name.toLowerCase())) {
         continue;
       }
       command.push("-H");

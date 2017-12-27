@@ -6,11 +6,11 @@ var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 this.EXPORTED_SYMBOLS = ["CommonUtils"];
 
-Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/osfile.jsm")
 Cu.import("resource://gre/modules/Log.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "OS",
+                                  "resource://gre/modules/osfile.jsm");
 
 this.CommonUtils = {
   /*
@@ -142,10 +142,10 @@ this.CommonUtils = {
    * accumulation and prevents callers from accidentally relying on
    * same-tick promise resolution.
    */
-  laterTickResolvingPromise(value, prototype) {
-    let deferred = Promise.defer(prototype);
-    this.nextTick(deferred.resolve.bind(deferred, value));
-    return deferred.promise;
+  laterTickResolvingPromise(value) {
+    return new Promise(resolve => {
+      this.nextTick(() => resolve(value));
+    });
   },
 
   /**
@@ -155,7 +155,8 @@ this.CommonUtils = {
    */
   namedTimer: function namedTimer(callback, wait, thisObj, name) {
     if (!thisObj || !name) {
-      throw "You must provide both an object and a property name for the timer!";
+      throw new Error(
+          "You must provide both an object and a property name for the timer!");
     }
 
     // Delay an existing timer if it exists
@@ -303,10 +304,10 @@ this.CommonUtils = {
       function advance() {
         c  = str[cOffset++];
         if (!c || c == "" || c == "=") // Easier than range checking.
-          throw "Done";                // Will be caught far away.
+          throw new Error("Done"); // Will be caught far away.
         val = key.indexOf(c);
         if (val == -1)
-          throw "Unknown character in base32: " + c;
+          throw new Error(`Unknown character in base32: ${c}`);
       }
 
       // Handle a left shift, restricted to bytes.
@@ -352,7 +353,7 @@ this.CommonUtils = {
         processBlock(ret, cOff, rOff);
       } catch (ex) {
         // Handle the detection of padding.
-        if (ex == "Done")
+        if (ex.message == "Done")
           break;
         throw ex;
       }

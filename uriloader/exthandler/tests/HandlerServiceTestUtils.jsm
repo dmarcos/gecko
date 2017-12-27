@@ -16,6 +16,7 @@ const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://testing-common/Assert.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "gExternalProtocolService",
                                    "@mozilla.org/uriloader/external-protocol-service;1",
@@ -24,14 +25,7 @@ XPCOMUtils.defineLazyServiceGetter(this, "gMIMEService",
                                    "@mozilla.org/mime;1",
                                    "nsIMIMEService");
 
-// For now, we need consumers to provide a reference to Assert.jsm.
-var Assert = null;
-
 this.HandlerServiceTestUtils = {
-  set Assert(assert) {
-    Assert = assert; // eslint-disable-line no-native-reassign
-  },
-
   /**
    * This has to be initialized to the nsIHandlerService instance under testing.
    *
@@ -95,6 +89,14 @@ this.HandlerServiceTestUtils = {
       // that may have been imported from the default nsIHandlerService instance
       // and is not overwritten by fillHandlerInfo later.
       let handlerInfo = gMIMEService.getFromTypeAndExtension(type, null);
+      if (AppConstants.platform == "android") {
+        // On Android, the first handler application is always the internal one.
+        while (handlerInfo.possibleApplicationHandlers.length > 1) {
+          handlerInfo.possibleApplicationHandlers.removeElementAt(1);
+        }
+      } else {
+        handlerInfo.possibleApplicationHandlers.clear();
+      }
       handlerInfo.setFileExtensions("");
       // Populate the object from the handler service instance under testing.
       if (this.handlerService.exists(handlerInfo)) {
@@ -173,9 +175,12 @@ this.HandlerServiceTestUtils = {
                                                         : Ci.nsIHandlerInfo;
     Assert.ok(handlerInfo instanceof expectedInterface);
     Assert.equal(handlerInfo.type, expected.type);
-    Assert.equal(handlerInfo.preferredAction, expected.preferredAction);
-    Assert.equal(handlerInfo.alwaysAskBeforeHandling,
-                 expected.alwaysAskBeforeHandling);
+
+    if (!expected.preferredActionOSDependent) {
+      Assert.equal(handlerInfo.preferredAction, expected.preferredAction);
+      Assert.equal(handlerInfo.alwaysAskBeforeHandling,
+                   expected.alwaysAskBeforeHandling);
+    }
 
     if (expectedInterface == Ci.nsIMIMEInfo) {
       let fileExtensionsEnumerator = handlerInfo.getFileExtensions();

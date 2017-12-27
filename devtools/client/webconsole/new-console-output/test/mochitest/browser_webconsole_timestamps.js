@@ -10,36 +10,48 @@
 
 const {PrefObserver} = require("devtools/client/shared/prefs");
 
-const TEST_URI = "data:text/html;charset=utf-8,Web Console test for " +
-                 "bug 1307871 - preference for toggling timestamps in messages";
+const TEST_URI = `data:text/html;charset=utf-8,
+  Web Console test for bug 1307871 - preference for toggling timestamps in messages
+  <script>
+    window.logMessage = function () {
+      console.log("simple text message");
+    };
+  </script>`;
 const PREF_MESSAGE_TIMESTAMP = "devtools.webconsole.timestampMessages";
 
-add_task(function* () {
-  let hud = yield openNewTabAndConsole(TEST_URI);
-  let outputNode = hud.ui.experimentalOutputNode;
-  let outputEl = outputNode.querySelector(".webconsole-output");
+add_task(async function() {
+  let hud = await openNewTabAndConsole(TEST_URI);
 
-  testPrefDefaults(outputEl);
+  info("Call the log function defined in the test page");
+  await ContentTask.spawn(gBrowser.selectedBrowser, null, () => {
+    content.wrappedJSObject.logMessage();
+  });
+
+  await testPrefDefaults(hud);
 
   let observer = new PrefObserver("");
   let toolbox = gDevTools.getToolbox(hud.target);
-  let optionsPanel = yield toolbox.selectTool("options");
-  yield togglePref(optionsPanel, observer);
+  let optionsPanel = await toolbox.selectTool("options");
+  await togglePref(optionsPanel, observer);
   observer.destroy();
 
-  yield testChangedPref(outputEl);
+  // Switch back to the console as it won't update when it is in background
+  await toolbox.selectTool("webconsole");
+
+  await testChangedPref(hud);
 
   Services.prefs.clearUserPref(PREF_MESSAGE_TIMESTAMP);
 });
 
-function testPrefDefaults(outputEl) {
+async function testPrefDefaults(hud) {
   let prefValue = Services.prefs.getBoolPref(PREF_MESSAGE_TIMESTAMP);
   ok(!prefValue, "Messages should have no timestamp by default (pref check)");
-  ok(outputEl.classList.contains("hideTimestamps"),
-     "Messages should have no timestamp (class name check)");
+  let message = await waitFor(() => findMessage(hud, "simple text message"));
+  is(message.querySelectorAll(".timestamp").length, 0,
+     "Messages should have no timestamp by default (element check)");
 }
 
-function* togglePref(panel, observer) {
+async function togglePref(panel, observer) {
   info("Options panel opened");
 
   info("Changing pref");
@@ -47,12 +59,13 @@ function* togglePref(panel, observer) {
   let checkbox = panel.panelDoc.getElementById("webconsole-timestamp-messages");
   checkbox.click();
 
-  yield prefChanged;
+  await prefChanged;
 }
 
-function* testChangedPref(outputEl) {
+async function testChangedPref(hud) {
   let prefValue = Services.prefs.getBoolPref(PREF_MESSAGE_TIMESTAMP);
   ok(prefValue, "Messages should have timestamps (pref check)");
-  ok(!outputEl.classList.contains("hideTimestamps"),
-     "Messages should have timestamps (class name check)");
+  let message = await waitFor(() => findMessage(hud, "simple text message"));
+  is(message.querySelectorAll(".timestamp").length, 1,
+     "Messages should have timestamp (element check)");
 }

@@ -13,12 +13,12 @@ const Provider = createFactory(require("react-redux").Provider);
 const { setupStore } = require("devtools/client/webconsole/new-console-output/test/helpers");
 
 // Components under test.
-const ConsoleApiCall = createFactory(require("devtools/client/webconsole/new-console-output/components/message-types/console-api-call"));
+const ConsoleApiCall = createFactory(require("devtools/client/webconsole/new-console-output/components/message-types/ConsoleApiCall"));
 const {
   MESSAGE_OPEN,
   MESSAGE_CLOSE,
 } = require("devtools/client/webconsole/new-console-output/constants");
-const { INDENT_WIDTH } = require("devtools/client/webconsole/new-console-output/components/message-indent");
+const { INDENT_WIDTH } = require("devtools/client/webconsole/new-console-output/components/MessageIndent");
 
 // Test fakes.
 const { stubPreparedMessages } = require("devtools/client/webconsole/new-console-output/test/fixtures/stubs/index");
@@ -67,10 +67,12 @@ describe("ConsoleAPICall component:", () => {
     });
 
     it("renders repeat node", () => {
-      const message =
-        stubPreparedMessages.get("console.log('foobar', 'test')")
-        .set("repeat", 107);
-      const wrapper = render(ConsoleApiCall({ message, serviceContainer }));
+      const message = stubPreparedMessages.get("console.log('foobar', 'test')");
+      const wrapper = render(ConsoleApiCall({
+        message,
+        serviceContainer,
+        repeat: 107
+      }));
 
       expect(wrapper.find(".message-repeats").text()).toBe("107");
       expect(wrapper.find(".message-repeats").prop("title")).toBe("107 repeats");
@@ -84,21 +86,40 @@ describe("ConsoleAPICall component:", () => {
       const message = stubPreparedMessages.get("console.log('foobar', 'test')");
 
       const indent = 10;
-      let wrapper = render(ConsoleApiCall({ message, serviceContainer, indent }));
-      expect(wrapper.find(".indent").prop("style").width)
-        .toBe(`${indent * INDENT_WIDTH}px`);
+      let wrapper = render(ConsoleApiCall({
+        message: Object.assign({}, message, {indent}),
+        serviceContainer
+      }));
+      let indentEl = wrapper.find(".indent");
+      expect(indentEl.prop("style").width).toBe(`${indent * INDENT_WIDTH}px`);
+      expect(indentEl.prop("data-indent")).toBe(`${indent}`);
 
       wrapper = render(ConsoleApiCall({ message, serviceContainer}));
-      expect(wrapper.find(".indent").prop("style").width).toBe(`0`);
+      indentEl = wrapper.find(".indent");
+      expect(indentEl.prop("style").width).toBe(`0`);
+      expect(indentEl.prop("data-indent")).toBe(`0`);
     });
 
-    it("renders a timestamp", () => {
+    it("renders a timestamp when passed a truthy timestampsVisible prop", () => {
       const message = stubPreparedMessages.get("console.log('foobar', 'test')");
-      const wrapper = render(ConsoleApiCall({ message, serviceContainer }));
-      const L10n = require("devtools/client/webconsole/new-console-output/test/fixtures/L10n");
-      const { timestampString } = new L10n();
+      const wrapper = render(ConsoleApiCall({
+        message,
+        serviceContainer,
+        timestampsVisible: true,
+      }));
+      const { timestampString } = require("devtools/client/webconsole/webconsole-l10n");
 
       expect(wrapper.find(".timestamp").text()).toBe(timestampString(message.timeStamp));
+    });
+
+    it("does not render a timestamp when not asked to", () => {
+      const message = stubPreparedMessages.get("console.log('foobar', 'test')");
+      const wrapper = render(ConsoleApiCall({
+        message,
+        serviceContainer,
+      }));
+
+      expect(wrapper.find(".timestamp").length).toBe(0);
     });
   });
 
@@ -129,6 +150,12 @@ describe("ConsoleAPICall component:", () => {
 
       expect(wrapper.find(".message-body").text()).toBe("");
     });
+    it("shows an error if called again", () => {
+      const message = stubPreparedMessages.get("timerAlreadyExists");
+      const wrapper = render(ConsoleApiCall({ message, serviceContainer }));
+
+      expect(wrapper.find(".message-body").text()).toBe("Timer “bar” already exists.");
+    });
   });
 
   describe("console.timeEnd", () => {
@@ -138,6 +165,12 @@ describe("ConsoleAPICall component:", () => {
 
       expect(wrapper.find(".message-body").text()).toBe(message.messageText);
       expect(wrapper.find(".message-body").text()).toMatch(/^bar: \d+(\.\d+)?ms$/);
+    });
+    it("shows an error if the timer doesn't exist", () => {
+      const message = stubPreparedMessages.get("timerDoesntExist");
+      const wrapper = render(ConsoleApiCall({ message, serviceContainer }));
+
+      expect(wrapper.find(".message-body").text()).toBe("Timer “bar” doesn’t exist.");
     });
   });
 
@@ -187,9 +220,9 @@ describe("ConsoleAPICall component:", () => {
     it("renders group with custom style", () => {
       const message = stubPreparedMessages.get("console.group(%cfoo%cbar)");
       const wrapper = render(ConsoleApiCall({ message, serviceContainer }));
+      expect(wrapper.find(".message-body").text()).toBe("foobar");
 
       const elements = wrapper.find(".objectBox-string");
-      expect(elements.text()).toBe("foobar");
       expect(elements.length).toBe(2);
 
       const firstElementStyle = elements.eq(0).prop("style");
@@ -295,6 +328,16 @@ describe("ConsoleAPICall component:", () => {
 
       expect(wrapper.find(".message-body").text())
         .toBe("Window http://example.com/browser/devtools/client/webconsole/new-console-output/test/fixtures/stub-generators/test-console-api.html");
+    });
+  });
+
+  describe("console.dir", () => {
+    it("renders", () => {
+      const message = stubPreparedMessages.get("console.dir({C, M, Y, K})");
+      const wrapper = render(ConsoleApiCall({ message, serviceContainer }));
+
+      expect(wrapper.find(".message-body").text())
+        .toBe(`Object { cyan: "C", magenta: "M", yellow: "Y", black: "K" }`);
     });
   });
 });

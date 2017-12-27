@@ -185,7 +185,7 @@ SVGMarkerElement::SetOrientToAngle(SVGAngle& angle, ErrorResult& rv)
 // nsIContent methods
 
 NS_IMETHODIMP_(bool)
-SVGMarkerElement::IsAttributeMapped(const nsIAtom* name) const
+SVGMarkerElement::IsAttributeMapped(const nsAtom* name) const
 {
   static const MappedAttributeEntry* const map[] = {
     sFEFloodMap,
@@ -209,8 +209,9 @@ SVGMarkerElement::IsAttributeMapped(const nsIAtom* name) const
 // nsSVGElement methods
 
 bool
-SVGMarkerElement::ParseAttribute(int32_t aNameSpaceID, nsIAtom* aName,
+SVGMarkerElement::ParseAttribute(int32_t aNameSpaceID, nsAtom* aName,
                                  const nsAString& aValue,
+                                 nsIPrincipal* aMaybeScriptedPrincipal,
                                  nsAttrValue& aResult)
 {
   if (aNameSpaceID == kNameSpaceID_None && aName == nsGkAtoms::orient) {
@@ -230,11 +231,13 @@ SVGMarkerElement::ParseAttribute(int32_t aNameSpaceID, nsIAtom* aName,
     mOrientType.SetBaseValue(SVG_MARKER_ORIENT_ANGLE);
   }
   return SVGMarkerElementBase::ParseAttribute(aNameSpaceID, aName,
-                                              aValue, aResult);
+                                              aValue,
+                                              aMaybeScriptedPrincipal,
+                                              aResult);
 }
 
 nsresult
-SVGMarkerElement::UnsetAttr(int32_t aNamespaceID, nsIAtom* aName,
+SVGMarkerElement::UnsetAttr(int32_t aNamespaceID, nsAtom* aName,
                             bool aNotify)
 {
   if (aNamespaceID == kNameSpaceID_None) {
@@ -250,7 +253,7 @@ SVGMarkerElement::UnsetAttr(int32_t aNamespaceID, nsIAtom* aName,
 // nsSVGElement methods
 
 void
-SVGMarkerElement::SetParentCoordCtxProvider(SVGSVGElement *aContext)
+SVGMarkerElement::SetParentCoordCtxProvider(SVGViewportElement *aContext)
 {
   mCoordCtx = aContext;
   mViewBoxToViewportTransform = nullptr;
@@ -261,7 +264,7 @@ SVGMarkerElement::HasValidDimensions() const
 {
   return (!mLengthAttributes[MARKERWIDTH].IsExplicitlySet() ||
            mLengthAttributes[MARKERWIDTH].GetAnimValInSpecifiedUnits() > 0) &&
-         (!mLengthAttributes[MARKERHEIGHT].IsExplicitlySet() || 
+         (!mLengthAttributes[MARKERHEIGHT].IsExplicitlySet() ||
            mLengthAttributes[MARKERHEIGHT].GetAnimValInSpecifiedUnits() > 0);
 }
 
@@ -303,8 +306,7 @@ SVGMarkerElement::GetPreserveAspectRatio()
 
 gfx::Matrix
 SVGMarkerElement::GetMarkerTransform(float aStrokeWidth,
-                                     float aX, float aY, float aAutoAngle,
-                                     bool aIsStart)
+                                     const nsSVGMark& aMark)
 {
   float scale = mEnumAttributes[MARKERUNITS].GetAnimValue() ==
                      SVG_MARKERUNITS_STROKEWIDTH ? aStrokeWidth : 1.0f;
@@ -312,10 +314,10 @@ SVGMarkerElement::GetMarkerTransform(float aStrokeWidth,
   float angle;
   switch (mOrientType.GetAnimValueInternal()) {
     case SVG_MARKER_ORIENT_AUTO:
-      angle = aAutoAngle;
+      angle = aMark.angle;
       break;
     case SVG_MARKER_ORIENT_AUTO_START_REVERSE:
-      angle = aAutoAngle + (aIsStart ? M_PI : 0.0f);
+      angle = aMark.angle + (aMark.type == nsSVGMark::eStart ? M_PI : 0.0f);
       break;
     default: // SVG_MARKER_ORIENT_ANGLE
       angle = mAngleAttributes[ORIENT].GetAnimValue() * M_PI / 180.0f;
@@ -324,7 +326,7 @@ SVGMarkerElement::GetMarkerTransform(float aStrokeWidth,
 
   return gfx::Matrix(cos(angle) * scale,   sin(angle) * scale,
                      -sin(angle) * scale,  cos(angle) * scale,
-                     aX,                    aY);
+                     aMark.x,              aMark.y);
 }
 
 nsSVGViewBoxRect
@@ -345,7 +347,7 @@ SVGMarkerElement::GetViewBoxTransform()
   if (!mViewBoxToViewportTransform) {
     float viewportWidth =
       mLengthAttributes[MARKERWIDTH].GetAnimValue(mCoordCtx);
-    float viewportHeight = 
+    float viewportHeight =
       mLengthAttributes[MARKERHEIGHT].GetAnimValue(mCoordCtx);
 
     nsSVGViewBoxRect viewbox = GetViewBoxRect();

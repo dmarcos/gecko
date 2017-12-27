@@ -11,7 +11,7 @@
 //! To guarantee the lifetime of a DOM object when performing asynchronous operations,
 //! obtain a `Trusted<T>` from that object and pass it along with each operation.
 //! A usable pointer to the original DOM object can be obtained on the script thread
-//! from a `Trusted<T>` via the `to_temporary` method.
+//! from a `Trusted<T>` via the `root` method.
 //!
 //! The implementation of `Trusted<T>` is as follows:
 //! The `Trusted<T>` object contains an atomic reference counted pointer to the Rust DOM object.
@@ -22,9 +22,10 @@
 //! its hash table during the next GC. During GC, the entries of the hash table are counted
 //! as JS roots.
 
-use core::nonzero::NonZero;
-use dom::bindings::js::Root;
+use dom::bindings::conversions::ToJSValConvertible;
+use dom::bindings::error::Error;
 use dom::bindings::reflector::{DomObject, Reflector};
+use dom::bindings::root::DomRoot;
 use dom::bindings::trace::trace_reflector;
 use dom::promise::Promise;
 use js::jsapi::JSTracer;
@@ -34,9 +35,9 @@ use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::hash_map::HashMap;
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::os;
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
+use task::TaskOnce;
 
 
 #[allow(missing_docs)]  // FIXME
@@ -115,6 +116,29 @@ impl TrustedPromise {
             promise
         })
     }
+
+    /// A task which will reject the promise.
+    #[allow(unrooted_must_root)]
+    pub fn reject_task(self, error: Error) -> impl TaskOnce {
+        let this = self;
+        task!(reject_promise: move || {
+            debug!("Rejecting promise.");
+            this.root().reject_error(error);
+        })
+    }
+
+    /// A task which will resolve the promise.
+    #[allow(unrooted_must_root)]
+    pub fn resolve_task<T>(self, value: T) -> impl TaskOnce
+    where
+        T: ToJSValConvertible + Send,
+    {
+        let this = self;
+        task!(resolve_promise: move || {
+            debug!("Resolving promise.");
+            this.root().resolve_native(&value);
+        })
+    }
 }
 
 /// A safe wrapper around a raw pointer to a DOM object that can be
@@ -152,14 +176,14 @@ impl<T: DomObject> Trusted<T> {
     /// Obtain a usable DOM pointer from a pinned `Trusted<T>` value. Fails if used on
     /// a different thread than the original value from which this `Trusted<T>` was
     /// obtained.
-    pub fn root(&self) -> Root<T> {
+    pub fn root(&self) -> DomRoot<T> {
         assert!(LIVE_REFERENCES.with(|ref r| {
             let r = r.borrow();
             let live_references = r.as_ref().unwrap();
             self.owner_thread == (&*live_references) as *const _ as *const libc::c_void
         }));
         unsafe {
-            Root::new(NonZero::new(self.refcount.0 as *const T))
+            DomRoot::from_ref(&*(self.refcount.0 as *const T))
         }
     }
 }
@@ -242,8 +266,7 @@ fn remove_nulls<K: Eq + Hash + Clone, V> (table: &mut HashMap<K, Weak<V>>) {
 
 /// A JSTraceDataOp for tracing reflectors held in LIVE_REFERENCES
 #[allow(unrooted_must_root)]
-pub unsafe extern "C" fn trace_refcounted_objects(tracer: *mut JSTracer,
-                                                  _data: *mut os::raw::c_void) {
+pub unsafe fn trace_refcounted_objects(tracer: *mut JSTracer) {
     info!("tracing live refcounted references");
     LIVE_REFERENCES.with(|ref r| {
         let r = r.borrow();

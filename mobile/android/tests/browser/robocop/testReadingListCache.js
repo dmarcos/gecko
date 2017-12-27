@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/*globals ReaderMode */
+/* globals ReaderMode */
 
 var { utils: Cu } = Components;
 
@@ -79,8 +79,8 @@ add_task(function* test_migrate_cache() {
 
     // This will always happen because there is no pre-existing data store.
     request.onupgradeneeded = event => {
-      let cacheDB = event.target.result;
-      cacheDB.createObjectStore("articles", { keyPath: "url" });
+      let cacheDB2 = event.target.result;
+      cacheDB2.createObjectStore("articles", { keyPath: "url" });
     };
 
     request.onsuccess = event => resolve(event.target.result);

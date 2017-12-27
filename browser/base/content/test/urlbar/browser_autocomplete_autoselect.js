@@ -1,3 +1,6 @@
+/* Any copyright is dedicated to the Public Domain.
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
+
 const ONEOFF_URLBAR_PREF = "browser.urlbar.oneOffSearches";
 
 function repeat(limit, func) {
@@ -25,13 +28,14 @@ function is_selected_one_off(index) {
      "A one-off is selected, so the listbox should not have a selection");
 }
 
-add_task(function*() {
+add_task(async function() {
   let maxResults = Services.prefs.getIntPref("browser.urlbar.maxRichResults");
-
   Services.prefs.setBoolPref(ONEOFF_URLBAR_PREF, true);
-  registerCleanupFunction(function* () {
-    yield PlacesTestUtils.clearHistory();
+  let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, "about:mozilla");
+  registerCleanupFunction(async function() {
+    await PlacesTestUtils.clearHistory();
     Services.prefs.clearUserPref(ONEOFF_URLBAR_PREF);
+    await BrowserTestUtils.removeTab(tab);
   });
 
   let visits = [];
@@ -40,10 +44,10 @@ add_task(function*() {
       uri: makeURI("http://example.com/autocomplete/?" + i),
     });
   });
-  yield PlacesTestUtils.addVisits(visits);
+  await PlacesTestUtils.addVisits(visits);
 
-  let tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, "about:mozilla");
-  yield promiseAutocompleteResultPopup("example.com/autocomplete");
+  await promiseAutocompleteResultPopup("example.com/autocomplete");
+  await waitForAutocompleteResultAt(maxResults - 1);
 
   let popup = gURLBar.popup;
   let results = popup.richlistbox.children;
@@ -79,14 +83,13 @@ add_task(function*() {
   is_selected(1);
 
   info("Page Up will go up the list, but not wrap");
-  EventUtils.synthesizeKey("VK_PAGE_UP", {})
+  EventUtils.synthesizeKey("VK_PAGE_UP", {});
   is_selected(0);
 
   info("Page Up again will wrap around to the end of the list");
-  EventUtils.synthesizeKey("VK_PAGE_UP", {})
+  EventUtils.synthesizeKey("VK_PAGE_UP", {});
   is_selected(maxResults - 1);
 
   EventUtils.synthesizeKey("VK_ESCAPE", {});
-  yield promisePopupHidden(gURLBar.popup);
-  gBrowser.removeTab(tab);
+  await promisePopupHidden(gURLBar.popup);
 });

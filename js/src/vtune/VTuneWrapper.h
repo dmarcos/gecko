@@ -11,7 +11,6 @@
 
 #include "vtune/jitprofiling.h"
 
-#include "jsgc.h"
 #include "jsscript.h"
 
 #include "jit/IonCode.h"
@@ -20,6 +19,7 @@ namespace js {
 namespace vtune {
 
 bool Initialize();
+void Shutdown();
 
 // VTune profiling may be attached/detached at any time, but there is no API for
 // attaching a callback to execute at attachment time. Methods compiled before

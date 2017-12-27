@@ -5,25 +5,23 @@ const NOW = Date.now() * 1000;
 const URL = "http://fake-site.com/";
 
 var tmp = {};
-Cc["@mozilla.org/moz/jssubscript-loader;1"]
-  .getService(Ci.mozIJSSubScriptLoader)
-  .loadSubScript("chrome://browser/content/sanitize.js", tmp);
+Services.scriptloader.loadSubScript("chrome://browser/content/sanitize.js", tmp);
 
 var {Sanitizer} = tmp;
 
-add_task(function* () {
-  yield promiseSanitizeHistory();
-  yield promiseAddFakeVisits();
-  yield* addNewTabPageTab();
+add_task(async function() {
+  await promiseSanitizeHistory();
+  await promiseAddFakeVisits();
+  await addNewTabPageTab();
 
-  let cellUrl = yield performOnCell(0, cell => { return cell.site.url; });
+  let cellUrl = await performOnCell(0, cell => { return cell.site.url; });
   is(cellUrl, URL, "first site is our fake site");
 
   let updatedPromise = whenPagesUpdated();
-  yield promiseSanitizeHistory();
-  yield updatedPromise;
+  await promiseSanitizeHistory();
+  await updatedPromise;
 
-  let isGone = yield performOnCell(0, cell => { return cell.site == null; });
+  let isGone = await performOnCell(0, cell => { return cell.site == null; });
   ok(isGone, "fake site is gone");
 });
 
@@ -58,7 +56,7 @@ function promiseSanitizeHistory() {
   let s = new Sanitizer();
   s.prefDomain = "privacy.cpd.";
 
-  let prefs = gPrefService.getBranch(s.prefDomain);
+  let prefs = Services.prefs.getBranch(s.prefDomain);
   prefs.setBoolPref("history", true);
   prefs.setBoolPref("downloads", false);
   prefs.setBoolPref("cache", false);

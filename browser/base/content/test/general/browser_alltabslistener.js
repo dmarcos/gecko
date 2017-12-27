@@ -35,7 +35,7 @@ var gFrontProgressListener = {
     is(state, gFrontNotifications[gFrontNotificationsPos], "Got a notification for the front notifications listener");
     gFrontNotificationsPos++;
   }
-}
+};
 
 var gAllProgressListener = {
   onStateChange(aBrowser, aWebProgress, aRequest, aStateFlags, aStatus) {
@@ -76,7 +76,7 @@ var gAllProgressListener = {
     is(state, gAllNotifications[gAllNotificationsPos], "Got a notification for the all notifications listener");
     gAllNotificationsPos++;
   }
-}
+};
 
 var gFrontNotifications, gAllNotifications, gFrontNotificationsPos, gAllNotificationsPos;
 var gBackgroundTab, gForegroundTab, gBackgroundBrowser, gForegroundBrowser, gTestBrowser;
@@ -87,8 +87,8 @@ var gNextTest;
 function test() {
   waitForExplicitFinish();
 
-  gBackgroundTab = gBrowser.addTab();
-  gForegroundTab = gBrowser.addTab();
+  gBackgroundTab = BrowserTestUtils.addTab(gBrowser);
+  gForegroundTab = BrowserTestUtils.addTab(gBrowser);
   gBackgroundBrowser = gBrowser.getBrowserForTab(gBackgroundTab);
   gForegroundBrowser = gBrowser.getBrowserForTab(gForegroundTab);
   gBrowser.selectedTab = gForegroundTab;
@@ -96,8 +96,8 @@ function test() {
   // We must wait until a page has completed loading before
   // starting tests or we get notifications from that
   let promises = [
-    waitForDocLoadComplete(gBackgroundBrowser),
-    waitForDocLoadComplete(gForegroundBrowser)
+    BrowserTestUtils.browserStopped(gBackgroundBrowser, kBasePage),
+    BrowserTestUtils.browserStopped(gForegroundBrowser, kBasePage)
   ];
   gBackgroundBrowser.loadURI(kBasePage);
   gForegroundBrowser.loadURI(kBasePage);

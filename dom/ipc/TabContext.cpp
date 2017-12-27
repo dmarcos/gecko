@@ -23,7 +23,7 @@ TabContext::TabContext()
   : mIsPrerendered(false)
   , mInitialized(false)
   , mIsMozBrowserElement(false)
-  , mOriginAttributes()
+  , mJSPluginID(-1)
   , mShowAccelerators(UIStateChangeType_NoChange)
   , mShowFocusRings(UIStateChangeType_NoChange)
 {
@@ -45,6 +45,18 @@ bool
 TabContext::IsMozBrowser() const
 {
   return IsMozBrowserElement();
+}
+
+bool
+TabContext::IsJSPlugin() const
+{
+  return mJSPluginID >= 0;
+}
+
+int32_t
+TabContext::JSPluginId() const
+{
+  return mJSPluginID;
 }
 
 bool
@@ -127,9 +139,23 @@ TabContext::SetTabContext(bool aIsMozBrowserElement,
   return true;
 }
 
+bool
+TabContext::SetTabContextForJSPluginFrame(int32_t aJSPluginID)
+{
+  NS_ENSURE_FALSE(mInitialized, false);
+
+  mInitialized = true;
+  mJSPluginID = aJSPluginID;
+  return true;
+}
+
 IPCTabContext
 TabContext::AsIPCTabContext() const
 {
+  if (IsJSPlugin()) {
+    return IPCTabContext(JSPluginFrameIPCTabContext(mJSPluginID));
+  }
+
   return IPCTabContext(FrameIPCTabContext(mOriginAttributes,
                                           mIsMozBrowserElement,
                                           mIsPrerendered,
@@ -143,6 +169,7 @@ MaybeInvalidTabContext::MaybeInvalidTabContext(const IPCTabContext& aParams)
 {
   bool isMozBrowserElement = false;
   bool isPrerendered = false;
+  int32_t jsPluginId = -1;
   OriginAttributes originAttributes;
   nsAutoString presentationURL;
   UIStateChangeType showAccelerators = UIStateChangeType_NoChange;
@@ -195,6 +222,13 @@ MaybeInvalidTabContext::MaybeInvalidTabContext(const IPCTabContext& aParams)
       originAttributes = context->mOriginAttributes;
       break;
     }
+    case IPCTabContext::TJSPluginFrameIPCTabContext: {
+      const JSPluginFrameIPCTabContext &ipcContext =
+        aParams.get_JSPluginFrameIPCTabContext();
+
+      jsPluginId = ipcContext.jsPluginId();
+      break;
+    }
     case IPCTabContext::TFrameIPCTabContext: {
       const FrameIPCTabContext &ipcContext =
         aParams.get_FrameIPCTabContext();
@@ -212,10 +246,6 @@ MaybeInvalidTabContext::MaybeInvalidTabContext(const IPCTabContext& aParams)
       // It is meant as a temporary solution until service workers can
       // provide a TabChild equivalent. Don't allow this on b2g since
       // it might be used to escalate privileges.
-#ifdef MOZ_B2G
-      mInvalidReason = "ServiceWorkerClients::OpenWindow is not supported.";
-      return;
-#endif
       if (!Preferences::GetBool("dom.serviceWorkers.enabled", false)) {
         mInvalidReason = "ServiceWorkers should be enabled.";
         return;
@@ -229,12 +259,16 @@ MaybeInvalidTabContext::MaybeInvalidTabContext(const IPCTabContext& aParams)
   }
 
   bool rv;
-  rv = mTabContext.SetTabContext(isMozBrowserElement,
-                                 isPrerendered,
-                                 showAccelerators,
-                                 showFocusRings,
-                                 originAttributes,
-                                 presentationURL);
+  if (jsPluginId >= 0) {
+    rv = mTabContext.SetTabContextForJSPluginFrame(jsPluginId);
+  } else {
+    rv = mTabContext.SetTabContext(isMozBrowserElement,
+                                   isPrerendered,
+                                   showAccelerators,
+                                   showFocusRings,
+                                   originAttributes,
+                                   presentationURL);
+  }
   if (!rv) {
     mInvalidReason = "Couldn't initialize TabContext.";
   }

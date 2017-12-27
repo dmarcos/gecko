@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,7 +9,7 @@
 #include "nsFrame.h"
 #include "nsGkAtoms.h"
 #include "nsStyleContext.h"
-#include "nsSVGEffects.h"
+#include "SVGObserverUtils.h"
 
 // This is a very simple frame whose only purpose is to capture style change
 // events and propagate them to the parent.  Most of the heavy lifting is done
@@ -20,13 +21,13 @@ class nsSVGStopFrame : public nsFrame
   NS_NewSVGStopFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 protected:
   explicit nsSVGStopFrame(nsStyleContext* aContext)
-    : nsFrame(aContext)
+    : nsFrame(aContext, kClassID)
   {
     AddStateBits(NS_FRAME_IS_NONDISPLAY);
   }
 
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsSVGStopFrame)
 
   // nsIFrame interface:
 #ifdef DEBUG
@@ -36,19 +37,11 @@ public:
 #endif
 
   void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                        const nsRect&           aDirtyRect,
                         const nsDisplayListSet& aLists) override {}
 
   virtual nsresult AttributeChanged(int32_t         aNameSpaceID,
-                                    nsIAtom*        aAttribute,
+                                    nsAtom*        aAttribute,
                                     int32_t         aModType) override;
-
-  /**
-   * Get the "type" of the frame
-   *
-   * @see nsGkAtoms::svgStopFrame
-   */
-  virtual nsIAtom* GetType() const override;
 
   virtual bool IsFrameOfType(uint32_t aFlags) const override
   {
@@ -83,23 +76,17 @@ nsSVGStopFrame::Init(nsIContent*       aContent,
 }
 #endif /* DEBUG */
 
-nsIAtom *
-nsSVGStopFrame::GetType() const
-{
-  return nsGkAtoms::svgStopFrame;
-}
-
 nsresult
 nsSVGStopFrame::AttributeChanged(int32_t         aNameSpaceID,
-                                 nsIAtom*        aAttribute,
+                                 nsAtom*        aAttribute,
                                  int32_t         aModType)
 {
   if (aNameSpaceID == kNameSpaceID_None &&
       aAttribute == nsGkAtoms::offset) {
-    MOZ_ASSERT(GetParent()->GetType() == nsGkAtoms::svgLinearGradientFrame ||
-               GetParent()->GetType() == nsGkAtoms::svgRadialGradientFrame,
+    MOZ_ASSERT(GetParent()->IsSVGLinearGradientFrame() ||
+               GetParent()->IsSVGRadialGradientFrame(),
                "Observers observe the gradient, so that's what we must invalidate");
-    nsSVGEffects::InvalidateDirectRenderingObservers(GetParent());
+    SVGObserverUtils::InvalidateDirectRenderingObservers(GetParent());
   }
 
   return nsFrame::AttributeChanged(aNameSpaceID, aAttribute, aModType);

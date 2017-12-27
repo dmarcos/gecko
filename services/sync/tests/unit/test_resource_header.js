@@ -40,13 +40,12 @@ function triggerRedirect() {
                                    "PROXY localhost:" + HTTP_PORT + "';" +
                          "}";
 
-  let prefsService = Cc["@mozilla.org/preferences-service;1"].getService(Ci.nsIPrefService);
-  let prefs = prefsService.getBranch("network.proxy.");
+  let prefs = Services.prefs.getBranch("network.proxy.");
   prefs.setIntPref("type", 2);
   prefs.setCharPref("autoconfig_url", "data:text/plain," + PROXY_FUNCTION);
 }
 
-add_test(function test_headers_copied() {
+add_task(async function test_headers_copied() {
   triggerRedirect();
 
   _("Issuing request.");
@@ -54,12 +53,12 @@ add_test(function test_headers_copied() {
   resource.setHeader("Authorization", "Basic foobar");
   resource.setHeader("X-Foo", "foofoo");
 
-  let result = resource.get(TEST_URL);
+  let result = await resource.get(TEST_URL);
   _("Result: " + result);
 
-  do_check_eq(result, BODY);
-  do_check_eq(auth, "Basic foobar");
-  do_check_eq(foo, "foofoo");
+  Assert.equal(result, BODY);
+  Assert.equal(auth, "Basic foobar");
+  Assert.equal(foo, "foofoo");
 
-  httpServer.stop(run_next_test);
+  await promiseStopServer(httpServer);
 });

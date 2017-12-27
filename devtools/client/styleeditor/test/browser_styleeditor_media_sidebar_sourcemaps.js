@@ -6,7 +6,7 @@
 
 // https rather than chrome to improve coverage
 const TESTCASE_URI = TEST_BASE_HTTPS + "media-rules-sourcemaps.html";
-const MAP_PREF = "devtools.styleeditor.source-maps-enabled";
+const MAP_PREF = "devtools.source-map.client-service.enabled";
 
 const LABELS = ["screen and (max-width: 320px)",
                 "screen and (min-width: 1200px)"];
@@ -18,8 +18,6 @@ add_task(function* () {
   Services.prefs.setBoolPref(MAP_PREF, true);
 
   let { ui } = yield openStyleEditorForURL(TESTCASE_URI);
-
-  yield listenForMediaChange(ui);
 
   is(ui.editors.length, 1, "correct number of editors");
 
@@ -56,14 +54,6 @@ function openEditor(editor) {
   getLinkFor(editor).click();
 
   return editor.getSourceEditor();
-}
-
-function listenForMediaChange(UI) {
-  let deferred = defer();
-  UI.once("media-list-changed", () => {
-    deferred.resolve();
-  });
-  return deferred.promise;
 }
 
 function getLinkFor(editor) {

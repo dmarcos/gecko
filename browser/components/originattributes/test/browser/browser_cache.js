@@ -32,7 +32,7 @@ function clearAllImageCaches() {
   let tools = SpecialPowers.Cc["@mozilla.org/image/tools;1"]
                              .getService(SpecialPowers.Ci.imgITools);
   let imageCache = tools.getImgCacheForDocument(window.document);
-  imageCache.clearCache(true);  // true=chrome
+  imageCache.clearCache(true); // true=chrome
   imageCache.clearCache(false); // false=content
 }
 
@@ -122,14 +122,12 @@ let stopObservingChannels;
 // The init function, which clears image and network caches, and generates
 // the random value for isolating video and audio elements across different
 // test runs.
-function* doInit(aMode) {
-  yield SpecialPowers.pushPrefEnv({"set": [["network.predictor.enabled",         false],
+async function doInit(aMode) {
+  await SpecialPowers.pushPrefEnv({"set": [["network.predictor.enabled",         false],
                                            ["network.predictor.enable-prefetch", false]]});
   clearAllImageCaches();
 
-  let networkCache = Cc["@mozilla.org/netwerk/cache-storage-service;1"]
-                        .getService(Ci.nsICacheStorageService);
-  networkCache.clear();
+  Services.cache2.clear();
 
   randomSuffix = Math.random();
   stopObservingChannels = startObservingChannels(aMode);
@@ -138,14 +136,14 @@ function* doInit(aMode) {
 // In the test function, we dynamically generate the video and audio element,
 // and assign a random suffix to their URL to isolate them across different
 // test runs.
-function* doTest(aBrowser) {
+async function doTest(aBrowser) {
 
   let argObj = {
     randomSuffix,
     urlPrefix: TEST_DOMAIN + TEST_PATH,
   };
 
-  yield ContentTask.spawn(aBrowser, argObj, function* (arg) {
+  await ContentTask.spawn(aBrowser, argObj, async function(arg) {
     let videoURL = arg.urlPrefix + "file_thirdPartyChild.video.ogv";
     let audioURL = arg.urlPrefix + "file_thirdPartyChild.audio.ogg";
     let trackURL = arg.urlPrefix + "file_thirdPartyChild.track.vtt";
@@ -158,12 +156,12 @@ function* doTest(aBrowser) {
     let audioTrack = content.document.createElement("track");
 
     // Append the audio and track element into the body, and wait until they're finished.
-    yield new Promise(resolve => {
+    await new Promise(resolve => {
       let audioLoaded = false;
       let trackLoaded = false;
 
       let audioListener = () => {
-        audio.removeEventListener("canplaythrough", audioListener);
+        audio.removeEventListener("suspend", audioListener);
 
         audioLoaded = true;
         if (audioLoaded && trackLoaded) {
@@ -182,7 +180,7 @@ function* doTest(aBrowser) {
 
       // Add the event listeners before everything in case we lose events.
       audioTrack.addEventListener("load", trackListener);
-      audio.addEventListener("canplaythrough", audioListener);
+      audio.addEventListener("suspend", audioListener);
 
       // Assign attributes for the audio element.
       audioSource.setAttribute("src", audioURL + URLSuffix);
@@ -198,14 +196,14 @@ function* doTest(aBrowser) {
     });
 
     // Append the video element into the body, and wait until it's finished.
-    yield new Promise(resolve => {
+    await new Promise(resolve => {
       let listener = () => {
-        video.removeEventListener("canplaythrough", listener);
+        video.removeEventListener("suspend", listener);
         resolve();
       };
 
       // Add the event listener before everything in case we lose the event.
-      video.addEventListener("canplaythrough", listener);
+      video.addEventListener("suspend", listener);
 
       // Assign attributes for the video element.
       video.setAttribute("src", videoURL + URLSuffix);
@@ -219,20 +217,20 @@ function* doTest(aBrowser) {
 }
 
 // The check function, which checks the number of cache entries.
-function* doCheck(aShouldIsolate, aInputA, aInputB) {
+async function doCheck(aShouldIsolate, aInputA, aInputB) {
   let expectedEntryCount = 1;
   let data = [];
-  data = data.concat(yield cacheDataForContext(LoadContextInfo.default));
-  data = data.concat(yield cacheDataForContext(LoadContextInfo.private));
-  data = data.concat(yield cacheDataForContext(LoadContextInfo.custom(true, {})));
-  data = data.concat(yield cacheDataForContext(LoadContextInfo.custom(false, { userContextId: 1 })));
-  data = data.concat(yield cacheDataForContext(LoadContextInfo.custom(true, { userContextId: 1 })));
-  data = data.concat(yield cacheDataForContext(LoadContextInfo.custom(false, { userContextId: 2 })));
-  data = data.concat(yield cacheDataForContext(LoadContextInfo.custom(true, { userContextId: 2 })));
-  data = data.concat(yield cacheDataForContext(LoadContextInfo.custom(false, { firstPartyDomain: "example.com" })));
-  data = data.concat(yield cacheDataForContext(LoadContextInfo.custom(true, { firstPartyDomain: "example.com" })));
-  data = data.concat(yield cacheDataForContext(LoadContextInfo.custom(false, { firstPartyDomain: "example.org" })));
-  data = data.concat(yield cacheDataForContext(LoadContextInfo.custom(true, { firstPartyDomain: "example.org" })));
+  data = data.concat(await cacheDataForContext(LoadContextInfo.default));
+  data = data.concat(await cacheDataForContext(LoadContextInfo.private));
+  data = data.concat(await cacheDataForContext(LoadContextInfo.custom(true, {})));
+  data = data.concat(await cacheDataForContext(LoadContextInfo.custom(false, { userContextId: 1 })));
+  data = data.concat(await cacheDataForContext(LoadContextInfo.custom(true, { userContextId: 1 })));
+  data = data.concat(await cacheDataForContext(LoadContextInfo.custom(false, { userContextId: 2 })));
+  data = data.concat(await cacheDataForContext(LoadContextInfo.custom(true, { userContextId: 2 })));
+  data = data.concat(await cacheDataForContext(LoadContextInfo.custom(false, { firstPartyDomain: "example.com" })));
+  data = data.concat(await cacheDataForContext(LoadContextInfo.custom(true, { firstPartyDomain: "example.com" })));
+  data = data.concat(await cacheDataForContext(LoadContextInfo.custom(false, { firstPartyDomain: "example.org" })));
+  data = data.concat(await cacheDataForContext(LoadContextInfo.custom(true, { firstPartyDomain: "example.org" })));
 
   if (aShouldIsolate) {
     expectedEntryCount = 2;

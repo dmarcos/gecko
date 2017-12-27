@@ -8,14 +8,12 @@
 #define NS_UNICODEPROPERTIES_H
 
 #include "nsBidiUtils.h"
-#include "nsIUGenCategory.h"
+#include "nsUGenCategory.h"
 #include "nsUnicodeScriptCodes.h"
 #include "harfbuzz/hb.h"
 
-#if ENABLE_INTL_API
 #include "unicode/uchar.h"
 #include "unicode/uscript.h"
-#endif
 
 const nsCharProps2& GetCharProps2(uint32_t aCh);
 
@@ -23,7 +21,7 @@ namespace mozilla {
 
 namespace unicode {
 
-extern const nsIUGenCategory::nsUGenCategory sDetailedToGeneralCategory[];
+extern const nsUGenCategory sDetailedToGeneralCategory[];
 
 /* This MUST match the values assigned by genUnicodePropertyData.pl! */
 enum VerticalOrientation {
@@ -46,10 +44,16 @@ enum PairedBracketType {
 enum IdentifierType {
   IDTYPE_RESTRICTED = 0,
   IDTYPE_ALLOWED = 1,
-  IDTYPE_ASPIRATIONAL = 2,
 };
 
-#if ENABLE_INTL_API // ICU is available, so simply forward to its API
+enum EmojiPresentation {
+  TextOnly = 0,
+  TextDefault = 1,
+  EmojiDefault = 2
+};
+
+const uint32_t kVariationSelector15 = 0xFE0E; // text presentation
+const uint32_t kVariationSelector16 = 0xFE0F; // emoji presentation
 
 extern const hb_unicode_general_category_t sICUtoHBcategory[];
 
@@ -177,65 +181,21 @@ IsDefaultIgnorable(uint32_t aCh)
   return u_hasBinaryProperty(aCh, UCHAR_DEFAULT_IGNORABLE_CODE_POINT);
 }
 
-#else // not ENABLE_INTL_API
-
-// Return whether the char has a mirrored-pair counterpart.
-uint32_t GetMirroredChar(uint32_t aCh);
-
-bool HasMirroredChar(uint32_t aChr);
-
-uint8_t GetCombiningClass(uint32_t aCh);
-
-// returns the detailed General Category in terms of HB_UNICODE_* values
-uint8_t GetGeneralCategory(uint32_t aCh);
-
-nsCharType GetBidiCat(uint32_t aCh);
-
-uint8_t GetLineBreakClass(uint32_t aCh);
-
-Script GetScriptCode(uint32_t aCh);
-
-// We don't support ScriptExtensions.txt data when building without ICU.
-// The most important cases will still be handled in gfxScriptItemizer
-// by checking IsClusterExtender to avoid breaking script runs within
-// a cluster.
-inline bool
-HasScript(uint32_t aCh, Script aScript)
+inline EmojiPresentation
+GetEmojiPresentation(uint32_t aCh)
 {
-  return false;
+  if (!u_hasBinaryProperty(aCh, UCHAR_EMOJI)) {
+    return TextOnly;
+  }
+
+  if (u_hasBinaryProperty(aCh, UCHAR_EMOJI_PRESENTATION)) {
+    return EmojiDefault;
+  }
+  return TextDefault;
 }
 
-uint32_t GetScriptTagForCode(Script aScriptCode);
-
-PairedBracketType GetPairedBracketType(uint32_t aCh);
-uint32_t GetPairedBracket(uint32_t aCh);
-
-/**
- * Return the numeric value of the character. The value returned is the value
- * of the Numeric_Value in field 7 of the UCD, or -1 if field 7 is empty.
- * To restrict to decimal digits, the caller should also check whether
- * GetGeneralCategory returns HB_UNICODE_GENERAL_CATEGORY_DECIMAL_NUMBER
- */
-int8_t GetNumericValue(uint32_t aCh);
-
-uint32_t GetUppercase(uint32_t aCh);
-uint32_t GetLowercase(uint32_t aCh);
-uint32_t GetTitlecaseForLower(uint32_t aCh); // maps LC to titlecase, UC unchanged
-uint32_t GetTitlecaseForAll(uint32_t aCh); // maps both UC and LC to titlecase
-
-// Return whether the char has EastAsianWidth class F or W or H.
-bool IsEastAsianWidthFWH(uint32_t aCh);
-
-// Return whether the char is default-ignorable.
-inline bool IsDefaultIgnorable(uint32_t aCh)
-{
-  return GetCharProps2(aCh).mDefaultIgnorable;
-}
-
-#endif // !ENABLE_INTL_API
-
-// returns the simplified Gen Category as defined in nsIUGenCategory
-inline nsIUGenCategory::nsUGenCategory GetGenCategory(uint32_t aCh) {
+// returns the simplified Gen Category as defined in nsUGenCategory
+inline nsUGenCategory GetGenCategory(uint32_t aCh) {
   return sDetailedToGeneralCategory[GetGeneralCategory(aCh)];
 }
 

@@ -52,13 +52,13 @@ function readTestData(testFile) {
 }
 
 function iterateDir(dir, recurse, callback) {
-  do_print("Iterate " + dir.leafName);
+  info("Iterate " + dir.leafName);
   let entries = dir.directoryEntries;
 
   // Loop over everything in this dir. If its a dir
   while (entries.hasMoreElements()) {
     let entry = entries.getNext();
-    entry.QueryInterface(Ci.nsILocalFile);
+    entry.QueryInterface(Ci.nsIFile);
 
     if (entry.isDirectory()) {
       if (recurse) {

@@ -16,6 +16,7 @@
 
 #include "mozilla/Assertions.h"
 #include "mozilla/Services.h"
+#include "mozilla/SystemGroup.h"
 
 using mozilla::WeakPtr;
 
@@ -45,13 +46,6 @@ CheckProgressConsistency(Progress aOldProgress, Progress aNewProgress, bool aIsM
   if (aNewProgress & FLAG_LOAD_COMPLETE) {
     MOZ_ASSERT(aIsMultipart || aNewProgress & (FLAG_SIZE_AVAILABLE | FLAG_HAS_ERROR));
   }
-  if (aNewProgress & FLAG_ONLOAD_BLOCKED) {
-    // No preconditions.
-  }
-  if (aNewProgress & FLAG_ONLOAD_UNBLOCKED) {
-    MOZ_ASSERT(aNewProgress & FLAG_ONLOAD_BLOCKED);
-    MOZ_ASSERT(aIsMultipart || aNewProgress & (FLAG_SIZE_AVAILABLE | FLAG_HAS_ERROR));
-  }
   if (aNewProgress & FLAG_IS_ANIMATED) {
     // No preconditions; like FLAG_HAS_TRANSPARENCY, we should normally never
     // discover this *after* FLAG_SIZE_AVAILABLE, but unfortunately some corrupt
@@ -69,10 +63,20 @@ CheckProgressConsistency(Progress aOldProgress, Progress aNewProgress, bool aIsM
   }
 }
 
+ProgressTracker::ProgressTracker()
+  : mMutex("ProgressTracker::mMutex")
+  , mImage(nullptr)
+  , mEventTarget(WrapNotNull(nsCOMPtr<nsIEventTarget>(SystemGroup::EventTargetFor(TaskCategory::Other))))
+  , mObserversWithTargets(0)
+  , mObservers(new ObserverTable)
+  , mProgress(NoProgress)
+  , mIsMultipart(false)
+{ }
+
 void
 ProgressTracker::SetImage(Image* aImage)
 {
-  MutexAutoLock lock(mImageMutex);
+  MutexAutoLock lock(mMutex);
   MOZ_ASSERT(aImage, "Setting null image");
   MOZ_ASSERT(!mImage, "Setting image when we already have one");
   mImage = aImage;
@@ -81,7 +85,7 @@ ProgressTracker::SetImage(Image* aImage)
 void
 ProgressTracker::ResetImage()
 {
-  MutexAutoLock lock(mImageMutex);
+  MutexAutoLock lock(mMutex);
   MOZ_ASSERT(mImage, "Resetting image when it's already null!");
   mImage = nullptr;
 }
@@ -193,7 +197,7 @@ ProgressTracker::Notify(IProgressObserver* aObserver)
     runnable->AddObserver(aObserver);
   } else {
     mRunnable = new AsyncNotifyRunnable(this, aObserver);
-    NS_DispatchToCurrentThread(mRunnable);
+    mEventTarget->Dispatch(mRunnable, NS_DISPATCH_NORMAL);
   }
 }
 
@@ -204,7 +208,8 @@ class AsyncNotifyCurrentStateRunnable : public Runnable
   public:
     AsyncNotifyCurrentStateRunnable(ProgressTracker* aProgressTracker,
                                     IProgressObserver* aObserver)
-      : mProgressTracker(aProgressTracker)
+      : Runnable("image::AsyncNotifyCurrentStateRunnable")
+      , mProgressTracker(aProgressTracker)
       , mObserver(aObserver)
     {
       MOZ_ASSERT(NS_IsMainThread(), "Should be created on the main thread");
@@ -250,7 +255,7 @@ ProgressTracker::NotifyCurrentState(IProgressObserver* aObserver)
 
   nsCOMPtr<nsIRunnable> ev = new AsyncNotifyCurrentStateRunnable(this,
                                                                  aObserver);
-  NS_DispatchToCurrentThread(ev);
+  mEventTarget->Dispatch(ev.forget(), NS_DISPATCH_NORMAL);
 }
 
 /**
@@ -321,10 +326,6 @@ SyncNotifyInternal(const T& aObservers,
     notify([](IProgressObserver* aObs) { aObs->Notify(I::SIZE_AVAILABLE); });
   }
 
-  if (aProgress & FLAG_ONLOAD_BLOCKED) {
-    notify([](IProgressObserver* aObs) { aObs->BlockOnload(); });
-  }
-
   if (aHasImage) {
     // OnFrameUpdate
     // If there's any content in this frame at all (always true for
@@ -349,13 +350,6 @@ SyncNotifyInternal(const T& aObservers,
     }
   }
 
-  // Send UnblockOnload before OnStopDecode and OnStopRequest. This allows
-  // observers that can fire events when they receive those notifications to do
-  // so then, instead of being forced to wait for UnblockOnload.
-  if (aProgress & FLAG_ONLOAD_UNBLOCKED) {
-    notify([](IProgressObserver* aObs) { aObs->UnblockOnload(); });
-  }
-
   if (aProgress & FLAG_DECODE_COMPLETE) {
     MOZ_ASSERT(aHasImage, "Stopped decoding without ever having an image?");
     notify([](IProgressObserver* aObs) { aObs->Notify(I::DECODE_COMPLETE); });
@@ -375,22 +369,8 @@ ProgressTracker::SyncNotifyProgress(Progress aProgress,
 {
   MOZ_ASSERT(NS_IsMainThread(), "Use mObservers on main thread only");
 
-  // Don't unblock onload if we're not blocked.
   Progress progress = Difference(aProgress);
-  if (!((mProgress | progress) & FLAG_ONLOAD_BLOCKED)) {
-    progress &= ~FLAG_ONLOAD_UNBLOCKED;
-  }
-
   CheckProgressConsistency(mProgress, mProgress | progress, mIsMultipart);
-
-  // XXX(seth): Hack to work around the fact that some observers have bugs and
-  // need to get onload blocking notifications multiple times. We should fix
-  // those observers and remove this.
-  if ((aProgress & FLAG_DECODE_COMPLETE) &&
-      (mProgress & FLAG_ONLOAD_BLOCKED) &&
-      (mProgress & FLAG_ONLOAD_UNBLOCKED)) {
-    progress |= FLAG_ONLOAD_BLOCKED | FLAG_ONLOAD_UNBLOCKED;
-  }
 
   // Apply the changes.
   mProgress |= progress;
@@ -438,13 +418,17 @@ ProgressTracker::EmulateRequestFinished(IProgressObserver* aObserver)
              "SyncNotifyState and mObservers are not threadsafe");
   RefPtr<IProgressObserver> kungFuDeathGrip(aObserver);
 
-  if (mProgress & FLAG_ONLOAD_BLOCKED && !(mProgress & FLAG_ONLOAD_UNBLOCKED)) {
-    aObserver->UnblockOnload();
-  }
-
   if (!(mProgress & FLAG_LOAD_COMPLETE)) {
     aObserver->OnLoadComplete(true);
   }
+}
+
+already_AddRefed<nsIEventTarget>
+ProgressTracker::GetEventTarget() const
+{
+  MutexAutoLock lock(mMutex);
+  nsCOMPtr<nsIEventTarget> target = mEventTarget;
+  return target.forget();
 }
 
 void
@@ -453,6 +437,24 @@ ProgressTracker::AddObserver(IProgressObserver* aObserver)
   MOZ_ASSERT(NS_IsMainThread());
   RefPtr<IProgressObserver> observer = aObserver;
 
+  nsCOMPtr<nsIEventTarget> target = observer->GetEventTarget();
+  if (target) {
+    if (mObserversWithTargets == 0) {
+      // On the first observer with a target (i.e. listener), always accept its
+      // event target; this may be for a specific DocGroup, or it may be the
+      // unlabelled main thread target.
+      MutexAutoLock lock(mMutex);
+      mEventTarget = WrapNotNull(target);
+    } else if (mEventTarget.get() != target.get()) {
+      // If a subsequent observer comes in with a different target, we need to
+      // switch to use the unlabelled main thread target, if we haven't already.
+      MutexAutoLock lock(mMutex);
+      nsCOMPtr<nsIEventTarget> mainTarget(do_GetMainThread());
+      mEventTarget = WrapNotNull(mainTarget);
+    }
+    ++mObserversWithTargets;
+  }
+
   mObservers.Write([=](ObserverTable* aTable) {
     MOZ_ASSERT(!aTable->Get(observer, nullptr),
                "Adding duplicate entry for image observer");
@@ -460,6 +462,8 @@ ProgressTracker::AddObserver(IProgressObserver* aObserver)
     WeakPtr<IProgressObserver> weakPtr = observer.get();
     aTable->Put(observer, weakPtr);
   });
+
+  MOZ_ASSERT(mObserversWithTargets <= ObserverCount());
 }
 
 bool
@@ -469,11 +473,32 @@ ProgressTracker::RemoveObserver(IProgressObserver* aObserver)
   RefPtr<IProgressObserver> observer = aObserver;
 
   // Remove the observer from the list.
-  bool removed = mObservers.Write([=](ObserverTable* aTable) {
-    bool removed = aTable->Get(observer, nullptr);
-    aTable->Remove(observer);
-    return removed;
+  bool removed = mObservers.Write([observer](ObserverTable* aTable) {
+    return aTable->Remove(observer);
   });
+
+  // Sometimes once an image is decoded, and all of its observers removed, a new
+  // document may request the same image. Thus we need to clear our event target
+  // state when the last observer is removed, so that we select the most
+  // appropriate event target when a new observer is added. Since the event
+  // target may have changed (e.g. due to the scheduler group going away before
+  // we were removed), so we should be cautious comparing this target against
+  // anything at this stage.
+  if (removed) {
+    nsCOMPtr<nsIEventTarget> target = observer->GetEventTarget();
+    if (target) {
+      MOZ_ASSERT(mObserversWithTargets > 0);
+      --mObserversWithTargets;
+
+      if (mObserversWithTargets == 0) {
+        MutexAutoLock lock(mMutex);
+        nsCOMPtr<nsIEventTarget> target(SystemGroup::EventTargetFor(TaskCategory::Other));
+        mEventTarget = WrapNotNull(target);
+      }
+    }
+
+    MOZ_ASSERT(mObserversWithTargets <= ObserverCount());
+  }
 
   // Observers can get confused if they don't get all the proper teardown
   // notifications. Part ways on good terms.

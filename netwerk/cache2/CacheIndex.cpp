@@ -367,7 +367,9 @@ CacheIndex::PreShutdown()
   }
 
   nsCOMPtr<nsIRunnable> event;
-  event = NewRunnableMethod(index, &CacheIndex::PreShutdownInternal);
+  event = NewRunnableMethod("net::CacheIndex::PreShutdownInternal",
+                            index,
+                            &CacheIndex::PreShutdownInternal);
 
   nsCOMPtr<nsIEventTarget> ioTarget = CacheFileIOManager::IOTarget();
   MOZ_ASSERT(ioTarget);
@@ -396,6 +398,7 @@ CacheIndex::PreShutdownInternal()
   MOZ_ASSERT(mShuttingDown);
 
   if (mUpdateTimer) {
+    mUpdateTimer->Cancel();
     mUpdateTimer = nullptr;
   }
 
@@ -746,6 +749,12 @@ CacheIndex::InitEntry(const SHA1Sum::Hash *aHash,
       MOZ_ASSERT(entry);
       MOZ_ASSERT(entry->IsFresh());
 
+      if (!entry) {
+        LOG(("CacheIndex::InitEntry() - Entry was not found in mIndex!"));
+        NS_WARNING(("CacheIndex::InitEntry() - Entry was not found in mIndex!"));
+        return NS_ERROR_UNEXPECTED;
+      }
+
       if (IsCollision(entry, aOriginAttrsHash, aAnonymous)) {
         index->mIndexNeedsUpdate = true; // TODO Does this really help in case of collision?
         reinitEntry = true;
@@ -760,6 +769,14 @@ CacheIndex::InitEntry(const SHA1Sum::Hash *aHash,
 
       MOZ_ASSERT(updated || !removed);
       MOZ_ASSERT(updated || entry);
+
+      if (!updated && !entry) {
+        LOG(("CacheIndex::InitEntry() - Entry was found neither in mIndex nor "
+             "in mPendingUpdates!"));
+        NS_WARNING(("CacheIndex::InitEntry() - Entry was found neither in "
+                    "mIndex nor in mPendingUpdates!"));
+        return NS_ERROR_UNEXPECTED;
+      }
 
       if (updated) {
         MOZ_ASSERT(updated->IsFresh());
@@ -960,6 +977,12 @@ CacheIndex::UpdateEntry(const SHA1Sum::Hash *aHash,
       MOZ_ASSERT(index->mPendingUpdates.Count() == 0);
       MOZ_ASSERT(entry);
 
+      if (!entry) {
+        LOG(("CacheIndex::UpdateEntry() - Entry was not found in mIndex!"));
+        NS_WARNING(("CacheIndex::UpdateEntry() - Entry was not found in mIndex!"));
+        return NS_ERROR_UNEXPECTED;
+      }
+
       if (!HasEntryChanged(entry, aFrecency, aExpirationTime, aHasAltData,
                            aOnStartTime, aOnStopTime, aSize)) {
         return NS_OK;
@@ -1005,7 +1028,7 @@ CacheIndex::UpdateEntry(const SHA1Sum::Hash *aHash,
                "nor in mPendingUpdates!"));
           NS_WARNING(("CacheIndex::UpdateEntry() - Entry was found neither in "
                       "mIndex nor in mPendingUpdates!"));
-          return NS_ERROR_NOT_AVAILABLE;
+          return NS_ERROR_UNEXPECTED;
         }
 
         // make a copy of a read-only entry
@@ -1416,15 +1439,18 @@ CacheIndex::AsyncGetDiskConsumption(nsICacheStorageConsumptionObserver* aObserve
   // Move forward with index re/building if it is pending
   RefPtr<CacheIOThread> ioThread = CacheFileIOManager::IOThread();
   if (ioThread) {
-    ioThread->Dispatch(NS_NewRunnableFunction([]() -> void {
-      StaticMutexAutoLock lock(sLock);
+    ioThread->Dispatch(
+      NS_NewRunnableFunction("net::CacheIndex::AsyncGetDiskConsumption",
+                             []() -> void {
+                               StaticMutexAutoLock lock(sLock);
 
-      RefPtr<CacheIndex> index = gInstance;
-      if (index && index->mUpdateTimer) {
-        index->mUpdateTimer->Cancel();
-        index->DelayedUpdateLocked();
-      }
-    }), CacheIOThread::INDEX);
+                               RefPtr<CacheIndex> index = gInstance;
+                               if (index && index->mUpdateTimer) {
+                                 index->mUpdateTimer->Cancel();
+                                 index->DelayedUpdateLocked();
+                               }
+                             }),
+      CacheIOThread::INDEX);
   }
 
   return NS_OK;
@@ -1604,7 +1630,7 @@ CacheIndex::ProcessPendingOperations()
             // Entries with empty file are not stored in index on disk. Just
             // remove the entry, but only in case the entry is not dirty, i.e.
             // the entry file was empty when we wrote the index.
-            mIndex.RemoveEntry(*update->Hash());
+            mIndex.RemoveEntry(entry);
             entry = nullptr;
           } else {
             entry->MarkRemoved();
@@ -2625,23 +2651,16 @@ CacheIndex::ScheduleUpdateTimer(uint32_t aDelay)
 
   MOZ_ASSERT(!mUpdateTimer);
 
-  nsresult rv;
-
-  nsCOMPtr<nsITimer> timer = do_CreateInstance("@mozilla.org/timer;1", &rv);
-  NS_ENSURE_SUCCESS(rv, rv);
-
   nsCOMPtr<nsIEventTarget> ioTarget = CacheFileIOManager::IOTarget();
   MOZ_ASSERT(ioTarget);
 
-  rv = timer->SetTarget(ioTarget);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  rv = timer->InitWithFuncCallback(CacheIndex::DelayedUpdate, nullptr,
-                                   aDelay, nsITimer::TYPE_ONE_SHOT);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  mUpdateTimer.swap(timer);
-  return NS_OK;
+  return NS_NewTimerWithFuncCallback(getter_AddRefs(mUpdateTimer),
+                                     CacheIndex::DelayedUpdate,
+                                     nullptr,
+                                     aDelay,
+                                     nsITimer::TYPE_ONE_SHOT,
+                                     "net::CacheIndex::ScheduleUpdateTimer",
+                                     ioTarget);
 }
 
 nsresult
@@ -2710,19 +2729,18 @@ CacheIndex::InitEntryFromDiskData(CacheIndexEntry *aEntry,
   }
   aEntry->SetHasAltData(hasAltData);
 
-  static auto getUint16MetaData = [&aMetaData](const char *key) -> uint16_t {
-    const char* s64 = aMetaData->GetElement(key);
-    if (s64) {
-      nsresult rv;
-      uint64_t n64 = nsCString(s64).ToInteger64(&rv);
-      MOZ_ASSERT(NS_SUCCEEDED(rv));
-      return n64 <= kIndexTimeOutOfBound ? n64 : kIndexTimeOutOfBound;
+  static auto toUint16 = [](const char *aUint16String) -> uint16_t {
+    if (!aUint16String) {
+      return kIndexTimeNotAvailable;
     }
-    return kIndexTimeNotAvailable;
+    nsresult rv;
+    uint64_t n64 = nsCString(aUint16String).ToInteger64(&rv);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+    return n64 <= kIndexTimeOutOfBound ? n64 : kIndexTimeOutOfBound;
   };
 
-  aEntry->SetOnStartTime(getUint16MetaData("net-response-time-onstart"));
-  aEntry->SetOnStopTime(getUint16MetaData("net-response-time-onstop"));
+  aEntry->SetOnStartTime(toUint16(aMetaData->GetElement("net-response-time-onstart")));
+  aEntry->SetOnStopTime(toUint16(aMetaData->GetElement("net-response-time-onstop")));
 
   aEntry->SetFileSize(static_cast<uint32_t>(
                         std::min(static_cast<int64_t>(PR_UINT32_MAX),
@@ -2778,11 +2796,16 @@ CacheIndex::BuildIndex()
       return;
     }
 
+    bool fileExists = false;
     nsCOMPtr<nsIFile> file;
     {
       // Do not do IO under the lock.
       StaticMutexAutoUnlock unlock(sLock);
       rv = mDirEnumerator->GetNextFile(getter_AddRefs(file));
+
+      if (file) {
+        file->Exists(&fileExists);
+      }
     }
     if (mState == SHUTDOWN) {
       return;
@@ -2798,6 +2821,12 @@ CacheIndex::BuildIndex()
       LOG(("CacheIndex::BuildIndex() - GetNativeLeafName() failed! Skipping "
            "file."));
       mDontMarkIndexClean = true;
+      continue;
+    }
+
+    if (!fileExists) {
+      LOG(("CacheIndex::BuildIndex() - File returned by the iterator was "
+           "removed in the meantime [name=%s]", leaf.get()));
       continue;
     }
 
@@ -2874,6 +2903,7 @@ CacheIndex::BuildIndex()
         LOG(("CacheIndex::BuildIndex() - CacheFile::InitEntryFromDiskData() "
              "failed, removing file. [name=%s]", leaf.get()));
         file->Remove(false);
+        entry->MarkRemoved();
       } else {
         LOG(("CacheIndex::BuildIndex() - Added entry to index. [name=%s]",
              leaf.get()));
@@ -2995,11 +3025,16 @@ CacheIndex::UpdateIndex()
       return;
     }
 
+    bool fileExists = false;
     nsCOMPtr<nsIFile> file;
     {
       // Do not do IO under the lock.
       StaticMutexAutoUnlock unlock(sLock);
       rv = mDirEnumerator->GetNextFile(getter_AddRefs(file));
+
+      if (file) {
+        file->Exists(&fileExists);
+      }
     }
     if (mState == SHUTDOWN) {
       return;
@@ -3015,6 +3050,12 @@ CacheIndex::UpdateIndex()
       LOG(("CacheIndex::UpdateIndex() - GetNativeLeafName() failed! Skipping "
            "file."));
       mDontMarkIndexClean = true;
+      continue;
+    }
+
+    if (!fileExists) {
+      LOG(("CacheIndex::UpdateIndex() - File returned by the iterator was "
+           "removed in the meantime [name=%s]", leaf.get()));
       continue;
     }
 

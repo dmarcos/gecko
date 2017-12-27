@@ -1,17 +1,17 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef nsBidiPresUtils_h___
 #define nsBidiPresUtils_h___
 
+#include "gfxContext.h"
 #include "nsBidi.h"
 #include "nsBidiUtils.h"
 #include "nsHashKeys.h"
 #include "nsCoord.h"
-#include "nsRenderingContext.h"
 
 #ifdef DrawText
 #undef DrawText
@@ -19,11 +19,11 @@
 
 struct BidiParagraphData;
 struct BidiLineData;
+class gfxContext;
 class nsFontMetrics;
 class nsIFrame;
 class nsBlockFrame;
 class nsPresContext;
-class nsRenderingContext;
 class nsBlockInFlowLineIterator;
 class nsStyleContext;
 struct nsSize;
@@ -40,31 +40,33 @@ namespace mozilla {
  */
 struct nsFrameContinuationState : public nsVoidPtrHashKey
 {
-  explicit nsFrameContinuationState(const void *aFrame) : nsVoidPtrHashKey(aFrame) {}
+  explicit nsFrameContinuationState(const void *aFrame)
+    : nsVoidPtrHashKey(aFrame)
+  {}
 
   /**
    * The first visual frame in the continuation chain containing this frame, or
    * nullptr if this frame is the first visual frame in the chain.
    */
-  nsIFrame* mFirstVisualFrame;
+  nsIFrame* mFirstVisualFrame { nullptr };
 
   /**
    * The number of frames in the continuation chain containing this frame, if
    * this frame is the first visual frame of the chain, or 0 otherwise.
    */
-  uint32_t mFrameCount;
+  uint32_t mFrameCount { 0 };
 
   /**
    * TRUE if this frame is the first visual frame of its continuation chain on
    * this line and the chain has some frames on the previous lines.
    */
-  bool mHasContOnPrevLines;
+  bool mHasContOnPrevLines { false };
 
   /**
    * TRUE if this frame is the first visual frame of its continuation chain on
    * this line and the chain has some frames left for next lines.
    */
-  bool mHasContOnNextLines;
+  bool mHasContOnNextLines { false };
 };
 
 /*
@@ -98,7 +100,7 @@ public:
 
   nsBidiPresUtils();
   ~nsBidiPresUtils();
-  
+
   /**
    * Interface for the processor used by ProcessText. Used by process text to
    * collect information about the width of subruns and to notify where each
@@ -136,7 +138,7 @@ public:
      * Draws the text given in SetText to a rendering context. If SetText was
      * not called with valid parameters, the result of this call is undefined.
      * This call is guaranteed to only be called once between SetText calls.
-     * 
+     *
      * @param aXOffset The offset of the left side of the substring to be drawn
      *  from the beginning of the overall string passed to ProcessText.
      * @param aWidth The width returned by GetWidth.
@@ -162,7 +164,7 @@ public:
    * Update frame array, following the new visual sequence.
    *
    * @return total inline size
-   * 
+   *
    * @lina 05/02/2000
    */
   static nscoord ReorderFrames(nsIFrame* aFirstFrameOnLine,
@@ -176,7 +178,7 @@ public:
    * of the platform. The formatting includes: reordering, Arabic shaping,
    * symmetric and numeric swapping, removing control characters.
    *
-   * @lina 06/18/2000 
+   * @lina 06/18/2000
    */
   static nsresult FormatUnicodeText(nsPresContext*  aPresContext,
                                     char16_t*       aText,
@@ -211,7 +213,7 @@ public:
                              int32_t                aLength,
                              nsBidiLevel            aBaseLevel,
                              nsPresContext*         aPresContext,
-                             nsRenderingContext&    aRenderingContext,
+                             gfxContext&            aRenderingContext,
                              DrawTarget*            aTextRunConstructionDrawTarget,
                              nsFontMetrics&         aFontMetrics,
                              nscoord                aX,
@@ -224,12 +226,12 @@ public:
                                           aFontMetrics,
                                           MODE_DRAW, aX, aY, aPosResolve, aPosResolveCount, nullptr);
   }
-  
+
   static nscoord MeasureTextWidth(const char16_t*     aText,
                                   int32_t              aLength,
                                   nsBidiLevel          aBaseLevel,
                                   nsPresContext*       aPresContext,
-                                  nsRenderingContext&  aRenderingContext,
+                                  gfxContext&          aRenderingContext,
                                   nsFontMetrics&       aFontMetrics)
   {
     nscoord length;
@@ -264,7 +266,7 @@ public:
   static nsIFrame* GetFrameToRightOf(const nsIFrame*  aFrame,
                                      nsIFrame*        aFirstFrameOnLine,
                                      int32_t          aNumFramesOnLine);
-    
+
   /**
    * Get the frame to the left of the given frame, on the same line.
    * @param aFrame : We're looking for the frame to the left of this frame.
@@ -277,7 +279,7 @@ public:
                                     int32_t          aNumFramesOnLine);
 
   static nsIFrame* GetFirstLeaf(nsIFrame* aFrame);
-    
+
   /**
    * Get the bidi data of the given (inline) frame.
    */
@@ -377,7 +379,7 @@ private:
                                  int32_t                aLength,
                                  nsBidiLevel            aBaseLevel,
                                  nsPresContext*         aPresContext,
-                                 nsRenderingContext&    aRenderingContext,
+                                 gfxContext&            aRenderingContext,
                                  DrawTarget*            aTextRunConstructionDrawTarget,
                                  nsFontMetrics&         aFontMetrics,
                                  Mode                   aMode,
@@ -398,6 +400,23 @@ private:
   static void TraverseFrames(nsBlockInFlowLineIterator* aLineIter,
                              nsIFrame*                  aCurrentFrame,
                              BidiParagraphData*         aBpd);
+
+  /**
+   * Perform a recursive "pre-traversal" of the child frames of a block or
+   * inline container frame, to determine whether full bidi resolution is
+   * actually needed.
+   * This explores the same frames as TraverseFrames (above), but is less
+   * expensive and may allow us to avoid performing the full TraverseFrames
+   * operation.
+   * @param   aFirstChild  frame to start traversal from
+   * @param[in/out]  aCurrContent  the content node that we've most recently
+   *          scanned for RTL characters (so that when descendant frames refer
+   *          to the same content, we can avoid repeatedly scanning it).
+   * @return  true if it finds that bidi is (or may be) required,
+   *          false if no potentially-bidi content is present.
+   */
+  static bool ChildListMayRequireBidi(nsIFrame*    aFirstChild,
+                                      nsIContent** aCurrContent);
 
   /**
    * Position ruby content frames (ruby base/text frame).
@@ -493,7 +512,7 @@ private:
                                         mozilla::WritingMode aLineWM,
                                         const nsSize& aContainerSize,
                                         nscoord aStart);
-  
+
   /**
    * Helper method for Resolve()
    * Truncate a text frame to the end of a single-directional run and possibly
@@ -501,7 +520,7 @@ private:
    *
    * @param aFrame       the original frame
    * @param aNewFrame    [OUT] the new frame that was created
-   * @param aStart       [IN] the start of the content mapped by aFrame (and 
+   * @param aStart       [IN] the start of the content mapped by aFrame (and
    *                          any fluid continuations)
    * @param aEnd         [IN] the offset of the end of the single-directional
    *                          text run.
@@ -538,7 +557,7 @@ private:
                                 int32_t&         aRunCount,
                                 uint8_t&         aCharType,
                                 uint8_t&         aPrevCharType);
-  
+
   static void StripBidiControlCharacters(char16_t* aText,
                                          int32_t&   aTextLength);
 };

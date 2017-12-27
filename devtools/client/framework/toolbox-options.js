@@ -71,7 +71,7 @@ function OptionsPanel(iframeWindow, toolbox) {
 
   this._addListeners();
 
-  const EventEmitter = require("devtools/shared/event-emitter");
+  const EventEmitter = require("devtools/shared/old-event-emitter");
   EventEmitter.decorate(this);
 }
 
@@ -100,6 +100,8 @@ OptionsPanel.prototype = {
   _addListeners: function () {
     Services.prefs.addObserver("devtools.cache.disabled", this._prefChanged);
     Services.prefs.addObserver("devtools.theme", this._prefChanged);
+    Services.prefs.addObserver("devtools.source-map.client-service.enabled",
+                               this._prefChanged);
     gDevTools.on("theme-registered", this._themeRegistered);
     gDevTools.on("theme-unregistered", this._themeUnregistered);
   },
@@ -107,6 +109,8 @@ OptionsPanel.prototype = {
   _removeListeners: function () {
     Services.prefs.removeObserver("devtools.cache.disabled", this._prefChanged);
     Services.prefs.removeObserver("devtools.theme", this._prefChanged);
+    Services.prefs.removeObserver("devtools.source-map.client-service.enabled",
+                                  this._prefChanged);
     gDevTools.off("theme-registered", this._themeRegistered);
     gDevTools.off("theme-unregistered", this._themeUnregistered);
   },
@@ -118,6 +122,8 @@ OptionsPanel.prototype = {
       cbx.checked = cacheDisabled;
     } else if (prefName === "devtools.theme") {
       this.updateCurrentTheme();
+    } else if (prefName === "devtools.source-map.client-service.enabled") {
+      this.updateSourceMapPref();
     }
   },
 
@@ -311,22 +317,22 @@ OptionsPanel.prototype = {
     }
 
     // Labels for these new buttons are nightly only and mostly intended for working on
-    // devtools. They should not be localized.
+    // devtools.
     let prefDefinitions = [{
       pref: "devtools.webconsole.new-frontend-enabled",
-      label: "Enable new console frontend",
+      label: L10N.getStr("toolbox.options.enableNewConsole.label"),
       id: "devtools-new-webconsole",
       parentId: "webconsole-options"
     }, {
       pref: "devtools.debugger.new-debugger-frontend",
-      label: "Enable new debugger frontend",
+      label: L10N.getStr("toolbox.options.enableNewDebugger.label"),
       id: "devtools-new-debugger",
       parentId: "debugger-options"
     }, {
-      pref: "devtools.layoutview.enabled",
-      label: "Enable layout panel",
-      id: "devtools-layout-panel",
-      parentId: "inspector-options"
+      pref: "devtools.performance.new-panel-enabled",
+      label: "Enable new performance recorder (then re-open DevTools)",
+      id: "devtools-new-performance",
+      parentId: "context-options"
     }];
 
     let createPreferenceOption = ({pref, label, id}) => {
@@ -352,6 +358,7 @@ OptionsPanel.prototype = {
     for (let prefDefinition of prefDefinitions) {
       let parent = this.panelDoc.getElementById(prefDefinition.parentId);
       parent.appendChild(createPreferenceOption(prefDefinition));
+      parent.removeAttribute("hidden");
     }
   },
 
@@ -428,6 +435,13 @@ OptionsPanel.prototype = {
       let lightThemeInputRadio = themeBox.querySelector("[value=light]");
       lightThemeInputRadio.checked = true;
     }
+  },
+
+  updateSourceMapPref: function () {
+    const prefName = "devtools.source-map.client-service.enabled";
+    let enabled = GetPref(prefName);
+    let box = this.panelDoc.querySelector(`[data-pref="${prefName}"]`);
+    box.checked = enabled;
   },
 
   /**

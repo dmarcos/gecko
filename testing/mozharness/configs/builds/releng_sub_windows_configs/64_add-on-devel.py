@@ -10,7 +10,6 @@ config = {
         'upload-files',
 #        'sendchange',
         'check-test',
-#        'generate-build-stats',
 #        'update',
     ],
     'stage_platform': 'win64-add-on-devel',
@@ -20,9 +19,8 @@ config = {
     'env': {
         'BINSCOPE': 'C:/Program Files (x86)/Microsoft/SDL BinScope/BinScope.exe',
         'HG_SHARE_BASE_DIR': 'C:/builds/hg-shared',
-        'MOZ_AUTOMATION': '1',
         'MOZ_CRASHREPORTER_NO_REPORT': '1',
-        'MOZ_OBJDIR': 'obj-firefox',
+        'MOZ_OBJDIR': '%(abs_obj_dir)s',
         'PATH': 'C:/mozilla-build/nsis-3.01;C:/mozilla-build/python27;'
                 'C:/mozilla-build/buildbotve/scripts;'
                 '%s' % (os.environ.get('path')),
@@ -32,6 +30,6 @@ config = {
         'TOOLTOOL_CACHE': 'c:/builds/tooltool_cache',
         'TOOLTOOL_HOME': '/c/builds',
     },
-    'src_mozconfig': 'browser/config/mozconfigs/win64/add-on-devel',
+    'mozconfig_variant': 'add-on-devel',
     #######################
 }

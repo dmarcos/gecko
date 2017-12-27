@@ -1,7 +1,8 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 "use strict";
 
 this.EXPORTED_SYMBOLS = ["LegacyExtensionsUtils"];
@@ -109,12 +110,15 @@ class EmbeddedExtension {
    *   An object with the following properties:
    * @param {string} containerAddonParams.id
    *   The Add-on id of the Legacy Extension which will contain the embedded webextension.
+   * @param {string} containerAddonParams.version
+   *   The add-on version.
    * @param {nsIURI} containerAddonParams.resourceURI
    *   The nsIURI of the Legacy Extension container add-on.
    */
-  constructor({id, resourceURI}) {
+  constructor({id, resourceURI, version}) {
     this.addonId = id;
     this.resourceURI = resourceURI;
+    this.version = version;
 
     // Setup status flag.
     this.started = false;
@@ -123,10 +127,13 @@ class EmbeddedExtension {
   /**
    * Start the embedded webextension.
    *
+   * @param {number} reason
+   *   The add-on startup bootstrap reason received from the XPIProvider.
+   *
    * @returns {Promise<LegacyContextAPI>} A promise which resolve to the API exposed to the
    *   legacy context.
    */
-  startup() {
+  startup(reason) {
     if (this.started) {
       return Promise.reject(new Error("This embedded extension has already been started"));
     }
@@ -139,7 +146,10 @@ class EmbeddedExtension {
       this.extension = new Extension({
         id: this.addonId,
         resourceURI: embeddedExtensionURI,
+        version: this.version,
       });
+
+      this.extension.isEmbedded = true;
 
       // This callback is register to the "startup" event, emitted by the Extension instance
       // after the extension manifest.json has been loaded without any errors, but before
@@ -177,7 +187,7 @@ class EmbeddedExtension {
 
       // Run ambedded extension startup and catch any error during embedded extension
       // startup.
-      this.extension.startup().catch((err) => {
+      this.extension.startup(reason).catch((err) => {
         this.started = false;
         this.startupPromise = null;
         this.extension.off("startup", onBeforeStarted);
@@ -192,24 +202,21 @@ class EmbeddedExtension {
   /**
    * Shuts down the embedded webextension.
    *
+   * @param {number} reason
+   *   The add-on shutdown bootstrap reason received from the XPIProvider.
+   *
    * @returns {Promise<void>} a promise that is resolved when the shutdown has been done
    */
-  shutdown() {
+  async shutdown(reason) {
     EmbeddedExtensionManager.untrackEmbeddedExtension(this);
 
-    // If there is a pending startup,  wait to be completed and then shutdown.
-    if (this.startupPromise) {
-      return this.startupPromise.then(() => {
-        this.extension.shutdown();
-      });
-    }
+    if (this.extension && !this.extension.hasShutdown) {
+      let {extension} = this;
+      this.extension = null;
 
-    // Run shutdown now if the embedded webextension has been correctly started
-    if (this.extension && this.started && !this.extension.hasShutdown) {
-      this.extension.shutdown();
+      await extension.shutdown(reason);
     }
-
-    return Promise.resolve();
+    return undefined;
   }
 }
 
@@ -227,11 +234,11 @@ EmbeddedExtensionManager = {
     }
   },
 
-  getEmbeddedExtensionFor({id, resourceURI}) {
+  getEmbeddedExtensionFor({id, resourceURI, version}) {
     let embeddedExtension = this.embeddedExtensionsByAddonId.get(id);
 
     if (!embeddedExtension) {
-      embeddedExtension = new EmbeddedExtension({id, resourceURI});
+      embeddedExtension = new EmbeddedExtension({id, resourceURI, version});
       // Keep track of the embedded extension instance.
       this.embeddedExtensionsByAddonId.set(id, embeddedExtension);
     }

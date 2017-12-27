@@ -10,8 +10,9 @@
 
 #include "mozilla/Assertions.h"
 #include "mozilla/dom/File.h"
-#include "mozilla/dom/ipc/BlobChild.h"
-#include "mozilla/dom/ipc/BlobParent.h"
+#include "mozilla/dom/ipc/IPCBlobInputStream.h"
+#include "mozilla/dom/ipc/IPCBlobInputStreamStorage.h"
+#include "mozilla/SlicedInputStream.h"
 #include "nsComponentManagerUtils.h"
 #include "nsDebug.h"
 #include "nsID.h"
@@ -20,9 +21,7 @@
 #include "nsMultiplexInputStream.h"
 #include "nsNetCID.h"
 #include "nsStringStream.h"
-#include "nsTemporaryFileInputStream.h"
 #include "nsXULAppAPI.h"
-#include "SlicedInputStream.h"
 
 using namespace mozilla::dom;
 
@@ -66,6 +65,16 @@ InputStreamHelper::DeserializeInputStream(const InputStreamParams& aParams,
   nsCOMPtr<nsIInputStream> stream;
   nsCOMPtr<nsIIPCSerializableInputStream> serializable;
 
+  // IPCBlobInputStreams are not deserializable on the parent side.
+  if (aParams.type() == InputStreamParams::TIPCBlobInputStreamParams) {
+    MOZ_ASSERT(XRE_IsParentProcess());
+    IPCBlobInputStreamStorage::Get()->GetStream(aParams.get_IPCBlobInputStreamParams().id(),
+                                                aParams.get_IPCBlobInputStreamParams().start(),
+                                                aParams.get_IPCBlobInputStreamParams().length(),
+                                                getter_AddRefs(stream));
+    return stream.forget();
+  }
+
   switch (aParams.type()) {
     case InputStreamParams::TStringInputStreamParams:
       serializable = do_CreateInstance(kStringInputStreamCID);
@@ -73,10 +82,6 @@ InputStreamHelper::DeserializeInputStream(const InputStreamParams& aParams,
 
     case InputStreamParams::TFileInputStreamParams:
       serializable = do_CreateInstance(kFileInputStreamCID);
-      break;
-
-    case InputStreamParams::TTemporaryFileInputStreamParams:
-      serializable = new nsTemporaryFileInputStream();
       break;
 
     case InputStreamParams::TBufferedInputStreamParams:
@@ -91,46 +96,8 @@ InputStreamHelper::DeserializeInputStream(const InputStreamParams& aParams,
       serializable = do_CreateInstance(kMultiplexInputStreamCID);
       break;
 
-    // When the input stream already exists in this process, all we need to do
-    // is retrieve the original instead of sending any data over the wire.
-    case InputStreamParams::TRemoteInputStreamParams: {
-      if (NS_WARN_IF(!XRE_IsParentProcess())) {
-        return nullptr;
-      }
-
-      const nsID& id = aParams.get_RemoteInputStreamParams().id();
-
-      RefPtr<BlobImpl> blobImpl = BlobParent::GetBlobImplForID(id);
-
-      MOZ_ASSERT(blobImpl, "Invalid blob contents");
-
-      // If fetching the internal stream fails, we ignore it and return a
-      // null stream.
-      ErrorResult rv;
-      nsCOMPtr<nsIInputStream> stream;
-      blobImpl->GetInternalStream(getter_AddRefs(stream), rv);
-      if (NS_WARN_IF(rv.Failed()) || !stream) {
-        NS_WARNING("Couldn't obtain a valid stream from the blob");
-        rv.SuppressException();
-      }
-      return stream.forget();
-    }
-
-    case InputStreamParams::TSameProcessInputStreamParams: {
-      MOZ_ASSERT(aFileDescriptors.IsEmpty());
-
-      const SameProcessInputStreamParams& params =
-        aParams.get_SameProcessInputStreamParams();
-
-      stream = dont_AddRef(
-        reinterpret_cast<nsIInputStream*>(params.addRefedInputStream()));
-      MOZ_ASSERT(stream);
-
-      return stream.forget();
-    }
-
     case InputStreamParams::TSlicedInputStreamParams:
-      serializable = new SlicedInputStream();
+      serializable = new mozilla::SlicedInputStream();
       break;
 
     default:

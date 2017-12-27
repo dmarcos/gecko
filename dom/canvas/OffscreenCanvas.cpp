@@ -86,15 +86,15 @@ OffscreenCanvas::ClearResources()
     mCanvasClient->Clear();
 
     if (mCanvasRenderer) {
-      nsCOMPtr<nsIThread> activeThread = mCanvasRenderer->GetActiveThread();
-      MOZ_RELEASE_ASSERT(activeThread, "GFX: failed to get active thread.");
+      nsCOMPtr<nsISerialEventTarget> activeTarget = mCanvasRenderer->GetActiveEventTarget();
+      MOZ_RELEASE_ASSERT(activeTarget, "GFX: failed to get active event target.");
       bool current;
-      activeThread->IsOnCurrentThread(&current);
+      activeTarget->IsOnCurrentThread(&current);
       MOZ_RELEASE_ASSERT(current, "GFX: active thread is not current thread.");
       mCanvasRenderer->SetCanvasClient(nullptr);
       mCanvasRenderer->mContext = nullptr;
       mCanvasRenderer->mGLContext = nullptr;
-      mCanvasRenderer->ResetActiveThread();
+      mCanvasRenderer->ResetActiveEventTarget();
     }
 
     mCanvasClient = nullptr;
@@ -143,7 +143,7 @@ OffscreenCanvas::GetContext(JSContext* aCx,
       WebGLContext* webGL = static_cast<WebGLContext*>(mCurrentContext.get());
       gl::GLContext* gl = webGL->GL();
       mCanvasRenderer->mContext = mCurrentContext;
-      mCanvasRenderer->SetActiveThread();
+      mCanvasRenderer->SetActiveEventTarget();
       mCanvasRenderer->mGLContext = gl;
       mCanvasRenderer->SetIsAlphaPremultiplied(webGL->IsPremultAlpha() || !gl->Caps().alpha);
 
@@ -217,11 +217,13 @@ OffscreenCanvas::ToCloneData()
 }
 
 already_AddRefed<ImageBitmap>
-OffscreenCanvas::TransferToImageBitmap()
+OffscreenCanvas::TransferToImageBitmap(ErrorResult& aRv)
 {
-  ErrorResult rv;
   nsCOMPtr<nsIGlobalObject> globalObject = GetGlobalObject();
-  RefPtr<ImageBitmap> result = ImageBitmap::CreateFromOffscreenCanvas(globalObject, *this, rv);
+  RefPtr<ImageBitmap> result = ImageBitmap::CreateFromOffscreenCanvas(globalObject, *this, aRv);
+  if (aRv.Failed()) {
+    return nullptr;
+  }
 
   // Clear the content.
   if ((mCurrentContextType == CanvasContextType::WebGL1 ||
@@ -266,17 +268,6 @@ OffscreenCanvas::ToBlob(JSContext* aCx,
     {
       RefPtr<Blob> blob = aBlob;
 
-      ErrorResult rv;
-      uint64_t size = blob->GetSize(rv);
-      if (rv.Failed()) {
-        rv.SuppressException();
-      } else {
-        AutoJSAPI jsapi;
-        if (jsapi.Init(mGlobal)) {
-          JS_updateMallocCounter(jsapi.cx(), size);
-        }
-      }
-
       if (mPromise) {
         RefPtr<Blob> newBlob = Blob::Create(mGlobal, blob->Impl());
         mPromise->MaybeResolve(newBlob);
@@ -285,7 +276,7 @@ OffscreenCanvas::ToBlob(JSContext* aCx,
       mGlobal = nullptr;
       mPromise = nullptr;
 
-      return rv.StealNSResult();
+      return NS_OK;
     }
 
     nsCOMPtr<nsIGlobalObject> mGlobal;
@@ -295,8 +286,13 @@ OffscreenCanvas::ToBlob(JSContext* aCx,
   RefPtr<EncodeCompleteCallback> callback =
     new EncodeCallback(global, promise);
 
-  CanvasRenderingContextHelper::ToBlob(aCx, global,
-                                       callback, aType, aParams, aRv);
+  // TODO: Can we obtain the context and document here somehow
+  // so that we can decide when usePlaceholder should be true/false?
+  // See https://trac.torproject.org/18599
+  // For now, we always return a placeholder if fingerprinting resistance is on.
+  bool usePlaceholder = nsContentUtils::ShouldResistFingerprinting();
+  CanvasRenderingContextHelper::ToBlob(aCx, global, callback, aType, aParams,
+                                       usePlaceholder, aRv);
 
   return promise.forget();
 }
@@ -363,7 +359,7 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(OffscreenCanvas, DOMEventTargetHelper, mCurre
 NS_IMPL_ADDREF_INHERITED(OffscreenCanvas, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(OffscreenCanvas, DOMEventTargetHelper)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(OffscreenCanvas)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(OffscreenCanvas)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 

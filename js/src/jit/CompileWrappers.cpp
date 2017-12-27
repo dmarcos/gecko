@@ -4,7 +4,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "jsgc.h"
+
 #include "jit/Ion.h"
+#include "jit/JitCompartment.h"
 
 #include "jscompartmentinlines.h"
 
@@ -37,7 +40,7 @@ CompileRuntime::jitRuntime()
     return runtime()->jitRuntime();
 }
 
-GeckoProfiler&
+GeckoProfilerRuntime&
 CompileRuntime::geckoProfiler()
 {
     return runtime()->geckoProfiler();
@@ -221,18 +224,6 @@ CompileRuntime*
 CompileCompartment::runtime()
 {
     return CompileRuntime::get(compartment()->runtimeFromAnyThread());
-}
-
-const void*
-CompileCompartment::addressOfEnumerators()
-{
-    return &compartment()->enumerators;
-}
-
-const void*
-CompileCompartment::addressOfLastCachedNativeIterator()
-{
-    return &compartment()->lastCachedNativeIterator;
 }
 
 const void*

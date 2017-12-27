@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -15,6 +16,25 @@
 
 namespace mozilla {
 namespace gfx {
+
+int32_t
+StrideForFormatAndWidth(SurfaceFormat aFormat, int32_t aWidth)
+{
+  MOZ_ASSERT(aFormat <= SurfaceFormat::UNKNOWN);
+  MOZ_ASSERT(aWidth > 0);
+
+  // There's nothing special about this alignment, other than that it's what
+  // cairo_format_stride_for_width uses.
+  static const int32_t alignment = sizeof(int32_t);
+
+  const int32_t bpp = BytesPerPixel(aFormat);
+
+  if (aWidth >= (INT32_MAX - alignment) / bpp) {
+    return -1; // too big
+  }
+
+  return (bpp * aWidth + alignment-1) & ~(alignment-1);
+}
 
 already_AddRefed<DataSourceSurface>
 CreateDataSourceSurfaceFromData(const IntSize& aSize,

@@ -23,9 +23,10 @@
 
 #include "nsCycleCollectionParticipant.h"
 #include "mozilla/dom/NameSpaceConstants.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 #include "mozilla/Attributes.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
+#include "plhash.h"
 
 class nsIDocument;
 class nsNodeInfoManager;
@@ -54,7 +55,7 @@ public:
    * For the HTML element "<body>" this will return the "body" atom and for
    * the XML element "<html:body>" this will return the "body" atom.
    */
-  nsIAtom* NameAtom() const
+  nsAtom* NameAtom() const
   {
     return mInner.mName;
   }
@@ -98,7 +99,7 @@ public:
    * For the HTML element "<body>" this will return a null atom and for
    * the XML element "<html:body>" this will return the "html" atom.
    */
-  nsIAtom* GetPrefixAtom() const
+  nsAtom* GetPrefixAtom() const
   {
     return mInner.mPrefix;
   }
@@ -129,7 +130,7 @@ public:
   /*
    * Get the extra name, used by PIs and DocTypes, for the node.
    */
-  nsIAtom* GetExtraName() const
+  nsAtom* GetExtraName() const
   {
     return mInner.mExtraName;
   }
@@ -152,23 +153,23 @@ public:
 
   bool NameAndNamespaceEquals(NodeInfo* aNodeInfo) const;
 
-  bool Equals(nsIAtom* aNameAtom) const
+  bool Equals(nsAtom* aNameAtom) const
   {
     return mInner.mName == aNameAtom;
   }
 
-  bool Equals(nsIAtom* aNameAtom, nsIAtom* aPrefixAtom) const
+  bool Equals(nsAtom* aNameAtom, nsAtom* aPrefixAtom) const
   {
     return (mInner.mName == aNameAtom) && (mInner.mPrefix == aPrefixAtom);
   }
 
-  bool Equals(nsIAtom* aNameAtom, int32_t aNamespaceID) const
+  bool Equals(nsAtom* aNameAtom, int32_t aNamespaceID) const
   {
     return ((mInner.mName == aNameAtom) &&
             (mInner.mNamespaceID == aNamespaceID));
   }
 
-  bool Equals(nsIAtom* aNameAtom, nsIAtom* aPrefixAtom, int32_t aNamespaceID) const
+  bool Equals(nsAtom* aNameAtom, nsAtom* aPrefixAtom, int32_t aNamespaceID) const
   {
     return ((mInner.mName == aNameAtom) &&
             (mInner.mPrefix == aPrefixAtom) &&
@@ -190,7 +191,7 @@ public:
 
   bool NamespaceEquals(const nsAString& aNamespaceURI) const;
 
-  inline bool QualifiedNameEquals(nsIAtom* aNameAtom) const;
+  inline bool QualifiedNameEquals(nsAtom* aNameAtom) const;
 
   bool QualifiedNameEquals(const nsAString& aQualifiedName) const
   {
@@ -206,13 +207,13 @@ public:
   }
 
 private:
-  NodeInfo() = delete; 
+  NodeInfo() = delete;
   NodeInfo(const NodeInfo& aOther) = delete;
 
   // NodeInfo is only constructed by nsNodeInfoManager which is a friend class.
   // aName and aOwnerManager may not be null.
-  NodeInfo(nsIAtom* aName, nsIAtom* aPrefix, int32_t aNamespaceID,
-           uint16_t aNodeType, nsIAtom* aExtraName,
+  NodeInfo(nsAtom* aName, nsAtom* aPrefix, int32_t aNamespaceID,
+           uint16_t aNodeType, nsAtom* aExtraName,
            nsNodeInfoManager* aOwnerManager);
 
   ~NodeInfo();
@@ -246,28 +247,33 @@ protected:
   public:
     NodeInfoInner()
       : mName(nullptr), mPrefix(nullptr), mNamespaceID(kNameSpaceID_Unknown),
-        mNodeType(0), mNameString(nullptr), mExtraName(nullptr)
+        mNodeType(0), mNameString(nullptr), mExtraName(nullptr),
+        mHash(0), mHashInitialized(false)
     {
     }
-    NodeInfoInner(nsIAtom *aName, nsIAtom *aPrefix, int32_t aNamespaceID,
-                    uint16_t aNodeType, nsIAtom* aExtraName)
+    NodeInfoInner(nsAtom *aName, nsAtom *aPrefix, int32_t aNamespaceID,
+                    uint16_t aNodeType, nsAtom* aExtraName)
       : mName(aName), mPrefix(aPrefix), mNamespaceID(aNamespaceID),
-        mNodeType(aNodeType), mNameString(nullptr), mExtraName(aExtraName)
+        mNodeType(aNodeType), mNameString(nullptr), mExtraName(aExtraName),
+        mHash(aName->hash()), mHashInitialized(true)
     {
     }
-    NodeInfoInner(const nsAString& aTmpName, nsIAtom *aPrefix,
+    NodeInfoInner(const nsAString& aTmpName, nsAtom *aPrefix,
                     int32_t aNamespaceID, uint16_t aNodeType)
       : mName(nullptr), mPrefix(aPrefix), mNamespaceID(aNamespaceID),
-        mNodeType(aNodeType), mNameString(&aTmpName), mExtraName(nullptr)
+        mNodeType(aNodeType), mNameString(&aTmpName), mExtraName(nullptr),
+        mHash(0), mHashInitialized(false)
     {
     }
 
-    nsCOMPtr<nsIAtom> mName;
-    nsCOMPtr<nsIAtom> mPrefix;
+    nsAtom* const MOZ_OWNING_REF mName;
+    nsAtom* MOZ_OWNING_REF mPrefix;
     int32_t             mNamespaceID;
     uint16_t            mNodeType; // As defined by nsIDOMNode.nodeType
-    const nsAString*    mNameString;
-    nsCOMPtr<nsIAtom> mExtraName; // Only used by PIs and DocTypes
+    const nsAString* const mNameString;
+    nsAtom* MOZ_OWNING_REF mExtraName; // Only used by PIs and DocTypes
+    PLHashNumber      mHash;
+    bool              mHashInitialized;
   };
 
   // nsNodeInfoManager needs to pass mInner to the hash table.

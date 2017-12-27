@@ -330,7 +330,7 @@ ConvertArgsToArray(nsISupports* aArguments)
     do_CreateInstance(NS_ARRAY_CONTRACTID);
   NS_ENSURE_TRUE(singletonArray, nullptr);
 
-  nsresult rv = singletonArray->AppendElement(aArguments, /* aWeak = */ false);
+  nsresult rv = singletonArray->AppendElement(aArguments);
   NS_ENSURE_SUCCESS(rv, nullptr);
 
   return singletonArray.forget();
@@ -482,6 +482,7 @@ nsWindowWatcher::CreateChromeWindow(const nsACString& aFeatures,
                                     uint32_t aChromeFlags,
                                     nsITabParent* aOpeningTabParent,
                                     mozIDOMWindowProxy* aOpener,
+                                    uint64_t aNextTabParentId,
                                     nsIWebBrowserChrome** aResult)
 {
   nsCOMPtr<nsIWindowCreator2> windowCreator2(do_QueryInterface(mWindowCreator));
@@ -489,18 +490,12 @@ nsWindowWatcher::CreateChromeWindow(const nsACString& aFeatures,
     return NS_ERROR_UNEXPECTED;
   }
 
-  // B2G multi-screen support. mozDisplayId is returned from the
-  // "display-changed" event, it is also platform-dependent.
-#ifdef MOZ_WIDGET_GONK
-  int retval = WinHasOption(aFeatures, "mozDisplayId", 0, nullptr);
-  windowCreator2->SetScreenId(retval);
-#endif
-
   bool cancel = false;
   nsCOMPtr<nsIWebBrowserChrome> newWindowChrome;
   nsresult rv =
     windowCreator2->CreateChromeWindow2(aParentChrome, aChromeFlags,
-                                        aOpeningTabParent, aOpener, &cancel,
+                                        aOpeningTabParent, aOpener,
+                                        aNextTabParentId, &cancel,
                                         getter_AddRefs(newWindowChrome));
 
   if (NS_SUCCEEDED(rv) && cancel) {
@@ -547,6 +542,8 @@ nsWindowWatcher::OpenWindowWithTabParent(nsITabParent* aOpeningTabParent,
                                          const nsACString& aFeatures,
                                          bool aCalledFromJS,
                                          float aOpenerFullZoom,
+                                         uint64_t aNextTabParentId,
+                                         bool aForceNoOpener,
                                          nsITabParent** aResult)
 {
   MOZ_ASSERT(XRE_IsParentProcess());
@@ -614,7 +611,8 @@ nsWindowWatcher::OpenWindowWithTabParent(nsITabParent* aOpeningTabParent,
   nsCOMPtr<nsIWebBrowserChrome> newWindowChrome;
 
   CreateChromeWindow(aFeatures, parentChrome, chromeFlags,
-                     aOpeningTabParent, nullptr,
+                     aForceNoOpener ? nullptr : aOpeningTabParent, nullptr,
+                     aNextTabParentId,
                      getter_AddRefs(newWindowChrome));
 
   if (NS_WARN_IF(!newWindowChrome)) {
@@ -780,28 +778,8 @@ nsWindowWatcher::OpenWindowInternal(mozIDOMWindowProxy* aParent,
     }
   }
 
-  // If we're not called through our JS version of the API, and we got
-  // our internal modal option, treat the window we're opening as a
-  // modal content window (and set the modal chrome flag).
-  if (!aCalledFromJS && aArgv &&
-      WinHasOption(features, "-moz-internal-modal", 0, nullptr)) {
-    windowIsModalContentDialog = true;
-
-    // CHROME_MODAL gets inherited by dependent windows, which affects various
-    // platform-specific window state (especially on OSX). So we need some way
-    // to determine that this window was actually opened by nsGlobalWindow::
-    // ShowModalDialog(), and that somebody is actually going to be watching
-    // for return values and all that.
-    chromeFlags |= nsIWebBrowserChrome::CHROME_MODAL_CONTENT_WINDOW;
-    chromeFlags |= nsIWebBrowserChrome::CHROME_MODAL;
-  }
-
   SizeSpec sizeSpec;
   CalcSizeSpec(features, sizeSpec);
-
-  nsCOMPtr<nsIScriptSecurityManager> sm(
-    do_GetService(NS_SCRIPTSECURITYMANAGER_CONTRACTID));
-
 
   // XXXbz Why is an AutoJSAPI good enough here?  Wouldn't AutoEntryScript (so
   // we affect the entry global) make more sense?  Or do we just want to affect
@@ -875,7 +853,8 @@ nsWindowWatcher::OpenWindowInternal(mozIDOMWindowProxy* aParent,
                                      sizeSpec.PositionSpecified(),
                                      sizeSpec.SizeSpecified(),
                                      uriToLoad, name, features, aForceNoOpener,
-                                     &windowIsNew, getter_AddRefs(newWindow));
+                                     aLoadInfo, &windowIsNew,
+                                     getter_AddRefs(newWindow));
 
         if (NS_SUCCEEDED(rv)) {
           GetWindowTreeItem(newWindow, getter_AddRefs(newDocShellItem));
@@ -985,7 +964,8 @@ nsWindowWatcher::OpenWindowInternal(mozIDOMWindowProxy* aParent,
       if (windowCreator2) {
         mozIDOMWindowProxy* openerWindow = aForceNoOpener ? nullptr : aParent;
         rv = CreateChromeWindow(features, parentChrome, chromeFlags,
-                                nullptr, openerWindow, getter_AddRefs(newChrome));
+                                nullptr, openerWindow, 0,
+                                getter_AddRefs(newChrome));
 
       } else {
         rv = mWindowCreator->CreateChromeWindow(parentChrome, chromeFlags,
@@ -1137,7 +1117,7 @@ nsWindowWatcher::OpenWindowInternal(mozIDOMWindowProxy* aParent,
     if (newWindow) {
       newWindow->SetInitialPrincipalToSubject();
       if (aIsPopupSpam) {
-        nsGlobalWindow* globalWin = nsGlobalWindow::Cast(newWindow);
+        nsGlobalWindowOuter* globalWin = nsGlobalWindowOuter::Cast(newWindow);
         MOZ_ASSERT(!globalWin->IsPopupSpamWindow(),
                    "Who marked it as popup spam already???");
         if (!globalWin->IsPopupSpamWindow()) { // Make sure we don't mess up our
@@ -1243,8 +1223,9 @@ nsWindowWatcher::OpenWindowInternal(mozIDOMWindowProxy* aParent,
       true);
   }
 
-  // Copy the current session storage for the current domain.
-  if (subjectPrincipal && parentDocShell) {
+  // Copy the current session storage for the current domain. Don't perform the
+  // copy if we're forcing noopener, however.
+  if (!aForceNoOpener && subjectPrincipal && parentDocShell) {
     nsCOMPtr<nsIDOMStorageManager> parentStorageManager =
       do_QueryInterface(parentDocShell);
     nsCOMPtr<nsIDOMStorageManager> newStorageManager =
@@ -1477,15 +1458,6 @@ nsWindowWatcher::AddWindow(mozIDOMWindowProxy* aWindow, nsIWebBrowserChrome* aCh
   if (!aWindow) {
     return NS_ERROR_INVALID_ARG;
   }
-
-#ifdef DEBUG
-  {
-    nsCOMPtr<nsPIDOMWindowOuter> win(do_QueryInterface(aWindow));
-
-    NS_ASSERTION(win->IsOuterWindow(),
-                 "Uh, the active window must be an outer window!");
-  }
-#endif
 
   {
     nsWatcherWindowEntry* info;

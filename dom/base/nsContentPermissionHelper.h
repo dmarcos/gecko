@@ -78,12 +78,13 @@ public:
 
   static PContentPermissionRequestParent*
   CreateContentPermissionRequestParent(const nsTArray<PermissionRequest>& aRequests,
-                                       Element* element,
-                                       const IPC::Principal& principal,
+                                       Element* aElement,
+                                       const IPC::Principal& aPrincipal,
+                                       const bool aIsHandlingUserInput,
                                        const TabId& aTabId);
 
   static nsresult
-  AskPermission(nsIContentPermissionRequest* aRequest, 
+  AskPermission(nsIContentPermissionRequest* aRequest,
                 nsPIDOMWindowInner* aWindow);
 
   static nsTArray<PContentPermissionRequestParent*>

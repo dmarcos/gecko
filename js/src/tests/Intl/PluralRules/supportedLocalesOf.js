@@ -1,9 +1,5 @@
-// |reftest| skip-if(!this.hasOwnProperty('Intl')||!this.hasOwnProperty('addIntlExtras')||xulRuntime.shell)
+// |reftest| skip-if(!this.hasOwnProperty('Intl')||xulRuntime.shell)
 // -- test in browser only that ICU has locale data for all Mozilla languages
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // This array contains the locales that ICU supports in
 // number formatting whose languages Mozilla localizes Firefox into.
@@ -365,8 +361,6 @@ var locales = [
     "zh-Hant-MO",
     "zh-Hant-TW",
 ];
-
-addIntlExtras(Intl);
 
 const result = Intl.PluralRules.supportedLocalesOf(locales);
 

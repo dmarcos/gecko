@@ -1,6 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: sw=2 ts=8 et :
- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,6 +16,7 @@
 #include "mozilla/dom/ScreenOrientation.h"  // for ScreenOrientation
 #include "mozilla/ipc/SharedMemory.h"   // for SharedMemory, etc
 #include "mozilla/layers/CompositableForwarder.h"
+#include "mozilla/layers/FocusTarget.h"
 #include "mozilla/layers/LayersTypes.h"
 #include "mozilla/layers/TextureForwarder.h"
 #include "mozilla/layers/CompositorTypes.h"  // for OpenMode, etc
@@ -26,7 +26,6 @@
 #include "nsTArrayForwardDeclare.h"     // for InfallibleTArray
 #include "nsIWidget.h"
 #include <vector>
-#include "nsExpirationTracker.h"
 
 namespace mozilla {
 namespace layers {
@@ -44,37 +43,6 @@ class TextureClient;
 class ThebesBuffer;
 class ThebesBufferData;
 class Transaction;
-
-/**
- * See ActiveResourceTracker below.
- */
-class ActiveResource
-{
-public:
- virtual void NotifyInactive() = 0;
-  nsExpirationState* GetExpirationState() { return &mExpirationState; }
-  bool IsActivityTracked() { return mExpirationState.IsTracked(); }
-private:
-  nsExpirationState mExpirationState;
-};
-
-/**
- * A convenience class on top of nsExpirationTracker
- */
-class ActiveResourceTracker : public nsExpirationTracker<ActiveResource, 3>
-{
-public:
-  ActiveResourceTracker(uint32_t aExpirationCycle, const char* aName,
-                        nsIEventTarget* aEventTarget)
-  : nsExpirationTracker(aExpirationCycle, aName, aEventTarget)
-  {}
-
-  virtual void NotifyExpired(ActiveResource* aResource) override
-  {
-    RemoveObject(aResource);
-    aResource->NotifyInactive();
-  }
-};
 
 /**
  * We want to share layer trees across thread contexts and address
@@ -319,6 +287,10 @@ public:
   bool HasShadowManager() const { return !!mShadowManager; }
   LayerTransactionChild* GetShadowManager() const { return mShadowManager.get(); }
 
+  // Send a synchronous message asking the LayerTransactionParent in the
+  // compositor to shutdown.
+  void SynchronouslyShutdown();
+
   virtual void WindowOverlayChanged() { mWindowOverlayChanged = true; }
 
   /**
@@ -367,7 +339,10 @@ public:
    */
   void SetIsFirstPaint() { mIsFirstPaint = true; }
 
-  void SetPaintSyncId(int32_t aSyncId) { mPaintSyncId = aSyncId; }
+  /**
+   * Set the current focus target to be sent with the next paint.
+   */
+  void SetFocusTarget(const FocusTarget& aFocusTarget) { mFocusTarget = aFocusTarget; }
 
   void SetLayerObserverEpoch(uint64_t aLayerObserverEpoch);
 
@@ -397,23 +372,26 @@ public:
     return mPaintTiming;
   }
 
+  ShadowLayerForwarder* AsLayerForwarder() override { return this; }
+
   // Returns true if aSurface wraps a Shmem.
   static bool IsShmem(SurfaceDescriptor* aSurface);
 
-  /**
-   * Sends a synchronous ping to the compsoitor.
-   *
-   * This is bad for performance and should only be called as a last resort if the
-   * compositor may be blocked for a long period of time, to avoid that the content
-   * process accumulates resource allocations that the compositor is not consuming
-   * and releasing.
-   */
-  void SyncWithCompositor();
+  void SyncWithCompositor() override;
 
   TextureForwarder* GetTextureForwarder() override { return GetCompositorBridgeChild(); }
   LayersIPCActor* GetLayersIPCActor() override { return this; }
 
-  ActiveResourceTracker& GetActiveResourceTracker() { return *mActiveResourceTracker.get(); }
+  ActiveResourceTracker* GetActiveResourceTracker() override { return mActiveResourceTracker.get(); }
+
+  CompositorBridgeChild* GetCompositorBridgeChild();
+
+  nsIEventTarget* GetEventTarget() { return mEventTarget; };
+
+  virtual bool IsThreadSafe() const override { return false; }
+
+  virtual RefPtr<KnowsCompositor> GetForMedia() override;
+
 protected:
   virtual ~ShadowLayerForwarder();
 
@@ -429,8 +407,6 @@ protected:
 
   bool InWorkerThread();
 
-  CompositorBridgeChild* GetCompositorBridgeChild();
-
   RefPtr<LayerTransactionChild> mShadowManager;
   RefPtr<CompositorBridgeChild> mCompositorBridgeChild;
 
@@ -441,8 +417,8 @@ private:
   MessageLoop* mMessageLoop;
   DiagnosticTypes mDiagnosticTypes;
   bool mIsFirstPaint;
+  FocusTarget mFocusTarget;
   bool mWindowOverlayChanged;
-  int32_t mPaintSyncId;
   InfallibleTArray<PluginWindowData> mPluginWindowData;
   UniquePtr<ActiveResourceTracker> mActiveResourceTracker;
   uint64_t mNextLayerHandle;

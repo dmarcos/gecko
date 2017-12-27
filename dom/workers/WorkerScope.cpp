@@ -9,6 +9,7 @@
 #include "jsapi.h"
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/dom/BindingDeclarations.h"
+#include "mozilla/dom/Clients.h"
 #include "mozilla/dom/Console.h"
 #include "mozilla/dom/DedicatedWorkerGlobalScopeBinding.h"
 #include "mozilla/dom/Fetch.h"
@@ -44,7 +45,6 @@
 #include "ScriptLoader.h"
 #include "WorkerPrivate.h"
 #include "WorkerRunnable.h"
-#include "ServiceWorkerClients.h"
 #include "ServiceWorkerManager.h"
 #include "ServiceWorkerRegistration.h"
 
@@ -72,10 +72,14 @@ using mozilla::dom::cache::CacheStorage;
 using mozilla::ipc::PrincipalInfo;
 
 WorkerGlobalScope::WorkerGlobalScope(WorkerPrivate* aWorkerPrivate)
-: mWindowInteractionsAllowed(0)
+: mSerialEventTarget(aWorkerPrivate->HybridEventTarget())
+, mWindowInteractionsAllowed(0)
 , mWorkerPrivate(aWorkerPrivate)
 {
   mWorkerPrivate->AssertIsOnWorkerThread();
+
+  // We should always have an event target when the global is created.
+  MOZ_DIAGNOSTIC_ASSERT(mSerialEventTarget);
 }
 
 WorkerGlobalScope::~WorkerGlobalScope()
@@ -132,7 +136,7 @@ WorkerGlobalScope::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
   MOZ_CRASH("We should never get here!");
 }
 
-Console*
+already_AddRefed<Console>
 WorkerGlobalScope::GetConsole(ErrorResult& aRv)
 {
   mWorkerPrivate->AssertIsOnWorkerThread();
@@ -144,7 +148,8 @@ WorkerGlobalScope::GetConsole(ErrorResult& aRv)
     }
   }
 
-  return mConsole;
+  RefPtr<Console> console = mConsole;
+  return console.forget();
 }
 
 Crypto*
@@ -489,8 +494,30 @@ WorkerGlobalScope::CreateImageBitmap(JSContext* aCx,
   }
 }
 
-DedicatedWorkerGlobalScope::DedicatedWorkerGlobalScope(WorkerPrivate* aWorkerPrivate)
-: WorkerGlobalScope(aWorkerPrivate)
+nsresult
+WorkerGlobalScope::Dispatch(TaskCategory aCategory,
+                            already_AddRefed<nsIRunnable>&& aRunnable)
+{
+  return EventTargetFor(aCategory)->Dispatch(Move(aRunnable),
+                                             NS_DISPATCH_NORMAL);
+}
+
+nsISerialEventTarget*
+WorkerGlobalScope::EventTargetFor(TaskCategory aCategory) const
+{
+  return mSerialEventTarget;
+}
+
+AbstractThread*
+WorkerGlobalScope::AbstractMainThreadFor(TaskCategory aCategory)
+{
+  MOZ_CRASH("AbstractMainThreadFor not supported for workers.");
+}
+
+DedicatedWorkerGlobalScope::DedicatedWorkerGlobalScope(WorkerPrivate* aWorkerPrivate,
+                                                       const nsString& aName)
+  : WorkerGlobalScope(aWorkerPrivate)
+  , mName(aName)
 {
 }
 
@@ -547,7 +574,7 @@ DedicatedWorkerGlobalScope::Close(JSContext* aCx)
 }
 
 SharedWorkerGlobalScope::SharedWorkerGlobalScope(WorkerPrivate* aWorkerPrivate,
-                                                 const nsCString& aName)
+                                                 const nsString& aName)
 : WorkerGlobalScope(aWorkerPrivate), mName(aName)
 {
 }
@@ -576,7 +603,7 @@ SharedWorkerGlobalScope::Close(JSContext* aCx)
 
 NS_IMPL_CYCLE_COLLECTION_INHERITED(ServiceWorkerGlobalScope, WorkerGlobalScope,
                                    mClients, mRegistration)
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ServiceWorkerGlobalScope)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ServiceWorkerGlobalScope)
 NS_INTERFACE_MAP_END_INHERITING(WorkerGlobalScope)
 
 NS_IMPL_ADDREF_INHERITED(ServiceWorkerGlobalScope, WorkerGlobalScope)
@@ -608,14 +635,15 @@ ServiceWorkerGlobalScope::WrapGlobalObject(JSContext* aCx,
                                                true, aReflector);
 }
 
-ServiceWorkerClients*
-ServiceWorkerGlobalScope::Clients()
+already_AddRefed<Clients>
+ServiceWorkerGlobalScope::GetClients()
 {
   if (!mClients) {
-    mClients = new ServiceWorkerClients(this);
+    mClients = new Clients(this);
   }
 
-  return mClients;
+  RefPtr<Clients> ref = mClients;
+  return ref.forget();
 }
 
 ServiceWorkerRegistration*
@@ -649,7 +677,8 @@ class ReportFetchListenerWarningRunnable final : public Runnable
 
 public:
   explicit ReportFetchListenerWarningRunnable(const nsString& aScope)
-    : mScope(NS_ConvertUTF16toUTF8(aScope))
+    : mozilla::Runnable("ReportFetchListenerWarningRunnable")
+    , mScope(NS_ConvertUTF16toUTF8(aScope))
   {
     WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
     MOZ_ASSERT(workerPrivate);
@@ -757,7 +786,8 @@ class WorkerScopeSkipWaitingRunnable final : public Runnable
 public:
   WorkerScopeSkipWaitingRunnable(PromiseWorkerProxy* aPromiseProxy,
                                  const nsCString& aScope)
-    : mPromiseProxy(aPromiseProxy)
+    : mozilla::Runnable("WorkerScopeSkipWaitingRunnable")
+    , mPromiseProxy(aPromiseProxy)
     , mScope(aScope)
   {
     MOZ_ASSERT(aPromiseProxy);
@@ -820,20 +850,15 @@ ServiceWorkerGlobalScope::SkipWaiting(ErrorResult& aRv)
   return promise.forget();
 }
 
-bool
-ServiceWorkerGlobalScope::OpenWindowEnabled(JSContext* aCx, JSObject* aObj)
-{
-  WorkerPrivate* worker = GetCurrentThreadWorkerPrivate();
-  MOZ_ASSERT(worker);
-  worker->AssertIsOnWorkerThread();
-  return worker->OpenWindowEnabled();
-}
-
 WorkerDebuggerGlobalScope::WorkerDebuggerGlobalScope(
                                                   WorkerPrivate* aWorkerPrivate)
 : mWorkerPrivate(aWorkerPrivate)
+, mSerialEventTarget(aWorkerPrivate->HybridEventTarget())
 {
   mWorkerPrivate->AssertIsOnWorkerThread();
+
+  // We should always have an event target when the global is created.
+  MOZ_DIAGNOSTIC_ASSERT(mSerialEventTarget);
 }
 
 WorkerDebuggerGlobalScope::~WorkerDebuggerGlobalScope()
@@ -1021,7 +1046,7 @@ WorkerDebuggerGlobalScope::SetConsoleEventHandler(JSContext* aCx,
   console->SetConsoleEventHandler(aHandler);
 }
 
-Console*
+already_AddRefed<Console>
 WorkerDebuggerGlobalScope::GetConsole(ErrorResult& aRv)
 {
   mWorkerPrivate->AssertIsOnWorkerThread();
@@ -1034,7 +1059,8 @@ WorkerDebuggerGlobalScope::GetConsole(ErrorResult& aRv)
     }
   }
 
-  return mConsole;
+  RefPtr<Console> console = mConsole;
+  return console.forget();
 }
 
 void
@@ -1047,22 +1073,38 @@ WorkerDebuggerGlobalScope::Dump(JSContext* aCx,
   }
 }
 
+nsresult
+WorkerDebuggerGlobalScope::Dispatch(TaskCategory aCategory,
+                                    already_AddRefed<nsIRunnable>&& aRunnable)
+{
+  return EventTargetFor(aCategory)->Dispatch(Move(aRunnable),
+                                             NS_DISPATCH_NORMAL);
+}
+
+nsISerialEventTarget*
+WorkerDebuggerGlobalScope::EventTargetFor(TaskCategory aCategory) const
+{
+  return mSerialEventTarget;
+}
+
+AbstractThread*
+WorkerDebuggerGlobalScope::AbstractMainThreadFor(TaskCategory aCategory)
+{
+  MOZ_CRASH("AbstractMainThreadFor not supported for workers.");
+}
+
 BEGIN_WORKERS_NAMESPACE
 
 bool
 IsWorkerGlobal(JSObject* object)
 {
-  nsIGlobalObject* globalObject = nullptr;
-  return NS_SUCCEEDED(UNWRAP_OBJECT(WorkerGlobalScope, object,
-                                    globalObject)) && !!globalObject;
+  return IS_INSTANCE_OF(WorkerGlobalScope, object);
 }
 
 bool
 IsDebuggerGlobal(JSObject* object)
 {
-  nsIGlobalObject* globalObject = nullptr;
-  return NS_SUCCEEDED(UNWRAP_OBJECT(WorkerDebuggerGlobalScope, object,
-                                    globalObject)) && !!globalObject;
+  return IS_INSTANCE_OF(WorkerDebuggerGlobalScope, object);
 }
 
 bool

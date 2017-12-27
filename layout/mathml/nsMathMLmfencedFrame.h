@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,12 +18,12 @@ class nsFontMetrics;
 
 class nsMathMLmfencedFrame final : public nsMathMLContainerFrame {
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsMathMLmfencedFrame)
 
   friend nsIFrame* NS_NewMathMLmfencedFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
   virtual void
-  SetAdditionalStyleContext(int32_t          aIndex, 
+  SetAdditionalStyleContext(int32_t          aIndex,
                             nsStyleContext*  aStyleContext) override;
   virtual nsStyleContext*
   GetAdditionalStyleContext(int32_t aIndex) const override;
@@ -41,16 +42,15 @@ public:
          nsReflowStatus&          aStatus) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual void
-  GetIntrinsicISizeMetrics(nsRenderingContext* aRenderingContext,
+  GetIntrinsicISizeMetrics(gfxContext* aRenderingContext,
                            ReflowOutput& aDesiredSize) override;
 
   virtual nsresult
   AttributeChanged(int32_t         aNameSpaceID,
-                   nsIAtom*        aAttribute,
+                   nsAtom*        aAttribute,
                    int32_t         aModType) override;
 
   // override the base method because we must keep separators in sync
@@ -62,9 +62,8 @@ public:
   FixInterFrameSpacing(ReflowOutput& aDesiredSize) override;
 
   // helper routines to format the MathMLChars involved here
-  static nsresult
-  ReflowChar(nsPresContext*       aPresContext,
-             DrawTarget*          aDrawTarget,
+  nsresult
+  ReflowChar(DrawTarget*          aDrawTarget,
              nsFontMetrics&       aFontMetrics,
              float                aFontSizeInflation,
              nsMathMLChar*        aMathMLChar,
@@ -97,7 +96,7 @@ public:
 
 protected:
   explicit nsMathMLmfencedFrame(nsStyleContext* aContext)
-    : nsMathMLContainerFrame(aContext)
+    : nsMathMLContainerFrame(aContext, kClassID)
     , mOpenChar(nullptr)
     , mCloseChar(nullptr)
     , mSeparatorsChar(nullptr)
@@ -105,7 +104,7 @@ protected:
   {}
 
   virtual ~nsMathMLmfencedFrame();
-  
+
   nsMathMLChar* mOpenChar;
   nsMathMLChar* mCloseChar;
   nsMathMLChar* mSeparatorsChar;

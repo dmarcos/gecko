@@ -12,6 +12,7 @@
 #include "nsProtectedAuthThread.h"
 #include "nsReadableUtils.h"
 #include "nsString.h"
+#include "nsThreadUtils.h"
 #include "pk11func.h"
 
 using namespace mozilla;
@@ -21,8 +22,8 @@ NS_IMPL_ISUPPORTS(nsProtectedAuthThread, nsIProtectedAuthThread)
 
 static void nsProtectedAuthThreadRunner(void *arg)
 {
-    AutoProfilerRegister registerThread("Protected Auth");
-    PR_SetCurrentThreadName("Protected Auth");
+    AUTO_PROFILER_REGISTER_THREAD("Protected Auth");
+    NS_SetCurrentThreadName("Protected Auth");
 
     nsProtectedAuthThread *self = static_cast<nsProtectedAuthThread *>(arg);
     self->Run();
@@ -45,13 +46,13 @@ nsProtectedAuthThread::~nsProtectedAuthThread()
 NS_IMETHODIMP nsProtectedAuthThread::Login(nsIObserver *aObserver)
 {
     NS_ENSURE_ARG(aObserver);
-    
+
     if (!mSlot)
         // We need pointer to the slot
         return NS_ERROR_FAILURE;
 
     MutexAutoLock lock(mMutex);
-    
+
     if (mIAmRunning || mLoginReady) {
         return NS_OK;
     }
@@ -65,7 +66,7 @@ NS_IMETHODIMP nsProtectedAuthThread::Login(nsIObserver *aObserver)
 
     mIAmRunning = true;
 
-    mThreadHandle = PR_CreateThread(PR_USER_THREAD, nsProtectedAuthThreadRunner, static_cast<void*>(this), 
+    mThreadHandle = PR_CreateThread(PR_USER_THREAD, nsProtectedAuthThreadRunner, static_cast<void*>(this),
         PR_PRIORITY_NORMAL, PR_GLOBAL_THREAD, PR_JOINABLE_THREAD, 0);
 
     // bool thread_started_ok = (threadHandle != nullptr);
@@ -111,7 +112,7 @@ SECStatus nsProtectedAuthThread::GetResult()
 
 void nsProtectedAuthThread::Run(void)
 {
-    // Login with null password. This call will also do C_Logout() but 
+    // Login with null password. This call will also do C_Logout() but
     // it is harmless here
     mLoginResult = PK11_CheckUserPassword(mSlot, 0);
 
@@ -131,7 +132,7 @@ void nsProtectedAuthThread::Run(void)
 
         notifyObserver.swap(mNotifyObserver);
     }
-    
+
     if (notifyObserver) {
         DebugOnly<nsresult> rv = NS_DispatchToMainThread(notifyObserver);
 	MOZ_ASSERT(NS_SUCCEEDED(rv),
@@ -143,7 +144,7 @@ void nsProtectedAuthThread::Join()
 {
     if (!mThreadHandle)
         return;
-    
+
     PR_JoinThread(mThreadHandle);
     mThreadHandle = nullptr;
 }

@@ -6,22 +6,21 @@ const Cc = Components.classes;
 const Ci = Components.interfaces;
 const Cu = Components.utils;
 
-Cu.import("resource://gre/modules/AppConstants.jsm");
-Cu.import("resource://gre/modules/FileUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "JNI", "resource://gre/modules/JNI.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  AppConstants: "resource://gre/modules/AppConstants.jsm",
+  EventDispatcher: "resource://gre/modules/Messaging.jsm",
+  FileUtils: "resource://gre/modules/FileUtils.jsm",
+  Services: "resource://gre/modules/Services.jsm",
+});
 
 // -----------------------------------------------------------------------
 // Directory Provider for special browser folders and files
 // -----------------------------------------------------------------------
 
 const NS_APP_CACHE_PARENT_DIR = "cachePDir";
-const NS_APP_SEARCH_DIR       = "SrchPlugns";
-const NS_APP_SEARCH_DIR_LIST  = "SrchPluginsDL";
 const NS_APP_DISTRIBUTION_SEARCH_DIR_LIST = "SrchPluginsDistDL";
-const NS_APP_USER_SEARCH_DIR  = "UsrSrchPlugns";
 const NS_XPCOM_CURRENT_PROCESS_DIR = "XCurProcD";
 const XRE_APP_DISTRIBUTION_DIR = "XREAppDist";
 const XRE_UPDATE_ROOT_DIR     = "UpdRootD";
@@ -113,7 +112,7 @@ DirectoryProvider.prototype = {
       return;
 
     let curLocale = "";
-    let reqLocales = Services.locales.getRequestedLocales();
+    let reqLocales = Services.locale.getRequestedLocales();
     if (reqLocales.length > 0) {
       curLocale = reqLocales[0];
     }
@@ -134,37 +133,16 @@ DirectoryProvider.prototype = {
       defLocalePlugins.append(defLocale);
       if (defLocalePlugins.exists())
         array.push(defLocalePlugins);
-    } catch(e) {
+    } catch (e) {
     }
   },
 
   getFiles: function(prop) {
-    if (prop != NS_APP_SEARCH_DIR_LIST &&
-        prop != NS_APP_DISTRIBUTION_SEARCH_DIR_LIST)
+    if (prop != NS_APP_DISTRIBUTION_SEARCH_DIR_LIST)
       return null;
 
     let result = [];
-
-    if (prop == NS_APP_DISTRIBUTION_SEARCH_DIR_LIST) {
-      this._appendDistroSearchDirs(result);
-    }
-    else {
-      /**
-       * We want to preserve the following order, since the search service
-       * loads engines in first-loaded-wins order.
-       *   - distro search plugin locations (loaded separately by the search
-       *     service)
-       *   - user search plugin locations (profile)
-       *   - app search plugin location (shipped engines)
-       */
-      let appUserSearchDir = FileUtils.getDir(NS_APP_USER_SEARCH_DIR, [], false);
-      if (appUserSearchDir.exists())
-        result.push(appUserSearchDir);
-
-      let appSearchDir = FileUtils.getDir(NS_APP_SEARCH_DIR, [], false);
-      if (appSearchDir.exists())
-        result.push(appSearchDir);
-    }
+    this._appendDistroSearchDirs(result);
 
     return {
       QueryInterface: XPCOMUtils.generateQI([Ci.nsISimpleEnumerator]),
@@ -179,29 +157,12 @@ DirectoryProvider.prototype = {
 
   _getDistributionDirectories: function() {
     let directories = [];
-    let jenv = null;
 
-    try {
-      jenv = JNI.GetForThread();
-
-      let jDistribution = JNI.LoadClass(jenv, "org.mozilla.gecko.distribution.Distribution", {
-        static_methods: [
-          { name: "getDistributionDirectories", sig: "()[Ljava/lang/String;" }
-        ],
-      });
-
-      let jDirectories = jDistribution.getDistributionDirectories();
-
-      for (let i = 0; i < jDirectories.length; i++) {
-        directories.push(new FileUtils.File(
-          JNI.ReadString(jenv, jDirectories.get(i))
-        ));
-      }
-    } finally {
-      if (jenv) {
-        JNI.UnloadClasses(jenv);
-      }
-    }
+    // Send a synchronous Gecko thread event.
+    EventDispatcher.instance.dispatch("Distribution:GetDirectories", null, {
+      onSuccess: response =>
+        directories = response.map(dir => new FileUtils.File(dir)),
+    });
 
     return directories;
   }

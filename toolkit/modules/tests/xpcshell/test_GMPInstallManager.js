@@ -1,5 +1,6 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
+/* eslint-disable mozilla/no-arbitrary-setTimeout */
 
 var {classes: Cc, interfaces: Ci, results: Cr, utils: Cu, manager: Cm} = Components;
 const URL_HOST = "http://localhost";
@@ -7,12 +8,12 @@ const URL_HOST = "http://localhost";
 var GMPScope = Cu.import("resource://gre/modules/GMPInstallManager.jsm", {});
 var GMPInstallManager = GMPScope.GMPInstallManager;
 
+Cu.import("resource://gre/modules/Timer.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://testing-common/httpd.js");
-Cu.import("resource://gre/modules/Promise.jsm");
-Cu.import("resource://gre/modules/Preferences.jsm")
+Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/UpdateUtils.jsm");
 
 var ProductAddonCheckerScope = Cu.import("resource://gre/modules/addons/ProductAddonChecker.jsm", {});
@@ -20,7 +21,7 @@ var ProductAddonCheckerScope = Cu.import("resource://gre/modules/addons/ProductA
 do_get_profile();
 
 function run_test() {
- Cu.import("resource://gre/modules/Preferences.jsm")
+ Cu.import("resource://gre/modules/Preferences.jsm");
   Preferences.set("media.gmp.log.dump", true);
   Preferences.set("media.gmp.log.level", 0);
   run_next_test();
@@ -29,35 +30,35 @@ function run_test() {
 /**
  * Tests that the helper used for preferences works correctly
  */
-add_task(function* test_prefs() {
+add_task(async function test_prefs() {
   let addon1 = "addon1", addon2 = "addon2";
 
-  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_URL, "http://not-really-used");
-  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_URL_OVERRIDE, "http://not-really-used-2");
-  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_PLUGIN_LAST_UPDATE, "1", addon1);
-  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_PLUGIN_VERSION, "2", addon1);
-  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_PLUGIN_LAST_UPDATE, "3", addon2);
-  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_PLUGIN_VERSION, "4", addon2);
-  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_PLUGIN_AUTOUPDATE, false, addon2);
-  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_CERT_CHECKATTRS, true);
+  GMPScope.GMPPrefs.setString(GMPScope.GMPPrefs.KEY_URL, "http://not-really-used");
+  GMPScope.GMPPrefs.setString(GMPScope.GMPPrefs.KEY_URL_OVERRIDE, "http://not-really-used-2");
+  GMPScope.GMPPrefs.setInt(GMPScope.GMPPrefs.KEY_PLUGIN_LAST_UPDATE, 1, addon1);
+  GMPScope.GMPPrefs.setString(GMPScope.GMPPrefs.KEY_PLUGIN_VERSION, "2", addon1);
+  GMPScope.GMPPrefs.setInt(GMPScope.GMPPrefs.KEY_PLUGIN_LAST_UPDATE, 3, addon2);
+  GMPScope.GMPPrefs.setInt(GMPScope.GMPPrefs.KEY_PLUGIN_VERSION, 4, addon2);
+  GMPScope.GMPPrefs.setBool(GMPScope.GMPPrefs.KEY_PLUGIN_AUTOUPDATE, false, addon2);
+  GMPScope.GMPPrefs.setBool(GMPScope.GMPPrefs.KEY_CERT_CHECKATTRS, true);
 
-  do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_URL), "http://not-really-used");
-  do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_URL_OVERRIDE),
-              "http://not-really-used-2");
-  do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_PLUGIN_LAST_UPDATE, "", addon1), "1");
-  do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_PLUGIN_VERSION, "", addon1), "2");
-  do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_PLUGIN_LAST_UPDATE, "", addon2), "3");
-  do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_PLUGIN_VERSION, "", addon2), "4");
-  do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_PLUGIN_AUTOUPDATE, undefined, addon2),
-              false);
-  do_check_true(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_CERT_CHECKATTRS));
-  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_PLUGIN_AUTOUPDATE, true, addon2);
+  Assert.equal(GMPScope.GMPPrefs.getString(GMPScope.GMPPrefs.KEY_URL), "http://not-really-used");
+  Assert.equal(GMPScope.GMPPrefs.getString(GMPScope.GMPPrefs.KEY_URL_OVERRIDE),
+               "http://not-really-used-2");
+  Assert.equal(GMPScope.GMPPrefs.getInt(GMPScope.GMPPrefs.KEY_PLUGIN_LAST_UPDATE, "", addon1), 1);
+  Assert.equal(GMPScope.GMPPrefs.getString(GMPScope.GMPPrefs.KEY_PLUGIN_VERSION, "", addon1), "2");
+  Assert.equal(GMPScope.GMPPrefs.getInt(GMPScope.GMPPrefs.KEY_PLUGIN_LAST_UPDATE, "", addon2), 3);
+  Assert.equal(GMPScope.GMPPrefs.getInt(GMPScope.GMPPrefs.KEY_PLUGIN_VERSION, "", addon2), 4);
+  Assert.equal(GMPScope.GMPPrefs.getBool(GMPScope.GMPPrefs.KEY_PLUGIN_AUTOUPDATE, undefined, addon2),
+               false);
+  Assert.ok(GMPScope.GMPPrefs.getBool(GMPScope.GMPPrefs.KEY_CERT_CHECKATTRS));
+  GMPScope.GMPPrefs.setBool(GMPScope.GMPPrefs.KEY_PLUGIN_AUTOUPDATE, true, addon2);
 });
 
 /**
  * Tests that an uninit without a check works fine
  */
-add_task(function* test_checkForAddons_uninitWithoutCheck() {
+add_task(async function test_checkForAddons_uninitWithoutCheck() {
   let installManager = new GMPInstallManager();
   installManager.uninit();
 });
@@ -70,7 +71,7 @@ add_test(function test_checkForAddons_uninitWithoutInstall() {
   let installManager = new GMPInstallManager();
   let promise = installManager.checkForAddons();
   promise.then(res => {
-    do_check_true(res.usedFallback);
+    Assert.ok(res.usedFallback);
     installManager.uninit();
     run_next_test();
   });
@@ -84,7 +85,7 @@ add_test(function test_checkForAddons_noResponse() {
   let installManager = new GMPInstallManager();
   let promise = installManager.checkForAddons();
   promise.then(res => {
-    do_check_true(res.usedFallback);
+    Assert.ok(res.usedFallback);
     installManager.uninit();
     run_next_test();
   });
@@ -93,22 +94,22 @@ add_test(function test_checkForAddons_noResponse() {
 /**
  * Tests that no addons element returned resolves with no addons
  */
-add_task(function* test_checkForAddons_noAddonsElement() {
+add_task(async function test_checkForAddons_noAddonsElement() {
   overrideXHR(200, "<updates></updates>");
   let installManager = new GMPInstallManager();
-  let res = yield installManager.checkForAddons();
-  do_check_eq(res.gmpAddons.length, 0);
+  let res = await installManager.checkForAddons();
+  Assert.equal(res.gmpAddons.length, 0);
   installManager.uninit();
 });
 
 /**
  * Tests that empty addons element returned resolves with no addons
  */
-add_task(function* test_checkForAddons_emptyAddonsElement() {
+add_task(async function test_checkForAddons_emptyAddonsElement() {
   overrideXHR(200, "<updates><addons/></updates>");
   let installManager = new GMPInstallManager();
-  let res = yield installManager.checkForAddons();
-  do_check_eq(res.gmpAddons.length, 0);
+  let res = await installManager.checkForAddons();
+  Assert.equal(res.gmpAddons.length, 0);
   installManager.uninit();
 });
 
@@ -120,7 +121,7 @@ add_test(function test_checkForAddons_wrongResponseXML() {
   let installManager = new GMPInstallManager();
   let promise = installManager.checkForAddons();
   promise.then(res => {
-    do_check_true(res.usedFallback);
+    Assert.ok(res.usedFallback);
     installManager.uninit();
     run_next_test();
   });
@@ -134,7 +135,7 @@ add_test(function test_checkForAddons_404Error() {
   let installManager = new GMPInstallManager();
   let promise = installManager.checkForAddons();
   promise.then(res => {
-    do_check_true(res.usedFallback);
+    Assert.ok(res.usedFallback);
     installManager.uninit();
     run_next_test();
   });
@@ -147,9 +148,18 @@ add_test(function test_checkForAddons_abort() {
   let overriddenXhr = overrideXHR(200, "", { dropRequest: true} );
   let installManager = new GMPInstallManager();
   let promise = installManager.checkForAddons();
-  overriddenXhr.abort();
+
+  // Since the XHR is created in checkForAddons asynchronously,
+  // we need to delay aborting till the XHR is running.
+  // Since checkForAddons returns a Promise already only after
+  // the abort is triggered, we can't use that, and instead
+  // we'll use a fake timer.
+  setTimeout(() => {
+    overriddenXhr.abort();
+  }, 100);
+
   promise.then(res => {
-    do_check_true(res.usedFallback);
+    Assert.ok(res.usedFallback);
     installManager.uninit();
     run_next_test();
   });
@@ -163,7 +173,7 @@ add_test(function test_checkForAddons_timeout() {
   let installManager = new GMPInstallManager();
   let promise = installManager.checkForAddons();
   promise.then(res => {
-    do_check_true(res.usedFallback);
+    Assert.ok(res.usedFallback);
     installManager.uninit();
     run_next_test();
   });
@@ -177,12 +187,12 @@ add_test(function test_checkForAddons_bad_ssl() {
   // Add random stuff that cause CertUtil to require https.
   //
   let PREF_KEY_URL_OVERRIDE_BACKUP =
-    Preferences.get(GMPScope.GMPPrefs.KEY_URL_OVERRIDE, undefined);
+    Preferences.get(GMPScope.GMPPrefs.KEY_URL_OVERRIDE, "");
   Preferences.reset(GMPScope.GMPPrefs.KEY_URL_OVERRIDE);
 
   let CERTS_BRANCH_DOT_ONE = GMPScope.GMPPrefs.KEY_CERTS_BRANCH + ".1";
   let PREF_CERTS_BRANCH_DOT_ONE_BACKUP =
-    Preferences.get(CERTS_BRANCH_DOT_ONE, undefined);
+    Preferences.get(CERTS_BRANCH_DOT_ONE, "");
   Services.prefs.setCharPref(CERTS_BRANCH_DOT_ONE, "funky value");
 
 
@@ -190,7 +200,7 @@ add_test(function test_checkForAddons_bad_ssl() {
   let installManager = new GMPInstallManager();
   let promise = installManager.checkForAddons();
   promise.then(res => {
-    do_check_true(res.usedFallback);
+    Assert.ok(res.usedFallback);
     installManager.uninit();
     if (PREF_KEY_URL_OVERRIDE_BACKUP) {
       Preferences.set(GMPScope.GMPPrefs.KEY_URL_OVERRIDE,
@@ -213,7 +223,7 @@ add_test(function test_checkForAddons_notXML() {
   let promise = installManager.checkForAddons();
 
   promise.then(res => {
-    do_check_true(res.usedFallback);
+    Assert.ok(res.usedFallback);
     installManager.uninit();
     run_next_test();
   });
@@ -222,7 +232,7 @@ add_test(function test_checkForAddons_notXML() {
 /**
  * Tests that getting a response with a single addon works as expected
  */
-add_task(function* test_checkForAddons_singleAddon() {
+add_task(async function test_checkForAddons_singleAddon() {
   let responseXML =
     "<?xml version=\"1.0\"?>" +
     "<updates>" +
@@ -233,20 +243,20 @@ add_task(function* test_checkForAddons_singleAddon() {
     "               hashValue=\"1118b90d6f645eefc2b99af17bae396636ace1e33d079c88de715177584e2aee\"" +
     "               version=\"1.1\"/>" +
     "  </addons>" +
-    "</updates>"
+    "</updates>";
   overrideXHR(200, responseXML);
   let installManager = new GMPInstallManager();
-  let res = yield installManager.checkForAddons();
-  do_check_eq(res.gmpAddons.length, 1);
+  let res = await installManager.checkForAddons();
+  Assert.equal(res.gmpAddons.length, 1);
   let gmpAddon = res.gmpAddons[0];
-  do_check_eq(gmpAddon.id, "gmp-gmpopenh264");
-  do_check_eq(gmpAddon.URL, "http://127.0.0.1:8011/gmp-gmpopenh264-1.1.zip");
-  do_check_eq(gmpAddon.hashFunction, "sha256");
-  do_check_eq(gmpAddon.hashValue, "1118b90d6f645eefc2b99af17bae396636ace1e33d079c88de715177584e2aee");
-  do_check_eq(gmpAddon.version, "1.1");
-  do_check_eq(gmpAddon.size, undefined);
-  do_check_true(gmpAddon.isValid);
-  do_check_false(gmpAddon.isInstalled);
+  Assert.equal(gmpAddon.id, "gmp-gmpopenh264");
+  Assert.equal(gmpAddon.URL, "http://127.0.0.1:8011/gmp-gmpopenh264-1.1.zip");
+  Assert.equal(gmpAddon.hashFunction, "sha256");
+  Assert.equal(gmpAddon.hashValue, "1118b90d6f645eefc2b99af17bae396636ace1e33d079c88de715177584e2aee");
+  Assert.equal(gmpAddon.version, "1.1");
+  Assert.equal(gmpAddon.size, undefined);
+  Assert.ok(gmpAddon.isValid);
+  Assert.ok(!gmpAddon.isInstalled);
   installManager.uninit();
 });
 
@@ -254,7 +264,7 @@ add_task(function* test_checkForAddons_singleAddon() {
  * Tests that getting a response with a single addon with the optional size
  * attribute parses as expected.
  */
-add_task(function* test_checkForAddons_singleAddonWithSize() {
+add_task(async function test_checkForAddons_singleAddonWithSize() {
   let responseXML =
     "<?xml version=\"1.0\"?>" +
     "<updates>" +
@@ -266,20 +276,20 @@ add_task(function* test_checkForAddons_singleAddonWithSize() {
     "               hashValue=\"1118b90d6f645eefc2b99af17bae396636ace1e33d079c88de715177584e2aee\"" +
     "               version=\"1.1\"/>" +
     "  </addons>" +
-    "</updates>"
+    "</updates>";
   overrideXHR(200, responseXML);
   let installManager = new GMPInstallManager();
-  let res = yield installManager.checkForAddons();
-  do_check_eq(res.gmpAddons.length, 1);
+  let res = await installManager.checkForAddons();
+  Assert.equal(res.gmpAddons.length, 1);
   let gmpAddon = res.gmpAddons[0];
-  do_check_eq(gmpAddon.id, "openh264-plugin-no-at-symbol");
-  do_check_eq(gmpAddon.URL, "http://127.0.0.1:8011/gmp-gmpopenh264-1.1.zip");
-  do_check_eq(gmpAddon.hashFunction, "sha256");
-  do_check_eq(gmpAddon.hashValue, "1118b90d6f645eefc2b99af17bae396636ace1e33d079c88de715177584e2aee");
-  do_check_eq(gmpAddon.size, 42);
-  do_check_eq(gmpAddon.version, "1.1");
-  do_check_true(gmpAddon.isValid);
-  do_check_false(gmpAddon.isInstalled);
+  Assert.equal(gmpAddon.id, "openh264-plugin-no-at-symbol");
+  Assert.equal(gmpAddon.URL, "http://127.0.0.1:8011/gmp-gmpopenh264-1.1.zip");
+  Assert.equal(gmpAddon.hashFunction, "sha256");
+  Assert.equal(gmpAddon.hashValue, "1118b90d6f645eefc2b99af17bae396636ace1e33d079c88de715177584e2aee");
+  Assert.equal(gmpAddon.size, 42);
+  Assert.equal(gmpAddon.version, "1.1");
+  Assert.ok(gmpAddon.isValid);
+  Assert.ok(!gmpAddon.isInstalled);
   installManager.uninit();
 });
 
@@ -287,7 +297,7 @@ add_task(function* test_checkForAddons_singleAddonWithSize() {
  * Tests that checking for multiple addons work correctly.
  * Also tests that invalid addons work correctly.
  */
-add_task(function* test_checkForAddons_multipleAddonNoUpdatesSomeInvalid() {
+add_task(async function test_checkForAddons_multipleAddonNoUpdatesSomeInvalid() {
   let responseXML =
     "<?xml version=\"1.0\"?>" +
     "<updates>" +
@@ -335,32 +345,32 @@ add_task(function* test_checkForAddons_multipleAddonNoUpdatesSomeInvalid() {
     "               hashValue=\"141592656f645eefc2b99af17bae396636ace1e33d079c88de715177584e2aee\"" +
     "               notversion=\"9.1\"/>" +
     "  </addons>" +
-    "</updates>"
+    "</updates>";
   overrideXHR(200, responseXML);
   let installManager = new GMPInstallManager();
-  let res = yield installManager.checkForAddons();
-  do_check_eq(res.gmpAddons.length, 7);
+  let res = await installManager.checkForAddons();
+  Assert.equal(res.gmpAddons.length, 7);
   let gmpAddon = res.gmpAddons[0];
-  do_check_eq(gmpAddon.id, "gmp-gmpopenh264");
-  do_check_eq(gmpAddon.URL, "http://127.0.0.1:8011/gmp-gmpopenh264-1.1.zip");
-  do_check_eq(gmpAddon.hashFunction, "sha256");
-  do_check_eq(gmpAddon.hashValue, "1118b90d6f645eefc2b99af17bae396636ace1e33d079c88de715177584e2aee");
-  do_check_eq(gmpAddon.version, "1.1");
-  do_check_true(gmpAddon.isValid);
-  do_check_false(gmpAddon.isInstalled);
+  Assert.equal(gmpAddon.id, "gmp-gmpopenh264");
+  Assert.equal(gmpAddon.URL, "http://127.0.0.1:8011/gmp-gmpopenh264-1.1.zip");
+  Assert.equal(gmpAddon.hashFunction, "sha256");
+  Assert.equal(gmpAddon.hashValue, "1118b90d6f645eefc2b99af17bae396636ace1e33d079c88de715177584e2aee");
+  Assert.equal(gmpAddon.version, "1.1");
+  Assert.ok(gmpAddon.isValid);
+  Assert.ok(!gmpAddon.isInstalled);
 
   gmpAddon = res.gmpAddons[1];
-  do_check_eq(gmpAddon.id, "NOT-gmp-gmpopenh264");
-  do_check_eq(gmpAddon.URL, "http://127.0.0.1:8011/NOT-gmp-gmpopenh264-1.1.zip");
-  do_check_eq(gmpAddon.hashFunction, "sha512");
-  do_check_eq(gmpAddon.hashValue, "141592656f645eefc2b99af17bae396636ace1e33d079c88de715177584e2aee");
-  do_check_eq(gmpAddon.version, "9.1");
-  do_check_true(gmpAddon.isValid);
-  do_check_false(gmpAddon.isInstalled);
+  Assert.equal(gmpAddon.id, "NOT-gmp-gmpopenh264");
+  Assert.equal(gmpAddon.URL, "http://127.0.0.1:8011/NOT-gmp-gmpopenh264-1.1.zip");
+  Assert.equal(gmpAddon.hashFunction, "sha512");
+  Assert.equal(gmpAddon.hashValue, "141592656f645eefc2b99af17bae396636ace1e33d079c88de715177584e2aee");
+  Assert.equal(gmpAddon.version, "9.1");
+  Assert.ok(gmpAddon.isValid);
+  Assert.ok(!gmpAddon.isInstalled);
 
   for (let i = 2; i < res.gmpAddons.length; i++) {
-    do_check_false(res.gmpAddons[i].isValid);
-    do_check_false(res.gmpAddons[i].isInstalled);
+    Assert.ok(!res.gmpAddons[i].isValid);
+    Assert.ok(!res.gmpAddons[i].isInstalled);
   }
   installManager.uninit();
 });
@@ -369,7 +379,7 @@ add_task(function* test_checkForAddons_multipleAddonNoUpdatesSomeInvalid() {
  * Tests that checking for addons when there are also updates available
  * works as expected.
  */
-add_task(function* test_checkForAddons_updatesWithAddons() {
+add_task(async function test_checkForAddons_updatesWithAddons() {
   let responseXML =
     "<?xml version=\"1.0\"?>" +
     "    <updates>" +
@@ -383,29 +393,29 @@ add_task(function* test_checkForAddons_updatesWithAddons() {
     "               hashValue=\"1118b90d6f645eefc2b99af17bae396636ace1e33d079c88de715177584e2aee\"" +
     "               version=\"1.1\"/>" +
     "  </addons>" +
-    "</updates>"
+    "</updates>";
   overrideXHR(200, responseXML);
   let installManager = new GMPInstallManager();
-  let res = yield installManager.checkForAddons();
-  do_check_eq(res.gmpAddons.length, 1);
+  let res = await installManager.checkForAddons();
+  Assert.equal(res.gmpAddons.length, 1);
   let gmpAddon = res.gmpAddons[0];
-  do_check_eq(gmpAddon.id, "gmp-gmpopenh264");
-  do_check_eq(gmpAddon.URL, "http://127.0.0.1:8011/gmp-gmpopenh264-1.1.zip");
-  do_check_eq(gmpAddon.hashFunction, "sha256");
-  do_check_eq(gmpAddon.hashValue, "1118b90d6f645eefc2b99af17bae396636ace1e33d079c88de715177584e2aee");
-  do_check_eq(gmpAddon.version, "1.1");
-  do_check_true(gmpAddon.isValid);
-  do_check_false(gmpAddon.isInstalled);
+  Assert.equal(gmpAddon.id, "gmp-gmpopenh264");
+  Assert.equal(gmpAddon.URL, "http://127.0.0.1:8011/gmp-gmpopenh264-1.1.zip");
+  Assert.equal(gmpAddon.hashFunction, "sha256");
+  Assert.equal(gmpAddon.hashValue, "1118b90d6f645eefc2b99af17bae396636ace1e33d079c88de715177584e2aee");
+  Assert.equal(gmpAddon.version, "1.1");
+  Assert.ok(gmpAddon.isValid);
+  Assert.ok(!gmpAddon.isInstalled);
   installManager.uninit();
 });
 
 /**
  * Tests that installing found addons works as expected
  */
-function* test_checkForAddons_installAddon(id, includeSize, wantInstallReject) {
-  do_print("Running installAddon for id: " + id +
-           ", includeSize: " + includeSize +
-           " and wantInstallReject: " + wantInstallReject);
+async function test_checkForAddons_installAddon(id, includeSize, wantInstallReject) {
+  info("Running installAddon for id: " + id +
+       ", includeSize: " + includeSize +
+       " and wantInstallReject: " + wantInstallReject);
   let httpServer = new HttpServer();
   let dir = FileUtils.getDir("TmpD", [], true);
   httpServer.registerDirectory("/", dir);
@@ -414,12 +424,12 @@ function* test_checkForAddons_installAddon(id, includeSize, wantInstallReject) {
   let zipFileName = "test_" + id + "_GMP.zip";
 
   let zipURL = URL_HOST + ":" + testserverPort + "/" + zipFileName;
-  do_print("zipURL: " + zipURL);
+  info("zipURL: " + zipURL);
 
   let data = "e~=0.5772156649";
   let zipFile = createNewZipFile(zipFileName, data);
   let hashFunc = "sha256";
-  let expectedDigest = yield ProductAddonCheckerScope.computeHash(hashFunc, zipFile.path);
+  let expectedDigest = await ProductAddonCheckerScope.computeHash(hashFunc, zipFile.path);
   let fileSize = zipFile.fileSize;
   if (wantInstallReject) {
     fileSize = 1;
@@ -436,43 +446,43 @@ function* test_checkForAddons_installAddon(id, includeSize, wantInstallReject) {
     (includeSize ? " size=\"" + fileSize + "\"" : "") +
     "               version=\"1.1\"/>" +
     "  </addons>" +
-    "</updates>"
+    "</updates>";
 
   overrideXHR(200, responseXML);
   let installManager = new GMPInstallManager();
-  let res = yield installManager.checkForAddons();
-  do_check_eq(res.gmpAddons.length, 1);
+  let res = await installManager.checkForAddons();
+  Assert.equal(res.gmpAddons.length, 1);
   let gmpAddon = res.gmpAddons[0];
-  do_check_false(gmpAddon.isInstalled);
+  Assert.ok(!gmpAddon.isInstalled);
 
   try {
-    let extractedPaths = yield installManager.installAddon(gmpAddon);
+    let extractedPaths = await installManager.installAddon(gmpAddon);
     if (wantInstallReject) {
-      do_check_true(false); // installAddon() should have thrown.
+      Assert.ok(false); // installAddon() should have thrown.
     }
-    do_check_eq(extractedPaths.length, 1);
+    Assert.equal(extractedPaths.length, 1);
     let extractedPath = extractedPaths[0];
 
-    do_print("Extracted path: " + extractedPath);
+    info("Extracted path: " + extractedPath);
 
     let extractedFile = Cc["@mozilla.org/file/local;1"].
                         createInstance(Ci.nsIFile);
     extractedFile.initWithPath(extractedPath);
-    do_check_true(extractedFile.exists());
+    Assert.ok(extractedFile.exists());
     let readData = readStringFromFile(extractedFile);
-    do_check_eq(readData, data);
+    Assert.equal(readData, data);
 
     // Make sure the prefs are set correctly
-    do_check_true(!!GMPScope.GMPPrefs.get(
+    Assert.ok(!!GMPScope.GMPPrefs.getInt(
       GMPScope.GMPPrefs.KEY_PLUGIN_LAST_UPDATE, "", gmpAddon.id));
-    do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_PLUGIN_VERSION, "",
-                                      gmpAddon.id),
-                "1.1");
-    do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_PLUGIN_ABI, "",
-                                      gmpAddon.id),
-                UpdateUtils.ABI);
+    Assert.equal(GMPScope.GMPPrefs.getString(GMPScope.GMPPrefs.KEY_PLUGIN_VERSION, "",
+                                             gmpAddon.id),
+                 "1.1");
+    Assert.equal(GMPScope.GMPPrefs.getString(GMPScope.GMPPrefs.KEY_PLUGIN_ABI, "",
+                                             gmpAddon.id),
+                 UpdateUtils.ABI);
     // Make sure it reports as being installed
-    do_check_true(gmpAddon.isInstalled);
+    Assert.ok(gmpAddon.isInstalled);
 
     // Cleanup
     extractedFile.parent.remove(true);
@@ -494,8 +504,8 @@ add_task(test_checkForAddons_installAddon.bind(null, "3", true, true));
 /**
  * Tests simpleCheckAndInstall when autoupdate is disabled for a GMP
  */
-add_task(function* test_simpleCheckAndInstall_autoUpdateDisabled() {
-  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_PLUGIN_AUTOUPDATE, false, GMPScope.OPEN_H264_ID);
+add_task(async function test_simpleCheckAndInstall_autoUpdateDisabled() {
+  GMPScope.GMPPrefs.setBool(GMPScope.GMPPrefs.KEY_PLUGIN_AUTOUPDATE, false, GMPScope.OPEN_H264_ID);
   let responseXML =
     "<?xml version=\"1.0\"?>" +
     "<updates>" +
@@ -507,44 +517,44 @@ add_task(function* test_simpleCheckAndInstall_autoUpdateDisabled() {
     "               hashValue=\"1118b90d6f645eefc2b99af17bae396636ace1e33d079c88de715177584e2aee\"" +
     "               version=\"1.1\"/>" +
     "  </addons>" +
-    "</updates>"
+    "</updates>";
 
   overrideXHR(200, responseXML);
   let installManager = new GMPInstallManager();
-  let result = yield installManager.simpleCheckAndInstall();
-  do_check_eq(result.status, "nothing-new-to-install");
+  let result = await installManager.simpleCheckAndInstall();
+  Assert.equal(result.status, "nothing-new-to-install");
   Preferences.reset(GMPScope.GMPPrefs.KEY_UPDATE_LAST_CHECK);
-  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_PLUGIN_AUTOUPDATE, true, GMPScope.OPEN_H264_ID);
+  GMPScope.GMPPrefs.setBool(GMPScope.GMPPrefs.KEY_PLUGIN_AUTOUPDATE, true, GMPScope.OPEN_H264_ID);
 });
 
 /**
  * Tests simpleCheckAndInstall nothing to install
  */
-add_task(function* test_simpleCheckAndInstall_nothingToInstall() {
+add_task(async function test_simpleCheckAndInstall_nothingToInstall() {
   let responseXML =
     "<?xml version=\"1.0\"?>" +
     "<updates>" +
-    "</updates>"
+    "</updates>";
 
   overrideXHR(200, responseXML);
   let installManager = new GMPInstallManager();
-  let result = yield installManager.simpleCheckAndInstall();
-  do_check_eq(result.status, "nothing-new-to-install");
+  let result = await installManager.simpleCheckAndInstall();
+  Assert.equal(result.status, "nothing-new-to-install");
 });
 
 /**
  * Tests simpleCheckAndInstall too frequent
  */
-add_task(function* test_simpleCheckAndInstall_tooFrequent() {
+add_task(async function test_simpleCheckAndInstall_tooFrequent() {
   let responseXML =
     "<?xml version=\"1.0\"?>" +
     "<updates>" +
-    "</updates>"
+    "</updates>";
 
   overrideXHR(200, responseXML);
   let installManager = new GMPInstallManager();
-  let result = yield installManager.simpleCheckAndInstall();
-  do_check_eq(result.status, "too-frequent-no-check");
+  let result = await installManager.simpleCheckAndInstall();
+  Assert.equal(result.status, "too-frequent-no-check");
 });
 
 /**
@@ -564,13 +574,13 @@ add_test(function test_installAddon_noServer() {
     "               hashValue=\"11221cbda000347b054028b527a60e578f919cb10f322ef8077d3491c6fcb474\"" +
     "               version=\"1.1\"/>" +
     "  </addons>" +
-    "</updates>"
+    "</updates>";
 
   overrideXHR(200, responseXML);
   let installManager = new GMPInstallManager();
   let checkPromise = installManager.checkForAddons();
   checkPromise.then(res => {
-    do_check_eq(res.gmpAddons.length, 1);
+    Assert.equal(res.gmpAddons.length, 1);
     let gmpAddon = res.gmpAddons[0];
 
     GMPInstallManager.overrideLeaveDownloadedZip = true;
@@ -578,7 +588,7 @@ add_test(function test_installAddon_noServer() {
     installPromise.then(extractedPaths => {
       do_throw("No server for install should reject");
     }, err => {
-      do_check_true(!!err);
+      Assert.ok(!!err);
       installManager.uninit();
       run_next_test();
     });
@@ -605,7 +615,7 @@ function readStringFromInputStream(inputStream) {
  */
 function readStringFromFile(file) {
   if (!file.exists()) {
-    do_print("readStringFromFile - file doesn't exist: " + file.path);
+    info("readStringFromFile - file doesn't exist: " + file.path);
     return null;
   }
   let fis = Cc["@mozilla.org/network/file-input-stream;1"].
@@ -661,7 +671,7 @@ xhr.prototype = {
   responseXML: null,
   responseText: null,
   send(aBody) {
-    do_execute_soon(function() {
+    executeSoon(() => {
       try {
         if (this._options.dropRequest) {
           if (this._timeout > 0 && this._options.timeout) {
@@ -687,7 +697,7 @@ xhr.prototype = {
       } catch (ex) {
         do_throw(ex);
       }
-    }.bind(this));
+    });
   },
   set onabort(aValue) { this._onabort = makeHandler(aValue); },
   get onabort() { return this._onabort; },
@@ -710,18 +720,19 @@ xhr.prototype = {
     for (let item of events) {
       let k = "on" + item;
       if (this[k]) {
-        do_print("Notifying " + item);
+        info("Notifying " + item);
         let e = {
           target: this,
           type: item,
         };
         this[k](e);
       } else {
-        do_print("Notifying " + item + ", but there are no listeners");
+        info("Notifying " + item + ", but there are no listeners");
       }
     }
   },
   addEventListener(aEvent, aValue, aCapturing) {
+    // eslint-disable-next-line no-eval
     eval("this._on" + aEvent + " = aValue");
   },
   flags: Ci.nsIClassInfo.SINGLETON,
@@ -787,6 +798,6 @@ function createNewZipFile(zipName, data) {
                              Ci.nsIZipWriter.COMPRESSION_BEST, stream, false);
     zipWriter.close();
     stream.close();
-    do_print("zip file created on disk at: " + zipFile.path);
+    info("zip file created on disk at: " + zipFile.path);
     return zipFile;
 }

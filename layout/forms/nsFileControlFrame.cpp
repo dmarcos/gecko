@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -23,7 +24,6 @@
 #include "mozilla/dom/FileList.h"
 #include "nsIDOMDragEvent.h"
 #include "nsIDOMFileList.h"
-#include "nsContentList.h"
 #include "nsIDOMMutationEvent.h"
 #include "nsTextNode.h"
 
@@ -39,7 +39,7 @@ NS_NewFileControlFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 NS_IMPL_FRAMEARENA_HELPERS(nsFileControlFrame)
 
 nsFileControlFrame::nsFileControlFrame(nsStyleContext* aContext)
-  : nsBlockFrame(aContext)
+  : nsBlockFrame(aContext, kClassID)
 {
   AddStateBits(NS_BLOCK_FLOAT_MGR);
 }
@@ -56,7 +56,7 @@ nsFileControlFrame::Init(nsIContent*       aContent,
 }
 
 void
-nsFileControlFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsFileControlFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   ENSURE_TRUE(mContent);
 
@@ -68,11 +68,11 @@ nsFileControlFrame::DestroyFrom(nsIFrame* aDestructRoot)
                                         mMouseListener, false);
   }
 
-  nsContentUtils::DestroyAnonymousContent(&mTextContent);
-  nsContentUtils::DestroyAnonymousContent(&mBrowseFilesOrDirs);
+  aPostDestroyData.AddAnonymousContent(mTextContent.forget());
+  aPostDestroyData.AddAnonymousContent(mBrowseFilesOrDirs.forget());
 
   mMouseListener->ForgetFrame();
-  nsBlockFrame::DestroyFrom(aDestructRoot);
+  nsBlockFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 static already_AddRefed<Element>
@@ -88,7 +88,7 @@ MakeAnonButton(nsIDocument* aDoc, const char* labelKey,
                   NS_LITERAL_STRING("button"), false);
 
   // Set the file picking button text depending on the current locale.
-  nsXPIDLString buttonTxt;
+  nsAutoString buttonTxt;
   nsContentUtils::GetLocalizedString(nsContentUtils::eFORMS_PROPERTIES,
                                      labelKey, buttonTxt);
 
@@ -110,15 +110,15 @@ MakeAnonButton(nsIDocument* aDoc, const char* labelKey,
     HTMLButtonElement::FromContentOrNull(button);
 
   if (!aAccessKey.IsEmpty()) {
-    buttonElement->SetAccessKey(aAccessKey);
+    IgnoredErrorResult ignored;
+    buttonElement->SetAccessKey(aAccessKey, ignored);
   }
 
   // Both elements are given the same tab index so that the user can tab
   // to the file control at the correct index, and then between the two
   // buttons.
-  int32_t tabIndex;
-  aInputElement->GetTabIndex(&tabIndex);
-  buttonElement->SetTabIndex(tabIndex);
+  IgnoredErrorResult ignored;
+  buttonElement->SetTabIndex(aInputElement->TabIndex(), ignored);
 
   return button.forget();
 }
@@ -191,7 +191,7 @@ NS_QUERYFRAME_HEAD(nsFileControlFrame)
   NS_QUERYFRAME_ENTRY(nsIFormControlFrame)
 NS_QUERYFRAME_TAIL_INHERITING(nsBlockFrame)
 
-void 
+void
 nsFileControlFrame::SetFocus(bool aOn, bool aRepaint)
 {
 }
@@ -422,7 +422,7 @@ nsFileControlFrame::DnDListener::CanDropTheseFiles(nsIDOMDataTransfer* aDOMDataT
 }
 
 nscoord
-nsFileControlFrame::GetMinISize(nsRenderingContext *aRenderingContext)
+nsFileControlFrame::GetMinISize(gfxContext *aRenderingContext)
 {
   nscoord result;
   DISPLAY_MIN_WIDTH(this, result);
@@ -446,7 +446,7 @@ nsFileControlFrame::SyncDisabledState()
 
 nsresult
 nsFileControlFrame::AttributeChanged(int32_t  aNameSpaceID,
-                                     nsIAtom* aAttribute,
+                                     nsAtom* aAttribute,
                                      int32_t  aModType)
 {
   if (aNameSpaceID == kNameSpaceID_None && aAttribute == nsGkAtoms::tabindex) {
@@ -485,7 +485,7 @@ nsFileControlFrame::UpdateDisplayedValue(const nsAString& aValue, bool aNotify)
 }
 
 nsresult
-nsFileControlFrame::SetFormProperty(nsIAtom* aName,
+nsFileControlFrame::SetFormProperty(nsAtom* aName,
                                     const nsAString& aValue)
 {
   if (nsGkAtoms::value == aName) {
@@ -496,10 +496,9 @@ nsFileControlFrame::SetFormProperty(nsIAtom* aName,
 
 void
 nsFileControlFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                     const nsRect&           aDirtyRect,
                                      const nsDisplayListSet& aLists)
 {
-  BuildDisplayListForInline(aBuilder, aDirtyRect, aLists);
+  BuildDisplayListForInline(aBuilder, aLists);
 }
 
 #ifdef ACCESSIBILITY

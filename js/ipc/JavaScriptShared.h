@@ -8,6 +8,7 @@
 #ifndef mozilla_jsipc_JavaScriptShared_h__
 #define mozilla_jsipc_JavaScriptShared_h__
 
+#include "mozilla/HashFunctions.h"
 #include "mozilla/dom/DOMTypes.h"
 #include "mozilla/jsipc/CrossProcessObjectWrappers.h"
 #include "mozilla/jsipc/PJavaScript.h"
@@ -72,7 +73,7 @@ struct ObjectIdHasher
 {
     typedef ObjectId Lookup;
     static js::HashNumber hash(const Lookup& l) {
-        return l.serialize();
+        return mozilla::HashGeneric(l.serialize());
     }
     static bool match(const ObjectId& k, const ObjectId& l) {
         return k == l;
@@ -173,14 +174,14 @@ class JavaScriptShared : public CPOWManager
     static void ConvertID(const nsID& from, JSIID* to);
     static void ConvertID(const JSIID& from, nsID* to);
 
-    JSObject* findCPOWById(const ObjectId& objId) {
-        return cpows_.find(objId);
-    }
+    JSObject* findCPOWById(const ObjectId& objId);
+    JSObject* findCPOWByIdPreserveColor(const ObjectId& objId);
     JSObject* findObjectById(JSContext* cx, const ObjectId& objId);
 
 #ifdef DEBUG
     bool hasCPOW(const ObjectId& objId, const JSObject* obj) {
-        return cpows_.has(objId, obj);
+        MOZ_ASSERT(obj);
+        return findCPOWByIdPreserveColor(objId) == obj;
     }
 #endif
 

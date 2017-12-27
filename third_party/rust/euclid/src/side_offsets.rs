@@ -17,9 +17,6 @@ use std::fmt;
 use std::ops::Add;
 use std::marker::PhantomData;
 
-#[cfg(feature = "unstable")]
-use heapsize::HeapSizeOf;
-
 /// A group of side offsets, which correspond to top/left/bottom/right for borders, padding,
 /// and margins in CSS, optionally tagged with a unit.
 define_matrix! {
@@ -43,7 +40,7 @@ pub type SideOffsets2D<T> = TypedSideOffsets2D<T, UnknownUnit>;
 
 impl<T: Copy, U> TypedSideOffsets2D<T, U> {
     /// Constructor taking a scalar for each side.
-    pub fn new(top: T, right: T, bottom: T, left: T) -> TypedSideOffsets2D<T, U> {
+    pub fn new(top: T, right: T, bottom: T, left: T) -> Self {
         TypedSideOffsets2D {
             top: top,
             right: right,
@@ -57,7 +54,7 @@ impl<T: Copy, U> TypedSideOffsets2D<T, U> {
     pub fn from_lengths(top: Length<T, U>,
                         right: Length<T, U>,
                         bottom: Length<T, U>,
-                        left: Length<T, U>) -> TypedSideOffsets2D<T, U> {
+                        left: Length<T, U>) -> Self {
         TypedSideOffsets2D::new(top.0, right.0, bottom.0, left.0)
     }
 
@@ -74,12 +71,12 @@ impl<T: Copy, U> TypedSideOffsets2D<T, U> {
     pub fn left_typed(&self) -> Length<T, U> { Length::new(self.left) }
 
     /// Constructor setting the same value to all sides, taking a scalar value directly.
-    pub fn new_all_same(all: T) -> TypedSideOffsets2D<T, U> {
+    pub fn new_all_same(all: T) -> Self {
         TypedSideOffsets2D::new(all, all, all, all)
     }
 
     /// Constructor setting the same value to all sides, taking a typed Length.
-    pub fn from_length_all_same(all: Length<T, U>) -> TypedSideOffsets2D<T, U> {
+    pub fn from_length_all_same(all: Length<T, U>) -> Self {
         TypedSideOffsets2D::new_all_same(all.0)
     }
 }
@@ -103,8 +100,8 @@ impl<T, U> TypedSideOffsets2D<T, U> where T: Add<T, Output=T> + Copy {
 }
 
 impl<T, U> Add for TypedSideOffsets2D<T, U> where T : Copy + Add<T, Output=T> {
-    type Output = TypedSideOffsets2D<T, U>;
-    fn add(self, other: TypedSideOffsets2D<T, U>) -> TypedSideOffsets2D<T, U> {
+    type Output = Self;
+    fn add(self, other: Self) -> Self {
         TypedSideOffsets2D::new(
             self.top + other.top,
             self.right + other.right,
@@ -116,7 +113,7 @@ impl<T, U> Add for TypedSideOffsets2D<T, U> where T : Copy + Add<T, Output=T> {
 
 impl<T: Copy + Zero, U> TypedSideOffsets2D<T, U> {
     /// Constructor, setting all sides to zero.
-    pub fn zero() -> TypedSideOffsets2D<T, U> {
+    pub fn zero() -> Self {
         TypedSideOffsets2D::new(
             Zero::zero(),
             Zero::zero(),
@@ -135,11 +132,6 @@ pub struct SideOffsets2DSimdI32 {
     pub bottom: i32,
     pub right: i32,
     pub left: i32,
-}
-
-#[cfg(feature = "unstable")]
-impl HeapSizeOf for SideOffsets2DSimdI32 {
-    fn heap_size_of_children(&self) -> usize { 0 }
 }
 
 #[cfg(feature = "unstable")]

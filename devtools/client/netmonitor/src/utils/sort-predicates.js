@@ -6,8 +6,13 @@
 
 const {
   getAbbreviatedMimeType,
+  getEndTime,
+  getResponseTime,
+  getResponseHeader,
+  getStartTime,
   ipToLong,
 } = require("./request-utils");
+const { RESPONSE_HEADERS } = require("../constants");
 
 /**
  * Predicates used when sorting items.
@@ -56,6 +61,49 @@ function protocol(first, second) {
   return result || waterfall(first, second);
 }
 
+function scheme(first, second) {
+  const result = compareValues(first.urlDetails.scheme, second.urlDetails.scheme);
+  return result || waterfall(first, second);
+}
+
+function startTime(first, second) {
+  const result = compareValues(getStartTime(first), getStartTime(second));
+  return result || waterfall(first, second);
+}
+
+function endTime(first, second) {
+  const result = compareValues(getEndTime(first), getEndTime(second));
+  return result || waterfall(first, second);
+}
+
+function responseTime(first, second) {
+  const result = compareValues(getResponseTime(first), getResponseTime(second));
+  return result || waterfall(first, second);
+}
+
+function duration(first, second) {
+  const result = compareValues(first.totalTime, second.totalTime);
+  return result || waterfall(first, second);
+}
+
+function latency(first, second) {
+  let { eventTimings: firstEventTimings = { timings: {} } } = first;
+  let { eventTimings: secondEventTimings = { timings: {} } } = second;
+  const result = compareValues(firstEventTimings.timings.wait,
+   secondEventTimings.timings.wait);
+  return result || waterfall(first, second);
+}
+
+function compareHeader(header, first, second) {
+  const result = compareValues(getResponseHeader(first, header) || "",
+                               getResponseHeader(second, header) || "");
+  return result || waterfall(first, second);
+}
+
+const responseHeaders = RESPONSE_HEADERS
+  .reduce((acc, header) => Object.assign(
+    acc, {[header]: (first, second) => compareHeader(header, first, second)}), {});
+
 function domain(first, second) {
   const firstDomain = first.urlDetails.host.toLowerCase();
   const secondDomain = second.urlDetails.host.toLowerCase();
@@ -77,6 +125,26 @@ function cause(first, second) {
   return result || waterfall(first, second);
 }
 
+function setCookies(first, second) {
+  let { responseCookies: firstResponseCookies = { cookies: [] } } = first;
+  let { responseCookies: secondResponseCookies = { cookies: [] } } = second;
+  firstResponseCookies = firstResponseCookies.cookies || firstResponseCookies;
+  secondResponseCookies = secondResponseCookies.cookies || secondResponseCookies;
+  const result =
+    compareValues(firstResponseCookies.length, secondResponseCookies.length);
+  return result || waterfall(first, second);
+}
+
+function cookies(first, second) {
+  let { requestCookies: firstRequestCookies = { cookies: [] } } = first;
+  let { requestCookies: secondRequestCookies = { cookies: [] } } = second;
+  firstRequestCookies = firstRequestCookies.cookies || firstRequestCookies;
+  secondRequestCookies = secondRequestCookies.cookies || secondRequestCookies;
+  const result =
+    compareValues(firstRequestCookies.length, secondRequestCookies.length);
+  return result || waterfall(first, second);
+}
+
 function type(first, second) {
   const firstType = getAbbreviatedMimeType(first.mimeType).toLowerCase();
   const secondType = getAbbreviatedMimeType(second.mimeType).toLowerCase();
@@ -94,16 +162,25 @@ function contentSize(first, second) {
   return result || waterfall(first, second);
 }
 
-exports.Sorters = {
+const sorters = {
   status,
   method,
   file,
   protocol,
+  scheme,
+  cookies,
+  setCookies,
   domain,
   remoteip,
   cause,
   type,
   transferred,
   contentSize,
+  startTime,
+  endTime,
+  responseTime,
+  duration,
+  latency,
   waterfall,
 };
+exports.Sorters = Object.assign(sorters, responseHeaders);

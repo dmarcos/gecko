@@ -36,67 +36,20 @@
 #include <unistd.h>
 #endif
 
-#include "base/child_privileges.h"
 #include "base/command_line.h"
 #include "base/process.h"
 
-#if defined(OS_WIN)
-typedef PROCESSENTRY32 ProcessEntry;
-typedef IO_COUNTERS IoCounters;
-#elif defined(OS_POSIX)
-// TODO(port): we should not rely on a Win32 structure.
-struct ProcessEntry {
-  int pid;
-  int ppid;
-  char szExeFile[NAME_MAX + 1];
-};
-
-struct IoCounters {
-  unsigned long long ReadOperationCount;
-  unsigned long long WriteOperationCount;
-  unsigned long long OtherOperationCount;
-  unsigned long long ReadTransferCount;
-  unsigned long long WriteTransferCount;
-  unsigned long long OtherTransferCount;
-};
-
+#if defined(OS_POSIX)
 #include "base/file_descriptor_shuffle.h"
 #endif
+
+#include "mozilla/UniquePtr.h"
 
 #if defined(OS_MACOSX)
 struct kinfo_proc;
 #endif
 
 namespace base {
-
-// These can be used in a 32-bit bitmask.
-enum ProcessArchitecture {
-  PROCESS_ARCH_I386 = 0x1,
-  PROCESS_ARCH_X86_64 = 0x2,
-  PROCESS_ARCH_PPC = 0x4,
-  PROCESS_ARCH_ARM = 0x8,
-  PROCESS_ARCH_MIPS = 0x10,
-  PROCESS_ARCH_ARM64 = 0x20
-};
-
-inline ProcessArchitecture GetCurrentProcessArchitecture()
-{
-  base::ProcessArchitecture currentArchitecture;
-#if defined(ARCH_CPU_X86)
-  currentArchitecture = base::PROCESS_ARCH_I386;
-#elif defined(ARCH_CPU_X86_64)
-  currentArchitecture = base::PROCESS_ARCH_X86_64;
-#elif defined(ARCH_CPU_PPC)
-  currentArchitecture = base::PROCESS_ARCH_PPC;
-#elif defined(ARCH_CPU_ARMEL)
-  currentArchitecture = base::PROCESS_ARCH_ARM;
-#elif defined(ARCH_CPU_MIPS)
-  currentArchitecture = base::PROCESS_ARCH_MIPS;
-#elif defined(ARCH_CPU_ARM64)
-  currentArchitecture = base::PROCESS_ARCH_ARM64;
-#endif
-  return currentArchitecture;
-}
 
 // A minimalistic but hopefully cross-platform set of exit codes.
 // Do not change the enumeration values or you will break third-party
@@ -142,15 +95,35 @@ void SetAllFDsToCloseOnExec();
 // given multimap. Only call this function in a child process where you know
 // that there aren't any other threads.
 void CloseSuperfluousFds(const base::InjectiveMultimap& saved_map);
+
+typedef std::vector<std::pair<int, int> > file_handle_mapping_vector;
+typedef std::map<std::string, std::string> environment_map;
 #endif
+
+struct LaunchOptions {
+  // If true, wait for the process to terminate.  Otherwise, return
+  // immediately.
+  bool wait = false;
+
+#if defined(OS_WIN)
+  bool start_hidden = false;
+#endif
+
+#if defined(OS_POSIX)
+  // Environment variables to be applied in addition to the current
+  // process's environment, replacing them where necessary.
+  environment_map environ;
+
+  // A mapping of (src fd -> dest fd) to propagate into the child
+  // process.  All other fds will be closed, except std{in,out,err}.
+  file_handle_mapping_vector fds_to_remap;
+#endif
+};
 
 #if defined(OS_WIN)
 // Runs the given application name with the given command line. Normally, the
 // first command line argument should be the path to the process, and don't
 // forget to quote it.
-//
-// If wait is true, it will block and wait for the other process to finish,
-// otherwise, it will just continue asynchronously.
 //
 // Example (including literal quotes)
 //  cmdline = "c:\windows\explorer.exe" -foo "c:\bar\"
@@ -160,45 +133,39 @@ void CloseSuperfluousFds(const base::InjectiveMultimap& saved_map);
 // NOTE: In this case, the caller is responsible for closing the handle so
 //       that it doesn't leak!
 bool LaunchApp(const std::wstring& cmdline,
-               bool wait, bool start_hidden, ProcessHandle* process_handle);
+               const LaunchOptions& options,
+               ProcessHandle* process_handle);
+
 #elif defined(OS_POSIX)
 // Runs the application specified in argv[0] with the command line argv.
-// Before launching all FDs open in the parent process will be marked as
-// close-on-exec.  |fds_to_remap| defines a mapping of src fd->dest fd to
-// propagate FDs into the child process.
 //
-// As above, if wait is true, execute synchronously. The pid will be stored
-// in process_handle if that pointer is non-null.
+// The pid will be stored in process_handle if that pointer is
+// non-null.
 //
 // Note that the first argument in argv must point to the filename,
-// and must be fully specified.
-typedef std::vector<std::pair<int, int> > file_handle_mapping_vector;
+// and must be fully specified (i.e., this will not search $PATH).
 bool LaunchApp(const std::vector<std::string>& argv,
-               const file_handle_mapping_vector& fds_to_remap,
-               bool wait, ProcessHandle* process_handle);
+               const LaunchOptions& options,
+               ProcessHandle* process_handle);
 
-typedef std::map<std::string, std::string> environment_map;
-bool LaunchApp(const std::vector<std::string>& argv,
-               const file_handle_mapping_vector& fds_to_remap,
-               const environment_map& env_vars_to_set,
-               ChildPrivileges privs,
-               bool wait, ProcessHandle* process_handle,
-               ProcessArchitecture arch=GetCurrentProcessArchitecture());
-bool LaunchApp(const std::vector<std::string>& argv,
-               const file_handle_mapping_vector& fds_to_remap,
-               const environment_map& env_vars_to_set,
-               bool wait, ProcessHandle* process_handle,
-               ProcessArchitecture arch=GetCurrentProcessArchitecture());
+// Deleter for the array of strings allocated within BuildEnvironmentArray.
+struct FreeEnvVarsArray
+{
+  void operator()(char** array);
+};
+
+typedef mozilla::UniquePtr<char*[], FreeEnvVarsArray> EnvironmentArray;
+
+// Merge an environment map with the current environment.
+// Existing variables are overwritten by env_vars_to_set.
+EnvironmentArray BuildEnvironmentArray(const environment_map& env_vars_to_set);
 #endif
-
-// Adjust the privileges of this process to match |privs|.  Only
-// returns if privileges were successfully adjusted.
-void SetCurrentProcessPrivileges(ChildPrivileges privs);
 
 // Executes the application specified by cl. This function delegates to one
 // of the above two platform-specific functions.
 bool LaunchApp(const CommandLine& cl,
-               bool wait, bool start_hidden, ProcessHandle* process_handle);
+               const LaunchOptions&,
+               ProcessHandle* process_handle);
 
 // Used to filter processes by process ID.
 class ProcessFilter {

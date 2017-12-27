@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -562,6 +563,14 @@ DataTransferItemList::GenerateFiles(FileList* aFiles,
 {
   MOZ_ASSERT(aFiles);
   MOZ_ASSERT(aFilesPrincipal);
+
+  // For non-system principals, the Files list should be empty if the
+  // DataTransfer is protected.
+  if (!nsContentUtils::IsSystemPrincipal(aFilesPrincipal) &&
+      mDataTransfer->IsProtected()) {
+    return;
+  }
+
   uint32_t count = Length();
   for (uint32_t i = 0; i < count; i++) {
     bool found;

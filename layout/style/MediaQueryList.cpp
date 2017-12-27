@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set shiftwidth=2 tabstop=8 autoindent cindent expandtab: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -21,24 +21,21 @@ namespace mozilla {
 namespace dom {
 
 MediaQueryList::MediaQueryList(nsIDocument* aDocument,
-                               const nsAString& aMediaQueryList)
+                               const nsAString& aMediaQueryList,
+                               CallerType aCallerType)
   : mDocument(aDocument)
   , mMatchesValid(false)
 {
   mMediaList =
-    MediaList::Create(aDocument->GetStyleBackendType(), aMediaQueryList);
-
-  PR_INIT_CLIST(this);
+    MediaList::Create(aDocument->GetStyleBackendType(),
+                      aMediaQueryList,
+                      aCallerType);
 
   KeepAliveIfHasListenersFor(ONCHANGE_STRING);
 }
 
 MediaQueryList::~MediaQueryList()
-{
-  if (mDocument) {
-    PR_REMOVE_LINK(this);
-  }
-}
+{}
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(MediaQueryList)
 
@@ -50,14 +47,14 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(MediaQueryList,
                                                 DOMEventTargetHelper)
   if (tmp->mDocument) {
-    PR_REMOVE_LINK(tmp);
+    tmp->remove();
     NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocument)
   }
   tmp->Disconnect();
   NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(MediaQueryList)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(MediaQueryList)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 NS_IMPL_ADDREF_INHERITED(MediaQueryList, DOMEventTargetHelper)

@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -17,30 +18,26 @@ public:
   RenderBufferTextureHost(uint8_t* aBuffer,
                           const layers::BufferDescriptor& aDescriptor);
 
-  virtual bool Lock() override;
-  virtual void Unlock() override;
+  wr::WrExternalImage Lock(uint8_t aChannelIndex, gl::GLContext* aGL) override;
+  void Unlock() override;
 
-  virtual gfx::IntSize GetSize() const override
+  class RenderBufferData
   {
-    return mSize;
-  }
-  virtual gfx::SurfaceFormat GetFormat() const override
-  {
-    return mFormat;
-  }
+  public:
+    RenderBufferData(uint8_t* aData, size_t aBufferSize)
+      : mData(aData)
+      , mBufferSize(aBufferSize)
+    {
+    }
+    const uint8_t* mData;
+    size_t mBufferSize;
+  };
 
-  virtual RenderBufferTextureHost* AsBufferTextureHost() override
-  {
-    return this;
-  }
-
-  const uint8_t* GetDataForRender() const;
-  size_t GetBufferSizeForRender() const;
+  RenderBufferData GetBufferDataForRender(uint8_t aChannelIndex);
 
 private:
   virtual ~RenderBufferTextureHost();
 
-  already_AddRefed<gfx::DataSourceSurface> GetAsSurface();
   uint8_t* GetBuffer() const
   {
     return mBuffer;
@@ -50,8 +47,17 @@ private:
   layers::BufferDescriptor mDescriptor;
   gfx::IntSize mSize;
   gfx::SurfaceFormat mFormat;
+
   RefPtr<gfx::DataSourceSurface> mSurface;
   gfx::DataSourceSurface::MappedSurface mMap;
+
+  RefPtr<gfx::DataSourceSurface> mYSurface;
+  RefPtr<gfx::DataSourceSurface> mCbSurface;
+  RefPtr<gfx::DataSourceSurface> mCrSurface;
+  gfx::DataSourceSurface::MappedSurface mYMap;
+  gfx::DataSourceSurface::MappedSurface mCbMap;
+  gfx::DataSourceSurface::MappedSurface mCrMap;
+
   bool mLocked;
 };
 

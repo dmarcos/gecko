@@ -11,7 +11,7 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://gre/modules/Messaging.jsm");
 
-Cu.importGlobalProperties(['File']);
+Cu.importGlobalProperties(["File"]);
 
 function FilePicker() {
 }
@@ -24,6 +24,7 @@ FilePicker.prototype = {
   _domFile: null,
   _defaultExtension: null,
   _displayDirectory: null,
+  _displaySpecialDirectory: null,
   _filePath: null,
   _promptActive: false,
   _filterIndex: 0,
@@ -35,7 +36,7 @@ FilePicker.prototype = {
     this._mode = aMode;
     this._title = aTitle;
 
-    let idService = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator); 
+    let idService = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
     this.guid = idService.generateUUID().toString();
 
     if (aMode != Ci.nsIFilePicker.modeOpen && aMode != Ci.nsIFilePicker.modeOpenMultiple)
@@ -113,13 +114,21 @@ FilePicker.prototype = {
   set filterIndex(val) {
     this._filterIndex = val;
   },
-  
+
   get displayDirectory() {
     return this._displayDirectory;
   },
 
   set displayDirectory(dir) {
     this._displayDirectory = dir;
+  },
+
+  get displaySpecialDirectory() {
+    return this._displaySpecialDirectory;
+  },
+
+  set displaySpecialDirectory(dir) {
+    this._displaySpecialDirectory = dir;
   },
 
   get file() {
@@ -170,9 +179,7 @@ FilePicker.prototype = {
     this._promptActive = true;
     this._sendMessage();
 
-    let thread = Services.tm.currentThread;
-    while (this._promptActive)
-      thread.processNextEvent(true);
+    Services.tm.spinEventLoopUntil(() => !this._promptActive);
     delete this._promptActive;
 
     if (this._domWin) {
@@ -202,8 +209,8 @@ FilePicker.prototype = {
     // Knowing the window lets us destroy any temp files when the tab is closed
     // Other consumers of the file picker may have to either wait for Android
     // to clean up the temp dir (not guaranteed) or clean up after themselves.
-    let win = Services.wm.getMostRecentWindow('navigator:browser');
-    let tab = win.BrowserApp.getTabForWindow(this._domWin.top)
+    let win = Services.wm.getMostRecentWindow("navigator:browser");
+    let tab = win && win.BrowserApp.getTabForWindow(this._domWin.top);
     if (tab) {
       msg.tabId = tab.id;
     }
@@ -272,7 +279,7 @@ FilePicker.prototype = {
       let winUtils = aDomWin.QueryInterface(Ci.nsIInterfaceRequestor)
                            .getInterface(Ci.nsIDOMWindowUtils);
       winUtils.dispatchEventToChromeOnly(aDomWin, event);
-    } catch(ex) {
+    } catch (ex) {
     }
   },
 

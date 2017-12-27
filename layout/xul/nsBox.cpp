@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -119,7 +120,7 @@ nsBox::GetBoxName(nsAutoString& aName)
 nsresult
 nsBox::BeginXULLayout(nsBoxLayoutState& aState)
 {
-#ifdef DEBUG_LAYOUT 
+#ifdef DEBUG_LAYOUT
 
   nsBoxAddIndents();
   printf("XULLayout: ");
@@ -131,7 +132,7 @@ nsBox::BeginXULLayout(nsBoxLayoutState& aState)
   // mark ourselves as dirty so no child under us
   // can post an incremental layout.
   // XXXldb Is this still needed?
-  mState |= NS_FRAME_HAS_DIRTY_CHILDREN;
+  AddStateBits(NS_FRAME_HAS_DIRTY_CHILDREN);
 
   if (GetStateBits() & NS_FRAME_IS_DIRTY)
   {
@@ -144,10 +145,9 @@ nsBox::BeginXULLayout(nsBoxLayoutState& aState)
 
   // Another copy-over from ReflowInput.
   // Since we are in reflow, we don't need to store these properties anymore.
-  FrameProperties props = Properties();
-  props.Delete(UsedBorderProperty());
-  props.Delete(UsedPaddingProperty());
-  props.Delete(UsedMarginProperty());
+  DeleteProperty(UsedBorderProperty());
+  DeleteProperty(UsedPaddingProperty());
+  DeleteProperty(UsedMarginProperty());
 
 #ifdef DEBUG_LAYOUT
   PropagateDebug(aState);
@@ -176,7 +176,8 @@ nsBox::EndXULLayout(nsBoxLayoutState& aState)
 bool nsBox::gGotTheme = false;
 nsITheme* nsBox::gTheme = nullptr;
 
-nsBox::nsBox()
+nsBox::nsBox(ClassID aID)
+  : nsIFrame(aID)
 {
   MOZ_COUNT_CTOR(nsBox);
   //mX = 0;
@@ -260,9 +261,9 @@ nsBox::SetXULBounds(nsBoxLayoutState& aState, const nsRect& aRect, bool aRemoveO
       if ((rect.x != aRect.x) || (rect.y != aRect.y))
         nsContainerFrame::PositionChildViews(this);
     }
-  
 
-   /*  
+
+   /*
     // only if the origin changed
     if ((rect.x != aRect.x) || (rect.y != aRect.y))  {
       if (frame->HasView()) {
@@ -297,15 +298,15 @@ nsresult
 nsBox::GetXULBorder(nsMargin& aMargin)
 {
   aMargin.SizeTo(0,0,0,0);
-    
+
   const nsStyleDisplay* disp = StyleDisplay();
-  if (disp->UsedAppearance() && gTheme) {
+  if (disp->mAppearance && gTheme) {
     // Go to the theme for the border.
     nsPresContext *context = PresContext();
-    if (gTheme->ThemeSupportsWidget(context, this, disp->UsedAppearance())) {
+    if (gTheme->ThemeSupportsWidget(context, this, disp->mAppearance)) {
       nsIntMargin margin(0, 0, 0, 0);
       gTheme->GetWidgetBorder(context->DeviceContext(), this,
-                              disp->UsedAppearance(), &margin);
+                              disp->mAppearance, &margin);
       aMargin.top = context->DevPixelsToAppUnits(margin.top);
       aMargin.right = context->DevPixelsToAppUnits(margin.right);
       aMargin.bottom = context->DevPixelsToAppUnits(margin.bottom);
@@ -323,15 +324,15 @@ nsresult
 nsBox::GetXULPadding(nsMargin& aMargin)
 {
   const nsStyleDisplay *disp = StyleDisplay();
-  if (disp->UsedAppearance() && gTheme) {
+  if (disp->mAppearance && gTheme) {
     // Go to the theme for the padding.
     nsPresContext *context = PresContext();
-    if (gTheme->ThemeSupportsWidget(context, this, disp->UsedAppearance())) {
+    if (gTheme->ThemeSupportsWidget(context, this, disp->mAppearance)) {
       nsIntMargin margin(0, 0, 0, 0);
       bool useThemePadding;
 
       useThemePadding = gTheme->GetWidgetPadding(context->DeviceContext(),
-                                                 this, disp->UsedAppearance(),
+                                                 this, disp->mAppearance,
                                                  &margin);
       if (useThemePadding) {
         aMargin.top = context->DevPixelsToAppUnits(margin.top);
@@ -524,7 +525,7 @@ nsBox::SyncLayout(nsBoxLayoutState& aState)
     return NS_OK;
   }
   */
-  
+
 
   if (GetStateBits() & NS_FRAME_IS_DIRTY)
      XULRedraw(aState);
@@ -567,7 +568,7 @@ nsBox::SyncLayout(nsBoxLayoutState& aState)
     // things like opacity correct
     nsContainerFrame::SyncFrameViewAfterReflow(presContext, this, view,
                                                visualOverflow, flags);
-  } 
+  }
 
   return NS_OK;
 }
@@ -606,7 +607,7 @@ nsIFrame::AddXULPrefSize(nsIFrame* aBox, nsSize& aSize, bool &aWidthSet, bool &a
     } else if (width.IsCalcUnit()) {
         if (!width.CalcHasPercent()) {
             // pass 0 for percentage basis since we know there are no %s
-            aSize.width = nsRuleNode::ComputeComputedCalc(width, 0);
+            aSize.width = width.ComputeComputedCalc(0);
             if (aSize.width < 0)
                 aSize.width = 0;
             aWidthSet = true;
@@ -620,7 +621,7 @@ nsIFrame::AddXULPrefSize(nsIFrame* aBox, nsSize& aSize, bool &aWidthSet, bool &a
     } else if (height.IsCalcUnit()) {
         if (!height.CalcHasPercent()) {
             // pass 0 for percentage basis since we know there are no %s
-            aSize.height = nsRuleNode::ComputeComputedCalc(height, 0);
+            aSize.height = height.ComputeComputedCalc(0);
             if (aSize.height < 0)
                 aSize.height = 0;
             aHeightSet = true;
@@ -669,12 +670,12 @@ nsIFrame::AddXULMinSize(nsBoxLayoutState& aState, nsIFrame* aBox, nsSize& aSize,
 
     // See if a native theme wants to supply a minimum size.
     const nsStyleDisplay* display = aBox->StyleDisplay();
-    if (display->UsedAppearance()) {
+    if (display->mAppearance) {
       nsITheme *theme = aState.PresContext()->GetTheme();
-      if (theme && theme->ThemeSupportsWidget(aState.PresContext(), aBox, display->UsedAppearance())) {
+      if (theme && theme->ThemeSupportsWidget(aState.PresContext(), aBox, display->mAppearance)) {
         LayoutDeviceIntSize size;
         theme->GetMinimumWidgetSize(aState.PresContext(), aBox,
-                                    display->UsedAppearance(), &size, &canOverride);
+                                    display->mAppearance, &size, &canOverride);
         if (size.width) {
           aSize.width = aState.PresContext()->DevPixelsToAppUnits(size.width);
           aWidthSet = true;
@@ -695,7 +696,7 @@ nsIFrame::AddXULMinSize(nsBoxLayoutState& aState, nsIFrame* aBox, nsSize& aSize,
     if ((minWidth.GetUnit() == eStyleUnit_Coord &&
          minWidth.GetCoordValue() != 0) ||
         (minWidth.IsCalcUnit() && !minWidth.CalcHasPercent())) {
-        nscoord min = nsRuleNode::ComputeCoordPercentCalc(minWidth, 0);
+        nscoord min = minWidth.ComputeCoordPercentCalc(0);
         if (!aWidthSet || (min > aSize.width && canOverride)) {
            aSize.width = min;
            aWidthSet = true;
@@ -717,7 +718,7 @@ nsIFrame::AddXULMinSize(nsBoxLayoutState& aState, nsIFrame* aBox, nsSize& aSize,
     if ((minHeight.GetUnit() == eStyleUnit_Coord &&
          minHeight.GetCoordValue() != 0) ||
         (minHeight.IsCalcUnit() && !minHeight.CalcHasPercent())) {
-        nscoord min = nsRuleNode::ComputeCoordPercentCalc(minHeight, 0);
+        nscoord min = minHeight.ComputeCoordPercentCalc(0);
         if (!aHeightSet || (min > aSize.height && canOverride)) {
            aSize.height = min;
            aHeightSet = true;
@@ -782,14 +783,14 @@ nsIFrame::AddXULMaxSize(nsIFrame* aBox, nsSize& aSize, bool &aWidthSet, bool &aH
     // (min-/max-/)(width/height) properties.)
     const nsStyleCoord maxWidth = position->mMaxWidth;
     if (maxWidth.ConvertsToLength()) {
-        aSize.width = nsRuleNode::ComputeCoordPercentCalc(maxWidth, 0);
+        aSize.width = maxWidth.ComputeCoordPercentCalc(0);
         aWidthSet = true;
     }
     // percentages and calc() with percentages are treated like 'none'
 
     const nsStyleCoord &maxHeight = position->mMaxHeight;
     if (maxHeight.ConvertsToLength()) {
-        aSize.height = nsRuleNode::ComputeCoordPercentCalc(maxHeight, 0);
+        aSize.height = maxHeight.ComputeCoordPercentCalc(0);
         aHeightSet = true;
     }
     // percentages and calc() with percentages are treated like 'none'

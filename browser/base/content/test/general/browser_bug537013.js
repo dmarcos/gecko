@@ -11,12 +11,11 @@ var texts = [
   "To err is human; to forgive is not company policy."
 ];
 
-var Clipboard = Cc["@mozilla.org/widget/clipboard;1"].getService(Ci.nsIClipboard);
-var HasFindClipboard = Clipboard.supportsFindClipboard();
+var HasFindClipboard = Services.clipboard.supportsFindClipboard();
 
 function addTabWithText(aText, aCallback) {
-  let newTab = gBrowser.addTab("data:text/html;charset=utf-8,<h1 id='h1'>" +
-                               aText + "</h1>");
+  let newTab = BrowserTestUtils.addTab(gBrowser, "data:text/html;charset=utf-8,<h1 id='h1'>" +
+                                       aText + "</h1>");
   tabs.push(newTab);
   gBrowser.selectedTab = newTab;
 }
@@ -45,7 +44,7 @@ function test() {
 
   setFindString(texts[0]);
   // Turn on highlight for testing bug 891638
-  gFindBar.toggleHighlight(true);
+  gFindBar.getElement("highlight").checked = true;
 
   // Make sure the second tab is correct, then set it up
   gBrowser.selectedTab = tabs[1];
@@ -72,7 +71,7 @@ function continueTests1() {
   ok(gFindBar.getElement("highlight").checked,
      "Highlight button state persists!");
 
-  // While we're here, let's test the backout of bug 253793.
+  // While we're here, let's test bug 253793
   gBrowser.reload();
   gBrowser.addEventListener("DOMContentLoaded", continueTests2, true);
 }
@@ -128,7 +127,7 @@ function checkNewWindow() {
     is(newWindow.gFindBar._findField.value, texts[1],
        "New window find bar has correct find value!");
     ok(!newWindow.gFindBar.getElement("find-next").disabled,
-       "New window findbar has disabled buttons!");
+       "New window findbar has enabled buttons!");
   }
   newWindow.close();
   finish();

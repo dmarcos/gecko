@@ -17,13 +17,13 @@ using namespace mozilla;
 /***************************************************************************/
 // static shared...
 
-// Note this is returning the bit pattern of the first part of the nsID, not
-// the pointer to the nsID.
+// Note this is returning the hash of the bit pattern of the first part of the nsID, not
+// the hash of the pointer to the nsID.
 
 static PLDHashNumber
 HashIIDPtrKey(const void* key)
 {
-    return *((js::HashNumber*)key);
+    return HashGeneric(*((uintptr_t*)key));
 }
 
 static bool
@@ -43,7 +43,7 @@ HashNativeKey(const void* data)
 // implement JSObject2WrappedJSMap...
 
 void
-JSObject2WrappedJSMap::UpdateWeakPointersAfterGC(XPCJSContext* context)
+JSObject2WrappedJSMap::UpdateWeakPointersAfterGC()
 {
     // Check all wrappers and update their JSObject pointer if it has been
     // moved. Release any wrappers whose weakly held JSObject has died.

@@ -4,6 +4,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 import os
 import unittest
 import subprocess
@@ -20,7 +22,10 @@ import mozhttpd
 import mozlog.unstructured as mozlog
 
 # Make logs go away
-log = mozlog.getLogger("mozcrash", handler=mozlog.FileHandler(os.devnull))
+try:
+    log = mozlog.getLogger("mozcrash", handler=mozlog.FileHandler(os.devnull))
+except ValueError:
+    pass
 
 
 def popen_factory(stdouts):
@@ -239,6 +244,7 @@ class TestJavaException(unittest.TestCase):
         passable_log[0] = "01-30 20:15:41.937 E/GeckoAppShell( 1703):" \
                           " >>> NOT-SO-BAD EXCEPTION FROM THREAD 9 (\"GeckoBackgroundThread\")"
         self.assert_(not mozcrash.check_for_java_exception(passable_log, quiet=True))
+
 
 if __name__ == '__main__':
     mozunit.main()

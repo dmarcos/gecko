@@ -7,7 +7,6 @@
 #include "ExtendedValidation.h"
 
 #include "cert.h"
-#include "certdb.h"
 #include "hasht.h"
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Assertions.h"
@@ -18,23 +17,24 @@
 #include "nsString.h"
 #include "pk11pub.h"
 #include "pkix/pkixtypes.h"
-#include "prerror.h"
 
-struct nsMyTrustedEVInfo
+namespace mozilla { namespace psm {
+
+struct EVInfo
 {
   // See bug 1338873 about making these fields const.
-  const char* dotted_oid;
-  const char* oid_name; // Set this to null to signal an invalid structure,
+  const char* dottedOid;
+  const char* oidName; // Set this to null to signal an invalid structure,
                   // (We can't have an empty list, so we'll use a dummy entry)
-  unsigned char ev_root_sha256_fingerprint[SHA256_LENGTH];
-  const char* issuer_base64;
-  const char* serial_base64;
+  unsigned char sha256Fingerprint[SHA256_LENGTH];
+  const char* issuerBase64;
+  const char* serialBase64;
 };
 
 // HOWTO enable additional CA root certificates for EV:
 //
 // For each combination of "root certificate" and "policy OID",
-// one entry must be added to the array named myTrustedEVInfos.
+// one entry must be added to the array named kEVInfos.
 //
 // We use the combination of "issuer name" and "serial number" to
 // uniquely identify the certificate. In order to avoid problems
@@ -86,9 +86,9 @@ struct nsMyTrustedEVInfo
 static const size_t NUM_TEST_EV_ROOTS = 2;
 #endif
 
-static const struct nsMyTrustedEVInfo myTrustedEVInfos[] = {
+static const struct EVInfo kEVInfos[] = {
   // IMPORTANT! When extending this list, if you add another entry that uses
-  // the same dotted_oid as an existing entry, use the same oid_name.
+  // the same dottedOid as an existing entry, use the same oidName.
 #ifdef DEBUG
   // Debug EV certificates should all use the following OID:
   // 1.3.6.1.4.1.13769.666.666.666.1.500.9.1.
@@ -112,11 +112,11 @@ static const struct nsMyTrustedEVInfo myTrustedEVInfos[] = {
     // following entry with the new fingerprint, issuer, and serial number.
     "1.3.6.1.4.1.13769.666.666.666.1.500.9.1",
     "DEBUGtesting EV OID",
-    { 0xE4, 0xFB, 0x04, 0x16, 0x10, 0x32, 0x67, 0x08, 0x6C, 0x84, 0x2E,
-      0x91, 0xF3, 0xEF, 0x0E, 0x45, 0x99, 0xBC, 0xA8, 0x54, 0x73, 0xF5,
-      0x03, 0x2C, 0x7B, 0xDC, 0x09, 0x70, 0x76, 0x49, 0xBF, 0xAA },
+    { 0x70, 0xED, 0xCB, 0x5A, 0xCE, 0x02, 0xC7, 0xC5, 0x0B, 0xA3, 0xD2, 0xD7,
+      0xC6, 0xF5, 0x0E, 0x18, 0x02, 0x19, 0x17, 0xF5, 0x48, 0x08, 0x9C, 0xB3,
+      0x8E, 0xEF, 0x9A, 0x1A, 0x4D, 0x7F, 0x82, 0x94 },
     "MBExDzANBgNVBAMMBmV2cm9vdA==",
-    "W9j5PS8YoKgynZdYa9i2Kwexnp8=",
+    "IZSHsVgzcvhPgdfrgdMGlpSfMeg=",
   },
   {
     // This is an RSA root with an inadequate key size. It is used to test that
@@ -135,25 +135,13 @@ static const struct nsMyTrustedEVInfo myTrustedEVInfos[] = {
     // following entry with the new fingerprint, issuer, and serial number.
     "1.3.6.1.4.1.13769.666.666.666.1.500.9.1",
     "DEBUGtesting EV OID",
-    { 0x49, 0x46, 0x10, 0xF4, 0xF5, 0xB1, 0x96, 0xE7, 0xFB, 0xFA, 0x4D,
-      0xA6, 0x34, 0x03, 0xD0, 0x99, 0x22, 0xD4, 0x77, 0x20, 0x3F, 0x84,
-      0xE0, 0xDF, 0x1C, 0xAD, 0xB4, 0xC2, 0x76, 0xBB, 0x63, 0x24 },
+    { 0x40, 0xAB, 0x5D, 0xA5, 0x89, 0x15, 0xA9, 0x4B, 0x82, 0x87, 0xB8, 0xA6,
+      0x9A, 0x84, 0xB1, 0xDB, 0x7A, 0x9D, 0xDB, 0xB8, 0x4E, 0xE1, 0x23, 0xE3,
+      0xC6, 0x64, 0xE7, 0x50, 0xDC, 0x35, 0x8C, 0x68  },
     "MBsxGTAXBgNVBAMMEGV2X3Jvb3RfcnNhXzIwNDA=",
-    "P1iIBgxk6kH+x64EUBTV3qoHuas=",
+    "J7nCMgtzNcSPG7jAh3CWzlTGHQg=",
   },
 #endif
-  {
-    // OU=Security Communication EV RootCA1,O="SECOM Trust Systems CO.,LTD.",C=JP
-    "1.2.392.200091.100.721.1",
-    "SECOM EV OID",
-    { 0xA2, 0x2D, 0xBA, 0x68, 0x1E, 0x97, 0x37, 0x6E, 0x2D, 0x39, 0x7D,
-      0x72, 0x8A, 0xAE, 0x3A, 0x9B, 0x62, 0x96, 0xB9, 0xFD, 0xBA, 0x60,
-      0xBC, 0x2E, 0x11, 0xF6, 0x47, 0xF2, 0xC6, 0x75, 0xFB, 0x37 },
-    "MGAxCzAJBgNVBAYTAkpQMSUwIwYDVQQKExxTRUNPTSBUcnVzdCBTeXN0ZW1zIENP"
-    "LixMVEQuMSowKAYDVQQLEyFTZWN1cml0eSBDb21tdW5pY2F0aW9uIEVWIFJvb3RD"
-    "QTE=",
-    "AA==",
-  },
   {
     // CN=Cybertrust Global Root,O=Cybertrust, Inc
     "1.3.6.1.4.1.6334.1.100.1",
@@ -175,41 +163,6 @@ static const struct nsMyTrustedEVInfo myTrustedEVInfos[] = {
     "MEUxCzAJBgNVBAYTAkNIMRUwEwYDVQQKEwxTd2lzc1NpZ24gQUcxHzAdBgNVBAMT"
     "FlN3aXNzU2lnbiBHb2xkIENBIC0gRzI=",
     "ALtAHEP1Xk+w",
-  },
-  {
-    // CN=StartCom Certification Authority,OU=Secure Digital Certificate Signing,O=StartCom Ltd.,C=IL
-    "1.3.6.1.4.1.23223.1.1.1",
-    "StartCom EV OID",
-    { 0xC7, 0x66, 0xA9, 0xBE, 0xF2, 0xD4, 0x07, 0x1C, 0x86, 0x3A, 0x31,
-      0xAA, 0x49, 0x20, 0xE8, 0x13, 0xB2, 0xD1, 0x98, 0x60, 0x8C, 0xB7,
-      0xB7, 0xCF, 0xE2, 0x11, 0x43, 0xB8, 0x36, 0xDF, 0x09, 0xEA },
-    "MH0xCzAJBgNVBAYTAklMMRYwFAYDVQQKEw1TdGFydENvbSBMdGQuMSswKQYDVQQL"
-    "EyJTZWN1cmUgRGlnaXRhbCBDZXJ0aWZpY2F0ZSBTaWduaW5nMSkwJwYDVQQDEyBT"
-    "dGFydENvbSBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eQ==",
-    "AQ==",
-  },
-  {
-    // CN=StartCom Certification Authority,OU=Secure Digital Certificate Signing,O=StartCom Ltd.,C=IL
-    "1.3.6.1.4.1.23223.1.1.1",
-    "StartCom EV OID",
-    { 0xE1, 0x78, 0x90, 0xEE, 0x09, 0xA3, 0xFB, 0xF4, 0xF4, 0x8B, 0x9C,
-      0x41, 0x4A, 0x17, 0xD6, 0x37, 0xB7, 0xA5, 0x06, 0x47, 0xE9, 0xBC,
-      0x75, 0x23, 0x22, 0x72, 0x7F, 0xCC, 0x17, 0x42, 0xA9, 0x11 },
-    "MH0xCzAJBgNVBAYTAklMMRYwFAYDVQQKEw1TdGFydENvbSBMdGQuMSswKQYDVQQL"
-    "EyJTZWN1cmUgRGlnaXRhbCBDZXJ0aWZpY2F0ZSBTaWduaW5nMSkwJwYDVQQDEyBT"
-    "dGFydENvbSBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eQ==",
-    "LQ==",
-  },
-  {
-    // CN=StartCom Certification Authority G2,O=StartCom Ltd.,C=IL
-    "1.3.6.1.4.1.23223.1.1.1",
-    "StartCom EV OID",
-    { 0xC7, 0xBA, 0x65, 0x67, 0xDE, 0x93, 0xA7, 0x98, 0xAE, 0x1F, 0xAA,
-      0x79, 0x1E, 0x71, 0x2D, 0x37, 0x8F, 0xAE, 0x1F, 0x93, 0xC4, 0x39,
-      0x7F, 0xEA, 0x44, 0x1B, 0xB7, 0xCB, 0xE6, 0xFD, 0x59, 0x95 },
-    "MFMxCzAJBgNVBAYTAklMMRYwFAYDVQQKEw1TdGFydENvbSBMdGQuMSwwKgYDVQQD"
-    "EyNTdGFydENvbSBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eSBHMg==",
-    "Ow==",
   },
   {
     // CN=VeriSign Class 3 Public Primary Certification Authority - G5,OU="(c) 2006 VeriSign, Inc. - For authorized use only",OU=VeriSign Trust Network,O="VeriSign, Inc.",C=US
@@ -318,19 +271,6 @@ static const struct nsMyTrustedEVInfo myTrustedEVInfos[] = {
     "QWRkVHJ1c3QgRXh0ZXJuYWwgVFRQIE5ldHdvcmsxIjAgBgNVBAMTGUFkZFRydXN0"
     "IEV4dGVybmFsIENBIFJvb3Q=",
     "AQ==",
-  },
-  {
-    // CN=UTN-USERFirst-Hardware,OU=http://www.usertrust.com,O=The USERTRUST Network,L=Salt Lake City,ST=UT,C=US
-    "1.3.6.1.4.1.6449.1.2.1.5.1",
-    "Comodo EV OID",
-    { 0x6E, 0xA5, 0x47, 0x41, 0xD0, 0x04, 0x66, 0x7E, 0xED, 0x1B, 0x48,
-      0x16, 0x63, 0x4A, 0xA3, 0xA7, 0x9E, 0x6E, 0x4B, 0x96, 0x95, 0x0F,
-      0x82, 0x79, 0xDA, 0xFC, 0x8D, 0x9B, 0xD8, 0x81, 0x21, 0x37 },
-    "MIGXMQswCQYDVQQGEwJVUzELMAkGA1UECBMCVVQxFzAVBgNVBAcTDlNhbHQgTGFr"
-    "ZSBDaXR5MR4wHAYDVQQKExVUaGUgVVNFUlRSVVNUIE5ldHdvcmsxITAfBgNVBAsT"
-    "GGh0dHA6Ly93d3cudXNlcnRydXN0LmNvbTEfMB0GA1UEAxMWVVROLVVTRVJGaXJz"
-    "dC1IYXJkd2FyZQ==",
-    "RL4Mi1AAJLQR0zYq/mUK/Q==",
   },
   {
     // OU=Go Daddy Class 2 Certification Authority,O=\"The Go Daddy Group, Inc.\",C=US
@@ -613,18 +553,6 @@ static const struct nsMyTrustedEVInfo myTrustedEVInfos[] = {
     "AQ==",
   },
   {
-    // CN=China Internet Network Information Center EV Certificates Root,O=China Internet Network Information Center,C=CN
-    "1.3.6.1.4.1.29836.1.10",
-    "CNNIC EV OID",
-    { 0x1C, 0x01, 0xC6, 0xF4, 0xDB, 0xB2, 0xFE, 0xFC, 0x22, 0x55, 0x8B,
-      0x2B, 0xCA, 0x32, 0x56, 0x3F, 0x49, 0x84, 0x4A, 0xCF, 0xC3, 0x2B,
-      0x7B, 0xE4, 0xB0, 0xFF, 0x59, 0x9F, 0x9E, 0x8C, 0x7A, 0xF7 },
-    "MIGKMQswCQYDVQQGEwJDTjEyMDAGA1UECgwpQ2hpbmEgSW50ZXJuZXQgTmV0d29y"
-    "ayBJbmZvcm1hdGlvbiBDZW50ZXIxRzBFBgNVBAMMPkNoaW5hIEludGVybmV0IE5l"
-    "dHdvcmsgSW5mb3JtYXRpb24gQ2VudGVyIEVWIENlcnRpZmljYXRlcyBSb290",
-    "SJ8AAQ==",
-  },
-  {
     // CN=TWCA Root Certification Authority,OU=Root CA,O=TAIWAN-CA,C=TW
     "1.3.6.1.4.1.40869.1.1.22.3",
     "TWCA EV OID",
@@ -646,18 +574,6 @@ static const struct nsMyTrustedEVInfo myTrustedEVInfos[] = {
     "MFAxCzAJBgNVBAYTAkRFMRUwEwYDVQQKDAxELVRydXN0IEdtYkgxKjAoBgNVBAMM"
     "IUQtVFJVU1QgUm9vdCBDbGFzcyAzIENBIDIgRVYgMjAwOQ==",
     "CYP0",
-  },
-  {
-    // CN=Swisscom Root EV CA 2,OU=Digital Certificate Services,O=Swisscom,C=ch
-    "2.16.756.1.83.21.0",
-    "Swisscom  EV OID",
-    { 0xD9, 0x5F, 0xEA, 0x3C, 0xA4, 0xEE, 0xDC, 0xE7, 0x4C, 0xD7, 0x6E,
-      0x75, 0xFC, 0x6D, 0x1F, 0xF6, 0x2C, 0x44, 0x1F, 0x0F, 0xA8, 0xBC,
-      0x77, 0xF0, 0x34, 0xB1, 0x9E, 0x5D, 0xB2, 0x58, 0x01, 0x5D },
-    "MGcxCzAJBgNVBAYTAmNoMREwDwYDVQQKEwhTd2lzc2NvbTElMCMGA1UECxMcRGln"
-    "aXRhbCBDZXJ0aWZpY2F0ZSBTZXJ2aWNlczEeMBwGA1UEAxMVU3dpc3Njb20gUm9v"
-    "dCBFViBDQSAy",
-    "APL6ZOJ0Y9ON/RAdBB92ylg=",
   },
   {
     // CN=VeriSign Universal Root Certification Authority,OU="(c) 2008 VeriSign, Inc. - For authorized use only",OU=VeriSign Trust Network,O="VeriSign, Inc.",C=US
@@ -744,28 +660,6 @@ static const struct nsMyTrustedEVInfo myTrustedEVInfos[] = {
     "cyBTLnAuQS4vMDMzNTg1MjA5NjcxJzAlBgNVBAMMHkFjdGFsaXMgQXV0aGVudGlj"
     "YXRpb24gUm9vdCBDQQ==",
     "VwoRl0LE48w=",
-  },
-  {
-    // CN=Certification Authority of WoSign,O=WoSign CA Limited,C=CN
-    "1.3.6.1.4.1.36305.2",
-    "WoSign EV OID",
-    { 0x4B, 0x22, 0xD5, 0xA6, 0xAE, 0xC9, 0x9F, 0x3C, 0xDB, 0x79, 0xAA,
-      0x5E, 0xC0, 0x68, 0x38, 0x47, 0x9C, 0xD5, 0xEC, 0xBA, 0x71, 0x64,
-      0xF7, 0xF2, 0x2D, 0xC1, 0xD6, 0x5F, 0x63, 0xD8, 0x57, 0x08 },
-    "MFUxCzAJBgNVBAYTAkNOMRowGAYDVQQKExFXb1NpZ24gQ0EgTGltaXRlZDEqMCgG"
-    "A1UEAxMhQ2VydGlmaWNhdGlvbiBBdXRob3JpdHkgb2YgV29TaWdu",
-    "XmjWEXGUY1BWAGjzPsnFkQ==",
-  },
-  {
-    // CN=CA ...............,O=WoSign CA Limited,C=CN
-    "1.3.6.1.4.1.36305.2",
-    "WoSign EV OID",
-    { 0xD6, 0xF0, 0x34, 0xBD, 0x94, 0xAA, 0x23, 0x3F, 0x02, 0x97, 0xEC,
-      0xA4, 0x24, 0x5B, 0x28, 0x39, 0x73, 0xE4, 0x47, 0xAA, 0x59, 0x0F,
-      0x31, 0x0C, 0x77, 0xF4, 0x8F, 0xDF, 0x83, 0x11, 0x22, 0x54 },
-    "MEYxCzAJBgNVBAYTAkNOMRowGAYDVQQKExFXb1NpZ24gQ0EgTGltaXRlZDEbMBkG"
-    "A1UEAwwSQ0Eg5rKD6YCa5qC56K+B5Lmm",
-    "UHBrzdgT/BtOOzNy0hFIjQ==",
   },
   {
     // CN=DigiCert Assured ID Root G2,OU=www.digicert.com,O=DigiCert Inc,C=US
@@ -949,28 +843,6 @@ static const struct nsMyTrustedEVInfo myTrustedEVInfos[] = {
     "GErM1g==",
   },
   {
-    // CN=Certification Authority of WoSign G2,O=WoSign CA Limited,C=CN
-    "1.3.6.1.4.1.36305.2",
-    "WoSign EV OID",
-    { 0xD4, 0x87, 0xA5, 0x6F, 0x83, 0xB0, 0x74, 0x82, 0xE8, 0x5E, 0x96,
-      0x33, 0x94, 0xC1, 0xEC, 0xC2, 0xC9, 0xE5, 0x1D, 0x09, 0x03, 0xEE,
-      0x94, 0x6B, 0x02, 0xC3, 0x01, 0x58, 0x1E, 0xD9, 0x9E, 0x16 },
-    "MFgxCzAJBgNVBAYTAkNOMRowGAYDVQQKExFXb1NpZ24gQ0EgTGltaXRlZDEtMCsG"
-    "A1UEAxMkQ2VydGlmaWNhdGlvbiBBdXRob3JpdHkgb2YgV29TaWduIEcy",
-    "ayXaioidfLwPBbOxemFFRA==",
-  },
-  {
-    // CN=CA WoSign ECC Root,O=WoSign CA Limited,C=CN
-    "1.3.6.1.4.1.36305.2",
-    "WoSign EV OID",
-    { 0x8B, 0x45, 0xDA, 0x1C, 0x06, 0xF7, 0x91, 0xEB, 0x0C, 0xAB, 0xF2,
-      0x6B, 0xE5, 0x88, 0xF5, 0xFB, 0x23, 0x16, 0x5C, 0x2E, 0x61, 0x4B,
-      0xF8, 0x85, 0x56, 0x2D, 0x0D, 0xCE, 0x50, 0xB2, 0x9B, 0x02 },
-    "MEYxCzAJBgNVBAYTAkNOMRowGAYDVQQKExFXb1NpZ24gQ0EgTGltaXRlZDEbMBkG"
-    "A1UEAxMSQ0EgV29TaWduIEVDQyBSb290",
-    "aEpYcIBr8I8C+vbe6LCQkA==",
-  },
-  {
     // OU=Security Communication RootCA2,O="SECOM Trust Systems CO.,LTD.",C=JP
     "1.2.392.200091.100.721.1",
     "SECOM EV OID",
@@ -1132,11 +1004,11 @@ static const struct nsMyTrustedEVInfo myTrustedEVInfos[] = {
   },
 };
 
-static SECOidTag sEVInfoOIDTags[mozilla::ArrayLength(myTrustedEVInfos)];
+static SECOidTag sEVInfoOIDTags[ArrayLength(kEVInfos)];
 
 static_assert(SEC_OID_UNKNOWN == 0,
   "We depend on zero-initialized globals being interpreted as SEC_OID_UNKNOWN.");
-static_assert(mozilla::ArrayLength(sEVInfoOIDTags) == mozilla::ArrayLength(myTrustedEVInfos),
+static_assert(ArrayLength(sEVInfoOIDTags) == ArrayLength(kEVInfos),
   "These arrays are used in parallel and must have the same length.");
 
 static SECOidTag
@@ -1170,8 +1042,6 @@ isEVPolicy(SECOidTag policyOIDTag)
   return false;
 }
 
-namespace mozilla { namespace psm {
-
 bool
 CertIsAuthoritativeForEVPolicy(const UniqueCERTCertificate& cert,
                                const mozilla::pkix::CertPolicyId& policy)
@@ -1190,13 +1060,13 @@ CertIsAuthoritativeForEVPolicy(const UniqueCERTCertificate& cert,
   }
 
   const SECOidData* cabforumOIDData = SECOID_FindOIDByTag(sCABForumEVOIDTag);
-  for (size_t iEV = 0; iEV < mozilla::ArrayLength(myTrustedEVInfos); ++iEV) {
-    const nsMyTrustedEVInfo& entry = myTrustedEVInfos[iEV];
+  for (size_t i = 0; i < ArrayLength(kEVInfos); ++i) {
+    const EVInfo& entry = kEVInfos[i];
 
     // This check ensures that only the specific roots we approve for EV get
     // that status, and not certs (roots or otherwise) that happen to have an
     // OID that's already been approved for EV.
-    if (!PodEqual(fingerprint, entry.ev_root_sha256_fingerprint)) {
+    if (!PodEqual(fingerprint, entry.sha256Fingerprint)) {
       continue;
     }
 
@@ -1204,7 +1074,7 @@ CertIsAuthoritativeForEVPolicy(const UniqueCERTCertificate& cert,
         PodEqual(cabforumOIDData->oid.data, policy.bytes, policy.numBytes)) {
       return true;
     }
-    const SECOidData* oidData = SECOID_FindOIDByTag(sEVInfoOIDTags[iEV]);
+    const SECOidData* oidData = SECOID_FindOIDByTag(sEVInfoOIDTags[i]);
     if (oidData && oidData->oid.len == policy.numBytes &&
         PodEqual(oidData->oid.data, policy.bytes, policy.numBytes)) {
       return true;
@@ -1215,12 +1085,12 @@ CertIsAuthoritativeForEVPolicy(const UniqueCERTCertificate& cert,
 }
 
 nsresult
-LoadExtendedValidationInfo()
+LoadExtendedValidationInfo(const nsNSSShutDownPreventionLock& /*proofOfLock*/)
 {
   static const char* sCABForumOIDString = "2.23.140.1.1";
   static const char* sCABForumOIDDescription = "CA/Browser Forum EV OID";
 
-  mozilla::ScopedAutoSECItem cabforumOIDItem;
+  ScopedAutoSECItem cabforumOIDItem;
   if (SEC_StringToOID(nullptr, &cabforumOIDItem, sCABForumOIDString, 0)
         != SECSuccess) {
     return NS_ERROR_FAILURE;
@@ -1230,8 +1100,8 @@ LoadExtendedValidationInfo()
     return NS_ERROR_FAILURE;
   }
 
-  for (size_t iEV = 0; iEV < mozilla::ArrayLength(myTrustedEVInfos); ++iEV) {
-    const nsMyTrustedEVInfo& entry = myTrustedEVInfos[iEV];
+  for (size_t i = 0; i < ArrayLength(kEVInfos); ++i) {
+    const EVInfo& entry = kEVInfos[i];
 
     SECStatus srv;
 #ifdef DEBUG
@@ -1241,7 +1111,7 @@ LoadExtendedValidationInfo()
     // unnecessary to check this in non-debug builds since we will safely fall
     // back to DV if the EV information is incorrect.
     nsAutoCString derIssuer;
-    nsresult rv = Base64Decode(nsDependentCString(entry.issuer_base64),
+    nsresult rv = Base64Decode(nsDependentCString(entry.issuerBase64),
                                derIssuer);
     MOZ_ASSERT(NS_SUCCEEDED(rv), "Could not base64-decode built-in EV issuer");
     if (NS_FAILED(rv)) {
@@ -1249,7 +1119,7 @@ LoadExtendedValidationInfo()
     }
 
     nsAutoCString serialNumber;
-    rv = Base64Decode(nsDependentCString(entry.serial_base64), serialNumber);
+    rv = Base64Decode(nsDependentCString(entry.serialBase64), serialNumber);
     MOZ_ASSERT(NS_SUCCEEDED(rv), "Could not base64-decode built-in EV serial");
     if (NS_FAILED(rv)) {
       return rv;
@@ -1273,7 +1143,7 @@ LoadExtendedValidationInfo()
       // The entries for the debug EV roots are at indices 0 through
       // NUM_TEST_EV_ROOTS - 1. Since they're not built-in, they probably
       // haven't been loaded yet.
-      MOZ_ASSERT(iEV < NUM_TEST_EV_ROOTS, "Could not find built-in EV root");
+      MOZ_ASSERT(i < NUM_TEST_EV_ROOTS, "Could not find built-in EV root");
     } else {
       unsigned char certFingerprint[SHA256_LENGTH];
       srv = PK11_HashBuf(SEC_OID_SHA256, certFingerprint, cert->derCert.data,
@@ -1282,7 +1152,7 @@ LoadExtendedValidationInfo()
       if (srv != SECSuccess) {
         return NS_ERROR_FAILURE;
       }
-      bool same = PodEqual(certFingerprint, entry.ev_root_sha256_fingerprint);
+      bool same = PodEqual(certFingerprint, entry.sha256Fingerprint);
       MOZ_ASSERT(same, "EV root fingerprint mismatch");
       if (!same) {
         return NS_ERROR_FAILURE;
@@ -1290,14 +1160,14 @@ LoadExtendedValidationInfo()
     }
 #endif
     // This is the code that actually enables these roots for EV.
-    mozilla::ScopedAutoSECItem evOIDItem;
-    srv = SEC_StringToOID(nullptr, &evOIDItem, entry.dotted_oid, 0);
+    ScopedAutoSECItem evOIDItem;
+    srv = SEC_StringToOID(nullptr, &evOIDItem, entry.dottedOid, 0);
     MOZ_ASSERT(srv == SECSuccess, "SEC_StringToOID failed");
     if (srv != SECSuccess) {
       return NS_ERROR_FAILURE;
     }
-    sEVInfoOIDTags[iEV] = RegisterOID(evOIDItem, entry.oid_name);
-    if (sEVInfoOIDTags[iEV] == SEC_OID_UNKNOWN) {
+    sEVInfoOIDTags[i] = RegisterOID(evOIDItem, entry.oidName);
+    if (sEVInfoOIDTags[i] == SEC_OID_UNKNOWN) {
       return NS_ERROR_FAILURE;
     }
   }

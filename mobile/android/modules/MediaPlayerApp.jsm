@@ -59,7 +59,7 @@ MediaPlayerApp.prototype = {
     }
   },
 
-}
+};
 
 /* RemoteMedia provides a proxy to a native media player session.
  */
@@ -68,9 +68,9 @@ function RemoteMedia(id, listener) {
   this._listener = listener;
 
   if ("onRemoteMediaStart" in this._listener) {
-    Services.tm.dispatchToMainThread((function() {
+    Services.tm.dispatchToMainThread(() => {
       this._listener.onRemoteMediaStart(this);
-    }).bind(this));
+    });
   }
 }
 
@@ -126,14 +126,14 @@ RemoteMedia.prototype = {
         "MediaPlayer:Paused",
       ]);
       this._status = "started";
-    })
+    });
   },
 
   get status() {
     return this._status;
   },
 
-  onEvent: function (event, message, callback) {
+  onEvent: function(event, message, callback) {
     switch (event) {
       case "MediaPlayer:Playing":
         if (this._status !== "started") {
@@ -158,4 +158,4 @@ RemoteMedia.prototype = {
     data.id = this._id;
     send(msg, data, callback);
   }
-}
+};

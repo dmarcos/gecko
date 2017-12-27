@@ -2,6 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 import os
 from setuptools import setup
 
@@ -11,25 +13,27 @@ try:
 except IOError:
     description = None
 
-PACKAGE_VERSION = '1.12'
+PACKAGE_VERSION = '1.14'
 
 deps = ['mozinfo >= 0.7',
         'mozfile >= 1.0',
+        'requests',
+        'six >= 1.10.0',
         ]
 
 setup(name='mozInstall',
       version=PACKAGE_VERSION,
       description="package for installing and uninstalling Mozilla applications",
-      long_description="see http://mozbase.readthedocs.org/",
+      long_description="see https://firefox-source-docs.mozilla.org/mozbase/index.html",
       # Get strings from http://pypi.python.org/pypi?%3Aaction=list_classifiers
       classifiers=['Environment :: Console',
                    'Intended Audience :: Developers',
                    'License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)',
                    'Natural Language :: English',
                    'Operating System :: OS Independent',
-                   'Programming Language :: Python',
                    'Topic :: Software Development :: Libraries :: Python Modules',
-                   ],
+                   'Programming Language :: Python :: 2.7',
+                   'Programming Language :: Python :: 2 :: Only'],
       keywords='mozilla',
       author='Mozilla Automation and Tools team',
       author_email='tools@lists.mozilla.org',

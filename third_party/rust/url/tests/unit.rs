@@ -8,12 +8,14 @@
 
 //! Unit tests
 
+#[macro_use]
 extern crate url;
 
+use std::ascii::AsciiExt;
 use std::borrow::Cow;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
-use url::{Host, Url, form_urlencoded};
+use url::{Host, HostAndPort, Url, form_urlencoded};
 
 #[test]
 fn size() {
@@ -163,12 +165,12 @@ fn test_equality() {
     // Different scheme
     let a: Url = url("http://example.com/");
     let b: Url = url("https://example.com/");
-    assert!(a != b);
+    assert_ne!(a, b);
 
     // Different host
     let a: Url = url("http://foo.com/");
     let b: Url = url("http://bar.com/");
-    assert!(a != b);
+    assert_ne!(a, b);
 
     // Missing path, automatically substituted. Semantically the same.
     let a: Url = url("http://foo.com");
@@ -252,6 +254,45 @@ fn test_form_serialize() {
         .append_pair("foo", "#")
         .finish();
     assert_eq!(encoded, "foo=%C3%A9%26&bar=&foo=%23");
+}
+
+#[test]
+fn form_urlencoded_custom_encoding_override() {
+    let encoded = form_urlencoded::Serializer::new(String::new())
+        .custom_encoding_override(|s| s.as_bytes().to_ascii_uppercase().into())
+        .append_pair("foo", "bar")
+        .finish();
+    assert_eq!(encoded, "FOO=BAR");
+}
+
+#[test]
+fn host_and_port_display() {
+    assert_eq!(
+        format!(
+            "{}",
+            HostAndPort{ host: Host::Domain("www.mozilla.org"), port: 80}
+        ),
+        "www.mozilla.org:80"
+    );
+    assert_eq!(
+        format!(
+            "{}",
+            HostAndPort::<String>{ host: Host::Ipv4(Ipv4Addr::new(1, 35, 33, 49)), port: 65535 }
+        ),
+        "1.35.33.49:65535"
+    );
+    assert_eq!(
+        format!(
+            "{}",
+            HostAndPort::<String>{
+                host: Host::Ipv6(Ipv6Addr::new(
+                    0x2001, 0x0db8, 0x85a3, 0x08d3, 0x1319, 0x8a2e, 0x0370, 0x7344
+                )),
+                port: 1337
+            })
+        ,
+        "[2001:db8:85a3:8d3:1319:8a2e:370:7344]:1337"
+    )
 }
 
 #[test]
@@ -341,4 +382,109 @@ fn test_set_host() {
     let mut url = Url::parse("foobar://example.net/hello").unwrap();
     url.set_host(None).unwrap();
     assert_eq!(url.as_str(), "foobar:/hello");
+}
+
+#[test]
+// https://github.com/servo/rust-url/issues/166
+fn test_leading_dots() {
+    assert_eq!(Host::parse(".org").unwrap(), Host::Domain(".org".to_owned()));
+    assert_eq!(Url::parse("file://./foo").unwrap().domain(), Some("."));
+}
+
+// This is testing that the macro produces buildable code when invoked
+// inside both a module and a function
+#[test]
+fn define_encode_set_scopes() {
+    use url::percent_encoding::{utf8_percent_encode, SIMPLE_ENCODE_SET};
+
+    define_encode_set! {
+        /// This encode set is used in the URL parser for query strings.
+        pub QUERY_ENCODE_SET = [SIMPLE_ENCODE_SET] | {' ', '"', '#', '<', '>'}
+    }
+
+    assert_eq!(utf8_percent_encode("foo bar", QUERY_ENCODE_SET).collect::<String>(), "foo%20bar");
+
+    mod m {
+        use url::percent_encoding::{utf8_percent_encode, SIMPLE_ENCODE_SET};
+
+        define_encode_set! {
+            /// This encode set is used in the URL parser for query strings.
+            pub QUERY_ENCODE_SET = [SIMPLE_ENCODE_SET] | {' ', '"', '#', '<', '>'}
+        }
+
+        pub fn test() {
+            assert_eq!(utf8_percent_encode("foo bar", QUERY_ENCODE_SET).collect::<String>(), "foo%20bar");
+        }
+    }
+
+    m::test();
+}
+
+#[test]
+/// https://github.com/servo/rust-url/issues/302
+fn test_origin_hash() {
+    use std::hash::{Hash,Hasher};
+    use std::collections::hash_map::DefaultHasher;
+
+    fn hash<T: Hash>(value: &T) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        value.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    let origin = &Url::parse("http://example.net/").unwrap().origin();
+
+    let origins_to_compare = [
+        Url::parse("http://example.net:80/").unwrap().origin(),
+        Url::parse("http://example.net:81/").unwrap().origin(),
+        Url::parse("http://example.net").unwrap().origin(),
+        Url::parse("http://example.net/hello").unwrap().origin(),
+        Url::parse("https://example.net").unwrap().origin(),
+        Url::parse("ftp://example.net").unwrap().origin(),
+        Url::parse("file://example.net").unwrap().origin(),
+        Url::parse("http://user@example.net/").unwrap().origin(),
+        Url::parse("http://user:pass@example.net/").unwrap().origin(),
+    ];
+
+    for origin_to_compare in &origins_to_compare {
+        if origin == origin_to_compare {
+            assert_eq!(hash(origin), hash(origin_to_compare));
+        } else {
+            assert_ne!(hash(origin), hash(origin_to_compare));
+        }
+    }
+
+    let opaque_origin = Url::parse("file://example.net").unwrap().origin();
+    let same_opaque_origin = Url::parse("file://example.net").unwrap().origin();
+    let other_opaque_origin = Url::parse("file://other").unwrap().origin();
+
+    assert_ne!(hash(&opaque_origin), hash(&same_opaque_origin));
+    assert_ne!(hash(&opaque_origin), hash(&other_opaque_origin));
+}
+
+#[test]
+fn test_windows_unc_path() {
+    if !cfg!(windows) {
+        return
+    }
+
+    let url = Url::from_file_path(Path::new(r"\\host\share\path\file.txt")).unwrap();
+    assert_eq!(url.as_str(), "file://host/share/path/file.txt");
+
+    let url = Url::from_file_path(Path::new(r"\\höst\share\path\file.txt")).unwrap();
+    assert_eq!(url.as_str(), "file://xn--hst-sna/share/path/file.txt");
+
+    let url = Url::from_file_path(Path::new(r"\\192.168.0.1\share\path\file.txt")).unwrap();
+    assert_eq!(url.host(), Some(Host::Ipv4(Ipv4Addr::new(192, 168, 0, 1))));
+
+    let path = url.to_file_path().unwrap();
+    assert_eq!(path.to_str(), Some(r"\\192.168.0.1\share\path\file.txt"));
+
+    // Another way to write these:
+    let url = Url::from_file_path(Path::new(r"\\?\UNC\host\share\path\file.txt")).unwrap();
+    assert_eq!(url.as_str(), "file://host/share/path/file.txt");
+
+    // Paths starting with "\\.\" (Local Device Paths) are intentionally not supported.
+    let url = Url::from_file_path(Path::new(r"\\.\some\path\file.txt"));
+    assert!(url.is_err());
 }

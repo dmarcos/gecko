@@ -13,9 +13,10 @@
 #include "nsTableColGroupFrame.h"
 #include "mozilla/WritingModes.h"
 
-class nsTableColFrame : public nsSplittableFrame {
+class nsTableColFrame final : public nsSplittableFrame
+{
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsTableColFrame)
 
   enum {eWIDTH_SOURCE_NONE          =0,   // no cell has contributed to the width style
         eWIDTH_SOURCE_CELL          =1,   // a cell specified a width
@@ -52,19 +53,8 @@ public:
                       const ReflowInput& aReflowInput,
                       nsReflowStatus&          aStatus) override;
 
-  /**
-   * Table columns never paint anything, nor receive events.
-   */
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
-                                const nsDisplayListSet& aLists) override {}
-
-  /**
-   * Get the "type" of the frame
-   *
-   * @see nsGkAtoms::tableColFrame
-   */
-  virtual nsIAtom* GetType() const override;
+                                const nsDisplayListSet& aLists) override;
 
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override;
@@ -75,7 +65,7 @@ public:
   nsTableColGroupFrame* GetTableColGroupFrame() const
   {
     nsIFrame* parent = GetParent();
-    MOZ_ASSERT(parent && parent->GetType() == nsGkAtoms::tableColGroupFrame);
+    MOZ_ASSERT(parent && parent->IsTableColGroupFrame());
     return static_cast<nsTableColGroupFrame*>(parent);
   }
 
@@ -337,14 +327,14 @@ inline nscoord
 nsTableColFrame::GetContinuousBCBorderWidth(mozilla::WritingMode aWM,
                                             mozilla::LogicalMargin& aBorder)
 {
-  int32_t aPixelsToTwips = nsPresContext::AppUnitsPerCSSPixel();
-  aBorder.BStart(aWM) = BC_BORDER_END_HALF_COORD(aPixelsToTwips,
+  int32_t d2a = PresContext()->AppUnitsPerDevPixel();
+  aBorder.BStart(aWM) = BC_BORDER_END_HALF_COORD(d2a,
                                                  mBStartContBorderWidth);
-  aBorder.IEnd(aWM) = BC_BORDER_START_HALF_COORD(aPixelsToTwips,
+  aBorder.IEnd(aWM) = BC_BORDER_START_HALF_COORD(d2a,
                                                  mIEndContBorderWidth);
-  aBorder.BEnd(aWM) = BC_BORDER_START_HALF_COORD(aPixelsToTwips,
+  aBorder.BEnd(aWM) = BC_BORDER_START_HALF_COORD(d2a,
                                                  mBEndContBorderWidth);
-  return BC_BORDER_END_HALF_COORD(aPixelsToTwips, mIEndContBorderWidth);
+  return BC_BORDER_END_HALF_COORD(d2a, mIEndContBorderWidth);
 }
 
 #endif

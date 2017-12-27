@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -35,12 +36,6 @@ nsPopupSetFrame::Init(nsIContent*       aContent,
   if (rootBox) {
     rootBox->SetPopupSetFrame(this);
   }
-}
-
-nsIAtom*
-nsPopupSetFrame::GetType() const
-{
-  return nsGkAtoms::popupSetFrame;
 }
 
 void
@@ -107,9 +102,9 @@ nsPopupSetFrame::GetChildLists(nsTArray<ChildList>* aLists) const
 }
 
 void
-nsPopupSetFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsPopupSetFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
-  mPopupList.DestroyFramesFrom(aDestructRoot);
+  mPopupList.DestroyFramesFrom(aDestructRoot, aPostDestroyData);
 
   // Normally the root box is our grandparent, but in case of wrapping
   // it can be our great-grandparent.
@@ -118,7 +113,7 @@ nsPopupSetFrame::DestroyFrom(nsIFrame* aDestructRoot)
     rootBox->SetPopupSetFrame(nullptr);
   }
 
-  nsBoxFrame::DestroyFrom(aDestructRoot);
+  nsBoxFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 NS_IMETHODIMP
@@ -140,7 +135,7 @@ void
 nsPopupSetFrame::RemovePopupFrame(nsIFrame* aPopup)
 {
   NS_PRECONDITION((aPopup->GetStateBits() & NS_FRAME_OUT_OF_FLOW) &&
-                  aPopup->GetType() == nsGkAtoms::menuPopupFrame,
+                  aPopup->IsMenuPopupFrame(),
                   "removing wrong type of frame in popupset's ::popupList");
 
   mPopupList.DestroyFrame(aPopup);
@@ -152,7 +147,7 @@ nsPopupSetFrame::AddPopupFrameList(nsFrameList& aPopupFrameList)
 #ifdef DEBUG
   for (nsFrameList::Enumerator e(aPopupFrameList); !e.AtEnd(); e.Next()) {
     NS_ASSERTION((e.get()->GetStateBits() & NS_FRAME_OUT_OF_FLOW) &&
-                 e.get()->GetType() == nsGkAtoms::menuPopupFrame,
+                 e.get()->IsMenuPopupFrame(),
                  "adding wrong type of frame in popupset's ::popupList");
   }
 #endif

@@ -10,56 +10,64 @@
                                     background-attachment background-image background-size background-origin
                                     background-clip"
                     spec="https://drafts.csswg.org/css-backgrounds/#the-background">
-    use properties::longhands::{background_color, background_position_x, background_position_y, background_repeat};
+    use properties::longhands::{background_position_x, background_position_y, background_repeat};
     use properties::longhands::{background_attachment, background_image, background_size, background_origin};
     use properties::longhands::background_clip;
     use properties::longhands::background_clip::single_value::computed_value::T as Clip;
     use properties::longhands::background_origin::single_value::computed_value::T as Origin;
-    use values::specified::position::Position;
+    use values::specified::{Color, Position, PositionComponent};
     use parser::Parse;
 
+    // FIXME(emilio): Should be the same type!
     impl From<background_origin::single_value::SpecifiedValue> for background_clip::single_value::SpecifiedValue {
         fn from(origin: background_origin::single_value::SpecifiedValue) ->
             background_clip::single_value::SpecifiedValue {
             match origin {
-                background_origin::single_value::SpecifiedValue::content_box =>
-                    background_clip::single_value::SpecifiedValue::content_box,
-                background_origin::single_value::SpecifiedValue::padding_box =>
-                    background_clip::single_value::SpecifiedValue::padding_box,
-                background_origin::single_value::SpecifiedValue::border_box =>
-                    background_clip::single_value::SpecifiedValue::border_box,
+                background_origin::single_value::SpecifiedValue::ContentBox =>
+                    background_clip::single_value::SpecifiedValue::ContentBox,
+                background_origin::single_value::SpecifiedValue::PaddingBox =>
+                    background_clip::single_value::SpecifiedValue::PaddingBox,
+                background_origin::single_value::SpecifiedValue::BorderBox =>
+                    background_clip::single_value::SpecifiedValue::BorderBox,
             }
         }
     }
 
-    pub fn parse_value(context: &ParserContext, input: &mut Parser) -> Result<Longhands, ()> {
+    pub fn parse_value<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
+                               -> Result<Longhands, ParseError<'i>> {
         let mut background_color = None;
 
         % for name in "image position_x position_y repeat size attachment origin clip".split():
-            let mut background_${name} = background_${name}::SpecifiedValue(Vec::new());
+            // Vec grows from 0 to 4 by default on first push().  So allocate
+            // with capacity 1, so in the common case of only one item we don't
+            // way overallocate.  Note that we always push at least one item if
+            // parsing succeeds.
+            let mut background_${name} = background_${name}::SpecifiedValue(Vec::with_capacity(1));
         % endfor
-        try!(input.parse_comma_separated(|input| {
-            % for name in "image position_x position_y repeat size attachment origin clip".split():
+        input.parse_comma_separated(|input| {
+            // background-color can only be in the last element, so if it
+            // is parsed anywhere before, the value is invalid.
+            if background_color.is_some() {
+                return Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError));
+            }
+
+            % for name in "image position repeat size attachment origin clip".split():
                 let mut ${name} = None;
             % endfor
             loop {
-                if let Ok(value) = input.try(|input| background_color::parse(context, input)) {
-                    if background_color.is_none() {
+                if background_color.is_none() {
+                    if let Ok(value) = input.try(|i| Color::parse(context, i)) {
                         background_color = Some(value);
                         continue
-                    } else {
-                        // color can only be the last element
-                        return Err(())
                     }
                 }
-                if position_x.is_none() && position_y.is_none() {
+                if position.is_none() {
                     if let Ok(value) = input.try(|input| Position::parse(context, input)) {
-                        position_x = Some(value.horizontal);
-                        position_y = Some(value.vertical);
+                        position = Some(value);
 
                         // Parse background size, if applicable.
                         size = input.try(|input| {
-                            try!(input.expect_delim('/'));
+                            input.expect_delim('/')?;
                             background_size::single_value::parse(context, input)
                         }).ok();
 
@@ -83,22 +91,17 @@
                 }
             }
             let mut any = false;
-            % for name in "image position_x position_y repeat size attachment origin clip".split():
+            % for name in "image position repeat size attachment origin clip".split():
                 any = any || ${name}.is_some();
             % endfor
             any = any || background_color.is_some();
             if any {
-                if position_x.is_some() || position_y.is_some() {
-                    % for name in "position_x position_y".split():
-                        if let Some(bg_${name}) = ${name} {
-                            background_${name}.0.push(bg_${name});
-                        }
-                    % endfor
+                if let Some(position) = position {
+                    background_position_x.0.push(position.horizontal);
+                    background_position_y.0.push(position.vertical);
                 } else {
-                    % for name in "position_x position_y".split():
-                        background_${name}.0.push(background_${name}::single_value
-                                                                    ::get_initial_position_value());
-                    % endfor
+                    background_position_x.0.push(PositionComponent::zero());
+                    background_position_y.0.push(PositionComponent::zero());
                 }
                 % for name in "image repeat size attachment origin clip".split():
                     if let Some(bg_${name}) = ${name} {
@@ -110,12 +113,12 @@
                 % endfor
                 Ok(())
             } else {
-                Err(())
+                Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
             }
-        }));
+        })?;
 
-        Ok(Longhands {
-             background_color: unwrap_or_initial!(background_color),
+        Ok(expanded! {
+             background_color: background_color.unwrap_or(Color::transparent()),
              background_image: background_image,
              background_position_x: background_position_x,
              background_position_y: background_position_y,
@@ -150,37 +153,37 @@
                 % endfor
 
                 if i != 0 {
-                    try!(write!(dest, ", "));
+                    dest.write_str(", ")?;
                 }
 
                 if i == len - 1 {
-                    try!(self.background_color.to_css(dest));
-                    try!(write!(dest, " "));
+                    self.background_color.to_css(dest)?;
+                    dest.write_str(" ")?;
                 }
 
-                try!(image.to_css(dest));
+                image.to_css(dest)?;
                 % for name in "repeat attachment".split():
-                    try!(write!(dest, " "));
-                    try!(${name}.to_css(dest));
+                    dest.write_str(" ")?;
+                    ${name}.to_css(dest)?;
                 % endfor
 
-                try!(write!(dest, " "));
+                dest.write_str(" ")?;
                 Position {
                     horizontal: position_x.clone(),
                     vertical: position_y.clone()
                 }.to_css(dest)?;
 
                 if *size != background_size::single_value::get_initial_specified_value() {
-                    try!(write!(dest, " / "));
-                    try!(size.to_css(dest));
+                    dest.write_str(" / ")?;
+                    size.to_css(dest)?;
                 }
 
-                if *origin != Origin::padding_box || *clip != Clip::border_box {
-                    try!(write!(dest, " "));
-                    try!(origin.to_css(dest));
+                if *origin != Origin::PaddingBox || *clip != Clip::BorderBox {
+                    dest.write_str(" ")?;
+                    origin.to_css(dest)?;
                     if *clip != From::from(*origin) {
-                        try!(write!(dest, " "));
-                        try!(clip.to_css(dest));
+                        dest.write_str(" ")?;
+                        clip.to_css(dest)?;
                     }
                 }
             }
@@ -193,32 +196,32 @@
 <%helpers:shorthand name="background-position"
                     sub_properties="background-position-x background-position-y"
                     spec="https://drafts.csswg.org/css-backgrounds-4/#the-background-position">
-    use properties::longhands::{background_position_x,background_position_y};
+    use properties::longhands::{background_position_x, background_position_y};
+    use values::specified::AllowQuirks;
     use values::specified::position::Position;
-    use parser::Parse;
 
-    pub fn parse_value(context: &ParserContext, input: &mut Parser) -> Result<Longhands, ()> {
-        let mut position_x = background_position_x::SpecifiedValue(Vec::new());
-        let mut position_y = background_position_y::SpecifiedValue(Vec::new());
+    pub fn parse_value<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
+                               -> Result<Longhands, ParseError<'i>> {
+        // Vec grows from 0 to 4 by default on first push().  So allocate with
+        // capacity 1, so in the common case of only one item we don't way
+        // overallocate.  Note that we always push at least one item if parsing
+        // succeeds.
+        let mut position_x = background_position_x::SpecifiedValue(Vec::with_capacity(1));
+        let mut position_y = background_position_y::SpecifiedValue(Vec::with_capacity(1));
         let mut any = false;
 
-        try!(input.parse_comma_separated(|input| {
-            loop {
-                if let Ok(value) = input.try(|input| Position::parse(context, input)) {
-                    position_x.0.push(value.horizontal);
-                    position_y.0.push(value.vertical);
-                    any = true;
-                    continue
-                }
-                break
-            }
+        input.parse_comma_separated(|input| {
+            let value = Position::parse_quirky(context, input, AllowQuirks::Yes)?;
+            position_x.0.push(value.horizontal);
+            position_y.0.push(value.vertical);
+            any = true;
             Ok(())
-        }));
-        if any == false {
-            return Err(());
+        })?;
+        if !any {
+            return Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError));
         }
 
-        Ok(Longhands {
+        Ok(expanded! {
             background_position_x: position_x,
             background_position_y: position_y,
         })

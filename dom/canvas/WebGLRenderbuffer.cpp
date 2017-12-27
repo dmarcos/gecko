@@ -62,8 +62,6 @@ WebGLRenderbuffer::WebGLRenderbuffer(WebGLContext* webgl)
 void
 WebGLRenderbuffer::Delete()
 {
-    mContext->MakeContextCurrent();
-
     mContext->gl->fDeleteRenderbuffers(1, &mPrimaryRB);
     if (mSecondaryRB)
         mContext->gl->fDeleteRenderbuffers(1, &mSecondaryRB);
@@ -188,16 +186,14 @@ WebGLRenderbuffer::RenderbufferStorage(const char* funcName, uint32_t samples,
         return;
     }
 
-    if (width > mContext->mImplMaxRenderbufferSize ||
-        height > mContext->mImplMaxRenderbufferSize)
+    if (width > mContext->mGLMaxRenderbufferSize ||
+        height > mContext->mGLMaxRenderbufferSize)
     {
         mContext->ErrorInvalidValue("%s: Width or height exceeds maximum renderbuffer"
                                     " size.",
                                     funcName);
         return;
     }
-
-    mContext->MakeContextCurrent();
 
     if (!usage->maxSamplesKnown) {
         const_cast<webgl::FormatUsageInfo*>(usage)->ResolveMaxSamples(mContext->gl);
@@ -217,6 +213,8 @@ WebGLRenderbuffer::RenderbufferStorage(const char* funcName, uint32_t samples,
         mContext->GenerateWarning("%s generated error %s", funcName, errorName);
         return;
     }
+
+    mContext->OnDataAllocCall();
 
     mSamples = samples;
     mFormat = usage;

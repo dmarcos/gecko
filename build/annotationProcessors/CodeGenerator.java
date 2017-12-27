@@ -27,6 +27,7 @@ public class CodeGenerator {
 
     private final Class<?> cls;
     private final String clsName;
+    private final ClassWithOptions options;
     private AnnotationInfo.CallingThread callingThread = null;
     private int numNativesInits;
 
@@ -35,9 +36,11 @@ public class CodeGenerator {
     public CodeGenerator(ClassWithOptions annotatedClass) {
         this.cls = annotatedClass.wrappedClass;
         this.clsName = annotatedClass.generatedName;
+        this.options = annotatedClass;
 
         final String unqualifiedName = Utils.getUnqualifiedName(clsName);
         header.append(
+                Utils.getIfdefHeader(annotatedClass.ifdef) +
                 "class " + clsName + " : public mozilla::jni::ObjectBase<" +
                         unqualifiedName + ">\n" +
                 "{\n" +
@@ -49,11 +52,13 @@ public class CodeGenerator {
                 "\n");
 
         cpp.append(
+                Utils.getIfdefHeader(annotatedClass.ifdef) +
                 "const char " + clsName + "::name[] =\n" +
                 "        \"" + cls.getName().replace('.', '/') + "\";\n" +
                 "\n");
 
         natives.append(
+                Utils.getIfdefHeader(annotatedClass.ifdef) +
                 "template<class Impl>\n" +
                 "class " + clsName + "::Natives : " +
                         "public mozilla::jni::NativeImpl<" + unqualifiedName + ", Impl>\n" +
@@ -103,6 +108,13 @@ public class CodeGenerator {
 
     private void generateMember(AnnotationInfo info, Member member,
                                 String uniqueName, Class<?> type, Class<?>[] argTypes) {
+        // Sanity check.
+        if (info.noLiteral && !(member instanceof Field &&
+                                Utils.isStatic(member) && Utils.isFinal(member))) {
+            throw new IllegalStateException(clsName + "::" + uniqueName +
+                                            " is not a static final field");
+        }
+
         final StringBuilder args = new StringBuilder();
         for (Class<?> argType : argTypes) {
             args.append("\n                " + getNativeParameterType(argType, info) + ",");
@@ -410,9 +422,9 @@ public class CodeGenerator {
         final String uniqueName = info.wrapperName;
         final Class<?> type = field.getType();
 
-        // Handles a peculiar case when dealing with enum types. We don't care about this field.
-        // It just gets in the way and stops our code from compiling.
-        if (field.isSynthetic() || field.getName().equals("$VALUES")) {
+        // Handle various cases where we don't care about the field.
+        if (field.isSynthetic() || field.getName().equals("$VALUES") ||
+                field.getName().equals("CREATOR")) {
             return;
         }
 
@@ -426,7 +438,8 @@ public class CodeGenerator {
         final boolean isStatic = Utils.isStatic(field);
         final boolean isFinal = Utils.isFinal(field);
 
-        if (isStatic && isFinal && (type.isPrimitive() || type.equals(String.class))) {
+        if (!info.noLiteral && isStatic && isFinal &&
+                (type.isPrimitive() || type.equals(String.class))) {
             Object val = null;
             try {
                 field.setAccessible(true);
@@ -529,35 +542,6 @@ public class CodeGenerator {
                 "\n");
     }
 
-    public void generateMembers(Member[] members) {
-        for (Member m : members) {
-            if (!Modifier.isPublic(m.getModifiers())) {
-                continue;
-            }
-
-            String name = Utils.getMemberName(m);
-            name = name.substring(0, 1).toUpperCase() + name.substring(1);
-
-            // Default for SDK bindings.
-            final AnnotationInfo info = new AnnotationInfo(name,
-                    AnnotationInfo.ExceptionMode.NSRESULT,
-                    AnnotationInfo.CallingThread.ANY,
-                    AnnotationInfo.DispatchTarget.CURRENT);
-            final AnnotatableEntity entity = new AnnotatableEntity(m, info);
-
-            if (m instanceof Constructor) {
-                generateConstructor(entity);
-            } else if (m instanceof Method) {
-                generateMethod(entity);
-            } else if (m instanceof Field) {
-                generateField(entity);
-            } else {
-                throw new IllegalArgumentException(
-                        "expected member to be Constructor, Method, or Field");
-            }
-        }
-    }
-
     public void generateClasses(final ClassWithOptions[] classes) {
         if (classes.length == 0) {
             return;
@@ -577,6 +561,8 @@ public class CodeGenerator {
      * @return The bytes to be written to the wrappers file.
      */
     public String getWrapperFileContents() {
+        cpp.append(
+                Utils.getIfdefFooter(options.ifdef));
         return cpp.toString();
     }
 
@@ -601,7 +587,8 @@ public class CodeGenerator {
         }
         header.append(
                 "};\n" +
-                "\n");
+                "\n" +
+                Utils.getIfdefFooter(options.ifdef));
         return header.toString();
     }
 
@@ -621,7 +608,8 @@ public class CodeGenerator {
                 "template<class Impl>\n" +
                 "const JNINativeMethod " + clsName + "::Natives<Impl>::methods[] = {" + nativesInits + '\n' +
                 "};\n" +
-                "\n");
+                "\n" +
+                Utils.getIfdefFooter(options.ifdef));
         return natives.toString();
     }
 }

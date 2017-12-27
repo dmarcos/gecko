@@ -1,3 +1,5 @@
+from __future__ import absolute_import, print_function
+
 import argparse
 from collections import defaultdict
 import json
@@ -55,6 +57,7 @@ def _filter(results_cmp):
         return rv
     return inner
 
+
 filter_unstable = _filter(lambda x: len(x) > 1)
 filter_stable = _filter(lambda x: len(x) == 1)
 
@@ -73,18 +76,18 @@ def group_results(data):
 def print_results(data):
     for run_info, tests in data.iteritems():
         run_str = " ".join("%s:%s" % (k, v) for k, v in run_info) if run_info else "No Run Info"
-        print run_str
-        print "=" * len(run_str)
+        print(run_str)
+        print("=" * len(run_str))
         print_run(tests)
 
 
 def print_run(tests):
     for test, subtests in sorted(tests.items()):
-        print "\n" + str(test)
-        print "-" * len(test)
+        print("\n" + str(test))
+        print("-" * len(test))
         for name, results in subtests.iteritems():
-            print "[%s]: %s" % (name if name is not None else "",
-                                " ".join("%s (%i)" % (k, v) for k, v in results.iteritems()))
+            print("[%s]: %s" % (name if name is not None else "",
+                                " ".join("%s (%i)" % (k, v) for k, v in results.iteritems())))
 
 
 def get_parser(add_help=True):
@@ -106,12 +109,13 @@ def main(**kwargs):
         unstable = group_results(unstable)
 
     if kwargs["json"]:
-        print json.dumps(unstable)
+        print(json.dumps(unstable))
     else:
         if not kwargs["group"]:
             print_results(unstable)
         else:
             print_run(unstable)
+
 
 if __name__ == "__main__":
     parser = get_parser()

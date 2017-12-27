@@ -4,7 +4,7 @@
 
 import os
 
-from WebIDL import IDLExternalInterface, IDLWrapperType, WebIDLError
+from WebIDL import IDLExternalInterface, IDLSequenceType, IDLWrapperType, WebIDLError
 
 
 class Configuration:
@@ -212,7 +212,7 @@ class Descriptor(DescriptorProvider):
             self.argumentType = "???"
             self.nativeType = ty
         else:
-            self.returnType = "Root<%s>" % typeName
+            self.returnType = "DomRoot<%s>" % typeName
             self.argumentType = "&%s" % typeName
             self.nativeType = "*const %s" % typeName
             if self.interface.isIteratorInterface():
@@ -398,7 +398,11 @@ class Descriptor(DescriptorProvider):
         assert self.interface.hasInterfaceObject()
         if self.interface.getExtendedAttribute("Inline"):
             return False
-        return self.interface.isCallback() or self.interface.isNamespace() or self.hasDescendants()
+        return (self.interface.isCallback() or self.interface.isNamespace() or
+                self.hasDescendants() or self.interface.getExtendedAttribute("HTMLConstructor"))
+
+    def shouldCacheConstructor(self):
+        return self.hasDescendants() or self.interface.getExtendedAttribute("HTMLConstructor")
 
     def isExposedConditionally(self):
         return self.interface.isExposedConditionally()
@@ -453,7 +457,7 @@ def getTypesFromDictionary(dictionary):
     types = []
     curDict = dictionary
     while curDict:
-        types.extend([m.type for m in curDict.members])
+        types.extend([getUnwrappedType(m.type) for m in curDict.members])
         curDict = curDict.parent
     return types
 
@@ -467,6 +471,12 @@ def getTypesFromCallback(callback):
     types = [sig[0]]  # Return type
     types.extend(arg.type for arg in sig[1])  # Arguments
     return types
+
+
+def getUnwrappedType(type):
+    while isinstance(type, IDLSequenceType):
+        type = type.inner
+    return type
 
 
 def iteratorNativeType(descriptor, infer=False):

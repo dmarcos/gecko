@@ -1,13 +1,25 @@
 "use strict";
 
-/* globals docShell */
+/* eslint-env mozilla/frame-script */
 
 var Ci = Components.interfaces;
 
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+Components.utils.import("resource://gre/modules/Services.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "WebNavigationFrames",
                                   "resource://gre/modules/WebNavigationFrames.jsm");
+
+function getDocShellOuterWindowId(docShell) {
+  if (!docShell) {
+    return undefined;
+  }
+
+  return docShell.QueryInterface(Ci.nsIInterfaceRequestor)
+                 .getInterface(Ci.nsIDOMWindow)
+                 .getInterface(Ci.nsIDOMWindowUtils)
+                 .outerWindowID;
+}
 
 function loadListener(event) {
   let document = event.target;
@@ -55,8 +67,9 @@ var CreatedNavigationTargetListener = {
     }
 
     const isSourceTab = docShell === sourceDocShell || isSourceTabDescendant;
+
     const sourceFrameId = WebNavigationFrames.getDocShellFrameId(sourceDocShell);
-    const createdWindowId = WebNavigationFrames.getDocShellFrameId(createdDocShell);
+    const createdOuterWindowId = getDocShellOuterWindowId(sourceDocShell);
 
     let url;
     if (props.hasKey("url")) {
@@ -66,7 +79,7 @@ var CreatedNavigationTargetListener = {
     sendAsyncMessage("Extension:CreatedNavigationTarget", {
       url,
       sourceFrameId,
-      createdWindowId,
+      createdOuterWindowId,
       isSourceTab,
     });
   },

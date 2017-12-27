@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -408,14 +409,14 @@ public:
   static bool IsPredefinedCounterStyle(const nsACString& aStyle);
 
   // Given a property enum, get the string value
-  static const nsAFlatCString& GetStringValue(nsCSSPropertyID aProperty);
-  static const nsAFlatCString& GetStringValue(nsCSSFontDesc aFontDesc);
-  static const nsAFlatCString& GetStringValue(nsCSSCounterDesc aCounterDesc);
+  static const nsCString& GetStringValue(nsCSSPropertyID aProperty);
+  static const nsCString& GetStringValue(nsCSSFontDesc aFontDesc);
+  static const nsCString& GetStringValue(nsCSSCounterDesc aCounterDesc);
 
   // Given a CSS Property and a Property Enum Value
   // Return back a const nsString& representation of the
   // value. Return back nullstr if no value is found
-  static const nsAFlatCString& LookupPropertyValue(nsCSSPropertyID aProperty, int32_t aValue);
+  static const nsCString& LookupPropertyValue(nsCSSPropertyID aProperty, int32_t aValue);
 
   // Get a color name for a predefined color value like buttonhighlight or activeborder
   // Sets the aStr param to the name of the propertyID
@@ -445,12 +446,11 @@ public:
     return ValueToKeywordEnum(static_cast<int16_t>(aValue), aTable);
   }
   // Ditto but as a string, return "" when not found.
-  static const nsAFlatCString& ValueToKeyword(int32_t aValue,
-                                              const KTableEntry aTable[]);
+  static const nsCString& ValueToKeyword(int32_t aValue,
+                                         const KTableEntry aTable[]);
   template<typename T,
            typename = typename std::enable_if<std::is_enum<T>::value>::type>
-  static const nsAFlatCString& ValueToKeyword(T aValue,
-                                              const KTableEntry aTable[])
+  static const nsCString& ValueToKeyword(T aValue, const KTableEntry aTable[])
   {
     static_assert(mozilla::EnumTypeFitsWithin<T, int16_t>::value,
                   "aValue must be an enum that fits within KTableEntry::mValue");
@@ -495,7 +495,6 @@ public:
   }
 
 private:
-  // Lives in nsCSSParser.cpp for the macros it depends on.
   static const uint32_t kParserVariantTable[eCSSProperty_COUNT_no_shorthands];
 
 public:
@@ -633,12 +632,10 @@ public:
   static bool IsEnabled(nsCSSPropertyID aProperty) {
     MOZ_ASSERT(0 <= aProperty && aProperty < eCSSProperty_COUNT_with_aliases,
                "out of range");
-    // We don't have useful pref init phases in the parent process.  But in the
-    // child process, assert that we're not trying to parse stylesheets before
-    // we've gotten all our prefs.
-    MOZ_ASSERT(XRE_IsParentProcess() ||
-               mozilla::Preferences::InitPhase() == END_ALL_PREFS,
-               "Checking style preferences before they have been set");
+    // In the child process, assert that we're not trying to parse stylesheets
+    // before we've gotten all our prefs.
+    MOZ_ASSERT_IF(!XRE_IsParentProcess(),
+                  mozilla::Preferences::AreAllPrefsSetInContentProcess());
     return gPropertyEnabled[aProperty];
   }
 
@@ -696,7 +693,6 @@ public:
   static const KTableEntry kAnimationPlayStateKTable[];
   static const KTableEntry kAnimationTimingFunctionKTable[];
   static const KTableEntry kAppearanceKTable[];
-  static const KTableEntry kMozAppearanceKTable[];
   static const KTableEntry kAzimuthKTable[];
   static const KTableEntry kBackfaceVisibilityKTable[];
   static const KTableEntry kTransformStyleKTable[];
@@ -758,7 +754,7 @@ public:
   static const KTableEntry kControlCharacterVisibilityKTable[];
   static const KTableEntry kCursorKTable[];
   static const KTableEntry kDirectionKTable[];
-  // Not const because we modify its entries when various 
+  // Not const because we modify its entries when various
   // "layout.css.*.enabled" prefs changes:
   static KTableEntry kDisplayKTable[];
   static const KTableEntry kElevationKTable[];
@@ -811,7 +807,6 @@ public:
   static const KTableEntry kIMEModeKTable[];
   static const KTableEntry kLineHeightKTable[];
   static const KTableEntry kListStylePositionKTable[];
-  static const KTableEntry kListStyleKTable[];
   static const KTableEntry kMaskTypeKTable[];
   static const KTableEntry kMathVariantKTable[];
   static const KTableEntry kMathDisplayKTable[];
@@ -839,6 +834,7 @@ public:
   static const KTableEntry kRubyAlignKTable[];
   static const KTableEntry kRubyPositionKTable[];
   static const KTableEntry kScrollBehaviorKTable[];
+  static const KTableEntry kOverscrollBehaviorKTable[];
   static const KTableEntry kScrollSnapTypeKTable[];
   static const KTableEntry kSpeakKTable[];
   static const KTableEntry kSpeakHeaderKTable[];

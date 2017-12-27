@@ -20,7 +20,7 @@ var windowListener = {
       if (domWindow) {
         domWindow.addEventListener("scroll", function(e) {
           let message = {
-            type: 'Robocop:Scroll',
+            type: "Robocop:Scroll",
             y: XPCNativeWrapper.unwrap(e.target).documentElement.scrollTop,
             height: XPCNativeWrapper.unwrap(e.target).documentElement.scrollHeight,
             cheight: XPCNativeWrapper.unwrap(e.target).documentElement.clientHeight,
@@ -31,7 +31,6 @@ var windowListener = {
     }, {once: true});
   },
   onCloseWindow: function(aWindow) { },
-  onWindowTitleChange: function(aWindow, aTitle) { }
 };
 
 function startup(aData, aReason) {
@@ -39,7 +38,7 @@ function startup(aData, aReason) {
 
   // Load into any new windows
   wm.addListener(windowListener);
-  EventDispatcher.instance.registerListener(function (event, data, callback) {
+  EventDispatcher.instance.registerListener(function(event, data, callback) {
       dump("Robocop:Quit received -- requesting quit");
       let appStartup = Cc["@mozilla.org/toolkit/app-startup;1"].getService(Ci.nsIAppStartup);
       appStartup.quit(Ci.nsIAppStartup.eForceQuit);

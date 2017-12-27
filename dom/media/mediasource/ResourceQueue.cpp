@@ -11,7 +11,7 @@
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/Logging.h"
 #include "mozilla/Sprintf.h"
-#include "mozilla/SizePrintfMacros.h"
+#include "mozilla/Unused.h"
 
 extern mozilla::LogModule* GetSourceBufferResourceLog();
 
@@ -38,9 +38,9 @@ ResourceItem::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
 }
 
 class ResourceQueueDeallocator : public nsDequeFunctor {
-  void* operator() (void* aObject) override {
+  void operator()(void* aObject) override
+  {
     delete static_cast<ResourceItem*>(aObject);
-    return nullptr;
   }
 };
 
@@ -102,7 +102,7 @@ uint32_t ResourceQueue::EvictBefore(uint64_t aOffset, ErrorResult& aRv)
   SBR_DEBUG("EvictBefore(%" PRIu64 ")", aOffset);
   uint32_t evicted = 0;
   while (ResourceItem* item = ResourceAt(0)) {
-    SBR_DEBUG("item=%p length=%" PRIuSIZE " offset=%" PRIu64,
+    SBR_DEBUG("item=%p length=%zu offset=%" PRIu64,
               item, item->mData->Length(), mOffset);
     if (item->mData->Length() + mOffset >= aOffset) {
       if (aOffset <= mOffset) {
@@ -135,7 +135,7 @@ ResourceQueue::EvictAll()
   SBR_DEBUG("EvictAll()");
   uint32_t evicted = 0;
   while (ResourceItem* item = ResourceAt(0)) {
-    SBR_DEBUG("item=%p length=%" PRIuSIZE " offset=%" PRIu64,
+    SBR_DEBUG("item=%p length=%zu offset=%" PRIu64,
               item, item->mData->Length(), mOffset);
     mOffset += item->mData->Length();
     evicted += item->mData->Length();
@@ -172,7 +172,7 @@ ResourceQueue::Dump(const char* aPath)
     if (!fp) {
       return;
     }
-    fwrite(item->mData->Elements(), item->mData->Length(), 1, fp);
+    Unused << fwrite(item->mData->Elements(), item->mData->Length(), 1, fp);
     fclose(fp);
   }
 }

@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use immeta::load_from_buf;
-use net_traits::{FetchResponseMsg, NetworkError};
+use net_traits::{FetchMetadata, FetchResponseMsg, NetworkError};
 use net_traits::image::base::{Image, ImageMetadata, PixelFormat, load_from_memory};
 use net_traits::image_cache::{CanRequestImages, ImageCache, ImageResponder};
 use net_traits::image_cache::{ImageOrMetadataAvailable, ImageResponse, ImageState};
@@ -15,9 +15,10 @@ use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::fs::File;
 use std::io::{self, Read};
 use std::mem;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use webrender_traits;
+use webrender_api;
 
 ///
 /// TODO(gw): Remaining work on image cache:
@@ -33,13 +34,13 @@ use webrender_traits;
 // Helper functions.
 // ======================================================================
 
-fn convert_format(format: PixelFormat) -> webrender_traits::ImageFormat {
+fn convert_format(format: PixelFormat) -> webrender_api::ImageFormat {
     match format {
         PixelFormat::K8 | PixelFormat::KA8 => {
             panic!("Not support by webrender yet");
         }
-        PixelFormat::RGB8 => webrender_traits::ImageFormat::RGB8,
-        PixelFormat::RGBA8 => webrender_traits::ImageFormat::RGBA8,
+        PixelFormat::RGB8 => webrender_api::ImageFormat::RGB8,
+        PixelFormat::BGRA8 => webrender_api::ImageFormat::BGRA8,
     }
 }
 
@@ -51,17 +52,24 @@ fn decode_bytes_sync(key: LoadKey, bytes: &[u8]) -> DecoderMsg {
     }
 }
 
-fn get_placeholder_image(webrender_api: &webrender_traits::RenderApi) -> io::Result<Arc<Image>> {
-    let mut placeholder_path = try!(resources_dir_path());
-    placeholder_path.push("rippy.png");
-    let mut file = try!(File::open(&placeholder_path));
+fn get_placeholder_image(webrender_api: &webrender_api::RenderApi, path: &PathBuf) -> io::Result<Arc<Image>> {
+    let mut file = File::open(path)?;
     let mut image_data = vec![];
-    try!(file.read_to_end(&mut image_data));
+    file.read_to_end(&mut image_data)?;
     let mut image = load_from_memory(&image_data).unwrap();
+    set_webrender_image_key(webrender_api, &mut image);
+    Ok(Arc::new(image))
+}
+
+fn set_webrender_image_key(webrender_api: &webrender_api::RenderApi, image: &mut Image) {
+    if image.id.is_some() { return; }
     let format = convert_format(image.format);
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&*image.bytes);
-    let descriptor = webrender_traits::ImageDescriptor {
+    if format == webrender_api::ImageFormat::BGRA8 {
+        premultiply(bytes.as_mut_slice());
+    }
+    let descriptor = webrender_api::ImageDescriptor {
         width: image.width,
         height: image.height,
         stride: None,
@@ -69,18 +77,19 @@ fn get_placeholder_image(webrender_api: &webrender_traits::RenderApi) -> io::Res
         offset: 0,
         is_opaque: is_image_opaque(format, &bytes),
     };
-    let data = webrender_traits::ImageData::new(bytes);
+    let data = webrender_api::ImageData::new(bytes);
     let image_key = webrender_api.generate_image_key();
-    webrender_api.add_image(image_key, descriptor, data, None);
+    let mut updates = webrender_api::ResourceUpdates::new();
+    updates.add_image(image_key, descriptor, data, None);
+    webrender_api.update_resources(updates);
     image.id = Some(image_key);
-    Ok(Arc::new(image))
 }
 
 // TODO(gw): This is a port of the old is_image_opaque code from WR.
 //           Consider using SIMD to speed this up if it shows in profiles.
-fn is_image_opaque(format: webrender_traits::ImageFormat, bytes: &[u8]) -> bool {
+fn is_image_opaque(format: webrender_api::ImageFormat, bytes: &[u8]) -> bool {
     match format {
-        webrender_traits::ImageFormat::RGBA8 => {
+        webrender_api::ImageFormat::BGRA8 => {
             let mut is_opaque = true;
             for i in 0..(bytes.len() / 4) {
                 if bytes[i * 4 + 3] != 255 {
@@ -90,17 +99,18 @@ fn is_image_opaque(format: webrender_traits::ImageFormat, bytes: &[u8]) -> bool 
             }
             is_opaque
         }
-        webrender_traits::ImageFormat::RGB8 => true,
-        webrender_traits::ImageFormat::RG8 => true,
-        webrender_traits::ImageFormat::A8 => false,
-        webrender_traits::ImageFormat::Invalid | webrender_traits::ImageFormat::RGBAF32 => unreachable!(),
+        webrender_api::ImageFormat::RGB8 => true,
+        webrender_api::ImageFormat::RG8 => true,
+        webrender_api::ImageFormat::A8 => false,
+        webrender_api::ImageFormat::Invalid | webrender_api::ImageFormat::RGBAF32 => unreachable!(),
     }
 }
 
 fn premultiply(data: &mut [u8]) {
     let length = data.len();
 
-    for i in (0..length).step_by(4) {
+    let mut i = 0;
+    while i < length {
         let b = data[i + 0] as u32;
         let g = data[i + 1] as u32;
         let r = data[i + 2] as u32;
@@ -109,6 +119,8 @@ fn premultiply(data: &mut [u8]) {
         data[i + 0] = (b * a / 255) as u8;
         data[i + 1] = (g * a / 255) as u8;
         data[i + 2] = (r * a / 255) as u8;
+
+        i += 4;
     }
 }
 
@@ -289,6 +301,8 @@ struct PendingLoad {
     // The url being loaded. Do not forget that this may be several Mb
     // if we are loading a data: url.
     url: ServoUrl,
+
+    final_url: Option<ServoUrl>,
 }
 
 impl PendingLoad {
@@ -299,6 +313,7 @@ impl PendingLoad {
             result: None,
             listeners: vec!(),
             url: url,
+            final_url: None,
         }
     }
 
@@ -320,8 +335,11 @@ struct ImageCacheStore {
     // The placeholder image used when an image fails to load
     placeholder_image: Option<Arc<Image>>,
 
+    // The URL used for the placeholder image
+    placeholder_url: ServoUrl,
+
     // Webrender API instance.
-    webrender_api: webrender_traits::RenderApi,
+    webrender_api: webrender_api::RenderApi,
 }
 
 impl ImageCacheStore {
@@ -333,32 +351,15 @@ impl ImageCacheStore {
         };
 
         match load_result {
-            LoadResult::Loaded(ref mut image) => {
-                let format = convert_format(image.format);
-                let mut bytes = Vec::new();
-                bytes.extend_from_slice(&*image.bytes);
-                if format == webrender_traits::ImageFormat::RGBA8 {
-                    premultiply(bytes.as_mut_slice());
-                }
-                let descriptor = webrender_traits::ImageDescriptor {
-                    width: image.width,
-                    height: image.height,
-                    stride: None,
-                    format: format,
-                    offset: 0,
-                    is_opaque: is_image_opaque(format, &bytes),
-                };
-                let data = webrender_traits::ImageData::new(bytes);
-                let image_key = self.webrender_api.generate_image_key();
-                self.webrender_api.add_image(image_key, descriptor, data, None);
-                image.id = Some(image_key);
-            }
+            LoadResult::Loaded(ref mut image) => set_webrender_image_key(&self.webrender_api, image),
             LoadResult::PlaceholderLoaded(..) | LoadResult::None => {}
         }
 
+        let url = pending_load.final_url.clone();
         let image_response = match load_result {
-            LoadResult::Loaded(image) => ImageResponse::Loaded(Arc::new(image)),
-            LoadResult::PlaceholderLoaded(image) => ImageResponse::PlaceholderLoaded(image),
+            LoadResult::Loaded(image) => ImageResponse::Loaded(Arc::new(image), url.unwrap()),
+            LoadResult::PlaceholderLoaded(image) =>
+                ImageResponse::PlaceholderLoaded(image, self.placeholder_url.clone()),
             LoadResult::None => ImageResponse::None,
         };
 
@@ -378,11 +379,11 @@ impl ImageCacheStore {
                                         -> Option<Result<ImageOrMetadataAvailable, ImageState>> {
         self.completed_loads.get(url).map(|completed_load| {
             match (&completed_load.image_response, placeholder) {
-                (&ImageResponse::Loaded(ref image), _) |
-                (&ImageResponse::PlaceholderLoaded(ref image), UsePlaceholder::Yes) => {
-                    Ok(ImageOrMetadataAvailable::ImageAvailable(image.clone()))
+                (&ImageResponse::Loaded(ref image, ref url), _) |
+                (&ImageResponse::PlaceholderLoaded(ref image, ref url), UsePlaceholder::Yes) => {
+                    Ok(ImageOrMetadataAvailable::ImageAvailable(image.clone(), url.clone()))
                 }
-                (&ImageResponse::PlaceholderLoaded(_), UsePlaceholder::No) |
+                (&ImageResponse::PlaceholderLoaded(_, _), UsePlaceholder::No) |
                 (&ImageResponse::None, _) |
                 (&ImageResponse::MetadataLoaded(_), _) => {
                     Err(ImageState::LoadError)
@@ -407,13 +408,18 @@ pub struct ImageCacheImpl {
 }
 
 impl ImageCache for ImageCacheImpl {
-    fn new(webrender_api: webrender_traits::RenderApi) -> ImageCacheImpl {
+    fn new(webrender_api: webrender_api::RenderApi) -> ImageCacheImpl {
         debug!("New image cache");
+
+        let mut placeholder_path = resources_dir_path().expect("Can't figure out resources path.");
+        placeholder_path.push("rippy.png");
+
         ImageCacheImpl {
             store: Arc::new(Mutex::new(ImageCacheStore {
                 pending_loads: AllPendingLoads::new(),
                 completed_loads: HashMap::new(),
-                placeholder_image: get_placeholder_image(&webrender_api).ok(),
+                placeholder_image: get_placeholder_image(&webrender_api, &placeholder_path).ok(),
+                placeholder_url: ServoUrl::from_file_path(&placeholder_path).unwrap(),
                 webrender_api: webrender_api,
             }))
         }
@@ -496,7 +502,21 @@ impl ImageCache for ImageCacheImpl {
         match (action, id) {
             (FetchResponseMsg::ProcessRequestBody, _) |
             (FetchResponseMsg::ProcessRequestEOF, _) => return,
-            (FetchResponseMsg::ProcessResponse(_response), _) => {}
+            (FetchResponseMsg::ProcessResponse(response), _) => {
+                let mut store = self.store.lock().unwrap();
+                let pending_load = store.pending_loads.get_by_key_mut(&id).unwrap();
+                let metadata = match response {
+                    Ok(meta) => {
+                        Some(match meta {
+                            FetchMetadata::Unfiltered(m) => m,
+                            FetchMetadata::Filtered { unsafe_, .. } => unsafe_,
+                        })
+                    },
+                    Err(_) => None,
+                };
+                let final_url = metadata.as_ref().map(|m| m.final_url.clone());
+                pending_load.final_url = final_url;
+            }
             (FetchResponseMsg::ProcessResponseChunk(data), _) => {
                 debug!("Got some data for {:?}", id);
                 let mut store = self.store.lock().unwrap();
@@ -509,7 +529,8 @@ impl ImageCache for ImageCacheImpl {
                         let img_metadata = ImageMetadata { width: dimensions.width,
                                                            height: dimensions.height };
                         for listener in &pending_load.listeners {
-                            listener.respond(ImageResponse::MetadataLoaded(img_metadata.clone()));
+                            listener.respond(
+                                ImageResponse::MetadataLoaded(img_metadata.clone()));
                         }
                         pending_load.metadata = Some(img_metadata);
                     }
@@ -548,5 +569,10 @@ impl ImageCache for ImageCacheImpl {
                 }
             }
         }
+    }
+
+    /// Ensure an image has a webrender key.
+    fn set_webrender_image_key(&self, image: &mut Image) {
+        set_webrender_image_key(&self.store.lock().unwrap().webrender_api, image);
     }
 }

@@ -7,20 +7,13 @@
 #ifndef FLAC_DECODER_H_
 #define FLAC_DECODER_H_
 
-#include "MediaDecoder.h"
-
 namespace mozilla {
 
 class MediaContainerType;
 
-class FlacDecoder : public MediaDecoder
+class FlacDecoder
 {
 public:
-  // MediaDecoder interface.
-  explicit FlacDecoder(MediaDecoderOwner* aOwner) : MediaDecoder(aOwner) {}
-  MediaDecoder* Clone(MediaDecoderOwner* aOwner) override;
-  MediaDecoderStateMachine* CreateStateMachine() override;
-
   // Returns true if the Flac backend is pref'ed on, and we're running on a
   // platform that is likely to have decoders for the format.
   static bool IsEnabled();

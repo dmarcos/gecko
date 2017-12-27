@@ -16,7 +16,6 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
 
@@ -25,7 +24,7 @@ function test()
 
   try
   {
-    eval('(function () { const b = 16; var out = []; for each (b in [true, "", true, "", true, ""]) out.push(b >> 1) })();');
+    eval('(function () { const b = 16; var out = []; for (b of [true, "", true, "", true, ""]) out.push(b >> 1) })();');
   }
   catch(ex)
   {
@@ -34,6 +33,4 @@ function test()
 
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

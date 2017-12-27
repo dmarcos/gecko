@@ -13,45 +13,46 @@ const TEST_URI =
     console.log("console message 1");
   </script>`;
 
-add_task(function* () {
-  let hud = yield openNewTabAndConsole(TEST_URI);
-  hud.jsterm.clearOutput();
+add_task(async function() {
+  let hud = await openNewTabAndConsole(TEST_URI);
 
   let inputNode = hud.jsterm.inputNode;
-  ok(inputNode.getAttribute("focused"), "input node is focused after output is cleared");
+  info("Focus after console is opened");
+  ok(hasFocus(inputNode), "input node is focused after console is opened");
 
-  ContentTask.spawn(gBrowser.selectedBrowser, {}, function* () {
+  hud.jsterm.clearOutput();
+  ok(hasFocus(inputNode), "input node is focused after output is cleared");
+
+  info("Focus during message logging");
+  ContentTask.spawn(gBrowser.selectedBrowser, {}, function() {
     content.wrappedJSObject.console.log("console message 2");
   });
-  let msg = yield waitFor(() => findMessage(hud, "console message 2"));
-  let outputItem = msg.querySelector(".message-body");
+  let msg = await waitFor(() => findMessage(hud, "console message 2"));
+  ok(hasFocus(inputNode, "input node is focused, first time"));
 
-  inputNode = hud.jsterm.inputNode;
-  ok(inputNode.getAttribute("focused"), "input node is focused, first");
-
-  yield waitForBlurredInput(inputNode);
-
-  EventUtils.sendMouseEvent({type: "click"}, hud.outputNode);
-  ok(inputNode.getAttribute("focused"), "input node is focused, second time");
-
-  yield waitForBlurredInput(inputNode);
+  info("Focus after clicking in the output area");
+  await waitForBlurredInput(hud);
+  EventUtils.sendMouseEvent({type: "click"}, msg);
+  ok(hasFocus(inputNode), "input node is focused, second time");
 
   info("Setting a text selection and making sure a click does not re-focus");
+  await waitForBlurredInput(hud);
   let selection = hud.iframeWindow.getSelection();
-  selection.selectAllChildren(outputItem);
-
-  EventUtils.sendMouseEvent({type: "click"}, hud.outputNode);
-  ok(!inputNode.getAttribute("focused"),
-    "input node focused after text is selected");
+  selection.selectAllChildren(msg.querySelector(".message-body"));
+  EventUtils.sendMouseEvent({type: "click"}, msg);
+  ok(!hasFocus(inputNode), "input node not focused after text is selected");
 });
 
-function waitForBlurredInput(inputNode) {
+function waitForBlurredInput(hud) {
+  let inputNode = hud.jsterm.inputNode;
   return new Promise(resolve => {
     let lostFocus = () => {
-      ok(!inputNode.getAttribute("focused"), "input node is not focused");
+      ok(!hasFocus(inputNode), "input node is not focused");
       resolve();
     };
     inputNode.addEventListener("blur", lostFocus, { once: true });
-    document.getElementById("urlbar").click();
+
+    // The 'blur' event fires if we focus e.g. the filter box.
+    inputNode.ownerDocument.querySelector("input.text-filter").focus();
   });
 }

@@ -17,7 +17,7 @@ nsMacDockSupport::nsMacDockSupport()
 , mProgressState(STATE_NO_PROGRESS)
 , mProgressFraction(0.0)
 {
-  mProgressTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
+  mProgressTimer = NS_NewTimer();
 }
 
 nsMacDockSupport::~nsMacDockSupport()
@@ -109,8 +109,9 @@ nsMacDockSupport::SetProgressState(nsTaskbarProgressState aState,
 
   if (mProgressState == STATE_NORMAL || mProgressState == STATE_INDETERMINATE) {
     int perSecond = 8; // Empirically determined, see bug 848792 
-    mProgressTimer->InitWithFuncCallback(RedrawIconCallback, this, 1000 / perSecond,
-      nsITimer::TYPE_REPEATING_SLACK);
+    mProgressTimer->InitWithNamedFuncCallback(RedrawIconCallback, this, 1000 / perSecond,
+                                              nsITimer::TYPE_REPEATING_SLACK,
+                                              "nsMacDockSupport::RedrawIconCallback");
     return NS_OK;
   } else {
     mProgressTimer->Cancel();
@@ -132,7 +133,7 @@ bool nsMacDockSupport::InitProgress()
   }
 
   if (!mAppIcon) {
-    mProgressTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
+    mProgressTimer = NS_NewTimer();
     mAppIcon = [[NSImage imageNamed:@"NSApplicationIcon"] retain];
     mProgressBackground = [mAppIcon copyWithZone:nil];
     mTheme = new nsNativeThemeCocoa();

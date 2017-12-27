@@ -7,15 +7,14 @@
 #![deny(unsafe_code)]
 
 use app_units::Au;
-use fragment::{Fragment, REQUIRES_LINE_BREAK_AFTERWARD_IF_WRAPPING_ON_NEWLINES, ScannedTextFlags};
-use fragment::{SELECTED, ScannedTextFragmentInfo, SpecificFragmentInfo, UnscannedTextFragmentInfo};
-use gfx::font::{DISABLE_KERNING_SHAPING_FLAG, FontMetrics, IGNORE_LIGATURES_SHAPING_FLAG};
-use gfx::font::{KEEP_ALL_FLAG, RTL_FLAG, RunMetrics, ShapingFlags, ShapingOptions};
+use fragment::{Fragment, ScannedTextFlags};
+use fragment::{ScannedTextFragmentInfo, SpecificFragmentInfo, UnscannedTextFragmentInfo};
+use gfx::font::{FontMetrics, RunMetrics, ShapingFlags, ShapingOptions};
 use gfx::font_context::FontContext;
 use gfx::text::glyph::ByteIndex;
 use gfx::text::text_run::TextRun;
 use gfx::text::util::{self, CompressionMode};
-use inline::{FIRST_FRAGMENT_OF_ELEMENT, InlineFragments, LAST_FRAGMENT_OF_ELEMENT};
+use inline::{InlineFragmentNodeFlags, InlineFragments};
 use linked_list::split_off_head;
 use ordered_float::NotNaN;
 use range::Range;
@@ -23,12 +22,15 @@ use std::borrow::ToOwned;
 use std::collections::LinkedList;
 use std::mem;
 use std::sync::Arc;
-use style::computed_values::{line_height, text_rendering, text_transform};
-use style::computed_values::{word_break, white_space};
+use style::computed_values::text_rendering::T as TextRendering;
+use style::computed_values::text_transform::T as TextTransform;
+use style::computed_values::white_space::T as WhiteSpace;
+use style::computed_values::word_break::T as WordBreak;
 use style::logical_geometry::{LogicalSize, WritingMode};
-use style::properties::ServoComputedValues;
+use style::properties::ComputedValues;
 use style::properties::style_structs;
-use unicode_bidi::{is_rtl, process_text};
+use style::values::generics::text::LineHeight;
+use unicode_bidi as bidi;
 use unicode_script::{Script, get_script};
 
 /// Returns the concatenated text of a list of unscanned text fragments.
@@ -74,10 +76,10 @@ impl TextRunScanner {
         // Calculate bidi embedding levels, so we can split bidirectional fragments for reordering.
         let text = text(&fragments);
         let para_level = fragments.front().unwrap().style.writing_mode.to_bidi_level();
-        let bidi_info = process_text(&text, Some(para_level));
+        let bidi_info = bidi::BidiInfo::new(&text, Some(para_level));
 
         // Optimization: If all the text is LTR, don't bother splitting on bidi levels.
-        let bidi_levels = if bidi_info.levels.iter().cloned().any(is_rtl) {
+        let bidi_levels = if bidi_info.has_rtl() {
             Some(&bidi_info.levels[..])
         } else {
             None
@@ -126,7 +128,7 @@ impl TextRunScanner {
                            font_context: &mut FontContext,
                            out_fragments: &mut Vec<Fragment>,
                            paragraph_bytes_processed: &mut usize,
-                           bidi_levels: Option<&[u8]>,
+                           bidi_levels: Option<&[bidi::Level]>,
                            mut last_whitespace: bool)
                            -> bool {
         debug!("TextRunScanner: flushing {} fragments in range", self.clump.len());
@@ -158,15 +160,15 @@ impl TextRunScanner {
                 let inherited_text_style = in_fragment.style().get_inheritedtext();
                 fontgroup = font_context.layout_font_group_for_style(font_style);
                 compression = match in_fragment.white_space() {
-                    white_space::T::normal |
-                    white_space::T::nowrap => CompressionMode::CompressWhitespaceNewline,
-                    white_space::T::pre |
-                    white_space::T::pre_wrap => CompressionMode::CompressNone,
-                    white_space::T::pre_line => CompressionMode::CompressWhitespace,
+                    WhiteSpace::Normal |
+                    WhiteSpace::Nowrap => CompressionMode::CompressWhitespaceNewline,
+                    WhiteSpace::Pre |
+                    WhiteSpace::PreWrap => CompressionMode::CompressNone,
+                    WhiteSpace::PreLine => CompressionMode::CompressWhitespace,
                 };
                 text_transform = inherited_text_style.text_transform;
-                letter_spacing = inherited_text_style.letter_spacing.0;
-                word_spacing = inherited_text_style.word_spacing.0
+                letter_spacing = inherited_text_style.letter_spacing;
+                word_spacing = inherited_text_style.word_spacing.value()
                                .map(|lop| lop.to_hash_key())
                                .unwrap_or((Au(0), NotNaN::new(0.0).unwrap()));
                 text_rendering = inherited_text_style.text_rendering;
@@ -211,7 +213,7 @@ impl TextRunScanner {
 
                     let bidi_level = match bidi_levels {
                         Some(levels) => levels[*paragraph_bytes_processed],
-                        None => 0
+                        None => bidi::Level::ltr(),
                     };
 
                     // Break the run if the new character has a different explicit script than the
@@ -288,19 +290,20 @@ impl TextRunScanner {
             // example, `finally` with a wide `letter-spacing` renders as `f i n a l l y` and not
             // `ﬁ n a l l y`.
             let mut flags = ShapingFlags::empty();
-            match letter_spacing {
-                Some(Au(0)) | None => {}
-                Some(_) => flags.insert(IGNORE_LIGATURES_SHAPING_FLAG),
+            if let Some(v) = letter_spacing.value() {
+                if v.px() != 0. {
+                    flags.insert(ShapingFlags::IGNORE_LIGATURES_SHAPING_FLAG);
+                }
             }
-            if text_rendering == text_rendering::T::optimizespeed {
-                flags.insert(IGNORE_LIGATURES_SHAPING_FLAG);
-                flags.insert(DISABLE_KERNING_SHAPING_FLAG)
+            if text_rendering == TextRendering::Optimizespeed {
+                flags.insert(ShapingFlags::IGNORE_LIGATURES_SHAPING_FLAG);
+                flags.insert(ShapingFlags::DISABLE_KERNING_SHAPING_FLAG)
             }
-            if word_break == word_break::T::keep_all {
-                flags.insert(KEEP_ALL_FLAG);
+            if word_break == WordBreak::KeepAll {
+                flags.insert(ShapingFlags::KEEP_ALL_FLAG);
             }
             let options = ShapingOptions {
-                letter_spacing: letter_spacing,
+                letter_spacing: letter_spacing.value().cloned().map(Au::from),
                 word_spacing: word_spacing,
                 script: Script::Common,
                 flags: flags,
@@ -310,8 +313,8 @@ impl TextRunScanner {
             run_info_list.into_iter().map(|run_info| {
                 let mut options = options;
                 options.script = run_info.script;
-                if is_rtl(run_info.bidi_level) {
-                    options.flags.insert(RTL_FLAG);
+                if run_info.bidi_level.is_rtl() {
+                    options.flags.insert(ShapingFlags::RTL_FLAG);
                 }
                 let mut font = fontgroup.fonts.get(run_info.font_index).unwrap().borrow_mut();
                 ScannedTextRun {
@@ -362,11 +365,11 @@ impl TextRunScanner {
 
                 if requires_line_break_afterward_if_wrapping_on_newlines {
                     byte_range.extend_by(ByteIndex(-1)); // Trim the '\n'
-                    flags.insert(REQUIRES_LINE_BREAK_AFTERWARD_IF_WRAPPING_ON_NEWLINES);
+                    flags.insert(ScannedTextFlags::REQUIRES_LINE_BREAK_AFTERWARD_IF_WRAPPING_ON_NEWLINES);
                 }
 
                 if mapping.selected {
-                    flags.insert(SELECTED);
+                    flags.insert(ScannedTextFlags::SELECTED);
                 }
 
                 let insertion_point = if mapping.contains_insertion_point(scanned_run.insertion_point) {
@@ -375,12 +378,13 @@ impl TextRunScanner {
                     None
                 };
 
-                let mut new_text_fragment_info = box ScannedTextFragmentInfo::new(
+                let mut new_text_fragment_info = Box::new(ScannedTextFragmentInfo::new(
                     scanned_run.run,
                     byte_range,
                     text_size,
                     insertion_point,
-                    flags);
+                    flags
+                ));
 
                 let new_metrics = new_text_fragment_info.run.metrics_for_range(&byte_range);
                 let writing_mode = old_fragment.style.writing_mode;
@@ -399,10 +403,10 @@ impl TextRunScanner {
                 if let Some(ref mut context) = new_fragment.inline_context {
                     for node in &mut context.nodes {
                         if !is_last_mapping_of_this_old_fragment {
-                            node.flags.remove(LAST_FRAGMENT_OF_ELEMENT);
+                            node.flags.remove(InlineFragmentNodeFlags::LAST_FRAGMENT_OF_ELEMENT);
                         }
                         if !is_first_mapping_of_this_old_fragment {
-                            node.flags.remove(FIRST_FRAGMENT_OF_ELEMENT);
+                            node.flags.remove(InlineFragmentNodeFlags::FIRST_FRAGMENT_OF_ELEMENT);
                         }
                     }
                 }
@@ -435,7 +439,7 @@ fn bounding_box_for_run_metrics(metrics: &RunMetrics, writing_mode: WritingMode)
 ///
 /// `#[inline]` because often the caller only needs a few fields from the font metrics.
 #[inline]
-pub fn font_metrics_for_style(font_context: &mut FontContext, font_style: Arc<style_structs::Font>)
+pub fn font_metrics_for_style(font_context: &mut FontContext, font_style: ::ServoArc<style_structs::Font>)
                               -> FontMetrics {
     let fontgroup = font_context.layout_font_group_for_style(font_style);
     // FIXME(https://github.com/rust-lang/rust/issues/23338)
@@ -444,12 +448,12 @@ pub fn font_metrics_for_style(font_context: &mut FontContext, font_style: Arc<st
 }
 
 /// Returns the line block-size needed by the given computed style and font size.
-pub fn line_height_from_style(style: &ServoComputedValues, metrics: &FontMetrics) -> Au {
-    let font_size = style.get_font().font_size;
+pub fn line_height_from_style(style: &ComputedValues, metrics: &FontMetrics) -> Au {
+    let font_size = style.get_font().font_size.size();
     match style.get_inheritedtext().line_height {
-        line_height::T::Normal => metrics.line_gap,
-        line_height::T::Number(l) => font_size.scale_by(l),
-        line_height::T::Length(l) => l
+        LineHeight::Normal => Au::from(metrics.line_gap),
+        LineHeight::Number(l) => font_size.scale_by(l.0),
+        LineHeight::Length(l) => Au::from(l)
     }
 }
 
@@ -459,7 +463,7 @@ fn split_first_fragment_at_newline_if_necessary(fragments: &mut LinkedList<Fragm
     }
 
     let new_fragment = {
-        let mut first_fragment = fragments.front_mut().unwrap();
+        let first_fragment = fragments.front_mut().unwrap();
         let string_before;
         let selection_before;
         {
@@ -504,10 +508,12 @@ fn split_first_fragment_at_newline_if_necessary(fragments: &mut LinkedList<Fragm
                 }
             };
         }
-        first_fragment.transform(first_fragment.border_box.size,
-                                 SpecificFragmentInfo::UnscannedText(
-                                     box UnscannedTextFragmentInfo::new(string_before,
-                                                                        selection_before)))
+        first_fragment.transform(
+            first_fragment.border_box.size,
+            SpecificFragmentInfo::UnscannedText(Box::new(
+                UnscannedTextFragmentInfo::new(string_before, selection_before)
+            ))
+        )
     };
 
     fragments.push_front(new_fragment);
@@ -522,7 +528,7 @@ struct RunInfo {
     /// The index of the applicable font in the font group.
     font_index: usize,
     /// The bidirection embedding level of this text run.
-    bidi_level: u8,
+    bidi_level: bidi::Level,
     /// The Unicode script property of this text run.
     script: Script,
 }
@@ -533,7 +539,7 @@ impl RunInfo {
             text: String::new(),
             insertion_point: None,
             font_index: 0,
-            bidi_level: 0,
+            bidi_level: bidi::Level::ltr(),
             script: Script::Common,
         }
     }
@@ -561,7 +567,7 @@ impl RunInfo {
 
 /// A mapping from a portion of an unscanned text fragment to the text run we're going to create
 /// for it.
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 struct RunMapping {
     /// The range of byte indices within the text fragment.
     byte_range: Range<usize>,
@@ -593,7 +599,7 @@ impl RunMapping {
              run_info: &mut RunInfo,
              text: &str,
              compression: CompressionMode,
-             text_transform: text_transform::T,
+             text_transform: TextTransform,
              last_whitespace: &mut bool,
              start_position: &mut usize,
              end_position: usize) {
@@ -646,26 +652,26 @@ impl RunMapping {
 /// use graphemes instead of characters.
 fn apply_style_transform_if_necessary(string: &mut String,
                                       first_character_position: usize,
-                                      text_transform: text_transform::T,
+                                      text_transform: TextTransform,
                                       last_whitespace: bool,
                                       is_first_run: bool) {
     match text_transform {
-        text_transform::T::none => {}
-        text_transform::T::uppercase => {
+        TextTransform::None => {}
+        TextTransform::Uppercase => {
             let original = string[first_character_position..].to_owned();
             string.truncate(first_character_position);
             for ch in original.chars().flat_map(|ch| ch.to_uppercase()) {
                 string.push(ch);
             }
         }
-        text_transform::T::lowercase => {
+        TextTransform::Lowercase => {
             let original = string[first_character_position..].to_owned();
             string.truncate(first_character_position);
             for ch in original.chars().flat_map(|ch| ch.to_lowercase()) {
                 string.push(ch);
             }
         }
-        text_transform::T::capitalize => {
+        TextTransform::Capitalize => {
             let original = string[first_character_position..].to_owned();
             string.truncate(first_character_position);
 

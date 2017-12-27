@@ -14,21 +14,28 @@ this.EXPORTED_SYMBOLS = ["FormAutofillContent"];
 
 const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr, manager: Cm} = Components;
 
+Cu.import("resource://gre/modules/PrivateBrowsingUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://formautofill/FormAutofillUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "ProfileAutoCompleteResult",
+XPCOMUtils.defineLazyModuleGetter(this, "AddressResult",
+                                  "resource://formautofill/ProfileAutoCompleteResult.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "CreditCardResult",
                                   "resource://formautofill/ProfileAutoCompleteResult.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "FormAutofillHandler",
                                   "resource://formautofill/FormAutofillHandler.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "FormLikeFactory",
                                   "resource://gre/modules/FormLikeFactory.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "InsecurePasswordUtils",
+                                  "resource://gre/modules/InsecurePasswordUtils.jsm");
 
 const formFillController = Cc["@mozilla.org/satchel/form-fill-controller;1"]
                              .getService(Ci.nsIFormFillController);
+const autocompleteController = Cc["@mozilla.org/autocomplete/controller;1"]
+                             .getService(Ci.nsIAutoCompleteController);
 
-const AUTOFILL_FIELDS_THRESHOLD = 3;
+const {ADDRESSES_COLLECTION_NAME, CREDITCARDS_COLLECTION_NAME, FIELD_STATES} = FormAutofillUtils;
 
 // Register/unregister a constructor as a factory.
 function AutocompleteFactory() {}
@@ -88,38 +95,81 @@ AutofillProfileAutoCompleteSearch.prototype = {
    * @param {Object} listener the listener to notify when the search is complete
    */
   startSearch(searchString, searchParam, previousResult, listener) {
-    this.log.debug("startSearch: for", searchString, "with input", formFillController.focusedInput);
-    let focusedInput = formFillController.focusedInput;
+    let {activeInput, activeSection, activeFieldDetail, savedFieldNames} = FormAutofillContent;
     this.forceStop = false;
-    let info = FormAutofillContent.getInputDetails(focusedInput);
 
-    if (!FormAutofillContent.savedFieldNames.has(info.fieldName) ||
-        FormAutofillContent.getFormHandler(focusedInput).filledProfileGUID) {
+    this.log.debug("startSearch: for", searchString, "with input", activeInput);
+
+    let isAddressField = FormAutofillUtils.isAddressField(activeFieldDetail.fieldName);
+    let isInputAutofilled = activeFieldDetail.state == FIELD_STATES.AUTO_FILLED;
+    let allFieldNames = activeSection.allFieldNames;
+    let filledRecordGUID = activeSection.getFilledRecordGUID();
+    let searchPermitted = isAddressField ?
+                          FormAutofillUtils.isAutofillAddressesEnabled :
+                          FormAutofillUtils.isAutofillCreditCardsEnabled;
+    let AutocompleteResult = isAddressField ? AddressResult : CreditCardResult;
+
+    ProfileAutocomplete.lastProfileAutoCompleteFocusedInput = activeInput;
+    // Fallback to form-history if ...
+    //   - specified autofill feature is pref off.
+    //   - no profile can fill the currently-focused input.
+    //   - the current form has already been populated.
+    //   - (address only) less than 3 inputs are covered by all saved fields in the storage.
+    if (!searchPermitted || !savedFieldNames.has(activeFieldDetail.fieldName) ||
+        (!isInputAutofilled && filledRecordGUID) || (isAddressField &&
+        allFieldNames.filter(field => savedFieldNames.has(field)).length < FormAutofillUtils.AUTOFILL_FIELDS_THRESHOLD)) {
+      if (activeInput.autocomplete == "off") {
+        // Create a dummy result as an empty search result.
+        let result = new AutocompleteResult("", "", [], [], {});
+        listener.onSearchResult(this, result);
+        return;
+      }
       let formHistory = Cc["@mozilla.org/autocomplete/search;1?name=form-history"]
                           .createInstance(Ci.nsIAutoCompleteSearch);
       formHistory.startSearch(searchString, searchParam, previousResult, {
         onSearchResult: (search, result) => {
           listener.onSearchResult(this, result);
-          ProfileAutocomplete.setProfileAutoCompleteResult(result);
+          ProfileAutocomplete.lastProfileAutoCompleteResult = result;
         },
       });
       return;
     }
 
-    this._getProfiles({info, searchString}).then((profiles) => {
+    if (isInputAutofilled) {
+      let result = new AutocompleteResult(searchString, "", [], [], {isInputAutofilled});
+      listener.onSearchResult(this, result);
+      ProfileAutocomplete.lastProfileAutoCompleteResult = result;
+      return;
+    }
+
+    let infoWithoutElement = Object.assign({}, activeFieldDetail);
+    delete infoWithoutElement.elementWeakRef;
+
+    let data = {
+      collectionName: isAddressField ? ADDRESSES_COLLECTION_NAME : CREDITCARDS_COLLECTION_NAME,
+      info: infoWithoutElement,
+      searchString,
+    };
+
+    this._getRecords(data).then((records) => {
       if (this.forceStop) {
         return;
       }
+      // Sort addresses by timeLastUsed for showing the lastest used address at top.
+      records.sort((a, b) => b.timeLastUsed - a.timeLastUsed);
 
-      let allFieldNames = FormAutofillContent.getAllFieldNames(focusedInput);
-      let result = new ProfileAutoCompleteResult(searchString,
-                                                 info.fieldName,
-                                                 allFieldNames,
-                                                 profiles,
-                                                 {});
+      let adaptedRecords = activeSection.getAdaptedProfiles(records);
+      let result = null;
+      let handler = FormAutofillContent.activeHandler;
+      let isSecure = InsecurePasswordUtils.isFormSecure(handler.form);
 
+      result = new AutocompleteResult(searchString,
+                                      activeFieldDetail.fieldName,
+                                      allFieldNames,
+                                      adaptedRecords,
+                                      {isSecure, isInputAutofilled});
       listener.onSearchResult(this, result);
-      ProfileAutocomplete.setProfileAutoCompleteResult(result);
+      ProfileAutocomplete.lastProfileAutoCompleteResult = result;
     });
   },
 
@@ -127,32 +177,34 @@ AutofillProfileAutoCompleteSearch.prototype = {
    * Stops an asynchronous search that is in progress
    */
   stopSearch() {
-    ProfileAutocomplete.setProfileAutoCompleteResult(null);
+    ProfileAutocomplete.lastProfileAutoCompleteResult = null;
     this.forceStop = true;
   },
 
   /**
-   * Get the profile data from parent process for AutoComplete result.
+   * Get the records from parent process for AutoComplete result.
    *
    * @private
    * @param  {Object} data
    *         Parameters for querying the corresponding result.
+   * @param  {string} data.collectionName
+   *         The name used to specify which collection to retrieve records.
    * @param  {string} data.searchString
-   *         The typed string for filtering out the matched profile.
+   *         The typed string for filtering out the matched records.
    * @param  {string} data.info
    *         The input autocomplete property's information.
    * @returns {Promise}
-   *          Promise that resolves when profiles returned from parent process.
+   *          Promise that resolves when addresses returned from parent process.
    */
-  _getProfiles(data) {
-    this.log.debug("_getProfiles with data:", data);
+  _getRecords(data) {
+    this.log.debug("_getRecords with data:", data);
     return new Promise((resolve) => {
-      Services.cpmm.addMessageListener("FormAutofill:Profiles", function getResult(result) {
-        Services.cpmm.removeMessageListener("FormAutofill:Profiles", getResult);
+      Services.cpmm.addMessageListener("FormAutofill:Records", function getResult(result) {
+        Services.cpmm.removeMessageListener("FormAutofill:Records", getResult);
         resolve(result.data);
       });
 
-      Services.cpmm.sendAsyncMessage("FormAutofill:GetProfiles", data);
+      Services.cpmm.sendAsyncMessage("FormAutofill:GetRecords", data);
     });
   },
 };
@@ -162,8 +214,8 @@ this.NSGetFactory = XPCOMUtils.generateNSGetFactory([AutofillProfileAutoComplete
 let ProfileAutocomplete = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
 
-  _lastAutoCompleteResult: null,
-  _lastAutoCompleteFocusedInput: null,
+  lastProfileAutoCompleteResult: null,
+  lastProfileAutoCompleteFocusedInput: null,
   _registered: false,
   _factory: null,
 
@@ -195,19 +247,14 @@ let ProfileAutocomplete = {
     Services.obs.removeObserver(this, "autocomplete-will-enter-text");
   },
 
-  setProfileAutoCompleteResult(result) {
-    this._lastAutoCompleteResult = result;
-    this._lastAutoCompleteFocusedInput = formFillController.focusedInput;
-  },
-
   observe(subject, topic, data) {
     switch (topic) {
       case "autocomplete-will-enter-text": {
-        if (!formFillController.focusedInput) {
+        if (!FormAutofillContent.activeInput) {
           // The observer notification is for autocomplete in a different process.
           break;
         }
-        this._fillFromAutocompleteRow(formFillController.focusedInput);
+        this._fillFromAutocompleteRow(FormAutofillContent.activeInput);
         break;
       }
     }
@@ -232,7 +279,7 @@ let ProfileAutocomplete = {
 
   _fillFromAutocompleteRow(focusedInput) {
     this.log.debug("_fillFromAutocompleteRow:", focusedInput);
-    let formDetails = FormAutofillContent.getFormDetails(focusedInput);
+    let formDetails = FormAutofillContent.activeFormDetails;
     if (!formDetails) {
       // The observer notification is for a different frame.
       return;
@@ -240,44 +287,40 @@ let ProfileAutocomplete = {
 
     let selectedIndex = this._getSelectedIndex(focusedInput.ownerGlobal);
     if (selectedIndex == -1 ||
-        !this._lastAutoCompleteResult ||
-        this._lastAutoCompleteResult.getStyleAt(selectedIndex) != "autofill-profile") {
+        !this.lastProfileAutoCompleteResult ||
+        this.lastProfileAutoCompleteResult.getStyleAt(selectedIndex) != "autofill-profile") {
       return;
     }
 
-    let profile = JSON.parse(this._lastAutoCompleteResult.getCommentAt(selectedIndex));
-    let formHandler = FormAutofillContent.getFormHandler(focusedInput);
+    let profile = JSON.parse(this.lastProfileAutoCompleteResult.getCommentAt(selectedIndex));
+    let {fieldName} = FormAutofillContent.activeFieldDetail;
 
-    formHandler.autofillFormFields(profile, focusedInput);
+    FormAutofillContent.activeHandler.autofillFormFields(profile).then(() => {
+      autocompleteController.searchString = profile[fieldName];
+    });
   },
 
   _clearProfilePreview() {
-    let focusedInput = formFillController.focusedInput || this._lastAutoCompleteFocusedInput;
-    if (!focusedInput || !FormAutofillContent.getFormDetails(focusedInput)) {
+    if (!this.lastProfileAutoCompleteFocusedInput || !FormAutofillContent.activeSection) {
       return;
     }
 
-    let formHandler = FormAutofillContent.getFormHandler(focusedInput);
-
-    formHandler.clearPreviewedFormFields();
+    FormAutofillContent.activeSection.clearPreviewedFormFields();
   },
 
   _previewSelectedProfile(selectedIndex) {
-    let focusedInput = formFillController.focusedInput;
-    if (!focusedInput || !FormAutofillContent.getFormDetails(focusedInput)) {
+    if (!FormAutofillContent.activeInput || !FormAutofillContent.activeFormDetails) {
       // The observer notification is for a different process/frame.
       return;
     }
 
-    if (!this._lastAutoCompleteResult ||
-        this._lastAutoCompleteResult.getStyleAt(selectedIndex) != "autofill-profile") {
+    if (!this.lastProfileAutoCompleteResult ||
+        this.lastProfileAutoCompleteResult.getStyleAt(selectedIndex) != "autofill-profile") {
       return;
     }
 
-    let profile = JSON.parse(this._lastAutoCompleteResult.getCommentAt(selectedIndex));
-    let formHandler = FormAutofillContent.getFormHandler(focusedInput);
-
-    formHandler.previewFormFields(profile);
+    let profile = JSON.parse(this.lastProfileAutoCompleteResult.getCommentAt(selectedIndex));
+    FormAutofillContent.activeSection.previewFormFields(profile);
   },
 };
 
@@ -298,6 +341,12 @@ var FormAutofillContent = {
    */
   savedFieldNames: null,
 
+  /**
+   * @type {Object} The object where to store the active items, e.g. element,
+   * handler, section, and field detail.
+   */
+  _activeItems: {},
+
   init() {
     FormAutofillUtils.defineLazyLogGetter(this, "FormAutofillContent");
 
@@ -305,28 +354,69 @@ var FormAutofillContent = {
     Services.cpmm.addMessageListener("FormAutofill:savedFieldNames", this);
     Services.obs.addObserver(this, "earlyformsubmit");
 
-    if (Services.cpmm.initialProcessData.autofillEnabled) {
+    let autofillEnabled = Services.cpmm.initialProcessData.autofillEnabled;
+    // If storage hasn't be initialized yet autofillEnabled is undefined but we need to ensure
+    // autocomplete is registered before the focusin so register it in this case as long as the
+    // pref is true.
+    let shouldEnableAutofill = autofillEnabled === undefined &&
+                               (FormAutofillUtils.isAutofillAddressesEnabled ||
+                               FormAutofillUtils.isAutofillCreditCardsEnabled);
+    if (autofillEnabled || shouldEnableAutofill) {
       ProfileAutocomplete.ensureRegistered();
     }
 
     this.savedFieldNames =
-      Services.cpmm.initialProcessData.autofillSavedFieldNames || new Set();
+      Services.cpmm.initialProcessData.autofillSavedFieldNames;
   },
 
-  _onFormSubmit(handler) {
-    // TODO: Handle form submit event for profile saving(bug 990219) and metrics(bug 1341569).
+  /**
+   * Send the profile to parent for doorhanger and storage saving/updating.
+   *
+   * @param {Object} profile Submitted form's address/creditcard guid and record.
+   * @param {Object} domWin Current content window.
+   * @param {int} timeStartedFillingMS Time of form filling started.
+   */
+  _onFormSubmit(profile, domWin, timeStartedFillingMS) {
+    let mm = this._messageManagerFromWindow(domWin);
+    mm.sendAsyncMessage("FormAutofill:OnFormSubmit",
+                        {profile, timeStartedFillingMS});
   },
 
-  notify(formElement) {
-    this.log.debug("notified for form early submission");
+  /**
+   * Handle earlyformsubmit event and early return when:
+   * 1. In private browsing mode.
+   * 2. Could not map any autofill handler by form element.
+   * 3. Number of filled fields is less than autofill threshold
+   *
+   * @param {HTMLElement} formElement Root element which receives earlyformsubmit event.
+   * @param {Object} domWin Content window
+   * @returns {boolean} Should always return true so form submission isn't canceled.
+   */
+  notify(formElement, domWin) {
+    this.log.debug("Notifying form early submission");
+
+    if (!FormAutofillUtils.isAutofillEnabled) {
+      this.log.debug("Form Autofill is disabled");
+      return true;
+    }
+
+    if (domWin && PrivateBrowsingUtils.isContentWindowPrivate(domWin)) {
+      this.log.debug("Ignoring submission in a private window");
+      return true;
+    }
 
     let handler = this._formsDetails.get(formElement);
     if (!handler) {
       this.log.debug("Form element could not map to an existing handler");
-    } else {
-      this._onFormSubmit(handler);
+      return true;
     }
 
+    let records = handler.createRecords();
+    if (!Object.values(records).some(typeRecords => typeRecords.length)) {
+      return true;
+    }
+
+    this._onFormSubmit(records, domWin, handler.timeStartedFillingMS);
     return true;
   },
 
@@ -347,25 +437,6 @@ var FormAutofillContent = {
   },
 
   /**
-   * Get the input's information from cache which is created after page identified.
-   *
-   * @param {HTMLInputElement} element Focused input which triggered profile searching
-   * @returns {Object|null}
-   *          Return target input's information that cloned from content cache
-   *          (or return null if the information is not found in the cache).
-   */
-  getInputDetails(element) {
-    let formDetails = this.getFormDetails(element);
-    for (let detail of formDetails) {
-      let detailElement = detail.elementWeakRef.get();
-      if (detailElement && element == detailElement) {
-        return detail;
-      }
-    }
-    return null;
-  },
-
-  /**
    * Get the form's handler from cache which is created after page identified.
    *
    * @param {HTMLInputElement} element Focused input which triggered profile searching
@@ -374,85 +445,192 @@ var FormAutofillContent = {
    *          (or return null if the information is not found in the cache).
    *
    */
-  getFormHandler(element) {
+  _getFormHandler(element) {
     let rootElement = FormLikeFactory.findRootForField(element);
     return this._formsDetails.get(rootElement);
   },
 
   /**
-   * Get the form's information from cache which is created after page identified.
+   * Get the active form's information from cache which is created after page
+   * identified.
    *
-   * @param {HTMLInputElement} element Focused input which triggered profile searching
    * @returns {Array<Object>|null}
    *          Return target form's information from content cache
    *          (or return null if the information is not found in the cache).
    *
    */
-  getFormDetails(element) {
-    let formHandler = this.getFormHandler(element);
+  get activeFormDetails() {
+    let formHandler = this.activeHandler;
     return formHandler ? formHandler.fieldDetails : null;
   },
 
-  getAllFieldNames(element) {
-    let formDetails = this.getFormDetails(element);
-    return formDetails.map(record => record.fieldName);
+  /**
+   * All active items should be updated according the active element of
+   * `formFillController.focusedInput`. All of them including element,
+   * handler, section, and field detail, can be retrieved by their own getters.
+   *
+   * @param {HTMLElement|null} element The active item should be updated based
+   * on this or `formFillController.focusedInput` will be taken.
+   */
+  updateActiveInput(element) {
+    element = element || formFillController.focusedInput;
+    let handler = this._getFormHandler(element);
+    if (handler) {
+      handler.focusedInput = element;
+    }
+    this._activeItems = {
+      handler,
+      elementWeakRef: Cu.getWeakReference(element),
+      section: handler ? handler.activeSection : null,
+      fieldDetail: null,
+    };
   },
 
-  identifyAutofillFields(doc) {
-    this.log.debug("identifyAutofillFields:", "" + doc.location);
-    let forms = [];
+  get activeInput() {
+    return this._activeItems.elementWeakRef.get();
+  },
 
-    // Collects root forms from inputs.
-    for (let field of doc.getElementsByTagName("input")) {
-      // We only consider text-like fields for now until we support radio and
-      // checkbox buttons in the future.
-      if (!field.mozIsTextField(true)) {
-        continue;
+  get activeHandler() {
+    return this._activeItems.handler;
+  },
+
+  get activeSection() {
+    return this._activeItems.section;
+  },
+
+  /**
+   * Get the active input's information from cache which is created after page
+   * identified.
+   *
+   * @returns {Object|null}
+   *          Return the active input's information that cloned from content cache
+   *          (or return null if the information is not found in the cache).
+   */
+  get activeFieldDetail() {
+    if (!this._activeItems.fieldDetail) {
+      let formDetails = this.activeFormDetails;
+      if (!formDetails) {
+        return null;
       }
-
-      let formLike = FormLikeFactory.createFromField(field);
-      if (!forms.some(form => form.rootElement === formLike.rootElement)) {
-        forms.push(formLike);
+      for (let detail of formDetails) {
+        let detailElement = detail.elementWeakRef.get();
+        if (detailElement && this.activeInput == detailElement) {
+          this._activeItems.fieldDetail = detail;
+          break;
+        }
       }
     }
+    return this._activeItems.fieldDetail;
+  },
 
-    this.log.debug("Found", forms.length, "forms");
+  identifyAutofillFields(element) {
+    this.log.debug("identifyAutofillFields:", "" + element.ownerDocument.location);
 
-    // Collects the fields that can be autofilled from each form and marks them
-    // as autofill fields if the amount is above the threshold.
-    forms.forEach(form => {
-      let formHandler = new FormAutofillHandler(form);
-      formHandler.collectFormFields();
-      if (formHandler.fieldDetails.length < AUTOFILL_FIELDS_THRESHOLD) {
-        this.log.debug("Ignoring form since it has only", formHandler.fieldDetails.length,
-                       "field(s)");
-        return;
-      }
+    if (!this.savedFieldNames) {
+      this.log.debug("identifyAutofillFields: savedFieldNames are not known yet");
+      Services.cpmm.sendAsyncMessage("FormAutofill:InitStorage");
+    }
 
-      this._formsDetails.set(form.rootElement, formHandler);
-      this.log.debug("Adding form handler to _formsDetails:", formHandler);
-      formHandler.fieldDetails.forEach(detail =>
-        this._markAsAutofillField(detail.elementWeakRef.get())
-      );
-    });
+    let formHandler = this._getFormHandler(element);
+    if (!formHandler) {
+      let formLike = FormLikeFactory.createFromField(element);
+      formHandler = new FormAutofillHandler(formLike);
+    } else if (!formHandler.updateFormIfNeeded(element)) {
+      this.log.debug("No control is removed or inserted since last collection.");
+      return;
+    }
+
+    let validDetails = formHandler.collectFormFields();
+
+    this._formsDetails.set(formHandler.form.rootElement, formHandler);
+    this.log.debug("Adding form handler to _formsDetails:", formHandler);
+
+    validDetails.forEach(detail =>
+      this._markAsAutofillField(detail.elementWeakRef.get())
+    );
+  },
+
+  clearForm() {
+    let focusedInput = this.activeInput || ProfileAutocomplete._lastAutoCompleteFocusedInput;
+    if (!focusedInput) {
+      return;
+    }
+
+    this.activeSection.clearPopulatedForm();
+    autocompleteController.searchString = "";
+  },
+
+  previewProfile(doc) {
+    let docWin = doc.ownerGlobal;
+    let selectedIndex = ProfileAutocomplete._getSelectedIndex(docWin);
+    let lastAutoCompleteResult = ProfileAutocomplete.lastProfileAutoCompleteResult;
+    let focusedInput = this.activeInput;
+    let mm = this._messageManagerFromWindow(docWin);
+
+    if (selectedIndex === -1 ||
+        !focusedInput ||
+        !lastAutoCompleteResult ||
+        lastAutoCompleteResult.getStyleAt(selectedIndex) != "autofill-profile") {
+      mm.sendAsyncMessage("FormAutofill:UpdateWarningMessage", {});
+
+      ProfileAutocomplete._clearProfilePreview();
+    } else {
+      let focusedInputDetails = this.activeFieldDetail;
+      let profile = JSON.parse(lastAutoCompleteResult.getCommentAt(selectedIndex));
+      let allFieldNames = FormAutofillContent.activeSection.allFieldNames;
+      let profileFields = allFieldNames.filter(fieldName => !!profile[fieldName]);
+
+      let focusedCategory = FormAutofillUtils.getCategoryFromFieldName(focusedInputDetails.fieldName);
+      let categories = FormAutofillUtils.getCategoriesFromFieldNames(profileFields);
+      mm.sendAsyncMessage("FormAutofill:UpdateWarningMessage", {
+        focusedCategory,
+        categories,
+      });
+
+      ProfileAutocomplete._previewSelectedProfile(selectedIndex);
+    }
+  },
+
+  onPopupClosed() {
+    ProfileAutocomplete._clearProfilePreview();
   },
 
   _markAsAutofillField(field) {
-    if (!field) {
+    // Since Form Autofill popup is only for input element, any non-Input
+    // element should be excluded here.
+    if (!field || !(field instanceof Ci.nsIDOMHTMLInputElement)) {
       return;
     }
 
     formFillController.markAsAutofillField(field);
   },
 
-  _previewProfile(doc) {
-    let selectedIndex = ProfileAutocomplete._getSelectedIndex(doc.ownerGlobal);
+  _messageManagerFromWindow(win) {
+    return win.QueryInterface(Ci.nsIInterfaceRequestor)
+              .getInterface(Ci.nsIWebNavigation)
+              .QueryInterface(Ci.nsIDocShell)
+              .QueryInterface(Ci.nsIInterfaceRequestor)
+              .getInterface(Ci.nsIContentFrameMessageManager);
+  },
 
-    if (selectedIndex === -1) {
-      ProfileAutocomplete._clearProfilePreview();
-    } else {
-      ProfileAutocomplete._previewSelectedProfile(selectedIndex);
+  _onKeyDown(e) {
+    let lastAutoCompleteResult = ProfileAutocomplete.lastProfileAutoCompleteResult;
+    let focusedInput = FormAutofillContent.activeInput;
+
+    if (e.keyCode != Ci.nsIDOMKeyEvent.DOM_VK_RETURN || !lastAutoCompleteResult ||
+        !focusedInput || focusedInput != ProfileAutocomplete.lastProfileAutoCompleteFocusedInput) {
+      return;
     }
+
+    let selectedIndex = ProfileAutocomplete._getSelectedIndex(e.target.ownerGlobal);
+    let selectedRowStyle = lastAutoCompleteResult.getStyleAt(selectedIndex);
+    focusedInput.addEventListener("DOMAutoComplete", () => {
+      if (selectedRowStyle == "autofill-footer") {
+        Services.cpmm.sendAsyncMessage("FormAutofill:OpenPreferences");
+      } else if (selectedRowStyle == "autofill-clear-button") {
+        FormAutofillContent.clearForm();
+      }
+    }, {once: true});
   },
 };
 

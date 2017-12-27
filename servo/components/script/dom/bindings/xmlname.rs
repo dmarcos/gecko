@@ -6,7 +6,7 @@
 
 use dom::bindings::error::{Error, ErrorResult, Fallible};
 use dom::bindings::str::DOMString;
-use html5ever_atoms::{Prefix, LocalName, Namespace};
+use html5ever::{Prefix, LocalName, Namespace};
 
 /// Validate a qualified name. See https://dom.spec.whatwg.org/#validate for details.
 pub fn validate_qualified_name(qualified_name: &str) -> ErrorResult {
@@ -32,7 +32,7 @@ pub fn validate_and_extract(namespace: Option<DOMString>,
     let namespace = namespace_from_domstring(namespace);
 
     // Step 2.
-    try!(validate_qualified_name(qualified_name));
+    validate_qualified_name(qualified_name)?;
 
     let colon = ':';
 

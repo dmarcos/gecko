@@ -16,25 +16,33 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(POST_DATA_URL);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
-  let wait = waitForNetworkEvents(monitor, 0, 2);
+  let wait = waitForNetworkEvents(monitor, 2);
   yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
     content.wrappedJSObject.performRequests();
   });
   yield wait;
 
+  let requestItems = document.querySelectorAll(".request-list-item");
+  for (let requestItem of requestItems) {
+    requestItem.scrollIntoView();
+    let requestsListStatus = requestItem.querySelector(".requests-list-status");
+    EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+    yield waitUntil(() => requestsListStatus.title);
+  }
+
   verifyRequestItemTarget(
     document,
-    getDisplayedRequests(gStore.getState()),
-    getSortedRequests(gStore.getState()).get(0),
+    getDisplayedRequests(store.getState()),
+    getSortedRequests(store.getState()).get(0),
     "POST",
     SIMPLE_SJS + "?foo=bar&baz=42&type=urlencoded",
     {
@@ -48,8 +56,8 @@ add_task(function* () {
   );
   verifyRequestItemTarget(
     document,
-    getDisplayedRequests(gStore.getState()),
-    getSortedRequests(gStore.getState()).get(1),
+    getDisplayedRequests(store.getState()),
+    getSortedRequests(store.getState()).get(1),
     "POST",
     SIMPLE_SJS + "?foo=bar&baz=42&type=multipart",
     {
@@ -112,20 +120,20 @@ add_task(function* () {
     let values = tabpanel
       .querySelectorAll("tr:not(.tree-section) .treeValueCell .objectBox");
 
-    is(labels[0].textContent, "foo", "The first query param name was incorrect.");
-    is(values[0].textContent, "bar", "The first query param value was incorrect.");
-    is(labels[1].textContent, "baz", "The second query param name was incorrect.");
-    is(values[1].textContent, "42", "The second query param value was incorrect.");
+    is(labels[0].textContent, "baz", "The first query param name was incorrect.");
+    is(values[0].textContent, "42", "The first query param value was incorrect.");
+    is(labels[1].textContent, "foo", "The second query param name was incorrect.");
+    is(values[1].textContent, "bar", "The second query param value was incorrect.");
     is(labels[2].textContent, "type", "The third query param name was incorrect.");
     is(values[2].textContent, type, "The third query param value was incorrect.");
 
     if (type == "urlencoded") {
       checkVisibility("params");
       is(labels.length, 5, "There should be 5 param values displayed in this tabpanel.");
-      is(labels[3].textContent, "foo", "The first post param name was incorrect.");
-      is(values[3].textContent, "bar", "The first post param value was incorrect.");
-      is(labels[4].textContent, "baz", "The second post param name was incorrect.");
-      is(values[4].textContent, "123", "The second post param value was incorrect.");
+      is(labels[3].textContent, "baz", "The first post param name was incorrect.");
+      is(values[3].textContent, "123", "The first post param value was incorrect.");
+      is(labels[4].textContent, "foo", "The second post param name was incorrect.");
+      is(values[4].textContent, "bar", "The second post param value was incorrect.");
     } else {
       checkVisibility("params editor");
 

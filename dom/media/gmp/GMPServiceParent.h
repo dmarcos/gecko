@@ -145,9 +145,12 @@ private:
       REMOVE_AND_DELETE_FROM_DISK,
     };
 
-    PathRunnable(GeckoMediaPluginServiceParent* aService, const nsAString& aPath,
-                 EOperation aOperation, bool aDefer = false)
-      : mService(aService)
+    PathRunnable(GeckoMediaPluginServiceParent* aService,
+                 const nsAString& aPath,
+                 EOperation aOperation,
+                 bool aDefer = false)
+      : Runnable("gmp::GeckoMediaPluginServiceParent::PathRunnable")
+      , mService(aService)
       , mPath(aPath)
       , mOperation(aOperation)
       , mDefer(aDefer)
@@ -243,7 +246,8 @@ public:
                                ProcessId* aOutID,
                                nsCString* aOutDisplayName,
                                Endpoint<PGMPContentParent>* aOutEndpoint,
-                               nsresult* aOutRv) override;
+                               nsresult* aOutRv,
+                               nsCString* aOutErrorDescription) override;
 
   ipc::IPCResult RecvLaunchGMPForNodeId(
     const NodeIdData& nodeId,
@@ -254,7 +258,8 @@ public:
     ProcessId* aOutID,
     nsCString* aOutDisplayName,
     Endpoint<PGMPContentParent>* aOutEndpoint,
-    nsresult* aOutRv) override;
+    nsresult* aOutRv,
+    nsCString* aOutErrorDescription) override;
 
 private:
   void CloseTransport(Monitor* aSyncMonitor, bool* aCompleted);

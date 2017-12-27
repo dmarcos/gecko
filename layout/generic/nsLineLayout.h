@@ -1,16 +1,8 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim:cindent:ts=2:et:sw=2:
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- * This Original Code has been modified by IBM Corporation. Modifications made by IBM 
- * described herein are Copyright (c) International Business Machines Corporation, 2000.
- * Modifications to Mozilla code or documentation identified per MPL Section 3.3
- *
- * Date             Modified by     Description of modification
- * 04/20/2000       IBM Corp.      OS/2 VisualAge build.
- */
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* state and methods used while laying out a single line of a block frame */
 
@@ -31,7 +23,7 @@ class nsLineLayout {
   using BlockReflowInput = mozilla::BlockReflowInput;
   using ReflowInput = mozilla::ReflowInput;
   using ReflowOutput = mozilla::ReflowOutput;
-  
+
 public:
   /**
    * @param aBaseLineLayout the nsLineLayout for ruby base,
@@ -165,13 +157,13 @@ public:
 
   bool LineIsBreakable() const;
 
-  bool GetLineEndsInBR() const 
-  { 
+  bool GetLineEndsInBR() const
+  {
     return mLineEndsInBR;
   }
 
-  void SetLineEndsInBR(bool aOn) 
-  { 
+  void SetLineEndsInBR(bool aOn)
+  {
     mLineEndsInBR = aOn;
   }
 
@@ -240,7 +232,7 @@ public:
    * have been made, but wasn't because we decided to place more content on
    * the line. For non-text frames, offset 0 means before the frame, offset
    * INT32_MAX means after the frame.
-   * 
+   *
    * Currently this is used to handle cases where a single word comprises
    * multiple frames, and the first frame fits on the line but the whole word
    * doesn't. We look back to the last optional break position and
@@ -249,9 +241,9 @@ public:
    * that cannot be part of a text run, so those are the positions we record.
    *
    * @param aFrame the frame which contains the optional break position.
-   * 
+   *
    * @param aFits set to true if the break position is within the available width.
-   * 
+   *
    * @param aPriority the priority of the break opportunity. If we are
    * prioritizing break opportunities, we will not set a break if we have
    * already set a break with a higher priority. @see gfxBreakPriority.
@@ -312,13 +304,13 @@ public:
   {
     return mLastOptionalBreakPriority;
   }
-  
+
   /**
    * Check whether frames overflowed the available width and CanPlaceFrame
    * requested backing up to a saved break position.
-   */  
+   */
   bool NeedsBackup() { return mNeedBackup; }
-  
+
   // Line layout may place too much content on a line, overflowing its available
   // width. When that happens, if SetLastOptionalBreakPosition has been
   // used to record an optional break that wasn't taken, we can reflow the line
@@ -350,7 +342,7 @@ public:
   nsLineList::iterator* GetLine() {
     return mGotLineBox ? &mLineBox : nullptr;
   }
-  
+
   /**
    * Returns the accumulated advance width of frames before the current frame
    * on the line, plus the line container's left border+padding.
@@ -408,7 +400,7 @@ protected:
 
   nsIFrame* mLastOptionalBreakFrame;
   nsIFrame* mForceBreakFrame;
-  
+
   // XXX remove this when landing bug 154892 (splitting absolute positioned frames)
   friend class nsInlineFrame;
 
@@ -468,7 +460,7 @@ protected:
     // and end justifiable info are not reliable for non-text frames.
     mozilla::JustificationInfo mJustificationInfo;
     mozilla::JustificationAssignment mJustificationAssignment;
-    
+
     // PerFrameData flags
     bool mRelativePos : 1;
     bool mIsTextFrame : 1;
@@ -584,7 +576,7 @@ protected:
   int32_t     mForceBreakFrameOffset;
 
   nscoord mMinLineBSize;
-  
+
   // The amount of text indent that we applied to this line, needed for
   // max-element-size calculation.
   nscoord mTextIndent;
@@ -605,7 +597,7 @@ protected:
   // Final computed line-bSize value after VerticalAlignFrames for
   // the block has been called.
   nscoord mFinalLineBSize;
-  
+
   // Amount of trimmable whitespace inline size for the trailing text
   // frame, if any
   nscoord mTrimmableISize;

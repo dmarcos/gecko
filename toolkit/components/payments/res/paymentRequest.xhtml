@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'"/>
+  <title></title>
+  <link rel="stylesheet" href="paymentRequest.css"/>
+  <script src="vendor/custom-elements.min.js"></script>
+
+  <script src="PaymentsStore.js"></script>
+
+  <script src="mixins/ObservedPropertiesMixin.js"></script>
+  <script src="mixins/PaymentStateSubscriberMixin.js"></script>
+
+  <script src="components/currency-amount.js"></script>
+
+  <script src="containers/payment-dialog.js"></script>
+
+  <script src="paymentRequest.js"></script>
+
+  <template id="payment-dialog-template">
+    <div id="host-name"></div>
+
+    <div id="total">
+      <h2 class="label"></h2>
+      <currency-amount></currency-amount>
+    </div>
+    <div id="controls-container">
+      <button id="cancel">Cancel</button>
+      <button id="pay">Pay</button>
+    </div>
+  </template>
+</head>
+<body>
+  <iframe id="debugging-console" hidden="hidden" src="debugging.html"></iframe>
+
+  <payment-dialog></payment-dialog>
+</body>
+</html>

@@ -4,24 +4,6 @@
 
 %include ../../shared/customizableui/panelUI.inc.css
 
-.panel-subviews {
-  background-color: hsla(0,0%,100%,.97);
-}
-
-.panelUI-grid .toolbarbutton-1 {
-  margin-right: 0;
-  margin-left: 0;
-  margin-bottom: 0;
-}
-
-.subviewbutton > .toolbarbutton-text {
-  margin: 2px 0 !important; /* !important for overriding toolbarbutton.css */
-}
-
-.subviewbutton:-moz-any([image],[targetURI],.cui-withicon, .bookmark-item) > .toolbarbutton-text {
-  margin: 2px 6px !important; /* !important for overriding toolbarbutton.css */
-}
-
 .restoreallitem > .toolbarbutton-icon {
   display: none;
 }
@@ -30,22 +12,31 @@
   padding-inline-start: 18px;
 }
 
-.subviewbutton[checked="true"] {
-  background-position: top 5px left 4px;
+.subviewbutton.download {
+  padding-inline-start: 14px;
 }
 
-.subviewbutton[checked="true"]:-moz-locale-dir(rtl) {
-  background-position: top 5px right 4px;
+panelmultiview .toolbaritem-combined-buttons > spacer {
+  width: 42px; /* 18px toolbarbutton padding + 16px icon + 8px label padding start */
+}
+
+#appMenu-addon-banners > .addon-banner-item,
+#appMenu-mainView > .panel-subview-body > .panel-banner-item {
+  padding-inline-start: 18px;
+}
+
+#appMenu-fxa-container[fxastatus="signedin"] > #appMenu-fxa-status > #appMenu-fxa-label {
+  /* 18px space before the avatar, then 16px for the avatar */
+  padding-inline-start: 34px;
+  margin-inline-start: -34px;
+}
+
+#appMenu-fxa-container[fxastatus="signedin"] > #appMenu-fxa-status > #appMenu-fxa-avatar {
+  margin-inline-start: 18px;
 }
 
 .subviewbutton:not(:-moz-any([image],[targetURI],.cui-withicon, .bookmark-item)) > .menu-iconic-left {
   display: none;
-}
-
-menu.subviewbutton,
-menuitem.subviewbutton:not(.panel-subview-footer) {
-  padding-top: 2px;
-  padding-bottom: 2px;
 }
 
 /* Override OSX-specific toolkit styles for the bookmarks panel */
@@ -62,17 +53,9 @@ menu.subviewbutton > .menu-right > image {
   -moz-appearance: menuarrow;
 }
 
-.widget-overflow-list .toolbarbutton-1 > .toolbarbutton-menubutton-dropmarker {
-  margin-inline-start: 4px;
-}
-
 .PanelUI-subView menuseparator,
 .cui-widget-panelview menuseparator {
   padding: 0 !important;
-}
-
-toolbarpaletteitem[place="palette"] > .toolbarbutton-1 > .toolbarbutton-menubutton-button {
-  padding: 3px 1px;
 }
 
 #PanelUI-remotetabs-tabslist > label[itemtype="client"] {

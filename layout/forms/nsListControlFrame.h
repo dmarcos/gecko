@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -55,7 +56,7 @@ public:
                                                   nsStyleContext* aContext);
 
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsListControlFrame)
 
     // nsIFrame
   virtual nsresult HandleEvent(nsPresContext* aPresContext,
@@ -65,8 +66,8 @@ public:
   virtual void SetInitialChildList(ChildListID     aListID,
                                    nsFrameList&    aChildList) override;
 
-  virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
-  virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
+  virtual nscoord GetPrefISize(gfxContext *aRenderingContext) override;
+  virtual nscoord GetMinISize(gfxContext *aRenderingContext) override;
 
   virtual void Reflow(nsPresContext*           aCX,
                       ReflowOutput&     aDesiredSize,
@@ -78,22 +79,13 @@ public:
                     nsIFrame*         aPrevInFlow) override;
 
   virtual void DidReflow(nsPresContext*            aPresContext,
-                         const ReflowInput*  aReflowInput,
-                         nsDidReflowStatus         aStatus) override;
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+                         const ReflowInput*  aReflowInput) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual nsContainerFrame* GetContentInsertionFrame() override;
-
-  /**
-   * Get the "type" of the frame
-   *
-   * @see nsGkAtoms::scrollFrame
-   */
-  virtual nsIAtom* GetType() const override;
 
   virtual bool IsFrameOfType(uint32_t aFlags) const override
   {
@@ -106,7 +98,7 @@ public:
 #endif
 
     // nsIFormControlFrame
-  virtual nsresult SetFormProperty(nsIAtom* aName, const nsAString& aValue) override;
+  virtual nsresult SetFormProperty(nsAtom* aName, const nsAString& aValue) override;
   virtual void SetFocus(bool aOn = true, bool aRepaint = false) override;
 
   virtual mozilla::ScrollbarStyles GetScrollbarStyles() const override;
@@ -256,7 +248,7 @@ public:
 protected:
   /**
    * Return the first non-disabled option starting at aFromIndex (inclusive).
-   * @param aFoundIndex if non-null, set to the index of the returned option 
+   * @param aFoundIndex if non-null, set to the index of the returned option
    */
   HTMLOptionElement* GetNonDisabledOptionFrom(int32_t aFromIndex,
                                               int32_t* aFoundIndex = nullptr);

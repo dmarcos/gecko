@@ -52,6 +52,23 @@ SharedRef::Unlock()
 }
 
 HRESULT
+SharedRef::ToStrongRef(IWeakReferenceSource** aOutStrongReference)
+{
+  RefPtr<IWeakReferenceSource> strongRef;
+
+  { // Scope for lock
+    AutoCriticalSection lock(&mCS);
+    if (!mSupport) {
+      return E_POINTER;
+    }
+    strongRef = mSupport;
+  }
+
+  strongRef.forget(aOutStrongReference);
+  return S_OK;
+}
+
+HRESULT
 SharedRef::Resolve(REFIID aIid, void** aOutStrongReference)
 {
   RefPtr<WeakReferenceSupport> strongRef;
@@ -90,6 +107,18 @@ WeakReferenceSupport::WeakReferenceSupport(Flags aFlags)
 WeakReferenceSupport::~WeakReferenceSupport()
 {
   ::DeleteCriticalSection(&mCSForQI);
+}
+
+void
+WeakReferenceSupport::Lock()
+{
+  ::EnterCriticalSection(&mCSForQI);
+}
+
+void
+WeakReferenceSupport::Unlock()
+{
+  ::LeaveCriticalSection(&mCSForQI);
 }
 
 HRESULT
@@ -151,7 +180,8 @@ WeakReferenceSupport::Release()
       // main thread right now, so we send a reference to ourselves to the main
       // thread to be re-released there.
       RefPtr<WeakReferenceSupport> self = this;
-      NS_ReleaseOnMainThread(self.forget());
+      NS_ReleaseOnMainThreadSystemGroup(
+        "WeakReferenceSupport", self.forget());
     }
   }
   return newRefCnt;
@@ -213,6 +243,12 @@ WeakRef::Release()
     delete this;
   }
   return newRefCnt;
+}
+
+HRESULT
+WeakRef::ToStrongRef(IWeakReferenceSource** aOutStrongReference)
+{
+  return mSharedRef->ToStrongRef(aOutStrongReference);
 }
 
 HRESULT

@@ -32,6 +32,7 @@
 #include "nsJSEnvironment.h"
 #include "nsLayoutUtils.h"
 #include "nsPIWindowRoot.h"
+#include "nsRFPService.h"
 #include "WorkerPrivate.h"
 
 namespace mozilla {
@@ -51,7 +52,7 @@ Event::Event(EventTarget* aOwner,
 
 Event::Event(nsPIDOMWindowInner* aParent)
 {
-  ConstructorInit(nsGlobalWindow::Cast(aParent), nullptr, nullptr);
+  ConstructorInit(nsGlobalWindowInner::Cast(aParent), nullptr, nullptr);
 }
 
 void
@@ -82,10 +83,10 @@ Event::ConstructorInit(EventTarget* aOwner,
       A derived class might want to allocate its own type of aEvent
       (derived from WidgetEvent). To do this, it should take care to pass
       a non-nullptr aEvent to this ctor, e.g.:
-      
+
         FooEvent::FooEvent(..., WidgetEvent* aEvent)
           : Event(..., aEvent ? aEvent : new WidgetEvent())
-      
+
       Then, to override the mEventIsInternal assignments done by the
       base ctor, it should do this in its own ctor:
 
@@ -123,7 +124,7 @@ Event::InitPresContextData(nsPresContext* aPresContext)
   }
 }
 
-Event::~Event() 
+Event::~Event()
 {
   NS_ASSERT_OWNINGTHREAD(Event);
 
@@ -152,18 +153,11 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(Event)
     tmp->mEvent->mTarget = nullptr;
     tmp->mEvent->mCurrentTarget = nullptr;
     tmp->mEvent->mOriginalTarget = nullptr;
+    tmp->mEvent->mRelatedTarget = nullptr;
     switch (tmp->mEvent->mClass) {
-      case eMouseEventClass:
-      case eMouseScrollEventClass:
-      case eWheelEventClass:
-      case eSimpleGestureEventClass:
-      case ePointerEventClass:
-        tmp->mEvent->AsMouseEventBase()->relatedTarget = nullptr;
-        break;
       case eDragEventClass: {
         WidgetDragEvent* dragEvent = tmp->mEvent->AsDragEvent();
         dragEvent->mDataTransfer = nullptr;
-        dragEvent->relatedTarget = nullptr;
         break;
       }
       case eClipboardEventClass:
@@ -171,9 +165,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(Event)
         break;
       case eMutationEventClass:
         tmp->mEvent->AsMutationEvent()->mRelatedNode = nullptr;
-        break;
-      case eFocusEventClass:
-        tmp->mEvent->AsFocusEvent()->mRelatedTarget = nullptr;
         break;
       default:
         break;
@@ -190,21 +181,12 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Event)
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mEvent->mTarget)
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mEvent->mCurrentTarget)
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mEvent->mOriginalTarget)
+    NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mEvent->mRelatedTarget)
     switch (tmp->mEvent->mClass) {
-      case eMouseEventClass:
-      case eMouseScrollEventClass:
-      case eWheelEventClass:
-      case eSimpleGestureEventClass:
-      case ePointerEventClass:
-        NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mEvent->relatedTarget");
-        cb.NoteXPCOMChild(tmp->mEvent->AsMouseEventBase()->relatedTarget);
-        break;
       case eDragEventClass: {
         WidgetDragEvent* dragEvent = tmp->mEvent->AsDragEvent();
         NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mEvent->mDataTransfer");
         cb.NoteXPCOMChild(dragEvent->mDataTransfer);
-        NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mEvent->relatedTarget");
-        cb.NoteXPCOMChild(dragEvent->relatedTarget);
         break;
       }
       case eClipboardEventClass:
@@ -214,10 +196,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Event)
       case eMutationEventClass:
         NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mEvent->mRelatedNode");
         cb.NoteXPCOMChild(tmp->mEvent->AsMutationEvent()->mRelatedNode);
-        break;
-      case eFocusEventClass:
-        NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mEvent->mRelatedTarget");
-        cb.NoteXPCOMChild(tmp->mEvent->AsFocusEvent()->mRelatedTarget);
         break;
       default:
         break;
@@ -270,6 +248,12 @@ EventTarget*
 Event::GetCurrentTarget() const
 {
   return mEvent->GetCurrentDOMEventTarget();
+}
+
+void
+Event::ComposedPath(nsTArray<RefPtr<EventTarget>>& aPath)
+{
+  EventDispatcher::GetComposedPathFor(mEvent, aPath);
 }
 
 NS_IMETHODIMP
@@ -483,11 +467,15 @@ Event::PreventDefault(JSContext* aCx, CallerType aCallerType)
   // Then, JS in content mey be call preventDefault()
   // even in the event is in system event group.  Therefore, don't refer
   // mInSystemGroup here.
-  PreventDefaultInternal(aCallerType == CallerType::System);
+  nsIPrincipal* principal = mIsMainThreadEvent ?
+                              nsContentUtils::SubjectPrincipal(aCx) : nullptr;
+
+  PreventDefaultInternal(aCallerType == CallerType::System, principal);
 }
 
 void
-Event::PreventDefaultInternal(bool aCalledByDefaultHandler)
+Event::PreventDefaultInternal(bool aCalledByDefaultHandler,
+                              nsIPrincipal* aPrincipal)
 {
   if (!mEvent->mFlags.mCancelable) {
     return;
@@ -506,7 +494,7 @@ Event::PreventDefaultInternal(bool aCalledByDefaultHandler)
     return;
   }
 
-  mEvent->PreventDefault(aCalledByDefaultHandler);
+  mEvent->PreventDefault(aCalledByDefaultHandler, aPrincipal);
 
   if (!IsTrusted()) {
     return;
@@ -665,12 +653,12 @@ PopupAllowedForEvent(const char *eventName)
 
   nsDependentCString events(sPopupAllowedEvents);
 
-  nsAFlatCString::const_iterator start, end;
-  nsAFlatCString::const_iterator startiter(events.BeginReading(start));
+  nsCString::const_iterator start, end;
+  nsCString::const_iterator startiter(events.BeginReading(start));
   events.EndReading(end);
 
   while (startiter != end) {
-    nsAFlatCString::const_iterator enditer(end);
+    nsCString::const_iterator enditer(end);
 
     if (!FindInReadable(nsDependentCString(eventName), startiter, enditer))
       return false;
@@ -712,6 +700,7 @@ Event::GetEventPopupControlState(WidgetEvent* aEvent, nsIDOMEvent* aDOMEvent)
     // triggered while handling user input. See
     // nsPresShell::HandleEventInternal() for details.
     if (EventStateManager::IsHandlingUserInput()) {
+      abuse = openBlocked;
       switch(aEvent->mMessage) {
       case eFormSelect:
         if (PopupAllowedForEvent("select")) {
@@ -733,6 +722,7 @@ Event::GetEventPopupControlState(WidgetEvent* aEvent, nsIDOMEvent* aDOMEvent)
     // while handling user input. See
     // nsPresShell::HandleEventInternal() for details.
     if (EventStateManager::IsHandlingUserInput()) {
+      abuse = openBlocked;
       switch(aEvent->mMessage) {
       case eEditorInput:
         if (PopupAllowedForEvent("input")) {
@@ -749,6 +739,7 @@ Event::GetEventPopupControlState(WidgetEvent* aEvent, nsIDOMEvent* aDOMEvent)
     // while handling user input. See
     // nsPresShell::HandleEventInternal() for details.
     if (EventStateManager::IsHandlingUserInput()) {
+      abuse = openBlocked;
       switch(aEvent->mMessage) {
       case eFormChange:
         if (PopupAllowedForEvent("change")) {
@@ -765,6 +756,7 @@ Event::GetEventPopupControlState(WidgetEvent* aEvent, nsIDOMEvent* aDOMEvent)
     break;
   case eKeyboardEventClass:
     if (aEvent->IsTrusted()) {
+      abuse = openBlocked;
       uint32_t key = aEvent->AsKeyboardEvent()->mKeyCode;
       switch(aEvent->mMessage) {
       case eKeyPress:
@@ -795,6 +787,7 @@ Event::GetEventPopupControlState(WidgetEvent* aEvent, nsIDOMEvent* aDOMEvent)
     break;
   case eTouchEventClass:
     if (aEvent->IsTrusted()) {
+      abuse = openBlocked;
       switch (aEvent->mMessage) {
       case eTouchStart:
         if (PopupAllowedForEvent("touchstart")) {
@@ -814,6 +807,7 @@ Event::GetEventPopupControlState(WidgetEvent* aEvent, nsIDOMEvent* aDOMEvent)
   case eMouseEventClass:
     if (aEvent->IsTrusted() &&
         aEvent->AsMouseEvent()->button == WidgetMouseEvent::eLeftButton) {
+      abuse = openBlocked;
       switch(aEvent->mMessage) {
       case eMouseUp:
         if (PopupAllowedForEvent("mouseup")) {
@@ -868,6 +862,7 @@ Event::GetEventPopupControlState(WidgetEvent* aEvent, nsIDOMEvent* aDOMEvent)
     // triggered while handling user input. See
     // nsPresShell::HandleEventInternal() for details.
     if (EventStateManager::IsHandlingUserInput()) {
+      abuse = openBlocked;
       switch(aEvent->mMessage) {
       case eFormSubmit:
         if (PopupAllowedForEvent("submit")) {
@@ -899,7 +894,8 @@ Event::PopupAllowedEventsChanged()
     free(sPopupAllowedEvents);
   }
 
-  nsAdoptingCString str = Preferences::GetCString("dom.popup_allowed_events");
+  nsAutoCString str;
+  Preferences::GetCString("dom.popup_allowed_events", str);
 
   // We'll want to do this even if str is empty to avoid looking up
   // this pref all the time if it's not set.
@@ -1094,7 +1090,7 @@ Event::DefaultPrevented(CallerType aCallerType) const
 }
 
 double
-Event::TimeStamp() const
+Event::TimeStampImpl() const
 {
   if (!sReturnHighResTimeStamp) {
     return static_cast<double>(mEvent->mTime);
@@ -1129,27 +1125,10 @@ Event::TimeStamp() const
   return workerPrivate->TimeStampToDOMHighRes(mEvent->mTimeStamp);
 }
 
-bool
-Event::GetPreventDefault() const
+double
+Event::TimeStamp() const
 {
-  nsCOMPtr<nsPIDOMWindowInner> win(do_QueryInterface(mOwner));
-  if (win) {
-    if (nsIDocument* doc = win->GetExtantDoc()) {
-      doc->WarnOnceAbout(nsIDocument::eGetPreventDefault);
-    }
-  }
-  // GetPreventDefault() is legacy and Gecko specific method.  Although,
-  // the result should be same as defaultPrevented, we don't need to break
-  // backward compatibility of legacy method.  Let's behave traditionally.
-  return DefaultPrevented();
-}
-
-NS_IMETHODIMP
-Event::GetPreventDefault(bool* aReturn)
-{
-  NS_ENSURE_ARG_POINTER(aReturn);
-  *aReturn = GetPreventDefault();
-  return NS_OK;
+  return nsRFPService::ReduceTimePrecisionAsMSecs(TimeStampImpl());
 }
 
 NS_IMETHODIMP
@@ -1328,7 +1307,7 @@ using namespace mozilla::dom;
 already_AddRefed<Event>
 NS_NewDOMEvent(EventTarget* aOwner,
                nsPresContext* aPresContext,
-               WidgetEvent* aEvent) 
+               WidgetEvent* aEvent)
 {
   RefPtr<Event> it = new Event(aOwner, aPresContext, aEvent);
   return it.forget();

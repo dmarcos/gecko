@@ -16,6 +16,7 @@
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/IntegerTypeTraits.h"
 #include "mozilla/Sprintf.h"
+#include "mozilla/TypeTraits.h"
 
 #include "jsapi.h"
 #include "jsfriendapi.h"
@@ -25,7 +26,6 @@
 #include "builtin/TypedObject.h"
 #include "jit/AtomicOperations.h"
 #include "jit/InlinableNatives.h"
-#include "js/GCAPI.h"
 #include "js/Value.h"
 
 #include "jsobjinlines.h"
@@ -37,6 +37,11 @@ using mozilla::IsFinite;
 using mozilla::IsNaN;
 using mozilla::FloorLog2;
 using mozilla::NumberIsInt32;
+using mozilla::EnableIf;
+using mozilla::IsIntegral;
+using mozilla::IsFloatingPoint;
+using mozilla::IsSigned;
+using mozilla::MakeUnsigned;
 
 ///////////////////////////////////////////////////////////////////////////
 // SIMD
@@ -156,6 +161,72 @@ ErrorBadIndex(JSContext* cx)
     return false;
 }
 
+/* Non-standard: convert and range check an index value for SIMD operations.
+ *
+ *   1. numericIndex = ToNumber(argument)            (may throw TypeError)
+ *   2. intIndex = ToInteger(numericIndex)
+ *   3. if intIndex != numericIndex throw RangeError
+ *
+ * This function additionally bounds the range to the non-negative contiguous
+ * integers:
+ *
+ *   4. if intIndex < 0 or intIndex > 2^53 throw RangeError
+ *
+ * Return true and set |*index| to the integer value if |argument| is a valid
+ * array index argument. Otherwise report an TypeError or RangeError and return
+ * false.
+ *
+ * The returned index will always be in the range 0 <= *index <= 2^53.
+ */
+static bool
+NonStandardToIndex(JSContext* cx, HandleValue v, uint64_t* index)
+{
+    // Fast common case.
+    if (v.isInt32()) {
+        int32_t i = v.toInt32();
+        if (i >= 0) {
+            *index = i;
+            return true;
+        }
+    }
+
+    // Slow case. Use ToNumber() to coerce. This may throw a TypeError.
+    double d;
+    if (!ToNumber(cx, v, &d))
+        return false;
+
+    // Check that |d| is an integer in the valid range.
+    //
+    // Not all floating point integers fit in the range of a uint64_t, so we
+    // need a rough range check before the real range check in our caller. We
+    // could limit indexes to UINT64_MAX, but this would mean that our callers
+    // have to be very careful about integer overflow. The contiguous integer
+    // floating point numbers end at 2^53, so make that our upper limit. If we
+    // ever support arrays with more than 2^53 elements, this will need to
+    // change.
+    //
+    // Reject infinities, NaNs, and numbers outside the contiguous integer range
+    // with a RangeError.
+
+    // Write relation so NaNs throw a RangeError.
+    if (!(0 <= d && d <= (uint64_t(1) << 53))) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_BAD_INDEX);
+        return false;
+    }
+
+    // Check that d is an integer, throw a RangeError if not.
+    // Note that this conversion could invoke undefined behaviour without the
+    // range check above.
+    uint64_t i(d);
+    if (d != double(i)) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_BAD_INDEX);
+        return false;
+    }
+
+    *index = i;
+    return true;
+}
+
 template<typename T>
 static SimdTypeDescr*
 GetTypeDescr(JSContext* cx)
@@ -200,9 +271,8 @@ TypedObjectMemory(HandleValue v, const JS::AutoRequireNoGC& nogc)
 static const ClassOps SimdTypeDescrClassOps = {
     nullptr, /* addProperty */
     nullptr, /* delProperty */
-    nullptr, /* getProperty */
-    nullptr, /* setProperty */
     nullptr, /* enumerate */
+    nullptr, /* newEnumerate */
     nullptr, /* resolve */
     nullptr, /* mayResolve */
     TypeDescr::finalize,
@@ -464,9 +534,8 @@ SimdTypeDescr::call(JSContext* cx, unsigned argc, Value* vp)
 static const ClassOps SimdObjectClassOps = {
     nullptr, /* addProperty */
     nullptr, /* delProperty */
-    nullptr, /* getProperty */
-    nullptr, /* setProperty */
     nullptr, /* enumerate */
+    nullptr, /* newEnumerate */
     SimdObject::resolve
 };
 
@@ -497,11 +566,8 @@ GlobalObject::initSimdObject(JSContext* cx, Handle<GlobalObject*> global)
         return false;
 
     RootedValue globalSimdValue(cx, ObjectValue(*globalSimdObject));
-    if (!DefineProperty(cx, global, cx->names().SIMD, globalSimdValue, nullptr, nullptr,
-                        JSPROP_RESOLVING))
-    {
+    if (!DefineDataProperty(cx, global, cx->names().SIMD, globalSimdValue, JSPROP_RESOLVING))
         return false;
-    }
 
     global->setConstructor(JSProto_SIMD, globalSimdValue);
     return true;
@@ -557,8 +623,8 @@ CreateSimdType(JSContext* cx, Handle<GlobalObject*> global, HandlePropertyName s
 
     RootedValue typeValue(cx, ObjectValue(*typeDescr));
     if (!JS_DefineFunctions(cx, typeDescr, methods) ||
-        !DefineProperty(cx, globalSimdObject, stringRepr, typeValue, nullptr, nullptr,
-                        JSPROP_READONLY | JSPROP_PERMANENT | JSPROP_RESOLVING))
+        !DefineDataProperty(cx, globalSimdObject, stringRepr, typeValue,
+                            JSPROP_READONLY | JSPROP_PERMANENT | JSPROP_RESOLVING))
     {
         return false;
     }
@@ -662,6 +728,21 @@ FOR_EACH_SIMD(InstantiateCreateSimd_)
 #undef FOR_EACH_SIMD
 
 namespace js {
+
+namespace detail {
+
+template<typename T, typename Enable = void>
+struct MaybeMakeUnsigned {
+    using Type = T;
+};
+
+template<typename T>
+struct MaybeMakeUnsigned<T, typename EnableIf<IsIntegral<T>::value && IsSigned<T>::value>::Type> {
+    using Type = typename MakeUnsigned<T>::Type;
+};
+
+} // namespace detail
+
 // Unary SIMD operators
 template<typename T>
 struct Identity {
@@ -673,7 +754,8 @@ struct Abs {
 };
 template<typename T>
 struct Neg {
-    static T apply(T x) { return -1 * x; }
+    using MaybeUnsignedT = typename detail::MaybeMakeUnsigned<T>::Type;
+    static T apply(T x) { return MaybeUnsignedT(-1) * MaybeUnsignedT(x); }
 };
 template<typename T>
 struct Not {
@@ -685,33 +767,40 @@ struct LogicalNot {
 };
 template<typename T>
 struct RecApprox {
+    static_assert(IsFloatingPoint<T>::value, "RecApprox only supported for floating points");
     static T apply(T x) { return 1 / x; }
 };
 template<typename T>
 struct RecSqrtApprox {
+    static_assert(IsFloatingPoint<T>::value, "RecSqrtApprox only supported for floating points");
     static T apply(T x) { return 1 / sqrt(x); }
 };
 template<typename T>
 struct Sqrt {
+    static_assert(IsFloatingPoint<T>::value, "Sqrt only supported for floating points");
     static T apply(T x) { return sqrt(x); }
 };
 
 // Binary SIMD operators
 template<typename T>
 struct Add {
-    static T apply(T l, T r) { return l + r; }
+    using MaybeUnsignedT = typename detail::MaybeMakeUnsigned<T>::Type;
+    static T apply(T l, T r) { return MaybeUnsignedT(l) + MaybeUnsignedT(r); }
 };
 template<typename T>
 struct Sub {
-    static T apply(T l, T r) { return l - r; }
+    using MaybeUnsignedT = typename detail::MaybeMakeUnsigned<T>::Type;
+    static T apply(T l, T r) { return MaybeUnsignedT(l) - MaybeUnsignedT(r); }
 };
 template<typename T>
 struct Div {
+    static_assert(IsFloatingPoint<T>::value, "Div only supported for floating points");
     static T apply(T l, T r) { return l / r; }
 };
 template<typename T>
 struct Mul {
-    static T apply(T l, T r) { return l * r; }
+    using MaybeUnsignedT = typename detail::MaybeMakeUnsigned<T>::Type;
+    static T apply(T l, T r) { return MaybeUnsignedT(l) * MaybeUnsignedT(r); }
 };
 template<typename T>
 struct Minimum {

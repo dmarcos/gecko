@@ -20,6 +20,7 @@ namespace mozilla {
 namespace dom {
 
 using base::Thread;
+using media::TimeUnit;
 using namespace ipc;
 using namespace layers;
 using namespace gfx;
@@ -43,10 +44,12 @@ private:
 
 VideoDecoderParent::VideoDecoderParent(VideoDecoderManagerParent* aParent,
                                        const VideoInfo& aVideoInfo,
+                                       float aFramerate,
                                        const layers::TextureFactoryIdentifier& aIdentifier,
                                        TaskQueue* aManagerTaskQueue,
                                        TaskQueue* aDecodeTaskQueue,
-                                       bool* aSuccess)
+                                       bool* aSuccess,
+                                       nsCString* aErrorDescription)
   : mParent(aParent)
   , mManagerTaskQueue(aManagerTaskQueue)
   , mDecodeTaskQueue(aDecodeTaskQueue)
@@ -74,13 +77,20 @@ VideoDecoderParent::VideoDecoderParent(VideoDecoderManagerParent* aParent,
   params.mTaskQueue = mDecodeTaskQueue;
   params.mKnowsCompositor = mKnowsCompositor;
   params.mImageContainer = new layers::ImageContainer();
+  params.mRate = CreateDecoderParams::VideoFrameRate(aFramerate);
+  MediaResult error(NS_OK);
+  params.mError = &error;
 
   mDecoder = pdm->CreateVideoDecoder(params);
+
+  if (NS_FAILED(error)) {
+    MOZ_ASSERT(aErrorDescription);
+    *aErrorDescription = error.Description();
+  }
 #else
   MOZ_ASSERT(false,
              "Can't use RemoteVideoDecoder on non-Windows platforms yet");
 #endif
-
   *aSuccess = !!mDecoder;
 }
 
@@ -111,8 +121,10 @@ VideoDecoderParent::RecvInit()
           self->mDecoder->IsHardwareAccelerated(hardwareReason);
         uint32_t conversion =
           static_cast<uint32_t>(self->mDecoder->NeedsConversion());
-        Unused << self->SendInitComplete(
-          hardwareAccelerated, hardwareReason, conversion);
+        Unused << self->SendInitComplete(self->mDecoder->GetDescriptionName(),
+                                         hardwareAccelerated,
+                                         hardwareReason,
+                                         conversion);
       }
     },
     [self] (MediaResult aReason) {
@@ -137,9 +149,9 @@ VideoDecoderParent::RecvInput(const MediaRawDataIPDL& aData)
     return IPC_OK();
   }
   data->mOffset = aData.base().offset();
-  data->mTime = aData.base().time();
-  data->mTimecode = aData.base().timecode();
-  data->mDuration = media::TimeUnit::FromMicroseconds(aData.base().duration());
+  data->mTime = TimeUnit::FromMicroseconds(aData.base().time());
+  data->mTimecode = TimeUnit::FromMicroseconds(aData.base().timecode());
+  data->mDuration = TimeUnit::FromMicroseconds(aData.base().duration());
   data->mKeyframe = aData.base().keyframe();
 
   DeallocShmem(aData.buffer());
@@ -154,7 +166,7 @@ VideoDecoderParent::RecvInput(const MediaRawDataIPDL& aData)
       ProcessDecodedData(aResults);
       Unused << SendInputExhausted();
     },
-    [self, this](const MediaResult& aError) { Error(aError); });
+    [self](const MediaResult& aError) { self->Error(aError); });
   return IPC_OK();
 }
 
@@ -163,6 +175,11 @@ VideoDecoderParent::ProcessDecodedData(
   const MediaDataDecoder::DecodedData& aData)
 {
   MOZ_ASSERT(OnManagerThread());
+
+  // If the video decoder bridge has shut down, stop.
+  if (!mKnowsCompositor->GetTextureForwarder()) {
+    return;
+  }
 
   for (const auto& data : aData) {
     MOZ_ASSERT(data->mType == MediaData::VIDEO_DATA,
@@ -186,13 +203,14 @@ VideoDecoderParent::ProcessDecodedData(
     }
 
     VideoDataIPDL output(
-      MediaDataIPDL(data->mOffset, data->mTime, data->mTimecode,
+      MediaDataIPDL(data->mOffset, data->mTime.ToMicroseconds(),
+                    data->mTimecode.ToMicroseconds(),
                     data->mDuration.ToMicroseconds(),
                     data->mFrames, data->mKeyframe),
       video->mDisplay,
       texture ? texture->GetSize() : IntSize(),
       texture ? mParent->StoreImage(video->mImage, texture)
-              : SurfaceDescriptorGPUVideo(0),
+              : SurfaceDescriptorGPUVideo(0, null_t()),
       video->mFrameID);
     Unused << SendOutput(output);
   }
@@ -206,12 +224,12 @@ VideoDecoderParent::RecvFlush()
   RefPtr<VideoDecoderParent> self = this;
   mDecoder->Flush()->Then(
     mManagerTaskQueue, __func__,
-    [self, this]() {
-      if (!mDestroyed) {
-        Unused << SendFlushComplete();
+    [self]() {
+      if (!self->mDestroyed) {
+        Unused << self->SendFlushComplete();
       }
     },
-    [self, this](const MediaResult& aError) { Error(aError); });
+    [self](const MediaResult& aError) { self->Error(aError); });
 
   return IPC_OK();
 }
@@ -230,7 +248,7 @@ VideoDecoderParent::RecvDrain()
         Unused << SendDrainComplete();
       }
     },
-    [self, this](const MediaResult& aError) { Error(aError); });
+    [self](const MediaResult& aError) { self->Error(aError); });
   return IPC_OK();
 }
 
@@ -251,7 +269,7 @@ VideoDecoderParent::RecvSetSeekThreshold(const int64_t& aTime)
 {
   MOZ_ASSERT(!mDestroyed);
   MOZ_ASSERT(OnManagerThread());
-  mDecoder->SetSeekThreshold(media::TimeUnit::FromMicroseconds(aTime));
+  mDecoder->SetSeekThreshold(TimeUnit::FromMicroseconds(aTime));
   return IPC_OK();
 }
 

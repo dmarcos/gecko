@@ -12,7 +12,7 @@
 //  * Neither the name of Google, Inc. nor the names of its contributors
 //    may be used to endorse or promote products derived from this
 //    software without specific prior written permission.
-// 
+//
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
 // "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
 // LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
@@ -41,7 +41,6 @@
 #include "mozilla/Unused.h"
 #include "PlatformMacros.h"
 #include <vector>
-#include "StackTop.h"
 
 // We need a definition of gettid(), but glibc doesn't provide a
 // wrapper for it.
@@ -67,10 +66,6 @@ static inline pid_t gettid()
 #ifndef getpid
 #define getpid _getpid
 #endif
-#endif
-
-#if defined(GP_OS_android) && !defined(MOZ_WIDGET_GONK)
-#define PROFILE_JAVA
 #endif
 
 extern mozilla::LazyLogModule gProfilerLog;
@@ -102,13 +97,7 @@ typedef uint8_t* Address;
 
 class Thread {
 public:
-#if defined(GP_OS_windows)
-  typedef DWORD tid_t;
-#else
-  typedef ::pid_t tid_t;
-#endif
-
-  static tid_t GetCurrentId();
+  static int GetCurrentId();
 };
 
 // ----------------------------------------------------------------------------
@@ -130,5 +119,9 @@ namespace mozilla {
 class JSONWriter;
 }
 void AppendSharedLibraries(mozilla::JSONWriter& aWriter);
+
+// Convert the array of strings to a bitfield.
+uint32_t ParseFeaturesFromStringArray(const char** aFeatures,
+                                      uint32_t aFeatureCount);
 
 #endif /* ndef TOOLS_PLATFORM_H_ */

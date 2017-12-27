@@ -6,8 +6,8 @@
 
 #include "nsHtml5OplessBuilder.h"
 
-#include "nsScriptLoader.h"
 #include "mozilla/css/Loader.h"
+#include "mozilla/dom/ScriptLoader.h"
 #include "nsIDocShell.h"
 #include "nsIHTMLDocument.h"
 
@@ -23,7 +23,7 @@ nsHtml5OplessBuilder::~nsHtml5OplessBuilder()
 void
 nsHtml5OplessBuilder::Start()
 {
-  mFlushState = eInFlush;
+  BeginFlush();
   BeginDocUpdate();
 }
 
@@ -31,6 +31,7 @@ void
 nsHtml5OplessBuilder::Finish()
 {
   EndDocUpdate();
+  EndFlush();
   DropParserAndPerfHint();
   mScriptLoader = nullptr;
   mDocument = nullptr;
@@ -39,7 +40,6 @@ nsHtml5OplessBuilder::Finish()
   mDocumentURI = nullptr;
   mDocShell = nullptr;
   mOwnedElements.Clear();
-  mFlushState = eNotFlushing;
 }
 
 void

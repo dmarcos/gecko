@@ -20,6 +20,7 @@
 #include "mozilla/Services.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/intl/LocaleService.h"
+#include "nsNativeCharsetUtils.h"
 
 #include "nsAppRunner.h"
 #include "mozilla/XREAppData.h"
@@ -43,7 +44,6 @@
 #include <sys/sysctl.h>
 #endif
 
-#include "prmem.h"
 #include "prnetdb.h"
 #include "prprf.h"
 #include "prproces.h"
@@ -64,7 +64,7 @@
 #include "nsIDialogParamBlock.h"
 #include "nsIDOMWindow.h"
 #include "mozilla/ModuleUtils.h"
-#include "nsIIOService2.h"
+#include "nsIIOService.h"
 #include "nsIObserverService.h"
 #include "nsINativeAppSupport.h"
 #include "nsIPlatformInfo.h"
@@ -110,14 +110,18 @@
 #endif
 #endif
 
-#if (defined(XP_WIN) || defined(XP_MACOSX)) && defined(MOZ_CONTENT_SANDBOX)
+#if defined(MOZ_CONTENT_SANDBOX)
+#include "mozilla/SandboxSettings.h"
+#if (defined(XP_WIN) || defined(XP_MACOSX))
 #include "nsIUUIDGenerator.h"
+#endif
 #endif
 
 #ifdef ACCESSIBILITY
 #include "nsAccessibilityService.h"
 #if defined(XP_WIN)
 #include "mozilla/a11y/Compatibility.h"
+#include "mozilla/a11y/Platform.h"
 #endif
 #endif
 
@@ -130,7 +134,7 @@
 #include "nsReadableUtils.h"
 #include "nsXPCOM.h"
 #include "nsXPCOMCIDInternal.h"
-#include "nsXPIDLString.h"
+#include "nsString.h"
 #include "nsPrintfCString.h"
 #include "nsVersionComparator.h"
 
@@ -156,6 +160,7 @@
 #ifdef XP_WIN
 #include <process.h>
 #include <shlobj.h>
+#include "mozilla/WindowsDllServices.h"
 #include "nsThreadUtils.h"
 #include <comdef.h>
 #include <wbemidl.h>
@@ -174,6 +179,9 @@
 #include "nsProfileLock.h"
 #include "SpecialSystemDirectory.h"
 #include <sched.h>
+#ifdef MOZ_ENABLE_DBUS
+#include "DBusRemoteClient.h"
+#endif
 // Time to wait for the remoting service to start
 #define MOZ_XREMOTE_START_TIMEOUT_SEC 5
 #endif
@@ -194,7 +202,6 @@
 #include "jprof.h"
 #endif
 
-#ifdef MOZ_CRASHREPORTER
 #include "nsExceptionHandler.h"
 #include "nsICrashReporter.h"
 #define NS_CRASHREPORTER_CONTRACTID "@mozilla.org/toolkit/crash-reporter;1"
@@ -202,7 +209,6 @@
 #include "nsIMemoryInfoDumper.h"
 #if defined(XP_LINUX) && !defined(ANDROID)
 #include "mozilla/widget/LSBUtils.h"
-#endif
 #endif
 
 #include "base/command_line.h"
@@ -219,6 +225,10 @@
 #include "SandboxBroker.h"
 #include "SandboxPermissions.h"
 #endif
+#endif
+
+#ifdef MOZ_CODE_COVERAGE
+#include "mozilla/CodeCoverageHandler.h"
 #endif
 
 extern uint32_t gRestartMode;
@@ -250,6 +260,9 @@ nsString gAbsoluteArgv0Path;
 #include <pango/pangofc-fontmap.h>
 #endif
 #include <gtk/gtk.h>
+#ifdef MOZ_WAYLAND
+#include <gdk/gdkwayland.h>
+#endif
 #ifdef MOZ_X11
 #include <gdk/gdkx.h>
 #endif /* MOZ_X11 */
@@ -314,7 +327,7 @@ EnvHasValue(const char *name)
 static void
 SaveWordToEnv(const char *name, const nsACString & word)
 {
-  char *expr = PR_smprintf("%s=%s", name, PromiseFlatCString(word).get());
+  char *expr = Smprintf("%s=%s", name, PromiseFlatCString(word).get()).release();
   if (expr)
     PR_SetEnv(expr);
   // We intentionally leak |expr| here since it is required by PR_SetEnv.
@@ -435,7 +448,7 @@ static MOZ_FORMAT_PRINTF(2, 3) void Output(bool isError, const char *fmt, ... )
   va_start(ap, fmt);
 
 #if defined(XP_WIN) && !MOZ_WINCONSOLE
-  char *msg = mozilla::Vsmprintf(fmt, ap);
+  SmprintfPointer msg = mozilla::Vsmprintf(fmt, ap);
   if (msg)
   {
     UINT flags = MB_OK;
@@ -447,13 +460,12 @@ static MOZ_FORMAT_PRINTF(2, 3) void Output(bool isError, const char *fmt, ... )
     wchar_t wide_msg[1024];
     MultiByteToWideChar(CP_ACP,
                         0,
-                        msg,
+                        msg.get(),
                         -1,
                         wide_msg,
                         sizeof(wide_msg) / sizeof(wchar_t));
 
     MessageBoxW(nullptr, wide_msg, L"XULRunner", flags);
-    mozilla::SmprintfFree(msg);
   }
 #else
   vfprintf(stderr, fmt, ap);
@@ -558,6 +570,50 @@ CheckArg(const char* aArg, bool aCheckOSInt = false, const char **aParam = nullp
   return ar;
 }
 
+/**
+ * Check for a commandline flag. Ignore data that's passed in with the flag.
+ * Flags may be in the form -arg or --arg (or /arg on win32).
+ * Will not remove flag if found.
+ *
+ * @param aArg the parameter to check. Must be lowercase.
+ */
+static ArgResult
+CheckArgExists(const char* aArg)
+{
+  char **curarg = gArgv + 1; // skip argv[0]
+  while (*curarg) {
+    char *arg = curarg[0];
+
+    if (arg[0] == '-'
+#if defined(XP_WIN)
+        || *arg == '/'
+#endif
+        ) {
+      ++arg;
+      if (*arg == '-')
+        ++arg;
+
+      char delimiter = '=';
+#if defined(XP_WIN)
+      delimiter = ':';
+#endif
+      int i;
+      for (i = 0; arg[i] && arg[i] != delimiter; i++) {}
+      char tmp = arg[i];
+      arg[i] = '\0';
+      bool found = strimatch(aArg, arg);
+      arg[i] = tmp;
+      if (found) {
+        return ARG_FOUND;
+      }
+    }
+
+    ++curarg;
+  }
+
+  return ARG_NONE;
+}
+
 #if defined(XP_WIN)
 /**
  * Check for a commandline flag from the windows shell and remove it from the
@@ -617,14 +673,10 @@ ProcessDDE(nsINativeAppSupport* aNative, bool aWait)
   if (ar == ARG_FOUND) {
     aNative->Enable(); // enable win32 DDE responses
     if (aWait) {
-      nsIThread *thread = NS_GetCurrentThread();
       // This is just a guesstimate based on testing different values.
       // If count is 8 or less windows will display an error dialog.
       int32_t count = 20;
-      while(--count >= 0) {
-        NS_ProcessNextEvent(thread);
-        PR_Sleep(PR_MillisecondsToInterval(1));
-      }
+      SpinEventLoopUntil([&]() { return --count < 0; });
     }
   }
 }
@@ -652,10 +704,8 @@ class nsXULAppInfo : public nsIXULAppInfo,
 #ifdef XP_WIN
                      public nsIWinAppHelper,
 #endif
-#ifdef MOZ_CRASHREPORTER
                      public nsICrashReporter,
                      public nsIFinishDumpingCallback,
-#endif
                      public nsIXULRuntime
 
 {
@@ -666,10 +716,8 @@ public:
   NS_DECL_NSIXULAPPINFO
   NS_DECL_NSIXULRUNTIME
   NS_DECL_NSIOBSERVER
-#ifdef MOZ_CRASHREPORTER
   NS_DECL_NSICRASHREPORTER
   NS_DECL_NSIFINISHDUMPINGCALLBACK
-#endif
 #ifdef XP_WIN
   NS_DECL_NSIWINAPPHELPER
 #endif
@@ -682,10 +730,8 @@ NS_INTERFACE_MAP_BEGIN(nsXULAppInfo)
 #ifdef XP_WIN
   NS_INTERFACE_MAP_ENTRY(nsIWinAppHelper)
 #endif
-#ifdef MOZ_CRASHREPORTER
   NS_INTERFACE_MAP_ENTRY(nsICrashReporter)
   NS_INTERFACE_MAP_ENTRY(nsIFinishDumpingCallback)
-#endif
   NS_INTERFACE_MAP_ENTRY(nsIPlatformInfo)
   NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIXULAppInfo, gAppData ||
                                      XRE_IsContentProcess())
@@ -857,9 +903,10 @@ SYNC_ENUMS(CONTENT, Content)
 SYNC_ENUMS(IPDLUNITTEST, IPDLUnitTest)
 SYNC_ENUMS(GMPLUGIN, GMPlugin)
 SYNC_ENUMS(GPU, GPU)
+SYNC_ENUMS(PDFIUM, PDFium)
 
 // .. and ensure that that is all of them:
-static_assert(GeckoProcessType_GPU + 1 == GeckoProcessType_End,
+static_assert(GeckoProcessType_PDFium + 1 == GeckoProcessType_End,
               "Did not find the final GeckoProcessType");
 
 NS_IMETHODIMP
@@ -910,9 +957,6 @@ static bool gBrowserTabsRemoteAutostart = false;
 static uint64_t gBrowserTabsRemoteStatus = 0;
 static bool gBrowserTabsRemoteAutostartInitialized = false;
 
-static bool gMultiprocessBlockPolicyInitialized = false;
-static uint32_t gMultiprocessBlockPolicy = 0;
-
 NS_IMETHODIMP
 nsXULAppInfo::Observe(nsISupports *aSubject, const char *aTopic, const char16_t *aData) {
   if (!nsCRT::strcmp(aTopic, "getE10SBlocked")) {
@@ -942,19 +986,60 @@ nsXULAppInfo::GetMaxWebProcessCount(uint32_t* aResult)
 }
 
 NS_IMETHODIMP
-nsXULAppInfo::GetMultiprocessBlockPolicy(uint32_t* aResult)
-{
-  *aResult = MultiprocessBlockPolicy();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 nsXULAppInfo::GetAccessibilityEnabled(bool* aResult)
 {
 #ifdef ACCESSIBILITY
   *aResult = GetAccService() != nullptr;
 #else
   *aResult = false;
+#endif
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXULAppInfo::GetAccessibleHandlerUsed(bool* aResult)
+{
+#if defined(ACCESSIBILITY) && defined(XP_WIN)
+  *aResult = Preferences::GetBool("accessibility.handler.enabled", false) &&
+    a11y::IsHandlerRegistered();
+#else
+  *aResult = false;
+#endif
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXULAppInfo::GetAccessibilityInstantiator(nsAString &aInstantiator)
+{
+#if defined(ACCESSIBILITY) && defined(XP_WIN)
+  if (!GetAccService()) {
+    aInstantiator = NS_LITERAL_STRING("");
+    return NS_OK;
+  }
+  nsAutoString ipClientInfo;
+  a11y::Compatibility::GetHumanReadableConsumersStr(ipClientInfo);
+  aInstantiator.Append(ipClientInfo);
+  aInstantiator.AppendLiteral("|");
+
+  nsCOMPtr<nsIFile> oopClientExe;
+  if (a11y::GetInstantiator(getter_AddRefs(oopClientExe))) {
+    nsAutoString oopClientInfo;
+    if (NS_SUCCEEDED(oopClientExe->GetPath(oopClientInfo))) {
+      aInstantiator.Append(oopClientInfo);
+    }
+  }
+#else
+  aInstantiator = NS_LITERAL_STRING("");
+#endif
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXULAppInfo::GetShouldBlockIncompatJaws(bool* aResult)
+{
+  *aResult = false;
+#if defined(ACCESSIBILITY) && defined(XP_WIN)
+  *aResult = mozilla::a11y::Compatibility::IsOldJAWS();
 #endif
   return NS_OK;
 }
@@ -976,7 +1061,8 @@ nsXULAppInfo::EnsureContentProcess()
   if (!XRE_IsParentProcess())
     return NS_ERROR_NOT_AVAILABLE;
 
-  RefPtr<ContentParent> unused = ContentParent::GetNewOrUsedBrowserProcess();
+  RefPtr<ContentParent> unused = ContentParent::GetNewOrUsedBrowserProcess(
+    NS_LITERAL_STRING(DEFAULT_REMOTE_TYPE));
   return NS_OK;
 }
 
@@ -1028,17 +1114,6 @@ nsXULAppInfo::GetReplacedLockTime(PRTime *aReplacedLockTime)
 }
 
 NS_IMETHODIMP
-nsXULAppInfo::GetLastRunCrashID(nsAString &aLastRunCrashID)
-{
-#ifdef MOZ_CRASHREPORTER
-  CrashReporter::GetLastRunCrashID(aLastRunCrashID);
-  return NS_OK;
-#else
-  return NS_ERROR_NOT_IMPLEMENTED;
-#endif
-}
-
-NS_IMETHODIMP
 nsXULAppInfo::GetIsReleaseOrBeta(bool* aResult)
 {
 #ifdef RELEASE_OR_BETA
@@ -1071,17 +1146,6 @@ NS_IMETHODIMP
 nsXULAppInfo::GetDistributionID(nsACString& aResult)
 {
   aResult.AssignLiteral(MOZ_DISTRIBUTION_ID);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsXULAppInfo::GetIsOfficial(bool* aResult)
-{
-#ifdef MOZILLA_OFFICIAL
-  *aResult = true;
-#else
-  *aResult = false;
-#endif
   return NS_OK;
 }
 
@@ -1143,7 +1207,6 @@ nsXULAppInfo::GetUserCanElevate(bool *aUserCanElevate)
 }
 #endif
 
-#ifdef MOZ_CRASHREPORTER
 NS_IMETHODIMP
 nsXULAppInfo::GetEnabled(bool *aEnabled)
 {
@@ -1373,7 +1436,6 @@ nsXULAppInfo::Callback(nsISupports* aData)
   CrashReporter::SetMemoryReportFile(file);
   return NS_OK;
 }
-#endif
 
 static const nsXULAppInfo kAppInfo;
 static nsresult AppInfoConstructor(nsISupports* aOuter,
@@ -1438,7 +1500,7 @@ ScopedXPCOMStartup::~ScopedXPCOMStartup()
       appStartup->DestroyHiddenWindow();
 
     gDirServiceProvider->DoShutdown();
-    PROFILER_MARKER("Shutdown early");
+    PROFILER_ADD_MARKER("Shutdown early");
 
     WriteConsoleLog();
 
@@ -1481,7 +1543,7 @@ static const mozilla::Module::ContractIDEntry kXREContracts[] = {
   { XULRUNTIME_SERVICE_CONTRACTID, &kAPPINFO_CID },
 #ifdef MOZ_CRASHREPORTER
   { NS_CRASHREPORTER_CONTRACTID, &kAPPINFO_CID },
-#endif
+#endif // MOZ_CRASHREPORTER
   { NS_PROFILESERVICE_CONTRACTID, &kProfileServiceCID },
   { NS_NATIVEAPPSUPPORT_CONTRACTID, &kNativeAppSupportCID },
   { nullptr }
@@ -1601,6 +1663,40 @@ ScopedXPCOMStartup::CreateAppSupport(nsISupports* aOuter, REFNSIID aIID, void** 
 
 nsINativeAppSupport* ScopedXPCOMStartup::gNativeAppSupport;
 
+#if defined(XP_WIN)
+
+class DllNotifications : public mozilla::DllServices
+{
+public:
+  DllNotifications()
+  {
+    Enable();
+  }
+
+private:
+  ~DllNotifications() = default;
+
+  void NotifyDllLoad(const bool aIsMainThread, const nsString& aDllName) override;
+};
+
+void
+DllNotifications::NotifyDllLoad(const bool aIsMainThread,
+                                const nsString& aDllName)
+{
+  const char* topic;
+
+  if (aIsMainThread) {
+    topic = "dll-loaded-main-thread";
+  } else {
+    topic = "dll-loaded-non-main-thread";
+  }
+
+  nsCOMPtr<nsIObserverService> obsServ(mozilla::services::GetObserverService());
+  obsServ->NotifyObservers(nullptr, topic, aDllName.get());
+}
+
+#endif // defined(XP_WIN)
+
 static void DumpArbitraryHelp()
 {
   nsresult rv;
@@ -1656,6 +1752,10 @@ DumpHelp()
 
 #if defined(XP_WIN)
   printf("  --console          Start %s with a debugging console.\n", (const char*) gAppData->name);
+#endif
+
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK) || defined(XP_MACOSX)
+  printf("  --headless         Run without a GUI.\n");
 #endif
 
   // this works, but only after the components have registered.  so if you drop in a new command line handler, --help
@@ -1754,18 +1854,31 @@ static RemoteResult
 StartRemoteClient(const char* aDesktopStartupID,
                   nsCString& program,
                   const char* profile,
-                  const char* username)
+                  const char* username,
+                  bool aIsX11Display)
 {
-  XRemoteClient client;
-  nsresult rv = client.Init();
+  nsAutoPtr<nsRemoteClient> client;
+
+  if (aIsX11Display) {
+    client = new XRemoteClient();
+  } else {
+#if defined(MOZ_ENABLE_DBUS) && defined(MOZ_WAYLAND)
+    client = new DBusRemoteClient();
+#else
+    MOZ_ASSERT(false, "Missing remote implementation!");
+    return REMOTE_NOT_FOUND;
+#endif
+  }
+
+  nsresult rv = client->Init();
   if (NS_FAILED(rv))
     return REMOTE_NOT_FOUND;
 
-  nsXPIDLCString response;
+  nsCString response;
   bool success = false;
-  rv = client.SendCommandLine(program.get(), username, profile,
-                              gArgc, gArgv, aDesktopStartupID,
-                              getter_Copies(response), &success);
+  rv = client->SendCommandLine(program.get(), username, profile,
+                               gArgc, gArgv, aDesktopStartupID,
+                               getter_Copies(response), &success);
   // did the command fail?
   if (!success)
     return REMOTE_NOT_FOUND;
@@ -1789,9 +1902,9 @@ XRE_InitOmnijar(nsIFile* greOmni, nsIFile* appOmni)
 }
 
 nsresult
-XRE_GetBinaryPath(const char* argv0, nsIFile* *aResult)
+XRE_GetBinaryPath(nsIFile* *aResult)
 {
-  return mozilla::BinaryPath::GetFile(argv0, aResult);
+  return mozilla::BinaryPath::GetFile(aResult);
 }
 
 #ifdef XP_WIN
@@ -1824,15 +1937,13 @@ static nsresult LaunchChild(nsINativeAppSupport* aNative,
 
   SaveToEnv("MOZ_LAUNCHED_CHILD=1");
 
-#if defined(MOZ_WIDGET_ANDROID)
-  java::GeckoAppShell::ScheduleRestart();
-#else
+#if !defined(MOZ_WIDGET_ANDROID) // Android has separate restart code.
 #if defined(XP_MACOSX)
   CommandLineServiceMac::SetupMacCommandLine(gRestartArgc, gRestartArgv, true);
   LaunchChildMac(gRestartArgc, gRestartArgv);
 #else
   nsCOMPtr<nsIFile> lf;
-  nsresult rv = XRE_GetBinaryPath(gArgv[0], getter_AddRefs(lf));
+  nsresult rv = XRE_GetBinaryPath(getter_AddRefs(lf));
   if (NS_FAILED(rv))
     return rv;
 
@@ -1936,23 +2047,21 @@ ProfileLockedDialog(nsIFile* aProfileDir, nsIFile* aProfileLocalDir,
     NS_ConvertUTF8toUTF16 appName(gAppData->name);
     const char16_t* params[] = {appName.get(), appName.get()};
 
-    nsXPIDLString killMessage;
+    nsAutoString killMessage;
 #ifndef XP_MACOSX
-    sb->FormatStringFromName(aUnlocker ? u"restartMessageUnlocker"
-                                       : u"restartMessageNoUnlocker",
-                             params, 2, getter_Copies(killMessage));
+    rv = sb->FormatStringFromName(aUnlocker ? "restartMessageUnlocker"
+                                            : "restartMessageNoUnlocker",
+                                  params, 2, killMessage);
 #else
-    sb->FormatStringFromName(aUnlocker ? u"restartMessageUnlockerMac"
-                                       : u"restartMessageNoUnlockerMac",
-                             params, 2, getter_Copies(killMessage));
+    rv = sb->FormatStringFromName(aUnlocker ? "restartMessageUnlockerMac"
+                                            : "restartMessageNoUnlockerMac",
+                                  params, 2, killMessage);
 #endif
+    NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
 
-    nsXPIDLString killTitle;
-    sb->FormatStringFromName(u"restartTitle",
-                             params, 1, getter_Copies(killTitle));
-
-    if (!killMessage || !killTitle)
-      return NS_ERROR_FAILURE;
+    nsAutoString killTitle;
+    rv = sb->FormatStringFromName("restartTitle", params, 1, killTitle);
+    NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
 
     if (gfxPlatform::IsHeadless()) {
       // TODO: make a way to turn off all dialogs when headless.
@@ -1977,8 +2086,8 @@ ProfileLockedDialog(nsIFile* aProfileDir, nsIFile* aProfileLocalDir,
          nsIPromptService::BUTTON_POS_1);
 
       bool checkState = false;
-      rv = ps->ConfirmEx(nullptr, killTitle, killMessage, flags,
-                         killTitle, nullptr, nullptr, nullptr,
+      rv = ps->ConfirmEx(nullptr, killTitle.get(), killMessage.get(), flags,
+                         killTitle.get(), nullptr, nullptr, nullptr,
                          &checkState, &button);
       NS_ENSURE_SUCCESS_LOG(rv, rv);
 #endif
@@ -2001,7 +2110,7 @@ ProfileLockedDialog(nsIFile* aProfileDir, nsIFile* aProfileLocalDir,
                                   nullptr, aResult);
       }
 #else
-      rv = ps->Alert(nullptr, killTitle, killMessage);
+      rv = ps->Alert(nullptr, killTitle.get(), killMessage.get());
       NS_ENSURE_SUCCESS_LOG(rv, rv);
 #endif
     }
@@ -2034,22 +2143,19 @@ ProfileMissingDialog(nsINativeAppSupport* aNative)
     NS_ConvertUTF8toUTF16 appName(gAppData->name);
     const char16_t* params[] = {appName.get(), appName.get()};
 
-    nsXPIDLString missingMessage;
-
     // profileMissing
-    sb->FormatStringFromName(u"profileMissing", params, 2, getter_Copies(missingMessage));
+    nsAutoString missingMessage;
+    rv = sb->FormatStringFromName("profileMissing", params, 2, missingMessage);
+    NS_ENSURE_SUCCESS(rv, NS_ERROR_ABORT);
 
-    nsXPIDLString missingTitle;
-    sb->FormatStringFromName(u"profileMissingTitle",
-                             params, 1, getter_Copies(missingTitle));
+    nsAutoString missingTitle;
+    rv = sb->FormatStringFromName("profileMissingTitle", params, 1, missingTitle);
+    NS_ENSURE_SUCCESS(rv, NS_ERROR_ABORT);
 
-    if (missingMessage && missingTitle) {
-      nsCOMPtr<nsIPromptService> ps
-        (do_GetService(NS_PROMPTSERVICE_CONTRACTID));
-      NS_ENSURE_TRUE(ps, NS_ERROR_FAILURE);
+    nsCOMPtr<nsIPromptService> ps(do_GetService(NS_PROMPTSERVICE_CONTRACTID));
+    NS_ENSURE_TRUE(ps, NS_ERROR_FAILURE);
 
-      ps->Alert(nullptr, missingTitle, missingMessage);
-    }
+    ps->Alert(nullptr, missingTitle.get(), missingMessage.get());
 
     return NS_ERROR_ABORT;
   }
@@ -2255,6 +2361,12 @@ SelectProfile(nsIProfileLock* *aResult, nsIToolkitProfileService* aProfileSvc, n
     gDoProfileReset = true;
     gDoMigration = true;
     SaveToEnv("MOZ_RESET_PROFILE_RESTART=");
+    // We only want to restore the previous session if the profile refresh was
+    // triggered by user. And if it was a user-triggered profile refresh
+    // through, say, the safeMode dialog or the troubleshooting page, the MOZ_RESET_PROFILE_RESTART
+    // env variable would be set. Hence we set MOZ_RESET_PROFILE_MIGRATE_SESSION here so that
+    // Firefox profile migrator would migrate old session data later.
+    SaveToEnv("MOZ_RESET_PROFILE_MIGRATE_SESSION=1");
   }
 
   // reset-profile and migration args need to be checked before any profiles are chosen below.
@@ -2505,7 +2617,9 @@ SelectProfile(nsIProfileLock* *aResult, nsIToolkitProfileService* aProfileSvc, n
 #endif
 
   if (!count) {
-    gDoMigration = true;
+    // For a fresh install, we would like to let users decide
+    // to do profile migration on their own later after using.
+    gDoMigration = false;
     gDoProfileReset = false;
 
     // create a default profile
@@ -2811,7 +2925,7 @@ static void SaveStateForAppInitiatedRestart()
   for (auto & savedVar : gSavedVars) {
     const char *s = PR_GetEnv(savedVar.name);
     if (s)
-      savedVar.value = PR_smprintf("%s=%s", savedVar.name, s);
+      savedVar.value = Smprintf("%s=%s", savedVar.name, s).release();
   }
 }
 
@@ -2823,7 +2937,6 @@ static void RestoreStateForAppInitiatedRestart()
   }
 }
 
-#ifdef MOZ_CRASHREPORTER
 // When we first initialize the crash reporter we don't have a profile,
 // so we set the minidump path to $TEMP.  Once we have a profile,
 // we set it to $PROFILE/minidumps, creating the directory
@@ -2848,7 +2961,6 @@ static void MakeOrSetMinidumpPath(nsIFile* profD)
       CrashReporter::SetMinidumpPath(pathStr);
   }
 }
-#endif
 
 const XREAppData* gAppData = nullptr;
 
@@ -2934,44 +3046,7 @@ static void MOZ_gdk_display_close(GdkDisplay *display)
   (void) display;
 #endif
 }
-
-const char* DetectDisplay(void)
-{
-  bool tryX11 = false;
-  bool tryWayland = false;
-  bool tryBroadway = false;
-
-  // Honor user backend selection
-  const char *backend = PR_GetEnv("GDK_BACKEND");
-  if (!backend || strstr(backend, "*")) {
-    // Try all backends
-    tryX11 = true;
-    tryWayland = true;
-    tryBroadway = true;
-  } else if (backend) {
-    if (strstr(backend, "x11"))
-      tryX11 = true;
-    if (strstr(backend, "wayland"))
-      tryWayland = true;
-    if (strstr(backend, "broadway"))
-      tryBroadway = true;
-  }
-
-  const char *display_name;
-  if (tryX11 && (display_name = PR_GetEnv("DISPLAY"))) {
-    return display_name;
-  }
-  if (tryWayland && (display_name = PR_GetEnv("WAYLAND_DISPLAY"))) {
-    return display_name;
-  }
-  if (tryBroadway && (display_name = PR_GetEnv("BROADWAY_DISPLAY"))) {
-    return display_name;
-  }
-
-  PR_fprintf(PR_STDERR, "Error: GDK_BACKEND does not match available displays\n");
-  return nullptr;
-}
-#endif // MOZ_WIDGET_GTK
+#endif
 
 /**
  * NSPR will search for the "nspr_use_zone_allocator" symbol throughout
@@ -3136,8 +3211,29 @@ XREMain::XRE_mainInit(bool* aExitFlag)
     printf_stderr("*** You are running in chaos test mode. See ChaosMode.h. ***\n");
   }
 
+  if (CheckArg("headless") || CheckArgExists("screenshot")) {
+    PR_SetEnv("MOZ_HEADLESS=1");
+  }
+
   if (gfxPlatform::IsHeadless()) {
-    Output(false, "*** You are running in headless mode.\n");
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK) || defined(XP_MACOSX)
+    printf_stderr("*** You are running in headless mode.\n");
+#else
+    Output(true, "Error: headless mode is not currently supported on this platform.\n");
+    return 1;
+#endif
+
+#ifdef XP_MACOSX
+    // To avoid taking focus when running in headless mode immediately
+    // transition Firefox to a background application.
+    ProcessSerialNumber psn = { 0, kCurrentProcess };
+    OSStatus transformStatus = TransformProcessType(&psn, kProcessTransformToBackgroundApplication);
+    if (transformStatus != noErr) {
+      NS_ERROR("Failed to make process a background application.");
+      return 1;
+    }
+#endif
+
   }
 
   nsresult rv;
@@ -3255,7 +3351,6 @@ XREMain::XRE_mainInit(bool* aExitFlag)
   if (NS_FAILED(rv))
     return 1;
 
-#ifdef MOZ_CRASHREPORTER
   if (EnvHasValue("MOZ_CRASHREPORTER")) {
     mAppData->flags |= NS_XRE_ENABLE_CRASH_REPORTER;
   }
@@ -3341,14 +3436,11 @@ XREMain::XRE_mainInit(bool* aExitFlag)
       }
     }
   }
-#endif
 
 #if defined(MOZ_SANDBOX) && defined(XP_WIN)
   if (mAppData->sandboxBrokerServices) {
     SandboxBroker::Initialize(mAppData->sandboxBrokerServices);
-    Telemetry::Accumulate(Telemetry::SANDBOX_BROKER_INITIALIZED, true);
   } else {
-    Telemetry::Accumulate(Telemetry::SANDBOX_BROKER_INITIALIZED, false);
 #if defined(MOZ_CONTENT_SANDBOX)
     // If we're sandboxing content and we fail to initialize, then crashing here
     // seems like the sensible option.
@@ -3493,21 +3585,17 @@ XREMain::XRE_mainInit(bool* aExitFlag)
       }
     }
 
-#ifdef MOZ_CRASHREPORTER
     if (cpuUpdateRevision > 0) {
       CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("CPUMicrocodeVersion"),
                                          nsPrintfCString("0x%x",
                                                          cpuUpdateRevision));
     }
-#endif
   }
 #endif
 
-#ifdef MOZ_CRASHREPORTER
     CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("SafeMode"),
                                        gSafeMode ? NS_LITERAL_CSTRING("1") :
                                                    NS_LITERAL_CSTRING("0"));
-#endif
 
   // Handle --no-remote and --new-instance command line arguments. Setup
   // the environment to better accommodate other components and various
@@ -3571,7 +3659,6 @@ XREMain::XRE_mainInit(bool* aExitFlag)
   return 0;
 }
 
-#ifdef MOZ_CRASHREPORTER
 #ifdef XP_WIN
 /**
  * Uses WMI to read some manufacturer information that may be useful for
@@ -3665,6 +3752,25 @@ AnnotateLSBRelease(void*)
 
 #endif // defined(XP_LINUX) && !defined(ANDROID)
 
+#ifdef XP_WIN
+static void ReadAheadDll(const wchar_t* dllName) {
+  wchar_t dllPath[MAX_PATH];
+  if (ConstructSystem32Path(dllName, dllPath, MAX_PATH)) {
+    ReadAheadLib(dllPath);
+  }
+}
+
+static void PR_CALLBACK ReadAheadDlls_ThreadStart(void *) {
+  // Load DataExchange.dll and twinapi.appcore.dll for nsWindow::EnableDragDrop
+  ReadAheadDll(L"DataExchange.dll");
+  ReadAheadDll(L"twinapi.appcore.dll");
+
+  // Load twinapi.dll for WindowsUIUtils::UpdateTabletModeState
+  ReadAheadDll(L"twinapi.dll");
+
+  // Load explorerframe.dll for WinTaskbar::Initialize
+  ReadAheadDll(L"ExplorerFrame.dll");
+}
 #endif
 
 namespace mozilla {
@@ -3678,7 +3784,11 @@ static void SetShutdownChecks() {
   // too.
 
 #ifdef DEBUG
+#if defined(MOZ_CODE_COVERAGE) && defined(XP_WIN)
+  gShutdownChecks = SCM_NOTHING;
+#else
   gShutdownChecks = SCM_CRASH;
+#endif // MOZ_CODE_COVERAGE && XP_WIN
 #else
   const char* releaseChannel = NS_STRINGIFY(MOZ_UPDATE_CHANNEL);
   if (strcmp(releaseChannel, "nightly") == 0 ||
@@ -3687,7 +3797,7 @@ static void SetShutdownChecks() {
   } else {
     gShutdownChecks = SCM_NOTHING;
   }
-#endif
+#endif // DEBUG
 
   // We let an environment variable override the default so that addons
   // authors can use it for debugging shutdown with released firefox versions.
@@ -3807,22 +3917,6 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
     return result;
   }
 
-#if defined(MOZ_WIDGET_GTK)
-  // display_name is owned by gdk.
-  const char *display_name = nullptr;
-  bool saveDisplayArg = false;
-  if (!gfxPlatform::IsHeadless()) {
-    display_name = gdk_get_display_arg_name();
-    if (display_name) {
-      saveDisplayArg = true;
-    } else {
-      display_name = DetectDisplay();
-      if (!display_name) {
-        return 1;
-      }
-    }
-  }
-#endif /* MOZ_WIDGET_GTK */
 #ifdef MOZ_X11
   // Init X11 in thread-safe mode. Must be called prior to the first call to XOpenDisplay
   // (called inside gdk_display_open). This is a requirement for off main tread compositing.
@@ -3832,19 +3926,58 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
 #endif
 #if defined(MOZ_WIDGET_GTK)
   if (!gfxPlatform::IsHeadless()) {
-    mGdkDisplay = gdk_display_open(display_name);
-    if (!mGdkDisplay) {
-      PR_fprintf(PR_STDERR, "Error: cannot open display: %s\n", display_name);
-      return 1;
+    const char *display_name = nullptr;
+    bool saveDisplayArg = false;
+
+    // display_name is owned by gdk.
+    display_name = gdk_get_display_arg_name();
+    // if --display argument is given make sure it's
+    // also passed to ContentChild::Init() by MOZ_GDK_DISPLAY.
+    if (display_name) {
+      SaveWordToEnv("MOZ_GDK_DISPLAY", nsDependentCString(display_name));
+      saveDisplayArg = true;
     }
-    gdk_display_manager_set_default_display (gdk_display_manager_get(),
-                                             mGdkDisplay);
+
+    // On Wayland disabled builds read X11 DISPLAY env exclusively
+    // and don't care about different displays.
+#if !defined(MOZ_WAYLAND)
+    if (!display_name) {
+      display_name = PR_GetEnv("DISPLAY");
+      if (!display_name) {
+        PR_fprintf(PR_STDERR,
+                   "Error: no DISPLAY environment variable specified\n");
+        return 1;
+      }
+    }
+#endif
+
+    if (display_name) {
+      mGdkDisplay = gdk_display_open(display_name);
+      if (!mGdkDisplay) {
+        PR_fprintf(PR_STDERR, "Error: cannot open display: %s\n", display_name);
+        return 1;
+      }
+      gdk_display_manager_set_default_display(gdk_display_manager_get(),
+                                              mGdkDisplay);
+      if (saveDisplayArg) {
+        if (GDK_IS_X11_DISPLAY(mGdkDisplay)) {
+            SaveWordToEnv("DISPLAY", nsDependentCString(display_name));
+        }
+#ifdef MOZ_WAYLAND
+        else if (GDK_IS_WAYLAND_DISPLAY(mGdkDisplay)) {
+            SaveWordToEnv("WAYLAND_DISPLAY", nsDependentCString(display_name));
+        }
+#endif
+      }
+    }
+#if (MOZ_WIDGET_GTK == 3)
+    else {
+      mGdkDisplay = gdk_display_manager_open_display(gdk_display_manager_get(),
+                                                     nullptr);
+    }
+#endif
   }
-  if (!gfxPlatform::IsHeadless() && GDK_IS_X11_DISPLAY(mGdkDisplay)) {
-    if (saveDisplayArg) {
-      SaveWordToEnv("DISPLAY", nsDependentCString(display_name));
-    }
-  } else {
+  else {
     mDisableRemote = true;
   }
 #endif
@@ -3924,7 +4057,8 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
     const char* desktopStartupIDPtr =
       mDesktopStartupID.IsEmpty() ? nullptr : mDesktopStartupID.get();
 
-    rr = StartRemoteClient(desktopStartupIDPtr, program, profile, username);
+    rr = StartRemoteClient(desktopStartupIDPtr, program, profile, username,
+                           GDK_IS_X11_DISPLAY(mGdkDisplay));
     if (rr == REMOTE_FOUND) {
       *aExitFlag = true;
       return 0;
@@ -3974,7 +4108,13 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
   }
 #endif
 
-#if defined(MOZ_UPDATER) && !defined(MOZ_WIDGET_ANDROID) && !defined(MOZ_WIDGET_GONK)
+  // Support exiting early for testing startup sequence. Bug 1360493
+  if (CheckArg("test-launch-without-hang")) {
+    *aExitFlag = true;
+    return 0;
+  }
+
+#if defined(MOZ_UPDATER) && !defined(MOZ_WIDGET_ANDROID)
   // Check for and process any available updates
   nsCOMPtr<nsIFile> updRoot;
   bool persistent;
@@ -4070,12 +4210,10 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
 
   mozilla::Telemetry::SetProfileDir(mProfD);
 
-#ifdef MOZ_CRASHREPORTER
   if (mAppData->flags & NS_XRE_ENABLE_CRASH_REPORTER)
       MakeOrSetMinidumpPath(mProfD);
 
   CrashReporter::SetProfileDirectory(mProfD);
-#endif
 
   nsAutoCString version;
   BuildVersion(version);
@@ -4166,12 +4304,11 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
   return 0;
 }
 
-#if defined(MOZ_CRASHREPORTER)
-#if defined(MOZ_CONTENT_SANDBOX) && !defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_CONTENT_SANDBOX)
 void AddSandboxAnnotations()
 {
   // Include the sandbox content level, regardless of platform
-  int level = Preferences::GetInt("security.sandbox.content.level");
+  int level = GetEffectiveContentSandboxLevel();
 
   nsAutoCString levelString;
   levelString.AppendInt(level);
@@ -4196,8 +4333,7 @@ void AddSandboxAnnotations()
     NS_LITERAL_CSTRING("ContentSandboxCapable"),
     sandboxCapable ? NS_LITERAL_CSTRING("1") : NS_LITERAL_CSTRING("0"));
 }
-#endif /* MOZ_CONTENT_SANDBOX && !MOZ_WIDGET_GONK */
-#endif /* MOZ_CRASHREPORTER */
+#endif /* MOZ_CONTENT_SANDBOX */
 
 /*
  * XRE_mainRun - Command line startup, profile migration, and
@@ -4208,6 +4344,13 @@ XREMain::XRE_mainRun()
 {
   nsresult rv = NS_OK;
   NS_ASSERTION(mScopedXPCOM, "Scoped xpcom not initialized.");
+
+#if defined(XP_WIN)
+  RefPtr<DllNotifications> dllNotifications(new DllNotifications());
+  auto dllNotificationsDisable = MakeScopeExit([&dllNotifications]() {
+    dllNotifications->Disable();
+  });
+#endif // defined(XP_WIN)
 
 #ifdef NS_FUNCTION_TIMER
   // initialize some common services, so we don't pay the cost for these at odd times later on;
@@ -4232,7 +4375,6 @@ XREMain::XRE_mainRun()
   rv = mScopedXPCOM->SetWindowCreator(mNativeApp);
   NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
 
-#ifdef MOZ_CRASHREPORTER
   // tell the crash reporter to also send the release channel
   nsCOMPtr<nsIPrefService> prefs = do_GetService("@mozilla.org/preferences-service;1", &rv);
   if (NS_SUCCEEDED(rv)) {
@@ -4240,8 +4382,8 @@ XREMain::XRE_mainRun()
     rv = prefs->GetDefaultBranch(nullptr, getter_AddRefs(defaultPrefBranch));
 
     if (NS_SUCCEEDED(rv)) {
-      nsXPIDLCString sval;
-      rv = defaultPrefBranch->GetCharPref("app.update.channel", getter_Copies(sval));
+      nsAutoCString sval;
+      rv = defaultPrefBranch->GetCharPref("app.update.channel", sval);
       if (NS_SUCCEEDED(rv)) {
         CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("ReleaseChannel"),
                                             sval);
@@ -4254,6 +4396,10 @@ XREMain::XRE_mainRun()
   CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("FramePoisonSize"),
                                      nsPrintfCString("%" PRIu32, uint32_t(gMozillaPoisonSize)));
 
+  bool includeContextHeap =
+    Preferences::GetBool("toolkit.crashreporter.include_context_heap", false);
+  CrashReporter::SetIncludeContextHeap(includeContextHeap);
+
 #ifdef XP_WIN
   PR_CreateThread(PR_USER_THREAD, AnnotateSystemManufacturer_ThreadStart, 0,
                   PR_PRIORITY_LOW, PR_GLOBAL_THREAD, PR_UNJOINABLE_THREAD, 0);
@@ -4264,26 +4410,22 @@ XREMain::XRE_mainRun()
                   PR_GLOBAL_THREAD, PR_UNJOINABLE_THREAD, 0);
 #endif
 
-#endif
-
   if (mStartOffline) {
-    nsCOMPtr<nsIIOService2> io (do_GetService("@mozilla.org/network/io-service;1"));
+    nsCOMPtr<nsIIOService> io(do_GetService("@mozilla.org/network/io-service;1"));
     NS_ENSURE_TRUE(io, NS_ERROR_FAILURE);
     io->SetManageOfflineStatus(false);
     io->SetOffline(true);
   }
 
+
+#ifdef XP_WIN
+  if (!PR_GetEnv("XRE_NO_DLL_READAHEAD"))
   {
-    nsCOMPtr<nsIObserver> startupNotifier
-      (do_CreateInstance(NS_APPSTARTUPNOTIFIER_CONTRACTID, &rv));
-    NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
-
-    startupNotifier->Observe(nullptr, APPSTARTUP_TOPIC, nullptr);
+    PR_CreateThread(PR_USER_THREAD, ReadAheadDlls_ThreadStart, 0,
+                    PR_PRIORITY_NORMAL, PR_GLOBAL_THREAD,
+                    PR_UNJOINABLE_THREAD, 0);
   }
-
-  nsCOMPtr<nsIAppStartup> appStartup
-    (do_GetService(NS_APPSTARTUP_CONTRACTID));
-  NS_ENSURE_TRUE(appStartup, NS_ERROR_FAILURE);
+#endif
 
   if (gDoMigration) {
     nsCOMPtr<nsIFile> file;
@@ -4358,6 +4500,7 @@ XREMain::XRE_mainRun()
       rv = GetCurrentProfile(mProfileSvc, mProfD, getter_AddRefs(newProfile));
       if (NS_SUCCEEDED(rv)) {
         newProfile->SetName(gResetOldProfileName);
+        mProfileName.Assign(gResetOldProfileName);
         // Set the new profile as the default after we're done cleaning up the old profile,
         // iff that profile was already the default
         if (profileWasSelected) {
@@ -4374,15 +4517,39 @@ XREMain::XRE_mainRun()
     }
   }
 
+  if (NS_IsNativeUTF8()) {
+    nsCOMPtr<nsIFile> profileDir;
+    nsAutoCString path;
+    rv = mDirProvider.GetProfileStartupDir(getter_AddRefs(profileDir));
+    if (NS_SUCCEEDED(rv) && NS_SUCCEEDED(profileDir->GetNativePath(path)) && !IsUTF8(path)) {
+      PR_fprintf(PR_STDERR, "Error: The profile path is not valid UTF-8. Unable to continue.\n");
+      return NS_ERROR_FAILURE;
+    }
+  }
+
+  // Initialize user preferences before notifying startup observers so they're
+  // ready in time for early consumers, such as the component loader.
+  mDirProvider.InitializeUserPrefs();
+
+  {
+    nsCOMPtr<nsIObserver> startupNotifier
+      (do_CreateInstance(NS_APPSTARTUPNOTIFIER_CONTRACTID, &rv));
+    NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
+
+    startupNotifier->Observe(nullptr, APPSTARTUP_TOPIC, nullptr);
+  }
+
+  nsCOMPtr<nsIAppStartup> appStartup
+    (do_GetService(NS_APPSTARTUP_CONTRACTID));
+  NS_ENSURE_TRUE(appStartup, NS_ERROR_FAILURE);
+
   mDirProvider.DoStartup();
 
   OverrideDefaultLocaleIfNeeded();
 
-#ifdef MOZ_CRASHREPORTER
   nsCString userAgentLocale;
   LocaleService::GetInstance()->GetAppLocaleAsLangTag(userAgentLocale);
   CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("useragent_locale"), userAgentLocale);
-#endif
 
   appStartup->GetShuttingDown(&mShuttingDown);
 
@@ -4415,10 +4582,16 @@ XREMain::XRE_mainRun()
   // Ugly details in http://bugzil.la/1175039#c27
   char appFile[MAX_PATH];
   if (GetEnvironmentVariableA("XUL_APP_FILE", appFile, sizeof(appFile))) {
-    char* saved = mozilla::Smprintf("XUL_APP_FILE=%s", appFile);
-    PR_SetEnv(saved);
-    mozilla::SmprintfFree(saved);
+    SmprintfPointer saved = mozilla::Smprintf("XUL_APP_FILE=%s", appFile);
+    // We intentionally leak the string here since it is required by PR_SetEnv.
+    PR_SetEnv(saved.release());
   }
+
+#if defined(MOZ_SANDBOX)
+  // Call SandboxBroker to initialize things that depend on Gecko machinery like
+  // the directory provider.
+  SandboxBroker::GeckoDependentInitialize();
+#endif
 #endif
 
   SaveStateForAppInitiatedRestart();
@@ -4467,10 +4640,8 @@ XREMain::XRE_mainRun()
 
     (void)appStartup->DoneStartingUp();
 
-#ifdef MOZ_CRASHREPORTER
     CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("StartupCrash"),
                                        NS_LITERAL_CSTRING("0"));
-#endif
 
     appStartup->GetShuttingDown(&mShuttingDown);
   }
@@ -4507,7 +4678,7 @@ XREMain::XRE_mainRun()
   }
 #endif /* MOZ_INSTRUMENT_EVENT_LOOP */
 
-#if defined(MOZ_SANDBOX) && defined(XP_LINUX) && !defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_SANDBOX) && defined(XP_LINUX)
   // If we're on Linux, we now have information about the OS capabilities
   // available to us.
   SandboxInfo sandboxInfo = SandboxInfo::Get();
@@ -4523,20 +4694,16 @@ XREMain::XRE_mainRun()
                         sandboxInfo.Test(SandboxInfo::kEnabledForContent));
   Telemetry::Accumulate(Telemetry::SANDBOX_MEDIA_ENABLED,
                         sandboxInfo.Test(SandboxInfo::kEnabledForMedia));
-#if defined(MOZ_CRASHREPORTER)
   nsAutoCString flagsString;
   flagsString.AppendInt(sandboxInfo.AsInteger());
 
   CrashReporter::AnnotateCrashReport(
     NS_LITERAL_CSTRING("ContentSandboxCapabilities"), flagsString);
-#endif /* MOZ_CRASHREPORTER */
-#endif /* MOZ_SANDBOX && XP_LINUX && !MOZ_WIDGET_GONK */
+#endif /* MOZ_SANDBOX && XP_LINUX */
 
-#if defined(MOZ_CRASHREPORTER)
-#if defined(MOZ_CONTENT_SANDBOX) && !defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_CONTENT_SANDBOX)
   AddSandboxAnnotations();
-#endif /* MOZ_CONTENT_SANDBOX && !MOZ_WIDGET_GONK */
-#endif /* MOZ_CRASHREPORTER */
+#endif /* MOZ_CONTENT_SANDBOX */
 
   {
     rv = appStartup->Run();
@@ -4568,15 +4735,6 @@ void XRE_GlibInit()
 }
 #endif
 
-// Separate stub function to let us specifically suppress it in Valgrind
-void
-XRE_CreateStatsObject()
-{
-  // Initialize global variables used by histogram collection
-  // machinery that is used by by Telemetry.  Note: is never de-initialised.
-  Telemetry::CreateStatisticsRecorder();
-}
-
 /*
  * XRE_main - A class based main entry point used by most platforms.
  *            Note that on OSX, aAppData->xreDirectory will point to
@@ -4589,25 +4747,16 @@ XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig)
 
   mozilla::LogModule::Init();
 
-  // NB: this must happen after the creation of |ScopedLogging log| since
-  // ScopedLogging::ScopedLogging calls NS_LogInit, and
-  // XRE_CreateStatsObject calls Telemetry::CreateStatisticsRecorder,
-  // and NS_LogInit must be called before Telemetry::CreateStatisticsRecorder.
-  // NS_LogInit must be called before Telemetry::CreateStatisticsRecorder
-  // so as to avoid many log messages of the form
-  //   WARNING: XPCOM objects created/destroyed from static ctor/dtor: [..]
-  // See bug 1279614.
-  XRE_CreateStatsObject();
-
 #if defined(MOZ_SANDBOX) && defined(XP_LINUX) && !defined(ANDROID)
   SandboxInfo::ThreadingCheck();
 #endif
 
-  char aLocal;
-  GeckoProfilerInitRAII profilerGuard(&aLocal);
+#ifdef MOZ_CODE_COVERAGE
+  CodeCoverageHandler::Init();
+#endif
 
-  PROFILER_LABEL("Startup", "XRE_Main",
-    js::ProfileEntry::Category::OTHER);
+  AUTO_PROFILER_INIT;
+  AUTO_PROFILER_LABEL("XREMain::XRE_main", OTHER);
 
   nsresult rv = NS_OK;
 
@@ -4642,7 +4791,7 @@ XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig)
   gAppData = mAppData.get();
 
   nsCOMPtr<nsIFile> binFile;
-  rv = XRE_GetBinaryPath(argv[0], getter_AddRefs(binFile));
+  rv = XRE_GetBinaryPath(getter_AddRefs(binFile));
   NS_ENSURE_SUCCESS(rv, 1);
 
   rv = binFile->GetPath(gAbsoluteArgv0Path);
@@ -4650,7 +4799,7 @@ XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig)
 
   if (!mAppData->xreDirectory) {
     nsCOMPtr<nsIFile> lf;
-    rv = XRE_GetBinaryPath(gArgv[0], getter_AddRefs(lf));
+    rv = XRE_GetBinaryPath(getter_AddRefs(lf));
     if (NS_FAILED(rv))
       return 2;
 
@@ -4770,17 +4919,18 @@ XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig)
     }
 
 #ifdef MOZ_WIDGET_GTK
-    MOZ_gdk_display_close(mGdkDisplay);
+    if (!gfxPlatform::IsHeadless()) {
+      MOZ_gdk_display_close(mGdkDisplay);
+    }
 #endif
 
     {
       rv = LaunchChild(mNativeApp, true);
     }
 
-#ifdef MOZ_CRASHREPORTER
     if (mAppData->flags & NS_XRE_ENABLE_CRASH_REPORTER)
       CrashReporter::UnsetExceptionHandler();
-#endif
+
     return rv == NS_ERROR_LAUNCHED_CHILD_PROCESS ? 0 : 1;
   }
 
@@ -4792,10 +4942,8 @@ XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig)
   }
 #endif
 
-#ifdef MOZ_CRASHREPORTER
   if (mAppData->flags & NS_XRE_ENABLE_CRASH_REPORTER)
       CrashReporter::UnsetExceptionHandler();
-#endif
 
   XRE_DeinitCommandLine();
 
@@ -4831,7 +4979,7 @@ XRE_InitCommandLine(int aArgc, char* aArgv[])
 
   // get the canonical version of the binary's path
   nsCOMPtr<nsIFile> binFile;
-  rv = XRE_GetBinaryPath(aArgv[0], getter_AddRefs(binFile));
+  rv = XRE_GetBinaryPath(getter_AddRefs(binFile));
   if (NS_FAILED(rv))
     return NS_ERROR_FAILURE;
 
@@ -4914,10 +5062,20 @@ XRE_IsGPUProcess()
   return XRE_GetProcessType() == GeckoProcessType_GPU;
 }
 
+/**
+ * Returns true in the e10s parent process and in the main process when e10s
+ * is disabled.
+ */
 bool
 XRE_IsParentProcess()
 {
   return XRE_GetProcessType() == GeckoProcessType_Default;
+}
+
+bool
+XRE_IsE10sParentProcess()
+{
+  return XRE_IsParentProcess() && BrowserTabsRemoteAutostart();
 }
 
 bool
@@ -4926,104 +5084,41 @@ XRE_IsContentProcess()
   return XRE_GetProcessType() == GeckoProcessType_Content;
 }
 
+bool
+XRE_UseNativeEventProcessing()
+{
+  if (XRE_IsContentProcess()) {
+    static bool sInited = false;
+    static bool sUseNativeEventProcessing = false;
+    if (!sInited) {
+      Preferences::AddBoolVarCache(&sUseNativeEventProcessing,
+                                   "dom.ipc.useNativeEventProcessing.content");
+      sInited = true;
+    }
+
+    return sUseNativeEventProcessing;
+  }
+
+  return true;
+}
+
 // If you add anything to this enum, please update about:support to reflect it
 enum {
   kE10sEnabledByUser = 0,
   kE10sEnabledByDefault = 1,
   kE10sDisabledByUser = 2,
   // kE10sDisabledInSafeMode = 3, was removed in bug 1172491.
-  kE10sDisabledForAccessibility = 4,
+  // kE10sDisabledForAccessibility = 4,
   // kE10sDisabledForMacGfx = 5, was removed in bug 1068674.
   // kE10sDisabledForBidi = 6, removed in bug 1309599
-  kE10sDisabledForAddons = 7,
+  // kE10sDisabledForAddons = 7, removed in bug 1406212
   kE10sForceDisabled = 8,
   // kE10sDisabledForXPAcceleration = 9, removed in bug 1296353
   // kE10sDisabledForOperatingSystem = 10, removed due to xp-eol
 };
 
-const char* kAccessibilityLastRunDatePref = "accessibility.lastLoadDate";
-const char* kAccessibilityLoadedLastSessionPref = "accessibility.loadedInLastSession";
-
-#if defined(XP_WIN)
-static inline uint32_t
-PRTimeToSeconds(PRTime t_usec)
-{
-  PRTime usec_per_sec = PR_USEC_PER_SEC;
-  return uint32_t(t_usec /= usec_per_sec);
-}
-#endif
-
 const char* kForceEnableE10sPref = "browser.tabs.remote.force-enable";
 const char* kForceDisableE10sPref = "browser.tabs.remote.force-disable";
-
-uint32_t
-MultiprocessBlockPolicy() {
-  if (gMultiprocessBlockPolicyInitialized) {
-    return gMultiprocessBlockPolicy;
-  }
-  gMultiprocessBlockPolicyInitialized = true;
-
-  /**
-   * Avoids enabling e10s if there are add-ons installed.
-   */
-  bool addonsCanDisable = Preferences::GetBool("extensions.e10sBlocksEnabling", false);
-  bool disabledByAddons = Preferences::GetBool("extensions.e10sBlockedByAddons", false);
-
-#ifdef MOZ_CRASHREPORTER
-  CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("AddonsShouldHaveBlockedE10s"),
-                                     disabledByAddons ? NS_LITERAL_CSTRING("1")
-                                                      : NS_LITERAL_CSTRING("0"));
-#endif
-
-  if (addonsCanDisable && disabledByAddons) {
-    gMultiprocessBlockPolicy = kE10sDisabledForAddons;
-    return gMultiprocessBlockPolicy;
-  }
-
-#if defined(XP_WIN)
-  // These checks are currently only in use under WinXP
-  if (false) { // !IsVistaOrLater()
-    bool disabledForA11y = false;
-    /**
-      * Avoids enabling e10s if accessibility has recently loaded. Performs the
-      * following checks:
-      * 1) Checks a pref indicating if a11y loaded in the last session. This pref
-      * is set in nsBrowserGlue.js. If a11y was loaded in the last session we
-      * do not enable e10s in this session.
-      * 2) Accessibility stores a last run date (PR_IntervalNow) when it is
-      * initialized (see nsBaseWidget.cpp). We check if this pref exists and
-      * compare it to now. If a11y hasn't run in an extended period of time or
-      * if the date pref does not exist we load e10s.
-      */
-    disabledForA11y = Preferences::GetBool(kAccessibilityLoadedLastSessionPref, false);
-    if (!disabledForA11y  &&
-        Preferences::HasUserValue(kAccessibilityLastRunDatePref)) {
-      #define ONE_WEEK_IN_SECONDS (60*60*24*7)
-      uint32_t a11yRunDate = Preferences::GetInt(kAccessibilityLastRunDatePref, 0);
-      MOZ_ASSERT(0 != a11yRunDate);
-      // If a11y hasn't run for a period of time, clear the pref and load e10s
-      uint32_t now = PRTimeToSeconds(PR_Now());
-      uint32_t difference = now - a11yRunDate;
-      if (difference > ONE_WEEK_IN_SECONDS || !a11yRunDate) {
-        Preferences::ClearUser(kAccessibilityLastRunDatePref);
-      } else {
-        disabledForA11y = true;
-      }
-    }
-    if (disabledForA11y) {
-      gMultiprocessBlockPolicy = kE10sDisabledForAccessibility;
-      return gMultiprocessBlockPolicy;
-    }
-  }
-#endif
-
-  /*
-   * None of the blocking policies matched, so e10s is allowed to run.
-   * Cache the information and return 0, indicating success.
-   */
-  gMultiprocessBlockPolicy = 0;
-  return 0;
-}
 
 namespace mozilla {
 
@@ -5041,31 +5136,18 @@ BrowserTabsRemoteAutostart()
     return gBrowserTabsRemoteAutostart;
   }
 
-  bool optInPref = Preferences::GetBool("browser.tabs.remote.autostart", false);
-  bool trialPref = Preferences::GetBool("browser.tabs.remote.autostart.2", false);
-  bool prefEnabled = optInPref || trialPref;
-  int status;
+  bool optInPref = Preferences::GetBool("browser.tabs.remote.autostart", true);
+  int status = kE10sEnabledByDefault;
+
   if (optInPref) {
-    status = kE10sEnabledByUser;
-  } else if (trialPref) {
-    status = kE10sEnabledByDefault;
+    gBrowserTabsRemoteAutostart = true;
   } else {
     status = kE10sDisabledByUser;
-  }
-
-  if (prefEnabled) {
-    uint32_t blockPolicy = MultiprocessBlockPolicy();
-    if (blockPolicy != 0) {
-      status = blockPolicy;
-    } else {
-      gBrowserTabsRemoteAutostart = true;
-    }
   }
 
   // Uber override pref for manual testing purposes
   if (Preferences::GetBool(kForceEnableE10sPref, false)) {
     gBrowserTabsRemoteAutostart = true;
-    prefEnabled = true;
     status = kE10sEnabledByUser;
   }
 
@@ -5080,10 +5162,6 @@ BrowserTabsRemoteAutostart()
   gBrowserTabsRemoteStatus = status;
 
   mozilla::Telemetry::Accumulate(mozilla::Telemetry::E10S_STATUS, status);
-  if (prefEnabled) {
-    mozilla::Telemetry::Accumulate(mozilla::Telemetry::E10S_BLOCKED_FROM_RUNNING,
-                                    !gBrowserTabsRemoteAutostart);
-  }
   return gBrowserTabsRemoteAutostart;
 }
 
@@ -5099,26 +5177,7 @@ GetMaxWebProcessCount()
 
   const char* optInPref = "dom.ipc.processCount";
   uint32_t optInPrefValue = Preferences::GetInt(optInPref, 1);
-
-  // If the user has set dom.ipc.processCount, respect their decision
-  // regardless of add-ons that might affect their experience or experiment
-  // cohort.
-  if (Preferences::HasUserValue(optInPref)) {
-    return std::max(1u, optInPrefValue);
-  }
-
-  // If there are add-ons that would make the user's experience poor, don't
-  // use more than one web content process.
-  if (Preferences::GetBool("extensions.e10sMultiBlocksEnabling", false) &&
-      Preferences::GetBool("extensions.e10sMultiBlockedByAddons", false)) {
-    return 1;
-  }
-
-  if (Preferences::HasUserValue("dom.ipc.processCount.web")) {
-    // The user didn't opt in or out so read the .web version of the pref.
-    return std::max(1, Preferences::GetInt("dom.ipc.processCount.web", 1));
-  }
-  return optInPrefValue;
+  return std::max(1u, optInPrefValue);
 }
 
 const char*
@@ -5184,6 +5243,7 @@ SetupErrorHandling(const char* progname)
   setbuf(stdout, 0);
 }
 
+// Note: This function should not be needed anymore. See Bug 818634 for details.
 void
 OverrideDefaultLocaleIfNeeded() {
   // Read pref to decide whether to override default locale with US English.

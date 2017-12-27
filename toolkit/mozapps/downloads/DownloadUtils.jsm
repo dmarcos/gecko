@@ -49,11 +49,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-this.__defineGetter__("gDecimalSymbol", function() {
-    delete this.gDecimalSymbol;
-      return this.gDecimalSymbol = Number(5.4).toLocaleString().match(/\D/);
-});
-
 var localeNumberFormatCache = new Map();
 function getLocaleNumberFormat(fractionDigits) {
   // Backward compatibility: don't use localized digits
@@ -84,7 +79,6 @@ var gStr = {
   timeLeftDouble: "timeLeftDouble3",
   timeFewSeconds: "timeFewSeconds2",
   timeUnknown: "timeUnknown2",
-  monthDate: "monthDate2",
   yesterday: "yesterday",
   doneScheme: "doneScheme2",
   doneFileScheme: "doneFileScheme",
@@ -95,11 +89,13 @@ var gStr = {
 };
 
 // This lazily initializes the string bundle upon first use.
-this.__defineGetter__("gBundle", function() {
-  delete this.gBundle;
-  return this.gBundle = Cc["@mozilla.org/intl/stringbundle;1"].
-                        getService(Ci.nsIStringBundleService).
-                        createBundle(kDownloadProperties);
+Object.defineProperty(this, "gBundle", {
+  configurable: true,
+  enumerable: true,
+  get() {
+    delete this.gBundle;
+    return this.gBundle = Services.strings.createBundle(kDownloadProperties);
+  },
 });
 
 // Keep track of at most this many second/lastSec pairs so that multiple calls
@@ -351,53 +347,29 @@ this.DownloadUtils = {
     let dateTimeCompact;
     let dateTimeFull;
 
-    // For Android, we have to keep the non Intl API version which uses
-    // deprecated toLocaleFormat until we get Intl API.
-    //
-    // For the rest of the platform, we'll use a combination of mozIntl,
-    // Intl API and localization.
-    if (typeof Intl === "undefined") {
-      // Figure out if the time is from today, yesterday, this week, etc.
-      if (aDate >= today) {
-        dateTimeCompact = aDate.toLocaleFormat("%X");
-      } else if (today - aDate < (MS_PER_DAY)) {
-        // After yesterday started, show yesterday
-        dateTimeCompact = gBundle.GetStringFromName(gStr.yesterday);
-      } else if (today - aDate < (6 * MS_PER_DAY)) {
-        // After last week started, show day of week
-        dateTimeCompact = aDate.toLocaleFormat("%A");
-      } else {
-        // Show month/day
-        let month = aDate.toLocaleFormat("%B");
-        let date = aDate.getDate();
-        dateTimeCompact = gBundle.formatStringFromName(gStr.monthDate, [month, date], 2);
-      }
-
-      dateTimeFull = aDate.toLocaleFormat("%x %X");
+    // Figure out if the time is from today, yesterday, this week, etc.
+    if (aDate >= today) {
+      let dts = Services.intl.createDateTimeFormat(undefined, {
+        timeStyle: "short"
+      });
+      dateTimeCompact = dts.format(aDate);
+    } else if (today - aDate < (MS_PER_DAY)) {
+      // After yesterday started, show yesterday
+      dateTimeCompact = gBundle.GetStringFromName(gStr.yesterday);
+    } else if (today - aDate < (6 * MS_PER_DAY)) {
+      // After last week started, show day of week
+      dateTimeCompact = aDate.toLocaleDateString(undefined, { weekday: "long" });
     } else {
-      // Figure out if the time is from today, yesterday, this week, etc.
-      if (aDate >= today) {
-        let dts = Services.intl.createDateTimeFormat(undefined, {
-          timeStyle: "short"
-        });
-        dateTimeCompact = dts.format(aDate);
-      } else if (today - aDate < (MS_PER_DAY)) {
-        // After yesterday started, show yesterday
-        dateTimeCompact = gBundle.GetStringFromName(gStr.yesterday);
-      } else if (today - aDate < (6 * MS_PER_DAY)) {
-        // After last week started, show day of week
-        dateTimeCompact = aDate.toLocaleDateString(undefined, { weekday: "long" });
-      } else {
-        // Show month/day
-        let month = aDate.toLocaleDateString(undefined, { month: "long" });
-        let date = aDate.getDate();
-        dateTimeCompact = gBundle.formatStringFromName(gStr.monthDate, [month, date], 2);
-      }
-
-      const dtOptions = { dateStyle: "long", timeStyle: "short" };
-      dateTimeFull =
-        Services.intl.createDateTimeFormat(undefined, dtOptions).format(aDate);
+      // Show month/day
+      dateTimeCompact = aDate.toLocaleString(undefined, {
+                          month: "long",
+                          day: "numeric"
+      });
     }
+
+    const dtOptions = { dateStyle: "long", timeStyle: "short" };
+    dateTimeFull =
+      Services.intl.createDateTimeFormat(undefined, dtOptions).format(aDate);
 
     return [dateTimeCompact, dateTimeFull];
   },
@@ -411,17 +383,13 @@ this.DownloadUtils = {
    * @return A pair: [display host for the URI string, full host name]
    */
   getURIHost: function DU_getURIHost(aURIString) {
-    let ioService = Cc["@mozilla.org/network/io-service;1"].
-                    getService(Ci.nsIIOService);
-    let eTLDService = Cc["@mozilla.org/network/effective-tld-service;1"].
-                      getService(Ci.nsIEffectiveTLDService);
     let idnService = Cc["@mozilla.org/network/idn-service;1"].
                      getService(Ci.nsIIDNService);
 
     // Get a URI that knows about its components
     let uri;
     try {
-      uri = ioService.newURI(aURIString);
+      uri = Services.io.newURI(aURIString);
     } catch (ex) {
       return ["", ""];
     }
@@ -441,7 +409,7 @@ this.DownloadUtils = {
     let displayHost;
     try {
       // This might fail if it's an IP address or doesn't have more than 1 part
-      let baseDomain = eTLDService.getBaseDomain(uri);
+      let baseDomain = Services.eTLD.getBaseDomain(uri);
 
       // Convert base domain for display; ignore the isAscii out param
       displayHost = idnService.convertToDisplayIDN(baseDomain, {});
@@ -496,15 +464,8 @@ this.DownloadUtils = {
     // Don't try to format Infinity values using NumberFormat.
     if (aBytes === Infinity) {
       aBytes = "Infinity";
-    } else if (typeof Intl != "undefined") {
-      aBytes = getLocaleNumberFormat(fractionDigits)
-                 .format(aBytes);
     } else {
-      // FIXME: Fall back to the old hack, will be fixed in bug 1344543.
-      aBytes = aBytes.toFixed(fractionDigits);
-      if (gDecimalSymbol != ".") {
-        aBytes = aBytes.replace(".", gDecimalSymbol);
-      }
+      aBytes = getLocaleNumberFormat(fractionDigits).format(aBytes);
     }
 
     return [aBytes, gBundle.GetStringFromName(gStr.units[unitIndex])];
@@ -588,7 +549,6 @@ function convertTimeUnitsUnits(aTime, aIndex) {
  */
 function log(aMsg) {
   let msg = "DownloadUtils.jsm: " + (aMsg.join ? aMsg.join("") : aMsg);
-  Cc["@mozilla.org/consoleservice;1"].getService(Ci.nsIConsoleService).
-    logStringMessage(msg);
+  Services.console.logStringMessage(msg);
   dump(msg + "\n");
 }

@@ -189,17 +189,6 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         push(Operand(addr));
     }
 
-    void moveValue(const Value& val, Register dest) {
-        movWithPatch(ImmWord(val.asRawBits()), dest);
-        writeDataRelocation(val);
-    }
-    void moveValue(const Value& src, const ValueOperand& dest) {
-        moveValue(src, dest.valueReg());
-    }
-    void moveValue(const ValueOperand& src, const ValueOperand& dest) {
-        if (src.valueReg() != dest.valueReg())
-            movq(src.valueReg(), dest.valueReg());
-    }
     void boxValue(JSValueType type, Register src, Register dest);
 
     Condition testUndefined(Condition cond, Register tag) {
@@ -654,6 +643,88 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         storePtr(ImmWord(imm.value), address);
     }
 
+    template <typename T>
+    void atomicFetchAdd64(Register64 src, const T& mem, Register64 temp, Register64 output) {
+        MOZ_ASSERT(temp.reg == InvalidReg);
+        if (src != output)
+            movq(src.reg, output.reg);
+        lock_xaddq(output.reg, Operand(mem));
+    }
+    template <typename T>
+    void atomicAdd64(const T& mem, Register64 value) {
+        lock_addq(value.reg, Operand(mem));
+    }
+
+    template <typename T>
+    void atomicFetchSub64(Register64 src, const T& mem, Register64 temp, Register64 output) {
+        MOZ_ASSERT(temp.reg == InvalidReg);
+        if (src != output)
+            movq(src.reg, output.reg);
+        negq(output.reg);
+        lock_xaddq(output.reg, Operand(mem));
+    }
+    template <typename T>
+    void atomicSub64(const T& mem, Register64 value) {
+        lock_subq(value.reg, Operand(mem));
+    }
+
+    // requires output == rax
+#define ATOMIC_BITOP_BODY(OP)                     \
+        MOZ_ASSERT(output.reg == rax);            \
+        movq(Operand(mem), rax);                  \
+        Label again;                              \
+        bind(&again);                             \
+        movq(rax, temp.reg);                      \
+        OP(src.reg, temp.reg);                    \
+        lock_cmpxchgq(temp.reg, Operand(mem));    \
+        j(NonZero, &again);
+
+    template <typename S, typename T>
+    void atomicFetchAnd64(const S& src, const T& mem, Register64 temp, Register64 output) {
+        ATOMIC_BITOP_BODY(andq)
+    }
+    template <typename T>
+    void atomicAnd64(const T& mem, Register64 value) {
+        lock_andq(value.reg, Operand(mem));
+    }
+
+    template <typename S, typename T>
+    void atomicFetchOr64(const S& src, const T& mem, Register64 temp, Register64 output) {
+        ATOMIC_BITOP_BODY(orq)
+    }
+    template <typename T>
+    void atomicOr64(const T& mem, Register64 value) {
+        lock_orq(value.reg, Operand(mem));
+    }
+
+    template <typename S, typename T>
+    void atomicFetchXor64(const S& src, const T& mem, Register64 temp, Register64 output) {
+        ATOMIC_BITOP_BODY(xorq)
+    }
+    template <typename T>
+    void atomicXor64(const T& mem, Register64 value) {
+        lock_xorq(value.reg, Operand(mem));
+    }
+
+#undef ATOMIC_BITOP_BODY
+
+    template <typename T>
+    void atomicExchange64(const T& mem, Register64 src, Register64 output) {
+        if (src != output)
+            movq(src.reg, output.reg);
+        xchgq(output.reg, Operand(mem));
+    }
+
+    template <typename T>
+    void compareExchange64(const T& mem, Register64 expected, Register64 replacement,
+                           Register64 output)
+    {
+        MOZ_ASSERT(output.reg == rax);
+        if (expected != output)
+            movq(expected.reg, output.reg);
+        lock_cmpxchgq(replacement.reg, Operand(mem));
+    }
+
     void splitTag(Register src, Register dest) {
         if (src != dest)
             movq(src, dest);
@@ -707,7 +778,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
         emitSet(cond, dest);
     }
 
-    void boxDouble(FloatRegister src, const ValueOperand& dest) {
+    void boxDouble(FloatRegister src, const ValueOperand& dest, FloatRegister) {
         vmovq(src, dest.valueReg());
     }
     void boxNonDouble(JSValueType type, Register src, const ValueOperand& dest) {
@@ -800,6 +871,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
 
     void unboxString(const ValueOperand& src, Register dest) { unboxNonDouble(src, dest); }
     void unboxString(const Operand& src, Register dest) { unboxNonDouble(src, dest); }
+    void unboxString(const Address& src, Register dest) { unboxNonDouble(src, dest); }
 
     void unboxSymbol(const ValueOperand& src, Register dest) { unboxNonDouble(src, dest); }
     void unboxSymbol(const Operand& src, Register dest) { unboxNonDouble(src, dest); }
@@ -957,7 +1029,7 @@ class MacroAssemblerX64 : public MacroAssemblerX86Shared
     inline void ensureDouble(const ValueOperand& source, FloatRegister dest, Label* failure);
 
   public:
-    void handleFailureWithHandlerTail(void* handler);
+    void handleFailureWithHandlerTail(void* handler, Label* profilerExitTail);
 
     // Instrumentation for entering and leaving the profiler.
     void profilerEnterFrame(Register framePtr, Register scratch);

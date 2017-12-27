@@ -3,7 +3,7 @@
 XPCOMUtils.defineLazyModuleGetter(this, "ctypes",
                                   "resource://gre/modules/ctypes.jsm");
 
-add_task(function* () {
+add_task(async function() {
   let migrator = MigrationUtils.getMigrator("ie");
   // Sanity check for the source.
   Assert.ok(migrator.sourceExists);
@@ -22,8 +22,11 @@ add_task(function* () {
     _In_  LPCTSTR lpszCookieData
   );
   */
+  // NOTE: Even though MSDN documentation does not indicate a calling convention,
+  // InternetSetCookieW is declared in SDK headers as __stdcall but is exported
+  // from wininet.dll without name mangling, so it is effectively winapi_abi
   let setIECookie = wininet.declare("InternetSetCookieW",
-                                    ctypes.default_abi,
+                                    ctypes.winapi_abi,
                                     BOOL,
                                     LPCTSTR,
                                     LPCTSTR,
@@ -37,8 +40,11 @@ add_task(function* () {
     _Inout_ LPDWORD lpdwSize
   );
   */
+  // NOTE: Even though MSDN documentation does not indicate a calling convention,
+  // InternetGetCookieW is declared in SDK headers as __stdcall but is exported
+  // from wininet.dll without name mangling, so it is effectively winapi_abi
   let getIECookie = wininet.declare("InternetGetCookieW",
-                                    ctypes.default_abi,
+                                    ctypes.winapi_abi,
                                     BOOL,
                                     LPCTSTR,
                                     LPCTSTR,
@@ -60,7 +66,7 @@ add_task(function* () {
   let data = ctypes.char16_t.array()(256);
   let sizeRef = DWORD(256).address();
 
-  do_register_cleanup(() => {
+  registerCleanupFunction(() => {
     // Remove the cookie.
     try {
       let expired = new Date(new Date().setDate(date - 2));
@@ -85,7 +91,7 @@ add_task(function* () {
   // Sanity check the cookie has been created.
   Assert.ok(getIECookie(COOKIE.href, COOKIE.name, data, sizeRef),
             "Found the added persistent IE cookie");
-  do_print("Found cookie: " + data.readString());
+  info("Found cookie: " + data.readString());
   Assert.equal(data.readString(), `${COOKIE.name}=${COOKIE.value}`,
             "Found the expected cookie");
 
@@ -94,7 +100,7 @@ add_task(function* () {
                "There are no cookies initially");
 
   // Migrate cookies.
-  yield promiseMigration(migrator, MigrationUtils.resourceTypes.COOKIES);
+  await promiseMigration(migrator, MigrationUtils.resourceTypes.COOKIES);
 
   Assert.equal(Services.cookies.countCookiesFromHost(COOKIE.host), 1,
                "Migrated the expected number of cookies");

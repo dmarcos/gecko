@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from __future__ import print_function, unicode_literals
+from __future__ import absolute_import, print_function, unicode_literals
 
 import hashlib
 import os
@@ -150,7 +150,8 @@ MODERN_MERCURIAL_VERSION = LooseVersion('3.7.3')
 MODERN_PYTHON_VERSION = LooseVersion('2.7.3')
 
 # Upgrade rust older than this.
-MODERN_RUST_VERSION = LooseVersion('1.15.1')
+MODERN_RUST_VERSION = LooseVersion('1.22.0')
+
 
 class BaseBootstrapper(object):
     """Base class for system bootstrappers."""
@@ -158,6 +159,7 @@ class BaseBootstrapper(object):
     def __init__(self, no_interactive=False):
         self.package_manager_updated = False
         self.no_interactive = no_interactive
+        self.state_dir = None
 
     def install_system_packages(self):
         '''
@@ -248,6 +250,39 @@ class BaseBootstrapper(object):
         raise NotImplementedError(
             '%s does not yet implement suggest_mobile_android_artifact_mode_mozconfig()'
             % __name__)
+
+    def ensure_stylo_packages(self, state_dir, checkout_root):
+        '''
+        Install any necessary packages needed for Stylo development.
+        '''
+        raise NotImplementedError(
+            '%s does not yet implement ensure_stylo_packages()'
+            % __name__)
+
+    def ensure_proguard_packages(self, state_dir, checkout_root):
+        '''
+        Install any necessary packages that provide the Proguard JAR.
+
+        Only required to build mobile/android.
+        '''
+        self.install_toolchain_artifact(state_dir, checkout_root, 'proguard-jar')
+
+    def install_toolchain_artifact(self, state_dir, checkout_root, toolchain_job):
+        mach_binary = os.path.join(checkout_root, 'mach')
+        mach_binary = os.path.abspath(mach_binary)
+        if not os.path.exists(mach_binary):
+            raise ValueError("mach not found at %s" % mach_binary)
+
+        # If Python can't figure out what its own executable is, there's little
+        # chance we're going to be able to execute mach on its own, particularly
+        # on Windows.
+        if not sys.executable:
+            raise ValueError("cannot determine path to Python executable")
+
+        cmd = [sys.executable, mach_binary, 'artifact', 'toolchain',
+               '--from-build', toolchain_job]
+
+        subprocess.check_call(cmd, cwd=state_dir)
 
     def which(self, name):
         """Python implementation of which.
@@ -523,8 +558,6 @@ class BaseBootstrapper(object):
             print('Could not find a Rust compiler.')
             return False, None
 
-        cargo = self.which('cargo')
-
         our = self._parse_version(rustc)
         if not our:
             return False, None
@@ -533,7 +566,7 @@ class BaseBootstrapper(object):
 
     def cargo_home(self):
         cargo_home = os.environ.get('CARGO_HOME',
-                os.path.expanduser(os.path.join('~', '.cargo')))
+                                    os.path.expanduser(os.path.join('~', '.cargo')))
         cargo_bin = os.path.join(cargo_home, 'bin')
         return cargo_home, cargo_bin
 
@@ -582,7 +615,7 @@ class BaseBootstrapper(object):
             have_cargo = os.path.exists(try_cargo)
             if have_rustc or have_cargo:
                 self.print_rust_path_advice(RUST_NOT_IN_PATH,
-                        cargo_home, cargo_bin)
+                                            cargo_home, cargo_bin)
                 sys.exit(1)
         else:
             print('Your version of Rust (%s) is too old.' % version)
@@ -607,15 +640,15 @@ class BaseBootstrapper(object):
 
     def ensure_rust_targets(self, rustup):
         """Make sure appropriate cross target libraries are installed."""
-        target_list =  subprocess.check_output([rustup, 'target', 'list'])
+        target_list = subprocess.check_output([rustup, 'target', 'list'])
         targets = [line.split()[0] for line in target_list.splitlines()
-                if 'installed' in line or 'default' in line]
+                   if 'installed' in line or 'default' in line]
         print('Rust supports %s targets.' % ', '.join(targets))
 
         # Support 32-bit Windows on 64-bit Windows.
         win32 = 'i686-pc-windows-msvc'
         win64 = 'x86_64-pc-windows-msvc'
-        if rust.platform() == win64 and not win32 in targets:
+        if rust.platform() == win64 and win32 not in targets:
             subprocess.check_call([rustup, 'target', 'add', win32])
 
     def upgrade_rust(self, rustup):
@@ -645,12 +678,11 @@ class BaseBootstrapper(object):
             print('Ok')
             print('Running rustup-init...')
             subprocess.check_call([rustup_init, '-y',
-                '--default-toolchain', 'stable',
-                '--default-host', platform,
-            ])
+                                   '--default-toolchain', 'stable',
+                                   '--default-host', platform, ])
             cargo_home, cargo_bin = self.cargo_home()
             self.print_rust_path_advice(RUST_INSTALL_COMPLETE,
-                    cargo_home, cargo_bin)
+                                        cargo_home, cargo_bin)
         finally:
             try:
                 os.remove(rustup_init)
@@ -658,9 +690,13 @@ class BaseBootstrapper(object):
                 if e.errno != errno.ENOENT:
                     raise
 
-    def http_download_and_save(self, url, dest, sha256hexhash):
+    def http_download_and_save(self, url, dest, hexhash, digest='sha256'):
+        """Download the given url and save it to dest.  hexhash is a checksum
+        that will be used to validate the downloaded file using the given
+        digest algorithm.  The value of digest can be any value accepted by
+        hashlib.new.  The default digest used is 'sha256'."""
         f = urllib2.urlopen(url)
-        h = hashlib.sha256()
+        h = hashlib.new(digest)
         with open(dest, 'wb') as out:
             while True:
                 data = f.read(4096)
@@ -669,6 +705,6 @@ class BaseBootstrapper(object):
                     h.update(data)
                 else:
                     break
-        if h.hexdigest() != sha256hexhash:
+        if h.hexdigest() != hexhash:
             os.remove(dest)
             raise ValueError('Hash of downloaded file does not match expected hash')

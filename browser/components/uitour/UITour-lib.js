@@ -42,8 +42,8 @@ if (typeof Mozilla == "undefined") {
     var event = new CustomEvent("mozUITour", {
       bubbles: true,
       detail: {
-	action,
-	data: data || {}
+        action,
+        data: data || {}
       }
     });
 
@@ -59,9 +59,9 @@ if (typeof Mozilla == "undefined") {
 
     function listener(event) {
       if (typeof event.detail != "object")
-	return;
+        return;
       if (event.detail.callbackID != id)
-	return;
+        return;
 
       document.removeEventListener("mozUITourResponse", listener);
       callback(event.detail.data);
@@ -107,13 +107,20 @@ if (typeof Mozilla == "undefined") {
    * <li>controlCenter-trackingBlock
    * <li>customize
    * <li>devtools
+   * <li>forget
    * <li>help
    * <li>home
-   * <li>forget
+   * <li>library
+   * <li>pageActionButton
+   * <li>pageAction-bookmark
+   * <li>pageAction-copyURL
+   * <li>pageAction-emailLink
+   * <li>pageAction-sendToDevice
    * <li>pocket
    * <li>privateWindow
    * <li>quit
    * <li>readerMode-urlBar
+   * <li>screenshots
    * <li>search
    * <li>searchIcon
    * <li>searchPrefsLink
@@ -179,48 +186,6 @@ if (typeof Mozilla == "undefined") {
     _sendEvent("registerPageID", {
       pageID
     });
-  };
-
-  /**
-   * Show a global notification bar with a prompt and optional buttons.
-   *
-   * Only intended for use by Self Support.
-   *
-   * @deprecated Use Heartbeat from
-   * {@link https://wiki.mozilla.org/Firefox/Shield/Heartbeat|Shield} instead.
-   *
-   * @param {String} message - Text to show in the notification bar before an action is taken.
-   * @param {String} thankyouMessage - Text to show in the notification bar after a vote.
-   * @param {String} flowId - An identifier for this rating flow. Please note that this is only used
-   *                          to identify the notification box.
-   * @param {String} engagementURL - URL to open in a new tab once the user has engaged.
-   * @param {String} learnMoreLabel - The label of the learn more link. No link will be shown if
-   *                                  this is null.
-   * @param {String} learnMoreURL - URL to open when clicking on the learn more link. No link will be
-   *                                shown if this is an invalid URL.
-   * @param {Object} options - Options to control behavior.
-   */
-  Mozilla.UITour.showHeartbeat = function(message, thankyouMessage, flowId, engagementURL,
-					  learnMoreLabel, learnMoreURL, options) {
-    var args = {
-      message,
-      thankyouMessage,
-      flowId,
-      engagementURL,
-      learnMoreLabel,
-      learnMoreURL,
-    };
-
-    if (options) {
-      for (var option in options) {
-	if (!options.hasOwnProperty(option)) {
-	  continue;
-	}
-	args[option] = options[option];
-      }
-    }
-
-    _sendEvent("showHeartbeat", args);
   };
 
   /**
@@ -307,12 +272,12 @@ if (typeof Mozilla == "undefined") {
     var buttonData = [];
     if (Array.isArray(buttons)) {
       for (var i = 0; i < buttons.length; i++) {
-	buttonData.push({
-	  label: buttons[i].label,
-	  icon: buttons[i].icon,
-	  style: buttons[i].style,
-	  callbackID: _waitForCallback(buttons[i].callback)
-	});
+        buttonData.push({
+          label: buttons[i].label,
+          icon: buttons[i].icon,
+          style: buttons[i].style,
+          callbackID: _waitForCallback(buttons[i].callback)
+        });
       }
     }
 
@@ -361,7 +326,6 @@ if (typeof Mozilla == "undefined") {
    *   "accentcolor":  "#000000",
    *   "header":       "https://addons.mozilla.org/_files/….jpg",
    *   "version":      "1.0",
-   *   "footerURL":    "https://addons.mozilla.org/_files/….jpg",
    *   "detailURL":    "https://addons.mozilla.org/firefox/addon/…",
    *   "textcolor":    "#ffffff",
    *   "id":           "18066",
@@ -413,8 +377,8 @@ if (typeof Mozilla == "undefined") {
       themes.push(theme);
 
       _sendEvent("previewTheme", {
-	theme: JSON.stringify(theme),
-	state: true
+        theme: JSON.stringify(theme),
+        state: true
       });
 
       callback(theme);
@@ -523,6 +487,13 @@ if (typeof Mozilla == "undefined") {
    * @property {String} distribution - Contains the distributionId property. This value will be
    *                                   "default" in most cases but can differ for repack or
    *                                   funnelcake builds. Since Fx48
+   * @property {Number} profileCreatedWeeksAgo - The number of weeks since the profile was created,
+   *                                             starting from 0 for profiles dating less than
+   *                                             seven days old. Since Fx56.
+   * @property {Number} profileResetWeeksAgo - The number of weeks since the profile was last reset,
+   *                                           starting from 0 for profiles reset less than seven
+   *                                           days ago. If the profile has never been reset it
+   *                                           returns null. Since Fx56.
    * @property {String} version - Version string e.g. "48.0a2"
    * @since 35
    */
@@ -598,21 +569,55 @@ if (typeof Mozilla == "undefined") {
    * is a string, begins with "utm_" and contains only only alphanumeric
    * characters, dashes or underscores. The values may be any string and will
    * automatically be encoded.
+   * @param {String} email - A string containing the default email account
+   * for the URL opened by the browser.
    * @since 31, 47 for `extraURLCampaignParams`
    * @example
-   * // Will open about:accounts?action=signup&entrypoint=uitour
+   * // Will open https://accounts.firefox.com/signup?entrypoint=uitour
    * Mozilla.UITour.showFirefoxAccounts();
    * @example
    * // Will open:
-   * // about:accounts?action=signup&entrypoint=uitour&utm_foo=bar&utm_bar=baz
+   * // https://accounts.firefox.com/signup?entrypoint=uitour&utm_foo=bar&utm_bar=baz
    * Mozilla.UITour.showFirefoxAccounts({
    *   'utm_foo': 'bar',
    *   'utm_bar': 'baz'
    * });
+   * @example
+   * // Will open:
+   * // https://accounts.firefox.com/?action=email&email=foo%40bar.com&entrypoint=uitour
+   * Mozilla.UITour.showFirefoxAccounts(null, "foo@bar.com");
    */
-  Mozilla.UITour.showFirefoxAccounts = function(extraURLCampaignParams) {
+  Mozilla.UITour.showFirefoxAccounts = function(extraURLCampaignParams, email) {
     _sendEvent("showFirefoxAccounts", {
       extraURLCampaignParams: JSON.stringify(extraURLCampaignParams),
+      email
+    });
+  };
+
+  /**
+   * Request the browser open the "Connect Another Device" Firefox Accounts page.
+   *
+   * @param {Object} extraURLCampaignParams - An object containing additional
+   * parameters for the URL opened by the browser for reasons of promotional
+   * campaign tracking. Each attribute of the object must have a name that
+   * is a string, begins with "utm_" and contains only only alphanumeric
+   * characters, dashes or underscores. The values may be any string and will
+   * automatically be encoded.
+   * @since 59
+   * @example
+   * // Will open https://accounts.firefox.com/connect_another_device?entrypoint=uitour
+   * Mozilla.UITour.showConnectAnotherDevice();
+   * @example
+   * // Will open:
+   * // https://accounts.firefox.com/connect_another_device?entrypoint=uitour&utm_foo=bar&utm_bar=baz
+   * Mozilla.UITour.showConnectAnotherDevice({
+   *   'utm_foo': 'bar',
+   *   'utm_bar': 'baz'
+   * });
+   */
+  Mozilla.UITour.showConnectAnotherDevice = function(extraURLCampaignParams) {
+    _sendEvent("showConnectAnotherDevice", {
+      extraURLCampaignParams: JSON.stringify(extraURLCampaignParams)
     });
   };
 
@@ -747,16 +752,22 @@ if (typeof Mozilla == "undefined") {
 
   /**
    * @param {String} pane - Pane to open/switch the preferences to.
-   * Valid values match fragments on about:preferences and are subject to change e.g.:<ul>
+   * Valid values match fragments on about:preferences and are subject to change e.g.:
+   *
+   * <ul>
+   * For the Preferences
    * <li>general
-   * <li>search
-   * <li>content
    * <li>applications
-   * <li>privacy
-   * <li>security
    * <li>sync
+   * <li>privacy
    * <li>advanced
    * </ul>
+   *
+   * To open to the options of sending telemetry, health report, crach reports,
+   * that is, the privcacy pane > reports on the preferences.
+   * Please call `Mozilla.UITour.openPreferences("privacy-reports")`.
+   * UITour would do route mapping automatically.
+   *
    * @since 42
    */
   Mozilla.UITour.openPreferences = function(pane) {

@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsTArray.h"
+#include "nsASCIIMask.h"
 #include "mozilla/CheckedInt.h"
 
 /**
@@ -13,23 +14,24 @@
  * aOffset specifies starting index
  * aCount specifies number of string compares (iterations)
  */
-
+template <typename T>
 int32_t
-nsTString_CharT::Find( const nsCString& aString, bool aIgnoreCase, int32_t aOffset, int32_t aCount) const
+nsTString<T>::Find(const nsTString<char>& aString, bool aIgnoreCase, int32_t aOffset, int32_t aCount) const
 {
   // this method changes the meaning of aOffset and aCount:
-  Find_ComputeSearchRange(mLength, aString.Length(), aOffset, aCount);
+  Find_ComputeSearchRange(this->mLength, aString.Length(), aOffset, aCount);
 
-  int32_t result = FindSubstring(mData + aOffset, aCount, aString.get(), aString.Length(), aIgnoreCase);
+  int32_t result = FindSubstring(this->mData + aOffset, aCount, aString.get(), aString.Length(), aIgnoreCase);
   if (result != kNotFound)
     result += aOffset;
   return result;
 }
 
+template <typename T>
 int32_t
-nsTString_CharT::Find( const char* aString, bool aIgnoreCase, int32_t aOffset, int32_t aCount) const
+nsTString<T>::Find(const char* aString, bool aIgnoreCase, int32_t aOffset, int32_t aCount) const
 {
-  return Find(nsDependentCString(aString), aIgnoreCase, aOffset, aCount);
+  return Find(nsTDependentString<char>(aString), aIgnoreCase, aOffset, aCount);
 }
 
 
@@ -39,34 +41,35 @@ nsTString_CharT::Find( const char* aString, bool aIgnoreCase, int32_t aOffset, i
  * aOffset specifies starting index
  * aCount specifies number of string compares (iterations)
  */
-
+template <typename T>
 int32_t
-nsTString_CharT::RFind( const nsCString& aString, bool aIgnoreCase, int32_t aOffset, int32_t aCount) const
+nsTString<T>::RFind(const nsTString<char>& aString, bool aIgnoreCase, int32_t aOffset, int32_t aCount) const
 {
   // this method changes the meaning of aOffset and aCount:
-  RFind_ComputeSearchRange(mLength, aString.Length(), aOffset, aCount);
+  RFind_ComputeSearchRange(this->mLength, aString.Length(), aOffset, aCount);
 
-  int32_t result = RFindSubstring(mData + aOffset, aCount, aString.get(), aString.Length(), aIgnoreCase);
+  int32_t result = RFindSubstring(this->mData + aOffset, aCount, aString.get(), aString.Length(), aIgnoreCase);
   if (result != kNotFound)
     result += aOffset;
   return result;
 }
 
+template <typename T>
 int32_t
-nsTString_CharT::RFind( const char* aString, bool aIgnoreCase, int32_t aOffset, int32_t aCount) const
+nsTString<T>::RFind(const char* aString, bool aIgnoreCase, int32_t aOffset, int32_t aCount) const
 {
-  return RFind(nsDependentCString(aString), aIgnoreCase, aOffset, aCount);
+  return RFind(nsTDependentString<char>(aString), aIgnoreCase, aOffset, aCount);
 }
 
 
 /**
  * nsTString::RFindChar
  */
-
+template <typename T>
 int32_t
-nsTString_CharT::RFindChar( char16_t aChar, int32_t aOffset, int32_t aCount) const
+nsTString<T>::RFindChar(char16_t aChar, int32_t aOffset, int32_t aCount) const
 {
-  return nsBufferRoutines<CharT>::rfind_char(mData, mLength, aOffset, aChar, aCount);
+  return nsBufferRoutines<T>::rfind_char(this->mData, this->mLength, aOffset, aChar, aCount);
 }
 
 
@@ -74,15 +77,16 @@ nsTString_CharT::RFindChar( char16_t aChar, int32_t aOffset, int32_t aCount) con
  * nsTString::FindCharInSet
  */
 
+template <typename T>
 int32_t
-nsTString_CharT::FindCharInSet( const char* aSet, int32_t aOffset ) const
+nsTString<T>::FindCharInSet(const char_type* aSet, int32_t aOffset) const
 {
   if (aOffset < 0)
     aOffset = 0;
-  else if (aOffset >= int32_t(mLength))
+  else if (aOffset >= int32_t(this->mLength))
     return kNotFound;
 
-  int32_t result = ::FindCharInSet(mData + aOffset, mLength - aOffset, aSet);
+  int32_t result = ::FindCharInSet(this->mData + aOffset, this->mLength - aOffset, aSet);
   if (result != kNotFound)
     result += aOffset;
   return result;
@@ -93,270 +97,136 @@ nsTString_CharT::FindCharInSet( const char* aSet, int32_t aOffset ) const
  * nsTString::RFindCharInSet
  */
 
+template <typename T>
 int32_t
-nsTString_CharT::RFindCharInSet( const CharT* aSet, int32_t aOffset ) const
+nsTString<T>::RFindCharInSet(const char_type* aSet, int32_t aOffset) const
 {
   // We want to pass a "data length" to ::RFindCharInSet
-  if (aOffset < 0 || aOffset > int32_t(mLength))
-    aOffset = mLength;
+  if (aOffset < 0 || aOffset > int32_t(this->mLength))
+    aOffset = this->mLength;
   else
     ++aOffset;
 
-  return ::RFindCharInSet(mData, aOffset, aSet);
+  return ::RFindCharInSet(this->mData, aOffset, aSet);
 }
 
 
-// it's a shame to replicate this code.  it was done this way in the past
-// to help performance.  this function also gets to keep the rickg style
-// indentation :-/
-int32_t
-nsTString_CharT::ToInteger( nsresult* aErrorCode, uint32_t aRadix ) const
+// Common logic for nsTString<T>::ToInteger and nsTString<T>::ToInteger64.
+template<typename T, typename int_type>
+int_type
+ToIntegerCommon(const nsTString<T>& aSrc, nsresult* aErrorCode, uint32_t aRadix)
 {
-  CharT*  cp=mData;
-  int32_t theRadix=10; // base 10 unless base 16 detected, or overriden (aRadix != kAutoDetect)
-  int32_t result=0;
-  bool    negate=false;
-  CharT   theChar=0;
+  MOZ_ASSERT(aRadix == 10 || aRadix == 16);
 
-  //initial value, override if we find an integer
-  *aErrorCode=NS_ERROR_ILLEGAL_VALUE;
+  // Initial value, override if we find an integer.
+  *aErrorCode = NS_ERROR_ILLEGAL_VALUE;
 
-  if(cp) {
+  // Begin by skipping over leading chars that shouldn't be part of the number.
+  auto cp = aSrc.BeginReading();
+  auto endcp = aSrc.EndReading();
+  bool negate = false;
+  bool done = false;
 
-    //begin by skipping over leading chars that shouldn't be part of the number...
+  // NB: For backwards compatibility I'm not going to change this logic but
+  //     it seems really odd. Previously there was logic to auto-detect the
+  //     radix if kAutoDetect was passed in. In practice this value was never
+  //     used, so it pretended to auto detect and skipped some preceding
+  //     letters (excluding valid hex digits) but never used the result.
+  //
+  //     For example if you pass in "Get the number: 10", aRadix = 10 we'd
+  //     skip the 'G', and then fail to parse "et the number: 10". If aRadix =
+  //     16 we'd skip the 'G', and parse just 'e' returning 14.
+  while ((cp < endcp) && (!done)) {
+    switch (*cp++) {
+      // clang-format off
+      case 'a': case 'b': case 'c': case 'd': case 'e': case 'f':
+      case 'A': case 'B': case 'C': case 'D': case 'E': case 'F':
+      case '0': case '1': case '2': case '3': case '4':
+      case '5': case '6': case '7': case '8': case '9':
+        done = true;
+        break;
+      // clang-format on
+      case '-':
+        negate = true;
+        break;
+      default:
+        break;
+    }
+  }
 
-    CharT*  endcp=cp+mLength;
-    bool    done=false;
+  if (!done) {
+    // No base 16 or base 10 digits were found.
+    return 0;
+  }
 
-    while((cp<endcp) && (!done)){
-      switch(*cp++) {
-        case 'a': case 'b': case 'c': case 'd': case 'e': case 'f':
-        case 'A': case 'B': case 'C': case 'D': case 'E': case 'F':
-          theRadix=16;
-          done=true;
-          break;
-        case '0': case '1': case '2': case '3': case '4':
-        case '5': case '6': case '7': case '8': case '9':
-          done=true;
-          break;
-        case '-':
-          negate=true; //fall through...
-          break;
-        case 'X': case 'x':
-          theRadix=16;
-          break;
-        default:
-          break;
-      } //switch
+  // Step back.
+  cp--;
+
+  mozilla::CheckedInt<int_type> result;
+
+  // Now iterate the numeric chars and build our result.
+  while (cp < endcp) {
+    auto theChar = *cp++;
+    if (('0' <= theChar) && (theChar <= '9')) {
+      result = (aRadix * result) + (theChar - '0');
+    } else if ((theChar >= 'A') && (theChar <= 'F')) {
+      if (10 == aRadix) {
+        // Invalid base 10 digit, error out.
+        return 0;
+      } else {
+        result = (aRadix * result) + ((theChar - 'A') + 10);
+      }
+    } else if ((theChar >= 'a') && (theChar <= 'f')) {
+      if (10 == aRadix) {
+        // Invalid base 10 digit, error out.
+        return 0;
+      } else {
+        result = (aRadix * result) + ((theChar - 'a') + 10);
+      }
+    } else if ((('X' == theChar) || ('x' == theChar)) && result == 0) {
+      // For some reason we support a leading 'x' regardless of radix. For
+      // example: "000000x500", aRadix = 10 would be parsed as 500 rather
+      // than 0.
+      continue;
+    } else {
+      // We've encountered a char that's not a legal number or sign and we can
+      // terminate processing.
+      break;
     }
 
-    if (done) {
-
-      //integer found
-      *aErrorCode = NS_OK;
-
-      if (aRadix!=kAutoDetect) theRadix = aRadix; // override
-
-      //now iterate the numeric chars and build our result
-      CharT* first=--cp;  //in case we have to back up.
-      bool haveValue = false;
-
-      while(cp<endcp){
-        int32_t oldresult = result;
-
-        theChar=*cp++;
-        if(('0'<=theChar) && (theChar<='9')){
-          result = (theRadix * result) + (theChar-'0');
-          haveValue = true;
-        }
-        else if((theChar>='A') && (theChar<='F')) {
-          if(10==theRadix) {
-            if(kAutoDetect==aRadix){
-              theRadix=16;
-              cp=first; //backup
-              result=0;
-              haveValue = false;
-            }
-            else {
-              *aErrorCode=NS_ERROR_ILLEGAL_VALUE;
-              result=0;
-              break;
-            }
-          }
-          else {
-            result = (theRadix * result) + ((theChar-'A')+10);
-            haveValue = true;
-          }
-        }
-        else if((theChar>='a') && (theChar<='f')) {
-          if(10==theRadix) {
-            if(kAutoDetect==aRadix){
-              theRadix=16;
-              cp=first; //backup
-              result=0;
-              haveValue = false;
-            }
-            else {
-              *aErrorCode=NS_ERROR_ILLEGAL_VALUE;
-              result=0;
-              break;
-            }
-          }
-          else {
-            result = (theRadix * result) + ((theChar-'a')+10);
-            haveValue = true;
-          }
-        }
-        else if((('X'==theChar) || ('x'==theChar)) && (!haveValue || result == 0)) {
-          continue;
-        }
-        else if((('#'==theChar) || ('+'==theChar)) && !haveValue) {
-          continue;
-        }
-        else {
-          //we've encountered a char that's not a legal number or sign
-          break;
-        }
-
-        if (result < oldresult) {
-          // overflow!
-          *aErrorCode = NS_ERROR_ILLEGAL_VALUE;
-          result = 0;
-          break;
-        }
-      } //while
-      if(negate)
-        result=-result;
-    } //if
+    if (!result.isValid()) {
+      // Overflow!
+      return 0;
+    }
   }
-  return result;
+
+  // Integer found.
+  *aErrorCode = NS_OK;
+
+  if (negate) {
+    result = -result;
+  }
+
+  return result.value();
+}
+
+
+template <typename T>
+int32_t
+nsTString<T>::ToInteger(nsresult* aErrorCode, uint32_t aRadix) const
+{
+  return ToIntegerCommon<T, int32_t>(*this, aErrorCode, aRadix);
 }
 
 
 /**
  * nsTString::ToInteger64
  */
+template <typename T>
 int64_t
-nsTString_CharT::ToInteger64( nsresult* aErrorCode, uint32_t aRadix ) const
+nsTString<T>::ToInteger64(nsresult* aErrorCode, uint32_t aRadix) const
 {
-  CharT*  cp=mData;
-  int32_t theRadix=10; // base 10 unless base 16 detected, or overriden (aRadix != kAutoDetect)
-  int64_t result=0;
-  bool    negate=false;
-  CharT   theChar=0;
-
-  //initial value, override if we find an integer
-  *aErrorCode=NS_ERROR_ILLEGAL_VALUE;
-
-  if(cp) {
-
-    //begin by skipping over leading chars that shouldn't be part of the number...
-
-    CharT*  endcp=cp+mLength;
-    bool    done=false;
-
-    while((cp<endcp) && (!done)){
-      switch(*cp++) {
-        case 'a': case 'b': case 'c': case 'd': case 'e': case 'f':
-        case 'A': case 'B': case 'C': case 'D': case 'E': case 'F':
-          theRadix=16;
-          done=true;
-          break;
-        case '0': case '1': case '2': case '3': case '4':
-        case '5': case '6': case '7': case '8': case '9':
-          done=true;
-          break;
-        case '-':
-          negate=true; //fall through...
-          break;
-        case 'X': case 'x':
-          theRadix=16;
-          break;
-        default:
-          break;
-      } //switch
-    }
-
-    if (done) {
-
-      //integer found
-      *aErrorCode = NS_OK;
-
-      if (aRadix!=kAutoDetect) theRadix = aRadix; // override
-
-      //now iterate the numeric chars and build our result
-      CharT* first=--cp;  //in case we have to back up.
-      bool haveValue = false;
-
-      while(cp<endcp){
-        int64_t oldresult = result;
-
-        theChar=*cp++;
-        if(('0'<=theChar) && (theChar<='9')){
-          result = (theRadix * result) + (theChar-'0');
-          haveValue = true;
-        }
-        else if((theChar>='A') && (theChar<='F')) {
-          if(10==theRadix) {
-            if(kAutoDetect==aRadix){
-              theRadix=16;
-              cp=first; //backup
-              result=0;
-              haveValue = false;
-            }
-            else {
-              *aErrorCode=NS_ERROR_ILLEGAL_VALUE;
-              result=0;
-              break;
-            }
-          }
-          else {
-            result = (theRadix * result) + ((theChar-'A')+10);
-            haveValue = true;
-          }
-        }
-        else if((theChar>='a') && (theChar<='f')) {
-          if(10==theRadix) {
-            if(kAutoDetect==aRadix){
-              theRadix=16;
-              cp=first; //backup
-              result=0;
-              haveValue = false;
-            }
-            else {
-              *aErrorCode=NS_ERROR_ILLEGAL_VALUE;
-              result=0;
-              break;
-            }
-          }
-          else {
-            result = (theRadix * result) + ((theChar-'a')+10);
-            haveValue = true;
-          }
-        }
-        else if((('X'==theChar) || ('x'==theChar)) && (!haveValue || result == 0)) {
-          continue;
-        }
-        else if((('#'==theChar) || ('+'==theChar)) && !haveValue) {
-          continue;
-        }
-        else {
-          //we've encountered a char that's not a legal number or sign
-          break;
-        }
-
-        if (result < oldresult) {
-          // overflow!
-          *aErrorCode = NS_ERROR_ILLEGAL_VALUE;
-          result = 0;
-          break;
-        }
-      } //while
-      if(negate)
-        result=-result;
-    } //if
-  }
-  return result;
+  return ToIntegerCommon<T, int64_t>(*this, aErrorCode, aRadix);
 }
 
 
@@ -364,10 +234,11 @@ nsTString_CharT::ToInteger64( nsresult* aErrorCode, uint32_t aRadix ) const
    * nsTString::Mid
    */
 
-uint32_t
-nsTString_CharT::Mid( self_type& aResult, index_type aStartPos, size_type aLengthToCopy ) const
+template <typename T>
+typename nsTString<T>::size_type
+nsTString<T>::Mid(self_type& aResult, index_type aStartPos, size_type aLengthToCopy) const
 {
-  if (aStartPos == 0 && aLengthToCopy >= mLength)
+  if (aStartPos == 0 && aLengthToCopy >= this->mLength)
     aResult = *this;
   else
     aResult = Substring(*this, aStartPos, aLengthToCopy);
@@ -380,16 +251,17 @@ nsTString_CharT::Mid( self_type& aResult, index_type aStartPos, size_type aLengt
  * nsTString::SetCharAt
  */
 
+template <typename T>
 bool
-nsTString_CharT::SetCharAt( char16_t aChar, uint32_t aIndex )
+nsTString<T>::SetCharAt(char16_t aChar, uint32_t aIndex)
 {
-  if (aIndex >= mLength)
+  if (aIndex >= this->mLength)
     return false;
 
-  if (!EnsureMutable())
-    AllocFailed(mLength);
+  if (!this->EnsureMutable())
+    this->AllocFailed(this->mLength);
 
-  mData[aIndex] = CharT(aChar);
+  this->mData[aIndex] = char_type(aChar);
   return true;
 }
 
@@ -398,63 +270,84 @@ nsTString_CharT::SetCharAt( char16_t aChar, uint32_t aIndex )
  * nsTString::StripChars,StripChar,StripWhitespace
  */
 
+template<typename T>
+template<typename Q, typename EnableIfChar16>
 void
-nsTString_CharT::StripChars( const char* aSet )
+nsTString<T>::StripChars(const incompatible_char_type* aSet)
 {
-  if (!EnsureMutable())
-    AllocFailed(mLength);
-
-  mLength = nsBufferRoutines<CharT>::strip_chars(mData, mLength, aSet);
+  if (!StripChars(aSet, mozilla::fallible)) {
+    this->AllocFailed(this->mLength);
+  }
 }
 
+template<typename T>
+template<typename Q, typename EnableIfChar16>
 bool
-nsTString_CharT::StripChars( const char* aSet, const fallible_t& )
+nsTString<T>::StripChars(const incompatible_char_type* aSet, const fallible_t&)
 {
-  if (!EnsureMutable()) {
+  if (!this->EnsureMutable()) {
     return false;
   }
 
-  mLength = nsBufferRoutines<CharT>::strip_chars(mData, mLength, aSet);
+  this->mLength = nsBufferRoutines<T>::strip_chars(this->mData, this->mLength, aSet);
   return true;
 }
 
+template<typename T>
 void
-nsTString_CharT::StripWhitespace()
+nsTString<T>::StripChars(const char_type* aSet)
 {
-  StripChars(kWhitespace);
+  nsTSubstring<T>::StripChars(aSet);
 }
 
-bool
-nsTString_CharT::StripWhitespace(const fallible_t& aFallible)
+template <typename T>
+void
+nsTString<T>::StripWhitespace()
 {
-  return StripChars(kWhitespace, aFallible);
+  if (!StripWhitespace(mozilla::fallible)) {
+    this->AllocFailed(this->mLength);
+  }
+}
+
+template <typename T>
+bool
+nsTString<T>::StripWhitespace(const fallible_t&)
+{
+  if (!this->EnsureMutable()) {
+    return false;
+  }
+
+  this->StripTaggedASCII(mozilla::ASCIIMask::MaskWhitespace());
+  return true;
 }
 
 /**
  * nsTString::ReplaceChar,ReplaceSubstring
  */
 
+template <typename T>
 void
-nsTString_CharT::ReplaceChar( char_type aOldChar, char_type aNewChar )
+nsTString<T>::ReplaceChar(char_type aOldChar, char_type aNewChar)
 {
-  if (!EnsureMutable()) // XXX do this lazily?
-    AllocFailed(mLength);
+  if (!this->EnsureMutable()) // XXX do this lazily?
+    this->AllocFailed(this->mLength);
 
-  for (uint32_t i=0; i<mLength; ++i)
+  for (uint32_t i=0; i<this->mLength; ++i)
   {
-    if (mData[i] == aOldChar)
-      mData[i] = aNewChar;
+    if (this->mData[i] == aOldChar)
+      this->mData[i] = aNewChar;
   }
 }
 
+template <typename T>
 void
-nsTString_CharT::ReplaceChar( const char* aSet, char_type aNewChar )
+nsTString<T>::ReplaceChar(const char_type* aSet, char_type aNewChar)
 {
-  if (!EnsureMutable()) // XXX do this lazily?
-    AllocFailed(mLength);
+  if (!this->EnsureMutable()) // XXX do this lazily?
+    this->AllocFailed(this->mLength);
 
-  char_type* data = mData;
-  uint32_t lenRemaining = mLength;
+  char_type* data = this->mData;
+  uint32_t lenRemaining = this->mLength;
 
   while (lenRemaining)
   {
@@ -468,41 +361,45 @@ nsTString_CharT::ReplaceChar( const char* aSet, char_type aNewChar )
   }
 }
 
-void ReleaseData(void* aData, uint32_t aFlags);
+void ReleaseData(void* aData, nsAString::DataFlags aFlags);
 
+template <typename T>
 void
-nsTString_CharT::ReplaceSubstring(const char_type* aTarget,
-                                  const char_type* aNewValue)
+nsTString<T>::ReplaceSubstring(const char_type* aTarget,
+                               const char_type* aNewValue)
 {
-  ReplaceSubstring(nsTDependentString_CharT(aTarget),
-                   nsTDependentString_CharT(aNewValue));
+  ReplaceSubstring(nsTDependentString<T>(aTarget),
+                   nsTDependentString<T>(aNewValue));
 }
 
+template <typename T>
 bool
-nsTString_CharT::ReplaceSubstring(const char_type* aTarget,
-                                  const char_type* aNewValue,
-                                  const fallible_t& aFallible)
+nsTString<T>::ReplaceSubstring(const char_type* aTarget,
+                               const char_type* aNewValue,
+                               const fallible_t& aFallible)
 {
-  return ReplaceSubstring(nsTDependentString_CharT(aTarget),
-                          nsTDependentString_CharT(aNewValue),
+  return ReplaceSubstring(nsTDependentString<T>(aTarget),
+                          nsTDependentString<T>(aNewValue),
                           aFallible);
 }
 
+template <typename T>
 void
-nsTString_CharT::ReplaceSubstring(const self_type& aTarget,
-                                  const self_type& aNewValue)
+nsTString<T>::ReplaceSubstring(const self_type& aTarget,
+                               const self_type& aNewValue)
 {
   if (!ReplaceSubstring(aTarget, aNewValue, mozilla::fallible)) {
     // Note that this may wildly underestimate the allocation that failed, as
     // we could have been replacing multiple copies of aTarget.
-    AllocFailed(mLength + (aNewValue.Length() - aTarget.Length()));
+    this->AllocFailed(this->mLength + (aNewValue.Length() - aTarget.Length()));
   }
 }
 
+template <typename T>
 bool
-nsTString_CharT::ReplaceSubstring(const self_type& aTarget,
-                                  const self_type& aNewValue,
-                                  const fallible_t&)
+nsTString<T>::ReplaceSubstring(const self_type& aTarget,
+                               const self_type& aNewValue,
+                               const fallible_t&)
 {
   if (aTarget.Length() == 0)
     return true;
@@ -513,8 +410,8 @@ nsTString_CharT::ReplaceSubstring(const self_type& aTarget,
   mozilla::CheckedUint32 newLength;
   while (true)
   {
-    int32_t r = FindSubstring(mData + i, mLength - i, static_cast<const char_type*>(aTarget.Data()), aTarget.Length(), false);
-    int32_t until = (r == kNotFound) ? mLength - i : r;
+    int32_t r = FindSubstring(this->mData + i, this->mLength - i, static_cast<const char_type*>(aTarget.Data()), aTarget.Length(), false);
+    int32_t until = (r == kNotFound) ? this->mLength - i : r;
     nonMatching.AppendElement(Segment(i, until));
     newLength += until;
     if (r == kNotFound) {
@@ -523,10 +420,10 @@ nsTString_CharT::ReplaceSubstring(const self_type& aTarget,
 
     newLength += aNewValue.Length();
     i += r + aTarget.Length();
-    if (i >= mLength) {
+    if (i >= this->mLength) {
       // Add an auxiliary entry at the end of the list to help as an edge case
       // for the algorithms below.
-      nonMatching.AppendElement(Segment(mLength, 0));
+      nonMatching.AppendElement(Segment(this->mLength, 0));
       break;
     }
   }
@@ -538,22 +435,22 @@ nsTString_CharT::ReplaceSubstring(const self_type& aTarget,
   // If there's only one non-matching segment, then the target string was not
   // found, and there's nothing to do.
   if (nonMatching.Length() == 1) {
-    MOZ_ASSERT(nonMatching[0].mBegin == 0 && nonMatching[0].mLength == mLength,
+    MOZ_ASSERT(nonMatching[0].mBegin == 0 && nonMatching[0].mLength == this->mLength,
                "We should have the correct non-matching segment.");
     return true;
   }
 
   // Make sure that we can mutate our buffer.
-  // Note that we always allocate at least an mLength sized buffer, because the
+  // Note that we always allocate at least an this->mLength sized buffer, because the
   // rest of the algorithm relies on having access to all of the original
   // string.  In other words, we over-allocate in the shrinking case.
   char_type* oldData;
-  uint32_t oldFlags;
-  if (!MutatePrep(XPCOM_MAX(mLength, newLength.value()), &oldData, &oldFlags))
+  DataFlags oldFlags;
+  if (!this->MutatePrep(XPCOM_MAX(this->mLength, newLength.value()), &oldData, &oldFlags))
     return false;
   if (oldData) {
     // Copy all of the old data to the new buffer.
-    char_traits::copy(mData, oldData, mLength);
+    char_traits::copy(this->mData, oldData, this->mLength);
     ::ReleaseData(oldData, oldFlags);
   }
 
@@ -564,8 +461,8 @@ nsTString_CharT::ReplaceSubstring(const self_type& aTarget,
       // When we move the i'th non-matching segment into position, we need to
       // account for the characters deleted by the previous |i| replacements by
       // subtracting |i * delta|.
-      const char_type* sourceSegmentPtr = mData + nonMatching[i].mBegin;
-      char_type* destinationSegmentPtr = mData + nonMatching[i].mBegin - i * delta;
+      const char_type* sourceSegmentPtr = this->mData + nonMatching[i].mBegin;
+      char_type* destinationSegmentPtr = this->mData + nonMatching[i].mBegin - i * delta;
       // Write the i'th replacement immediately before the new i'th non-matching
       // segment.
       char_traits::copy(destinationSegmentPtr - aNewValue.Length(),
@@ -580,8 +477,8 @@ nsTString_CharT::ReplaceSubstring(const self_type& aTarget,
       // When we move the i'th non-matching segment into position, we need to
       // account for the characters added by the previous |i| replacements by
       // adding |i * delta|.
-      const char_type* sourceSegmentPtr = mData + nonMatching[i].mBegin;
-      char_type* destinationSegmentPtr = mData + nonMatching[i].mBegin + i * delta;
+      const char_type* sourceSegmentPtr = this->mData + nonMatching[i].mBegin;
+      char_type* destinationSegmentPtr = this->mData + nonMatching[i].mBegin + i * delta;
       char_traits::move(destinationSegmentPtr, sourceSegmentPtr,
                         nonMatching[i].mLength);
       // Write the i'th replacement immediately before the new i'th non-matching
@@ -592,8 +489,8 @@ nsTString_CharT::ReplaceSubstring(const self_type& aTarget,
   }
 
   // Adjust the length and make sure the string is null terminated.
-  mLength = newLength.value();
-  mData[mLength] = char_type(0);
+  this->mLength = newLength.value();
+  this->mData[this->mLength] = char_type(0);
 
   return true;
 }
@@ -602,19 +499,20 @@ nsTString_CharT::ReplaceSubstring(const self_type& aTarget,
  * nsTString::Trim
  */
 
+template <typename T>
 void
-nsTString_CharT::Trim( const char* aSet, bool aTrimLeading, bool aTrimTrailing, bool aIgnoreQuotes )
+nsTString<T>::Trim(const char* aSet, bool aTrimLeading, bool aTrimTrailing, bool aIgnoreQuotes)
 {
   // the old implementation worried about aSet being null :-/
   if (!aSet)
     return;
 
-  char_type* start = mData;
-  char_type* end   = mData + mLength;
+  char_type* start = this->mData;
+  char_type* end   = this->mData + this->mLength;
 
   // skip over quotes if requested
-  if (aIgnoreQuotes && mLength > 2 && mData[0] == mData[mLength - 1] &&
-      (mData[0] == '\'' || mData[0] == '"'))
+  if (aIgnoreQuotes && this->mLength > 2 && this->mData[0] == this->mData[this->mLength - 1] &&
+      (this->mData[0] == '\'' || this->mData[0] == '"'))
   {
     ++start;
     --end;
@@ -624,7 +522,7 @@ nsTString_CharT::Trim( const char* aSet, bool aTrimLeading, bool aTrimTrailing, 
 
   if (aTrimLeading)
   {
-    uint32_t cutStart = start - mData;
+    uint32_t cutStart = start - this->mData;
     uint32_t cutLength = 0;
 
     // walk forward from start to end
@@ -637,17 +535,17 @@ nsTString_CharT::Trim( const char* aSet, bool aTrimLeading, bool aTrimTrailing, 
 
     if (cutLength)
     {
-      Cut(cutStart, cutLength);
+      this->Cut(cutStart, cutLength);
 
       // reset iterators
-      start = mData + cutStart;
-      end   = mData + mLength - cutStart;
+      start = this->mData + cutStart;
+      end   = this->mData + this->mLength - cutStart;
     }
   }
 
   if (aTrimTrailing)
   {
-    uint32_t cutEnd = end - mData;
+    uint32_t cutEnd = end - this->mData;
     uint32_t cutLength = 0;
 
     // walk backward from end to start
@@ -660,46 +558,55 @@ nsTString_CharT::Trim( const char* aSet, bool aTrimLeading, bool aTrimTrailing, 
     }
 
     if (cutLength)
-      Cut(cutEnd - cutLength, cutLength);
+      this->Cut(cutEnd - cutLength, cutLength);
   }
 }
 
 
 /**
- * nsTString::CompressWhitespace
+ * nsTString::CompressWhitespace.
  */
 
+template <typename T>
 void
-nsTString_CharT::CompressWhitespace( bool aTrimLeading, bool aTrimTrailing )
+nsTString<T>::CompressWhitespace(bool aTrimLeading, bool aTrimTrailing)
 {
-  const char* set = kWhitespace;
-
-  ReplaceChar(set, ' ');
-  Trim(set, aTrimLeading, aTrimTrailing);
-
-  // this one does some questionable fu... just copying the old code!
-  mLength = nsBufferRoutines<char_type>::compress_chars(mData, mLength, set);
-}
-
-
-/**
- * nsTString::AssignWithConversion
- */
-
-void
-nsTString_CharT::AssignWithConversion( const incompatible_char_type* aData, int32_t aLength )
-{
-  // for compatibility with the old string implementation, we need to allow
-  // for a nullptr input buffer :-(
-  if (!aData)
-  {
-    Truncate();
+  // Quick exit
+  if (this->mLength == 0) {
+    return;
   }
-  else
-  {
-    if (aLength < 0)
-      aLength = nsCharTraits<incompatible_char_type>::length(aData);
 
-    AssignWithConversion(Substring(aData, aLength));
+  if (!this->EnsureMutable())
+    this->AllocFailed(this->mLength);
+
+  const ASCIIMaskArray& mask = mozilla::ASCIIMask::MaskWhitespace();
+
+  char_type* to   = this->mData;
+  char_type* from = this->mData;
+  char_type* end  = this->mData + this->mLength;
+
+  // Compresses runs of whitespace down to a normal space ' ' and convert
+  // any whitespace to a normal space.  This assumes that whitespace is
+  // all standard 7-bit ASCII.
+  bool skipWS = aTrimLeading;
+  while (from < end) {
+    uint32_t theChar = *from++;
+    if (mozilla::ASCIIMask::IsMasked(mask, theChar)) {
+      if (!skipWS) {
+        *to++ = ' ';
+        skipWS = true;
+      }
+    } else {
+      *to++ = theChar;
+      skipWS = false;
+    }
   }
+
+  // If we need to trim the trailing whitespace, back up one character.
+  if (aTrimTrailing && skipWS && to > this->mData) {
+    to--;
+  }
+
+  *to = char_type(0); // add the null
+  this->mLength = to - this->mData;
 }

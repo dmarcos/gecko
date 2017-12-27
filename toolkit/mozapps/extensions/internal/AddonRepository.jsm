@@ -9,46 +9,34 @@ const Ci = Components.interfaces;
 const Cu = Components.utils;
 const Cr = Components.results;
 
-Components.utils.import("resource://gre/modules/Services.jsm");
-Components.utils.import("resource://gre/modules/AddonManager.jsm");
-/* globals AddonManagerPrivate*/
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
-                                  "resource://gre/modules/NetUtil.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "OS",
-                                  "resource://gre/modules/osfile.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "DeferredSave",
-                                  "resource://gre/modules/DeferredSave.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "AddonRepository_SQLiteMigrator",
-                                  "resource://gre/modules/addons/AddonRepository_SQLiteMigrator.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
-                                  "resource://gre/modules/Preferences.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-                                  "resource://gre/modules/Promise.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ServiceRequest",
-                                  "resource://gre/modules/ServiceRequest.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Task",
-                                  "resource://gre/modules/Task.jsm");
-
+XPCOMUtils.defineLazyModuleGetters(this, {
+  AddonManager: "resource://gre/modules/AddonManager.jsm",
+  AddonManagerPrivate: "resource://gre/modules/AddonManager.jsm",
+  AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
+  DeferredTask: "resource://gre/modules/DeferredTask.jsm",
+  Services: "resource://gre/modules/Services.jsm",
+  ServiceRequest: "resource://gre/modules/ServiceRequest.jsm",
+  NetUtil: "resource://gre/modules/NetUtil.jsm",
+  OS: "resource://gre/modules/osfile.jsm",
+  Preferences: "resource://gre/modules/Preferences.jsm",
+});
 
 this.EXPORTED_SYMBOLS = [ "AddonRepository" ];
 
 const PREF_GETADDONS_CACHE_ENABLED       = "extensions.getAddons.cache.enabled";
 const PREF_GETADDONS_CACHE_TYPES         = "extensions.getAddons.cache.types";
-const PREF_GETADDONS_CACHE_ID_ENABLED    = "extensions.%ID%.getAddons.cache.enabled"
+const PREF_GETADDONS_CACHE_ID_ENABLED    = "extensions.%ID%.getAddons.cache.enabled";
 const PREF_GETADDONS_BROWSEADDONS        = "extensions.getAddons.browseAddons";
 const PREF_GETADDONS_BYIDS               = "extensions.getAddons.get.url";
 const PREF_GETADDONS_BYIDS_PERFORMANCE   = "extensions.getAddons.getWithPerformance.url";
-const PREF_GETADDONS_BROWSERECOMMENDED   = "extensions.getAddons.recommended.browseURL";
-const PREF_GETADDONS_GETRECOMMENDED      = "extensions.getAddons.recommended.url";
 const PREF_GETADDONS_BROWSESEARCHRESULTS = "extensions.getAddons.search.browseURL";
-const PREF_GETADDONS_GETSEARCHRESULTS    = "extensions.getAddons.search.url";
-const PREF_GETADDONS_DB_SCHEMA           = "extensions.getAddons.databaseSchema"
+const PREF_GETADDONS_DB_SCHEMA           = "extensions.getAddons.databaseSchema";
 
 const PREF_METADATA_LASTUPDATE           = "extensions.getAddons.cache.lastUpdate";
 const PREF_METADATA_UPDATETHRESHOLD_SEC  = "extensions.getAddons.cache.updateThreshold";
-const DEFAULT_METADATA_UPDATETHRESHOLD_SEC = 172800;  // two days
+const DEFAULT_METADATA_UPDATETHRESHOLD_SEC = 172800; // two days
 
 const XMLURI_PARSE_ERROR  = "http://www.mozilla.org/newlayout/xml/parsererror.xml";
 
@@ -65,7 +53,7 @@ const BLANK_DB = function() {
     addons: new Map(),
     schema: DB_SCHEMA
   };
-}
+};
 
 const TOOLKIT_ID     = "toolkit@mozilla.org";
 
@@ -121,27 +109,37 @@ function convertHTMLToPlainText(html) {
   return html;
 }
 
-function getAddonsToCache(aIds) {
+async function getAddonsToCache(aIds) {
   let types = Preferences.get(PREF_GETADDONS_CACHE_TYPES) || DEFAULT_CACHE_TYPES;
 
   types = types.split(",");
 
-  return AddonManager.getAddonsByIDs(aIds).then(addons => {
-    let enabledIds = [];
-    for (let [i, addon] of addons.entries()) {
-      var preference = PREF_GETADDONS_CACHE_ID_ENABLED.replace("%ID%", aIds[i]);
-      // If the preference doesn't exist caching is enabled by default
-      if (!Preferences.get(preference, true))
-        continue;
+  let addons = await AddonManager.getAddonsByIDs(aIds);
+  let enabledIds = [];
 
-      // The add-ons manager may not know about this ID yet if it is a pending
-      // install. In that case we'll just cache it regardless
-      if (!addon || types.includes(addon.type))
-        enabledIds.push(aIds[i]);
+  for (let [i, addon] of addons.entries()) {
+    var preference = PREF_GETADDONS_CACHE_ID_ENABLED.replace("%ID%", aIds[i]);
+    // If the preference doesn't exist caching is enabled by default
+    if (!Preferences.get(preference, true))
+      continue;
+
+    // The add-ons manager may not know about this ID yet if it is a pending
+    // install. In that case we'll just cache it regardless
+
+    // Don't cache add-ons of the wrong types
+    if (addon && !types.includes(addon.type)) {
+      continue;
     }
 
-    return enabledIds;
-  });
+    // Don't cache system add-ons
+    if (addon && addon.isSystem) {
+      continue;
+    }
+
+    enabledIds.push(aIds[i]);
+  }
+
+  return enabledIds;
 }
 
 function AddonSearchResult(aId) {
@@ -450,7 +448,7 @@ AddonSearchResult.prototype = {
 
     return json;
   }
-}
+};
 
 /**
  * The add-on repository is a source of add-ons that can be installed. It can
@@ -542,7 +540,7 @@ this.AddonRepository = {
    * @param  aCallback
    *         The callback to pass the result back to
    */
-  getCachedAddonByID: Task.async(function*(aId, aCallback) {
+  async getCachedAddonByID(aId, aCallback) {
     if (!aId || !this.cacheEnabled) {
       aCallback(null);
       return;
@@ -562,7 +560,7 @@ this.AddonRepository = {
     }
 
     getAddon(this._addons);
-  }),
+  },
 
   /**
    * Asynchronously repopulate cache so it only contains the add-ons
@@ -589,8 +587,8 @@ this.AddonRepository = {
       AddonManagerPrivate.updateAddonRepositoryData());
   },
 
-  _repopulateCacheInternal: Task.async(function*(aSendPerformance, aTimeout) {
-    let allAddons = yield AddonManager.getAllAddons();
+  async _repopulateCacheInternal(aSendPerformance, aTimeout) {
+    let allAddons = await AddonManager.getAllAddons();
 
     // Filter the hotfix out of our list of add-ons
     allAddons = allAddons.filter(a => a.id != AddonManager.hotfixID);
@@ -598,23 +596,23 @@ this.AddonRepository = {
     // Completely remove cache if caching is not enabled
     if (!this.cacheEnabled) {
       logger.debug("Clearing cache because it is disabled");
-      yield this._clearCache();
+      await this._clearCache();
       return;
     }
 
     let ids = allAddons.map(a => a.id);
     logger.debug("Repopulate add-on cache with " + ids.toSource());
 
-    let addonsToCache = yield getAddonsToCache(ids);
+    let addonsToCache = await getAddonsToCache(ids);
 
     // Completely remove cache if there are no add-ons to cache
     if (addonsToCache.length == 0) {
       logger.debug("Clearing cache because 0 add-ons were requested");
-      yield this._clearCache();
+      await this._clearCache();
       return;
     }
 
-    yield new Promise((resolve, reject) =>
+    await new Promise((resolve, reject) =>
       this._beginGetAddons(addonsToCache, {
         searchSucceeded: aAddons => {
           this._addons = new Map();
@@ -630,8 +628,8 @@ this.AddonRepository = {
       }, aSendPerformance, aTimeout));
 
     // Always call AddonManager updateAddonRepositoryData after we refill the cache
-    yield AddonManagerPrivate.updateAddonRepositoryData();
-  }),
+    await AddonManagerPrivate.updateAddonRepositoryData();
+  },
 
   /**
    * Asynchronously add add-ons to the cache corresponding to the specified
@@ -690,15 +688,6 @@ this.AddonRepository = {
    */
   get isSearching() {
     return this._searching;
-  },
-
-  /**
-   * The url that can be visited to see recommended add-ons in this repository.
-   * If the corresponding preference is not defined, defaults to about:blank.
-   */
-  getRecommendedURL() {
-    let url = this._formatURLPref(PREF_GETADDONS_BROWSERECOMMENDED, {});
-    return (url != null) ? url : "about:blank";
   },
 
   /**
@@ -771,9 +760,7 @@ this.AddonRepository = {
       if (type == Services.prefs.PREF_STRING) {
         pref = PREF_GETADDONS_BYIDS_PERFORMANCE;
 
-        let startupInfo = Cc["@mozilla.org/toolkit/app-startup;1"].
-                          getService(Ci.nsIAppStartup).
-                          getStartupInfo();
+        let startupInfo = Services.startup.getStartupInfo();
 
         params.TIME_MAIN = "";
         params.TIME_FIRST_PAINT = "";
@@ -841,7 +828,7 @@ this.AddonRepository = {
 
       // aTotalResults irrelevant
       this._reportSuccess(results, -1);
-    }
+    };
 
     this._beginSearch(url, ids.length, aCallback, handleResults, aTimeout);
   },
@@ -857,70 +844,6 @@ this.AddonRepository = {
    */
   backgroundUpdateCheck() {
     return this._repopulateCacheInternal(true);
-  },
-
-  /**
-   * Begins a search for recommended add-ons in this repository. Results will
-   * be passed to the given callback.
-   *
-   * @param  aMaxResults
-   *         The maximum number of results to return
-   * @param  aCallback
-   *         The callback to pass results to
-   */
-  retrieveRecommendedAddons(aMaxResults, aCallback) {
-    let url = this._formatURLPref(PREF_GETADDONS_GETRECOMMENDED, {
-      API_VERSION,
-
-      // Get twice as many results to account for potential filtering
-      MAX_RESULTS: 2 * aMaxResults
-    });
-
-    let handleResults = (aElements, aTotalResults) => {
-      this._getLocalAddonIds(aLocalAddonIds => {
-        // aTotalResults irrelevant
-        this._parseAddons(aElements, -1, aLocalAddonIds);
-      });
-    }
-
-    this._beginSearch(url, aMaxResults, aCallback, handleResults);
-  },
-
-  /**
-   * Begins a search for add-ons in this repository. Results will be passed to
-   * the given callback.
-   *
-   * @param  aSearchTerms
-   *         The terms to search for
-   * @param  aMaxResults
-   *         The maximum number of results to return
-   * @param  aCallback
-   *         The callback to pass results to
-   */
-  searchAddons(aSearchTerms, aMaxResults, aCallback) {
-    let compatMode = "normal";
-    if (!AddonManager.checkCompatibility)
-      compatMode = "ignore";
-    else if (AddonManager.strictCompatibility)
-      compatMode = "strict";
-
-    let substitutions = {
-      API_VERSION,
-      TERMS: encodeURIComponent(aSearchTerms),
-      // Get twice as many results to account for potential filtering
-      MAX_RESULTS: 2 * aMaxResults,
-      COMPATIBILITY_MODE: compatMode,
-    };
-
-    let url = this._formatURLPref(PREF_GETADDONS_GETSEARCHRESULTS, substitutions);
-
-    let handleResults = (aElements, aTotalResults) => {
-      this._getLocalAddonIds(aLocalAddonIds => {
-        this._parseAddons(aElements, aTotalResults, aLocalAddonIds);
-      });
-    }
-
-    this._beginSearch(url, aMaxResults, aCallback, handleResults);
   },
 
   // Posts results to the callback
@@ -1139,7 +1062,7 @@ this.AddonRepository = {
             addon.contributionURL = meetDevelopers;
             addon.contributionAmount = suggestedAmount;
           }
-          break
+          break;
         case "payment_data":
           let link = this._getDescendantTextContent(node, "link");
           let amountTag = this._getUniqueDescendant(node, "amount");
@@ -1150,7 +1073,7 @@ this.AddonRepository = {
             addon.purchaseAmount = amount;
             addon.purchaseDisplayAmount = displayAmount;
           }
-          break
+          break;
         case "rating":
           let averageRating = parseInt(this._getTextContent(node));
           if (averageRating >= 0)
@@ -1302,7 +1225,7 @@ this.AddonRepository = {
         pendingResults--;
         if (pendingResults == 0)
           this._reportSuccess(results, aTotalResults);
-      }
+      };
 
       if (result.xpiURL) {
         AddonManager.getInstallForURL(result.xpiURL, callback,
@@ -1454,29 +1377,6 @@ this.AddonRepository = {
     this._request.send(null);
   },
 
-  // Gets the id's of local add-ons, and the sourceURI's of local installs,
-  // passing the results to aCallback
-  _getLocalAddonIds(aCallback) {
-    let localAddonIds = {ids: null, sourceURIs: null};
-
-    AddonManager.getAllAddons(function(aAddons) {
-      localAddonIds.ids = aAddons.map(a => a.id);
-      if (localAddonIds.sourceURIs)
-        aCallback(localAddonIds);
-    });
-
-    AddonManager.getAllInstalls(function(aInstalls) {
-      localAddonIds.sourceURIs = [];
-      for (let install of aInstalls) {
-        if (install.state != AddonManager.STATE_AVAILABLE)
-          localAddonIds.sourceURIs.push(install.sourceURI.spec);
-      }
-
-      if (localAddonIds.ids)
-        aCallback(localAddonIds);
-    });
-  },
-
   // Create url from preference, returning null if preference does not exist
   _formatURLPref(aPreference, aSubstitutions) {
     let url = Services.prefs.getCharPref(aPreference, "");
@@ -1523,6 +1423,9 @@ this.AddonRepository = {
 
 var AddonDatabase = {
   connectionPromise: null,
+  _saveTask: null,
+  _blockerAdded: false,
+
   // the in-memory database
   DB: BLANK_DB(),
 
@@ -1540,13 +1443,13 @@ var AddonDatabase = {
    */
   openConnection() {
     if (!this.connectionPromise) {
-     this.connectionPromise = Task.spawn(function*() {
+     this.connectionPromise = (async () => {
        this.DB = BLANK_DB();
 
        let inputDB, schema;
 
        try {
-         let data = yield OS.File.read(this.jsonFile, { encoding: "utf-8"})
+         let data = await OS.File.read(this.jsonFile, { encoding: "utf-8"});
          inputDB = JSON.parse(data);
 
          if (!inputDB.hasOwnProperty("addons") ||
@@ -1572,20 +1475,7 @@ var AddonDatabase = {
          }
 
          // Create a blank addons.json file
-         this._saveDBToDisk();
-
-         let dbSchema = Services.prefs.getIntPref(PREF_GETADDONS_DB_SCHEMA, 0);
-
-         if (dbSchema < DB_MIN_JSON_SCHEMA) {
-           let results = yield new Promise((resolve, reject) => {
-             AddonRepository_SQLiteMigrator.migrate(resolve);
-           });
-
-           if (results.length) {
-             yield this._insertAddons(results);
-           }
-
-         }
+         this.save();
 
          Services.prefs.setIntPref(PREF_GETADDONS_DB_SCHEMA, DB_SCHEMA);
          return this.DB;
@@ -1601,17 +1491,10 @@ var AddonDatabase = {
        }
 
        return this.DB;
-     }.bind(this));
+     })();
     }
 
     return this.connectionPromise;
-  },
-
-  /**
-   * A lazy getter for the database connection.
-   */
-  get connection() {
-    return this.openConnection();
   },
 
   /**
@@ -1631,10 +1514,13 @@ var AddonDatabase = {
 
     this.connectionPromise = null;
 
-    if (aSkipFlush) {
+    if (aSkipFlush || !this._saveTask) {
       return Promise.resolve();
     }
-    return this.Writer.flush();
+
+    let promise = this._saveTask.finalize();
+    this._saveTask = null;
+    return promise;
   },
 
   /**
@@ -1648,43 +1534,52 @@ var AddonDatabase = {
   delete(aCallback) {
     this.DB = BLANK_DB();
 
-    this._deleting = this.Writer.flush()
-      .then(null, () => {})
-      // shutdown(true) never rejects
-      .then(() => this.shutdown(true))
+    if (this._saveTask) {
+      this._saveTask.disarm();
+      this._saveTask = null;
+    }
+
+    // shutdown(true) never rejects
+    this._deleting = this.shutdown(true)
       .then(() => OS.File.remove(this.jsonFile, {}))
-      .then(null, error => logger.error("Unable to delete Addon Repository file " +
+      .catch(error => logger.error("Unable to delete Addon Repository file " +
                                  this.jsonFile, error))
       .then(() => this._deleting = null)
       .then(aCallback);
     return this._deleting;
   },
 
-  toJSON() {
+  async _saveNow() {
     let json = {
       schema: this.DB.schema,
       addons: []
-    }
+    };
 
     for (let [, value] of this.DB.addons)
       json.addons.push(value);
 
-    return json;
+    await OS.File.writeAtomic(this.jsonFile, JSON.stringify(json),
+                              {tmpPath: `${this.jsonFile}.tmp`});
   },
 
-  /*
-   * This is a deferred task writer that is used
-   * to batch operations done within 50ms of each
-   * other and thus generating only one write to disk
-   */
-  get Writer() {
-    delete this.Writer;
-    this.Writer = new DeferredSave(
-      this.jsonFile,
-      () => { return JSON.stringify(this); },
-      DB_BATCH_TIMEOUT_MS
-    );
-    return this.Writer;
+  save() {
+    if (!this._saveTask) {
+      this._saveTask = new DeferredTask(() => this._saveNow(), DB_BATCH_TIMEOUT_MS);
+
+      if (!this._blockerAdded) {
+        AsyncShutdown.profileBeforeChange.addBlocker(
+          "Flush AddonRepository",
+          async () => {
+            if (!this._saveTask) {
+              return;
+            }
+            await this._saveTask.finalize();
+            this._saveTask = null;
+          });
+        this._blockerAdded = true;
+      }
+    }
+    this._saveTask.arm();
   },
 
   /**
@@ -1697,7 +1592,14 @@ var AddonDatabase = {
     if (this._deleting) {
       return this._deleting;
     }
-    return this.Writer.flush();
+
+    if (this._saveTask) {
+      let promise = this._saveTask.finalize();
+      this._saveTask = null;
+      return promise;
+    }
+
+    return Promise.resolve();
   },
 
   /**
@@ -1737,19 +1639,16 @@ var AddonDatabase = {
    * @param  aCallback
    *         An optional callback to call once complete
    */
-  insertAddons: Task.async(function*(aAddons, aCallback) {
-    yield this.openConnection();
-    yield this._insertAddons(aAddons, aCallback);
-  }),
+  async insertAddons(aAddons, aCallback) {
+    await this.openConnection();
 
-  _insertAddons: Task.async(function*(aAddons, aCallback) {
     for (let addon of aAddons) {
       this._insertAddon(addon);
     }
 
-    yield this._saveDBToDisk();
+    this.save();
     aCallback && aCallback();
-  }),
+  },
 
   /**
    * Inserts an individual add-on into the database. If the add-on already
@@ -1881,19 +1780,6 @@ var AddonDatabase = {
     }
 
     return addon;
-  },
-
-  /**
-   * Write the in-memory DB to disk, after waiting for
-   * the DB_BATCH_TIMEOUT_MS timeout.
-   *
-   * @return Promise A promise that resolves after the
-   *                 write to disk has completed.
-   */
-  _saveDBToDisk() {
-    return this.Writer.saveChanges().then(
-      null,
-      e => logger.error("SaveDBToDisk failed", e));
   },
 
   /**

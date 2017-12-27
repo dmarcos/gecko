@@ -6,9 +6,14 @@
 
 const Services = require("Services");
 const { applyMiddleware, createStore } = require("devtools/client/shared/vendor/redux");
+
+// Middleware
 const batching = require("../middleware/batching");
 const prefs = require("../middleware/prefs");
 const thunk = require("../middleware/thunk");
+const recording = require("../middleware/recording");
+
+// Reducers
 const rootReducer = require("../reducers/index");
 const { FilterTypes, Filters } = require("../reducers/filters");
 const { Requests } = require("../reducers/requests");
@@ -16,36 +21,69 @@ const { Sort } = require("../reducers/sort");
 const { TimingMarkers } = require("../reducers/timing-markers");
 const { UI, Columns } = require("../reducers/ui");
 
-function configureStore() {
-  let activeFilters = {};
-  let filters = JSON.parse(Services.prefs.getCharPref("devtools.netmonitor.filters"));
-  filters.forEach((filter) => {
-    activeFilters[filter] = true;
-  });
-
-  let columns = new Columns();
-  let hiddenColumns =
-    JSON.parse(Services.prefs.getCharPref("devtools.netmonitor.hiddenColumns"));
-
-  for (let [col] of columns) {
-    columns = columns.withMutations((state) => {
-      state.set(col, !hiddenColumns.includes(col));
-    });
-  }
-
+/**
+ * Configure state and middleware for the Network monitor tool.
+ */
+function configureStore(connector) {
+  // Prepare initial state.
   const initialState = {
     filters: new Filters({
-      requestFilterTypes: new FilterTypes(activeFilters)
+      requestFilterTypes: getFilterState()
     }),
     requests: new Requests(),
     sort: new Sort(),
     timingMarkers: new TimingMarkers(),
-    ui: new UI({
-      columns,
+    ui: UI({
+      columns: getColumnState()
     }),
   };
 
-  return createStore(rootReducer, initialState, applyMiddleware(thunk, prefs, batching));
+  // Prepare middleware.
+  let middleware = applyMiddleware(
+    thunk,
+    prefs,
+    batching,
+    recording(connector)
+  );
+
+  return createStore(rootReducer, initialState, middleware);
+}
+
+// Helpers
+
+/**
+ * Get column state from preferences.
+ */
+function getColumnState() {
+  let columns = Columns();
+  let visibleColumns = getPref("devtools.netmonitor.visibleColumns");
+
+  const state = {};
+  for (let col in columns) {
+    state[col] = visibleColumns.includes(col);
+  }
+
+  return state;
+}
+
+/**
+ * Get filter state from preferences.
+ */
+function getFilterState() {
+  let activeFilters = {};
+  let filters = getPref("devtools.netmonitor.filters");
+  filters.forEach((filter) => {
+    activeFilters[filter] = true;
+  });
+  return new FilterTypes(activeFilters);
+}
+
+function getPref(pref) {
+  try {
+    return JSON.parse(Services.prefs.getCharPref(pref));
+  } catch (_) {
+    return [];
+  }
 }
 
 exports.configureStore = configureStore;

@@ -27,7 +27,7 @@ const PLUGIN_TAG = getTestPlugin();
    there is some sort of plugin in the page.
  */
 function promiseUpdatePluginBindings(browser) {
-  return ContentTask.spawn(browser, {}, function* () {
+  return ContentTask.spawn(browser, {}, async function() {
     let doc = content.document;
     let elems = doc.getElementsByTagName("embed");
     if (elems && elems.length > 0) {
@@ -55,7 +55,7 @@ function stored(needles) {
 
 add_task(async function testPluginData() {
   function background() {
-    browser.test.onMessage.addListener(async(msg, options) => {
+    browser.test.onMessage.addListener(async (msg, options) => {
       if (msg == "removePluginData") {
         await browser.browsingData.removePluginData(options);
       } else {

@@ -19,6 +19,8 @@
 #include "nsIDOMStorageManager.h"
 #include "nsDocLoader.h"
 #include "mozilla/BasePrincipal.h"
+#include "mozilla/Maybe.h"
+#include "mozilla/Move.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/WeakPtr.h"
 #include "mozilla/TimeStamp.h"
@@ -44,6 +46,7 @@
 // Interfaces Needed
 #include "nsIDocCharset.h"
 #include "nsIInterfaceRequestor.h"
+#include "nsINamed.h"
 #include "nsIRefreshURI.h"
 #include "nsIWebNavigation.h"
 #include "nsIWebPageDescriptor.h"
@@ -60,11 +63,15 @@
 #include "nsRect.h"
 #include "Units.h"
 #include "nsIDeprecationWarner.h"
-#include "nsIThrottlingService.h"
+#include "nsILoadURIDelegate.h"
 
 namespace mozilla {
+class Encoding;
+class HTMLEditor;
 enum class TaskCategory;
 namespace dom {
+class ClientInfo;
+class ClientSource;
 class EventTarget;
 class PendingGlobalHistoryEntry;
 typedef uint32_t ScreenOrientationInternal;
@@ -73,7 +80,8 @@ typedef uint32_t ScreenOrientationInternal;
 
 class nsDocShell;
 class nsDOMNavigationTiming;
-class nsGlobalWindow;
+class nsGlobalWindowOuter;
+class nsGlobalWindowInner;
 class nsIController;
 class nsIScrollableFrame;
 class OnLinkClickEvent;
@@ -96,6 +104,7 @@ class nsIURIFixup;
 class nsIURILoader;
 class nsIWebBrowserFind;
 class nsIWidget;
+class FramingChecker;
 
 /* internally used ViewMode types */
 enum ViewMode
@@ -105,17 +114,25 @@ enum ViewMode
 };
 
 class nsRefreshTimer : public nsITimerCallback
+                     , public nsINamed
 {
 public:
-  nsRefreshTimer();
+  nsRefreshTimer(nsDocShell* aDocShell,
+                 nsIURI* aURI,
+                 nsIPrincipal* aPrincipal,
+                 int32_t aDelay,
+                 bool aRepeat,
+                 bool aMetaRefresh);
 
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSITIMERCALLBACK
+  NS_DECL_NSINAMED
 
   int32_t GetDelay() { return mDelay ;}
 
   RefPtr<nsDocShell> mDocShell;
   nsCOMPtr<nsIURI> mURI;
+  nsCOMPtr<nsIPrincipal> mPrincipal;
   int32_t mDelay;
   bool mRepeat;
   bool mMetaRefresh;
@@ -154,6 +171,8 @@ class nsDocShell final
   , public mozilla::SupportsWeakPtr<nsDocShell>
 {
   friend class nsDSURIContentListener;
+  friend class FramingChecker;
+  using Encoding = mozilla::Encoding;
 
 public:
   MOZ_DECLARE_WEAKREFERENCE_TYPENAME(nsDocShell)
@@ -163,6 +182,7 @@ public:
   virtual nsresult Init() override;
 
   NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(nsDocShell, nsDocLoader)
 
   NS_DECL_NSIDOCSHELL
   NS_DECL_NSIDOCSHELLTREEITEM
@@ -200,6 +220,7 @@ public:
                          const char16_t* aTargetSpec,
                          const nsAString& aFileName,
                          nsIInputStream* aPostDataStream,
+                         int64_t aPostDataStreamLength,
                          nsIInputStream* aHeadersDataStream,
                          bool aIsTrusted,
                          nsIPrincipal* aTriggeringPrincipal) override;
@@ -208,6 +229,7 @@ public:
                              const char16_t* aTargetSpec,
                              const nsAString& aFileName,
                              nsIInputStream* aPostDataStream = 0,
+                             int64_t aPostDataStreamLength = -1,
                              nsIInputStream* aHeadersDataStream = 0,
                              bool aNoOpenerImplied = false,
                              nsIDocShell** aDocShell = 0,
@@ -245,10 +267,13 @@ public:
   // ForceRefreshURI method on nsIRefreshURI, but makes sure to take
   // the timer involved out of mRefreshURIList if it's there.
   // aTimer must not be null.
-  nsresult ForceRefreshURIFromTimer(nsIURI* aURI, int32_t aDelay,
+  nsresult ForceRefreshURIFromTimer(nsIURI* aURI, nsIPrincipal* aPrincipal,
+                                    int32_t aDelay,
                                     bool aMetaRefresh, nsITimer* aTimer);
 
   friend class OnLinkClickEvent;
+
+  static bool SandboxFlagsImplyCookies(const uint32_t &aSandboxFlags);
 
   // We need dummy OnLocationChange in some cases to update the UI without
   // updating security info.
@@ -273,6 +298,70 @@ public:
   }
   bool InFrameSwap();
 
+  const Encoding* GetForcedCharset() { return mForcedCharset; }
+
+  mozilla::HTMLEditor* GetHTMLEditorInternal();
+  nsresult SetHTMLEditorInternal(mozilla::HTMLEditor* aHTMLEditor);
+
+  nsDOMNavigationTiming* GetNavigationTiming() const;
+
+  /**
+   * Get the list of ancestor principals for this docshell.  The list is meant
+   * to be the list of principals of the documents this docshell is "nested
+   * through" in the sense of
+   * <https://html.spec.whatwg.org/multipage/browsers.html#browsing-context-nested-through>.
+   * In practice, it is defined as follows:
+   *
+   * If this is an <iframe mozbrowser> or a toplevel content docshell
+   * (i.e. toplevel document in spec terms), the list is empty.
+   *
+   * Otherwise the list is the list for the document we're nested through (again
+   * in the spec sense), with the principal of that document prepended.  Note
+   * that this matches the ordering specified for Location.ancestorOrigins.
+   */
+  const nsTArray<nsCOMPtr<nsIPrincipal>>& AncestorPrincipals() const
+  {
+    return mAncestorPrincipals;
+  }
+
+  /**
+   * Set the list of ancestor principals for this docshell.  This is really only
+   * needed for use by the frameloader.  We can't do this ourselves, inside
+   * docshell, because there's a bunch of state setup that frameloader does
+   * (like telling us whether we're a mozbrowser), some of which comes after the
+   * docshell is added to the docshell tree, which can affect what the ancestor
+   * principals should look like.
+   *
+   * This method steals the data from the passed-in array.
+   */
+  void SetAncestorPrincipals(
+    nsTArray<nsCOMPtr<nsIPrincipal>>&& aAncestorPrincipals)
+  {
+    mAncestorPrincipals = mozilla::Move(aAncestorPrincipals);
+  }
+
+  /**
+   * Get the list of ancestor outerWindowIDs for this docshell.  The list is meant
+   * to be the list of outer window IDs that correspond to the ancestorPrincipals
+   * above.   For each ancestor principal, we store the parent window ID.
+   */
+  const nsTArray<uint64_t>& AncestorOuterWindowIDs() const
+  {
+    return mAncestorOuterWindowIDs;
+  }
+
+  /**
+   * Set the list of ancestor outer window IDs for this docshell.  We call this
+   * from frameloader as well in order to keep the array matched with the
+   * ancestor principals.
+   *
+   * This method steals the data from the passed-in array.
+   */
+  void SetAncestorOuterWindowIDs(nsTArray<uint64_t>&& aAncestorOuterWindowIDs)
+  {
+    mAncestorOuterWindowIDs = mozilla::Move(aAncestorOuterWindowIDs);
+  }
+
 private:
   bool CanSetOriginAttributes();
 
@@ -284,11 +373,6 @@ public:
   }
 
   nsresult SetOriginAttributes(const mozilla::OriginAttributes& aAttrs);
-
-  void GetInterceptedDocumentId(nsAString& aId)
-  {
-    aId = mInterceptedDocumentId;
-  }
 
 private:
   // An observed docshell wrapper is created when recording markers is enabled.
@@ -370,7 +454,10 @@ protected:
   // If aLoadReplace is true, LOAD_REPLACE flag will be set to the nsIChannel.
   nsresult DoURILoad(nsIURI* aURI,
                      nsIURI* aOriginalURI,
+                     mozilla::Maybe<nsCOMPtr<nsIURI>> const& aResultPrincipalURI,
                      bool aLoadReplace,
+                     bool aLoadFromExternal,
+                     bool aForceAllowDataURI,
                      nsIURI* aReferrer,
                      bool aSendReferrer,
                      uint32_t aReferrerPolicy,
@@ -379,6 +466,7 @@ protected:
                      const char* aTypeHint,
                      const nsAString& aFileName,
                      nsIInputStream* aPostData,
+                     int64_t aPostDataLength,
                      nsIInputStream* aHeadersData,
                      bool aFirstParty,
                      nsIDocShell** aDocShell,
@@ -430,7 +518,7 @@ protected:
   void SetReferrerPolicy(uint32_t aReferrerPolicy);
 
   // Session History
-  bool ShouldAddToSessionHistory(nsIURI* aURI);
+  bool ShouldAddToSessionHistory(nsIURI* aURI, nsIChannel* aChannel);
   // Either aChannel or aOwner must be null. If aChannel is
   // present, the owner should be gotten from it.
   // If aCloneChildren is true, then our current session history's
@@ -607,7 +695,7 @@ protected:
   nsresult RefreshURIFromQueue();
   NS_IMETHOD LoadErrorPage(nsIURI* aURI, const char16_t* aURL,
                            const char* aErrorPage,
-                           const char16_t* aErrorType,
+                           const char* aErrorType,
                            const char16_t* aDescription,
                            const char* aCSSClass,
                            nsIChannel* aFailedChannel);
@@ -739,6 +827,26 @@ protected:
   // Convenience method for getting our parent docshell. Can return null
   already_AddRefed<nsDocShell> GetParentDocshell();
 
+  // Possibly create a ClientSource object to represent an initial about:blank
+  // window that has not been allocated yet.  Normally we try not to create
+  // this about:blank window until something calls GetDocument().  We still need
+  // the ClientSource to exist for this conceptual window, though.
+  //
+  // The ClientSource is created with the given principal if specified.  If
+  // the principal is not provided we will attempt to inherit it when we
+  // are sure it will match what the real about:blank window principal
+  // would have been.  There are some corner cases where we cannot easily
+  // determine the correct principal and will not create the ClientSource.
+  // In these cases the initial about:blank will appear to not exist until
+  // its real document and window are created.
+  void MaybeCreateInitialClientSource(nsIPrincipal* aPrincipal = nullptr);
+
+  // Return the ClientInfo for the initial about:blank window, if it exists
+  // or we have speculatively created a ClientSource in
+  // MaybeCreateInitialClientSource().  This can return a ClientInfo object
+  // even if GetExtantDoc() returns nullptr.
+  mozilla::Maybe<mozilla::dom::ClientInfo> GetInitialClientInfo() const;
+
 protected:
   nsresult GetCurScrollPos(int32_t aScrollOrientation, int32_t* aCurPos);
   nsresult SetCurScrollPosEx(int32_t aCurHorizontalPos,
@@ -775,7 +883,11 @@ public:
   {
   public:
     NS_DECL_NSIRUNNABLE
-    explicit RestorePresentationEvent(nsDocShell* aDs) : mDocShell(aDs) {}
+    explicit RestorePresentationEvent(nsDocShell* aDs)
+      : mozilla::Runnable("nsDocShell::RestorePresentationEvent")
+      , mDocShell(aDs)
+    {
+    }
     void Revoke() { mDocShell = nullptr; }
   private:
     RefPtr<nsDocShell> mDocShell;
@@ -831,7 +943,7 @@ protected:
   nsCOMPtr<nsIURI> mCurrentURI;
   nsCOMPtr<nsIURI> mReferrerURI;
   uint32_t mReferrerPolicy;
-  RefPtr<nsGlobalWindow> mScriptGlobal;
+  RefPtr<nsGlobalWindowOuter> mScriptGlobal;
   nsCOMPtr<nsISHistory> mSessionHistory;
   nsCOMPtr<nsIGlobalHistory2> mGlobalHistory;
   nsCOMPtr<nsIWebBrowserFind> mFind;
@@ -889,9 +1001,11 @@ protected:
 
   eCharsetReloadState mCharsetReloadState;
 
+  nsCOMPtr<nsILoadURIDelegate> mLoadURIDelegate;
+
   // Offset in the parent's child list.
   // -1 if the docshell is added dynamically to the parent shell.
-  uint32_t mChildOffset;
+  int32_t mChildOffset;
   uint32_t mBusyFlags;
   uint32_t mAppType;
   uint32_t mLoadType;
@@ -904,7 +1018,8 @@ protected:
   int32_t mItemType;
 
   // Index into the SHTransaction list, indicating the previous and current
-  // transaction at the time that this DocShell begins to load
+  // transaction at the time that this DocShell begins to load. Consequently
+  // root docshell's indices can differ from child docshells'.
   int32_t mPreviousTransIndex;
   int32_t mLoadedTransIndex;
 
@@ -1031,11 +1146,21 @@ protected:
   // origin attribute set.
   uint32_t mPrivateBrowsingId;
 
-  nsString mInterceptedDocumentId;
+  // This represents the CSS display-mode we are currently using.
+  // It can be any of the following values from nsIDocShell.idl:
+  //
+  // DISPLAY_MODE_BROWSER = 0
+  // DISPLAY_MODE_MINIMAL_UI = 1
+  // DISPLAY_MODE_STANDALONE = 2
+  // DISPLAY_MODE_FULLSCREEN = 3
+  //
+  // This is mostly used for media queries. The integer values above
+  // match those used in nsStyleConsts.h
+  uint32_t mDisplayMode;
 
 private:
-  nsCString mForcedCharset;
-  nsCString mParentCharset;
+  const Encoding* mForcedCharset;
+  const Encoding* mParentCharset;
   int32_t mParentCharsetSource;
   nsCOMPtr<nsIPrincipal> mParentCharsetPrincipal;
   nsTObserverArray<nsWeakPtr> mPrivacyObservers;
@@ -1047,6 +1172,8 @@ private:
 
   mozilla::UniquePtr<mozilla::dom::PendingGlobalHistoryEntry> mPrerenderGlobalHistory;
 
+  mozilla::UniquePtr<mozilla::dom::ClientSource> mInitialClientSource;
+
   // A depth count of how many times NotifyRunToCompletionStart
   // has been called without a matching NotifyRunToCompletionStop.
   uint32_t mJSRunToCompletionDepth;
@@ -1054,6 +1181,11 @@ private:
   // Whether or not touch events are overridden. Possible values are defined
   // as constants in the nsIDocShell.idl file.
   uint32_t mTouchEventsOverride;
+
+  // Our list of ancestor principals.
+  nsTArray<nsCOMPtr<nsIPrincipal>> mAncestorPrincipals;
+  // Our list of ancestor outerWindowIDs.
+  nsTArray<uint64_t> mAncestorOuterWindowIDs;
 
   // Separate function to do the actual name (i.e. not _top, _self etc.)
   // searching for FindItemWithName.
@@ -1079,8 +1211,7 @@ private:
                                         bool aSkipCheckingDynEntries);
 
   // Dispatch a runnable to the TabGroup associated to this docshell.
-  nsresult DispatchToTabGroup(const char* aName,
-                              mozilla::TaskCategory aCategory,
+  nsresult DispatchToTabGroup(mozilla::TaskCategory aCategory,
                               already_AddRefed<nsIRunnable>&& aRunnable);
 
 #ifdef DEBUG
@@ -1101,9 +1232,6 @@ public:
     InterfaceRequestorProxy() {}
     nsWeakPtr mWeakPtr;
   };
-
-private:
-  mozilla::UniquePtr<mozilla::net::Throttler> mThrottler;
 };
 
 #endif /* nsDocShell_h__ */

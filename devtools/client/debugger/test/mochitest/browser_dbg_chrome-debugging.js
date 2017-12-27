@@ -20,10 +20,8 @@ customLoader.invisibleToDebugger = true;
 var { DebuggerServer } = customLoader.require("devtools/server/main");
 
 function test() {
-  if (!DebuggerServer.initialized) {
-    DebuggerServer.init();
-    DebuggerServer.addBrowserActors();
-  }
+  DebuggerServer.init();
+  DebuggerServer.registerAllActors();
   DebuggerServer.allowChromeProcess = true;
 
   let transport = DebuggerServer.connectPipe();
@@ -35,7 +33,7 @@ function test() {
     promise.all([gAttached.promise, gNewGlobal.promise, gNewChromeSource.promise])
       .then(resumeAndCloseConnection)
       .then(finish)
-      .then(null, aError => {
+      .catch(aError => {
         ok(false, "Got an error: " + aError.message + "\n" + aError.stack);
       });
 
@@ -61,7 +59,7 @@ function testChromeActor() {
           gAttached.resolve();
 
           // Ensure that a new chrome global will be created.
-          gBrowser.selectedTab = gBrowser.addTab("about:mozilla");
+          gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser, "about:mozilla");
         }
       });
     });

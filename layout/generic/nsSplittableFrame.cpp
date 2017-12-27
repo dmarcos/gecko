@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -29,7 +30,7 @@ nsSplittableFrame::Init(nsIContent*       aContent,
 }
 
 void
-nsSplittableFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsSplittableFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   // Disconnect from the flow list
   if (mPrevContinuation || mNextContinuation) {
@@ -37,7 +38,7 @@ nsSplittableFrame::DestroyFrom(nsIFrame* aDestructRoot)
   }
 
   // Let the base class destroy the frame
-  nsFrame::DestroyFrom(aDestructRoot);
+  nsFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 nsSplittableType
@@ -54,8 +55,10 @@ nsIFrame* nsSplittableFrame::GetPrevContinuation() const
 void
 nsSplittableFrame::SetPrevContinuation(nsIFrame* aFrame)
 {
-  NS_ASSERTION (!aFrame || GetType() == aFrame->GetType(), "setting a prev continuation with incorrect type!");
-  NS_ASSERTION (!IsInPrevContinuationChain(aFrame, this), "creating a loop in continuation chain!");
+  NS_ASSERTION(!aFrame || Type() == aFrame->Type(),
+               "setting a prev continuation with incorrect type!");
+  NS_ASSERTION(!IsInPrevContinuationChain(aFrame, this),
+               "creating a loop in continuation chain!");
   mPrevContinuation = aFrame;
   RemoveStateBits(NS_FRAME_IS_FLUID_CONTINUATION);
 }
@@ -68,7 +71,8 @@ nsIFrame* nsSplittableFrame::GetNextContinuation() const
 void
 nsSplittableFrame::SetNextContinuation(nsIFrame* aFrame)
 {
-  NS_ASSERTION (!aFrame || GetType() == aFrame->GetType(),  "setting a next continuation with incorrect type!");
+  NS_ASSERTION(!aFrame || Type() == aFrame->Type(),
+              "setting a next continuation with incorrect type!");
   NS_ASSERTION (!IsInNextContinuationChain(aFrame, this), "creating a loop in continuation chain!");
   mNextContinuation = aFrame;
   if (aFrame)
@@ -133,23 +137,27 @@ nsIFrame* nsSplittableFrame::GetPrevInFlow() const
 void
 nsSplittableFrame::SetPrevInFlow(nsIFrame* aFrame)
 {
-  NS_ASSERTION (!aFrame || GetType() == aFrame->GetType(), "setting a prev in flow with incorrect type!");
-  NS_ASSERTION (!IsInPrevContinuationChain(aFrame, this), "creating a loop in continuation chain!");
+  NS_ASSERTION(!aFrame || Type() == aFrame->Type(),
+               "setting a prev in flow with incorrect type!");
+  NS_ASSERTION(!IsInPrevContinuationChain(aFrame, this),
+               "creating a loop in continuation chain!");
   mPrevContinuation = aFrame;
   AddStateBits(NS_FRAME_IS_FLUID_CONTINUATION);
 }
 
 nsIFrame* nsSplittableFrame::GetNextInFlow() const
 {
-  return mNextContinuation && (mNextContinuation->GetStateBits() & NS_FRAME_IS_FLUID_CONTINUATION) ? 
+  return mNextContinuation && (mNextContinuation->GetStateBits() & NS_FRAME_IS_FLUID_CONTINUATION) ?
     mNextContinuation : nullptr;
 }
 
 void
 nsSplittableFrame::SetNextInFlow(nsIFrame* aFrame)
 {
-  NS_ASSERTION (!aFrame || GetType() == aFrame->GetType(),  "setting a next in flow with incorrect type!");
-  NS_ASSERTION (!IsInNextContinuationChain(aFrame, this), "creating a loop in continuation chain!");
+  NS_ASSERTION(!aFrame || Type() == aFrame->Type(),
+               "setting a next in flow with incorrect type!");
+  NS_ASSERTION(!IsInNextContinuationChain(aFrame, this),
+               "creating a loop in continuation chain!");
   mNextContinuation = aFrame;
   if (aFrame)
     aFrame->AddStateBits(NS_FRAME_IS_FLUID_CONTINUATION);
@@ -290,20 +298,3 @@ nsSplittableFrame::PreReflowBlockLevelLogicalSkipSides() const
   }
   return LogicalSides();
 }
-
-#ifdef DEBUG
-void
-nsSplittableFrame::DumpBaseRegressionData(nsPresContext* aPresContext, FILE* out, int32_t aIndent)
-{
-  nsFrame::DumpBaseRegressionData(aPresContext, out, aIndent);
-  if (nullptr != mNextContinuation) {
-    IndentBy(out, aIndent);
-    fprintf(out, "<next-continuation va=\"%p\"/>\n", (void*)mNextContinuation);
-  }
-  if (nullptr != mPrevContinuation) {
-    IndentBy(out, aIndent);
-    fprintf(out, "<prev-continuation va=\"%p\"/>\n", (void*)mPrevContinuation);
-  }
-
-}
-#endif

@@ -6,7 +6,6 @@
 
 #include "base/basictypes.h"
 
-#include "mozilla/AbstractThread.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Poison.h"
 #include "mozilla/SharedThreadPool.h"
@@ -77,7 +76,6 @@
 #include "nsStringStream.h"
 extern nsresult nsStringInputStreamConstructor(nsISupports*, REFNSIID, void**);
 
-#include "nsAtomService.h"
 #include "nsAtomTable.h"
 #include "nsISupportsImpl.h"
 
@@ -106,12 +104,11 @@ extern nsresult nsStringInputStreamConstructor(nsISupports*, REFNSIID, void**);
 #include "nsSecurityConsoleMessage.h"
 #include "nsMessageLoop.h"
 
-#include "nsStatusReporterManager.h"
-
 #include <locale.h>
 #include "mozilla/Services.h"
 #include "mozilla/Omnijar.h"
 #include "mozilla/HangMonitor.h"
+#include "mozilla/ScriptPreloader.h"
 #include "mozilla/SystemGroup.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/BackgroundHangMonitor.h"
@@ -131,7 +128,6 @@ extern nsresult nsStringInputStreamConstructor(nsISupports*, REFNSIID, void**);
 #include "mozilla/AvailableMemoryTracker.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/CountingAllocatorBase.h"
-#include "mozilla/SystemMemoryReporter.h"
 #include "mozilla/UniquePtr.h"
 
 #include "mozilla/ipc/GeckoChildProcessHost.h"
@@ -204,7 +200,6 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsSupportsDouble)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsSupportsInterfacePointer)
 
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsConsoleService, Init)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsAtomService)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsTimer)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsBinaryOutputStream)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsBinaryInputStream)
@@ -229,8 +224,6 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsSystemInfo, Init)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsMemoryReporterManager, Init)
 
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsMemoryInfoDumper)
-
-NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsStatusReporterManager, Init)
 
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsIOUtil)
 
@@ -551,10 +544,6 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
   }
 #endif
 
-#if defined(XP_UNIX)
-  NS_StartupNativeCharsetUtils();
-#endif
-
   NS_StartupLocalFile();
 
   nsDirectoryService::RealInit();
@@ -677,12 +666,9 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
   // Initialize the JS engine.
   const char* jsInitFailureReason = JS_InitWithFailureDiagnostic();
   if (jsInitFailureReason) {
-    NS_RUNTIMEABORT(jsInitFailureReason);
+    MOZ_CRASH_UNSAFE_OOL(jsInitFailureReason);
   }
   sInitializedJS = true;
-  
-  // Init AbstractThread.
-  AbstractThread::InitStatics();
 
   rv = nsComponentManagerImpl::gComponentManager->Init();
   if (NS_FAILED(rv)) {
@@ -713,6 +699,7 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
   nsCOMPtr<nsISupports> componentLoader =
     do_GetService("@mozilla.org/moz/jsloader;1");
 
+  mozilla::ScriptPreloader::GetSingleton();
   mozilla::scache::StartupCache::GetSingleton();
   mozilla::AvailableMemoryTracker::Activate();
 
@@ -723,13 +710,6 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
 #ifdef XP_WIN
   CreateAnonTempFileRemover();
 #endif
-
-  // We only want the SystemMemoryReporter running in one process, because it
-  // profiles the entire system.  The main process is the obvious place for
-  // it.
-  if (XRE_IsParentProcess()) {
-    mozilla::SystemMemoryReporter::Init();
-  }
 
   // The memory reporter manager is up and running -- register our reporters.
   RegisterStrongMemoryReporter(new ICUReporter());
@@ -791,7 +771,6 @@ NS_InitMinimalXPCOM()
     return NS_ERROR_UNEXPECTED;
   }
 
-  AbstractThread::InitStatics();
   SharedThreadPool::InitStatics();
   mozilla::Telemetry::Init();
   mozilla::HangMonitor::Startup();
@@ -989,7 +968,7 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
 #endif
   nsCycleCollector_shutdown(shutdownCollect);
 
-  PROFILER_MARKER("Shutdown xpcom");
+  PROFILER_ADD_MARKER("Shutdown xpcom");
   // If we are doing any shutdown checks, poison writes.
   if (gShutdownChecks != SCM_NOTHING) {
 #ifdef XP_MACOSX
@@ -1000,9 +979,6 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
 
   // Shutdown nsLocalFile string conversion
   NS_ShutdownLocalFile();
-#ifdef XP_UNIX
-  NS_ShutdownNativeCharsetUtils();
-#endif
 
   // Shutdown xpcom. This will release all loaders and cause others holding
   // a refcount to the component manager to release it.
@@ -1013,7 +989,6 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
     NS_WARNING("Component Manager was never created ...");
   }
 
-#ifdef MOZ_GECKO_PROFILER
   // In optimized builds we don't do shutdown collections by default, so
   // uncollected (garbage) objects may keep the nsXPConnect singleton alive,
   // and its XPCJSContext along with it. However, we still destroy various
@@ -1022,8 +997,7 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
   // JS pseudo-stack's internal reference to the main thread JSContext,
   // duplicating the call in XPCJSContext::~XPCJSContext() in case that
   // never fired.
-  profiler_clear_js_context();
-#endif
+  PROFILER_CLEAR_JS_CONTEXT();
 
   if (sInitializedJS) {
     // Shut down the JS engine.
@@ -1071,24 +1045,12 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
   Omnijar::CleanUp();
 
   HangMonitor::Shutdown();
+  BackgroundHangMonitor::Shutdown();
 
   delete sMainHangMonitor;
   sMainHangMonitor = nullptr;
 
-  BackgroundHangMonitor::Shutdown();
-
   NS_LogTerm();
-
-#if defined(MOZ_WIDGET_GONK)
-  // This _exit(0) call is intended to be temporary, to get shutdown leak
-  // checking working on non-B2G platforms.
-  // On debug B2G, the child process crashes very late.  Instead, just
-  // give up so at least we exit cleanly. See bug 1071866.
-  if (XRE_IsContentProcess()) {
-      NS_WARNING("Exiting child process early!");
-      _exit(0);
-  }
-#endif
 
   return NS_OK;
 }

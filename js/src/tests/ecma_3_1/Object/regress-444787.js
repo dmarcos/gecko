@@ -16,7 +16,6 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
  
@@ -54,14 +53,13 @@ function test()
       actual = Object.getPrototypeOf(instance);
       reportCompare(expect, actual, summary + ': new ' + type.name);
     }
-    catch(ex if ex instanceof TypeError)
-    {
-      print('Ignore ' + ex);
-    }
-    catch(ex)
-    {
-      actual = ex + '';
-      reportCompare(expect, actual, summary + ': new ' + type.name);
+    catch(ex) {
+      if (ex instanceof TypeError) {
+        print('Ignore ' + ex);
+      } else {
+        actual = ex + '';
+        reportCompare(expect, actual, summary + ': new ' + type.name);
+      }
     }
 
   }
@@ -100,6 +98,4 @@ function test()
     actual   = Object.getPrototypeOf(instance);
     reportCompare(expect, actual, summary + ' instance: ' + instance + ', type: ' + type.name);
   }
-
-  exitFunc ('test');
 }

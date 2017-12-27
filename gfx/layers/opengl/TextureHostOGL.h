@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -31,14 +32,15 @@
 #include "nsRegionFwd.h"                // for nsIntRegion
 #include "OGLShaderProgram.h"           // for ShaderProgramType, etc
 
+#ifdef MOZ_WIDGET_ANDROID
+#include "GeneratedJNIWrappers.h"
+#include "AndroidSurfaceTexture.h"
+#endif
+
 namespace mozilla {
 namespace gfx {
 class DataSourceSurface;
 } // namespace gfx
-
-namespace gl {
-class AndroidSurfaceTexture;
-} // namespace gl
 
 namespace layers {
 
@@ -341,11 +343,12 @@ class SurfaceTextureSource : public TextureSource
 {
 public:
   SurfaceTextureSource(TextureSourceProvider* aProvider,
-                       mozilla::gl::AndroidSurfaceTexture* aSurfTex,
+                       java::GeckoSurfaceTexture::Ref& aSurfTex,
                        gfx::SurfaceFormat aFormat,
                        GLenum aTarget,
                        GLenum aWrapMode,
-                       gfx::IntSize aSize);
+                       gfx::IntSize aSize,
+                       bool aIgnoreTransform);
 
   virtual const char* Name() const override { return "SurfaceTextureSource"; }
 
@@ -376,21 +379,27 @@ public:
 
 protected:
   RefPtr<gl::GLContext> mGL;
-  RefPtr<gl::AndroidSurfaceTexture> mSurfTex;
+  mozilla::java::GeckoSurfaceTexture::GlobalRef mSurfTex;
   const gfx::SurfaceFormat mFormat;
   const GLenum mTextureTarget;
   const GLenum mWrapMode;
   const gfx::IntSize mSize;
+  const bool mIgnoreTransform;
 };
 
 class SurfaceTextureHost : public TextureHost
 {
 public:
   SurfaceTextureHost(TextureFlags aFlags,
-                     mozilla::gl::AndroidSurfaceTexture* aSurfTex,
-                     gfx::IntSize aSize);
+                     mozilla::java::GeckoSurfaceTexture::Ref& aSurfTex,
+                     gfx::IntSize aSize,
+                     gfx::SurfaceFormat aFormat,
+                     bool aContinuousUpdate,
+                     bool aIgnoreTransform);
 
   virtual ~SurfaceTextureHost();
+
+  virtual void PrepareTextureSource(CompositableTextureSourceRef& aTexture) override;
 
   virtual void DeallocateDeviceData() override;
 
@@ -398,9 +407,9 @@ public:
 
   virtual bool Lock() override;
 
-  virtual void Unlock() override;
-
   virtual gfx::SurfaceFormat GetFormat() const override;
+
+  virtual void NotifyNotUsed() override;
 
   virtual bool BindTextureSource(CompositableTextureSourceRef& aTexture) override
   {
@@ -420,8 +429,13 @@ public:
   virtual const char* Name() override { return "SurfaceTextureHost"; }
 
 protected:
-  RefPtr<gl::AndroidSurfaceTexture> mSurfTex;
+  bool EnsureAttached();
+
+  mozilla::java::GeckoSurfaceTexture::GlobalRef mSurfTex;
   const gfx::IntSize mSize;
+  const gfx::SurfaceFormat mFormat;
+  bool mContinuousUpdate;
+  const bool mIgnoreTransform;
   RefPtr<CompositorOGL> mCompositor;
   RefPtr<SurfaceTextureSource> mTextureSource;
 };

@@ -47,10 +47,18 @@ pref("security.family_safety.mode", 2);
 
 pref("security.enterprise_roots.enabled", false);
 
+// The supported values of this pref are:
+// 0: do not fetch OCSP
+// 1: fetch OCSP for DV and EV certificates
+// 2: fetch OCSP only for EV certificates
 pref("security.OCSP.enabled", 1);
 pref("security.OCSP.require", false);
 pref("security.OCSP.GET.enabled", false);
+#ifdef RELEASE_OR_BETA
 pref("security.OCSP.timeoutMilliseconds.soft", 2000);
+#else
+pref("security.OCSP.timeoutMilliseconds.soft", 1000);
+#endif
 pref("security.OCSP.timeoutMilliseconds.hard", 10000);
 
 pref("security.pki.cert_short_lifetime_in_days", 10);
@@ -58,6 +66,12 @@ pref("security.pki.cert_short_lifetime_in_days", 10);
 // See the comment in CertVerifier.cpp.
 // 3 = only allow SHA-1 for certificates issued by an imported root.
 pref("security.pki.sha1_enforcement_level", 3);
+
+// This preference controls what signature algorithms are accepted for signed
+// apps (i.e. add-ons).
+// 0: SHA-1 and/or SHA-256 PKCS#7 allowed
+// 1: SHA-256 PKCS#7 allowed
+pref("security.signed_app_signatures.policy", 0);
 
 // security.pki.name_matching_mode controls how the platform matches hostnames
 // to name information in TLS certificates. The possible values are:
@@ -92,13 +106,13 @@ pref("security.pki.netscape_step_up_policy", 2);
 // 1: Only collect telemetry. CT qualification checks are not performed.
 pref("security.pki.certificate_transparency.mode", 0);
 
+// Hardware Origin-bound Second Factor Support
 pref("security.webauth.u2f", false);
-pref("security.webauth.u2f_enable_softtoken", false);
-pref("security.webauth.u2f_enable_usbtoken", false);
-
 pref("security.webauth.webauthn", false);
+// Only one of "enable_softtoken" and "enable_usbtoken" can be true
+// at a time.
 pref("security.webauth.webauthn_enable_softtoken", false);
-pref("security.webauth.webauthn_enable_usbtoken", false);
+pref("security.webauth.webauthn_enable_usbtoken", true);
 
 pref("security.ssl.errorReporting.enabled", true);
 pref("security.ssl.errorReporting.url", "https://incoming.telemetry.mozilla.org/submit/sslreports/");
@@ -112,12 +126,11 @@ pref("security.cert_pinning.max_max_age_seconds", 5184000);
 // HSTS Priming
 // If a request is mixed-content, send an HSTS priming request to attempt to
 // see if it is available over HTTPS.
-#ifdef RELEASE_OR_BETA
 // Don't change the order of evaluation of mixed-content and HSTS upgrades in
-// order to be most compatible with current standards
+// order to be most compatible with current standards in Release
 pref("security.mixed_content.send_hsts_priming", false);
 pref("security.mixed_content.use_hsts", false);
-#else
+#ifdef EARLY_BETA_OR_EARLIER
 // Change the order of evaluation so HSTS upgrades happen before
 // mixed-content blocking
 pref("security.mixed_content.send_hsts_priming", true);
@@ -125,6 +138,6 @@ pref("security.mixed_content.use_hsts", true);
 #endif
 // Approximately 1 week default cache for HSTS priming failures, in seconds
 pref ("security.mixed_content.hsts_priming_cache_timeout", 604800);
-// Force the channel to timeout in 3 seconds if we have not received
+// Force the channel to timeout in 2 seconds if we have not received
 // expects a time in milliseconds
-pref ("security.mixed_content.hsts_priming_request_timeout", 3000);
+pref ("security.mixed_content.hsts_priming_request_timeout", 2000);

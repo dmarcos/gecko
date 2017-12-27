@@ -11,15 +11,14 @@ add_task(function* () {
   let { monitor } = yield initNetMonitor(SIMPLE_SJS);
   info("Starting test... ");
 
-  let { gStore, windowRequire } = monitor.panelWin;
+  let { store, windowRequire, connector } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
-  let { NetMonitorController } =
-    windowRequire("devtools/client/netmonitor/src/netmonitor-controller");
+  let { requestData, sendHTTPRequest } = connector;
   let {
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   let requestUrl = SIMPLE_SJS;
   let requestHeaders = [
@@ -31,8 +30,8 @@ add_task(function* () {
     { name: "Accept-Language", value: "cs-CZ" }
   ];
 
-  let wait = waitForNetworkEvents(monitor, 0, 1);
-  NetMonitorController.webConsoleClient.sendHTTPRequest({
+  let wait = waitForNetworkEvents(monitor, 1);
+  sendHTTPRequest({
     url: requestUrl,
     method: "POST",
     headers: requestHeaders,
@@ -40,7 +39,20 @@ add_task(function* () {
   });
   yield wait;
 
-  let item = getSortedRequests(gStore.getState()).get(0);
+  let item = getSortedRequests(store.getState()).get(0);
+
+  ok(item.requestHeadersAvailable, "headers are available for lazily fetching");
+
+  if (item.requestHeadersAvailable && !item.requestHeaders) {
+    requestData(item.id, "requestHeaders");
+  }
+
+  // Wait until requestHeaders packet gets updated.
+  yield waitUntil(() => {
+    item = getSortedRequests(store.getState()).get(0);
+    return item.requestHeaders;
+  });
+
   is(item.method, "POST", "The request has the right method");
   is(item.url, requestUrl, "The request has the right URL");
 

@@ -16,8 +16,6 @@ PerformanceMark::PerformanceMark(nsISupports* aParent,
   : PerformanceEntry(aParent, aName, NS_LITERAL_STRING("mark"))
   , mStartTime(aStartTime)
 {
-  // mParent is null in workers.
-  MOZ_ASSERT(mParent || !NS_IsMainThread());
 }
 
 PerformanceMark::~PerformanceMark()
@@ -28,4 +26,10 @@ JSObject*
 PerformanceMark::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
   return PerformanceMarkBinding::Wrap(aCx, this, aGivenProto);
+}
+
+size_t
+PerformanceMark::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
+{
+  return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
 }

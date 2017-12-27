@@ -12,6 +12,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/MessagePort.h"
 #include "mozilla/dom/SharedWorkerBinding.h"
+#include "mozilla/dom/WorkerBinding.h"
 #include "mozilla/Telemetry.h"
 #include "nsContentUtils.h"
 #include "nsIClassInfoImpl.h"
@@ -49,7 +50,7 @@ SharedWorker::~SharedWorker()
 already_AddRefed<SharedWorker>
 SharedWorker::Constructor(const GlobalObject& aGlobal,
                           const nsAString& aScriptURL,
-                          const mozilla::dom::Optional<nsAString>& aName,
+                          const StringOrWorkerOptions& aOptions,
                           ErrorResult& aRv)
 {
   AssertIsOnMainThread();
@@ -60,9 +61,12 @@ SharedWorker::Constructor(const GlobalObject& aGlobal,
     return nullptr;
   }
 
-  nsCString name;
-  if (aName.WasPassed()) {
-    name = NS_ConvertUTF16toUTF8(aName.Value());
+  nsAutoString name;
+  if (aOptions.IsString()) {
+    name = aOptions.GetAsString();
+  } else {
+    MOZ_ASSERT(aOptions.IsWorkerOptions());
+    name = aOptions.GetAsWorkerOptions().mName;
   }
 
   RefPtr<SharedWorker> sharedWorker;
@@ -72,8 +76,6 @@ SharedWorker::Constructor(const GlobalObject& aGlobal,
     aRv = rv;
     return nullptr;
   }
-
-  Telemetry::Accumulate(Telemetry::SHARED_WORKER_COUNT, 1);
 
   return sharedWorker.forget();
 }
@@ -158,7 +160,7 @@ SharedWorker::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
 NS_IMPL_ADDREF_INHERITED(SharedWorker, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(SharedWorker, DOMEventTargetHelper)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(SharedWorker)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(SharedWorker)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(SharedWorker)
@@ -199,7 +201,7 @@ SharedWorker::GetEventTargetParent(EventChainPreVisitor& aVisitor)
     QueueEvent(event);
 
     aVisitor.mCanHandle = false;
-    aVisitor.mParentTarget = nullptr;
+    aVisitor.SetParentTarget(nullptr, false);
     return NS_OK;
   }
 

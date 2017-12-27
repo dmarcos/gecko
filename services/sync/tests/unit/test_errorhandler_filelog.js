@@ -16,7 +16,7 @@ const logsdir            = FileUtils.getDir("ProfD", ["weave", "logs"], true);
 // so otherwise we can end up with all of our files -- the ones we want to
 // keep, and the ones we want to clean up -- having the same modified time.
 const CLEANUP_DELAY      = 2000;
-const DELAY_BUFFER       = 500;  // Buffer for timers on different OS platforms.
+const DELAY_BUFFER       = 500; // Buffer for timers on different OS platforms.
 
 const PROLONGED_ERROR_DURATION =
   (Svc.Prefs.get("errorhandler.networkFailureReportTimeout") * 2) * 1000;
@@ -74,7 +74,7 @@ add_test(function test_logOnSuccess_false() {
   Svc.Obs.add("weave:service:reset-file-log", function onResetFileLog() {
     Svc.Obs.remove("weave:service:reset-file-log", onResetFileLog);
     // No log file was written.
-    do_check_false(logsdir.directoryEntries.hasMoreElements());
+    Assert.ok(!logsdir.directoryEntries.hasMoreElements());
 
     Svc.Prefs.resetBranch("");
     run_next_test();
@@ -107,22 +107,22 @@ add_test(function test_logOnSuccess_true() {
 
     // Exactly one log file was written.
     let entries = logsdir.directoryEntries;
-    do_check_true(entries.hasMoreElements());
-    let logfile = entries.getNext().QueryInterface(Ci.nsILocalFile);
-    do_check_eq(logfile.leafName.slice(-4), ".txt");
-    do_check_true(logfile.leafName.startsWith("success-sync-"), logfile.leafName);
-    do_check_false(entries.hasMoreElements());
+    Assert.ok(entries.hasMoreElements());
+    let logfile = entries.getNext().QueryInterface(Ci.nsIFile);
+    Assert.equal(logfile.leafName.slice(-4), ".txt");
+    Assert.ok(logfile.leafName.startsWith("success-sync-"), logfile.leafName);
+    Assert.ok(!entries.hasMoreElements());
 
     // Ensure the log message was actually written to file.
     readFile(logfile, function(error, data) {
-      do_check_true(Components.isSuccessCode(error));
-      do_check_neq(data.indexOf(MESSAGE), -1);
+      Assert.ok(Components.isSuccessCode(error));
+      Assert.notEqual(data.indexOf(MESSAGE), -1);
 
       // Clean up.
       try {
         logfile.remove(false);
       } catch (ex) {
-        dump("Couldn't delete file: " + ex + "\n");
+        dump("Couldn't delete file: " + ex.message + "\n");
         // Stupid Windows box.
       }
 
@@ -144,7 +144,7 @@ add_test(function test_sync_error_logOnError_false() {
   Svc.Obs.add("weave:service:reset-file-log", function onResetFileLog() {
     Svc.Obs.remove("weave:service:reset-file-log", onResetFileLog);
     // No log file was written.
-    do_check_false(logsdir.directoryEntries.hasMoreElements());
+    Assert.ok(!logsdir.directoryEntries.hasMoreElements());
 
     Svc.Prefs.resetBranch("");
     run_next_test();
@@ -162,38 +162,32 @@ add_test(function test_sync_error_logOnError_true() {
   const MESSAGE = "this WILL show up";
   log.info(MESSAGE);
 
-  // We need to wait until the log cleanup started by this test is complete
-  // or the next test will fail as it is ongoing.
-  Svc.Obs.add("services-tests:common:log-manager:cleanup-logs", function onCleanupLogs() {
-    Svc.Obs.remove("services-tests:common:log-manager:cleanup-logs", onCleanupLogs);
-    run_next_test();
-  });
-
   Svc.Obs.add("weave:service:reset-file-log", function onResetFileLog() {
     Svc.Obs.remove("weave:service:reset-file-log", onResetFileLog);
 
     // Exactly one log file was written.
     let entries = logsdir.directoryEntries;
-    do_check_true(entries.hasMoreElements());
-    let logfile = entries.getNext().QueryInterface(Ci.nsILocalFile);
-    do_check_eq(logfile.leafName.slice(-4), ".txt");
-    do_check_true(logfile.leafName.startsWith("error-sync-"), logfile.leafName);
-    do_check_false(entries.hasMoreElements());
+    Assert.ok(entries.hasMoreElements());
+    let logfile = entries.getNext().QueryInterface(Ci.nsIFile);
+    Assert.equal(logfile.leafName.slice(-4), ".txt");
+    Assert.ok(logfile.leafName.startsWith("error-sync-"), logfile.leafName);
+    Assert.ok(!entries.hasMoreElements());
 
     // Ensure the log message was actually written to file.
     readFile(logfile, function(error, data) {
-      do_check_true(Components.isSuccessCode(error));
-      do_check_neq(data.indexOf(MESSAGE), -1);
+      Assert.ok(Components.isSuccessCode(error));
+      Assert.notEqual(data.indexOf(MESSAGE), -1);
 
       // Clean up.
       try {
         logfile.remove(false);
       } catch (ex) {
-        dump("Couldn't delete file: " + ex + "\n");
+        dump("Couldn't delete file: " + ex.message + "\n");
         // Stupid Windows box.
       }
 
       Svc.Prefs.resetBranch("");
+      run_next_test();
     });
   });
 
@@ -211,7 +205,7 @@ add_test(function test_login_error_logOnError_false() {
   Svc.Obs.add("weave:service:reset-file-log", function onResetFileLog() {
     Svc.Obs.remove("weave:service:reset-file-log", onResetFileLog);
     // No log file was written.
-    do_check_false(logsdir.directoryEntries.hasMoreElements());
+    Assert.ok(!logsdir.directoryEntries.hasMoreElements());
 
     Svc.Prefs.resetBranch("");
     run_next_test();
@@ -229,38 +223,32 @@ add_test(function test_login_error_logOnError_true() {
   const MESSAGE = "this WILL show up";
   log.info(MESSAGE);
 
-  // We need to wait until the log cleanup started by this test is complete
-  // or the next test will fail as it is ongoing.
-  Svc.Obs.add("services-tests:common:log-manager:cleanup-logs", function onCleanupLogs() {
-    Svc.Obs.remove("services-tests:common:log-manager:cleanup-logs", onCleanupLogs);
-    run_next_test();
-  });
-
   Svc.Obs.add("weave:service:reset-file-log", function onResetFileLog() {
     Svc.Obs.remove("weave:service:reset-file-log", onResetFileLog);
 
     // Exactly one log file was written.
     let entries = logsdir.directoryEntries;
-    do_check_true(entries.hasMoreElements());
-    let logfile = entries.getNext().QueryInterface(Ci.nsILocalFile);
-    do_check_eq(logfile.leafName.slice(-4), ".txt");
-    do_check_true(logfile.leafName.startsWith("error-sync-"), logfile.leafName);
-    do_check_false(entries.hasMoreElements());
+    Assert.ok(entries.hasMoreElements());
+    let logfile = entries.getNext().QueryInterface(Ci.nsIFile);
+    Assert.equal(logfile.leafName.slice(-4), ".txt");
+    Assert.ok(logfile.leafName.startsWith("error-sync-"), logfile.leafName);
+    Assert.ok(!entries.hasMoreElements());
 
     // Ensure the log message was actually written to file.
     readFile(logfile, function(error, data) {
-      do_check_true(Components.isSuccessCode(error));
-      do_check_neq(data.indexOf(MESSAGE), -1);
+      Assert.ok(Components.isSuccessCode(error));
+      Assert.notEqual(data.indexOf(MESSAGE), -1);
 
       // Clean up.
       try {
         logfile.remove(false);
       } catch (ex) {
-        dump("Couldn't delete file: " + ex + "\n");
+        dump("Couldn't delete file: " + ex.message + "\n");
         // Stupid Windows box.
       }
 
       Svc.Prefs.resetBranch("");
+      run_next_test();
     });
   });
 
@@ -273,11 +261,10 @@ add_test(function test_noNewFailed_noErrorLog() {
   Svc.Prefs.set("log.appender.file.logOnError", true);
   Svc.Prefs.set("log.appender.file.logOnSuccess", false);
 
-  let log = Log.repository.getLogger("Sync.Test.FileLog");
   Svc.Obs.add("weave:service:reset-file-log", function onResetFileLog() {
     Svc.Obs.remove("weave:service:reset-file-log", onResetFileLog);
     // No log file was written.
-    do_check_false(logsdir.directoryEntries.hasMoreElements());
+    Assert.ok(!logsdir.directoryEntries.hasMoreElements());
 
     Svc.Prefs.resetBranch("");
     run_next_test();
@@ -302,39 +289,32 @@ add_test(function test_newFailed_errorLog() {
   const MESSAGE = "this WILL show up 2";
   log.info(MESSAGE);
 
-  // We need to wait until the log cleanup started by this test is complete
-  // or the next test will fail as it is ongoing.
-  Svc.Obs.add("services-tests:common:log-manager:cleanup-logs", function onCleanupLogs() {
-    Svc.Obs.remove("services-tests:common:log-manager:cleanup-logs", onCleanupLogs);
-    run_next_test();
-  });
-
   Svc.Obs.add("weave:service:reset-file-log", function onResetFileLog() {
     Svc.Obs.remove("weave:service:reset-file-log", onResetFileLog);
 
     // Exactly one log file was written.
     let entries = logsdir.directoryEntries;
-    do_check_true(entries.hasMoreElements());
-    let logfile = entries.getNext().QueryInterface(Ci.nsILocalFile);
-    do_check_eq(logfile.leafName.slice(-4), ".txt");
-    do_check_true(logfile.leafName.startsWith("error-sync-"), logfile.leafName);
-    do_check_false(entries.hasMoreElements());
+    Assert.ok(entries.hasMoreElements());
+    let logfile = entries.getNext().QueryInterface(Ci.nsIFile);
+    Assert.equal(logfile.leafName.slice(-4), ".txt");
+    Assert.ok(logfile.leafName.startsWith("error-sync-"), logfile.leafName);
+    Assert.ok(!entries.hasMoreElements());
 
     // Ensure the log message was actually written to file.
     readFile(logfile, function(error, data) {
-      do_check_true(Components.isSuccessCode(error));
-      do_check_neq(data.indexOf(MESSAGE), -1);
+      Assert.ok(Components.isSuccessCode(error));
+      Assert.notEqual(data.indexOf(MESSAGE), -1);
 
       // Clean up.
       try {
         logfile.remove(false);
       } catch (ex) {
-        dump("Couldn't delete file: " + ex + "\n");
+        dump("Couldn't delete file: " + ex.message + "\n");
         // Stupid Windows box.
       }
 
       Svc.Prefs.resetBranch("");
-
+      run_next_test();
     });
   });
   // newFailed is nonzero -- should write a log.
@@ -353,37 +333,31 @@ add_test(function test_newFailed_errorLog() {
 add_test(function test_errorLog_dumpAddons() {
   Svc.Prefs.set("log.appender.file.logOnError", true);
 
-  // We need to wait until the log cleanup started by this test is complete
-  // or the next test will fail as it is ongoing.
-  Svc.Obs.add("services-tests:common:log-manager:cleanup-logs", function onCleanupLogs() {
-    Svc.Obs.remove("services-tests:common:log-manager:cleanup-logs", onCleanupLogs);
-    run_next_test();
-  });
-
   Svc.Obs.add("weave:service:reset-file-log", function onResetFileLog() {
     Svc.Obs.remove("weave:service:reset-file-log", onResetFileLog);
 
     let entries = logsdir.directoryEntries;
-    do_check_true(entries.hasMoreElements());
-    let logfile = entries.getNext().QueryInterface(Ci.nsILocalFile);
-    do_check_eq(logfile.leafName.slice(-4), ".txt");
-    do_check_true(logfile.leafName.startsWith("error-sync-"), logfile.leafName);
-    do_check_false(entries.hasMoreElements());
+    Assert.ok(entries.hasMoreElements());
+    let logfile = entries.getNext().QueryInterface(Ci.nsIFile);
+    Assert.equal(logfile.leafName.slice(-4), ".txt");
+    Assert.ok(logfile.leafName.startsWith("error-sync-"), logfile.leafName);
+    Assert.ok(!entries.hasMoreElements());
 
     // Ensure we logged some addon list (which is probably empty)
     readFile(logfile, function(error, data) {
-      do_check_true(Components.isSuccessCode(error));
-      do_check_neq(data.indexOf("Addons installed"), -1);
+      Assert.ok(Components.isSuccessCode(error));
+      Assert.notEqual(data.indexOf("Addons installed"), -1);
 
       // Clean up.
       try {
         logfile.remove(false);
       } catch (ex) {
-        dump("Couldn't delete file: " + ex + "\n");
+        dump("Couldn't delete file: " + ex.message + "\n");
         // Stupid Windows box.
       }
 
       Svc.Prefs.resetBranch("");
+      run_next_test();
     });
   });
 
@@ -420,18 +394,18 @@ add_test(function test_logErrorCleanup_age() {
 
     // Only the newest created log file remains.
     let entries = logsdir.directoryEntries;
-    do_check_true(entries.hasMoreElements());
-    let logfile = entries.getNext().QueryInterface(Ci.nsILocalFile);
-    do_check_true(oldLogs.every(function(e) {
+    Assert.ok(entries.hasMoreElements());
+    let logfile = entries.getNext().QueryInterface(Ci.nsIFile);
+    Assert.ok(oldLogs.every(function(e) {
       return e != logfile.leafName;
     }));
-    do_check_false(entries.hasMoreElements());
+    Assert.ok(!entries.hasMoreElements());
 
     // Clean up.
     try {
       logfile.remove(false);
     } catch (ex) {
-      dump("Couldn't delete file: " + ex + "\n");
+      dump("Couldn't delete file: " + ex.message + "\n");
       // Stupid Windows box.
     }
 

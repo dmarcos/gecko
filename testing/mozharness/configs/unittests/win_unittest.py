@@ -98,6 +98,7 @@ config = {
                 "--log-errorsummary=%(error_summary_file)s",
                 "--screenshot-on-fail",
                 "--cleanup-crashes",
+                "--marionette-startup-timeout=180",
             ],
             "run_filename": "runtests.py",
             "testsdir": "mochitest"
@@ -129,6 +130,7 @@ config = {
                 "--log-raw=%(raw_log_file)s",
                 "--log-errorsummary=%(error_summary_file)s",
                 "--cleanup-crashes",
+                "--marionette-startup-timeout=180",
             ],
             "run_filename": "runreftest.py",
             "testsdir": "reftest"
@@ -173,13 +175,11 @@ config = {
         "browser-chrome-chunked": ["--flavor=browser", "--chunk-by-runtime"],
         "browser-chrome-addons": ["--flavor=browser", "--chunk-by-runtime", "--tag=addons"],
         "browser-chrome-screenshots": ["--flavor=browser", "--subsuite=screenshots"],
+        "browser-chrome-instrumentation": ["--flavor=browser"],
         "mochitest-gl": ["--subsuite=webgl"],
         "mochitest-devtools-chrome": ["--flavor=browser", "--subsuite=devtools"],
         "mochitest-devtools-chrome-chunked": ["--flavor=browser", "--subsuite=devtools", "--chunk-by-runtime"],
         "mochitest-metro-chrome": ["--flavor=browser", "--metro-immersive"],
-        "jetpack-package": ["--flavor=jetpack-package"],
-        "jetpack-package-clipboard": ["--flavor=jetpack-package", "--subsuite=clipboard"],
-        "jetpack-addon": ["--flavor=jetpack-addon"],
         "a11y": ["--flavor=a11y"],
     },
     # local reftest suites
@@ -203,8 +203,12 @@ config = {
         },
         "reftest-no-accel": {
             "options": ["--suite=reftest",
-                        "--setpref=gfx.direct2d.disabled=true",
                         "--setpref=layers.acceleration.disabled=true"],
+            "tests": ["tests/reftest/tests/layout/reftests/reftest.list"]
+        },
+        "reftest-qr": {
+            "options": ["--suite=reftest",
+                        "--setpref=gfx.webrender.enabled=true"],
             "tests": ["tests/reftest/tests/layout/reftests/reftest.list"]
         },
     },
@@ -263,8 +267,7 @@ config = {
     "default_blob_upload_servers": [
         "https://blobupload.elasticbeanstalk.com",
     ],
-    "unstructured_flavors": {"mochitest": ['jetpack'],
-                            "xpcshell": [],
+    "unstructured_flavors": {"xpcshell": [],
                             "gtest": [],
                             "mozmill": [],
                             "cppunittest": [],

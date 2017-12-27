@@ -12,10 +12,8 @@ const TAB_URL = EXAMPLE_URL + "doc_event-listeners-01.html";
 var gClient, gThreadClient, gInput, gButton;
 
 function test() {
-  if (!DebuggerServer.initialized) {
-    DebuggerServer.init();
-    DebuggerServer.addBrowserActors();
-  }
+  DebuggerServer.init();
+  DebuggerServer.registerAllActors();
 
   let transport = DebuggerServer.connectPipe();
   gClient = new DebuggerClient(transport);
@@ -33,7 +31,7 @@ function test() {
       .then(testBreakOnClick)
       .then(() => gClient.close())
       .then(finish)
-      .then(null, aError => {
+      .catch(aError => {
         ok(false, "Got an error: " + aError.message + "\n" + aError.stack);
       });
   });

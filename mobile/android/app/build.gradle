@@ -1,6 +1,5 @@
 buildDir "${topobjdir}/gradle/build/mobile/android/app"
 
-apply plugin: 'android-sdk-manager' // Must come before 'com.android.*'.
 apply plugin: 'com.android.application'
 apply plugin: 'checkstyle'
 apply plugin: 'com.getkeepsafe.dexcount'
@@ -11,20 +10,17 @@ dexcount {
 }
 
 android {
-    compileSdkVersion 23
-    buildToolsVersion mozconfig.substs.ANDROID_BUILD_TOOLS_VERSION
+    compileSdkVersion project.ext.compileSdkVersion
+    buildToolsVersion project.ext.buildToolsVersion
 
     defaultConfig {
-        targetSdkVersion 23
-        minSdkVersion 15
+        targetSdkVersion project.ext.targetSdkVersion
+        minSdkVersion project.ext.minSdkVersion
+        manifestPlaceholders = project.ext.manifestPlaceholders
+
         applicationId mozconfig.substs.ANDROID_PACKAGE_NAME
         testApplicationId 'org.mozilla.roboexample.test'
         testInstrumentationRunner 'org.mozilla.gecko.FennecInstrumentationTestRunner'
-        manifestPlaceholders = [
-            ANDROID_PACKAGE_NAME: mozconfig.substs.ANDROID_PACKAGE_NAME,
-            MOZ_ANDROID_MIN_SDK_VERSION: mozconfig.substs.MOZ_ANDROID_MIN_SDK_VERSION,
-            MOZ_ANDROID_SHARED_ID: "${mozconfig.substs.ANDROID_PACKAGE_NAME}.sharedID",
-        ]
         // Used by Robolectric based tests; see TestRunner.
         buildConfigField 'String', 'BUILD_DIR', "\"${project.buildDir}\""
 
@@ -38,6 +34,7 @@ android {
 
     dexOptions {
         javaMaxHeapSize "2g"
+        jumboMode = true
     }
 
     lintOptions {
@@ -73,40 +70,58 @@ android {
         }
     }
 
+    // The "audience" flavour dimension distinguishes between _local_ builds (intended for
+    // development) and _official_ builds (intended for testing in automation and to ship in one of
+    // the Fennec distribution channels).
+    //
+    // The "skin" flavor dimension distinguishes between different user interfaces.  We sometimes
+    // want to develop significant new user interface pieces in-tree that don't ship (even in the
+    // Nightly channel) while under development.  A new "skin" flavour allows us to develop such
+    // pieces in Gradle without changing the mainline configuration.
+    flavorDimensions "audience", "skin"
+
     productFlavors {
-        // For API 21+ - with multi dex, this will be faster for local development.
+        // For API 21+ - with pre-dexing, this will be faster for local development.
         local {
-            // For multi dex, setting `minSdkVersion 21` allows the Android gradle plugin to
+            dimension "audience"
+
+            // For pre-dexing, setting `minSdkVersion 21` allows the Android gradle plugin to
             // pre-DEX each module and produce an APK that can be tested on
             // Android Lollipop without time consuming DEX merging processes.
             minSdkVersion 21
             dexOptions {
                 preDexLibraries true
-                multiDexEnabled true
             }
         }
-        // For API < 21 - does not support multi dex because local development
-        // is slow in that case. Most builds will not require multi dex so this
-        // should not be an issue.
+        // For API < 21 - does not support pre-dexing because local development
+        // is slow in that case.
         localOld {
+            dimension "audience"
         }
-        // Automation builds.
-        automation {
+
+        // Automation builds.  We use "official" rather than "automation" to drive these builds down
+        // the list of configurations that Android Studio offers, thereby making it _not_ the
+        // default.  This avoids a common issue with "omni.ja" not being packed into the default APK
+        // built and deployed by Android Studio.
+        official {
+             dimension "audience"
+        }
+
+        // Since Firefox 57, the mobile user interface has followed the Photon design.
+        // Before Firefox 57, the user interface followed the Australis design.
+        photon {
+            dimension "skin"
         }
     }
 
     sourceSets {
         main {
-            manifest.srcFile "${project.buildDir}/generated/source/preprocessed_manifest/AndroidManifest.xml"
-
             aidl {
                 srcDir "${topsrcdir}/mobile/android/base/aidl"
             }
 
             java {
                 srcDir "${topsrcdir}/mobile/android/base/java"
-                srcDir "${topsrcdir}/mobile/android/search/java"
-                srcDir "${topsrcdir}/mobile/android/javaaddons/java"
                 srcDir "${topsrcdir}/mobile/android/services/src/main/java"
 
                 if (mozconfig.substs.MOZ_ANDROID_MLS_STUMBLER) {
@@ -125,16 +140,16 @@ android {
                     exclude 'org/mozilla/gecko/MediaPlayerManager.java'
                 }
 
-                if (mozconfig.substs.MOZ_WEBRTC) {
-                    srcDir "${topsrcdir}/media/webrtc/trunk/webrtc/modules/audio_device/android/java/src"
-                    srcDir "${topsrcdir}/media/webrtc/trunk/webrtc/modules/video_capture/android/java/src"
-                    srcDir "${topsrcdir}/media/webrtc/trunk/webrtc/modules/video_render/android/java/src"
-                }
-
                 if (mozconfig.substs.MOZ_INSTALL_TRACKING) {
                     exclude 'org/mozilla/gecko/adjust/StubAdjustHelper.java'
                 } else {
                     exclude 'org/mozilla/gecko/adjust/AdjustHelper.java'
+                }
+
+                if (mozconfig.substs.MOZ_ANDROID_MMA) {
+                    exclude 'org/mozilla/gecko/mma/MmaStubImp.java'
+                } else {
+                    exclude 'org/mozilla/gecko/mma/MmaLeanplumImp.java'
                 }
 
                 if (!mozconfig.substs.MOZ_ANDROID_GCM) {
@@ -148,7 +163,6 @@ android {
             res {
                 srcDir "${topsrcdir}/${mozconfig.substs.MOZ_BRANDING_DIRECTORY}/res"
                 srcDir "${project.buildDir}/generated/source/preprocessed_resources" // See syncPreprocessedResources.
-                srcDir "${topsrcdir}/mobile/android/base/resources"
                 srcDir "${topsrcdir}/mobile/android/services/src/main/res"
                 if (mozconfig.substs.MOZ_CRASHREPORTER) {
                     srcDir "${topsrcdir}/mobile/android/base/crashreporter/res"
@@ -156,18 +170,28 @@ android {
             }
 
             assets {
-                if (mozconfig.substs.MOZ_ANDROID_DISTRIBUTION_DIRECTORY && !mozconfig.substs.MOZ_ANDROID_PACKAGE_INSTALL_BOUNCER) {
-                    // If we are packaging the bouncer, it will have the distribution, so don't put
-                    // it in the main APK as well.
+                if (mozconfig.substs.MOZ_ANDROID_DISTRIBUTION_DIRECTORY) {
                     srcDir "${mozconfig.substs.MOZ_ANDROID_DISTRIBUTION_DIRECTORY}/assets"
                 }
-                srcDir "${topsrcdir}/mobile/android/app/assets"
             }
+        }
+
+        // Every configuration needs the stub manifest at
+        // src/main/AndroidManifest.xml and the generated manifest.  We can't
+        // use the main sourceSet without losing the stub, so we cover all the
+        // configurations by enumerating the buildTypes here.
+        debug {
+            manifest.srcFile "${project.buildDir}/generated/source/preprocessed_manifest/AndroidManifest.xml"
+        }
+
+        release {
+            manifest.srcFile "${project.buildDir}/generated/source/preprocessed_manifest/AndroidManifest.xml"
         }
 
         test {
             java {
-                srcDir "${topsrcdir}/mobile/android/tests/background/junit4/src"
+                // Bug 1229149 tracks pushing this into a :services Gradle project.
+                srcDir "${topsrcdir}/mobile/android/services/src/test/java"
 
                 if (!mozconfig.substs.MOZ_ANDROID_GCM) {
                     exclude 'org/mozilla/gecko/gcm/**/*.java'
@@ -175,16 +199,17 @@ android {
                 }
             }
             resources {
-                srcDir "${topsrcdir}/mobile/android/tests/background/junit4/resources"
+                // Bug 1229149 tracks pushing this into a :services Gradle project.
+                srcDir "${topsrcdir}/mobile/android/services/src/test/resources"
             }
         }
 
         androidTest {
             java {
                 srcDir "${topsrcdir}/mobile/android/tests/browser/robocop/src"
-                srcDir "${topsrcdir}/mobile/android/tests/background/junit3/src"
+                // Bug 1229149 tracks pushing this into a :services Gradle project.
+                srcDir "${topsrcdir}/mobile/android/services/src/androidTest/java"
                 srcDir "${topsrcdir}/mobile/android/tests/browser/junit3/src"
-                srcDir "${topsrcdir}/mobile/android/tests/javaddons/src"
             }
             res {
                 srcDir "${topsrcdir}/mobile/android/tests/browser/robocop/res"
@@ -212,7 +237,6 @@ dependencies {
     compile "com.android.support:recyclerview-v7:${mozconfig.substs.ANDROID_SUPPORT_LIBRARY_VERSION}"
     compile "com.android.support:design:${mozconfig.substs.ANDROID_SUPPORT_LIBRARY_VERSION}"
     compile "com.android.support:customtabs:${mozconfig.substs.ANDROID_SUPPORT_LIBRARY_VERSION}"
-    compile "com.android.support:palette-v7:${mozconfig.substs.ANDROID_SUPPORT_LIBRARY_VERSION}"
 
     if (mozconfig.substs.MOZ_NATIVE_DEVICES) {
         compile "com.android.support:mediarouter-v7:${mozconfig.substs.ANDROID_SUPPORT_LIBRARY_VERSION}"
@@ -222,7 +246,7 @@ dependencies {
     }
 
     if (mozconfig.substs.MOZ_INSTALL_TRACKING) {
-        compile "com.google.android.gms:play-services-ads:${mozconfig.substs.ANDROID_GOOGLE_PLAY_SERVICES_VERSION}"
+        compile "com.google.android.gms:play-services-analytics:${mozconfig.substs.ANDROID_GOOGLE_PLAY_SERVICES_VERSION}"
         compile "com.google.android.gms:play-services-basement:${mozconfig.substs.ANDROID_GOOGLE_PLAY_SERVICES_VERSION}"
     }
 
@@ -234,18 +258,37 @@ dependencies {
     }
 
     // Include LeakCanary in most gradle based builds. LeakCanary adds about 5k methods, so we disable
-    // it for the (non-proguarded, non-multidex) localOld builds to allow space for other libraries.
+    // it for the (non-proguarded, non-predex) localOld builds to allow space for other libraries.
     // Gradle based tests include the no-op version.  Mach based builds only include the no-op version
     // of this library.
     // It doesn't seem like there is a non-trivial way to be conditional on 'localOld', so instead we explicitly
     // define a version of leakcanary for every flavor:
     localCompile 'com.squareup.leakcanary:leakcanary-android:1.4-beta1'
     localOldCompile 'com.squareup.leakcanary:leakcanary-android-no-op:1.4-beta1'
-    automationCompile 'com.squareup.leakcanary:leakcanary-android-no-op:1.4-beta1'
+    officialCompile 'com.squareup.leakcanary:leakcanary-android-no-op:1.4-beta1'
+    officialCompile 'com.squareup.leakcanary:leakcanary-android-no-op:1.4-beta1'
     testCompile 'com.squareup.leakcanary:leakcanary-android-no-op:1.4-beta1'
 
-    compile project(':geckoview')
-    compile project(':thirdparty')
+    // With a simple "compile", Gradle will always build these libraries in their default configuration
+    // (i.e. release), so we need to explicitly forward our own build configuration here (bug 1385695).
+    //
+    // Official builds compile a hacked up app:Official..Debug, but need the
+    // release versions of the dependencies, in order to not have debugging
+    // information.  It's not yet possible to specify just officialDebug, so we
+    // hack around it here.
+    if (mozconfig.substs.MOZILLA_OFFICIAL) {
+        debugCompile project(path: ':geckoview', configuration: "release")
+    } else {
+        debugCompile project(path: ':geckoview', configuration: "debug")
+    }
+    releaseCompile project(path: ':geckoview', configuration: "release")
+
+    if (mozconfig.substs.MOZILLA_OFFICIAL) {
+        debugCompile project(path: ':thirdparty', configuration: "release")
+    } else {
+        debugCompile project(path: ':thirdparty', configuration: "debug")
+    }
+    releaseCompile project(path: ':thirdparty', configuration: "release")
 
     testCompile 'junit:junit:4.12'
     testCompile 'org.robolectric:robolectric:3.1.2'
@@ -261,7 +304,7 @@ dependencies {
 task checkstyle(type: Checkstyle) {
     configFile file("checkstyle.xml")
     // TODO: should use sourceSets from project instead of hard-coded str.
-    source '../base/java/'
+    source = ['../base/java/','../geckoview/src/main/java/']
     // TODO: This ignores our pre-processed resources.
     include '**/*.java'
     // TODO: classpath should probably be something.
@@ -270,10 +313,7 @@ task checkstyle(type: Checkstyle) {
 
 task syncPreprocessedCode(type: Sync, dependsOn: rootProject.generateCodeAndResources) {
     into("${project.buildDir}/generated/source/preprocessed_code")
-    from("${topobjdir}/mobile/android/base/generated/preprocessed") {
-        // All other preprocessed code is included in the geckoview project.
-        include '**/AdjustConstants.java'
-    }
+    from("${topobjdir}/mobile/android/base/generated/preprocessed")
 }
 
 // The localization system uses the moz.build preprocessor to interpolate a .dtd
@@ -316,115 +356,44 @@ android.applicationVariants.all { variant ->
     variant.preBuild.dependsOn syncPreprocessedCode
     variant.preBuild.dependsOn syncPreprocessedResources
 
-    // Automation builds don't include Gecko binaries, since those binaries are
-    // not produced until after build time (at package time).  Therefore,
-    // automation builds include the Gecko binaries into the APK at package
-    // time.  The "withGeckoBinaries" variant of the :geckoview project also
-    // does this.  (It does what it says on the tin!)  For notes on this
+    // Official automation builds don't include Gecko binaries, since those binaries are not
+    // produced until after build time (at package time).  official Therefore, automation builds
+    // include the Gecko binaries into the APK at package time.  The "withGeckoBinaries" variant of
+    // the :geckoview project also does this.  (It does what it says on the tin!)  For notes on this
     // approach, see mobile/android/gradle/with_gecko_binaries.gradle.
 
     // Like 'local' or 'localOld'.
-    def productFlavor = variant.productFlavors[0].name
+    def audienceDimension = variant.productFlavors[0].name
 
     // :app uses :geckoview:release and handles it's own Gecko binary inclusion,
     // even though this would be most naturally done in the :geckoview project.
-    if (!productFlavor.equals('automation')) {
+    if (!audienceDimension.equals('official')) {
         configureVariantWithGeckoBinaries(variant)
     }
 }
 
-apply plugin: 'spoon'
-
-spoon {
-    // For now, let's be verbose.
-    debug = true
-    // It's not helpful to pass when we don't have a device connected.
-    failIfNoDeviceConnected = true
-
-    def spoonPackageName
-    if (gradle.startParameter.taskNames.contains('runBrowserTests')) {
-        spoonPackageName = 'org.mozilla.tests.browser.junit3'
-    }
-    if (gradle.startParameter.taskNames.contains('runBackgroundTests')) {
-        spoonPackageName = 'org.mozilla.gecko.background'
-    }
-    if (project.hasProperty('spoonPackageName')) {
-        // Command line overrides everything.
-        spoonPackageName = project.spoonPackageName
-    }
-    if (spoonPackageName) {
-        instrumentationArgs = ['-e', "package=${spoonPackageName}".toString()]
-    }
-}
-
-// See discussion at https://github.com/stanfy/spoon-gradle-plugin/issues/9.
-afterEvaluate {
-    tasks["spoonLocal${android.testBuildType.capitalize()}AndroidTest"].outputs.upToDateWhen { false }
-
-    // This is an awkward way to define different sets of instrumentation tests.
-    // The task name itself is fished at runtime and the package name configured
-    // in the spoon configuration.
-    task runBrowserTests {
-        dependsOn tasks["spoonLocalOldDebugAndroidTest"]
-    }
-    task runBackgroundTests {
-        dependsOn tasks["spoonLocalOldDebugAndroidTest"]
-    }
-}
-
-// Bug 1299015: Complain to treeherder if checkstyle, lint, or unittest fails.  It's not obvious
-// how to listen to individual errors in most cases, so we just link to the reports for now.
-def makeTaskExecutionListener(artifactRootUrl) {
-    return new TaskExecutionListener() {
-        void beforeExecute(Task task) {
-            // Do nothing.
-        }
-
-        void afterExecute(Task task, TaskState state) {
-            if (!state.failure) {
-                return
-            }
-
-            // Link to the failing report.  The task path and the report path
-            // depend on the android-lint task in
-            // taskcluster/ci/android-stuff/kind.yml.  It's not possible to link
-            // directly, so for now consumers will need to copy-paste the URL.
-            switch (task.path) {
-            case ':app:checkstyle':
-                def url = "${artifactRootUrl}/public/android/checkstyle/checkstyle.xml"
-                println "TEST-UNEXPECTED-FAIL | android-checkstyle | Checkstyle rule violations were found. See the report at: $url"
-                break
-
-            case ':app:lintAutomationDebug':
-                def url = "${artifactRootUrl}/public/android/lint/lint-results-automationDebug.html"
-                println "TEST-UNEXPECTED-FAIL | android-lint | Lint found errors in the project; aborting build. See the report at: $url"
-                break
-
-            case ':app:testAutomationDebugUnitTest':
-                def url = "${artifactRootUrl}/public/android/unittest/automationDebug/index.html"
-                println "TEST-UNEXPECTED-FAIL | android-test | There were failing tests. See the report at: $url"
-                break
-
-            case ':app:findbugsAutomationDebug':
-                def url = "${artifactRootUrl}/public/android/findbugs/findbugs-report.html"
-                println "TEST-UNEXPECTED-FAIL | android-findbugs | Findbugs found issues in the project. See the report at: $url"
-                break
-            }
-        }
-    }
-}
-
-// TASK_ID and RUN_ID are provided by docker-worker; see
-// https://docs.taskcluster.net/manual/execution/workers/docker-worker.
-if (System.env.TASK_ID && System.env.RUN_ID) {
-    def artifactRootUrl = "https://queue.taskcluster.net/v1/task/${System.env.TASK_ID}/runs/${System.env.RUN_ID}/artifacts"
-    gradle.addListener(makeTaskExecutionListener(artifactRootUrl))
-}
-
-// Bug 1320035: Gradle configuration for running findbugs
 android.applicationVariants.all { variant ->
-    task("findbugs${variant.name.capitalize()}", type: FindBugs) {
-        description "Analyze ${variant.name} code with findbugs"
+    configureVariantWithJNIWrappers(variant, "Fennec")
+}
+
+if (gradle.startParameter.taskNames.any { it.endsWith('UnitTest') }) {
+    // Approach cribbed from https://github.com/rwinch/jce-checker.
+    int maxKeyLen = javax.crypto.Cipher.getMaxAllowedKeyLength("AES")
+    if (maxKeyLen <= 128) {
+        throw new GradleException(
+            "Android unit tests require " +
+            "Java Cryptography Extension (JCE) Unlimited Strength Jurisdiction Policy, see " +
+            "http://www.oracle.com/technetwork/java/javase/downloads/jce8-download-2133166.html")
+    }
+}
+
+// Bug 1320035: Gradle configuration for running findbugs.  Findbugs only allows
+// to generate one report per invocation: https://stackoverflow.com/a/42720235.
+// Run two tasks, accepting the cost of duplicate work.
+android.applicationVariants.all { variant ->
+    task("findbugsHtml${variant.name.capitalize()}", type: FindBugs) {
+        // TODO: figure out how to share the shared configuration.
+        description "Analyze ${variant.name} code with findbugs (HTML report)"
         group "Verification"
 
         ignoreFailures = false // We want builds to fail when running this task and issues are found
@@ -437,15 +406,37 @@ android.applicationVariants.all { variant ->
         classpath = variant.javaCompile.classpath
 
         excludeFilter = file("findbugs-exclude.xml")
+        dependsOn "assemble${variant.name.capitalize()}"
 
         reports {
-            html.enabled = true // We only care about HTML reports for humans
+            html.enabled = true // HTML reports for humans.
+            html.destination = "$project.buildDir/reports/findbugs/findbugs-${variant.name}-output.html"
             xml.enabled = false
-
-            html.destination = "$project.buildDir/outputs/findbugs/findbugs-${variant.name}-output.html"
         }
+    }
 
+    task("findbugsXml${variant.name.capitalize()}", type: FindBugs) {
+        // TODO: figure out how to share the shared configuration.
+        description "Analyze ${variant.name} code with findbugs (XML report)"
+        group "Verification"
+
+        ignoreFailures = false // We want builds to fail when running this task and issues are found
+        effort = "max"         // Using more memory and time to find issues is acceptable in automation
+        reportLevel = "high"   // For now we only care about high priority bugs. After we have fixed
+                               // the issues with medium/low priority we can lower the report level here.
+        
+        classes = files("$project.buildDir/intermediates/classes")
+        source = variant.javaCompile.source
+        classpath = variant.javaCompile.classpath
+
+        excludeFilter = file("findbugs-exclude.xml")
         dependsOn "assemble${variant.name.capitalize()}"
+
+        reports {
+            xml.enabled = true // XML reports for machines.
+            xml.destination = "$project.buildDir/reports/findbugs/findbugs-${variant.name}-output.xml"
+            html.enabled = false
+        }
     }
 }
 
@@ -455,10 +446,18 @@ android.applicationVariants.all configureVariantDebugLevel
 
 
 // Bug 1320310 - Hack up the manifest produced by Gradle to match that produced
-// by moz.build.
+// by moz.build.  Per https://bugzilla.mozilla.org/show_bug.cgi?id=1320310#c14,
+// this breaks launching in Android Studio; therefore, we only do this for
+// official automation builds and not for local developer builds.
 import groovy.xml.XmlUtil
 
 android.applicationVariants.all { variant ->
+    // Like 'local', 'localOld', or 'official'.
+    def audienceDimension = variant.productFlavors[0].name
+    if (!audienceDimension.equals('official')) {
+        return
+    }
+
     variant.outputs.each { output ->
         output.processManifest.doLast {
             [output.processManifest.manifestOutputFile,
@@ -485,4 +484,39 @@ android.applicationVariants.all { variant ->
             })
         }
     }
+}
+
+android.applicationVariants.all { variant ->
+    def processResourcesTask = tasks["process${variant.name.capitalize()}Resources"]
+    def assembleTask = tasks["assemble${variant.name.capitalize()}"]
+
+    def dumpTask = task("dump${variant.name.capitalize()}RTxt", type: Copy) {
+        from "${project.buildDir}/intermediates/symbols"
+        into "${project.buildDir}/R/symbols-${System.env.AB_CD}"
+        include "**/R.txt"
+
+        includeEmptyDirs = false
+
+        // Force task to run.
+        outputs.upToDateWhen { false }
+
+        rename { filename ->
+            filename.replace 'R.txt', "R-${new Date().format('yyyyMMddHHmmssSSS')}.txt"
+        }
+
+        dependsOn processResourcesTask
+    }
+
+    assembleTask.dependsOn dumpTask
+}
+
+// Bug 1415298: make Robolectric find assets.  Fix adapted from
+// https://github.com/robolectric/robolectric/issues/2647.
+android.applicationVariants.all { variant ->
+    def productFlavor = ""
+    variant.productFlavors.each {
+        productFlavor += "${it.name.capitalize()}"
+    }
+    def buildType = "${variant.buildType.name.capitalize()}"
+    tasks["compile${productFlavor}${buildType}UnitTestSources"].dependsOn(tasks["merge${productFlavor}${buildType}Assets"])
 }

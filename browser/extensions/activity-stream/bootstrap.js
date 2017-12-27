@@ -1,24 +1,50 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-/* globals Components, XPCOMUtils, Preferences, ActivityStream */
 "use strict";
 
-const {utils: Cu} = Components;
+const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Preferences.jsm");
+Cu.importGlobalProperties(["fetch"]);
 
-XPCOMUtils.defineLazyModuleGetter(this, "ActivityStream",
-  "resource://activity-stream/lib/ActivityStream.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Services",
+  "resource://gre/modules/Services.jsm");
 
 const ACTIVITY_STREAM_ENABLED_PREF = "browser.newtabpage.activity-stream.enabled";
-const REASON_STARTUP_ON_PREF_CHANGE = "PREF_ON";
+const BROWSER_READY_NOTIFICATION = "sessionstore-windows-restored";
+const PREF_CHANGED_TOPIC = "nsPref:changed";
 const REASON_SHUTDOWN_ON_PREF_CHANGE = "PREF_OFF";
+const REASON_STARTUP_ON_PREF_CHANGE = "PREF_ON";
+const RESOURCE_BASE = "resource://activity-stream";
 
 const ACTIVITY_STREAM_OPTIONS = {newTabURL: "about:newtab"};
 
 let activityStream;
+let modulesToUnload = new Set();
 let startupData;
+let startupReason;
+let waitingForBrowserReady = true;
+
+// Lazily load ActivityStream then find related modules to unload
+XPCOMUtils.defineLazyModuleGetter(this, "ActivityStream",
+  "resource://activity-stream/lib/ActivityStream.jsm", null, null, () => {
+    // Helper to fetch a resource directory listing and call back with each item
+    const processListing = async (uri, cb) => (await (await fetch(uri)).text())
+      .split("\n").slice(2).forEach(line => cb(line.split(" ").slice(1)));
+
+    // Look for modules one level deeper than the top resource URI
+    processListing(RESOURCE_BASE, ([directory, , , type]) => {
+      if (type === "DIRECTORY") {
+        // Look into this directory for .jsm files
+        const subDir = `${RESOURCE_BASE}/${directory}`;
+        processListing(subDir, ([name]) => {
+          if (name && name.search(/\.jsm$/) !== -1) {
+            modulesToUnload.add(`${subDir}/${name}`);
+          }
+        });
+      }
+    });
+  });
 
 /**
  * init - Initializes an instance of ActivityStream. This could be called by
@@ -34,7 +60,11 @@ function init(reason) {
   }
   const options = Object.assign({}, startupData || {}, ACTIVITY_STREAM_OPTIONS);
   activityStream = new ActivityStream(options);
-  activityStream.init(reason);
+  try {
+    activityStream.init(reason);
+  } catch (e) {
+    Cu.reportError(e);
+  }
 }
 
 /**
@@ -45,6 +75,7 @@ function init(reason) {
  * @param  {type} reason Reason for uninitialization. Could be uninstall, upgrade, or PREF_OFF
  */
 function uninit(reason) {
+  // Make sure to only uninit once in case both pref change and shutdown happen
   if (activityStream) {
     activityStream.uninit(reason);
     activityStream = null;
@@ -54,13 +85,88 @@ function uninit(reason) {
 /**
  * onPrefChanged - handler for changes to ACTIVITY_STREAM_ENABLED_PREF
  *
- * @param  {bool} isEnabled Determines whether Activity Stream is enabled
  */
-function onPrefChanged(isEnabled) {
-  if (isEnabled) {
+function onPrefChanged() {
+  if (Services.prefs.getBoolPref(ACTIVITY_STREAM_ENABLED_PREF, false)) {
     init(REASON_STARTUP_ON_PREF_CHANGE);
   } else {
     uninit(REASON_SHUTDOWN_ON_PREF_CHANGE);
+  }
+}
+
+/**
+ * Check if an old pref has a custom value to migrate. Clears the pref so that
+ * it's the default after migrating (to avoid future need to migrate).
+ *
+ * @param oldPrefName {string} Pref to check and migrate
+ * @param cbIfNotDefault {function} Callback that gets the current pref value
+ */
+function migratePref(oldPrefName, cbIfNotDefault) {
+  // Nothing to do if the user doesn't have a custom value
+  if (!Services.prefs.prefHasUserValue(oldPrefName)) {
+    return;
+  }
+
+  // Figure out what kind of pref getter to use
+  let prefGetter;
+  switch (Services.prefs.getPrefType(oldPrefName)) {
+    case Services.prefs.PREF_BOOL:
+      prefGetter = "getBoolPref";
+      break;
+    case Services.prefs.PREF_INT:
+      prefGetter = "getIntPref";
+      break;
+    case Services.prefs.PREF_STRING:
+      prefGetter = "getStringPref";
+      break;
+  }
+
+  // Give the callback the current value then clear the pref
+  cbIfNotDefault(Services.prefs[prefGetter](oldPrefName));
+  Services.prefs.clearUserPref(oldPrefName);
+}
+
+/**
+ * onBrowserReady - Continues startup of the add-on after browser is ready.
+ */
+function onBrowserReady() {
+  waitingForBrowserReady = false;
+
+  // Listen for changes to the pref that enables Activity Stream
+  Services.prefs.addObserver(ACTIVITY_STREAM_ENABLED_PREF, observe); // eslint-disable-line no-use-before-define
+
+  // Only initialize if the pref is true
+  if (Services.prefs.getBoolPref(ACTIVITY_STREAM_ENABLED_PREF, false)) {
+    init(startupReason);
+  }
+
+  // Do a one time migration of Tiles about:newtab prefs that have been modified
+  migratePref("browser.newtabpage.rows", rows => {
+    // Just disable top sites if rows are not desired
+    if (rows <= 0) {
+      Services.prefs.setBoolPref("browser.newtabpage.activity-stream.showTopSites", false);
+    } else {
+      // Assume we want a full row (6 sites per row)
+      Services.prefs.setIntPref("browser.newtabpage.activity-stream.topSitesCount", rows * 6);
+    }
+  });
+}
+
+/**
+ * observe - nsIObserver callback to handle various browser notifications.
+ */
+function observe(subject, topic, data) {
+  switch (topic) {
+    case BROWSER_READY_NOTIFICATION:
+      Services.obs.removeObserver(observe, BROWSER_READY_NOTIFICATION);
+      // Avoid running synchronously during this event that's used for timing
+      Services.tm.dispatchToMainThread(() => onBrowserReady());
+      break;
+    case PREF_CHANGED_TOPIC:
+      if (data === ACTIVITY_STREAM_ENABLED_PREF) {
+        onPrefChanged();
+      }
+      break;
   }
 }
 
@@ -72,23 +178,38 @@ this.startup = function startup(data, reason) {
   // Cache startup data which contains stuff like the version number, etc.
   // so we can use it when we init
   startupData = data;
+  startupReason = reason;
 
-  // Listen for changes to the pref that enables Activity Stream
-  Preferences.observe(ACTIVITY_STREAM_ENABLED_PREF, onPrefChanged);
-
-  // Only initialize if the pref is true
-  if (Preferences.get(ACTIVITY_STREAM_ENABLED_PREF)) {
-    init(reason);
+  // Only start Activity Stream up when the browser UI is ready
+  if (Services.startup.startingUp) {
+    Services.obs.addObserver(observe, BROWSER_READY_NOTIFICATION);
+  } else {
+    // Handle manual install or automatic install after manual uninstall
+    onBrowserReady();
   }
 };
 
 this.shutdown = function shutdown(data, reason) {
   // Uninitialize Activity Stream
   startupData = null;
+  startupReason = null;
   uninit(reason);
 
-  // Stop listening to the pref that enables Activity Stream
-  Preferences.ignore(ACTIVITY_STREAM_ENABLED_PREF, onPrefChanged);
+  // Stop waiting for browser to be ready
+  if (waitingForBrowserReady) {
+    Services.obs.removeObserver(observe, BROWSER_READY_NOTIFICATION);
+  } else {
+    // Stop listening to the pref that enables Activity Stream
+    Services.prefs.removeObserver(ACTIVITY_STREAM_ENABLED_PREF, observe);
+  }
+
+  // Unload any add-on modules that might might have been imported
+  modulesToUnload.forEach(Cu.unload);
 };
 
-this.uninstall = function uninstall(data, reason) {};
+this.uninstall = function uninstall(data, reason) {
+  if (activityStream) {
+    activityStream.uninstall(reason);
+    activityStream = null;
+  }
+};

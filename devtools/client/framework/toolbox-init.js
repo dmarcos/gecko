@@ -21,7 +21,7 @@ if (url.search.length > 1) {
   const { Toolbox } = require("devtools/client/framework/toolbox");
   const { TargetFactory } = require("devtools/client/framework/target");
   const { DebuggerServer } = require("devtools/server/main");
-  const { DebuggerClient } = require("devtools/shared/client/main");
+  const { DebuggerClient } = require("devtools/shared/client/debugger-client");
   const { Task } = require("devtools/shared/task");
 
   // `host` is the frame element loading the toolbox.
@@ -62,19 +62,16 @@ if (url.search.length > 1) {
         throw new Error("Unable to find the targeted iframe to debug");
       }
 
-      // Need to use a xray and query some interfaces to have
-      // attributes and behavior expected by devtools codebase
+      // Need to use a xray to have attributes and behavior expected by
+      // devtools codebase
       iframe = XPCNativeWrapper(iframe);
-      iframe.QueryInterface(Ci.nsIFrameLoaderOwner);
 
       // Fake a xul:tab object as we don't have one.
       // linkedBrowser is the only one attribute being queried by client.getTab
       let tab = { linkedBrowser: iframe };
 
-      if (!DebuggerServer.initialized) {
-        DebuggerServer.init();
-        DebuggerServer.addBrowserActors();
-      }
+      DebuggerServer.init();
+      DebuggerServer.registerAllActors();
       let client = new DebuggerClient(DebuggerServer.connectPipe());
 
       yield client.connect();

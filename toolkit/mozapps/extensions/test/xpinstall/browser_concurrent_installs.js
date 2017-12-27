@@ -8,7 +8,7 @@ var gResults = [];
 function frame_script() {
   /* globals addMessageListener, sendAsyncMessage*/
   addMessageListener("Test:StartInstall", () => {
-    content.document.getElementById("installnow").click()
+    content.document.getElementById("installnow").click();
   });
 
   addEventListener("load", () => {
@@ -50,7 +50,7 @@ function installNext() {
 }
 
 function createTab(url) {
-  let tab = gBrowser.addTab(url);
+  let tab = BrowserTestUtils.addTab(gBrowser, url);
   tab.linkedBrowser.messageManager.loadFrameScript("data:,(" + frame_script.toString() + ")();", true);
 
   tab.linkedBrowser.messageManager.addMessageListener("Test:InstallComplete", ({data}) => {

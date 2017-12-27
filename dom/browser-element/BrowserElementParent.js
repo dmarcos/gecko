@@ -34,7 +34,7 @@ function getIntPref(prefName, def) {
 
 function handleWindowEvent(e) {
   if (this._browserElementParents) {
-    let beps = ThreadSafeChromeUtils.nondeterministicGetWeakMapKeys(this._browserElementParents);
+    let beps = ChromeUtils.nondeterministicGetWeakMapKeys(this._browserElementParents);
     beps.forEach(bep => bep._handleOwnerEvent(e));
   }
 }
@@ -168,23 +168,15 @@ BrowserElementParent.prototype = {
       "got-contentdimensions": this._gotDOMRequestResult,
       "got-can-go-back": this._gotDOMRequestResult,
       "got-can-go-forward": this._gotDOMRequestResult,
-      "got-muted": this._gotDOMRequestResult,
-      "got-volume": this._gotDOMRequestResult,
       "requested-dom-fullscreen": this._requestedDOMFullscreen,
       "fullscreen-origin-change": this._fullscreenOriginChange,
       "exit-dom-fullscreen": this._exitDomFullscreen,
       "got-visible": this._gotDOMRequestResult,
-      "visibilitychange": this._childVisibilityChange,
       "got-set-input-method-active": this._gotDOMRequestResult,
       "scrollviewchange": this._handleScrollViewChange,
       "caretstatechanged": this._handleCaretStateChanged,
       "findchange": this._handleFindChange,
       "execute-script-done": this._gotDOMRequestResult,
-      "got-audio-channel-volume": this._gotDOMRequestResult,
-      "got-set-audio-channel-volume": this._gotDOMRequestResult,
-      "got-audio-channel-muted": this._gotDOMRequestResult,
-      "got-set-audio-channel-muted": this._gotDOMRequestResult,
-      "got-is-audio-channel-active": this._gotDOMRequestResult,
       "got-web-manifest": this._gotDOMRequestResult,
     };
 
@@ -535,26 +527,6 @@ BrowserElementParent.prototype = {
     }
   },
 
-  setVisible: defineNoReturnMethod(function(visible) {
-    this._sendAsyncMsg('set-visible', {visible: visible});
-    this._frameLoader.visible = visible;
-  }),
-
-  getVisible: defineDOMRequestMethod('get-visible'),
-
-  setActive: defineNoReturnMethod(function(active) {
-    this._frameLoader.visible = active;
-  }),
-
-  getActive: function() {
-    if (!this._isAlive()) {
-      throw Components.Exception("Dead content process",
-                                 Cr.NS_ERROR_DOM_INVALID_STATE_ERR);
-    }
-
-    return this._frameLoader.visible;
-  },
-
   getChildProcessOffset: function() {
     let offset = { x: 0, y: 0 };
     let tabParent = this._frameLoader.tabParent;
@@ -627,22 +599,6 @@ BrowserElementParent.prototype = {
 
   clearMatch: defineNoReturnMethod(function() {
     return this._sendAsyncMsg('clear-match');
-  }),
-
-  mute: defineNoReturnMethod(function() {
-    this._sendAsyncMsg('mute');
-  }),
-
-  unmute: defineNoReturnMethod(function() {
-    this._sendAsyncMsg('unmute');
-  }),
-
-  getMuted: defineDOMRequestMethod('get-muted'),
-
-  getVolume: defineDOMRequestMethod('get-volume'),
-
-  setVolume: defineNoReturnMethod(function(volume) {
-    this._sendAsyncMsg('set-volume', {volume});
   }),
 
   goBack: defineNoReturnMethod(function() {
@@ -896,33 +852,6 @@ BrowserElementParent.prototype = {
     }
   },
 
-  getAudioChannelVolume: function(aAudioChannel) {
-    return this._sendDOMRequest('get-audio-channel-volume',
-                                {audioChannel: aAudioChannel});
-  },
-
-  setAudioChannelVolume: function(aAudioChannel, aVolume) {
-    return this._sendDOMRequest('set-audio-channel-volume',
-                                {audioChannel: aAudioChannel,
-                                 volume: aVolume});
-  },
-
-  getAudioChannelMuted: function(aAudioChannel) {
-    return this._sendDOMRequest('get-audio-channel-muted',
-                                {audioChannel: aAudioChannel});
-  },
-
-  setAudioChannelMuted: function(aAudioChannel, aMuted) {
-    return this._sendDOMRequest('set-audio-channel-muted',
-                                {audioChannel: aAudioChannel,
-                                 muted: aMuted});
-  },
-
-  isAudioChannelActive: function(aAudioChannel) {
-    return this._sendDOMRequest('get-is-audio-channel-active',
-                                {audioChannel: aAudioChannel});
-  },
-
   getWebManifest: defineDOMRequestMethod('get-web-manifest'),
   /**
    * Called when the visibility of the window which owns this iframe changes.
@@ -930,21 +859,6 @@ BrowserElementParent.prototype = {
   _ownerVisibilityChange: function() {
     this._sendAsyncMsg('owner-visibility-change',
                        {visible: !this._window.document.hidden});
-  },
-
-  /*
-   * Called when the child notices that its visibility has changed.
-   *
-   * This is sometimes redundant; for example, the child's visibility may
-   * change in response to a setVisible request that we made here!  But it's
-   * not always redundant; for example, the child's visibility may change in
-   * response to its parent docshell being hidden.
-   */
-  _childVisibilityChange: function(data) {
-    debug("_childVisibilityChange(" + data.json.visible + ")");
-    this._frameLoader.visible = data.json.visible;
-
-    this._fireEventFromMsg(data);
   },
 
   _requestedDOMFullscreen: function() {

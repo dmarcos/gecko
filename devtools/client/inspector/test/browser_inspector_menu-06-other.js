@@ -10,6 +10,7 @@ add_task(function* () {
   yield testShowDOMProperties();
   yield testDuplicateNode();
   yield testDeleteNode();
+  yield testDeleteTextNode();
   yield testDeleteRootNode();
   yield testScrollIntoView();
   function* testShowDOMProperties() {
@@ -72,6 +73,28 @@ add_task(function* () {
     ok(!(yield testActor.hasNode("#delete")), "Node deleted");
   }
 
+  function* testDeleteTextNode() {
+    info("Testing 'Delete Node' menu item for text elements.");
+    let { walker } = inspector;
+    let divBefore = yield walker.querySelector(walker.rootNode, "#nestedHiddenElement");
+    let { nodes } = yield walker.children(divBefore);
+    yield selectNode(nodes[0], inspector, "test-highlight");
+
+    let allMenuItems = openContextMenuAndGetAllItems(inspector);
+    let deleteNode = allMenuItems.find(item => item.id === "node-menu-delete");
+    ok(deleteNode, "the popup menu has a delete menu item");
+    ok(deleteNode.disabled == false, "the delete menu item is not disabled");
+    let updated = inspector.once("inspector-updated");
+
+    info("Triggering 'Delete Node' and waiting for inspector to update");
+    deleteNode.click();
+    yield updated;
+
+    let divAfter = yield walker.querySelector(walker.rootNode, "#nestedHiddenElement");
+    let nodesAfter = (yield walker.children(divAfter)).nodes;
+    ok(nodesAfter.length == 0, "the node still had children");
+  }
+
   function* testDeleteRootNode() {
     info("Testing 'Delete Node' menu item does not delete root node.");
     yield selectNode("html", inspector);
@@ -80,11 +103,11 @@ add_task(function* () {
     let deleteNode = allMenuItems.find(item => item.id === "node-menu-delete");
     deleteNode.click();
 
-    let deferred = defer();
-    executeSoon(deferred.resolve);
-    yield deferred.promise;
+    yield new Promise(resolve => {
+      executeSoon(resolve);
+    });
 
-    ok((yield testActor.eval("!!content.document.documentElement")),
+    ok((yield testActor.eval("!!document.documentElement")),
        "Document element still alive.");
   }
 

@@ -14,7 +14,7 @@
 
 #include "nsISupports.h"
 
-class nsIAtom;
+class nsAtom;
 class nsIContent;
 class nsIDocument;
 class nsIRDFNode;
@@ -22,6 +22,12 @@ class nsIRDFResource;
 class nsIRDFLiteral;
 class nsIRDFService;
 class nsICollation;
+
+namespace mozilla {
+namespace dom {
+class Element;
+}
+}
 
 // errors to pass to LogTemplateError
 #define ERROR_TEMPLATE_INVALID_QUERYPROCESSOR                           \
@@ -102,8 +108,8 @@ public:
     static nsresult
     FindChildByTag(nsIContent *aElement,
                    int32_t aNameSpaceID,
-                   nsIAtom* aTag,
-                   nsIContent **aResult);
+                   nsAtom* aTag,
+                   mozilla::dom::Element** aResult);
 
     static nsresult
     FindChildByResource(nsIContent* aElement,
@@ -114,7 +120,7 @@ public:
     GetTextForNode(nsIRDFNode* aNode, nsAString& aResult);
 
     static nsresult
-    GetResource(int32_t aNameSpaceID, nsIAtom* aAttribute, nsIRDFResource** aResult);
+    GetResource(int32_t aNameSpaceID, nsAtom* aAttribute, nsIRDFResource** aResult);
 
     static nsresult
     GetResource(int32_t aNameSpaceID, const nsAString& aAttribute, nsIRDFResource** aResult);

@@ -194,7 +194,7 @@ mozilla::StyleSheet*
 nsXULPrototypeCache::GetStyleSheet(nsIURI* aURI,
                                    StyleBackendType aType)
 {
-    StyleSheetTable& table = TableForBackendType(aType);
+    StyleSheetTable& table = StyleSheetTableFor(aType);
     return table.GetWeak(aURI);
 }
 
@@ -204,7 +204,7 @@ nsXULPrototypeCache::PutStyleSheet(StyleSheet* aStyleSheet,
 {
     nsIURI* uri = aStyleSheet->GetSheetURI();
 
-    StyleSheetTable& table = TableForBackendType(aType);
+    StyleSheetTable& table = StyleSheetTableFor(aType);
     table.Put(uri, aStyleSheet);
 
     return NS_OK;
@@ -238,50 +238,62 @@ nsXULPrototypeCache::PutScript(nsIURI* aURI,
     return NS_OK;
 }
 
+nsXBLDocumentInfo*
+nsXULPrototypeCache::GetXBLDocumentInfo(nsIURI* aURL,
+                                        StyleBackendType aType)
+{
+  MOZ_ASSERT(aType != StyleBackendType::None,
+             "Please use either gecko or servo when looking up for the cache!");
+  return XBLDocTableFor(aType).GetWeak(aURL);
+}
+
 nsresult
 nsXULPrototypeCache::PutXBLDocumentInfo(nsXBLDocumentInfo* aDocumentInfo)
 {
-    nsIURI* uri = aDocumentInfo->DocumentURI();
+  nsIURI* uri = aDocumentInfo->DocumentURI();
+  XBLDocTable& table =
+    XBLDocTableFor(aDocumentInfo->GetDocument()->GetStyleBackendType());
 
-    RefPtr<nsXBLDocumentInfo> info;
-    mXBLDocTable.Get(uri, getter_AddRefs(info));
-    if (!info) {
-        mXBLDocTable.Put(uri, aDocumentInfo);
-    }
-    return NS_OK;
+  nsXBLDocumentInfo* info = table.GetWeak(uri);
+  if (!info) {
+    table.Put(uri, aDocumentInfo);
+  }
+  return NS_OK;
 }
 
 void
 nsXULPrototypeCache::FlushSkinFiles()
 {
-  // Flush out skin XBL files from the cache.
-  for (auto iter = mXBLDocTable.Iter(); !iter.Done(); iter.Next()) {
-    nsAutoCString str;
-    iter.Key()->GetPath(str);
-    if (strncmp(str.get(), "/skin", 5) == 0) {
-      iter.Remove();
-    }
-  }
+  StyleBackendType tableTypes[] = { StyleBackendType::Gecko,
+                                    StyleBackendType::Servo };
 
-  // Now flush out our skin stylesheets from the cache.
-  mozilla::StyleBackendType tableTypes[] = { StyleBackendType::Gecko,
-                                             StyleBackendType::Servo };
   for (auto tableType : tableTypes) {
-    StyleSheetTable& table = TableForBackendType(tableType);
-    for (auto iter = table.Iter(); !iter.Done(); iter.Next()) {
+    // Flush out skin XBL files from the cache.
+    XBLDocTable& xblDocTable = XBLDocTableFor(tableType);
+    for (auto iter = xblDocTable.Iter(); !iter.Done(); iter.Next()) {
       nsAutoCString str;
-      iter.Data()->GetSheetURI()->GetPath(str);
+      iter.Key()->GetPathQueryRef(str);
       if (strncmp(str.get(), "/skin", 5) == 0) {
         iter.Remove();
       }
     }
-  }
 
-  // Iterate over all the remaining XBL and make sure cached
-  // scoped skin stylesheets are flushed and refetched by the
-  // prototype bindings.
-  for (auto iter = mXBLDocTable.Iter(); !iter.Done(); iter.Next()) {
-    iter.Data()->FlushSkinStylesheets();
+    // Now flush out our skin stylesheets from the cache.
+    StyleSheetTable& table = StyleSheetTableFor(tableType);
+    for (auto iter = table.Iter(); !iter.Done(); iter.Next()) {
+      nsAutoCString str;
+      iter.Data()->GetSheetURI()->GetPathQueryRef(str);
+      if (strncmp(str.get(), "/skin", 5) == 0) {
+        iter.Remove();
+      }
+    }
+
+    // Iterate over all the remaining XBL and make sure cached
+    // scoped skin stylesheets are flushed and refetched by the
+    // prototype bindings.
+    for (auto iter = xblDocTable.Iter(); !iter.Done(); iter.Next()) {
+      iter.Data()->FlushSkinStylesheets();
+    }
   }
 }
 
@@ -298,7 +310,8 @@ nsXULPrototypeCache::Flush()
     mScriptTable.Clear();
     mGeckoStyleSheetTable.Clear();
     mServoStyleSheetTable.Clear();
-    mXBLDocTable.Clear();
+    mGeckoXBLDocTable.Clear();
+    mServoXBLDocTable.Clear();
 }
 
 
@@ -386,11 +399,15 @@ nsXULPrototypeCache::GetOutputStream(nsIURI* uri, nsIObjectOutputStream** stream
     nsCOMPtr<nsIStorageStream> storageStream;
     bool found = mOutputStreamTable.Get(uri, getter_AddRefs(storageStream));
     if (found) {
-        objectOutput = do_CreateInstance("mozilla.org/binaryoutputstream;1");
-        if (!objectOutput) return NS_ERROR_OUT_OF_MEMORY;
+        // Setting an output stream here causes crashes on Windows. The previous
+        // version of this code always returned NS_ERROR_OUT_OF_MEMORY here,
+        // because it used a mistyped contract ID to create its object stream.
+        return NS_ERROR_NOT_IMPLEMENTED;
+#if 0
         nsCOMPtr<nsIOutputStream> outputStream
             = do_QueryInterface(storageStream);
-        objectOutput->SetOutputStream(outputStream);
+        objectOutput = NS_NewObjectOutputStream(outputStream);
+#endif
     } else {
         rv = NewObjectOutputWrappedStorageStream(getter_AddRefs(objectOutput),
                                                  getter_AddRefs(storageStream),
@@ -472,7 +489,7 @@ nsXULPrototypeCache::BeginCaching(nsIURI* aURI)
     nsresult rv, tmp;
 
     nsAutoCString path;
-    aURI->GetPath(path);
+    aURI->GetPathQueryRef(path);
     if (!StringEndsWith(path, NS_LITERAL_CSTRING(".xul")))
         return NS_ERROR_NOT_AVAILABLE;
 
@@ -593,8 +610,14 @@ nsXULPrototypeCache::BeginCaching(nsIURI* aURI)
 void
 nsXULPrototypeCache::MarkInCCGeneration(uint32_t aGeneration)
 {
-    for (auto iter = mXBLDocTable.Iter(); !iter.Done(); iter.Next()) {
-        iter.Data()->MarkInCCGeneration(aGeneration);
+    StyleBackendType tableTypes[] = { StyleBackendType::Gecko,
+                                      StyleBackendType::Servo };
+
+    for (auto tableType : tableTypes) {
+        XBLDocTable& xblDocTable = XBLDocTableFor(tableType);
+        for (auto iter = xblDocTable.Iter(); !iter.Done(); iter.Next()) {
+            iter.Data()->MarkInCCGeneration(aGeneration);
+        }
     }
     for (auto iter = mPrototypeTable.Iter(); !iter.Done(); iter.Next()) {
         iter.Data()->MarkInCCGeneration(aGeneration);

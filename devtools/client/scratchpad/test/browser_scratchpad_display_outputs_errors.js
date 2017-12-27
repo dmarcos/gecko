@@ -7,13 +7,13 @@ function test()
 {
   waitForExplicitFinish();
 
-  gBrowser.selectedTab = gBrowser.addTab();
-  gBrowser.selectedBrowser.addEventListener("load", function () {
+  gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
+  BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser).then(function () {
     openScratchpad(runTests, {"state":{"text":""}});
-  }, {capture: true, once: true});
+  });
 
-  content.location = "data:text/html,<p>test that exceptions are output as " +
-      "comments for 'display' and not sent to the console in Scratchpad";
+  gBrowser.loadURI("data:text/html,<p>test that exceptions are output as " +
+                   "comments for 'display' and not sent to the console in Scratchpad");
 }
 
 function runTests()

@@ -7,7 +7,7 @@
 DEFINES['MOZ_APP_VERSION'] = CONFIG['MOZ_APP_VERSION']
 DEFINES['MOZ_APP_MAXVERSION'] = CONFIG['MOZ_APP_MAXVERSION']
 
-DIRS += ['locale']
+DIRS += ['locales']
 
 FINAL_TARGET_FILES.features['formautofill@mozilla.org'] += [
   'bootstrap.js'
@@ -21,7 +21,11 @@ BROWSER_CHROME_MANIFESTS += ['test/browser/browser.ini']
 
 XPCSHELL_TESTS_MANIFESTS += ['test/unit/xpcshell.ini']
 
+MOCHITEST_MANIFESTS += ['test/mochitest/mochitest.ini']
+
 JAR_MANIFESTS += ['jar.mn']
 
+SPHINX_TREES['docs'] = 'docs'
+
 with Files('**'):
-    BUG_COMPONENT = ('Toolkit', 'Form Manager')
+    BUG_COMPONENT = ('Toolkit', 'Form Autofill')

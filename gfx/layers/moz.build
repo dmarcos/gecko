@@ -41,7 +41,6 @@ EXPORTS += [
     'LayerTreeInvalidation.h',
     'LayerUserData.h',
     'opengl/OGLShaderProgram.h',
-    'opengl/TexturePoolOGL.h',
     'protobuf/LayerScopePacket.pb.h',
     'ReadbackLayer.h',
     'TiledLayerBuffer.h',
@@ -50,6 +49,7 @@ EXPORTS += [
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
     SOURCES += [
         'D3D11ShareHandleImage.cpp',
+        'D3D11YCbCrImage.cpp',
     ]
     UNIFIED_SOURCES += [
         'D3D9SurfaceImage.cpp',
@@ -62,17 +62,22 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
     if CONFIG['MOZ_ENABLE_D3D10_LAYER']:
         EXPORTS.mozilla.layers += [
             'd3d11/CompositorD3D11.h',
+            'd3d11/DeviceAttachmentsD3D11.h',
             'd3d11/DiagnosticsD3D11.h',
             'd3d11/HelpersD3D11.h',
+            'd3d11/MLGDeviceD3D11.h',
             'd3d11/ReadbackManagerD3D11.h',
+            'd3d11/ShaderDefinitionsD3D11.h',
             'd3d11/TextureD3D11.h',
         ]
         UNIFIED_SOURCES += [
             'd3d11/DiagnosticsD3D11.cpp',
+            'd3d11/MLGDeviceD3D11.cpp',
             'd3d11/TextureD3D11.cpp',
         ]
         SOURCES += [
             'd3d11/CompositorD3D11.cpp',
+            'd3d11/DeviceAttachmentsD3D11.cpp',
             'd3d11/ReadbackManagerD3D11.cpp',
         ]
 
@@ -86,6 +91,7 @@ EXPORTS.mozilla.dom += [
 
 EXPORTS.mozilla.layers += [
     'AnimationHelper.h',
+    'AnimationInfo.h',
     'apz/public/CompositorController.h',
     'apz/public/GeckoContentController.h',
     'apz/public/IAPZCTreeManager.h',
@@ -96,6 +102,10 @@ EXPORTS.mozilla.layers += [
     'apz/src/APZUtils.h',
     'apz/src/AsyncDragMetrics.h',
     'apz/src/AsyncPanZoomAnimation.h',
+    'apz/src/FocusState.h',
+    'apz/src/FocusTarget.h',
+    'apz/src/KeyboardMap.h',
+    'apz/src/KeyboardScrollAction.h',
     'apz/src/TouchCounter.h',
     'apz/testutil/APZTestData.h',
     'apz/util/ActiveElementManager.h',
@@ -118,6 +128,7 @@ EXPORTS.mozilla.layers += [
     'basic/TextureHostBasic.h',
     'BSPTree.h',
     'BufferTexture.h',
+    'CanvasRenderer.h',
     'client/CanvasClient.h',
     'client/CompositableClient.h',
     'client/ContentClient.h',
@@ -144,12 +155,16 @@ EXPORTS.mozilla.layers += [
     'composite/ImageLayerComposite.h',
     'composite/LayerManagerComposite.h',
     'composite/PaintedLayerComposite.h',
+    'composite/TextRenderer.h',
     'composite/TextureHost.h',
     'composite/TiledContentHost.h',
     'Compositor.h',
     'CompositorTypes.h',
+    'CopyableCanvasRenderer.h',
     'D3D11ShareHandleImage.h',
+    'D3D11YCbCrImage.h',
     'D3D9SurfaceImage.h',
+    'DirectionUtils.h',
     'Effects.h',
     'ImageDataSerializer.h',
     'ipc/APZChild.h',
@@ -159,6 +174,8 @@ EXPORTS.mozilla.layers += [
     'ipc/CompositableTransactionParent.h',
     'ipc/CompositorBridgeChild.h',
     'ipc/CompositorBridgeParent.h',
+    'ipc/CompositorManagerChild.h',
+    'ipc/CompositorManagerParent.h',
     'ipc/CompositorThread.h',
     'ipc/CompositorVsyncScheduler.h',
     'ipc/CompositorVsyncSchedulerOwner.h',
@@ -168,6 +185,7 @@ EXPORTS.mozilla.layers += [
     'ipc/ISurfaceAllocator.h',
     'ipc/KnowsCompositor.h',
     'ipc/LayerAnimationUtils.h',
+    'ipc/LayersMessageUtils.h',
     'ipc/LayerTransactionChild.h',
     'ipc/LayerTransactionParent.h',
     'ipc/LayerTreeOwnerTracker.h',
@@ -175,37 +193,60 @@ EXPORTS.mozilla.layers += [
     'ipc/ShadowLayers.h',
     'ipc/SharedPlanarYCbCrImage.h',
     'ipc/SharedRGBImage.h',
+    'ipc/SharedSurfacesChild.h',
+    'ipc/SharedSurfacesParent.h',
     'ipc/SynchronousTask.h',
     'ipc/TextureForwarder.h',
     'ipc/UiCompositorControllerChild.h',
+    'ipc/UiCompositorControllerMessageTypes.h',
     'ipc/UiCompositorControllerParent.h',
     'ipc/VideoBridgeChild.h',
     'ipc/VideoBridgeParent.h',
     'LayerAttributes.h',
     'LayerMetricsWrapper.h',
+    'LayersHelpers.h',
     'LayersTypes.h',
+    'mlgpu/LayerManagerMLGPU.h',
+    'mlgpu/LayerMLGPU.h',
+    'mlgpu/MemoryReportingMLGPU.h',
+    'mlgpu/MLGDevice.h',
+    'mlgpu/MLGDeviceTypes.h',
+    'mlgpu/ShaderDefinitionsMLGPU.h',
+    'mlgpu/UtilityMLGPU.h',
     'opengl/CompositingRenderTargetOGL.h',
     'opengl/CompositorOGL.h',
     'opengl/MacIOSurfaceTextureClientOGL.h',
     'opengl/MacIOSurfaceTextureHostOGL.h',
     'opengl/TextureClientOGL.h',
     'opengl/TextureHostOGL.h',
+    'PaintThread.h',
     'PersistentBufferProvider.h',
     'RenderTrace.h',
+    'RotatedBuffer.h',
+    'ShareableCanvasRenderer.h',
     'SourceSurfaceSharedData.h',
     'SourceSurfaceVolatileData.h',
+    'SyncObject.h',
     'TextureSourceProvider.h',
     'TextureWrapperImage.h',
     'TransactionIdAllocator.h',
+    'UpdateImageHelper.h',
+    'wr/AsyncImagePipelineManager.h',
+    'wr/IpcResourceUpdateQueue.h',
+    'wr/ScrollingLayersHelper.h',
+    'wr/StackingContextHelper.h',
     'wr/WebRenderBridgeChild.h',
     'wr/WebRenderBridgeParent.h',
-    'wr/WebRenderCompositableHolder.h',
-    'wr/WebRenderDisplayItemLayer.h',
+    'wr/WebRenderCanvasRenderer.h',
+    'wr/WebRenderCommandBuilder.h',
     'wr/WebRenderImageHost.h',
     'wr/WebRenderLayerManager.h',
     'wr/WebRenderLayersLogging.h',
     'wr/WebRenderMessageUtils.h',
+    'wr/WebRenderScrollData.h',
+    'wr/WebRenderScrollDataWrapper.h',
     'wr/WebRenderTextureHost.h',
+    'wr/WebRenderUserData.h',
 ]
 
 if CONFIG['MOZ_X11']:
@@ -245,20 +286,32 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
     UNIFIED_SOURCES += [
         'apz/src/AndroidAPZ.cpp',
+        'apz/src/AndroidDynamicToolbarAnimator.cpp',
+    ]
+    EXPORTS.mozilla.layers += [
+        'apz/src/AndroidDynamicToolbarAnimator.h',
     ]
 
 UNIFIED_SOURCES += [
     'AnimationHelper.cpp',
+    'AnimationInfo.cpp',
     'apz/public/IAPZCTreeManager.cpp',
     'apz/src/APZCTreeManager.cpp',
     'apz/src/AsyncPanZoomController.cpp',
+    'apz/src/AutoscrollAnimation.cpp',
     'apz/src/Axis.cpp',
     'apz/src/CheckerboardEvent.cpp',
     'apz/src/DragTracker.cpp',
+    'apz/src/FocusState.cpp',
+    'apz/src/FocusTarget.cpp',
+    'apz/src/GenericScrollAnimation.cpp',
     'apz/src/GestureEventListener.cpp',
     'apz/src/HitTestingTreeNode.cpp',
     'apz/src/InputBlockState.cpp',
     'apz/src/InputQueue.cpp',
+    'apz/src/KeyboardMap.cpp',
+    'apz/src/KeyboardScrollAction.cpp',
+    'apz/src/KeyboardScrollAnimation.cpp',
     'apz/src/OverscrollHandoffState.cpp',
     'apz/src/PotentialCheckerboardDurationTracker.cpp',
     'apz/src/QueuedInput.cpp',
@@ -294,9 +347,11 @@ UNIFIED_SOURCES += [
     'BSPTree.cpp',
     'BufferTexture.cpp',
     'BufferUnrotate.cpp',
+    'CanvasRenderer.cpp',
     'client/CanvasClient.cpp',
     'client/ClientBorderLayer.cpp',
     'client/ClientCanvasLayer.cpp',
+    'client/ClientCanvasRenderer.cpp',
     'client/ClientColorLayer.cpp',
     'client/ClientContainerLayer.cpp',
     'client/ClientImageLayer.cpp',
@@ -334,7 +389,7 @@ UNIFIED_SOURCES += [
     'composite/TextureHost.cpp',
     'composite/TiledContentHost.cpp',
     'Compositor.cpp',
-    'CopyableCanvasLayer.cpp',
+    'CopyableCanvasRenderer.cpp',
     'Effects.cpp',
     'FrameMetrics.cpp',
     'GLImages.cpp',
@@ -347,6 +402,8 @@ UNIFIED_SOURCES += [
     'ipc/CompositorBench.cpp',
     'ipc/CompositorBridgeChild.cpp',
     'ipc/CompositorBridgeParent.cpp',
+    'ipc/CompositorManagerChild.cpp',
+    'ipc/CompositorManagerParent.cpp',
     'ipc/CompositorThread.cpp',
     'ipc/CompositorVsyncScheduler.cpp',
     'ipc/CrossProcessCompositorBridgeParent.cpp',
@@ -361,42 +418,63 @@ UNIFIED_SOURCES += [
     'ipc/ShadowLayers.cpp',
     'ipc/SharedPlanarYCbCrImage.cpp',
     'ipc/SharedRGBImage.cpp',
+    'ipc/SharedSurfacesChild.cpp',
+    'ipc/SharedSurfacesParent.cpp',
     'ipc/UiCompositorControllerChild.cpp',
     'ipc/UiCompositorControllerParent.cpp',
     'ipc/VideoBridgeChild.cpp',
     'ipc/VideoBridgeParent.cpp',
     'LayerScope.cpp',
+    'LayersHelpers.cpp',
     'LayersLogging.cpp',
     'LayerSorter.cpp',
+    'LayersTypes.cpp',
+    'mlgpu/BufferCache.cpp',
+    'mlgpu/CanvasLayerMLGPU.cpp',
+    'mlgpu/ContainerLayerMLGPU.cpp',
+    'mlgpu/FrameBuilder.cpp',
+    'mlgpu/ImageLayerMLGPU.cpp',
+    'mlgpu/LayerManagerMLGPU.cpp',
+    'mlgpu/LayerMLGPU.cpp',
+    'mlgpu/MaskOperation.cpp',
+    'mlgpu/MemoryReportingMLGPU.cpp',
+    'mlgpu/MLGDevice.cpp',
+    'mlgpu/PaintedLayerMLGPU.cpp',
+    'mlgpu/RenderPassMLGPU.cpp',
+    'mlgpu/RenderViewMLGPU.cpp',
+    'mlgpu/SharedBufferMLGPU.cpp',
+    'mlgpu/StagingBuffer.cpp',
+    'mlgpu/TexturedLayerMLGPU.cpp',
+    'mlgpu/TextureSourceProviderMLGPU.cpp',
     'opengl/CompositingRenderTargetOGL.cpp',
     'opengl/CompositorOGL.cpp',
     'opengl/GLBlitTextureImageHelper.cpp',
     'opengl/OGLShaderProgram.cpp',
     'opengl/TextureClientOGL.cpp',
     'opengl/TextureHostOGL.cpp',
-    'opengl/TexturePoolOGL.cpp',
-    'protobuf/LayerScopePacket.pb.cc',
+    'PaintThread.cpp',
     'ReadbackProcessor.cpp',
     'RenderTrace.cpp',
     'RotatedBuffer.cpp',
-    'ShareableCanvasLayer.cpp',
+    'ShareableCanvasRenderer.cpp',
     'SourceSurfaceSharedData.cpp',
     'SourceSurfaceVolatileData.cpp',
+    'SyncObject.cpp',
     'TextureSourceProvider.cpp',
     'TextureWrapperImage.cpp',
+    'wr/AsyncImagePipelineManager.cpp',
+    'wr/IpcResourceUpdateQueue.cpp',
+    'wr/ScrollingLayersHelper.cpp',
+    'wr/StackingContextHelper.cpp',
     'wr/WebRenderBridgeChild.cpp',
     'wr/WebRenderBridgeParent.cpp',
-    'wr/WebRenderCanvasLayer.cpp',
-    'wr/WebRenderColorLayer.cpp',
-    'wr/WebRenderCompositableHolder.cpp',
-    'wr/WebRenderContainerLayer.cpp',
-    'wr/WebRenderDisplayItemLayer.cpp',
+    'wr/WebRenderCanvasRenderer.cpp',
+    'wr/WebRenderCommandBuilder.cpp',
     'wr/WebRenderImageHost.cpp',
-    'wr/WebRenderImageLayer.cpp',
     'wr/WebRenderLayerManager.cpp',
     'wr/WebRenderLayersLogging.cpp',
-    'wr/WebRenderPaintedLayer.cpp',
-    'wr/WebRenderTextLayer.cpp',
+    'wr/WebRenderScrollData.cpp',
+    'wr/WebRenderUserData.cpp',
     # XXX here are some unified build error.
     #'wr/WebRenderTextureHost.cpp'
 ]
@@ -407,14 +485,15 @@ SOURCES += [
     'Layers.cpp',
     'LayerTreeInvalidation.cpp',
     'PersistentBufferProvider.cpp',
+    'protobuf/LayerScopePacket.pb.cc',
     'wr/WebRenderTextureHost.cpp',
 ]
 
-# Disable RTTI in google protocol buffer
 DEFINES['GOOGLE_PROTOBUF_NO_RTTI'] = True
+DEFINES['GOOGLE_PROTOBUF_NO_STATIC_INITIALIZER'] = True
 
 # Workaround compiler bug (Bug 795594)
-if CONFIG['_MSC_VER'] and CONFIG['CPU_ARCH'] == 'x86_64':
+if CONFIG['CC_TYPE'] in ('msvc', 'clang-cl') and CONFIG['CPU_ARCH'] == 'x86_64':
     for src in [
         'Layers.cpp',
         'LayerTreeInvalidation.cpp',
@@ -434,6 +513,7 @@ IPDL_SOURCES += [
     'ipc/PAPZ.ipdl',
     'ipc/PAPZCTreeManager.ipdl',
     'ipc/PCompositorBridge.ipdl',
+    'ipc/PCompositorManager.ipdl',
     'ipc/PImageBridge.ipdl',
     'ipc/PLayerTransaction.ipdl',
     'ipc/PTexture.ipdl',
@@ -444,6 +524,19 @@ IPDL_SOURCES += [
 ]
 
 include('/ipc/chromium/chromium-config.mozbuild')
+
+if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
+  GENERATED_FILES = [
+      'CompositorD3D11Shaders.h',
+      'MLGShaders.h',
+  ]
+
+  d3d11_shaders = GENERATED_FILES['CompositorD3D11Shaders.h']
+  d3d11_shaders.script = 'd3d11/genshaders.py'
+  d3d11_shaders.inputs = ['d3d11/shaders.manifest']
+  mlg_shaders = GENERATED_FILES['MLGShaders.h']
+  mlg_shaders.script = 'd3d11/genshaders.py'
+  mlg_shaders.inputs = ['d3d11/mlgshaders/shaders.manifest']
 
 LOCAL_INCLUDES += [
     '/docshell/base',  # for nsDocShell.h
@@ -471,8 +564,12 @@ CXXFLAGS += CONFIG['TK_CFLAGS']
 
 LOCAL_INCLUDES += CONFIG['SKIA_INCLUDES']
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']
+    # Suppress warnings in third-party code.
+    CXXFLAGS += [
+        '-Wno-maybe-uninitialized'
+    ]
 
 if CONFIG['MOZ_ENABLE_SKIA']:
   UNIFIED_SOURCES += [

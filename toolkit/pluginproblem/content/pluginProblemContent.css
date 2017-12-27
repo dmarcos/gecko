@@ -49,6 +49,11 @@ a .mainBox:focus,
   word-spacing: initial;
   letter-spacing: initial;
   line-height: initial;
+  visibility: hidden;
+}
+
+.visible {
+  visibility: visible;
 }
 
 /* Initialize the overlay with visibility:hidden to prevent flickering if
@@ -86,14 +91,12 @@ a .hoverBox,
 }
 
 a .msgClickToPlay,
-a .msgTapToPlay,
 :-moz-handler-clicktoplay .msgClickToPlay,
 :-moz-handler-vulnerable-updatable .msgVulnerabilityStatus,
 :-moz-handler-vulnerable-updatable .msgCheckForUpdates,
 :-moz-handler-vulnerable-updatable .msgClickToPlay,
 :-moz-handler-vulnerable-no-update .msgVulnerabilityStatus,
 :-moz-handler-vulnerable-no-update .msgClickToPlay,
-:-moz-handler-clicktoplay .msgTapToPlay,
 :-moz-handler-blocked .msgBlocked,
 :-moz-handler-crashed .msgCrashed {
   display: block;

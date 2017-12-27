@@ -127,16 +127,19 @@ BoxModel.prototype = {
     }
 
     let lastRequest = Task.spawn((function* () {
-      if (!(this.isPanelVisible() &&
-          this.inspector.selection.isConnected() &&
-          this.inspector.selection.isElementNode())) {
+      if (!this.inspector ||
+          !this.isPanelVisible() ||
+          !this.inspector.selection.isConnected() ||
+          !this.inspector.selection.isElementNode()) {
         return null;
       }
 
       let node = this.inspector.selection.nodeFront;
+
       let layout = yield this.inspector.pageStyle.getLayout(node, {
         autoMargins: true,
       });
+
       let styleEntries = yield this.inspector.pageStyle.getApplied(node, {
         // We don't need styles applied to pseudo elements of the current node.
         skipPseudo: true
@@ -146,12 +149,13 @@ BoxModel.prototype = {
       // Update the layout properties with whether or not the element's position is
       // editable with the geometry editor.
       let isPositionEditable = yield this.inspector.pageStyle.isPositionEditable(node);
+
       layout = Object.assign({}, layout, {
         isPositionEditable,
       });
 
-      const actorCanGetOffSetParent
-        = yield this.inspector.target.actorHasMethod("domwalker", "getOffsetParent");
+      const actorCanGetOffSetParent =
+        yield this.inspector.target.actorHasMethod("domwalker", "getOffsetParent");
 
       if (actorCanGetOffSetParent) {
         // Update the redux store with the latest offset parent DOM node
@@ -298,29 +302,19 @@ BoxModel.prototype = {
           properties[0].name = property.substring(9);
         }
 
-        session.setProperties(properties).catch(e => console.error(e));
+        session.setProperties(properties).catch(console.error);
       },
       done: (value, commit) => {
         editor.elt.parentNode.classList.remove("boxmodel-editing");
         if (!commit) {
           session.revert().then(() => {
             session.destroy();
-          }, e => console.error(e));
+          }, console.error);
           return;
         }
 
-        if (!this.inspector) {
-          return;
-        }
-
-        let node = this.inspector.selection.nodeFront;
-        this.inspector.pageStyle.getLayout(node, {
-          autoMargins: true,
-        }).then(layout => {
-          this.store.dispatch(updateLayout(layout));
-        }, e => console.error(e));
+        this.updateBoxModel("editable-value-change");
       },
-      contextMenu: this.inspector.onTextBoxContextMenu,
       cssProperties: getCssProperties(this.inspector.toolbox)
     }, event);
   },
@@ -343,10 +337,9 @@ BoxModel.prototype = {
   },
 
   /**
-   * Handler for the inspector sidebar select event. Starts listening for
-   * "grid-layout-changed" if the layout panel is visible. Otherwise, stop
-   * listening for grid layout changes. Finally, refresh the layout view if
-   * it is visible.
+   * Handler for the inspector sidebar select event. Starts tracking reflows if the
+   * layout panel is visible. Otherwise, stop tracking reflows. Finally, refresh the box
+   * model view if it is visible.
    */
   onSidebarSelect() {
     if (!this.isPanelVisible()) {

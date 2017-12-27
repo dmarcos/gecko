@@ -32,17 +32,20 @@ class nsIDocument;
 class nsIURI;
 class nsIChannel;
 class nsIDocShell;
-class nsIAtom;
+class nsAtom;
 class nsIChannel;
 class nsIContent;
 class nsNodeInfoManager;
-class nsScriptLoader;
 class nsIApplicationCache;
 
 namespace mozilla {
 namespace css {
 class Loader;
 } // namespace css
+
+namespace dom {
+class ScriptLoader;
+} // namespace dom
 } // namespace mozilla
 
 #ifdef DEBUG
@@ -69,9 +72,6 @@ extern mozilla::LazyLogModule gContentSinkLogModuleInfo;
 #undef SINK_NO_INCREMENTAL
 
 //----------------------------------------------------------------------
-
-// 1/2 second fudge factor for window creation
-#define NS_DELAY_FOR_WINDOW_CREATION  500000
 
 class nsContentSink : public nsICSSLoaderObserver,
                       public nsSupportsWeakReference,
@@ -113,7 +113,7 @@ class nsContentSink : public nsICSSLoaderObserver,
   virtual void UpdateChildCounts() = 0;
 
   bool IsTimeToNotify();
-  bool LinkContextIsOurDocument(const nsSubstring& aAnchor);
+  bool LinkContextIsOurDocument(const nsAString& aAnchor);
   bool Decode5987Format(nsAString& aEncoded);
 
   static void InitializeStatics();
@@ -148,23 +148,28 @@ protected:
                 nsISupports* aContainer, nsIChannel* aChannel);
 
   nsresult ProcessHTTPHeaders(nsIChannel* aChannel);
-  nsresult ProcessHeaderData(nsIAtom* aHeader, const nsAString& aValue,
+  nsresult ProcessHeaderData(nsAtom* aHeader, const nsAString& aValue,
                              nsIContent* aContent = nullptr);
   nsresult ProcessLinkHeader(const nsAString& aLinkData);
-  nsresult ProcessLink(const nsSubstring& aAnchor,
-                       const nsSubstring& aHref, const nsSubstring& aRel,
-                       const nsSubstring& aTitle, const nsSubstring& aType,
-                       const nsSubstring& aMedia, const nsSubstring& aCrossOrigin);
+  nsresult ProcessLink(const nsAString& aAnchor,
+                       const nsAString& aHref, const nsAString& aRel,
+                       const nsAString& aTitle, const nsAString& aType,
+                       const nsAString& aMedia, const nsAString& aCrossOrigin,
+                       const nsAString& aReferrerPolicy,
+                       const nsAString& aAs);
 
   virtual nsresult ProcessStyleLink(nsIContent* aElement,
-                                    const nsSubstring& aHref,
+                                    const nsAString& aHref,
                                     bool aAlternate,
-                                    const nsSubstring& aTitle,
-                                    const nsSubstring& aType,
-                                    const nsSubstring& aMedia);
+                                    const nsAString& aTitle,
+                                    const nsAString& aType,
+                                    const nsAString& aMedia,
+                                    const nsAString& aReferrerPolicy);
 
-  void PrefetchHref(const nsAString &aHref, nsINode *aSource,
-                    bool aExplicit);
+  void PrefetchPreloadHref(const nsAString &aHref, nsINode *aSource,
+                           uint32_t aLinkTypes, const nsAString& aAs,
+                           const nsAString& aType,
+                           const nsAString& aMedia);
 
   // For PrefetchDNS() aHref can either be the usual
   // URI format or of the form "//www.hostname.com" without a scheme.
@@ -222,7 +227,7 @@ public:
   // when there is no manifest attribute!
   void ProcessOfflineManifest(const nsAString& aManifestSpec);
 
-  // Extracts the manifest attribute from the element if it is the root 
+  // Extracts the manifest attribute from the element if it is the root
   // element and calls the above method.
   void ProcessOfflineManifest(nsIContent *aElement);
 
@@ -276,7 +281,7 @@ protected:
   nsCOMPtr<nsIDocShell>         mDocShell;
   RefPtr<mozilla::css::Loader> mCSSLoader;
   RefPtr<nsNodeInfoManager>   mNodeInfoManager;
-  RefPtr<nsScriptLoader>      mScriptLoader;
+  RefPtr<mozilla::dom::ScriptLoader> mScriptLoader;
 
   // back off timer notification after count
   int32_t mBackoffCount;
@@ -305,7 +310,7 @@ protected:
   // True if this is parser is a fragment parser or an HTML DOMParser.
   // XML DOMParser leaves this to false for now!
   uint8_t mRunsToCompletion : 1;
-  
+
   //
   // -- Can interrupt parsing members --
   //

@@ -22,7 +22,11 @@ struct _XDisplay;
 typedef struct _XDisplay Display;
 #endif // MOZ_X11
 
-class gfxFontconfigUtils;
+namespace mozilla {
+    namespace dom {
+        class SystemFontListEntry;
+    };
+};
 
 class gfxPlatformGtk : public gfxPlatform {
 public:
@@ -33,14 +37,14 @@ public:
         return (gfxPlatformGtk*) gfxPlatform::GetPlatform();
     }
 
+    void ReadSystemFontList(
+        InfallibleTArray<mozilla::dom::SystemFontListEntry>* retValue) override;
+
     virtual already_AddRefed<gfxASurface>
       CreateOffscreenSurface(const IntSize& aSize,
                              gfxImageFormat aFormat) override;
 
-    virtual already_AddRefed<mozilla::gfx::ScaledFont>
-      GetScaledFontForFont(mozilla::gfx::DrawTarget* aTarget, gfxFont *aFont) override;
-
-    virtual nsresult GetFontList(nsIAtom *aLangGroup,
+    virtual nsresult GetFontList(nsAtom *aLangGroup,
                                  const nsACString& aGenericFamily,
                                  nsTArray<nsString>& aListOfFonts) override;
 
@@ -84,13 +88,6 @@ public:
                                            uint32_t aLength) override;
 
     /**
-     * Check whether format is supported on a platform or not (if unclear,
-     * returns true).
-     */
-    virtual bool IsFontFormatSupported(nsIURI *aFontURI,
-                                         uint32_t aFormatFlags) override;
-
-    /**
      * Calls XFlush if xrender is enabled.
      */
     virtual void FlushContentDrawing() override;
@@ -103,8 +100,8 @@ public:
     static GdkDrawable *GetGdkDrawable(cairo_surface_t *target);
 #endif
 
-    static int32_t GetDPI();
-    static double  GetDPIScale();
+    static int32_t GetFontScaleDPI();
+    static double  GetFontScaleFactor();
 
 #ifdef MOZ_X11
     virtual void GetAzureBackendInfo(mozilla::widget::InfoObject &aObj) override {
@@ -145,8 +142,6 @@ public:
 #endif // MOZ_X11
 
 protected:
-    static gfxFontconfigUtils *sFontconfigUtils;
-
     int8_t mMaxGenericSubstitutions;
 
 private:

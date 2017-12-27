@@ -52,6 +52,55 @@ MacroAssembler::move16SignExtend(Register src, Register dest)
     as_sxth(dest, src, 0);
 }
 
+void
+MacroAssembler::moveDoubleToGPR64(FloatRegister src, Register64 dest)
+{
+    ma_vxfer(src, dest.low, dest.high);
+}
+
+void
+MacroAssembler::moveGPR64ToDouble(Register64 src, FloatRegister dest)
+{
+    ma_vxfer(src.low, src.high, dest);
+}
+
+void
+MacroAssembler::move64To32(Register64 src, Register dest)
+{
+    if (src.low != dest)
+        move32(src.low, dest);
+}
+
+void
+MacroAssembler::move32To64ZeroExtend(Register src, Register64 dest)
+{
+    if (src != dest.low)
+        move32(src, dest.low);
+    move32(Imm32(0), dest.high);
+}
+
+void
+MacroAssembler::move8To64SignExtend(Register src, Register64 dest)
+{
+    as_sxtb(dest.low, src, 0);
+    ma_asr(Imm32(31), dest.low, dest.high);
+}
+
+void
+MacroAssembler::move16To64SignExtend(Register src, Register64 dest)
+{
+    as_sxth(dest.low, src, 0);
+    ma_asr(Imm32(31), dest.low, dest.high);
+}
+
+void
+MacroAssembler::move32To64SignExtend(Register src, Register64 dest)
+{
+    if (src != dest.low)
+        move32(src, dest.low);
+    ma_asr(Imm32(31), dest.low, dest.high);
+}
+
 // ===============================================================
 // Logical instructions
 
@@ -323,8 +372,9 @@ void
 MacroAssembler::patchAdd32ToPtr(CodeOffset offset, Imm32 imm)
 {
     ScratchRegisterScope scratch(*this);
-    ma_mov_patch(imm, scratch, Always,
-                 HasMOVWT() ? L_MOVWT : L_LDR, offsetToInstruction(offset));
+    BufferInstructionIterator iter(BufferOffset(offset.offset()), &m_buffer);
+    iter.maybeSkipAutomaticInstructions();
+    ma_mov_patch(imm, scratch, Always, HasMOVWT() ? L_MOVWT : L_LDR, iter);
 }
 
 void
@@ -1457,6 +1507,12 @@ MacroAssembler::branchPtr(Condition cond, wasm::SymbolicAddress lhs, Register rh
     branchPtr(cond, scratch2, rhs, label);
 }
 
+void
+MacroAssembler::branchPtr(Condition cond, const BaseIndex& lhs, ImmWord rhs, Label* label)
+{
+    branch32(cond, lhs, Imm32(rhs.value), label);
+}
+
 template <typename T>
 inline CodeOffsetJump
 MacroAssembler::branchPtrWithPatch(Condition cond, Register lhs, T rhs, RepatchLabel* label)
@@ -1855,6 +1911,12 @@ MacroAssembler::branchTestString(Condition cond, Register tag, Label* label)
 }
 
 void
+MacroAssembler::branchTestString(Condition cond, const Address& address, Label* label)
+{
+    branchTestStringImpl(cond, address, label);
+}
+
+void
 MacroAssembler::branchTestString(Condition cond, const BaseIndex& address, Label* label)
 {
     branchTestStringImpl(cond, address, label);
@@ -2047,8 +2109,31 @@ MacroAssembler::branchTestMagicImpl(Condition cond, const T& t, L label)
 void
 MacroAssembler::branchTestMagic(Condition cond, const Address& valaddr, JSWhyMagic why, Label* label)
 {
-    branchTestMagic(cond, valaddr, label);
+    MOZ_ASSERT(cond == Assembler::Equal || cond == Assembler::NotEqual);
+
+    Label notMagic;
+    if (cond == Assembler::Equal)
+        branchTestMagic(Assembler::NotEqual, valaddr, &notMagic);
+    else
+        branchTestMagic(Assembler::NotEqual, valaddr, label);
+
     branch32(cond, ToPayload(valaddr), Imm32(why), label);
+    bind(&notMagic);
+}
+
+void
+MacroAssembler::branchToComputedAddress(const BaseIndex& addr)
+{
+    MOZ_ASSERT(addr.base == pc, "Unsupported jump from any other addresses.");
+    MOZ_ASSERT(addr.offset == 0, "NYI: offsets from pc should be shifted by the number of instructions.");
+
+    Register base = addr.base;
+    uint32_t scale = Imm32::ShiftOf(addr.scale).value;
+
+    ma_ldr(DTRAddr(base, DtrRegImmShift(addr.index, LSL, scale)), pc);
+    // When loading from pc, the pc is shifted to the next instruction, we
+    // add one extra instruction to accomodate for this shifted offset.
+    breakpoint();
 }
 
 // ========================================================================

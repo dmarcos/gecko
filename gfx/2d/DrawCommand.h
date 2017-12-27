@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -9,8 +10,11 @@
 #include <math.h>
 
 #include "2D.h"
+#include "Blur.h"
 #include "Filters.h"
 #include <vector>
+#include "CaptureCommandList.h"
+#include "FilterNodeCapture.h"
 
 namespace mozilla {
 namespace gfx {
@@ -28,13 +32,18 @@ enum class CommandType : int8_t {
   STROKE,
   FILL,
   FILLGLYPHS,
+  STROKEGLYPHS,
   MASK,
   MASKSURFACE,
   PUSHCLIP,
   PUSHCLIPRECT,
+  PUSHLAYER,
   POPCLIP,
+  POPLAYER,
   SETTRANSFORM,
-  FLUSH
+  SETPERMITSUBPIXELAA,
+  FLUSH,
+  BLUR
 };
 
 class DrawingCommand
@@ -43,8 +52,8 @@ public:
   virtual ~DrawingCommand() {}
 
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix* aTransform = nullptr) const = 0;
-
   virtual bool GetAffectedRect(Rect& aDeviceRect, const Matrix& aTransform) const { return false; }
+  virtual void CloneInto(CaptureCommandList* aList) = 0;
 
   CommandType GetType() { return mType; }
 
@@ -56,6 +65,33 @@ protected:
 
 private:
   CommandType mType;
+};
+
+#define CLONE_INTO(Type) new (aList->Append<Type>()) Type
+
+class StrokeOptionsCommand : public DrawingCommand
+{
+public:
+  StrokeOptionsCommand(CommandType aType,
+                       const StrokeOptions& aStrokeOptions)
+    : DrawingCommand(aType)
+    , mStrokeOptions(aStrokeOptions)
+  {
+    // Stroke Options dashes are owned by the caller.
+    // Have to copy them here so they don't get freed
+    // between now and replay.
+    if (aStrokeOptions.mDashLength) {
+      mDashes.resize(aStrokeOptions.mDashLength);
+      mStrokeOptions.mDashPattern = &mDashes.front();
+      PodCopy(&mDashes.front(), aStrokeOptions.mDashPattern, mStrokeOptions.mDashLength);
+    }
+  }
+
+  virtual ~StrokeOptionsCommand() {}
+
+protected:
+  StrokeOptions mStrokeOptions;
+  std::vector<Float> mDashes;
 };
 
 class StoredPattern
@@ -136,10 +172,16 @@ public:
   {
   }
 
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(DrawSurfaceCommand)(mSurface, mDest, mSource, mSurfOptions, mOptions);
+  }
+
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
   {
     aDT->DrawSurface(mSurface, mDest, mSource, mSurfOptions, mOptions);
   }
+
+  static const bool AffectsSnapshot = true;
 
 private:
   RefPtr<SourceSurface> mSurface;
@@ -147,6 +189,45 @@ private:
   Rect mSource;
   DrawSurfaceOptions mSurfOptions;
   DrawOptions mOptions;
+};
+
+class DrawSurfaceWithShadowCommand : public DrawingCommand
+{
+public:
+  DrawSurfaceWithShadowCommand(SourceSurface *aSurface,
+                               const Point &aDest,
+                               const Color &aColor,
+                               const Point &aOffset,
+                               Float aSigma,
+                               CompositionOp aOperator)
+    : DrawingCommand(CommandType::DRAWSURFACEWITHSHADOW),
+      mSurface(aSurface),
+      mDest(aDest),
+      mColor(aColor),
+      mOffset(aOffset),
+      mSigma(aSigma),
+      mOperator(aOperator)
+  {
+  }
+
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(DrawSurfaceWithShadowCommand)(mSurface, mDest, mColor, mOffset, mSigma, mOperator);
+  }
+
+  virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
+  {
+    aDT->DrawSurfaceWithShadow(mSurface, mDest, mColor, mOffset, mSigma, mOperator);
+  }
+
+  static const bool AffectsSnapshot = true;
+
+private:
+  RefPtr<SourceSurface> mSurface;
+  Point mDest;
+  Color mColor;
+  Point mOffset;
+  Float mSigma;
+  CompositionOp mOperator;
 };
 
 class DrawFilterCommand : public DrawingCommand
@@ -160,10 +241,20 @@ public:
   {
   }
 
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(DrawFilterCommand)(mFilter, mSourceRect, mDestPoint, mOptions);
+  }
+
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
   {
-    aDT->DrawFilter(mFilter, mSourceRect, mDestPoint, mOptions);
+    RefPtr<FilterNode> filter = mFilter;
+    if (mFilter->GetBackendType() == FilterBackend::FILTER_BACKEND_CAPTURE) {
+      filter = static_cast<FilterNodeCapture*>(filter.get())->Validate(aDT);
+    }
+    aDT->DrawFilter(filter, mSourceRect, mDestPoint, mOptions);
   }
+
+  static const bool AffectsSnapshot = true;
 
 private:
   RefPtr<FilterNode> mFilter;
@@ -181,10 +272,16 @@ public:
   {
   }
 
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(ClearRectCommand)(mRect);
+  }
+
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
   {
     aDT->ClearRect(mRect);
   }
+
+  static const bool AffectsSnapshot = true;
 
 private:
   Rect mRect;
@@ -203,6 +300,10 @@ public:
   {
   }
 
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(CopySurfaceCommand)(mSurface, mSourceRect, mDestination);
+  }
+
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix* aTransform) const
   {
     MOZ_ASSERT(!aTransform || !aTransform->HasNonIntegerTranslation());
@@ -212,6 +313,8 @@ public:
     }
     aDT->CopySurface(mSurface, mSourceRect, IntPoint(uint32_t(dest.x), uint32_t(dest.y)));
   }
+
+  static const bool AffectsSnapshot = true;
 
 private:
   RefPtr<SourceSurface> mSurface;
@@ -232,6 +335,10 @@ public:
   {
   }
 
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(FillRectCommand)(mRect, mPattern, mOptions);
+  }
+
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
   {
     aDT->FillRect(mRect, mPattern, mOptions);
@@ -243,30 +350,30 @@ public:
     return true;
   }
 
+  static const bool AffectsSnapshot = true;
+
 private:
   Rect mRect;
   StoredPattern mPattern;
   DrawOptions mOptions;
 };
 
-class StrokeRectCommand : public DrawingCommand
+class StrokeRectCommand : public StrokeOptionsCommand
 {
 public:
   StrokeRectCommand(const Rect& aRect,
                     const Pattern& aPattern,
                     const StrokeOptions& aStrokeOptions,
                     const DrawOptions& aOptions)
-    : DrawingCommand(CommandType::STROKERECT)
+    : StrokeOptionsCommand(CommandType::STROKERECT, aStrokeOptions)
     , mRect(aRect)
     , mPattern(aPattern)
-    , mStrokeOptions(aStrokeOptions)
     , mOptions(aOptions)
   {
-    if (aStrokeOptions.mDashLength) {
-      mDashes.resize(aStrokeOptions.mDashLength);
-      mStrokeOptions.mDashPattern = &mDashes.front();
-      memcpy(&mDashes.front(), aStrokeOptions.mDashPattern, mStrokeOptions.mDashLength * sizeof(Float));
-    }
+  }
+
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(StrokeRectCommand)(mRect, mPattern, mStrokeOptions, mOptions);
   }
 
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
@@ -274,15 +381,15 @@ public:
     aDT->StrokeRect(mRect, mPattern, mStrokeOptions, mOptions);
   }
 
+  static const bool AffectsSnapshot = true;
+
 private:
   Rect mRect;
   StoredPattern mPattern;
-  StrokeOptions mStrokeOptions;
   DrawOptions mOptions;
-  std::vector<Float> mDashes;
 };
 
-class StrokeLineCommand : public DrawingCommand
+class StrokeLineCommand : public StrokeOptionsCommand
 {
 public:
   StrokeLineCommand(const Point& aStart,
@@ -290,13 +397,16 @@ public:
                     const Pattern& aPattern,
                     const StrokeOptions& aStrokeOptions,
                     const DrawOptions& aOptions)
-    : DrawingCommand(CommandType::STROKELINE)
+    : StrokeOptionsCommand(CommandType::STROKELINE, aStrokeOptions)
     , mStart(aStart)
     , mEnd(aEnd)
     , mPattern(aPattern)
-    , mStrokeOptions(aStrokeOptions)
     , mOptions(aOptions)
   {
+  }
+
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(StrokeLineCommand)(mStart, mEnd, mPattern, mStrokeOptions, mOptions);
   }
 
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
@@ -304,11 +414,12 @@ public:
     aDT->StrokeLine(mStart, mEnd, mPattern, mStrokeOptions, mOptions);
   }
 
+  static const bool AffectsSnapshot = true;
+
 private:
   Point mStart;
   Point mEnd;
   StoredPattern mPattern;
-  StrokeOptions mStrokeOptions;
   DrawOptions mOptions;
 };
 
@@ -325,6 +436,10 @@ public:
   {
   }
 
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(FillCommand)(mPath, mPattern, mOptions);
+  }
+
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
   {
     aDT->Fill(mPath, mPattern, mOptions);
@@ -335,6 +450,8 @@ public:
     aDeviceRect = mPath->GetBounds(aTransform);
     return true;
   }
+
+  static const bool AffectsSnapshot = true;
 
 private:
   RefPtr<Path> mPath;
@@ -382,24 +499,23 @@ PathExtentsToMaxStrokeExtents(const StrokeOptions &aStrokeOptions,
   return result;
 }
 
-class StrokeCommand : public DrawingCommand
+
+class StrokeCommand : public StrokeOptionsCommand
 {
 public:
   StrokeCommand(const Path* aPath,
                 const Pattern& aPattern,
                 const StrokeOptions& aStrokeOptions,
                 const DrawOptions& aOptions)
-    : DrawingCommand(CommandType::STROKE)
+    : StrokeOptionsCommand(CommandType::STROKE, aStrokeOptions)
     , mPath(const_cast<Path*>(aPath))
     , mPattern(aPattern)
-    , mStrokeOptions(aStrokeOptions)
     , mOptions(aOptions)
   {
-    if (aStrokeOptions.mDashLength) {
-      mDashes.resize(aStrokeOptions.mDashLength);
-      mStrokeOptions.mDashPattern = &mDashes.front();
-      memcpy(&mDashes.front(), aStrokeOptions.mDashPattern, mStrokeOptions.mDashLength * sizeof(Float));
-    }
+  }
+
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(StrokeCommand)(mPath, mPattern, mStrokeOptions, mOptions);
   }
 
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
@@ -413,12 +529,12 @@ public:
     return true;
   }
 
+  static const bool AffectsSnapshot = true;
+
 private:
   RefPtr<Path> mPath;
   StoredPattern mPattern;
-  StrokeOptions mStrokeOptions;
   DrawOptions mOptions;
-  std::vector<Float> mDashes;
 };
 
 class FillGlyphsCommand : public DrawingCommand
@@ -428,16 +544,22 @@ public:
   FillGlyphsCommand(ScaledFont* aFont,
                     const GlyphBuffer& aBuffer,
                     const Pattern& aPattern,
-                    const DrawOptions& aOptions,
-                    const GlyphRenderingOptions* aRenderingOptions)
+                    const DrawOptions& aOptions)
     : DrawingCommand(CommandType::FILLGLYPHS)
     , mFont(aFont)
     , mPattern(aPattern)
     , mOptions(aOptions)
-    , mRenderingOptions(const_cast<GlyphRenderingOptions*>(aRenderingOptions))
   {
     mGlyphs.resize(aBuffer.mNumGlyphs);
     memcpy(&mGlyphs.front(), aBuffer.mGlyphs, sizeof(Glyph) * aBuffer.mNumGlyphs);
+  }
+
+  void CloneInto(CaptureCommandList* aList) {
+    GlyphBuffer glyphs = {
+      mGlyphs.data(),
+      (uint32_t)mGlyphs.size(),
+    };
+    CLONE_INTO(FillGlyphsCommand)(mFont, glyphs, mPattern, mOptions);
   }
 
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
@@ -445,15 +567,59 @@ public:
     GlyphBuffer buf;
     buf.mNumGlyphs = mGlyphs.size();
     buf.mGlyphs = &mGlyphs.front();
-    aDT->FillGlyphs(mFont, buf, mPattern, mOptions, mRenderingOptions);
+    aDT->FillGlyphs(mFont, buf, mPattern, mOptions);
   }
+
+  static const bool AffectsSnapshot = true;
 
 private:
   RefPtr<ScaledFont> mFont;
   std::vector<Glyph> mGlyphs;
   StoredPattern mPattern;
   DrawOptions mOptions;
-  RefPtr<GlyphRenderingOptions> mRenderingOptions;
+};
+
+class StrokeGlyphsCommand : public StrokeOptionsCommand
+{
+  friend class DrawTargetCaptureImpl;
+public:
+  StrokeGlyphsCommand(ScaledFont* aFont,
+                      const GlyphBuffer& aBuffer,
+                      const Pattern& aPattern,
+                      const StrokeOptions& aStrokeOptions,
+                      const DrawOptions& aOptions)
+    : StrokeOptionsCommand(CommandType::STROKEGLYPHS, aStrokeOptions)
+    , mFont(aFont)
+    , mPattern(aPattern)
+    , mOptions(aOptions)
+  {
+    mGlyphs.resize(aBuffer.mNumGlyphs);
+    memcpy(&mGlyphs.front(), aBuffer.mGlyphs, sizeof(Glyph) * aBuffer.mNumGlyphs);
+  }
+
+  void CloneInto(CaptureCommandList* aList) {
+    GlyphBuffer glyphs = {
+      mGlyphs.data(),
+      (uint32_t)mGlyphs.size(),
+    };
+    CLONE_INTO(StrokeGlyphsCommand)(mFont, glyphs, mPattern, mStrokeOptions, mOptions);
+  }
+
+  virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
+  {
+    GlyphBuffer buf;
+    buf.mNumGlyphs = mGlyphs.size();
+    buf.mGlyphs = &mGlyphs.front();
+    aDT->StrokeGlyphs(mFont, buf, mPattern, mStrokeOptions, mOptions);
+  }
+
+  static const bool AffectsSnapshot = true;
+
+private:
+  RefPtr<ScaledFont> mFont;
+  std::vector<Glyph> mGlyphs;
+  StoredPattern mPattern;
+  DrawOptions mOptions;
 };
 
 class MaskCommand : public DrawingCommand
@@ -469,10 +635,16 @@ public:
   {
   }
 
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(MaskCommand)(mSource, mMask, mOptions);
+  }
+
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
   {
     aDT->Mask(mSource, mMask, mOptions);
   }
+
+  static const bool AffectsSnapshot = true;
 
 private:
   StoredPattern mSource;
@@ -495,10 +667,16 @@ public:
   {
   }
 
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(MaskSurfaceCommand)(mSource, mMask, mOffset, mOptions);
+  }
+
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
   {
     aDT->MaskSurface(mSource, mMask, mOffset, mOptions);
   }
+
+  static const bool AffectsSnapshot = true;
 
 private:
   StoredPattern mSource;
@@ -516,10 +694,16 @@ public:
   {
   }
 
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(PushClipCommand)(mPath);
+  }
+
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
   {
     aDT->PushClip(mPath);
   }
+
+  static const bool AffectsSnapshot = false;
 
 private:
   RefPtr<Path> mPath;
@@ -534,13 +718,59 @@ public:
   {
   }
 
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(PushClipRectCommand)(mRect);
+  }
+
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
   {
     aDT->PushClipRect(mRect);
   }
 
+  static const bool AffectsSnapshot = false;
+
 private:
   Rect mRect;
+};
+
+class PushLayerCommand : public DrawingCommand
+{
+public:
+  PushLayerCommand(const bool aOpaque,
+                   const Float aOpacity,
+                   SourceSurface* aMask,
+                   const Matrix& aMaskTransform,
+                   const IntRect& aBounds,
+                   bool aCopyBackground)
+    : DrawingCommand(CommandType::PUSHLAYER)
+    , mOpaque(aOpaque)
+    , mOpacity(aOpacity)
+    , mMask(aMask)
+    , mMaskTransform(aMaskTransform)
+    , mBounds(aBounds)
+    , mCopyBackground(aCopyBackground)
+  {
+  }
+
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(PushLayerCommand)(mOpaque, mOpacity, mMask, mMaskTransform, mBounds, mCopyBackground);
+  }
+
+  virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
+  {
+    aDT->PushLayer(mOpaque, mOpacity, mMask,
+                   mMaskTransform, mBounds, mCopyBackground);
+  }
+
+  static const bool AffectsSnapshot = false;
+
+private:
+  bool mOpaque;
+  float mOpacity;
+  RefPtr<SourceSurface> mMask;
+  Matrix mMaskTransform;
+  IntRect mBounds;
+  bool mCopyBackground;
 };
 
 class PopClipCommand : public DrawingCommand
@@ -551,10 +781,36 @@ public:
   {
   }
 
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(PopClipCommand)();
+  }
+
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
   {
     aDT->PopClip();
   }
+
+  static const bool AffectsSnapshot = false;
+};
+
+class PopLayerCommand : public DrawingCommand
+{
+public:
+  PopLayerCommand()
+    : DrawingCommand(CommandType::POPLAYER)
+  {
+  }
+
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(PopLayerCommand)();
+  }
+
+  virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
+  {
+    aDT->PopLayer();
+  }
+
+  static const bool AffectsSnapshot = true;
 };
 
 class SetTransformCommand : public DrawingCommand
@@ -567,6 +823,10 @@ public:
   {
   }
 
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(SetTransformCommand)(mTransform);
+  }
+
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix* aMatrix) const
   {
     if (aMatrix) {
@@ -576,8 +836,35 @@ public:
     }
   }
 
+  static const bool AffectsSnapshot = false;
+
 private:
   Matrix mTransform;
+};
+
+class SetPermitSubpixelAACommand : public DrawingCommand
+{
+  friend class DrawTargetCaptureImpl;
+public:
+  explicit SetPermitSubpixelAACommand(bool aPermitSubpixelAA)
+    : DrawingCommand(CommandType::SETPERMITSUBPIXELAA)
+    , mPermitSubpixelAA(aPermitSubpixelAA)
+  {
+  }
+
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(SetPermitSubpixelAACommand)(mPermitSubpixelAA);
+  }
+
+  virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix* aMatrix) const
+  {
+    aDT->SetPermitSubpixelAA(mPermitSubpixelAA);
+  }
+
+  static const bool AffectsSnapshot = false;
+
+private:
+  bool mPermitSubpixelAA;
 };
 
 class FlushCommand : public DrawingCommand
@@ -588,14 +875,43 @@ public:
   {
   }
 
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(FlushCommand)();
+  }
+
   virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const
   {
     aDT->Flush();
   }
+
+  static const bool AffectsSnapshot = false;
 };
 
-} // namespace gfx
+class BlurCommand : public DrawingCommand
+{
+public:
+  explicit BlurCommand(const AlphaBoxBlur& aBlur)
+   : DrawingCommand(CommandType::BLUR)
+   , mBlur(aBlur)
+  {}
 
+  void CloneInto(CaptureCommandList* aList) {
+    CLONE_INTO(BlurCommand)(mBlur);
+  }
+
+  virtual void ExecuteOnDT(DrawTarget* aDT, const Matrix*) const {
+    aDT->Blur(mBlur);
+  }
+
+  static const bool AffectsSnapshot = true;
+
+private:
+  AlphaBoxBlur mBlur;
+};
+
+#undef CLONE_INTO
+
+} // namespace gfx
 } // namespace mozilla
 
 #endif /* MOZILLA_GFX_DRAWCOMMAND_H_ */

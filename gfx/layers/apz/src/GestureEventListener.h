@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=8 et tw=80 : */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -105,7 +105,8 @@ private:
     // A user put down her finger again right after a single tap thus the
     // gesture can't be a single tap, but rather a double tap. But we're
     // still not sure about that until the user lifts her finger again.
-    // Allowed next states: GESTURE_MULTI_TOUCH_DOWN, GESTURE_NONE.
+    // Allowed next states: GESTURE_MULTI_TOUCH_DOWN, GESTURE_ONE_TOUCH_PINCH,
+    //                      GESTURE_NONE.
     GESTURE_SECOND_SINGLE_TOUCH_DOWN,
 
     // A long touch has happened, but the user still keeps her finger down.
@@ -122,7 +123,12 @@ private:
     // There are two or more fingers on the screen, and the user has already
     // pinched enough for us to start zooming the screen.
     // Allowed next states: GESTURE_NONE
-    GESTURE_PINCH
+    GESTURE_PINCH,
+
+    // The user has double tapped, but not lifted her finger, and moved her
+    // finger more than PINCH_START_THRESHOLD.
+    // Allowed next states: GESTURE_NONE.
+    GESTURE_ONE_TOUCH_PINCH
   };
 
   /**
@@ -139,7 +145,15 @@ private:
 
   void TriggerSingleTapConfirmedEvent();
 
-  bool MoveDistanceIsLarge();
+  bool MoveDistanceExceeds(ScreenCoord aThreshold) const;
+  bool MoveDistanceIsLarge() const;
+  bool SecondTapIsFar() const;
+
+  /**
+   * Returns current vertical span, counting from the where the user first put
+   * her finger down.
+   */
+  ParentLayerCoord GetYSpanFromStartPoint();
 
   /**
    * Do actual state transition and reset substates.

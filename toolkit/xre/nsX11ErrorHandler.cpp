@@ -117,17 +117,15 @@ X11Error(Display *display, XErrorEvent *event) {
     }
   }
 
-#ifdef MOZ_CRASHREPORTER
   switch (XRE_GetProcessType()) {
   case GeckoProcessType_Default:
   case GeckoProcessType_Plugin:
   case GeckoProcessType_Content:
     CrashReporter::AppendAppNotesToCrashReport(notes);
     break;
-  default: 
+  default:
     ; // crash report notes not supported.
   }
-#endif
 
 #ifdef DEBUG
   // The resource id is unlikely to be useful in a crash report without
@@ -144,8 +142,7 @@ X11Error(Display *display, XErrorEvent *event) {
 #endif
 #endif
 
-  NS_RUNTIMEABORT(notes.get());
-  return 0; // not reached
+  MOZ_CRASH_UNSAFE_OOL(notes.get());
 }
 }
 

@@ -8,7 +8,6 @@
 #define MOZ_UNITS_H_
 
 #include "mozilla/gfx/Coord.h"
-#include "mozilla/gfx/Matrix.h"
 #include "mozilla/gfx/Point.h"
 #include "mozilla/gfx/Rect.h"
 #include "mozilla/gfx/ScaleFactor.h"
@@ -33,12 +32,14 @@ struct RenderTargetPixel;
 struct ScreenPixel;
 struct ParentLayerPixel;
 struct DesktopPixel;
+struct ImagePixel;
 
 template<> struct IsPixel<CSSPixel>          : TrueType {};
 template<> struct IsPixel<LayoutDevicePixel> : TrueType {};
 template<> struct IsPixel<LayerPixel>        : TrueType {};
 template<> struct IsPixel<CSSTransformedLayerPixel> : TrueType {};
 template<> struct IsPixel<RenderTargetPixel> : TrueType {};
+template<> struct IsPixel<ImagePixel> : TrueType {};
 template<> struct IsPixel<ScreenPixel>       : TrueType {};
 template<> struct IsPixel<ParentLayerPixel>  : TrueType {};
 template<> struct IsPixel<DesktopPixel>      : TrueType {};
@@ -100,6 +101,8 @@ typedef gfx::IntRectTyped<RenderTargetPixel> RenderTargetIntRect;
 typedef gfx::MarginTyped<RenderTargetPixel> RenderTargetMargin;
 typedef gfx::IntMarginTyped<RenderTargetPixel> RenderTargetIntMargin;
 typedef gfx::IntRegionTyped<RenderTargetPixel> RenderTargetIntRegion;
+
+typedef gfx::IntRectTyped<ImagePixel> ImageIntRect;
 
 typedef gfx::CoordTyped<ScreenPixel> ScreenCoord;
 typedef gfx::IntCoordTyped<ScreenPixel> ScreenIntCoord;
@@ -186,6 +189,7 @@ typedef gfx::Matrix4x4Typed<ScreenPixel, ParentLayerPixel> ScreenToParentLayerMa
 typedef gfx::Matrix4x4Typed<ParentLayerPixel, LayerPixel> ParentLayerToLayerMatrix4x4;
 typedef gfx::Matrix4x4Typed<ParentLayerPixel, ScreenPixel> ParentLayerToScreenMatrix4x4;
 typedef gfx::Matrix4x4Typed<ParentLayerPixel, ParentLayerPixel> ParentLayerToParentLayerMatrix4x4;
+typedef gfx::Matrix4x4Typed<ParentLayerPixel, RenderTargetPixel> ParentLayerToRenderTargetMatrix4x4;
 
 /*
  * The pixels that content authors use to specify sizes in.
@@ -211,8 +215,8 @@ struct CSSPixel {
   static CSSRect FromAppUnits(const nsRect& aRect) {
     return CSSRect(NSAppUnitsToFloatPixels(aRect.x, float(AppUnitsPerCSSPixel())),
                    NSAppUnitsToFloatPixels(aRect.y, float(AppUnitsPerCSSPixel())),
-                   NSAppUnitsToFloatPixels(aRect.width, float(AppUnitsPerCSSPixel())),
-                   NSAppUnitsToFloatPixels(aRect.height, float(AppUnitsPerCSSPixel())));
+                   NSAppUnitsToFloatPixels(aRect.Width(), float(AppUnitsPerCSSPixel())),
+                   NSAppUnitsToFloatPixels(aRect.Height(), float(AppUnitsPerCSSPixel())));
   }
 
   static CSSMargin FromAppUnits(const nsMargin& aMargin) {
@@ -236,8 +240,12 @@ struct CSSPixel {
   static CSSIntRect FromAppUnitsRounded(const nsRect& aRect) {
     return CSSIntRect(NSAppUnitsToIntPixels(aRect.x, float(AppUnitsPerCSSPixel())),
                       NSAppUnitsToIntPixels(aRect.y, float(AppUnitsPerCSSPixel())),
-                      NSAppUnitsToIntPixels(aRect.width, float(AppUnitsPerCSSPixel())),
-                      NSAppUnitsToIntPixels(aRect.height, float(AppUnitsPerCSSPixel())));
+                      NSAppUnitsToIntPixels(aRect.Width(), float(AppUnitsPerCSSPixel())),
+                      NSAppUnitsToIntPixels(aRect.Height(), float(AppUnitsPerCSSPixel())));
+  }
+
+  static CSSIntRect FromAppUnitsToNearest(const nsRect& aRect) {
+    return CSSIntRect::FromUnknownRect(aRect.ToNearestPixels(AppUnitsPerCSSPixel()));
   }
 
   // Conversions to app units
@@ -269,15 +277,15 @@ struct CSSPixel {
   static nsRect ToAppUnits(const CSSRect& aRect) {
     return nsRect(NSToCoordRoundWithClamp(aRect.x * float(AppUnitsPerCSSPixel())),
                   NSToCoordRoundWithClamp(aRect.y * float(AppUnitsPerCSSPixel())),
-                  NSToCoordRoundWithClamp(aRect.width * float(AppUnitsPerCSSPixel())),
-                  NSToCoordRoundWithClamp(aRect.height * float(AppUnitsPerCSSPixel())));
+                  NSToCoordRoundWithClamp(aRect.Width() * float(AppUnitsPerCSSPixel())),
+                  NSToCoordRoundWithClamp(aRect.Height() * float(AppUnitsPerCSSPixel())));
   }
 
   static nsRect ToAppUnits(const CSSIntRect& aRect) {
     return nsRect(NSToCoordRoundWithClamp(float(aRect.x) * float(AppUnitsPerCSSPixel())),
                   NSToCoordRoundWithClamp(float(aRect.y) * float(AppUnitsPerCSSPixel())),
-                  NSToCoordRoundWithClamp(float(aRect.width) * float(AppUnitsPerCSSPixel())),
-                  NSToCoordRoundWithClamp(float(aRect.height) * float(AppUnitsPerCSSPixel())));
+                  NSToCoordRoundWithClamp(float(aRect.Width()) * float(AppUnitsPerCSSPixel())),
+                  NSToCoordRoundWithClamp(float(aRect.Height()) * float(AppUnitsPerCSSPixel())));
   }
 };
 
@@ -293,8 +301,8 @@ struct LayoutDevicePixel {
   static LayoutDeviceRect FromAppUnits(const nsRect& aRect, nscoord aAppUnitsPerDevPixel) {
     return LayoutDeviceRect(NSAppUnitsToFloatPixels(aRect.x, float(aAppUnitsPerDevPixel)),
                             NSAppUnitsToFloatPixels(aRect.y, float(aAppUnitsPerDevPixel)),
-                            NSAppUnitsToFloatPixels(aRect.width, float(aAppUnitsPerDevPixel)),
-                            NSAppUnitsToFloatPixels(aRect.height, float(aAppUnitsPerDevPixel)));
+                            NSAppUnitsToFloatPixels(aRect.Width(), float(aAppUnitsPerDevPixel)),
+                            NSAppUnitsToFloatPixels(aRect.Height(), float(aAppUnitsPerDevPixel)));
   }
 
   static LayoutDeviceSize FromAppUnits(const nsSize& aSize, nscoord aAppUnitsPerDevPixel) {
@@ -360,15 +368,15 @@ struct LayoutDevicePixel {
   static nsRect ToAppUnits(const LayoutDeviceIntRect& aRect, nscoord aAppUnitsPerDevPixel) {
     return nsRect(aRect.x * aAppUnitsPerDevPixel,
                   aRect.y * aAppUnitsPerDevPixel,
-                  aRect.width * aAppUnitsPerDevPixel,
-                  aRect.height * aAppUnitsPerDevPixel);
+                  aRect.Width() * aAppUnitsPerDevPixel,
+                  aRect.Height() * aAppUnitsPerDevPixel);
   }
 
   static nsRect ToAppUnits(const LayoutDeviceRect& aRect, nscoord aAppUnitsPerDevPixel) {
     return nsRect(NSFloatPixelsToAppUnits(aRect.x, aAppUnitsPerDevPixel),
                   NSFloatPixelsToAppUnits(aRect.y, aAppUnitsPerDevPixel),
-                  NSFloatPixelsToAppUnits(aRect.width, aAppUnitsPerDevPixel),
-                  NSFloatPixelsToAppUnits(aRect.height, aAppUnitsPerDevPixel));
+                  NSFloatPixelsToAppUnits(aRect.Width(), aAppUnitsPerDevPixel),
+                  NSFloatPixelsToAppUnits(aRect.Height(), aAppUnitsPerDevPixel));
   }
 };
 
@@ -402,6 +410,13 @@ struct CSSTransformedLayerPixel {
  * have RenderTargetPixel == LayerPixel.
  */
 struct RenderTargetPixel {
+};
+
+/*
+ * This unit represents one pixel in an image. Image space
+ * is largely independent of any other space.
+ */
+struct ImagePixel {
 };
 
 /*
@@ -512,64 +527,64 @@ template<class src, class dst>
 gfx::RectTyped<dst> operator*(const gfx::RectTyped<src>& aRect, const gfx::ScaleFactor<src, dst>& aScale) {
   return gfx::RectTyped<dst>(aRect.x * aScale.scale,
                              aRect.y * aScale.scale,
-                             aRect.width * aScale.scale,
-                             aRect.height * aScale.scale);
+                             aRect.Width() * aScale.scale,
+                             aRect.Height() * aScale.scale);
 }
 
 template<class src, class dst>
 gfx::RectTyped<dst> operator/(const gfx::RectTyped<src>& aRect, const gfx::ScaleFactor<dst, src>& aScale) {
   return gfx::RectTyped<dst>(aRect.x / aScale.scale,
                              aRect.y / aScale.scale,
-                             aRect.width / aScale.scale,
-                             aRect.height / aScale.scale);
+                             aRect.Width() / aScale.scale,
+                             aRect.Height() / aScale.scale);
 }
 
 template<class src, class dst>
 gfx::RectTyped<dst> operator*(const gfx::RectTyped<src>& aRect, const gfx::ScaleFactors2D<src, dst>& aScale) {
   return gfx::RectTyped<dst>(aRect.x * aScale.xScale,
                              aRect.y * aScale.yScale,
-                             aRect.width * aScale.xScale,
-                             aRect.height * aScale.yScale);
+                             aRect.Width() * aScale.xScale,
+                             aRect.Height() * aScale.yScale);
 }
 
 template<class src, class dst>
 gfx::RectTyped<dst> operator/(const gfx::RectTyped<src>& aRect, const gfx::ScaleFactors2D<dst, src>& aScale) {
   return gfx::RectTyped<dst>(aRect.x / aScale.xScale,
                              aRect.y / aScale.yScale,
-                             aRect.width / aScale.xScale,
-                             aRect.height / aScale.yScale);
+                             aRect.Width() / aScale.xScale,
+                             aRect.Height() / aScale.yScale);
 }
 
 template<class src, class dst>
 gfx::RectTyped<dst> operator*(const gfx::IntRectTyped<src>& aRect, const gfx::ScaleFactor<src, dst>& aScale) {
   return gfx::RectTyped<dst>(float(aRect.x) * aScale.scale,
                              float(aRect.y) * aScale.scale,
-                             float(aRect.width) * aScale.scale,
-                             float(aRect.height) * aScale.scale);
+                             float(aRect.Width()) * aScale.scale,
+                             float(aRect.Height()) * aScale.scale);
 }
 
 template<class src, class dst>
 gfx::RectTyped<dst> operator/(const gfx::IntRectTyped<src>& aRect, const gfx::ScaleFactor<dst, src>& aScale) {
   return gfx::RectTyped<dst>(float(aRect.x) / aScale.scale,
                              float(aRect.y) / aScale.scale,
-                             float(aRect.width) / aScale.scale,
-                             float(aRect.height) / aScale.scale);
+                             float(aRect.Width()) / aScale.scale,
+                             float(aRect.Height()) / aScale.scale);
 }
 
 template<class src, class dst>
 gfx::RectTyped<dst> operator*(const gfx::IntRectTyped<src>& aRect, const gfx::ScaleFactors2D<src, dst>& aScale) {
   return gfx::RectTyped<dst>(float(aRect.x) * aScale.xScale,
                              float(aRect.y) * aScale.yScale,
-                             float(aRect.width) * aScale.xScale,
-                             float(aRect.height) * aScale.yScale);
+                             float(aRect.Width()) * aScale.xScale,
+                             float(aRect.Height()) * aScale.yScale);
 }
 
 template<class src, class dst>
 gfx::RectTyped<dst> operator/(const gfx::IntRectTyped<src>& aRect, const gfx::ScaleFactors2D<dst, src>& aScale) {
   return gfx::RectTyped<dst>(float(aRect.x) / aScale.xScale,
                              float(aRect.y) / aScale.yScale,
-                             float(aRect.width) / aScale.xScale,
-                             float(aRect.height) / aScale.yScale);
+                             float(aRect.Width()) / aScale.xScale,
+                             float(aRect.Height()) / aScale.yScale);
 }
 
 template<class src, class dst>
@@ -666,6 +681,32 @@ gfx::ScaleFactor<src, dst> MinScaleRatio(const gfx::SizeTyped<dst>& aDestSize, c
   return gfx::ScaleFactor<src, dst>(std::min(aDestSize.width / aSrcSize.width,
                                              aDestSize.height / aSrcSize.height));
 }
+
+template <typename T>
+struct CoordOfImpl;
+
+template <typename Units>
+struct CoordOfImpl<gfx::PointTyped<Units>> {
+  typedef gfx::CoordTyped<Units> Type;
+};
+
+template <typename Units>
+struct CoordOfImpl<gfx::IntPointTyped<Units>> {
+  typedef gfx::IntCoordTyped<Units> Type;
+};
+
+template <typename Units>
+struct CoordOfImpl<gfx::RectTyped<Units>> {
+  typedef gfx::CoordTyped<Units> Type;
+};
+
+template <typename Units>
+struct CoordOfImpl<gfx::IntRectTyped<Units>> {
+  typedef gfx::IntCoordTyped<Units> Type;
+};
+
+template <typename T>
+using CoordOf = typename CoordOfImpl<T>::Type;
 
 } // namespace mozilla
 

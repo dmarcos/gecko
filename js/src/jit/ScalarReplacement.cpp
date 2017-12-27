@@ -101,8 +101,9 @@ IsObjectEscaped(MInstruction* ins, JSObject* objDefault = nullptr);
 // Returns False if the lambda is not escaped and if it is optimizable by
 // ScalarReplacementOfObject.
 static bool
-IsLambdaEscaped(MLambda* lambda, JSObject* obj)
+IsLambdaEscaped(MInstruction* lambda, JSObject* obj)
 {
+    MOZ_ASSERT(lambda->isLambda() || lambda->isLambdaArrow());
     JitSpewDef(JitSpew_Escape, "Check lambda\n", lambda);
     JitSpewIndent spewIndent(JitSpew_Escape);
 
@@ -138,7 +139,7 @@ static inline bool
 IsOptimizableObjectInstruction(MInstruction* ins)
 {
     return ins->isNewObject() || ins->isCreateThisWithTemplate() || ins->isNewCallObject() ||
-           ins->isNewArrayIterator();
+           ins->isNewIterator();
 }
 
 // Returns False if the object is not escaped and if it is optimizable by
@@ -150,7 +151,10 @@ static bool
 IsObjectEscaped(MInstruction* ins, JSObject* objDefault)
 {
     MOZ_ASSERT(ins->type() == MIRType::Object);
-    MOZ_ASSERT(IsOptimizableObjectInstruction(ins) || ins->isGuardShape() ||
+    MOZ_ASSERT(IsOptimizableObjectInstruction(ins) ||
+               ins->isGuardShape() ||
+               ins->isGuardObjectGroup() ||
+               ins->isGuardUnboxedExpando() ||
                ins->isFunctionEnvironment());
 
     JitSpewDef(JitSpew_Escape, "Check object\n", ins);
@@ -181,8 +185,8 @@ IsObjectEscaped(MInstruction* ins, JSObject* objDefault)
 
         MDefinition* def = consumer->toDefinition();
         switch (def->op()) {
-          case MDefinition::Op_StoreFixedSlot:
-          case MDefinition::Op_LoadFixedSlot:
+          case MDefinition::Opcode::StoreFixedSlot:
+          case MDefinition::Opcode::LoadFixedSlot:
             // Not escaped if it is the first argument.
             if (def->indexOf(*i) == 0)
                 break;
@@ -190,12 +194,12 @@ IsObjectEscaped(MInstruction* ins, JSObject* objDefault)
             JitSpewDef(JitSpew_Escape, "is escaped by\n", def);
             return true;
 
-          case MDefinition::Op_LoadUnboxedScalar:
-          case MDefinition::Op_StoreUnboxedScalar:
-          case MDefinition::Op_LoadUnboxedObjectOrNull:
-          case MDefinition::Op_StoreUnboxedObjectOrNull:
-          case MDefinition::Op_LoadUnboxedString:
-          case MDefinition::Op_StoreUnboxedString:
+          case MDefinition::Opcode::LoadUnboxedScalar:
+          case MDefinition::Opcode::StoreUnboxedScalar:
+          case MDefinition::Opcode::LoadUnboxedObjectOrNull:
+          case MDefinition::Opcode::StoreUnboxedObjectOrNull:
+          case MDefinition::Opcode::LoadUnboxedString:
+          case MDefinition::Opcode::StoreUnboxedString:
             // Not escaped if it is the first argument.
             if (def->indexOf(*i) != 0) {
                 JitSpewDef(JitSpew_Escape, "is escaped by\n", def);
@@ -209,10 +213,10 @@ IsObjectEscaped(MInstruction* ins, JSObject* objDefault)
 
             break;
 
-          case MDefinition::Op_PostWriteBarrier:
+          case MDefinition::Opcode::PostWriteBarrier:
             break;
 
-          case MDefinition::Op_Slots: {
+          case MDefinition::Opcode::Slots: {
 #ifdef DEBUG
             // Assert that MSlots are only used by MStoreSlot and MLoadSlot.
             MSlots* ins = def->toSlots();
@@ -221,14 +225,14 @@ IsObjectEscaped(MInstruction* ins, JSObject* objDefault)
                 // toDefinition should normally never fail, since they don't get
                 // captured by resume points.
                 MDefinition* def = (*i)->consumer()->toDefinition();
-                MOZ_ASSERT(def->op() == MDefinition::Op_StoreSlot ||
-                           def->op() == MDefinition::Op_LoadSlot);
+                MOZ_ASSERT(def->op() == MDefinition::Opcode::StoreSlot ||
+                           def->op() == MDefinition::Opcode::LoadSlot);
             }
 #endif
             break;
           }
 
-          case MDefinition::Op_GuardShape: {
+          case MDefinition::Opcode::GuardShape: {
             MGuardShape* guard = def->toGuardShape();
             MOZ_ASSERT(!ins->isGuardShape());
             if (obj->maybeShape() != guard->shape()) {
@@ -242,10 +246,42 @@ IsObjectEscaped(MInstruction* ins, JSObject* objDefault)
             break;
           }
 
-          case MDefinition::Op_Lambda: {
-            MLambda* lambda = def->toLambda();
-            if (IsLambdaEscaped(lambda, obj)) {
-                JitSpewDef(JitSpew_Escape, "is indirectly escaped by\n", lambda);
+          case MDefinition::Opcode::GuardObjectGroup: {
+            MGuardObjectGroup* guard = def->toGuardObjectGroup();
+            MOZ_ASSERT(!ins->isGuardObjectGroup());
+            if (obj->group() != guard->group()) {
+                JitSpewDef(JitSpew_Escape, "has a non-matching guard group\n", guard);
+                return true;
+            }
+            if (IsObjectEscaped(def->toInstruction(), obj)) {
+                JitSpewDef(JitSpew_Escape, "is indirectly escaped by\n", def);
+                return true;
+            }
+            break;
+          }
+
+          case MDefinition::Opcode::GuardUnboxedExpando: {
+            MGuardUnboxedExpando* guard = def->toGuardUnboxedExpando();
+            MOZ_ASSERT(!ins->isGuardUnboxedExpando());
+            if (guard->requireExpando()) {
+                JitSpewDef(JitSpew_Escape, "requires an unboxed expando object\n", guard);
+                return true;
+            }
+            if (obj->as<UnboxedPlainObject>().maybeExpando()) {
+                JitSpewDef(JitSpew_Escape, "has an expando object\n", guard);
+                return true;
+            }
+            if (IsObjectEscaped(def->toInstruction(), obj)) {
+                JitSpewDef(JitSpew_Escape, "is indirectly escaped by\n", def);
+                return true;
+            }
+            break;
+          }
+
+          case MDefinition::Opcode::Lambda:
+          case MDefinition::Opcode::LambdaArrow: {
+            if (IsLambdaEscaped(def->toInstruction(), obj)) {
+                JitSpewDef(JitSpew_Escape, "is indirectly escaped by\n", def);
                 return true;
             }
             break;
@@ -253,7 +289,7 @@ IsObjectEscaped(MInstruction* ins, JSObject* objDefault)
 
           // This instruction is a no-op used to verify that scalar replacement
           // is working as expected in jit-test.
-          case MDefinition::Op_AssertRecoveredOnBailout:
+          case MDefinition::Opcode::AssertRecoveredOnBailout:
             break;
 
           default:
@@ -310,8 +346,11 @@ class ObjectMemoryView : public MDefinitionVisitorDefaultNoop
     void visitStoreSlot(MStoreSlot* ins);
     void visitLoadSlot(MLoadSlot* ins);
     void visitGuardShape(MGuardShape* ins);
+    void visitGuardObjectGroup(MGuardObjectGroup* ins);
+    void visitGuardUnboxedExpando(MGuardUnboxedExpando* ins);
     void visitFunctionEnvironment(MFunctionEnvironment* ins);
     void visitLambda(MLambda* ins);
+    void visitLambdaArrow(MLambdaArrow* ins);
     void visitStoreUnboxedScalar(MStoreUnboxedScalar* ins);
     void visitLoadUnboxedScalar(MLoadUnboxedScalar* ins);
     void visitStoreUnboxedObjectOrNull(MStoreUnboxedObjectOrNull* ins);
@@ -322,6 +361,7 @@ class ObjectMemoryView : public MDefinitionVisitorDefaultNoop
   private:
     void storeOffset(MInstruction* ins, size_t offset, MDefinition* value);
     void loadOffset(MInstruction* ins, size_t offset);
+    void visitObjectGuard(MInstruction* ins, MDefinition* operand);
 };
 
 const char* ObjectMemoryView::phaseName = "Scalar Replacement of Object";
@@ -480,7 +520,7 @@ ObjectMemoryView::assertSuccess()
 
         // The only remaining uses would be removed by DCE, which will also
         // recover the object on bailouts.
-        MOZ_ASSERT(def->isSlots() || def->isLambda());
+        MOZ_ASSERT(def->isSlots() || def->isLambda() || def->isLambdaArrow());
         MOZ_ASSERT(!def->hasDefUses());
     }
 }
@@ -624,13 +664,17 @@ ObjectMemoryView::visitLoadSlot(MLoadSlot* ins)
 }
 
 void
-ObjectMemoryView::visitGuardShape(MGuardShape* ins)
+ObjectMemoryView::visitObjectGuard(MInstruction* ins, MDefinition* operand)
 {
-    // Skip loads made on other objects.
-    if (ins->object() != obj_)
+    MOZ_ASSERT(ins->numOperands() == 1);
+    MOZ_ASSERT(ins->getOperand(0) == operand);
+    MOZ_ASSERT(ins->type() == MIRType::Object);
+
+    // Skip guards on other objects.
+    if (operand != obj_)
         return;
 
-    // Replace the shape guard by its object.
+    // Replace the guard by its object.
     ins->replaceAllUsesWith(obj_);
 
     // Remove original instruction.
@@ -638,12 +682,37 @@ ObjectMemoryView::visitGuardShape(MGuardShape* ins)
 }
 
 void
+ObjectMemoryView::visitGuardShape(MGuardShape* ins)
+{
+    visitObjectGuard(ins, ins->object());
+}
+
+void
+ObjectMemoryView::visitGuardObjectGroup(MGuardObjectGroup* ins)
+{
+    visitObjectGuard(ins, ins->object());
+}
+
+void
+ObjectMemoryView::visitGuardUnboxedExpando(MGuardUnboxedExpando* ins)
+{
+    visitObjectGuard(ins, ins->object());
+}
+
+void
 ObjectMemoryView::visitFunctionEnvironment(MFunctionEnvironment* ins)
 {
     // Skip function environment which are not aliases of the NewCallObject.
     MDefinition* input = ins->input();
-    if (!input->isLambda() || input->toLambda()->environmentChain() != obj_)
+    if (input->isLambda()) {
+        if (input->toLambda()->environmentChain() != obj_)
+            return;
+    } else if (input->isLambdaArrow()) {
+        if (input->toLambdaArrow()->environmentChain() != obj_)
+            return;
+    } else {
         return;
+    }
 
     // Replace the function environment by the scope chain of the lambda.
     ins->replaceAllUsesWith(obj_);
@@ -660,6 +729,15 @@ ObjectMemoryView::visitLambda(MLambda* ins)
 
     // In order to recover the lambda we need to recover the scope chain, as the
     // lambda is holding it.
+    ins->setIncompleteObject();
+}
+
+void
+ObjectMemoryView::visitLambdaArrow(MLambdaArrow* ins)
+{
+    if (ins->environmentChain() != obj_)
+        return;
+
     ins->setIncompleteObject();
 }
 
@@ -797,7 +875,7 @@ IndexOf(MDefinition* ins, int32_t* res)
 // Returns False if the elements is not escaped and if it is optimizable by
 // ScalarReplacementOfArray.
 static bool
-IsElementEscaped(MElements* def, uint32_t arraySize)
+IsElementEscaped(MElements* def, uint32_t arraySize, bool copyOnWrite)
 {
     JitSpewDef(JitSpew_Escape, "Check elements\n", def);
     JitSpewIndent spewIndent(JitSpew_Escape);
@@ -808,7 +886,7 @@ IsElementEscaped(MElements* def, uint32_t arraySize)
         MDefinition* access = (*i)->consumer()->toDefinition();
 
         switch (access->op()) {
-          case MDefinition::Op_LoadElement: {
+          case MDefinition::Opcode::LoadElement: {
             MOZ_ASSERT(access->toLoadElement()->elements() == def);
 
             // If we need hole checks, then the array cannot be escaped
@@ -838,8 +916,13 @@ IsElementEscaped(MElements* def, uint32_t arraySize)
             break;
           }
 
-          case MDefinition::Op_StoreElement: {
+          case MDefinition::Opcode::StoreElement: {
             MOZ_ASSERT(access->toStoreElement()->elements() == def);
+
+            if (copyOnWrite) {
+                JitSpewDef(JitSpew_Escape, "write to COW\n", access);
+                return true;
+            }
 
             // If we need hole checks, then the array cannot be escaped
             // as the array might refer to the prototype chain to look
@@ -872,15 +955,20 @@ IsElementEscaped(MElements* def, uint32_t arraySize)
             break;
           }
 
-          case MDefinition::Op_SetInitializedLength:
+          case MDefinition::Opcode::SetInitializedLength:
+            if (copyOnWrite) {
+                JitSpewDef(JitSpew_Escape, "write to COW\n", access);
+                return true;
+            }
+
             MOZ_ASSERT(access->toSetInitializedLength()->elements() == def);
             break;
 
-          case MDefinition::Op_InitializedLength:
+          case MDefinition::Opcode::InitializedLength:
             MOZ_ASSERT(access->toInitializedLength()->elements() == def);
             break;
 
-          case MDefinition::Op_ArrayLength:
+          case MDefinition::Opcode::ArrayLength:
             MOZ_ASSERT(access->toArrayLength()->elements() == def);
             break;
 
@@ -893,6 +981,12 @@ IsElementEscaped(MElements* def, uint32_t arraySize)
     return false;
 }
 
+static inline bool
+IsOptimizableArrayInstruction(MInstruction* ins)
+{
+    return ins->isNewArray() || ins->isNewArrayCopyOnWrite();
+}
+
 // Returns False if the array is not escaped and if it is optimizable by
 // ScalarReplacementOfArray.
 //
@@ -902,21 +996,21 @@ static bool
 IsArrayEscaped(MInstruction* ins)
 {
     MOZ_ASSERT(ins->type() == MIRType::Object);
-    MOZ_ASSERT(ins->isNewArray());
-    uint32_t length = ins->toNewArray()->length();
+    MOZ_ASSERT(IsOptimizableArrayInstruction(ins));
 
     JitSpewDef(JitSpew_Escape, "Check array\n", ins);
     JitSpewIndent spewIndent(JitSpew_Escape);
 
-    JSObject* obj = ins->toNewArray()->templateObject();
-    if (!obj) {
-        JitSpew(JitSpew_Escape, "No template object defined.");
-        return true;
-    }
+    uint32_t length;
+    if (ins->isNewArray()) {
+        if (!ins->toNewArray()->templateObject()) {
+            JitSpew(JitSpew_Escape, "No template object defined.");
+            return true;
+        }
 
-    if (obj->is<UnboxedArrayObject>()) {
-        JitSpew(JitSpew_Escape, "Template object is an unboxed plain object.");
-        return true;
+        length = ins->toNewArray()->length();
+    } else {
+        length = ins->toNewArrayCopyOnWrite()->templateObject()->length();
     }
 
     if (length >= 16) {
@@ -940,10 +1034,10 @@ IsArrayEscaped(MInstruction* ins)
 
         MDefinition* def = consumer->toDefinition();
         switch (def->op()) {
-          case MDefinition::Op_Elements: {
+          case MDefinition::Opcode::Elements: {
             MElements *elem = def->toElements();
             MOZ_ASSERT(elem->object() == ins);
-            if (IsElementEscaped(elem, length)) {
+            if (IsElementEscaped(elem, length, ins->isNewArrayCopyOnWrite())) {
                 JitSpewDef(JitSpew_Escape, "is indirectly escaped by\n", elem);
                 return true;
             }
@@ -953,7 +1047,7 @@ IsArrayEscaped(MInstruction* ins)
 
           // This instruction is a no-op used to verify that scalar replacement
           // is working as expected in jit-test.
-          case MDefinition::Op_AssertRecoveredOnBailout:
+          case MDefinition::Opcode::AssertRecoveredOnBailout:
             break;
 
           default:
@@ -1053,7 +1147,9 @@ ArrayMemoryView::initStartingState(BlockState** pState)
 {
     // Uninitialized elements have an "undefined" value.
     undefinedVal_ = MConstant::New(alloc_, UndefinedValue());
-    MConstant* initLength = MConstant::New(alloc_, Int32Value(0));
+    MConstant* initLength = MConstant::New(alloc_, Int32Value(arr_->isNewArrayCopyOnWrite()
+                                                              ? arr_->toNewArrayCopyOnWrite()->length()
+                                                              : 0));
     arr_->block()->insertBefore(arr_, undefinedVal_);
     arr_->block()->insertBefore(arr_, initLength);
 
@@ -1063,6 +1159,10 @@ ArrayMemoryView::initStartingState(BlockState** pState)
         return false;
 
     startBlock_->insertAfter(arr_, state);
+
+    // Initialize the elements of the array state.
+    if (!state->initFromTemplateObject(alloc_, undefinedVal_))
+        return false;
 
     // Hold out of resume point until it is visited.
     state->setInWorklist();
@@ -1328,7 +1428,7 @@ ScalarReplacement(MIRGenerator* mir, MIRGraph& graph)
                 continue;
             }
 
-            if (ins->isNewArray() && !IsArrayEscaped(*ins)) {
+            if (IsOptimizableArrayInstruction(*ins) && !IsArrayEscaped(*ins)) {
                 ArrayMemoryView view(graph.alloc(), *ins);
                 if (!replaceArray.run(view))
                     return false;

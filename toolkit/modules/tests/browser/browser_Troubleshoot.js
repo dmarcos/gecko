@@ -71,7 +71,7 @@ var tests = [
 
   function unicodePreferences(done) {
     let name = "font.name.sans-serif.x-western";
-    let utf8Value = "\xc4\x8capk\xc5\xafv Krasopis"
+    let utf8Value = "\xc4\x8capk\xc5\xafv Krasopis";
     let unicodeValue = "\u010Capk\u016Fv Krasopis";
 
     // set/getCharPref work with 8bit strings (utf8)
@@ -137,6 +137,27 @@ const SNAPSHOT_SCHEMA = {
         },
         numRemoteWindows: {
           type: "number",
+        },
+        currentContentProcesses: {
+          type: "number",
+        },
+        maxContentProcesses: {
+          type: "number",
+        },
+        styloBuild: {
+          type: "boolean",
+        },
+        styloDefault: {
+          type: "boolean",
+        },
+        styloResult: {
+          type: "boolean",
+        },
+        styloChromeDefault: {
+          type: "boolean",
+        },
+        styloChromeResult: {
+          type: "boolean",
         },
         keyGoogleFound: {
           type: "boolean",
@@ -252,8 +273,8 @@ const SNAPSHOT_SCHEMA = {
         windowLayerManagerRemote: {
           type: "boolean",
         },
-        currentAudioBackend: {
-          type: "string",
+        windowUsingAdvancedLayers: {
+          type: "boolean",
         },
         numAcceleratedWindowsMessage: {
           type: "array",
@@ -318,6 +339,9 @@ const SNAPSHOT_SCHEMA = {
         directWriteVersion: {
           type: "string",
         },
+        offMainThreadPaintEnabled: {
+          type: "boolean",
+        },
         clearTypeParameters: {
           type: "string",
         },
@@ -377,6 +401,158 @@ const SNAPSHOT_SCHEMA = {
         },
       },
     },
+    media: {
+      required: true,
+      type: "object",
+      properties: {
+        currentAudioBackend: {
+          required: true,
+          type: "string",
+        },
+        currentMaxAudioChannels: {
+          required: true,
+          type: "number",
+        },
+        currentPreferredChannelLayout: {
+          required: true,
+          type: "string",
+        },
+        currentPreferredSampleRate: {
+          required: true,
+          type: "number",
+        },
+        audioOutputDevices: {
+          required: true,
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: {
+                required: true,
+                type: "string",
+              },
+              groupId: {
+                required: true,
+                type: "string",
+              },
+              vendor: {
+                required: true,
+                type: "string",
+              },
+              type: {
+                required: true,
+                type: "number",
+              },
+              state: {
+                required: true,
+                type: "number",
+              },
+              preferred: {
+                required: true,
+                type: "number",
+              },
+              supportedFormat: {
+                required: true,
+                type: "number",
+              },
+              defaultFormat: {
+                required: true,
+                type: "number",
+              },
+              maxChannels: {
+                required: true,
+                type: "number",
+              },
+              defaultRate: {
+                required: true,
+                type: "number",
+              },
+              maxRate: {
+                required: true,
+                type: "number",
+              },
+              minRate: {
+                required: true,
+                type: "number",
+              },
+              maxLatency: {
+                required: true,
+                type: "number",
+              },
+              minLatency: {
+                required: true,
+                type: "number",
+              }
+            },
+          },
+        },
+        audioInputDevices: {
+          required: true,
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: {
+                required: true,
+                type: "string",
+              },
+              groupId: {
+                required: true,
+                type: "string",
+              },
+              vendor: {
+                required: true,
+                type: "string",
+              },
+              type: {
+                required: true,
+                type: "number",
+              },
+              state: {
+                required: true,
+                type: "number",
+              },
+              preferred: {
+                required: true,
+                type: "number",
+              },
+              supportedFormat: {
+                required: true,
+                type: "number",
+              },
+              defaultFormat: {
+                required: true,
+                type: "number",
+              },
+              maxChannels: {
+                required: true,
+                type: "number",
+              },
+              defaultRate: {
+                required: true,
+                type: "number",
+              },
+              maxRate: {
+                required: true,
+                type: "number",
+              },
+              minRate: {
+                required: true,
+                type: "number",
+              },
+              maxLatency: {
+                required: true,
+                type: "number",
+              },
+              minLatency: {
+                required: true,
+                type: "number",
+              }
+            },
+          },
+        },
+      },
+    },
     javaScript: {
       required: true,
       type: "object",
@@ -397,6 +573,12 @@ const SNAPSHOT_SCHEMA = {
         forceDisabled: {
           type: "number",
         },
+        handlerUsed: {
+          type: "boolean",
+        },
+        instantiator: {
+          type: "string"
+        }
       },
     },
     libraryVersions: {
@@ -520,42 +702,92 @@ const SNAPSHOT_SCHEMA = {
           required: AppConstants.MOZ_CONTENT_SANDBOX,
           type: "number"
         },
-	syscallLog: {
-	  required: AppConstants.platform == "linux",
-	  type: "array",
-	  items: {
-	    type: "object",
-	    properties: {
-	      index: {
-		required: true,
-		type: "number",
-	      },
-	      pid: {
-		required: true,
-		type: "number",
-	      },
-	      tid: {
-		required: true,
-		type: "number",
-	      },
-	      procType: {
-		required: true,
-		type: "string",
-	      },
-	      syscall: {
-		required: true,
-		type: "number",
-	      },
-	      args: {
-		required: true,
-		type: "array",
-		items: {
-		  type: "string",
-		},
-	      },
-	    },
-	  },
-	},
+        effectiveContentSandboxLevel: {
+          required: AppConstants.MOZ_CONTENT_SANDBOX,
+          type: "number"
+        },
+        syscallLog: {
+          required: AppConstants.platform == "linux",
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              index: {
+                required: true,
+                type: "number",
+              },
+              pid: {
+                required: true,
+                type: "number",
+              },
+              tid: {
+                required: true,
+                type: "number",
+              },
+              procType: {
+                required: true,
+                type: "string",
+              },
+              syscall: {
+                required: true,
+                type: "number",
+              },
+              args: {
+                required: true,
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    intl: {
+      required: true,
+      type: "object",
+      properties: {
+        localeService: {
+          required: true,
+          type: "object",
+          properties: {
+            requested: {
+              required: true,
+              type: "array"
+            },
+            available: {
+              required: true,
+              type: "array"
+            },
+            supported: {
+              required: true,
+              type: "array"
+            },
+            regionalPrefs: {
+              required: true,
+              type: "array"
+            },
+            defaultLocale: {
+              required: true,
+              type: "string"
+            },
+          },
+        },
+        osPrefs: {
+          required: true,
+          type: "object",
+          properties: {
+            systemLocales: {
+              required: true,
+              type: "array"
+            },
+            regionalPrefsLocales: {
+              required: true,
+              type: "array"
+            },
+          },
+        },
       },
     },
   },

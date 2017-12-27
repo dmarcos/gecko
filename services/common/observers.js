@@ -10,6 +10,7 @@ var Cr = Components.results;
 var Cu = Components.utils;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 
 /**
  * A service for adding, removing and notifying observers of notifications.
@@ -36,7 +37,7 @@ this.Observers = {
   add(topic, callback, thisObject) {
     let observer = new Observer(topic, callback, thisObject);
     this._cache.push(observer);
-    this._service.addObserver(observer, topic, true);
+    Services.obs.addObserver(observer, topic, true);
 
     return observer;
   },
@@ -62,8 +63,10 @@ this.Observers = {
                                              v.callback == callback &&
                                              v.thisObject == thisObject);
     if (observer) {
-      this._service.removeObserver(observer, topic);
+      Services.obs.removeObserver(observer, topic);
       this._cache.splice(this._cache.indexOf(observer), 1);
+    } else {
+      throw new Error("Attempt to remove non-existing observer");
     }
   },
 
@@ -86,11 +89,8 @@ this.Observers = {
   notify(topic, subject, data) {
     subject = (typeof subject == "undefined") ? null : new Subject(subject);
        data = (typeof data == "undefined") ? null : data;
-    this._service.notifyObservers(subject, topic, data);
+    Services.obs.notifyObservers(subject, topic, data);
   },
-
-  _service: Cc["@mozilla.org/observer-service;1"].
-            getService(Ci.nsIObserverService),
 
   /**
    * A cache of observers that have been added.
@@ -131,7 +131,7 @@ Observer.prototype = {
     } else // typeof this.callback == "object" (nsIObserver)
       this.callback.observe(subject, topic, data);
   }
-}
+};
 
 
 function Subject(object) {

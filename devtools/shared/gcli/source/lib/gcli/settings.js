@@ -28,12 +28,7 @@ var Services = require("Services");
 XPCOMUtils.defineLazyGetter(imports, 'prefBranch', function() {
   var prefService = Cc['@mozilla.org/preferences-service;1']
           .getService(Ci.nsIPrefService);
-  return prefService.getBranch(null).QueryInterface(Ci.nsIPrefBranch2);
-});
-
-XPCOMUtils.defineLazyGetter(imports, 'supportsString', function() {
-  return Cc['@mozilla.org/supports-string;1']
-          .createInstance(Ci.nsISupportsString);
+  return prefService.getBranch(null).QueryInterface(Ci.nsIPrefBranch);
 });
 
 var util = require('./util/util');
@@ -75,15 +70,15 @@ Settings.prototype._readSystem = function() {
     return;
   }
 
-  imports.prefBranch.getChildList('').forEach(function(name) {
+  imports.prefBranch.getChildList('').forEach(name => {
     var setting = new Setting(this, name);
     this._settingsAll.push(setting);
     this._settingsMap.set(name, setting);
-  }.bind(this));
+  });
 
-  this._settingsAll.sort(function(s1, s2) {
+  this._settingsAll.sort((s1, s2) => {
     return s1.name.localeCompare(s2.name);
-  }.bind(this));
+  });
 
   this._hasReadSystem = true;
 };
@@ -99,9 +94,9 @@ Settings.prototype.getAll = function(filter) {
     return this._settingsAll;
   }
 
-  return this._settingsAll.filter(function(setting) {
+  return this._settingsAll.filter(setting => {
     return setting.name.indexOf(filter) !== -1;
-  }.bind(this));
+  });
 };
 
 /**
@@ -266,10 +261,7 @@ Object.defineProperty(Setting.prototype, 'value', {
         break;
 
       case imports.prefBranch.PREF_STRING:
-        imports.supportsString.data = value;
-        imports.prefBranch.setComplexValue(this.name,
-                Ci.nsISupportsString,
-                imports.supportsString);
+        imports.prefBranch.setStringPref(this.name, value);
         break;
 
       default:

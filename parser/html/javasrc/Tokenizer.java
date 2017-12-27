@@ -415,14 +415,30 @@ public class Tokenizer implements Locator {
     protected boolean endTag;
 
     /**
-     * The current tag token name.
+     * <code>true</code> iff the current element/attribute name contains
+     * a hyphen.
+     */
+    private boolean containsHyphen;
+
+    /**
+     * The current tag token name. One of
+     * 1) null,
+     * 2) non-owning reference to nonInternedTagName
+     * 3) non-owning reference to a pre-interned ElementName
      */
     private ElementName tagName = null;
+
+    /**
+     * The recycled ElementName instance for the non-pre-interned cases.
+     */
+    private ElementName nonInternedTagName = null;
 
     /**
      * The current attribute name.
      */
     protected AttributeName attributeName = null;
+
+    // CPPONLY: private AttributeName nonInternedAttributeName = null;
 
     // [NOCPP[
 
@@ -517,8 +533,11 @@ public class Tokenizer implements Locator {
         this.charRefBuf = new char[32];
         this.bmpChar = new char[1];
         this.astralChar = new char[2];
+        this.containsHyphen = false;
         this.tagName = null;
+        this.nonInternedTagName = new ElementName();
         this.attributeName = null;
+        // CPPONLY: this.nonInternedAttributeName = new AttributeName();
         this.doctypeName = null;
         this.publicIdentifier = null;
         this.systemIdentifier = null;
@@ -546,8 +565,11 @@ public class Tokenizer implements Locator {
         this.charRefBuf = new char[32];
         this.bmpChar = new char[1];
         this.astralChar = new char[2];
+        this.containsHyphen = false;
         this.tagName = null;
+        this.nonInternedTagName = new ElementName();
         this.attributeName = null;
+        // CPPONLY: this.nonInternedAttributeName = new AttributeName();
         this.doctypeName = null;
         this.publicIdentifier = null;
         this.systemIdentifier = null;
@@ -690,8 +712,9 @@ public class Tokenizer implements Locator {
             return;
         }
         @Auto char[] asArray = Portability.newCharArrayFromLocal(endTagExpectation);
-        this.endTagExpectation = ElementName.elementNameByBuffer(asArray, 0,
+        this.endTagExpectation = ElementName.elementNameByBuffer(asArray,
                 asArray.length, interner);
+        assert this.endTagExpectation != null;
         endTagExpectationToArray();
     }
 
@@ -874,7 +897,7 @@ public class Tokenizer implements Locator {
      */
     protected String strBufToString() {
         String str = Portability.newStringFromBuffer(strBuf, 0, strBufLen
-            // CPPONLY: , tokenHandler
+            // CPPONLY: , tokenHandler, !newAttributesEachTime && attributeName == AttributeName.CLASS
         );
         clearStrBufAfterUse();
         return str;
@@ -887,8 +910,7 @@ public class Tokenizer implements Locator {
      * @return the buffer as local name
      */
     private void strBufToDoctypeName() {
-        doctypeName = Portability.newLocalNameFromBuffer(strBuf, 0, strBufLen,
-                interner);
+        doctypeName = Portability.newLocalNameFromBuffer(strBuf, strBufLen, interner);
         clearStrBufAfterUse();
     }
 
@@ -1090,8 +1112,29 @@ public class Tokenizer implements Locator {
     }
 
     private void strBufToElementNameString() {
-        tagName = ElementName.elementNameByBuffer(strBuf, 0, strBufLen,
-                interner);
+        if (containsHyphen) {
+            // We've got a custom element or annotation-xml.
+            @Local String annotationName = ElementName.ANNOTATION_XML.getName();
+            if (Portability.localEqualsBuffer(annotationName, strBuf, strBufLen)) {
+                tagName = ElementName.ANNOTATION_XML;
+            } else {
+                nonInternedTagName.setNameForNonInterned(Portability.newLocalNameFromBuffer(strBuf, strBufLen,
+                        interner)
+                        // CPPONLY: , true
+                        );
+                tagName = nonInternedTagName;
+            }
+        } else {
+            tagName = ElementName.elementNameByBuffer(strBuf, strBufLen, interner);
+            if (tagName == null) {
+                nonInternedTagName.setNameForNonInterned(Portability.newLocalNameFromBuffer(strBuf, strBufLen,
+                    interner)
+                        // CPPONLY: , false
+                        );
+                tagName = nonInternedTagName;
+            }
+        }
+        containsHyphen = false;
         clearStrBufAfterUse();
     }
 
@@ -1124,7 +1167,6 @@ public class Tokenizer implements Locator {
             tokenHandler.startTag(tagName, attrs, selfClosing);
             // CPPONLY: }
         }
-        tagName.release();
         tagName = null;
         if (newAttributesEachTime) {
             attributes = null;
@@ -1139,11 +1181,17 @@ public class Tokenizer implements Locator {
     }
 
     private void attributeNameComplete() throws SAXException {
-        attributeName = AttributeName.nameByBuffer(strBuf, 0, strBufLen
-        // [NOCPP[
-                , namePolicy != XmlViolationPolicy.ALLOW
-                // ]NOCPP]
-                , interner);
+        attributeName = AttributeName.nameByBuffer(strBuf, strBufLen, interner);
+        if (attributeName == null) {
+            // [NOCPP[
+            attributeName = AttributeName.createAttributeName(
+                    Portability.newLocalNameFromBuffer(strBuf, strBufLen,
+                            interner),
+                    namePolicy != XmlViolationPolicy.ALLOW);
+            // ]NOCPP]
+            // CPPONLY:     nonInternedAttributeName.setNameForNonInterned(Portability.newLocalNameFromBuffer(strBuf, 0, strBufLen, interner));
+            // CPPONLY:     attributeName = nonInternedAttributeName;
+        }
         clearStrBufAfterUse();
 
         if (attributes == null) {
@@ -1160,7 +1208,6 @@ public class Tokenizer implements Locator {
          */
         if (attributes.contains(attributeName)) {
             errDuplicateAttribute();
-            attributeName.release();
             attributeName = null;
         }
     }
@@ -1209,8 +1256,7 @@ public class Tokenizer implements Locator {
                 // [NOCPP[
             }
             // ]NOCPP]
-            attributeName = null; // attributeName has been adopted by the
-            // |attributes| object
+            attributeName = null;
         } else {
             clearStrBufAfterUse();
         }
@@ -1241,8 +1287,7 @@ public class Tokenizer implements Locator {
             // ]NOCPP]
             // CPPONLY: , attributeLine
             );
-            attributeName = null; // attributeName has been adopted by the
-            // |attributes| object
+            attributeName = null;
         } else {
             // We have a duplicate attribute. Explicitly discard its value.
             clearStrBufAfterUse();
@@ -1543,6 +1588,7 @@ public class Tokenizer implements Locator {
                              */
                             clearStrBufBeforeUse();
                             appendStrBuf((char) (c + 0x20));
+                            containsHyphen = false;
                             /* then switch to the tag name state. */
                             state = transition(state, Tokenizer.TAG_NAME, reconsume, pos);
                             /*
@@ -1563,6 +1609,7 @@ public class Tokenizer implements Locator {
                              */
                             clearStrBufBeforeUse();
                             appendStrBuf(c);
+                            containsHyphen = false;
                             /* then switch to the tag name state. */
                             state = transition(state, Tokenizer.TAG_NAME, reconsume, pos);
                             /*
@@ -1706,6 +1753,8 @@ public class Tokenizer implements Locator {
                                      * tag name.
                                      */
                                     c += 0x20;
+                                } else if (c == '-') {
+                                    containsHyphen = true;
                                 }
                                 /*
                                  * Anything else Append the current input
@@ -3607,6 +3656,7 @@ public class Tokenizer implements Locator {
                                  */
                                 clearStrBufBeforeUse();
                                 appendStrBuf(c);
+                                containsHyphen = false;
                                 /*
                                  * then switch to the tag name state. (Don't
                                  * emit the token yet; further details will be
@@ -6637,14 +6687,12 @@ public class Tokenizer implements Locator {
             Portability.releaseString(publicIdentifier);
             publicIdentifier = null;
         }
-        if (tagName != null) {
-            tagName.release();
-            tagName = null;
-        }
-        if (attributeName != null) {
-            attributeName.release();
-            attributeName = null;
-        }
+        tagName = null;
+        nonInternedTagName.setNameForNonInterned(null
+                // CPPONLY: , false
+                );
+        attributeName = null;
+        // CPPONLY: nonInternedAttributeName.setNameForNonInterned(null);
         tokenHandler.endTokenization();
         if (attributes != null) {
             // [NOCPP[
@@ -6721,14 +6769,9 @@ public class Tokenizer implements Locator {
         endTag = false;
         shouldSuspend = false;
         initDoctypeFields();
-        if (tagName != null) {
-            tagName.release();
-            tagName = null;
-        }
-        if (attributeName != null) {
-            attributeName.release();
-            attributeName = null;
-        }
+        containsHyphen = false;
+        tagName = null;
+        attributeName = null;
         if (newAttributesEachTime) {
             if (attributes != null) {
                 Portability.delete(attributes);
@@ -6788,23 +6831,35 @@ public class Tokenizer implements Locator {
             publicIdentifier = Portability.newStringFromString(other.publicIdentifier);
         }
 
-        if (tagName != null) {
-            tagName.release();
-        }
+        containsHyphen = other.containsHyphen;
         if (other.tagName == null) {
             tagName = null;
+        } else if (other.tagName.isInterned()) {
+            tagName = other.tagName;
         } else {
-            tagName = other.tagName.cloneElementName(interner);
+            // In the C++ case, the atoms in the other tokenizer are from a
+            // different tokenizer-scoped atom table. Therefore, we have to
+            // obtain the correspoding atom from our own atom table.
+            nonInternedTagName.setNameForNonInterned(Portability.newLocalFromLocal(other.tagName.getName(), interner)
+                    // CPPONLY: , other.tagName.isCustom()
+                    );
+            tagName = nonInternedTagName;
         }
 
-        if (attributeName != null) {
-            attributeName.release();
-        }
-        if (other.attributeName == null) {
-            attributeName = null;
-        } else {
-            attributeName = other.attributeName.cloneAttributeName(interner);
-        }
+        // [NOCPP[
+        attributeName = other.attributeName;
+        // ]NOCPP]
+        // CPPONLY: if (other.attributeName == null) {
+        // CPPONLY:     attributeName = null;
+        // CPPONLY: } else if (other.attributeName.isInterned()) {
+        // CPPONLY:     attributeName = other.attributeName;
+        // CPPONLY: } else {
+        // CPPONLY:     // In the C++ case, the atoms in the other tokenizer are from a
+        // CPPONLY:     // different tokenizer-scoped atom table. Therefore, we have to
+        // CPPONLY:     // obtain the correspoding atom from our own atom table.
+        // CPPONLY:     nonInternedAttributeName.setNameForNonInterned(Portability.newLocalFromLocal(other.attributeName.getLocal(AttributeName.HTML), interner));
+        // CPPONLY:     attributeName = nonInternedAttributeName;
+        // CPPONLY: }
 
         Portability.delete(attributes);
         if (other.attributes == null) {
@@ -7045,6 +7100,9 @@ public class Tokenizer implements Locator {
     }
 
     void destructor() {
+        Portability.delete(nonInternedTagName);
+        // CPPONLY: Portability.delete(nonInternedAttributeName);
+        nonInternedTagName = null;
         // The translator will write refcount tracing stuff here
         Portability.delete(attributes);
         attributes = null;

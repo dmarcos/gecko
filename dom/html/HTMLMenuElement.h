@@ -8,7 +8,6 @@
 #define mozilla_dom_HTMLMenuElement_h
 
 #include "mozilla/Attributes.h"
-#include "nsIDOMHTMLMenuElement.h"
 #include "nsGenericHTMLElement.h"
 
 class nsIMenuBuilder;
@@ -16,8 +15,7 @@ class nsIMenuBuilder;
 namespace mozilla {
 namespace dom {
 
-class HTMLMenuElement final : public nsGenericHTMLElement,
-                              public nsIDOMHTMLMenuElement
+class HTMLMenuElement final : public nsGenericHTMLElement
 {
 public:
   explicit HTMLMenuElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
@@ -27,27 +25,37 @@ public:
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
 
-  // nsIDOMHTMLMenuElement
-  NS_DECL_NSIDOMHTMLMENUELEMENT
-
+  virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
+                                const nsAttrValue* aValue,
+                                const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
+                                bool aNotify) override;
   virtual bool ParseAttribute(int32_t aNamespaceID,
-                                nsIAtom* aAttribute,
+                                nsAtom* aAttribute,
                                 const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 nsAttrValue& aResult) override;
 
-  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+                         bool aPreallocateChildren) const override;
 
   uint8_t GetType() const { return mType; }
 
   // WebIDL
 
-  // The XPCOM GetType is OK for us
+  void GetType(nsAString& aValue)
+  {
+    GetHTMLAttr(nsGkAtoms::type, aValue);
+  }
   void SetType(const nsAString& aType, ErrorResult& aError)
   {
     SetHTMLAttr(nsGkAtoms::type, aType, aError);
   }
 
-  // The XPCOM GetLabel is OK for us
+  void GetLabel(nsAString& aValue)
+  {
+    GetHTMLAttr(nsGkAtoms::label, aValue);
+  }
   void SetLabel(const nsAString& aLabel, ErrorResult& aError)
   {
     SetHTMLAttr(nsGkAtoms::label, aLabel, aError);

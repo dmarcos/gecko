@@ -3,6 +3,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+Components.utils.import("resource://gre/modules/Services.jsm");
+
 var gLanguagesDialog = {
 
   _availableLanguagesList: [],
@@ -19,7 +21,9 @@ var gLanguagesDialog = {
   // see bug 1194346.
   forceReflow() {
     this._activeLanguages.style.fontKerning = "none";
-    setTimeout("gLanguagesDialog._activeLanguages.style.removeProperty('font-kerning')", 0);
+    setTimeout(() => {
+      this._activeLanguages.style.removeProperty("font-kerning");
+    }, 0);
   },
 
   get _activeLanguages() {
@@ -57,7 +61,7 @@ var gLanguagesDialog = {
       var property = currString.key.split("."); // ab[-cd].accept
       if (property[1] == "accept") {
         var abCD = property[0];
-        var abCDPairs = abCD.split("-");      // ab[-cd]
+        var abCDPairs = abCD.split("-"); // ab[-cd]
         var useABCDFormat = abCDPairs.length > 1;
         var ab = useABCDFormat ? abCDPairs[0] : abCD;
         var cd = useABCDFormat ? abCDPairs[1] : "";
@@ -147,6 +151,10 @@ var gLanguagesDialog = {
       this._activeLanguages.selectedIndex = selectedIndex;
     }
 
+    // Update states of accept-language list and buttons according to
+    // privacy.resistFingerprinting and privacy.spoof_english.
+    this.readSpoofEnglish();
+
     return undefined;
   },
 
@@ -155,8 +163,10 @@ var gLanguagesDialog = {
   },
 
   onAvailableLanguageSelect() {
+    var availableLanguages = this._availableLanguages;
     var addButton = document.getElementById("addButton");
-    addButton.disabled = false;
+    addButton.disabled = availableLanguages.disabled ||
+                         availableLanguages.selectedIndex < 0;
 
     this._availableLanguages.removeAttribute("accesskey");
   },
@@ -289,6 +299,40 @@ var gLanguagesDialog = {
       downButton.disabled = true;
       removeButton.disabled = false;
     }
+  },
+
+  readSpoofEnglish() {
+    var checkbox = document.getElementById("spoofEnglish");
+    var resistFingerprinting = Services.prefs.getBoolPref("privacy.resistFingerprinting");
+    if (!resistFingerprinting) {
+      checkbox.hidden = true;
+      return false;
+    }
+
+    var spoofEnglish = document.getElementById("privacy.spoof_english").value;
+    var activeLanguages = this._activeLanguages;
+    var availableLanguages = this._availableLanguages;
+    checkbox.hidden = false;
+    switch (spoofEnglish) {
+    case 1: // don't spoof intl.accept_lanauges
+      activeLanguages.disabled = false;
+      activeLanguages.selectItem(activeLanguages.firstChild);
+      availableLanguages.disabled = false;
+      this.onAvailableLanguageSelect();
+      return false;
+    case 2: // spoof intl.accept_lanauges
+      activeLanguages.clearSelection();
+      activeLanguages.disabled = true;
+      availableLanguages.disabled = true;
+      this.onAvailableLanguageSelect();
+      return true;
+    default: // will prompt for spoofing intl.accept_lanauges if resisting fingerprinting
+      return false;
+    }
+  },
+
+  writeSpoofEnglish() {
+    return document.getElementById("spoofEnglish").checked ? 2 : 1;
   }
 };
 

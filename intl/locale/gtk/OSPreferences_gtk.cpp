@@ -4,12 +4,21 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include <locale.h>
 #include "OSPreferences.h"
 #include "dlfcn.h"
 #include "glib.h"
 #include "gio/gio.h"
 
 using namespace mozilla::intl;
+
+OSPreferences::OSPreferences()
+{
+}
+
+OSPreferences::~OSPreferences()
+{
+}
 
 bool
 OSPreferences::ReadSystemLocales(nsTArray<nsCString>& aLocaleList)
@@ -22,6 +31,23 @@ OSPreferences::ReadSystemLocales(nsTArray<nsCString>& aLocaleList)
     aLocaleList.AppendElement(defaultLang);
     return true;
   }
+  return false;
+}
+
+bool
+OSPreferences::ReadRegionalPrefsLocales(nsTArray<nsCString>& aLocaleList)
+{
+  MOZ_ASSERT(aLocaleList.IsEmpty());
+
+  // For now we're just taking the LC_TIME from POSIX environment for all
+  // regional preferences.
+  nsAutoCString localeStr(setlocale(LC_TIME, nullptr));
+
+  if (CanonicalizeLanguageTag(localeStr)) {
+    aLocaleList.AppendElement(localeStr);
+    return true;
+  }
+
   return false;
 }
 

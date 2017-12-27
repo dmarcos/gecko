@@ -21,7 +21,7 @@ const TESTCASES = [
   },
 ].sort((a, b) => a.expireTime - b.expireTime);
 
-do_register_cleanup(() => {
+registerCleanupFunction(() => {
   Services.prefs.clearUserPref(
     "security.cert_pinning.process_headers_from_non_builtin_roots");
   Services.prefs.clearUserPref("security.cert_pinning.max_max_age_seconds");
@@ -52,12 +52,14 @@ function insertEntries() {
       header += "; includeSubdomains";
     }
     sss.processHeader(Ci.nsISiteSecurityService.HEADER_HSTS, uri, header,
-                      sslStatus, 0);
+                      sslStatus, 0,
+                      Ci.nsISiteSecurityService.SOURCE_ORGANIC_REQUEST);
     for (let key of KEY_HASHES) {
       header += `; pin-sha256="${key}"`;
     }
     sss.processHeader(Ci.nsISiteSecurityService.HEADER_HPKP, uri, header,
-                      sslStatus, 0);
+                      sslStatus, 0,
+                      Ci.nsISiteSecurityService.SOURCE_ORGANIC_REQUEST);
   }
 }
 

@@ -7,7 +7,6 @@
 #include "mozilla/EndianUtils.h"
 #include "mozilla/dom/TypedArray.h"
 #include "mozilla/HoldDropJSObjects.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Telemetry.h"
 
 #include "nsSocketTransport2.h"
@@ -31,10 +30,7 @@
 #include "nsIDNSRecord.h"
 #include "nsIDNSService.h"
 #include "nsICancelable.h"
-
-#ifdef MOZ_WIDGET_GONK
-#include "NetStatistics.h"
-#endif
+#include "nsWrapperCacheInlines.h"
 
 namespace mozilla {
 namespace net {
@@ -51,7 +47,8 @@ PostEvent(nsUDPSocket *s, nsUDPSocketFunc func)
   if (!gSocketTransportService)
     return NS_ERROR_FAILURE;
 
-  return gSocketTransportService->Dispatch(NewRunnableMethod(s, func), NS_DISPATCH_NORMAL);
+  return gSocketTransportService->Dispatch(
+    NewRunnableMethod("net::PostEvent", s, func), NS_DISPATCH_NORMAL);
 }
 
 static nsresult
@@ -94,7 +91,8 @@ class SetSocketOptionRunnable : public Runnable
 {
 public:
   SetSocketOptionRunnable(nsUDPSocket* aSocket, const PRSocketOptionData& aOpt)
-    : mSocket(aSocket)
+    : Runnable("net::SetSocketOptionRunnable")
+    , mSocket(aSocket)
     , mOpt(aOpt)
   {}
 
@@ -357,8 +355,8 @@ nsUDPSocket::TryAttach()
   //
   if (!gSocketTransportService->CanAttachSocket())
   {
-    nsCOMPtr<nsIRunnable> event =
-      NewRunnableMethod(this, &nsUDPSocket::OnMsgAttach);
+    nsCOMPtr<nsIRunnable> event = NewRunnableMethod(
+      "net::nsUDPSocket::OnMsgAttach", this, &nsUDPSocket::OnMsgAttach);
 
     nsresult rv = gSocketTransportService->NotifyWhenCanAttachSocket(event);
     if (NS_FAILED(rv))
@@ -534,7 +532,8 @@ nsUDPSocket::OnSocketDetached(PRFileDesc *fd)
 
     if (listener) {
       listener->OnStopListening(this, mCondition);
-      NS_ProxyRelease(mListenerTarget, listener.forget());
+      NS_ProxyRelease(
+        "nsUDPSocket::mListener", mListenerTarget, listener.forget());
     }
   }
 }
@@ -849,8 +848,9 @@ class SocketListenerProxy final : public nsIUDPSocketListener
 
 public:
   explicit SocketListenerProxy(nsIUDPSocketListener* aListener)
-    : mListener(new nsMainThreadPtrHolder<nsIUDPSocketListener>(aListener))
-    , mTargetThread(do_GetCurrentThread())
+    : mListener(new nsMainThreadPtrHolder<nsIUDPSocketListener>(
+        "SocketListenerProxy::mListener", aListener))
+    , mTarget(GetCurrentThreadEventTarget())
   { }
 
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -859,10 +859,12 @@ public:
   class OnPacketReceivedRunnable : public Runnable
   {
   public:
-    OnPacketReceivedRunnable(const nsMainThreadPtrHandle<nsIUDPSocketListener>& aListener,
-                             nsIUDPSocket* aSocket,
-                             nsIUDPMessage* aMessage)
-      : mListener(aListener)
+    OnPacketReceivedRunnable(
+      const nsMainThreadPtrHandle<nsIUDPSocketListener>& aListener,
+      nsIUDPSocket* aSocket,
+      nsIUDPMessage* aMessage)
+      : Runnable("net::SocketListenerProxy::OnPacketReceivedRunnable")
+      , mListener(aListener)
       , mSocket(aSocket)
       , mMessage(aMessage)
     { }
@@ -878,10 +880,12 @@ public:
   class OnStopListeningRunnable : public Runnable
   {
   public:
-    OnStopListeningRunnable(const nsMainThreadPtrHandle<nsIUDPSocketListener>& aListener,
-                            nsIUDPSocket* aSocket,
-                            nsresult aStatus)
-      : mListener(aListener)
+    OnStopListeningRunnable(
+      const nsMainThreadPtrHandle<nsIUDPSocketListener>& aListener,
+      nsIUDPSocket* aSocket,
+      nsresult aStatus)
+      : Runnable("net::SocketListenerProxy::OnStopListeningRunnable")
+      , mListener(aListener)
       , mSocket(aSocket)
       , mStatus(aStatus)
     { }
@@ -896,7 +900,7 @@ public:
 
 private:
   nsMainThreadPtrHandle<nsIUDPSocketListener> mListener;
-  nsCOMPtr<nsIEventTarget> mTargetThread;
+  nsCOMPtr<nsIEventTarget> mTarget;
 };
 
 NS_IMPL_ISUPPORTS(SocketListenerProxy,
@@ -908,7 +912,7 @@ SocketListenerProxy::OnPacketReceived(nsIUDPSocket* aSocket,
 {
   RefPtr<OnPacketReceivedRunnable> r =
     new OnPacketReceivedRunnable(mListener, aSocket, aMessage);
-  return mTargetThread->Dispatch(r, NS_DISPATCH_NORMAL);
+  return mTarget->Dispatch(r, NS_DISPATCH_NORMAL);
 }
 
 NS_IMETHODIMP
@@ -917,7 +921,7 @@ SocketListenerProxy::OnStopListening(nsIUDPSocket* aSocket,
 {
   RefPtr<OnStopListeningRunnable> r =
     new OnStopListeningRunnable(mListener, aSocket, aStatus);
-  return mTargetThread->Dispatch(r, NS_DISPATCH_NORMAL);
+  return mTarget->Dispatch(r, NS_DISPATCH_NORMAL);
 }
 
 NS_IMETHODIMP
@@ -955,7 +959,7 @@ class SocketListenerProxyBackground final : public nsIUDPSocketListener
 public:
   explicit SocketListenerProxyBackground(nsIUDPSocketListener* aListener)
     : mListener(aListener)
-    , mTargetThread(do_GetCurrentThread())
+    , mTarget(GetCurrentThreadEventTarget())
   { }
 
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -967,7 +971,8 @@ public:
     OnPacketReceivedRunnable(const nsCOMPtr<nsIUDPSocketListener>& aListener,
                              nsIUDPSocket* aSocket,
                              nsIUDPMessage* aMessage)
-      : mListener(aListener)
+      : Runnable("net::SocketListenerProxyBackground::OnPacketReceivedRunnable")
+      , mListener(aListener)
       , mSocket(aSocket)
       , mMessage(aMessage)
     { }
@@ -986,7 +991,8 @@ public:
     OnStopListeningRunnable(const nsCOMPtr<nsIUDPSocketListener>& aListener,
                             nsIUDPSocket* aSocket,
                             nsresult aStatus)
-      : mListener(aListener)
+      : Runnable("net::SocketListenerProxyBackground::OnStopListeningRunnable")
+      , mListener(aListener)
       , mSocket(aSocket)
       , mStatus(aStatus)
     { }
@@ -1001,7 +1007,7 @@ public:
 
 private:
   nsCOMPtr<nsIUDPSocketListener> mListener;
-  nsCOMPtr<nsIEventTarget> mTargetThread;
+  nsCOMPtr<nsIEventTarget> mTarget;
 };
 
 NS_IMPL_ISUPPORTS(SocketListenerProxyBackground,
@@ -1013,7 +1019,7 @@ SocketListenerProxyBackground::OnPacketReceived(nsIUDPSocket* aSocket,
 {
   RefPtr<OnPacketReceivedRunnable> r =
     new OnPacketReceivedRunnable(mListener, aSocket, aMessage);
-  return mTargetThread->Dispatch(r, NS_DISPATCH_NORMAL);
+  return mTarget->Dispatch(r, NS_DISPATCH_NORMAL);
 }
 
 NS_IMETHODIMP
@@ -1022,7 +1028,7 @@ SocketListenerProxyBackground::OnStopListening(nsIUDPSocket* aSocket,
 {
   RefPtr<OnStopListeningRunnable> r =
     new OnStopListeningRunnable(mListener, aSocket, aStatus);
-  return mTargetThread->Dispatch(r, NS_DISPATCH_NORMAL);
+  return mTarget->Dispatch(r, NS_DISPATCH_NORMAL);
 }
 
 NS_IMETHODIMP
@@ -1038,7 +1044,7 @@ SocketListenerProxyBackground::OnPacketReceivedRunnable::Run()
 
   FallibleTArray<uint8_t>& data = mMessage->GetDataAsTArray();
 
-  UDPSOCKET_LOG(("%s [this=%p], len %" PRIuSIZE, __FUNCTION__, this, data.Length()));
+  UDPSOCKET_LOG(("%s [this=%p], len %zu", __FUNCTION__, this, data.Length()));
   nsCOMPtr<nsIUDPMessage> message = new UDPMessageProxy(&netAddr,
                                                         outputStream,
                                                         data);
@@ -1142,10 +1148,11 @@ PendingSendStream::OnLookupComplete(nsICancelable *request,
 
 class SendRequestRunnable: public Runnable {
 public:
-  SendRequestRunnable(nsUDPSocket *aSocket,
-                      const NetAddr &aAddr,
+  SendRequestRunnable(nsUDPSocket* aSocket,
+                      const NetAddr& aAddr,
                       FallibleTArray<uint8_t>&& aData)
-    : mSocket(aSocket)
+    : Runnable("net::SendRequestRunnable")
+    , mSocket(aSocket)
     , mAddr(aAddr)
     , mData(Move(aData))
   { }
@@ -1177,7 +1184,7 @@ nsUDPSocket::AsyncListen(nsIUDPSocketListener *aListener)
   NS_ENSURE_TRUE(mListener == nullptr, NS_ERROR_IN_PROGRESS);
   {
     MutexAutoLock lock(mLock);
-    mListenerTarget = NS_GetCurrentThread();
+    mListenerTarget = GetCurrentThreadEventTarget();
     if (NS_IsMainThread()) {
       // PNecko usage
       mListener = new SocketListenerProxy(aListener);

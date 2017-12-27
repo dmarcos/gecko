@@ -39,13 +39,14 @@ function test() {
       tab.linkedBrowser.removeEventListener("load", load, true);
 
       // Observe page setup
+      // eslint-disable-next-line mozilla/no-cpows-in-tests
       let doc = gBrowser.contentDocumentAsCPOW;
       gMutationObserver = new MutationObserver(function(mutations) {
         for (let mutation of mutations) {
           if (mutation.attributeName == "searchEngineName") {
             // Re-add the listener, and perform a search
             gBrowser.addProgressListener(listener);
-            gMutationObserver.disconnect()
+            gMutationObserver.disconnect();
             gMutationObserver = null;
             executeSoon(function() {
               doc.getElementById("searchText").value = "foo";
@@ -102,7 +103,7 @@ function test() {
     }
   }
 
-  let tab = gBrowser.selectedTab = gBrowser.addTab();
+  let tab = gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
 
   let listener = {
     onStateChange: function onStateChange(webProgress, req, flags, status) {
@@ -126,7 +127,7 @@ function test() {
 
       executeSoon(nextTest);
     }
-  }
+  };
 
   registerCleanupFunction(function() {
     Services.search.currentEngine = previouslySelectedEngine;

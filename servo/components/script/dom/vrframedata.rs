@@ -2,13 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use core::nonzero::NonZero;
 use dom::bindings::codegen::Bindings::VRFrameDataBinding;
 use dom::bindings::codegen::Bindings::VRFrameDataBinding::VRFrameDataMethods;
 use dom::bindings::error::Fallible;
-use dom::bindings::js::{JS, Root};
+use dom::bindings::nonnull::NonNullJSObjectPtr;
 use dom::bindings::num::Finite;
 use dom::bindings::reflector::{DomObject, Reflector, reflect_dom_object};
+use dom::bindings::root::{Dom, DomRoot};
 use dom::globalscope::GlobalScope;
 use dom::vrpose::VRPose;
 use dom::window::Window;
@@ -16,6 +16,7 @@ use dom_struct::dom_struct;
 use js::jsapi::{Heap, JSContext, JSObject};
 use js::typedarray::{Float32Array, CreateWith};
 use std::cell::Cell;
+use std::ptr;
 use webvr_traits::WebVRFrameData;
 
 #[dom_struct]
@@ -25,56 +26,59 @@ pub struct VRFrameData {
     left_view: Heap<*mut JSObject>,
     right_proj: Heap<*mut JSObject>,
     right_view: Heap<*mut JSObject>,
-    pose: JS<VRPose>,
+    pose: Dom<VRPose>,
     timestamp: Cell<f64>,
     first_timestamp: Cell<f64>
 }
 
 impl VRFrameData {
+    fn new_inherited(pose: &VRPose) -> VRFrameData {
+        VRFrameData {
+            reflector_: Reflector::new(),
+            left_proj: Heap::default(),
+            left_view: Heap::default(),
+            right_proj: Heap::default(),
+            right_view: Heap::default(),
+            pose: Dom::from_ref(&*pose),
+            timestamp: Cell::new(0.0),
+            first_timestamp: Cell::new(0.0)
+        }
+    }
+
     #[allow(unsafe_code)]
-    #[allow(unrooted_must_root)]
-    fn new(global: &GlobalScope) -> Root<VRFrameData> {
+    fn new(global: &GlobalScope) -> DomRoot<VRFrameData> {
         let matrix = [1.0, 0.0, 0.0, 0.0,
                       0.0, 1.0, 0.0, 0.0,
                       0.0, 0.0, 1.0, 0.0,
                       0.0, 0.0, 0.0, 1.0f32];
         let pose = VRPose::new(&global, &Default::default());
 
-        let framedata = VRFrameData {
-            reflector_: Reflector::new(),
-            left_proj: Heap::default(),
-            left_view: Heap::default(),
-            right_proj: Heap::default(),
-            right_view: Heap::default(),
-            pose: JS::from_ref(&*pose),
-            timestamp: Cell::new(0.0),
-            first_timestamp: Cell::new(0.0)
-        };
-
-        let root = reflect_dom_object(box framedata,
-                           global,
-                           VRFrameDataBinding::Wrap);
-
-        unsafe {
-            let ref framedata = *root;
-            let _ = Float32Array::create(global.get_cx(), CreateWith::Slice(&matrix),
-                                         framedata.left_proj.handle_mut());
-            let _ = Float32Array::create(global.get_cx(), CreateWith::Slice(&matrix),
-                                         framedata.left_view.handle_mut());
-            let _ = Float32Array::create(global.get_cx(), CreateWith::Slice(&matrix),
-                                         framedata.right_proj.handle_mut());
-            let _ = Float32Array::create(global.get_cx(), CreateWith::Slice(&matrix),
-                                         framedata.right_view.handle_mut());
-        }
+        let root = reflect_dom_object(Box::new(VRFrameData::new_inherited(&pose)),
+                                      global,
+                                      VRFrameDataBinding::Wrap);
+        let cx = global.get_cx();
+        create_typed_array(cx, &matrix, &root.left_proj);
+        create_typed_array(cx, &matrix, &root.left_view);
+        create_typed_array(cx, &matrix, &root.right_proj);
+        create_typed_array(cx, &matrix, &root.right_view);
 
         root
     }
 
-    pub fn Constructor(window: &Window) -> Fallible<Root<VRFrameData>> {
+    pub fn Constructor(window: &Window) -> Fallible<DomRoot<VRFrameData>> {
         Ok(VRFrameData::new(&window.global()))
     }
 }
 
+
+#[allow(unsafe_code)]
+fn create_typed_array(cx: *mut JSContext, src: &[f32], dst: &Heap<*mut JSObject>) {
+    rooted!(in (cx) let mut array = ptr::null_mut());
+    unsafe {
+        let _ = Float32Array::create(cx, CreateWith::Slice(src), array.handle_mut());
+    }
+    (*dst).set(array.get());
+}
 
 impl VRFrameData {
     #[allow(unsafe_code)]
@@ -114,30 +118,30 @@ impl VRFrameDataMethods for VRFrameData {
 
     #[allow(unsafe_code)]
     // https://w3c.github.io/webvr/#dom-vrframedata-leftprojectionmatrix
-    unsafe fn LeftProjectionMatrix(&self, _cx: *mut JSContext) -> NonZero<*mut JSObject> {
-        NonZero::new(self.left_proj.get())
+    unsafe fn LeftProjectionMatrix(&self, _cx: *mut JSContext) -> NonNullJSObjectPtr {
+        NonNullJSObjectPtr::new_unchecked(self.left_proj.get())
     }
 
     #[allow(unsafe_code)]
     // https://w3c.github.io/webvr/#dom-vrframedata-leftviewmatrix
-    unsafe fn LeftViewMatrix(&self, _cx: *mut JSContext) -> NonZero<*mut JSObject> {
-        NonZero::new(self.left_view.get())
+    unsafe fn LeftViewMatrix(&self, _cx: *mut JSContext) -> NonNullJSObjectPtr {
+        NonNullJSObjectPtr::new_unchecked(self.left_view.get())
     }
 
     #[allow(unsafe_code)]
     // https://w3c.github.io/webvr/#dom-vrframedata-rightprojectionmatrix
-    unsafe fn RightProjectionMatrix(&self, _cx: *mut JSContext) -> NonZero<*mut JSObject> {
-        NonZero::new(self.right_proj.get())
+    unsafe fn RightProjectionMatrix(&self, _cx: *mut JSContext) -> NonNullJSObjectPtr {
+        NonNullJSObjectPtr::new_unchecked(self.right_proj.get())
     }
 
     #[allow(unsafe_code)]
     // https://w3c.github.io/webvr/#dom-vrframedata-rightviewmatrix
-    unsafe fn RightViewMatrix(&self, _cx: *mut JSContext) -> NonZero<*mut JSObject> {
-        NonZero::new(self.right_view.get())
+    unsafe fn RightViewMatrix(&self, _cx: *mut JSContext) -> NonNullJSObjectPtr {
+        NonNullJSObjectPtr::new_unchecked(self.right_view.get())
     }
 
     // https://w3c.github.io/webvr/#dom-vrframedata-pose
-    fn Pose(&self) -> Root<VRPose> {
-        Root::from_ref(&*self.pose)
+    fn Pose(&self) -> DomRoot<VRPose> {
+        DomRoot::from_ref(&*self.pose)
     }
 }

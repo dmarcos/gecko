@@ -295,6 +295,7 @@ public:
     }
 };
 
+template<class C, typename T> jclass Context<C, T>::sClassRef;
 
 template<class Cls, typename Type = jobject>
 class ObjectBase
@@ -350,6 +351,28 @@ public:
         : ObjectBase<BoxedObject<T>, jobject>(ctx)
     {}
 };
+
+template<> const char ObjectBase<Object, jobject>::name[];
+template<> const char ObjectBase<TypedObject<jstring>, jstring>::name[];
+template<> const char ObjectBase<TypedObject<jclass>, jclass>::name[];
+template<> const char ObjectBase<TypedObject<jthrowable>, jthrowable>::name[];
+template<> const char ObjectBase<BoxedObject<jboolean>, jobject>::name[];
+template<> const char ObjectBase<BoxedObject<jbyte>, jobject>::name[];
+template<> const char ObjectBase<BoxedObject<jchar>, jobject>::name[];
+template<> const char ObjectBase<BoxedObject<jshort>, jobject>::name[];
+template<> const char ObjectBase<BoxedObject<jint>, jobject>::name[];
+template<> const char ObjectBase<BoxedObject<jlong>, jobject>::name[];
+template<> const char ObjectBase<BoxedObject<jfloat>, jobject>::name[];
+template<> const char ObjectBase<BoxedObject<jdouble>, jobject>::name[];
+template<> const char ObjectBase<TypedObject<jbooleanArray>, jbooleanArray>::name[];
+template<> const char ObjectBase<TypedObject<jbyteArray>, jbyteArray>::name[];
+template<> const char ObjectBase<TypedObject<jcharArray>, jcharArray>::name[];
+template<> const char ObjectBase<TypedObject<jshortArray>, jshortArray>::name[];
+template<> const char ObjectBase<TypedObject<jintArray>, jintArray>::name[];
+template<> const char ObjectBase<TypedObject<jlongArray>, jlongArray>::name[];
+template<> const char ObjectBase<TypedObject<jfloatArray>, jfloatArray>::name[];
+template<> const char ObjectBase<TypedObject<jdoubleArray>, jdoubleArray>::name[];
+template<> const char ObjectBase<TypedObject<jobjectArray>, jobjectArray>::name[];
 
 // Define bindings for built-in types.
 using String = TypedObject<jstring>;
@@ -853,14 +876,27 @@ public:
         static_assert(sizeof(ElementType) == sizeof(JNIElemType),
                       "Size of native type must match size of JNI type");
 
-        const jsize len = size_t(Base::Env()->GetArrayLength(Base::Instance()));
+        const size_t len = size_t(Base::Env()->GetArrayLength(Base::Instance()));
 
-        nsTArray<ElementType> array((size_t(len)));
-        array.SetLength(size_t(len));
-        (Base::Env()->*detail::TypeAdapter<ElementType>::GetArray)(
-                Base::Instance(), 0, len,
-                reinterpret_cast<JNIElemType*>(array.Elements()));
+        nsTArray<ElementType> array(len);
+        array.SetLength(len);
+        CopyTo(array.Elements(), len);
         return array;
+    }
+
+    // returns number of elements copied
+    size_t CopyTo(ElementType* buffer, size_t size) const
+    {
+        using JNIElemType = typename detail::TypeAdapter<ElementType>::JNIType;
+        static_assert(sizeof(ElementType) == sizeof(JNIElemType),
+                      "Size of native type must match size of JNI type");
+
+        const size_t len = size_t(Base::Env()->GetArrayLength(Base::Instance()));
+        const size_t amountToCopy = (len > size ? size : len);
+        (Base::Env()->*detail::TypeAdapter<ElementType>::GetArray)(
+                Base::Instance(), 0, jsize(amountToCopy),
+                reinterpret_cast<JNIElemType*>(buffer));
+        return amountToCopy;
     }
 
     ElementType operator[](size_t index) const
@@ -927,6 +963,7 @@ public:
     }
 };
 
+template<> const char ObjectBase<ByteBuffer, jobject>::name[];
 
 template<>
 class TypedObject<jobjectArray>

@@ -54,7 +54,7 @@ RestyleManager::ContentStateChanged(nsIContent* aContent,
 void
 RestyleManager::AttributeWillChange(dom::Element* aElement,
                                     int32_t aNameSpaceID,
-                                    nsIAtom* aAttribute,
+                                    nsAtom* aAttribute,
                                     int32_t aModType,
                                     const nsAttrValue* aNewValue)
 {
@@ -65,7 +65,7 @@ RestyleManager::AttributeWillChange(dom::Element* aElement,
 void
 RestyleManager::AttributeChanged(dom::Element* aElement,
                                  int32_t aNameSpaceID,
-                                 nsIAtom* aAttribute,
+                                 nsAtom* aAttribute,
                                  int32_t aModType,
                                  const nsAttrValue* aOldValue)
 {
@@ -77,6 +77,12 @@ nsresult
 RestyleManager::ReparentStyleContext(nsIFrame* aFrame)
 {
   MOZ_STYLO_FORWARD(ReparentStyleContext, (aFrame));
+}
+
+void
+RestyleManager::UpdateOnlyAnimationStyles()
+{
+  MOZ_STYLO_FORWARD(UpdateOnlyAnimationStyles, ());
 }
 
 } // namespace mozilla

@@ -63,7 +63,16 @@ nsMozIconURI::nsMozIconURI()
 nsMozIconURI::~nsMozIconURI()
 { }
 
-NS_IMPL_ISUPPORTS(nsMozIconURI, nsIMozIconURI, nsIURI, nsIIPCSerializableURI)
+NS_IMPL_ADDREF(nsMozIconURI)
+NS_IMPL_RELEASE(nsMozIconURI)
+
+NS_INTERFACE_MAP_BEGIN(nsMozIconURI)
+  NS_INTERFACE_MAP_ENTRY(nsIMozIconURI)
+  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIURI)
+  NS_INTERFACE_MAP_ENTRY(nsIURI)
+  NS_INTERFACE_MAP_ENTRY(nsIIPCSerializableURI)
+  NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsINestedURI, mIconURL)
+NS_INTERFACE_MAP_END
 
 #define MOZICON_SCHEME "moz-icon:"
 #define MOZICON_SCHEME_LEN (sizeof(MOZICON_SCHEME) - 1)
@@ -118,10 +127,48 @@ nsMozIconURI::GetSpecIgnoringRef(nsACString& result)
 }
 
 NS_IMETHODIMP
+nsMozIconURI::GetDisplaySpec(nsACString& aUnicodeSpec)
+{
+  return GetSpec(aUnicodeSpec);
+}
+
+NS_IMETHODIMP
+nsMozIconURI::GetDisplayHostPort(nsACString& aUnicodeHostPort)
+{
+  return GetHostPort(aUnicodeHostPort);
+}
+
+NS_IMETHODIMP
+nsMozIconURI::GetDisplayHost(nsACString& aUnicodeHost)
+{
+  return GetHost(aUnicodeHost);
+}
+
+NS_IMETHODIMP
+nsMozIconURI::GetDisplayPrePath(nsACString& aPrePath)
+{
+  return GetPrePath(aPrePath);
+}
+
+NS_IMETHODIMP
 nsMozIconURI::GetHasRef(bool* result)
 {
   *result = false;
   return NS_OK;
+}
+
+NS_IMPL_ISUPPORTS(nsMozIconURI::Mutator, nsIURISetters, nsIURIMutator)
+
+NS_IMETHODIMP
+nsMozIconURI::Mutate(nsIURIMutator** aMutator)
+{
+    RefPtr<nsMozIconURI::Mutator> mutator = new nsMozIconURI::Mutator();
+    nsresult rv = mutator->InitFromURI(this);
+    if (NS_FAILED(rv)) {
+        return rv;
+    }
+    mutator.forget(aMutator);
+    return NS_OK;
 }
 
 // takes a string like ?size=32&contentType=text/html and returns a new string
@@ -171,7 +218,10 @@ nsMozIconURI::SetSpec(const nsACString& aSpec)
 
   nsAutoCString iconSpec(aSpec);
   if (!Substring(iconSpec, 0,
-                 MOZICON_SCHEME_LEN).EqualsLiteral(MOZICON_SCHEME)) {
+                 MOZICON_SCHEME_LEN).EqualsLiteral(MOZICON_SCHEME) ||
+      (!Substring(iconSpec, MOZICON_SCHEME_LEN, 7).EqualsLiteral("file://") &&
+       // Checking for the leading '//' will match both the '//stock/' and '//.foo' cases:
+       !Substring(iconSpec, MOZICON_SCHEME_LEN, 2).EqualsLiteral("//"))) {
     return NS_ERROR_MALFORMED_URI;
   }
 
@@ -251,6 +301,11 @@ nsMozIconURI::SetSpec(const nsACString& aSpec)
   ioService->NewURI(iconPath, nullptr, nullptr, getter_AddRefs(uri));
   mIconURL = do_QueryInterface(uri);
   if (mIconURL) {
+    // The inner URI should be a 'file:' one. If not, bail.
+    bool isFile = false;
+    if (!NS_SUCCEEDED(mIconURL->SchemeIs("file", &isFile)) || !isFile) {
+      return NS_ERROR_MALFORMED_URI;
+    }
     mFileName.Truncate();
   } else if (mFileName.IsEmpty()) {
     return NS_ERROR_MALFORMED_URI;
@@ -359,14 +414,14 @@ nsMozIconURI::SetPort(int32_t aPort)
 }
 
 NS_IMETHODIMP
-nsMozIconURI::GetPath(nsACString& aPath)
+nsMozIconURI::GetPathQueryRef(nsACString& aPath)
 {
   aPath.Truncate();
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsMozIconURI::SetPath(const nsACString& aPath)
+nsMozIconURI::SetPathQueryRef(const nsACString& aPath)
 {
   return NS_ERROR_FAILURE;
 }
@@ -393,6 +448,13 @@ nsMozIconURI::GetQuery(nsACString& aQuery)
 
 NS_IMETHODIMP
 nsMozIconURI::SetQuery(const nsACString& aQuery)
+{
+  return NS_ERROR_FAILURE;
+}
+
+NS_IMETHODIMP
+nsMozIconURI::SetQueryWithEncoding(const nsACString& aQuery,
+                                   const Encoding* aEncoding)
 {
   return NS_ERROR_FAILURE;
 }
@@ -521,13 +583,6 @@ NS_IMETHODIMP
 nsMozIconURI::GetAsciiHost(nsACString& aHostA)
 {
   return GetHost(aHostA);
-}
-
-NS_IMETHODIMP
-nsMozIconURI::GetOriginCharset(nsACString& result)
-{
-  result.Truncate();
-  return NS_OK;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -694,32 +749,21 @@ nsMozIconURI::Deserialize(const URIParams& aParams)
   return true;
 }
 
-////////////////////////////////////////////////////////////
-// Nested version of nsIconURI
-
-nsNestedMozIconURI::nsNestedMozIconURI()
-{ }
-
-nsNestedMozIconURI::~nsNestedMozIconURI()
-{ }
-
-NS_IMPL_ISUPPORTS_INHERITED(nsNestedMozIconURI, nsMozIconURI, nsINestedURI)
-
 NS_IMETHODIMP
-nsNestedMozIconURI::GetInnerURI(nsIURI** aURI)
+nsMozIconURI::GetInnerURI(nsIURI** aURI)
 {
   nsCOMPtr<nsIURI> iconURL = do_QueryInterface(mIconURL);
-  if (iconURL) {
-    iconURL.forget(aURI);
-  } else {
+  if (!iconURL) {
     *aURI = nullptr;
+    return NS_ERROR_FAILURE;
   }
+
+  iconURL.forget(aURI);
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsNestedMozIconURI::GetInnermostURI(nsIURI** aURI)
+nsMozIconURI::GetInnermostURI(nsIURI** aURI)
 {
   return NS_ImplGetInnermostURI(this, aURI);
 }
-

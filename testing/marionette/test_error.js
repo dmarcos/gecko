@@ -4,7 +4,35 @@
 
 const {utils: Cu} = Components;
 
-Cu.import("chrome://marionette/content/error.js");
+const {
+  ElementClickInterceptedError,
+  ElementNotAccessibleError,
+  ElementNotInteractableError,
+  error,
+  InsecureCertificateError,
+  InvalidArgumentError,
+  InvalidCookieDomainError,
+  InvalidElementStateError,
+  InvalidSelectorError,
+  InvalidSessionIDError,
+  JavaScriptError,
+  MoveTargetOutOfBoundsError,
+  NoAlertOpenError,
+  NoSuchElementError,
+  NoSuchFrameError,
+  NoSuchWindowError,
+  ScriptTimeoutError,
+  SessionNotCreatedError,
+  stack,
+  StaleElementReferenceError,
+  TimeoutError,
+  UnableToSetCookieError,
+  UnexpectedAlertOpenError,
+  UnknownCommandError,
+  UnknownError,
+  UnsupportedOperationError,
+  WebDriverError,
+} = Cu.import("chrome://marionette/content/error.js", {});
 
 function notok(condition) {
   ok(!(condition));
@@ -56,16 +84,16 @@ add_test(function test_wrap() {
   ok(error.wrap(new InvalidArgumentError()) instanceof WebDriverError);
   ok(error.wrap(new InvalidArgumentError()) instanceof InvalidArgumentError);
 
-  // JS errors should be wrapped in WebDriverError
-  equal(error.wrap(new Error()).name, "WebDriverError");
-  ok(error.wrap(new Error()) instanceof WebDriverError);
-  equal(error.wrap(new EvalError()).name, "WebDriverError");
-  equal(error.wrap(new InternalError()).name, "WebDriverError");
-  equal(error.wrap(new RangeError()).name, "WebDriverError");
-  equal(error.wrap(new ReferenceError()).name, "WebDriverError");
-  equal(error.wrap(new SyntaxError()).name, "WebDriverError");
-  equal(error.wrap(new TypeError()).name, "WebDriverError");
-  equal(error.wrap(new URIError()).name, "WebDriverError");
+  // JS errors should be wrapped in UnknownError
+  equal(error.wrap(new Error()).name, "UnknownError");
+  ok(error.wrap(new Error()) instanceof UnknownError);
+  equal(error.wrap(new EvalError()).name, "UnknownError");
+  equal(error.wrap(new InternalError()).name, "UnknownError");
+  equal(error.wrap(new RangeError()).name, "UnknownError");
+  equal(error.wrap(new ReferenceError()).name, "UnknownError");
+  equal(error.wrap(new SyntaxError()).name, "UnknownError");
+  equal(error.wrap(new TypeError()).name, "UnknownError");
+  equal(error.wrap(new URIError()).name, "UnknownError");
 
   // wrapped JS errors should retain their type
   // as part of the message field
@@ -89,29 +117,10 @@ add_test(function test_stringify() {
   run_next_test();
 });
 
-add_test(function test_pprint() {
-  equal('[object Object] {"foo":"bar"}', error.pprint`${{foo: "bar"}}`);
-
-  equal("[object Number] 42", error.pprint`${42}`);
-  equal("[object Boolean] true", error.pprint`${true}`);
-  equal("[object Undefined] undefined", error.pprint`${undefined}`);
-  equal("[object Null] null", error.pprint`${null}`);
-
-  let complexObj = {toJSON: () => "foo"};
-  equal('[object Object] "foo"', error.pprint`${complexObj}`);
-
-  let cyclic = {};
-  cyclic.me = cyclic;
-  equal("[object Object] <cyclic object value>", error.pprint`${cyclic}`);
-
-  let el = {
-    nodeType: 1,
-    localName: "input",
-    id: "foo",
-    classList: {length: 1},
-    className: "bar baz",
-  };
-  equal('<input id="foo" class="bar baz">', error.pprint`${el}`);
+add_test(function test_stack() {
+  equal("string", typeof stack());
+  ok(stack().includes("test_stack"));
+  ok(!stack().includes("add_test"));
 
   run_next_test();
 });
@@ -128,7 +137,11 @@ add_test(function test_toJSON() {
   equal(e1s.message, e1.message);
   equal(e1s.stacktrace, e1.stack);
 
-  let e2 = new JavaScriptError("first", "second", "third", "fourth");
+  let e2 = new JavaScriptError("first", {
+    fnName: "second",
+    file: "third",
+    line: "fourth",
+  });
   let e2s = e2.toJSON();
   equal(e2.status, e2s.error);
   equal(e2.message, e2s.message);
@@ -196,28 +209,40 @@ add_test(function test_WebDriverError() {
 
 add_test(function test_ElementClickInterceptedError() {
   let otherEl = {
+    hasAttribute: attr => attr in otherEl,
+    getAttribute: attr => attr in otherEl ? otherEl[attr] : null,
     nodeType: 1,
     localName: "a",
-    classList: [],
   };
   let obscuredEl = {
+    hasAttribute: attr => attr in obscuredEl,
+    getAttribute: attr => attr in obscuredEl ? obscuredEl[attr] : null,
     nodeType: 1,
     localName: "b",
-    classList: [],
     ownerDocument: {
       elementFromPoint: function (x, y) {
         return otherEl;
       },
     },
+    style: {
+      pointerEvents: "auto",
+    }
   };
 
-  let err = new ElementClickInterceptedError(obscuredEl, {x: 1, y: 2});
-  equal("ElementClickInterceptedError", err.name);
+  let err1 = new ElementClickInterceptedError(obscuredEl, {x: 1, y: 2});
+  equal("ElementClickInterceptedError", err1.name);
   equal("Element <b> is not clickable at point (1,2) " +
       "because another element <a> obscures it",
-      err.message);
-  equal("element click intercepted", err.status);
-  ok(err instanceof WebDriverError);
+      err1.message);
+  equal("element click intercepted", err1.status);
+  ok(err1 instanceof WebDriverError);
+
+  obscuredEl.style.pointerEvents = "none";
+  let err2 = new ElementClickInterceptedError(obscuredEl, {x: 1, y: 2});
+  equal("Element <b> is not clickable at point (1,2) " +
+      "because it does not have pointer events enabled, " +
+      "and element <a> would receive the click instead",
+      err2.message);
 
   run_next_test();
 });
@@ -247,6 +272,16 @@ add_test(function test_InvalidArgumentError() {
   equal("InvalidArgumentError", err.name);
   equal("foo", err.message);
   equal("invalid argument", err.status);
+  ok(err instanceof WebDriverError);
+
+  run_next_test();
+});
+
+add_test(function test_InvalidCookieDomainError() {
+  let err = new InvalidCookieDomainError("foo");
+  equal("InvalidCookieDomainError", err.name);
+  equal("foo", err.message);
+  equal("invalid cookie domain", err.status);
   ok(err instanceof WebDriverError);
 
   run_next_test();
@@ -291,9 +326,9 @@ add_test(function test_JavaScriptError() {
 
   equal("undefined", new JavaScriptError(undefined).message);
   // TODO(ato): Bug 1240550
-  //equal("funcname @file", new JavaScriptError("message", "funcname", "file").stack);
+  //equal("funcname @file", new JavaScriptError("message", {fnName: "funcname", file: "file"}).stack);
   equal("funcname @file, line line",
-      new JavaScriptError("message", "funcname", "file", "line").stack);
+      new JavaScriptError("message", {fnName: "funcname", file: "file", line: "line"}).stack);
 
   // TODO(ato): More exhaustive tests for JS stack computation
 

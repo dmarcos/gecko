@@ -16,7 +16,7 @@
 #include "nsISupportsPrimitives.h"
 #include "IEnumFE.h"
 #include "nsPrimitiveHelpers.h"
-#include "nsXPIDLString.h"
+#include "nsString.h"
 #include "nsImageClipboard.h"
 #include "nsCRT.h"
 #include "nsPrintfCString.h"
@@ -34,6 +34,7 @@
 #include "nsIContentPolicy.h"
 #include "nsContentUtils.h"
 #include "nsIPrincipal.h"
+#include "nsNativeCharsetUtils.h"
 
 #include "WinUtils.h"
 #include "mozilla/LazyIdleThread.h"
@@ -117,9 +118,10 @@ nsDataObj::CStream::OnDataAvailable(nsIRequest *aRequest,
                                     uint32_t aCount) // bytes available on this call
 {
     // Extend the write buffer for the incoming data.
-    uint8_t* buffer = mChannelData.AppendElements(aCount);
-    if (buffer == nullptr)
+    uint8_t* buffer = mChannelData.AppendElements(aCount, fallible);
+    if (!buffer) {
       return NS_ERROR_OUT_OF_MEMORY;
+    }
     NS_ASSERTION((mChannelData.Length() == (aOffset + aCount)),
       "stream length mismatch w/write buffer");
 
@@ -158,10 +160,7 @@ NS_IMETHODIMP nsDataObj::CStream::OnStopRequest(nsIRequest *aRequest,
 nsresult nsDataObj::CStream::WaitForCompletion()
 {
   // We are guaranteed OnStopRequest will get called, so this should be ok.
-  while (!mChannelRead) {
-    // Pump messages
-    NS_ProcessNextEvent(nullptr, true);
-  }
+  SpinEventLoopUntil([&]() { return mChannelRead; });
 
   if (!mChannelData.Length())
     mChannelResult = NS_ERROR_FAILURE;
@@ -441,7 +440,7 @@ STDMETHODIMP_(ULONG) nsDataObj::AddRef()
 }
 
 namespace {
-class RemoveTempFileHelper : public nsIObserver
+class RemoveTempFileHelper final : public nsIObserver
 {
 public:
   explicit RemoveTempFileHelper(nsIFile* aTempFile)
@@ -457,11 +456,11 @@ public:
     // We need to listen to both the xpcom shutdown message and our timer, and
     // fire when the first of either of these two messages is received.
     nsresult rv;
-    mTimer = do_CreateInstance(NS_TIMER_CONTRACTID, &rv);
+    rv = NS_NewTimerWithObserver(getter_AddRefs(mTimer),
+                                 this, 500, nsITimer::TYPE_ONE_SHOT);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return;
     }
-    mTimer->Init(this, 500, nsITimer::TYPE_ONE_SHOT);
 
     nsCOMPtr<nsIObserverService> observerService =
       do_GetService("@mozilla.org/observer-service;1");
@@ -1081,7 +1080,7 @@ CreateFilenameFromTextW(nsString & aText, const wchar_t * aExtension,
 #define PAGEINFO_PROPERTIES "chrome://navigator/locale/pageInfo.properties"
 
 static bool
-GetLocalizedString(const char16_t * aName, nsXPIDLString & aString)
+GetLocalizedString(const char* aName, nsAString& aString)
 {
   nsCOMPtr<nsIStringBundleService> stringService =
     mozilla::services::GetStringBundleService();
@@ -1094,7 +1093,7 @@ GetLocalizedString(const char16_t * aName, nsXPIDLString & aString)
   if (NS_FAILED(rv))
     return false;
 
-  rv = stringBundle->GetStringFromName(aName, getter_Copies(aString));
+  rv = stringBundle->GetStringFromName(aName, aString);
   return NS_SUCCEEDED(rv);
 }
 
@@ -1126,8 +1125,8 @@ nsDataObj :: GetFileDescriptorInternetShortcutA ( FORMATETC& aFE, STGMEDIUM& aST
   // 2) localized string for an untitled page, 3) just use "Untitled.URL"
   if (!CreateFilenameFromTextA(title, ".URL", 
                                fileGroupDescA->fgd[0].cFileName, NS_MAX_FILEDESCRIPTOR)) {
-    nsXPIDLString untitled;
-    if (!GetLocalizedString(u"noPageTitle", untitled) ||
+    nsAutoString untitled;
+    if (!GetLocalizedString("noPageTitle", untitled) ||
         !CreateFilenameFromTextA(untitled, ".URL", 
                                  fileGroupDescA->fgd[0].cFileName, NS_MAX_FILEDESCRIPTOR)) {
       strcpy(fileGroupDescA->fgd[0].cFileName, "Untitled.URL");
@@ -1167,8 +1166,8 @@ nsDataObj :: GetFileDescriptorInternetShortcutW ( FORMATETC& aFE, STGMEDIUM& aST
   // 2) localized string for an untitled page, 3) just use "Untitled.URL"
   if (!CreateFilenameFromTextW(title, L".URL",
                                fileGroupDescW->fgd[0].cFileName, NS_MAX_FILEDESCRIPTOR)) {
-    nsXPIDLString untitled;
-    if (!GetLocalizedString(u"noPageTitle", untitled) ||
+    nsAutoString untitled;
+    if (!GetLocalizedString("noPageTitle", untitled) ||
         !CreateFilenameFromTextW(untitled, L".URL",
                                  fileGroupDescW->fgd[0].cFileName, NS_MAX_FILEDESCRIPTOR)) {
       wcscpy(fileGroupDescW->fgd[0].cFileName, L"Untitled.URL");
@@ -1343,7 +1342,8 @@ HRESULT nsDataObj::GetText(const nsACString & aDataFlavor, FORMATETC& aFE, STGME
   mTransferable->GetTransferData(flavorStr, getter_AddRefs(genericDataWrapper), &len);
   if ( !len )
     return E_FAIL;
-  nsPrimitiveHelpers::CreateDataFromPrimitive ( flavorStr, genericDataWrapper, &data, len );
+  nsPrimitiveHelpers::CreateDataFromPrimitive(
+    nsDependentCString(flavorStr), genericDataWrapper, &data, len);
   if ( !data )
     return E_FAIL;
 

@@ -63,10 +63,6 @@ nsPrintingProxy::GetInstance()
 nsresult
 nsPrintingProxy::Init()
 {
-  ContentChild::GetSingleton()->SetEventTargetForActor(this,
-    SystemGroup::EventTargetFor(mozilla::TaskCategory::Other));
-  MOZ_ASSERT(this->GetActorEventTarget());
-
   mozilla::Unused << ContentChild::GetSingleton()->SendPPrintingConstructor(this);
   return NS_OK;
 }
@@ -117,9 +113,7 @@ nsPrintingProxy::ShowPrintDialog(mozIDOMWindowProxy *parent,
 
   mozilla::Unused << SendShowPrintDialog(dialog, pBrowser, inSettings);
 
-  while(!dialog->returned()) {
-    NS_ProcessNextEvent(nullptr, true);
-  }
+  SpinEventLoopUntil([&, dialog]() { return dialog->returned(); });
 
   rv = dialog->result();
   NS_ENSURE_SUCCESS(rv, rv);
@@ -154,7 +148,7 @@ nsPrintingProxy::ShowProgress(mozIDOMWindowProxy*      parent,
   TabChild* pBrowser = static_cast<TabChild*>(tabchild.get());
 
   RefPtr<PrintProgressDialogChild> dialogChild =
-    new PrintProgressDialogChild(openDialogObserver);
+    new PrintProgressDialogChild(openDialogObserver, printSettings);
 
   SendPPrintProgressDialogConstructor(dialogChild);
 
@@ -168,12 +162,12 @@ nsPrintingProxy::ShowProgress(mozIDOMWindowProxy*      parent,
     }
   }
 
-  nsresult rv = NS_OK;
+  // NOTE: We set notifyOnOpen to true unconditionally. If the parent process
+  // would get `false` for notifyOnOpen, then it will synthesize a notification
+  // which will be sent asynchronously down to the child.
+  *notifyOnOpen = true;
   mozilla::Unused << SendShowProgress(pBrowser, dialogChild, remotePrintJob,
-                                      isForPrinting, notifyOnOpen, &rv);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
+                                      isForPrinting);
 
   // If we have a RemotePrintJob that will be being used as a more general
   // forwarder for print progress listeners. Once we always have one we can
@@ -190,14 +184,6 @@ NS_IMETHODIMP
 nsPrintingProxy::ShowPageSetup(mozIDOMWindowProxy *parent,
                                nsIPrintSettings *printSettings,
                                nsIObserver *aObs)
-{
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_IMETHODIMP
-nsPrintingProxy::ShowPrinterProperties(mozIDOMWindowProxy *parent,
-                                       const char16_t *printerName,
-                                       nsIPrintSettings *printSettings)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }

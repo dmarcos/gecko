@@ -14,12 +14,16 @@ import re
 import sys
 import os
 import os.path as path
+import platform
 import copy
 from collections import OrderedDict
 from time import time
 import json
 import urllib2
+import urllib
 import base64
+import shutil
+import subprocess
 
 from mach.registrar import Registrar
 from mach.decorators import (
@@ -45,21 +49,16 @@ WEB_PLATFORM_TESTS_PATH = os.path.join("tests", "wpt", "web-platform-tests")
 SERVO_TESTS_PATH = os.path.join("tests", "wpt", "mozilla", "tests")
 
 TEST_SUITES = OrderedDict([
-    ("tidy", {"kwargs": {"all_files": False, "no_progress": False, "self_test": False},
+    ("tidy", {"kwargs": {"all_files": False, "no_progress": False, "self_test": False,
+                         "stylo": False},
               "include_arg": "include"}),
     ("wpt", {"kwargs": {"release": False},
              "paths": [path.abspath(WEB_PLATFORM_TESTS_PATH),
                        path.abspath(SERVO_TESTS_PATH)],
              "include_arg": "include"}),
-    ("css", {"kwargs": {"release": False},
-             "paths": [path.abspath(path.join("tests", "wpt", "css-tests"))],
-             "include_arg": "include"}),
     ("unit", {"kwargs": {},
               "paths": [path.abspath(path.join("tests", "unit"))],
               "include_arg": "test_name"}),
-    ("compiletest", {"kwargs": {"release": False},
-                     "paths": [path.abspath(path.join("tests", "compiletest"))],
-                     "include_arg": "test_name"})
 ])
 
 TEST_SUITES_BY_PREFIX = {path: k for k, v in TEST_SUITES.iteritems() if "paths" in v for path in v["paths"]}
@@ -69,7 +68,7 @@ def create_parser_wpt():
     parser = wptcommandline.create_parser()
     parser.add_argument('--release', default=False, action="store_true",
                         help="Run with a release build of servo")
-    parser.add_argument('--chaos', default=False, action="store_true",
+    parser.add_argument('--rr-chaos', default=False, action="store_true",
                         help="Run under chaos mode in rr until a failure is captured")
     parser.add_argument('--pref', default=[], action="append", dest="prefs",
                         help="Pass preferences to servo")
@@ -111,11 +110,10 @@ class MachCommands(CommandBase):
     def test(self, params, render_mode=DEFAULT_RENDER_MODE, release=False, tidy_all=False,
              no_progress=False, self_test=False, all_suites=False):
         suites = copy.deepcopy(TEST_SUITES)
-        suites["tidy"]["kwargs"] = {"all_files": tidy_all, "no_progress": no_progress, "self_test": self_test}
+        suites["tidy"]["kwargs"] = {"all_files": tidy_all, "no_progress": no_progress, "self_test": self_test,
+                                    "stylo": False}
         suites["wpt"]["kwargs"] = {"release": release}
-        suites["css"]["kwargs"] = {"release": release}
         suites["unit"]["kwargs"] = {}
-        suites["compiletest"]["kwargs"] = {"release": release}
 
         selected_suites = OrderedDict()
 
@@ -171,21 +169,23 @@ class MachCommands(CommandBase):
     @Command('test-perf',
              description='Run the page load performance test',
              category='testing')
-    @CommandArgument('--submit', default=False, action="store_true",
+    @CommandArgument('--base', default=None,
+                     help="the base URL for testcases")
+    @CommandArgument('--date', default=None,
+                     help="the datestamp for the data")
+    @CommandArgument('--submit', '-a', default=False, action="store_true",
                      help="submit the data to perfherder")
-    def test_perf(self, submit=False):
+    def test_perf(self, base=None, date=None, submit=False):
         self.set_software_rendering_env(True)
 
         self.ensure_bootstrapped()
         env = self.build_env()
         cmd = ["bash", "test_perf.sh"]
+        if base:
+            cmd += ["--base", base]
+        if date:
+            cmd += ["--date", date]
         if submit:
-            if not ("TREEHERDER_CLIENT_ID" in os.environ and
-                    "TREEHERDER_CLIENT_SECRET" in os.environ):
-                print("Please set the environment variable \"TREEHERDER_CLIENT_ID\""
-                      " and \"TREEHERDER_CLIENT_SECRET\" to submit the performance"
-                      " test result to perfherder")
-                return 1
             cmd += ["--submit"]
         return call(cmd,
                     env=env,
@@ -231,19 +231,35 @@ class MachCommands(CommandBase):
             else:
                 test_patterns.append(test)
 
+        in_crate_packages = []
+
+        # Since the selectors tests have no corresponding selectors_tests crate in tests/unit,
+        # we need to treat them separately from those that do.
+        try:
+            packages.remove('selectors')
+            in_crate_packages += ["selectors"]
+        except KeyError:
+            pass
+
         if not packages:
             packages = set(os.listdir(path.join(self.context.topdir, "tests", "unit"))) - set(['.DS_Store'])
+            in_crate_packages += ["selectors"]
+
+        # Since the selectors tests have no corresponding selectors_tests crate in tests/unit,
+        # we need to treat them separately from those that do.
+        try:
+            packages.remove('selectors')
+            in_crate_packages += ["selectors"]
+        except KeyError:
+            pass
 
         packages.discard('stylo')
 
-        has_style = True
-        try:
-            packages.remove('style')
-        except KeyError:
-            has_style = False
-
         env = self.build_env()
         env["RUST_BACKTRACE"] = "1"
+
+        # Work around https://github.com/rust-lang/cargo/issues/4790
+        del env["RUSTDOCFLAGS"]
 
         if "msvc" in host_triple():
             # on MSVC, we need some DLLs in the path. They were copied
@@ -255,6 +271,8 @@ class MachCommands(CommandBase):
             args = ["cargo", "bench" if bench else "test"]
             for crate in packages:
                 args += ["-p", "%s_tests" % crate]
+            for crate in in_crate_packages:
+                args += ["-p", crate]
             args += test_patterns
 
             if features:
@@ -267,26 +285,14 @@ class MachCommands(CommandBase):
             if err is not 0:
                 return err
 
-        # Run style tests with the testing feature
-        if has_style:
-            args = ["cargo", "bench" if bench else "test", "-p", "style_tests", "--features"]
-            if features:
-                args += ["%s" % ' '.join(features + ["testing"])]
-            else:
-                args += ["testing"]
-
-            args += test_patterns
-
-            if nocapture:
-                args += ["--", "--nocapture"]
-            return call(args, env=env, cwd=self.servo_crate())
-
     @Command('test-stylo',
              description='Run stylo unit tests',
              category='testing')
+    @CommandArgument('test_name', nargs=argparse.REMAINDER,
+                     help="Only run tests that match this pattern or file path")
     @CommandArgument('--release', default=False, action="store_true",
                      help="Run with a release build of servo")
-    def test_stylo(self, release=False):
+    def test_stylo(self, release=False, test_name=None):
         self.set_use_stable_rust()
         self.ensure_bootstrapped()
 
@@ -294,71 +300,10 @@ class MachCommands(CommandBase):
         env["RUST_BACKTRACE"] = "1"
         env["CARGO_TARGET_DIR"] = path.join(self.context.topdir, "target", "geckolib").encode("UTF-8")
 
-        release = ["--release"] if release else []
-        ret = 0
+        args = (["cargo", "test", "-p", "stylo_tests"] +
+                (["--release"] if release else []) + (test_name or []))
         with cd(path.join("ports", "geckolib")):
-            ret = call(["cargo", "test", "-p", "stylo_tests", "--features", "testing"] + release, env=env)
-        if ret != 0:
-            return ret
-        with cd(path.join("ports", "geckolib")):
-            return call(["cargo", "test", "-p", "style"] + release, env=env)
-
-    @Command('test-compiletest',
-             description='Run compiletests',
-             category='testing')
-    @CommandArgument('--package', '-p', default=None, help="Specific package to test")
-    @CommandArgument('test_name', nargs=argparse.REMAINDER,
-                     help="Only run tests that match this pattern or file path")
-    @CommandArgument('--release', default=False, action="store_true",
-                     help="Run with a release build of servo")
-    def test_compiletest(self, test_name=None, package=None, release=False):
-        if test_name is None:
-            test_name = []
-
-        self.ensure_bootstrapped()
-
-        if package:
-            packages = {package}
-        else:
-            packages = set()
-
-        test_patterns = []
-        for test in test_name:
-            # add package if 'tests/compiletest/<package>'
-            match = re.search("tests/compiletest/(\\w+)/?$", test)
-            if match:
-                packages.add(match.group(1))
-            # add package & test if '<package>/<test>', 'tests/compiletest/<package>/<test>.rs', or similar
-            elif re.search("\\w/\\w", test):
-                tokens = test.split("/")
-                packages.add(tokens[-2])
-                test_prefix = tokens[-1]
-                if test_prefix.endswith(".rs"):
-                    test_prefix = test_prefix[:-3]
-                test_prefix += "::"
-                test_patterns.append(test_prefix)
-            # add test as-is otherwise
-            else:
-                test_patterns.append(test)
-
-        if not packages:
-            packages = set(os.listdir(path.join(self.context.topdir, "tests", "compiletest"))) - set(['.DS_Store'])
-
-        packages.remove("helper")
-
-        args = ["cargo", "test"]
-        for crate in packages:
-            args += ["-p", "%s_compiletest" % crate]
-        args += test_patterns
-
-        env = self.build_env()
-        if release:
-            env["BUILD_MODE"] = "release"
-            args += ["--release"]
-        else:
-            env["BUILD_MODE"] = "debug"
-
-        return call(args, env=env, cwd=self.servo_crate())
+            return call(args, env=env)
 
     @Command('test-content',
              description='Run the content tests',
@@ -456,9 +401,17 @@ class MachCommands(CommandBase):
     def wptrunner(self, run_file, **kwargs):
         self.set_software_rendering_env(kwargs['release'])
 
+        # By default, Rayon selects the number of worker threads
+        # based on the available CPU count. This doesn't work very
+        # well when running tests on CI, since we run so many
+        # Servo processes in parallel. The result is a lot of
+        # extra timeouts. Instead, force Rayon to assume we are
+        # running on a 2 CPU environment.
+        os.environ['RAYON_RS_NUM_CPUS'] = "2"
+
         os.environ["RUST_BACKTRACE"] = "1"
         kwargs["debug"] = not kwargs["release"]
-        if kwargs.pop("chaos"):
+        if kwargs.pop("rr_chaos"):
             kwargs["debugger"] = "rr"
             kwargs["debugger_args"] = "record --chaos"
             kwargs["repeat_until_unexpected"] = True
@@ -487,14 +440,12 @@ class MachCommands(CommandBase):
              description='Update the web platform tests',
              category='testing',
              parser=updatecommandline.create_parser())
-    @CommandArgument('--patch', action='store_true', default=False,
-                     help='Create an mq patch or git commit containing the changes')
-    def update_wpt(self, patch, **kwargs):
+    def update_wpt(self, **kwargs):
         self.ensure_bootstrapped()
         run_file = path.abspath(path.join("tests", "wpt", "update.py"))
-        kwargs["no_patch"] = not patch
+        patch = kwargs.get("patch", False)
 
-        if kwargs["no_patch"] and kwargs["sync"]:
+        if not patch and kwargs["sync"]:
             print("Are you sure you don't want a patch?")
             return 1
 
@@ -513,9 +464,11 @@ class MachCommands(CommandBase):
                      help='Print intermittents to file')
     @CommandArgument('--auth', default=None,
                      help='File containing basic authorization credentials for Github API (format `username:password`)')
-    @CommandArgument('--use-tracker', default=False, action='store_true',
-                     help='Use https://www.joshmatthews.net/intermittent-tracker')
-    def filter_intermittents(self, summary, log_filteredsummary, log_intermittents, auth, use_tracker):
+    @CommandArgument('--tracker-api', default=None, action='store',
+                     help='The API endpoint for tracking known intermittent failures.')
+    @CommandArgument('--reporter-api', default=None, action='store',
+                     help='The API endpoint for reporting tracked intermittent failures.')
+    def filter_intermittents(self, summary, log_filteredsummary, log_intermittents, auth, tracker_api, reporter_api):
         encoded_auth = None
         if auth:
             with open(auth, "r") as file:
@@ -529,9 +482,14 @@ class MachCommands(CommandBase):
         actual_failures = []
         intermittents = []
         for failure in failures:
-            if use_tracker:
+            if tracker_api:
+                if tracker_api == 'default':
+                    tracker_api = "http://build.servo.org/intermittent-tracker"
+                elif tracker_api.endswith('/'):
+                    tracker_api = tracker_api[0:-1]
+
                 query = urllib2.quote(failure['test'], safe='')
-                request = urllib2.Request("http://build.servo.org/intermittent-tracker/query.py?name=%s" % query)
+                request = urllib2.Request("%s/query.py?name=%s" % (tracker_api, query))
                 search = urllib2.urlopen(request)
                 data = json.load(search)
                 if len(data) == 0:
@@ -551,6 +509,39 @@ class MachCommands(CommandBase):
                     actual_failures += [failure]
                 else:
                     intermittents += [failure]
+
+        if reporter_api:
+            if reporter_api == 'default':
+                reporter_api = "http://build.servo.org/intermittent-failure-tracker"
+            if reporter_api.endswith('/'):
+                reporter_api = reporter_api[0:-1]
+            reported = set()
+
+            proc = subprocess.Popen(
+                ["git", "log", "--merges", "--oneline", "-1"],
+                stdout=subprocess.PIPE)
+            (last_merge, _) = proc.communicate()
+
+            # Extract the issue reference from "abcdef Auto merge of #NNN"
+            pull_request = int(last_merge.split(' ')[4][1:])
+
+            for intermittent in intermittents:
+                if intermittent['test'] in reported:
+                    continue
+                reported.add(intermittent['test'])
+
+                data = {
+                    'test_file': intermittent['test'],
+                    'platform': platform.system(),
+                    'builder': os.environ.get('BUILDER_NAME', 'BUILDER NAME MISSING'),
+                    'number': pull_request,
+                }
+                request = urllib2.Request("%s/record.py" % reporter_api, urllib.urlencode(data))
+                request.add_header('Accept', 'application/json')
+                response = urllib2.urlopen(request)
+                data = json.load(response)
+                if data['status'] != "success":
+                    print('Error reporting test failure: ' + data['error'])
 
         if log_intermittents:
             with open(log_intermittents, "w") as intermittents_file:
@@ -601,41 +592,6 @@ class MachCommands(CommandBase):
                      help='Run the dev build')
     def update_jquery(self, release, dev):
         return self.jquery_test_runner("update", release, dev)
-
-    @Command('test-css',
-             description='Run the web platform CSS tests',
-             category='testing',
-             parser=create_parser_wpt)
-    def test_css(self, **kwargs):
-        self.ensure_bootstrapped()
-        ret = self.run_test_list_or_dispatch(kwargs["test_list"], "css", self._test_css, **kwargs)
-        if kwargs["always_succeed"]:
-            return 0
-        else:
-            return ret
-
-    def _test_css(self, **kwargs):
-        run_file = path.abspath(path.join("tests", "wpt", "run_css.py"))
-        return self.wptrunner(run_file, **kwargs)
-
-    @Command('update-css',
-             description='Update the web platform CSS tests',
-             category='testing',
-             parser=updatecommandline.create_parser())
-    @CommandArgument('--patch', action='store_true', default=False,
-                     help='Create an mq patch or git commit containing the changes')
-    def update_css(self, patch, **kwargs):
-        self.ensure_bootstrapped()
-        run_file = path.abspath(path.join("tests", "wpt", "update_css.py"))
-        kwargs["no_patch"] = not patch
-
-        if kwargs["no_patch"] and kwargs["sync"]:
-            print("Are you sure you don't want a patch?")
-            return 1
-
-        run_globals = {"__file__": run_file}
-        execfile(run_file, run_globals)
-        return run_globals["update_tests"](**kwargs)
 
     @Command('compare_dromaeo',
              description='Compare outputs of two runs of ./mach test-dromaeo command',
@@ -922,3 +878,24 @@ testing/web-platform/mozilla/tests for Servo-only tests""" % reference_path)
         run_globals = {"__file__": run_file}
         execfile(run_file, run_globals)
         return run_globals["update_test_file"](cache_dir)
+
+    @Command('update-webgl',
+             description='Update the WebGL conformance suite tests from Khronos repo',
+             category='testing')
+    @CommandArgument('--version', default='2.0.0',
+                     help='WebGL conformance suite version')
+    def update_webgl(self, version=None):
+        self.ensure_bootstrapped()
+
+        base_dir = path.abspath(path.join(PROJECT_TOPLEVEL_PATH,
+                                "tests", "wpt", "mozilla", "tests", "webgl"))
+        run_file = path.join(base_dir, "tools", "import-conformance-tests.py")
+        dest_folder = path.join(base_dir, "conformance-%s" % version)
+        patches_dir = path.join(base_dir, "tools")
+        # Clean dest folder if exists
+        if os.path.exists(dest_folder):
+            shutil.rmtree(dest_folder)
+
+        run_globals = {"__file__": run_file}
+        execfile(run_file, run_globals)
+        return run_globals["update_conformance"](version, dest_folder, None, patches_dir)

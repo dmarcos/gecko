@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -127,13 +129,11 @@ GetPrefsFor(EventClassID aEventClassID)
     nsPrintfCString repositionPref("ui.%s.radius.reposition", prefBranch);
     Preferences::AddBoolVarCache(&prefs->mRepositionEventCoords, repositionPref.get(), false);
 
-    Preferences::AddBoolVarCache(&prefs->mTouchClusterDetectionEnabled, "ui.zoomedview.enabled", false);
-
-    Preferences::AddBoolVarCache(&prefs->mSimplifiedClusterDetection, "ui.zoomedview.simplified", false);
-
-    Preferences::AddUintVarCache(&prefs->mLimitReadableSize, "ui.zoomedview.limitReadableSize", 8);
-
-    Preferences::AddUintVarCache(&prefs->mKeepLimitSizeForCluster, "ui.zoomedview.keepLimitSize", 16);
+    // These values were formerly set by ui.zoomedview preferences.
+    prefs->mTouchClusterDetectionEnabled = false;
+    prefs->mSimplifiedClusterDetection = false;
+    prefs->mLimitReadableSize = 8;
+    prefs->mKeepLimitSizeForCluster = 16;
   }
 
   return prefs;
@@ -192,7 +192,7 @@ IsDescendant(nsIFrame* aFrame, nsIContent* aAncestor, nsAutoString* aLabelTarget
 }
 
 static nsIContent*
-GetClickableAncestor(nsIFrame* aFrame, nsIAtom* stopAt = nullptr, nsAutoString* aLabelTargetId = nullptr)
+GetClickableAncestor(nsIFrame* aFrame, nsAtom* stopAt = nullptr, nsAutoString* aLabelTargetId = nullptr)
 {
   // Input events propagate up the content tree so we'll follow the content
   // ancestors to look for elements accepting the click.
@@ -584,7 +584,7 @@ FindFrameTargetedByInputEvent(WidgetGUIEvent* aEvent,
   // never be targeted --- something nsSubDocumentFrame in an ancestor document
   // would be targeted instead.
   nsIFrame* restrictToDescendants = target ?
-    target->PresContext()->PresShell()->GetRootFrame() : aRootFrame;
+    target->PresShell()->GetRootFrame() : aRootFrame;
 
   nsRect targetRect = GetTargetRect(aRootFrame, aPointRelativeToRootFrame,
                                     restrictToDescendants, prefs, aFlags);

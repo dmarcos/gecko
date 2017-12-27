@@ -9,18 +9,7 @@
  */
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
-const TEST_URI = `data:text/xml;charset=UTF-8,<?xml version="1.0"?>
-  <?xml-stylesheet href="chrome://global/skin/global.css"?>
-  <?xml-stylesheet href="chrome://devtools/skin/tooltips.css"?>
-  <window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
-   title="Tooltip test">
-    <vbox flex="1">
-      <hbox id="box1" style="height: 50px">test1</hbox>
-      <hbox id="box2" style="height: 50px">test2</hbox>
-      <hbox id="box3" style="height: 50px">test3</hbox>
-      <hbox id="box4" style="height: 50px">test4</hbox>
-    </vbox>
-  </window>`;
+const TEST_URI = CHROME_URL_ROOT + "doc_html_tooltip-05.xul";
 
 const {HTMLTooltip} = require("devtools/client/shared/widgets/tooltip/HTMLTooltip");
 loadHelperScript("helper_html_tooltip.js");
@@ -37,10 +26,19 @@ add_task(function* () {
 
   let [, win, doc] = yield createHost("bottom", TEST_URI);
 
-  info("Resizing window to have some space below the window.");
+  info("Resize and move the window to have space below.");
   let originalWidth = win.top.outerWidth;
   let originalHeight = win.top.outerHeight;
-  win.top.resizeBy(0, -100);
+  win.top.resizeBy(-100, -200);
+  let originalTop = win.top.screenTop;
+  let originalLeft = win.top.screenLeft;
+  win.top.moveTo(100, 100);
+
+  registerCleanupFunction(() => {
+    info("Restore original window dimensions and position.");
+    win.top.resizeTo(originalWidth, originalHeight);
+    win.top.moveTo(originalTop, originalLeft);
+  });
 
   info("Create HTML tooltip");
   let tooltip = new HTMLTooltip(doc, {useXulWrapper: true});
@@ -66,9 +64,6 @@ add_task(function* () {
   is(tooltip.isVisible(), false, "Tooltip is not visible");
 
   tooltip.destroy();
-
-  info("Restore original window dimensions.");
-  win.top.resizeTo(originalWidth, originalHeight);
 });
 
 function checkTooltip(tooltip, position, height) {

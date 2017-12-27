@@ -4,13 +4,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// Local Includes
 #include "nsDOMWindowList.h"
 
-// Helper classes
+#include "FlushType.h"
 #include "nsCOMPtr.h"
-
-// Interfaces needed
 #include "nsIDocument.h"
 #include "nsIDOMDocument.h"
 #include "nsIDOMWindow.h"
@@ -18,6 +15,8 @@
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIScriptGlobalObject.h"
 #include "nsIWebNavigation.h"
+
+using namespace mozilla;
 
 nsDOMWindowList::nsDOMWindowList(nsIDocShell *aDocShell)
 {
@@ -75,7 +74,7 @@ nsDOMWindowList::GetLength()
   return uint32_t(length);
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsDOMWindowList::GetLength(uint32_t* aLength)
 {
   *aLength = GetLength();
@@ -96,7 +95,7 @@ nsDOMWindowList::IndexedGetter(uint32_t aIndex)
   return window.forget();
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsDOMWindowList::Item(uint32_t aIndex, mozIDOMWindowProxy** aReturn)
 {
   nsCOMPtr<nsPIDOMWindowOuter> window = IndexedGetter(aIndex);
@@ -104,7 +103,7 @@ nsDOMWindowList::Item(uint32_t aIndex, mozIDOMWindowProxy** aReturn)
   return NS_OK;
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsDOMWindowList::NamedItem(const nsAString& aName, mozIDOMWindowProxy** aReturn)
 {
   nsCOMPtr<nsIDocShellTreeItem> item;

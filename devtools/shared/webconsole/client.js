@@ -7,10 +7,8 @@
 "use strict";
 
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
-const EventEmitter = require("devtools/shared/event-emitter");
-const promise = require("promise");
-const defer = require("devtools/shared/defer");
-const {LongStringClient} = require("devtools/shared/client/main");
+const EventEmitter = require("devtools/shared/old-event-emitter");
+const LongStringClient = require("devtools/shared/client/long-string-client");
 
 /**
  * A WebConsoleClient is used as a front end for the WebConsoleActor that is
@@ -34,10 +32,12 @@ function WebConsoleClient(debuggerClient, response) {
   this.onEvaluationResult = this.onEvaluationResult.bind(this);
   this.onNetworkEvent = this._onNetworkEvent.bind(this);
   this.onNetworkEventUpdate = this._onNetworkEventUpdate.bind(this);
+  this.onInspectObject = this._onInspectObject.bind(this);
 
   this._client.addListener("evaluationResult", this.onEvaluationResult);
   this._client.addListener("networkEvent", this.onNetworkEvent);
   this._client.addListener("networkEventUpdate", this.onNetworkEventUpdate);
+  this._client.addListener("inspectObject", this.onInspectObject);
   EventEmitter.decorate(this);
 }
 
@@ -171,6 +171,20 @@ WebConsoleClient.prototype = {
       packet: packet,
       networkInfo
     });
+  },
+
+  /**
+   * The "inspectObject" message type handler. We just re-emit it so that
+   * the toolbox can listen to the event and decide how to handle it.
+   *
+   * @private
+   * @param string type
+   *        Message type.
+   * @param object packet
+   *        The message received from the server.
+   */
+  _onInspectObject: function (type, packet) {
+    this.emit("inspectObject", packet);
   },
 
   /**
@@ -553,6 +567,24 @@ WebConsoleClient.prototype = {
   },
 
   /**
+   * Retrieve the stack-trace information for the given NetworkEventActor.
+   *
+   * @param string actor
+   *        The NetworkEventActor ID.
+   * @param function onResponse
+   *        The function invoked when the stack-trace is received.
+   * @return request
+   *         Request object that implements both Promise and EventEmitter interfaces
+   */
+  getStackTrace: function (actor, onResponse) {
+    let packet = {
+      to: actor,
+      type: "getStackTrace",
+    };
+    return this._client.request(packet, onResponse);
+  },
+
+  /**
    * Send a HTTP request with the given data.
    *
    * @param string data
@@ -643,6 +675,7 @@ WebConsoleClient.prototype = {
     this._client.removeListener("networkEvent", this.onNetworkEvent);
     this._client.removeListener("networkEventUpdate",
                                 this.onNetworkEventUpdate);
+    this._client.removeListener("inspectObject", this.onInspectObject);
     this.stopListeners(null, onResponse);
     this._longStrings = null;
     this._client = null;
@@ -669,31 +702,28 @@ WebConsoleClient.prototype = {
    */
   getString: function (stringGrip) {
     // Make sure this is a long string.
-    if (typeof stringGrip != "object" || stringGrip.type != "longString") {
+    if (typeof stringGrip !== "object" || stringGrip.type !== "longString") {
       // Go home string, you're drunk.
-      return promise.resolve(stringGrip);
+      return Promise.resolve(stringGrip);
     }
 
     // Fetch the long string only once.
     if (stringGrip._fullText) {
-      return stringGrip._fullText.promise;
+      return stringGrip._fullText;
     }
 
-    let deferred = stringGrip._fullText = defer();
-    let { initial, length } = stringGrip;
-    let longStringClient = this.longString(stringGrip);
+    return new Promise((resolve, reject) => {
+      let { initial, length } = stringGrip;
+      let longStringClient = this.longString(stringGrip);
 
-    longStringClient.substring(initial.length, length, response => {
-      if (response.error) {
-        DevToolsUtils.reportException("getString",
-            response.error + ": " + response.message);
-
-        deferred.reject(response);
-        return;
-      }
-      deferred.resolve(initial + response.substring);
+      longStringClient.substring(initial.length, length, response => {
+        if (response.error) {
+          DevToolsUtils.reportException("getString",
+              response.error + ": " + response.message);
+          reject(response);
+        }
+        resolve(initial + response.substring);
+      });
     });
-
-    return deferred.promise;
   }
 };

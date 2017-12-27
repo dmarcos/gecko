@@ -17,18 +17,18 @@ interface HTMLMediaElement : HTMLElement {
   readonly attribute MediaError? error;
 
   // network state
-  [SetterThrows]
+  [CEReactions, SetterNeedsSubjectPrincipal, SetterThrows]
            attribute DOMString src;
   readonly attribute DOMString currentSrc;
 
-  [SetterThrows]
+  [CEReactions, SetterThrows]
            attribute DOMString? crossOrigin;
   const unsigned short NETWORK_EMPTY = 0;
   const unsigned short NETWORK_IDLE = 1;
   const unsigned short NETWORK_LOADING = 2;
   const unsigned short NETWORK_NO_SOURCE = 3;
   readonly attribute unsigned short networkState;
-  [SetterThrows]
+  [CEReactions, SetterThrows]
            attribute DOMString preload;
   [NewObject]
   readonly attribute TimeRanges buffered;
@@ -63,9 +63,9 @@ interface HTMLMediaElement : HTMLElement {
   [NewObject]
   readonly attribute TimeRanges seekable;
   readonly attribute boolean ended;
-  [SetterThrows]
+  [CEReactions, SetterThrows]
            attribute boolean autoplay;
-  [SetterThrows]
+  [CEReactions, SetterThrows]
            attribute boolean loop;
   [Throws]
   Promise<void> play();
@@ -78,12 +78,12 @@ interface HTMLMediaElement : HTMLElement {
   //         attribute MediaController? controller;
 
   // controls
-  [SetterThrows]
+  [CEReactions, SetterThrows]
            attribute boolean controls;
   [SetterThrows]
            attribute double volume;
            attribute boolean muted;
-  [SetterThrows]
+  [CEReactions, SetterThrows]
            attribute boolean defaultMuted;
 
   // TODO: Bug 847379
@@ -100,22 +100,24 @@ interface HTMLMediaElement : HTMLElement {
 
 // Mozilla extensions:
 partial interface HTMLMediaElement {
-  [Func="HasDebuggerPrivilege"]
+  [Func="HasDebuggerOrTabsPrivilege"]
   readonly attribute MediaSource? mozMediaSourceObject;
-  [Func="HasDebuggerPrivilege"]
+  [Func="HasDebuggerOrTabsPrivilege"]
   readonly attribute DOMString mozDebugReaderData;
-  [Func="HasDebuggerPrivilege", NewObject]
+  [Func="HasDebuggerOrTabsPrivilege", NewObject]
   Promise<DOMString> mozRequestDebugInfo();
 
+  [Func="HasDebuggerOrTabsPrivilege", NewObject]
+  static void mozEnableDebugLog();
+  [Func="HasDebuggerOrTabsPrivilege", NewObject]
+  Promise<DOMString> mozRequestDebugLog();
+
   [Pref="media.test.dumpDebugInfo"]
-  void mozDumpDebugInfo();
+  Promise<void> mozDumpDebugInfo();
 
   attribute MediaStream? srcObject;
-  // TODO: remove prefixed version soon (1183495).
-  attribute MediaStream? mozSrcObject;
 
   attribute boolean mozPreservesPitch;
-  readonly attribute boolean mozAutoplayEnabled;
 
   // NB: for internal use with the video controls:
   [Func="IsChromeOrXBL"] attribute boolean mozAllowCasting;
@@ -139,20 +141,8 @@ partial interface HTMLMediaElement {
   // it is equal to the media duration.
   readonly attribute double mozFragmentEnd;
 
-  // Mozilla extension: an audio channel type for media elements.
-  // Read AudioChannel.webidl for more information about this attribute.
-  [SetterThrows, Pref="media.useAudioChannelAPI"]
-  attribute AudioChannel mozAudioChannelType;
-
-  // In addition the media element has this new events:
-  // * onmozinterruptbegin - called when the media element is interrupted
-  //   because of the audiochannel manager.
-  // * onmozinterruptend - called when the interruption is concluded
-  [Pref="media.useAudioChannelAPI"]
-  attribute EventHandler onmozinterruptbegin;
-
-  [Pref="media.useAudioChannelAPI"]
-  attribute EventHandler onmozinterruptend;
+  [ChromeOnly]
+  void reportCanPlayTelemetry();
 };
 
 // Encrypted Media Extensions

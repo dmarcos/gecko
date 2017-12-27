@@ -13,6 +13,7 @@ EXPORTS += [
     'VRDisplayClient.h',
     'VRDisplayPresentation.h',
     'VRManager.h',
+    'VRThread.h',
 ]
 
 LOCAL_INCLUDES += [
@@ -24,25 +25,45 @@ LOCAL_INCLUDES += [
 UNIFIED_SOURCES += [
     'gfxVR.cpp',
     'gfxVROSVR.cpp',
-    'gfxVRPuppet.cpp',
     'ipc/VRLayerChild.cpp',
     'ipc/VRLayerParent.cpp',
     'ipc/VRManagerChild.cpp',
     'ipc/VRManagerParent.cpp',
     'VRDisplayClient.cpp',
-    'VRDisplayHost.cpp',
     'VRDisplayPresentation.cpp',
     'VRManager.cpp',
+    'VRThread.cpp',
 ]
 
-if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
+# VRDisplayHost includes MacIOSurface.h which includes Mac headers
+# which define Size and Points types in the root namespace that
+# often conflict with our own types.
+SOURCES += [
+    'gfxVRPuppet.cpp',
+    'VRDisplayHost.cpp',
+]
+
+# Build OpenVR on Windows, Linux, and macOS desktop targets
+if CONFIG['OS_TARGET'] in ('WINNT', 'Linux', 'Darwin'):
     DIRS += [
         'openvr',
     ]
     SOURCES += [
-        'gfxVROculus.cpp',
         'gfxVROpenVR.cpp',
     ]
+
+if CONFIG['OS_TARGET'] == 'WINNT':
+    SOURCES += [
+        'gfxVROculus.cpp',
+    ]
+
+if CONFIG['MOZ_ANDROID_GOOGLE_VR']:
+    SOURCES += [
+        'gfxVRGVR.cpp',
+        'jni/gfxGVRJNI.cpp',
+    ]
+    CXXFLAGS += ['-I%s' % CONFIG['MOZ_ANDROID_GOOGLE_VR_INCLUDE']]
+    LOCAL_INCLUDES += ['/widget/android']
 
 IPDL_SOURCES = [
     'ipc/PVRLayer.ipdl',
@@ -69,7 +90,7 @@ include('/ipc/chromium/chromium-config.mozbuild')
 FINAL_LIBRARY = 'xul'
 
 # This is intended as a temporary hack to enable VS2015 builds.
-if CONFIG['_MSC_VER']:
+if CONFIG['CC_TYPE'] in ('msvc', 'clang-cl'):
     # ovr_capi_dynamic.h '<unnamed-tag>': Alignment specifier is less than
     # actual alignment (8), and will be ignored
     CXXFLAGS += ['-wd4359']

@@ -19,6 +19,24 @@ function scopedCuImport(path) {
   return scope;
 }
 
+// There are shutdown issues for which multiple rejections are left uncaught.
+// This bug should be fixed, but for the moment devtools are whitelisted.
+//
+// NOTE: Entire directory whitelisting should be kept to a minimum. Normally you
+//       should use "expectUncaughtRejection" to flag individual failures.
+const {PromiseTestUtils} = scopedCuImport("resource://testing-common/PromiseTestUtils.jsm");
+PromiseTestUtils.whitelistRejectionsGlobally(/Component not initialized/);
+PromiseTestUtils.whitelistRejectionsGlobally(/Connection closed/);
+PromiseTestUtils.whitelistRejectionsGlobally(/destroy/);
+PromiseTestUtils.whitelistRejectionsGlobally(/File closed/);
+PromiseTestUtils.whitelistRejectionsGlobally(/is no longer, usable/);
+PromiseTestUtils.whitelistRejectionsGlobally(/NS_ERROR_FAILURE/);
+PromiseTestUtils.whitelistRejectionsGlobally(/this\._urls is null/);
+PromiseTestUtils.whitelistRejectionsGlobally(/this\.tabTarget is null/);
+PromiseTestUtils.whitelistRejectionsGlobally(/this\.toolbox is null/);
+PromiseTestUtils.whitelistRejectionsGlobally(/this\.webConsoleClient is null/);
+PromiseTestUtils.whitelistRejectionsGlobally(/this\.worker is null/);
+
 const {console} = scopedCuImport("resource://gre/modules/Console.jsm");
 const {ScratchpadManager} = scopedCuImport("resource://devtools/client/scratchpad/scratchpad-manager.jsm");
 const {loader, require} = scopedCuImport("resource://devtools/shared/Loader.jsm");
@@ -39,6 +57,9 @@ const URL_ROOT = CHROME_URL_ROOT.replace("chrome://mochitests/content/",
                                          "http://example.com/");
 const URL_ROOT_SSL = CHROME_URL_ROOT.replace("chrome://mochitests/content/",
                                              "https://example.com/");
+
+// Force devtools to be initialized so menu items and keyboard shortcuts get installed
+require("devtools/client/framework/devtools-browser");
 
 // All test are asynchronous
 waitForExplicitFinish();
@@ -67,7 +88,7 @@ const ConsoleObserver = {
   observe: function (subject, topic, data) {
     let message = subject.wrappedJSObject.arguments[0];
 
-    if (/Failed propType/.test(message)) {
+    if (message && /Failed propType/.test(message.toString())) {
       ok(false, message);
     }
   }
@@ -97,6 +118,7 @@ registerCleanupFunction(() => {
   Services.prefs.clearUserPref("devtools.toolbox.host");
   Services.prefs.clearUserPref("devtools.toolbox.previousHost");
   Services.prefs.clearUserPref("devtools.toolbox.splitconsoleEnabled");
+  Services.prefs.clearUserPref("devtools.toolbox.splitconsoleHeight");
 });
 
 registerCleanupFunction(function* cleanup() {
@@ -122,7 +144,7 @@ var addTab = Task.async(function* (url, options = { background: false, window: w
   let { gBrowser } = options.window ? options.window : window;
   let { userContextId } = options;
 
-  let tab = gBrowser.addTab(url,
+  let tab = BrowserTestUtils.addTab(gBrowser, url,
     {userContextId, preferredRemoteType: options.preferredRemoteType});
   if (!background) {
     gBrowser.selectedTab = tab;
@@ -151,17 +173,17 @@ var removeTab = Task.async(function* (tab) {
 });
 
 /**
- * Refresh the given tab.
- * @param {Object} tab The tab to be refreshed.
+ * Refresh the provided tab.
+ * @param {Object} tab The tab to be refreshed. Defaults to the currently selected tab.
  * @return Promise<undefined> resolved when the tab is successfully refreshed.
  */
-var refreshTab = Task.async(function*(tab) {
+var refreshTab = async function (tab = gBrowser.selectedTab) {
   info("Refreshing tab.");
   const finished = BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
-  gBrowser.reloadTab(gBrowser.selectedTab);
-  yield finished;
+  gBrowser.reloadTab(tab);
+  await finished;
   info("Tab finished refreshing.");
-});
+};
 
 /**
  * Simulate a key event from a <key> element.
@@ -584,6 +606,8 @@ function loadTelemetryAndRecordLogs() {
       this.telemetryInfo[histogramId].push(value);
     }
   };
+  Telemetry.prototype._oldlogScalar = Telemetry.prototype.logScalar;
+  Telemetry.prototype.logScalar = Telemetry.prototype.log;
   Telemetry.prototype._oldlogKeyed = Telemetry.prototype.logKeyed;
   Telemetry.prototype.logKeyed = function (histogramId, key, value) {
     this.log(`${histogramId}|${key}`, value);
@@ -600,8 +624,10 @@ function loadTelemetryAndRecordLogs() {
 function stopRecordingTelemetryLogs(Telemetry) {
   info("Stopping Telemetry");
   Telemetry.prototype.log = Telemetry.prototype._oldlog;
+  Telemetry.prototype.logScalar = Telemetry.prototype._oldlogScalar;
   Telemetry.prototype.logKeyed = Telemetry.prototype._oldlogKeyed;
   delete Telemetry.prototype._oldlog;
+  delete Telemetry.prototype._oldlogScalar;
   delete Telemetry.prototype._oldlogKeyed;
   delete Telemetry.prototype.telemetryInfo;
 }

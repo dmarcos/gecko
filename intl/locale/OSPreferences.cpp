@@ -14,10 +14,8 @@
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/Services.h"
 #include "nsIObserverService.h"
-#ifdef ENABLE_INTL_API
 #include "unicode/udat.h"
 #include "unicode/udatpg.h"
-#endif
 
 using namespace mozilla::intl;
 
@@ -55,6 +53,22 @@ OSPreferences::GetSystemLocales(nsTArray<nsCString>& aRetVal)
   return false;
 }
 
+bool
+OSPreferences::GetRegionalPrefsLocales(nsTArray<nsCString>& aRetVal)
+{
+  if (!mRegionalPrefsLocales.IsEmpty()) {
+    aRetVal = mRegionalPrefsLocales;
+    return true;
+  }
+
+  if (ReadRegionalPrefsLocales(aRetVal)) {
+    mRegionalPrefsLocales = aRetVal;
+    return true;
+  }
+
+  return false;
+}
+
 void
 OSPreferences::Refresh()
 {
@@ -82,7 +96,6 @@ OSPreferences::Refresh()
 bool
 OSPreferences::CanonicalizeLanguageTag(nsCString& aLoc)
 {
-#ifdef ENABLE_INTL_API
   char langTag[512];
 
   UErrorCode status = U_ZERO_ERROR;
@@ -96,9 +109,6 @@ OSPreferences::CanonicalizeLanguageTag(nsCString& aLoc)
 
   aLoc.Assign(langTag, langTagLen);
   return true;
-#else
-  return false;
-#endif
 }
 
 /**
@@ -110,7 +120,6 @@ OSPreferences::GetDateTimePatternForStyle(DateTimeFormatStyle aDateStyle,
                                           const nsACString& aLocale,
                                           nsAString& aRetVal)
 {
-#ifdef ENABLE_INTL_API
   UDateFormatStyle timeStyle = UDAT_NONE;
   UDateFormatStyle dateStyle = UDAT_NONE;
 
@@ -161,7 +170,9 @@ OSPreferences::GetDateTimePatternForStyle(DateTimeFormatStyle aDateStyle,
 
   nsAutoCString locale;
   if (aLocale.IsEmpty()) {
-    LocaleService::GetInstance()->GetAppLocaleAsBCP47(locale);
+    AutoTArray<nsCString, 10> regionalPrefsLocales;
+    LocaleService::GetInstance()->GetRegionalPrefsLocales(regionalPrefsLocales);
+    locale.Assign(regionalPrefsLocales[0]);
   } else {
     locale.Assign(aLocale);
   }
@@ -181,9 +192,6 @@ OSPreferences::GetDateTimePatternForStyle(DateTimeFormatStyle aDateStyle,
   }
   aRetVal.Assign((const char16_t*)pattern, patsize);
   return true;
-#else
-  return false;
-#endif
 }
 
 
@@ -201,7 +209,6 @@ OSPreferences::GetDateTimeSkeletonForStyle(DateTimeFormatStyle aDateStyle,
                                            const nsACString& aLocale,
                                            nsAString& aRetVal)
 {
-#ifdef ENABLE_INTL_API
   nsAutoString pattern;
   if (!GetDateTimePatternForStyle(aDateStyle, aTimeStyle, aLocale, pattern)) {
     return false;
@@ -221,9 +228,6 @@ OSPreferences::GetDateTimeSkeletonForStyle(DateTimeFormatStyle aDateStyle,
 
   aRetVal.Assign((const char16_t*)skeleton, skelsize);
   return true;
-#else
-  return false;
-#endif
 }
 
 /**
@@ -240,7 +244,6 @@ OSPreferences::GetPatternForSkeleton(const nsAString& aSkeleton,
                                      const nsACString& aLocale,
                                      nsAString& aRetVal)
 {
-#ifdef ENABLE_INTL_API
   UErrorCode status = U_ZERO_ERROR;
   UDateTimePatternGenerator* pg = udatpg_open(PromiseFlatCString(aLocale).get(), &status);
   if (U_FAILURE(status)) {
@@ -261,9 +264,6 @@ OSPreferences::GetPatternForSkeleton(const nsAString& aSkeleton,
   udatpg_close(pg);
 
   return U_SUCCESS(status);
-#else
-  return false;
-#endif
 }
 
 /**
@@ -280,7 +280,6 @@ OSPreferences::GetDateTimeConnectorPattern(const nsACString& aLocale,
                                            nsAString& aRetVal)
 {
   bool result = false;
-#ifdef ENABLE_INTL_API
   UErrorCode status = U_ZERO_ERROR;
   UDateTimePatternGenerator* pg = udatpg_open(PromiseFlatCString(aLocale).get(), &status);
   if (U_SUCCESS(status)) {
@@ -292,7 +291,6 @@ OSPreferences::GetDateTimeConnectorPattern(const nsACString& aLocale,
     result = true;
   }
   udatpg_close(pg);
-#endif
   return result;
 }
 
@@ -335,6 +333,30 @@ OSPreferences::GetSystemLocale(nsACString& aRetVal)
       aRetVal = locales[0];
     }
   }
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+OSPreferences::GetRegionalPrefsLocales(uint32_t* aCount, char*** aOutArray)
+{
+  AutoTArray<nsCString,10> tempLocales;
+  nsTArray<nsCString>* regionalPrefsLocalesPtr;
+
+  if (!mRegionalPrefsLocales.IsEmpty()) {
+    // use cached value
+    regionalPrefsLocalesPtr = &mRegionalPrefsLocales;
+  } else {
+    // get a (perhaps temporary/fallback/hack) value
+    GetRegionalPrefsLocales(tempLocales);
+    regionalPrefsLocalesPtr = &tempLocales;
+  }
+  *aCount = regionalPrefsLocalesPtr->Length();
+  *aOutArray = static_cast<char**>(moz_xmalloc(*aCount * sizeof(char*)));
+
+  for (uint32_t i = 0; i < *aCount; i++) {
+    (*aOutArray)[i] = moz_xstrdup((*regionalPrefsLocalesPtr)[i].get());
+  }
+
   return NS_OK;
 }
 

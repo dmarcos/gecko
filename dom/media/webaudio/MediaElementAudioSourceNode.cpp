@@ -6,6 +6,9 @@
 
 #include "MediaElementAudioSourceNode.h"
 #include "mozilla/dom/MediaElementAudioSourceNodeBinding.h"
+#include "AudioDestinationNode.h"
+#include "nsIScriptError.h"
+#include "AudioNodeStream.h"
 
 namespace mozilla {
 namespace dom {
@@ -21,11 +24,6 @@ MediaElementAudioSourceNode::Create(AudioContext& aAudioContext,
                                     ErrorResult& aRv)
 {
   if (aAudioContext.IsOffline()) {
-    aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
-    return nullptr;
-  }
-
-  if (aOptions.mMediaElement->ContainsRestrictedContent()) {
     aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
     return nullptr;
   }

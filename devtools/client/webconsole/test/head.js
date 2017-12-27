@@ -12,7 +12,7 @@ Services.scriptloader.loadSubScript("chrome://mochitests/content/browser/devtool
 var {Utils: WebConsoleUtils} = require("devtools/client/webconsole/utils");
 var {Messages} = require("devtools/client/webconsole/console-output");
 const asyncStorage = require("devtools/shared/async-storage");
-const HUDService = require("devtools/client/webconsole/hudservice");
+const {HUDService} = require("devtools/client/webconsole/hudservice");
 
 // Services.prefs.setBoolPref("devtools.debugger.log", true);
 
@@ -37,8 +37,7 @@ const SEVERITY_LOG = 3;
 // The indent of a console group in pixels.
 const GROUP_INDENT = 12;
 
-const WEBCONSOLE_STRINGS_URI = "devtools/client/locales/webconsole.properties";
-var WCUL10n = new WebConsoleUtils.L10n(WEBCONSOLE_STRINGS_URI);
+var WCUL10n = require("devtools/client/webconsole/webconsole-l10n");
 
 const DOCS_GA_PARAMS = "?utm_source=mozilla" +
                        "&utm_medium=firefox-console-errors" +
@@ -188,7 +187,7 @@ function findLogEntry(str) {
  *         A promise that is resolved once the web console is open.
  */
 var openConsole = function (tab) {
-  let webconsoleOpened = promise.defer();
+  let webconsoleOpened = defer();
   let target = TargetFactory.forTab(tab || gBrowser.selectedTab);
   gDevTools.showToolbox(target, "webconsole").then(toolbox => {
     let hud = toolbox.getCurrentPanel().hud;
@@ -228,7 +227,7 @@ var waitForTab = Task.async(function* () {
   yield once(gBrowser.tabContainer, "TabOpen");
   let tab = gBrowser.selectedTab;
   let browser = tab.linkedBrowser;
-  yield once(browser, "load", true);
+  yield BrowserTestUtils.browserLoaded(browser);
   info("The tab load completed");
   return tab;
 });
@@ -347,7 +346,7 @@ waitForExplicitFinish();
  *         A Promise object that is resolved based on the validator function.
  */
 function waitForSuccess(options) {
-  let deferred = promise.defer();
+  let deferred = defer();
   let start = Date.now();
   let timeout = options.timeout || 5000;
   let {validator} = options;
@@ -453,7 +452,7 @@ function findVariableViewProperties(view, rules, options) {
       return promise.resolve(null);
     }
 
-    let deferred = promise.defer();
+    let deferred = defer();
     let expandOptions = {
       rootVariable: view,
       expandTo: rule.name,
@@ -595,7 +594,7 @@ function isVariableViewPropertyIterator(prop, webConsole) {
     return promise.resolve(true);
   }
 
-  let deferred = promise.defer();
+  let deferred = defer();
 
   variablesViewExpandTo({
     rootVariable: prop,
@@ -631,7 +630,7 @@ function variablesViewExpandTo(options) {
   let root = options.rootVariable;
   let expandTo = options.expandTo.split(".");
   let jsterm = (options.webconsole || {}).jsterm;
-  let lastDeferred = promise.defer();
+  let lastDeferred = defer();
 
   function fetch(prop) {
     if (!prop.onexpand) {
@@ -639,7 +638,7 @@ function variablesViewExpandTo(options) {
       return promise.reject(prop);
     }
 
-    let deferred = promise.defer();
+    let deferred = defer();
 
     if (prop._fetched || !jsterm) {
       executeSoon(function () {
@@ -717,7 +716,7 @@ var updateVariablesViewProperty = Task.async(function* (options) {
       throw new Error("options.field is incorrect");
   }
 
-  let deferred = promise.defer();
+  let deferred = defer();
 
   executeSoon(() => {
     EventUtils.synthesizeKey("A", { accelKey: true }, view.window);
@@ -763,7 +762,7 @@ function openDebugger(options = {}) {
     options.tab = gBrowser.selectedTab;
   }
 
-  let deferred = promise.defer();
+  let deferred = defer();
 
   let target = TargetFactory.forTab(options.tab);
   let toolbox = gDevTools.getToolbox(target);
@@ -893,7 +892,7 @@ function waitForMessages(options) {
   let rules = WebConsoleUtils.cloneObject(options.messages, true);
   let rulesMatched = 0;
   let listenerAdded = false;
-  let deferred = promise.defer();
+  let deferred = defer();
   options.matchCondition = options.matchCondition || "all";
 
   function checkText(rule, text) {
@@ -1496,12 +1495,12 @@ function checkOutputForInputs(hud, inputTests) {
     }
     ok(body, "the message body");
 
-    let deferredVariablesView = promise.defer();
+    let deferredVariablesView = defer();
     entry._onVariablesViewOpen = onVariablesViewOpen.bind(null, entry,
                                                           deferredVariablesView);
     hud.jsterm.on("variablesview-open", entry._onVariablesViewOpen);
 
-    let deferredTab = promise.defer();
+    let deferredTab = defer();
     entry._onTabOpen = onTabOpen.bind(null, entry, deferredTab);
     container.addEventListener("TabOpen", entry._onTabOpen, true);
 
@@ -1717,7 +1716,7 @@ function waitForFinishedRequest(predicate = () => true) {
 function once(target, eventName, useCapture = false) {
   info("Waiting for event: '" + eventName + "' on " + target + ".");
 
-  let deferred = promise.defer();
+  let deferred = defer();
 
   for (let [add, remove] of [
     ["addEventListener", "removeEventListener"],
@@ -1776,7 +1775,7 @@ function getSourceActor(sources, URL) {
  * open the expected URL.
  */
 function simulateMessageLinkClick(element, expectedLink) {
-  let deferred = promise.defer();
+  let deferred = defer();
 
   // Invoke the click event and check if a new tab would
   // open to the correct page.
@@ -1807,4 +1806,19 @@ function getRenderedSource(root) {
     line: location.getAttribute("data-line"),
     column: location.getAttribute("data-column"),
   } : null;
+}
+
+function waitForBrowserConsole() {
+  return new Promise(resolve => {
+    Services.obs.addObserver(function observer(subject) {
+      Services.obs.removeObserver(observer, "web-console-created");
+      subject.QueryInterface(Ci.nsISupportsString);
+
+      let hud = HUDService.getBrowserConsole();
+      ok(hud, "browser console is open");
+      is(subject.data, hud.hudId, "notification hudId is correct");
+
+      executeSoon(() => resolve(hud));
+    }, "web-console-created");
+  });
 }

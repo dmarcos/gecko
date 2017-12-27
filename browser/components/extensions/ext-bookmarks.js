@@ -2,34 +2,69 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
-                                  "resource://gre/modules/PlacesUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Task",
-                                  "resource://gre/modules/Task.jsm");
+// The ext-* files are imported into the same scopes.
+/* import-globals-from ext-browserAction.js */
+
+Cu.import("resource://gre/modules/PlacesUtils.jsm");
+
+const {
+  TYPE_BOOKMARK,
+  TYPE_FOLDER,
+  TYPE_SEPARATOR,
+} = PlacesUtils.bookmarks;
+
+const BOOKMARKS_TYPES_TO_API_TYPES_MAP = new Map([
+  [TYPE_BOOKMARK, "bookmark"],
+  [TYPE_FOLDER, "folder"],
+  [TYPE_SEPARATOR, "separator"],
+]);
+
+const BOOKMARK_SEPERATOR_URL = "data:";
+
+XPCOMUtils.defineLazyGetter(this, "API_TYPES_TO_BOOKMARKS_TYPES_MAP", () => {
+  let theMap = new Map();
+
+  for (let [code, name] of BOOKMARKS_TYPES_TO_API_TYPES_MAP) {
+    theMap.set(name, code);
+  }
+  return theMap;
+});
 
 let listenerCount = 0;
 
-function getTree(rootGuid, onlyChildren) {
+function getUrl(type, url) {
+  switch (type) {
+    case TYPE_BOOKMARK:
+      return url;
+    case TYPE_SEPARATOR:
+      return BOOKMARK_SEPERATOR_URL;
+    default:
+      return undefined;
+  }
+}
+
+const getTree = (rootGuid, onlyChildren) => {
   function convert(node, parent) {
     let treenode = {
       id: node.guid,
       title: node.title || "",
       index: node.index,
       dateAdded: node.dateAdded / 1000,
+      type: BOOKMARKS_TYPES_TO_API_TYPES_MAP.get(node.typeCode),
+      url: getUrl(node.typeCode, node.uri),
     };
 
     if (parent && node.guid != PlacesUtils.bookmarks.rootGuid) {
       treenode.parentId = parent.guid;
     }
 
-    if (node.type == PlacesUtils.TYPE_X_MOZ_PLACE) {
-      // This isn't quite correct. Recently Bookmarked ends up here ...
-      treenode.url = node.uri;
-    } else {
+    if (node.typeCode == TYPE_FOLDER) {
       treenode.dateGroupModified = node.lastModified / 1000;
 
-      if (node.children && !onlyChildren) {
-        treenode.children = node.children.map(child => convert(child, node));
+      if (!onlyChildren) {
+        treenode.children = node.children
+          ? node.children.map(child => convert(child, node))
+          : [];
       }
     }
 
@@ -38,9 +73,6 @@ function getTree(rootGuid, onlyChildren) {
 
   return PlacesUtils.promiseBookmarksTree(rootGuid, {
     excludeItemsCallback: item => {
-      if (item.type == PlacesUtils.TYPE_X_MOZ_PLACE_SEPARATOR) {
-        return true;
-      }
       return item.annos &&
              item.annos.find(a => a.name == PlacesUtils.EXCLUDE_FROM_BACKUP_ANNO);
     },
@@ -54,65 +86,61 @@ function getTree(rootGuid, onlyChildren) {
     // It seems like the array always just contains the root node.
     return [treenode];
   }).catch(e => Promise.reject({message: e.message}));
-}
+};
 
-function convert(result) {
+const convertBookmarks = result => {
   let node = {
     id: result.guid,
     title: result.title || "",
     index: result.index,
     dateAdded: result.dateAdded.getTime(),
+    type: BOOKMARKS_TYPES_TO_API_TYPES_MAP.get(result.type),
+    url: getUrl(result.type, result.url && result.url.href),
   };
 
   if (result.guid != PlacesUtils.bookmarks.rootGuid) {
     node.parentId = result.parentGuid;
   }
 
-  if (result.type == PlacesUtils.bookmarks.TYPE_BOOKMARK) {
-    node.url = result.url.href; // Output is always URL object.
-  } else {
+  if (result.type == TYPE_FOLDER) {
     node.dateGroupModified = result.lastModified.getTime();
   }
 
   return node;
-}
+};
 
-let observer = {
-  skipTags: true,
-  skipDescendantsOnItemRemoval: true,
+let observer = new class extends EventEmitter {
+  constructor() {
+    super();
 
-  onBeginUpdateBatch() {},
-  onEndUpdateBatch() {},
+    this.skipTags = true;
+    this.skipDescendantsOnItemRemoval = true;
+  }
+
+  onBeginUpdateBatch() {}
+  onEndUpdateBatch() {}
 
   onItemAdded(id, parentId, index, itemType, uri, title, dateAdded, guid, parentGuid, source) {
-    if (itemType == PlacesUtils.bookmarks.TYPE_SEPARATOR) {
-      return;
-    }
-
     let bookmark = {
       id: guid,
       parentId: parentGuid,
       index,
       title,
       dateAdded: dateAdded / 1000,
+      type: BOOKMARKS_TYPES_TO_API_TYPES_MAP.get(itemType),
+      url: getUrl(itemType, uri && uri.spec),
     };
 
-    if (itemType == PlacesUtils.bookmarks.TYPE_BOOKMARK) {
-      bookmark.url = uri.spec;
-    } else {
+    if (itemType == TYPE_FOLDER) {
       bookmark.dateGroupModified = bookmark.dateAdded;
     }
 
     this.emit("created", bookmark);
-  },
+  }
 
-  onItemVisited() {},
+  onItemVisited() {}
 
   onItemMoved(id, oldParentId, oldIndex, newParentId, newIndex, itemType, guid, oldParentGuid, newParentGuid, source) {
-    if (itemType == PlacesUtils.bookmarks.TYPE_SEPARATOR) {
-      return;
-    }
-
     let info = {
       parentId: newParentGuid,
       index: newIndex,
@@ -120,31 +148,21 @@ let observer = {
       oldIndex,
     };
     this.emit("moved", {guid, info});
-  },
+  }
 
   onItemRemoved(id, parentId, index, itemType, uri, guid, parentGuid, source) {
-    if (itemType == PlacesUtils.bookmarks.TYPE_SEPARATOR) {
-      return;
-    }
-
     let node = {
       id: guid,
       parentId: parentGuid,
       index,
+      type: BOOKMARKS_TYPES_TO_API_TYPES_MAP.get(itemType),
+      url: getUrl(itemType, uri && uri.spec),
     };
 
-    if (itemType == PlacesUtils.bookmarks.TYPE_BOOKMARK) {
-      node.url = uri.spec;
-    }
-
     this.emit("removed", {guid, info: {parentId: parentGuid, index, node}});
-  },
+  }
 
   onItemChanged(id, prop, isAnno, val, lastMod, itemType, parentId, guid, parentGuid, oldVal, source) {
-    if (itemType == PlacesUtils.bookmarks.TYPE_SEPARATOR) {
-      return;
-    }
-
     let info = {};
     if (prop == "title") {
       info.title = val;
@@ -156,42 +174,43 @@ let observer = {
     }
 
     this.emit("changed", {guid, info});
-  },
-};
-EventEmitter.decorate(observer);
+  }
+}();
 
-function decrementListeners() {
+const decrementListeners = () => {
   listenerCount -= 1;
   if (!listenerCount) {
     PlacesUtils.bookmarks.removeObserver(observer);
   }
-}
+};
 
-function incrementListeners() {
+const incrementListeners = () => {
   listenerCount++;
   if (listenerCount == 1) {
     PlacesUtils.bookmarks.addObserver(observer);
   }
-}
+};
 
 this.bookmarks = class extends ExtensionAPI {
   getAPI(context) {
     return {
       bookmarks: {
-        get: function(idOrIdList) {
+        async get(idOrIdList) {
           let list = Array.isArray(idOrIdList) ? idOrIdList : [idOrIdList];
 
-          return Task.spawn(function* () {
+          try {
             let bookmarks = [];
             for (let id of list) {
-              let bookmark = yield PlacesUtils.bookmarks.fetch({guid: id});
+              let bookmark = await PlacesUtils.bookmarks.fetch({guid: id});
               if (!bookmark) {
                 throw new Error("Bookmark not found");
               }
-              bookmarks.push(convert(bookmark));
+              bookmarks.push(convertBookmarks(bookmark));
             }
             return bookmarks;
-          }).catch(error => Promise.reject({message: error.message}));
+          } catch (error) {
+            return Promise.reject({message: error.message});
+          }
         },
 
         getChildren: function(id) {
@@ -208,11 +227,11 @@ this.bookmarks = class extends ExtensionAPI {
         },
 
         search: function(query) {
-          return PlacesUtils.bookmarks.search(query).then(result => result.map(convert));
+          return PlacesUtils.bookmarks.search(query).then(result => result.map(convertBookmarks));
         },
 
         getRecent: function(numberOfItems) {
-          return PlacesUtils.bookmarks.getRecent(numberOfItems).then(result => result.map(convert));
+          return PlacesUtils.bookmarks.getRecent(numberOfItems).then(result => result.map(convertBookmarks));
         },
 
         create: function(bookmark) {
@@ -220,12 +239,18 @@ this.bookmarks = class extends ExtensionAPI {
             title: bookmark.title || "",
           };
 
-          // If url is NULL or missing, it will be a folder.
-          if (bookmark.url !== null) {
-            info.type = PlacesUtils.bookmarks.TYPE_BOOKMARK;
+          info.type = API_TYPES_TO_BOOKMARKS_TYPES_MAP.get(bookmark.type);
+          if (!info.type) {
+            // If url is NULL or missing, it will be a folder.
+            if (bookmark.url !== null) {
+              info.type = TYPE_BOOKMARK;
+            } else {
+              info.type = TYPE_FOLDER;
+            }
+          }
+
+          if (info.type === TYPE_BOOKMARK) {
             info.url = bookmark.url || "";
-          } else {
-            info.type = PlacesUtils.bookmarks.TYPE_FOLDER;
           }
 
           if (bookmark.index !== null) {
@@ -239,7 +264,7 @@ this.bookmarks = class extends ExtensionAPI {
           }
 
           try {
-            return PlacesUtils.bookmarks.insert(info).then(convert)
+            return PlacesUtils.bookmarks.insert(info).then(convertBookmarks)
               .catch(error => Promise.reject({message: error.message}));
           } catch (e) {
             return Promise.reject({message: `Invalid bookmark: ${JSON.stringify(info)}`});
@@ -258,7 +283,7 @@ this.bookmarks = class extends ExtensionAPI {
             PlacesUtils.bookmarks.DEFAULT_INDEX : destination.index;
 
           try {
-            return PlacesUtils.bookmarks.update(info).then(convert)
+            return PlacesUtils.bookmarks.update(info).then(convertBookmarks)
               .catch(error => Promise.reject({message: error.message}));
           } catch (e) {
             return Promise.reject({message: `Invalid bookmark: ${JSON.stringify(info)}`});
@@ -278,7 +303,7 @@ this.bookmarks = class extends ExtensionAPI {
           }
 
           try {
-            return PlacesUtils.bookmarks.update(info).then(convert)
+            return PlacesUtils.bookmarks.update(info).then(convertBookmarks)
               .catch(error => Promise.reject({message: error.message}));
           } catch (e) {
             return Promise.reject({message: `Invalid bookmark: ${JSON.stringify(info)}`});
@@ -292,7 +317,7 @@ this.bookmarks = class extends ExtensionAPI {
 
           // The API doesn't give you the old bookmark at the moment
           try {
-            return PlacesUtils.bookmarks.remove(info, {preventRemovalOfNonEmptyFolders: true}).then(result => {})
+            return PlacesUtils.bookmarks.remove(info, {preventRemovalOfNonEmptyFolders: true})
               .catch(error => Promise.reject({message: error.message}));
           } catch (e) {
             return Promise.reject({message: `Invalid bookmark: ${JSON.stringify(info)}`});
@@ -305,14 +330,14 @@ this.bookmarks = class extends ExtensionAPI {
           };
 
           try {
-            return PlacesUtils.bookmarks.remove(info).then(result => {})
+            return PlacesUtils.bookmarks.remove(info)
               .catch(error => Promise.reject({message: error.message}));
           } catch (e) {
             return Promise.reject({message: `Invalid bookmark: ${JSON.stringify(info)}`});
           }
         },
 
-        onCreated: new SingletonEventManager(context, "bookmarks.onCreated", fire => {
+        onCreated: new EventManager(context, "bookmarks.onCreated", fire => {
           let listener = (event, bookmark) => {
             fire.sync(bookmark.id, bookmark);
           };
@@ -325,7 +350,7 @@ this.bookmarks = class extends ExtensionAPI {
           };
         }).api(),
 
-        onRemoved: new SingletonEventManager(context, "bookmarks.onRemoved", fire => {
+        onRemoved: new EventManager(context, "bookmarks.onRemoved", fire => {
           let listener = (event, data) => {
             fire.sync(data.guid, data.info);
           };
@@ -338,7 +363,7 @@ this.bookmarks = class extends ExtensionAPI {
           };
         }).api(),
 
-        onChanged: new SingletonEventManager(context, "bookmarks.onChanged", fire => {
+        onChanged: new EventManager(context, "bookmarks.onChanged", fire => {
           let listener = (event, data) => {
             fire.sync(data.guid, data.info);
           };
@@ -351,7 +376,7 @@ this.bookmarks = class extends ExtensionAPI {
           };
         }).api(),
 
-        onMoved: new SingletonEventManager(context, "bookmarks.onMoved", fire => {
+        onMoved: new EventManager(context, "bookmarks.onMoved", fire => {
           let listener = (event, data) => {
             fire.sync(data.guid, data.info);
           };

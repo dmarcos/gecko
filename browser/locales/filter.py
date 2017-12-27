@@ -6,8 +6,10 @@ def test(mod, path, entity = None):
   import re
   # ignore anything but Firefox
   if mod not in ("netwerk", "dom", "toolkit", "security/manager",
-                 "devtools/client", "devtools/shared",
+                 "devtools/client", "devtools/shared", "devtools/shim",
                  "browser",
+                 "browser/extensions/formautofill",
+                 "browser/extensions/onboarding",
                  "browser/extensions/webcompat-reporter",
                  "extensions/spellcheck",
                  "other-licenses/branding/firefox",
@@ -17,7 +19,7 @@ def test(mod, path, entity = None):
   if mod not in ("browser", "extensions/spellcheck"):
     # we only have exceptions for browser and extensions/spellcheck
     return "error"
-  if not entity:
+  if entity is None:
     # the only files to ignore are spell checkers
     if mod == "extensions/spellcheck":
       return "ignore"

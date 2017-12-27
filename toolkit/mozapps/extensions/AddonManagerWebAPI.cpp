@@ -20,9 +20,31 @@ using namespace mozilla::dom;
 
 static bool
 IsValidHost(const nsACString& host) {
-  if (host.Equals("addons.mozilla.org") ||
-      host.Equals("discovery.addons.mozilla.org") ||
-      host.Equals("testpilot.firefox.com")) {
+  // This hidden pref allows users to disable mozAddonManager entirely if they want
+  // for fingerprinting resistance. Someone like Tor browser will use this pref.
+  if (Preferences::GetBool("privacy.resistFingerprinting.block_mozAddonManager")) {
+    return false;
+  }
+
+  // This is ugly, but Preferences.h doesn't have support
+  // for default prefs or locked prefs
+  nsCOMPtr<nsIPrefService> prefService (do_GetService(NS_PREFSERVICE_CONTRACTID));
+  nsCOMPtr<nsIPrefBranch> prefs;
+  if (prefService) {
+    prefService->GetDefaultBranch(nullptr, getter_AddRefs(prefs));
+    bool isEnabled;
+    if (NS_SUCCEEDED(prefs->GetBoolPref("xpinstall.enabled", &isEnabled)) && !isEnabled) {
+      bool isLocked;
+      prefs->PrefIsLocked("xpinstall.enabled", &isLocked);
+      if (isLocked) {
+        return false;
+      }
+    }
+  }
+
+  if (host.EqualsLiteral("addons.mozilla.org") ||
+      host.EqualsLiteral("discovery.addons.mozilla.org") ||
+      host.EqualsLiteral("testpilot.firefox.com")) {
     return true;
   }
 
@@ -69,7 +91,7 @@ AddonManagerWebAPI::IsValidSite(nsIURI* uri)
 bool
 AddonManagerWebAPI::IsAPIEnabled(JSContext* cx, JSObject* obj)
 {
-  nsGlobalWindow* global = xpc::WindowGlobalOrNull(obj);
+  nsGlobalWindowInner* global = xpc::WindowGlobalOrNull(obj);
   if (!global) {
     return false;
   }

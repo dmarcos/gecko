@@ -167,36 +167,14 @@ public:
   GetUpload(ErrorResult& aRv) override;
 
   virtual void
-  Send(JSContext* aCx, ErrorResult& aRv) override;
+  Send(JSContext* aCx,
+       const Nullable<DocumentOrBlobOrArrayBufferViewOrArrayBufferOrFormDataOrURLSearchParamsOrUSVString>& aData,
+       ErrorResult& aRv) override;
 
   virtual void
-  Send(JSContext* aCx, const nsAString& aBody, ErrorResult& aRv) override;
-
-  virtual void
-  Send(JSContext* aCx, nsIInputStream* aStream, ErrorResult& aRv) override
+  SendInputStream(nsIInputStream* aInputStream, ErrorResult& aRv) override
   {
-    MOZ_CRASH("This method cannot be called on workers.");
-  }
-
-  virtual void
-  Send(JSContext* aCx, Blob& aBody, ErrorResult& aRv) override;
-
-  virtual void
-  Send(JSContext* aCx, FormData& aBody, ErrorResult& aRv) override;
-
-  virtual void
-  Send(JSContext* aCx, const ArrayBuffer& aBody, ErrorResult& aRv) override;
-
-  virtual void
-  Send(JSContext* aCx, const ArrayBufferView& aBody, ErrorResult& aRv) override;
-
-  virtual void
-  Send(JSContext* aCx, URLSearchParams& aBody, ErrorResult& aRv) override;
-
-  virtual void
-  Send(JSContext* aCx, nsIDocument& aDoc, ErrorResult& aRv) override
-  {
-    MOZ_CRASH("This method cannot be called on workers.");
+    MOZ_CRASH("nsIInputStream is not a valid argument for XHR in workers.");
   }
 
   virtual void
@@ -283,6 +261,11 @@ public:
   {
     mStateData.mResponseText.SetVoid();
     mStateData.mResponse.setNull();
+  }
+
+  virtual uint16_t ErrorCode() const override
+  {
+    return 0; // eOK
   }
 
   virtual bool MozAnon() const override

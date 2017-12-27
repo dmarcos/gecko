@@ -123,7 +123,11 @@ class DestroyWidgetRunnable : public Runnable {
 public:
   NS_DECL_NSIRUNNABLE
 
-  explicit DestroyWidgetRunnable(nsIWidget* aWidget) : mWidget(aWidget) {}
+  explicit DestroyWidgetRunnable(nsIWidget* aWidget)
+    : mozilla::Runnable("DestroyWidgetRunnable")
+    , mWidget(aWidget)
+  {
+  }
 
 private:
   nsCOMPtr<nsIWidget> mWidget;
@@ -712,7 +716,10 @@ nsresult nsView::AttachToTopLevelWidget(nsIWidget* aWidget)
   mWindow = aWidget;
 
   mWindow->SetAttachedWidgetListener(this);
-  mWindow->EnableDragDrop(true);
+  if (mWindow->WindowType() != eWindowType_invisible) {
+    nsresult rv = mWindow->AsyncEnableDragDrop(true);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
   mWidgetIsTopLevel = true;
 
   // Refresh the view bounds
@@ -1035,8 +1042,7 @@ nsView::WindowResized(nsIWidget* aWidget, int32_t aWidth, int32_t aHeight)
 bool
 nsView::RequestWindowClose(nsIWidget* aWidget)
 {
-  if (mFrame && IsPopupWidget(aWidget) &&
-      mFrame->GetType() == nsGkAtoms::menuPopupFrame) {
+  if (mFrame && IsPopupWidget(aWidget) && mFrame->IsMenuPopupFrame()) {
     nsXULPopupManager* pm = nsXULPopupManager::GetInstance();
     if (pm) {
       pm->HidePopup(mFrame->GetContent(), false, true, false, false);
@@ -1140,5 +1146,5 @@ nsView::HandleEvent(WidgetGUIEvent* aEvent,
 bool
 nsView::IsPrimaryFramePaintSuppressed()
 {
-  return sShowPreviousPage && mFrame && mFrame->PresContext()->PresShell()->IsPaintingSuppressed();
+  return sShowPreviousPage && mFrame && mFrame->PresShell()->IsPaintingSuppressed();
 }

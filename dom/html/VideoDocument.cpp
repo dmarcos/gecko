@@ -28,6 +28,14 @@ public:
                                      nsIContentSink*     aSink = nullptr);
   virtual void SetScriptGlobalObject(nsIScriptGlobalObject* aScriptGlobalObject);
 
+  virtual void Destroy()
+  {
+    if (mStreamListener) {
+      mStreamListener->DropDocumentRef();
+    }
+    MediaDocument::Destroy();
+  }
+
 protected:
 
   // Sets document <title> to reflect the file name and description.
@@ -74,7 +82,7 @@ VideoDocument::SetScriptGlobalObject(nsIScriptGlobalObject* aScriptGlobalObject)
   if (aScriptGlobalObject) {
     if (!nsContentUtils::IsChildOfSameType(this) &&
         GetReadyStateEnum() != nsIDocument::READYSTATE_COMPLETE) {
-      LinkStylesheet(NS_LITERAL_STRING("resource://gre/res/TopLevelVideoDocument.css"));
+      LinkStylesheet(NS_LITERAL_STRING("resource://content-accessible/TopLevelVideoDocument.css"));
       LinkStylesheet(NS_LITERAL_STRING("chrome://global/skin/media/TopLevelVideoDocument.css"));
       LinkScript(NS_LITERAL_STRING("chrome://global/content/TopLevelVideoDocument.js"));
     }

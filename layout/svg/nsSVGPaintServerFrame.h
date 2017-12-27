@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -6,6 +7,7 @@
 #ifndef __NS_SVGPAINTSERVERFRAME_H__
 #define __NS_SVGPAINTSERVERFRAME_H__
 
+#include "gfxRect.h"
 #include "mozilla/Attributes.h"
 #include "nsCOMPtr.h"
 #include "nsFrame.h"
@@ -23,8 +25,6 @@ class DrawTarget;
 class gfxContext;
 class gfxPattern;
 class nsStyleContext;
-
-struct gfxRect;
 
 /**
  * RAII class used to temporarily set and remove the
@@ -56,15 +56,16 @@ class nsSVGPaintServerFrame : public nsSVGContainerFrame
 {
 protected:
   typedef mozilla::gfx::DrawTarget DrawTarget;
-  typedef mozilla::image::DrawResult DrawResult;
 
-  explicit nsSVGPaintServerFrame(nsStyleContext* aContext)
-    : nsSVGContainerFrame(aContext)
+  nsSVGPaintServerFrame(nsStyleContext* aContext, ClassID aID)
+    : nsSVGContainerFrame(aContext, aID)
   {
     AddStateBits(NS_FRAME_IS_NONDISPLAY);
   }
 
 public:
+  typedef mozilla::image::imgDrawingParams imgDrawingParams;
+
   NS_DECL_ABSTRACT_FRAME(nsSVGPaintServerFrame)
 
   /**
@@ -75,18 +76,17 @@ public:
    *   that surfaces of the correct size can be created. (SVG gradients are
    *   vector based, so it's not used there.)
    */
-  virtual mozilla::Pair<DrawResult, RefPtr<gfxPattern>>
+  virtual already_AddRefed<gfxPattern>
     GetPaintServerPattern(nsIFrame *aSource,
                           const DrawTarget* aDrawTarget,
                           const gfxMatrix& aContextMatrix,
                           nsStyleSVGPaint nsStyleSVG::*aFillOrStroke,
                           float aOpacity,
-                          const gfxRect *aOverrideBounds = nullptr,
-                          uint32_t aFlags = 0) = 0;
+                          imgDrawingParams& aImgParams,
+                          const gfxRect* aOverrideBounds = nullptr) = 0;
 
   // nsIFrame methods:
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override {}
 
   virtual bool IsFrameOfType(uint32_t aFlags) const override

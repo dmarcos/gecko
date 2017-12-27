@@ -2,12 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
- /* eslint-env browser */
+/* eslint-env browser */
 
 "use strict";
 
-const { createClass, createFactory, PropTypes, DOM: dom } =
-  require("devtools/client/shared/vendor/react");
+const { Component, createFactory } = require("devtools/client/shared/vendor/react");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
 const { connect } = require("devtools/client/shared/vendor/react-redux");
 
 const {
@@ -27,32 +28,51 @@ const {
   resizeViewport,
   rotateViewport,
 } = require("./actions/viewports");
-const DeviceModal = createFactory(require("./components/device-modal"));
-const GlobalToolbar = createFactory(require("./components/global-toolbar"));
-const Viewports = createFactory(require("./components/viewports"));
+const DeviceModal = createFactory(require("./components/DeviceModal"));
+const GlobalToolbar = createFactory(require("./components/GlobalToolbar"));
+const Viewports = createFactory(require("./components/Viewports"));
 const Types = require("./types");
 
-let App = createClass({
-  displayName: "App",
+class App extends Component {
+  static get propTypes() {
+    return {
+      devices: PropTypes.shape(Types.devices).isRequired,
+      dispatch: PropTypes.func.isRequired,
+      displayPixelRatio: Types.pixelRatio.value.isRequired,
+      networkThrottling: PropTypes.shape(Types.networkThrottling).isRequired,
+      screenshot: PropTypes.shape(Types.screenshot).isRequired,
+      touchSimulation: PropTypes.shape(Types.touchSimulation).isRequired,
+      viewports: PropTypes.arrayOf(PropTypes.shape(Types.viewport)).isRequired,
+    };
+  }
 
-  propTypes: {
-    devices: PropTypes.shape(Types.devices).isRequired,
-    dispatch: PropTypes.func.isRequired,
-    displayPixelRatio: Types.pixelRatio.value.isRequired,
-    location: Types.location.isRequired,
-    networkThrottling: PropTypes.shape(Types.networkThrottling).isRequired,
-    screenshot: PropTypes.shape(Types.screenshot).isRequired,
-    touchSimulation: PropTypes.shape(Types.touchSimulation).isRequired,
-    viewports: PropTypes.arrayOf(PropTypes.shape(Types.viewport)).isRequired,
-  },
+  constructor(props) {
+    super(props);
+    this.onAddCustomDevice = this.onAddCustomDevice.bind(this);
+    this.onBrowserMounted = this.onBrowserMounted.bind(this);
+    this.onChangeDevice = this.onChangeDevice.bind(this);
+    this.onChangeNetworkThrottling = this.onChangeNetworkThrottling.bind(this);
+    this.onChangePixelRatio = this.onChangePixelRatio.bind(this);
+    this.onChangeTouchSimulation = this.onChangeTouchSimulation.bind(this);
+    this.onContentResize = this.onContentResize.bind(this);
+    this.onDeviceListUpdate = this.onDeviceListUpdate.bind(this);
+    this.onExit = this.onExit.bind(this);
+    this.onRemoveCustomDevice = this.onRemoveCustomDevice.bind(this);
+    this.onRemoveDeviceAssociation = this.onRemoveDeviceAssociation.bind(this);
+    this.onResizeViewport = this.onResizeViewport.bind(this);
+    this.onRotateViewport = this.onRotateViewport.bind(this);
+    this.onScreenshot = this.onScreenshot.bind(this);
+    this.onUpdateDeviceDisplayed = this.onUpdateDeviceDisplayed.bind(this);
+    this.onUpdateDeviceModal = this.onUpdateDeviceModal.bind(this);
+  }
 
   onAddCustomDevice(device) {
     this.props.dispatch(addCustomDevice(device));
-  },
+  }
 
   onBrowserMounted() {
     window.postMessage({ type: "browser-mounted" }, "*");
-  },
+  }
 
   onChangeDevice(id, device, deviceType) {
     // TODO: Bug 1332754: Move messaging and logic into the action creator so that the
@@ -65,7 +85,7 @@ let App = createClass({
     this.props.dispatch(changeDevice(id, device.name, deviceType));
     this.props.dispatch(changeTouchSimulation(device.touch));
     this.props.dispatch(changePixelRatio(id, device.pixelRatio));
-  },
+  }
 
   onChangeNetworkThrottling(enabled, profile) {
     window.postMessage({
@@ -74,7 +94,7 @@ let App = createClass({
       profile,
     }, "*");
     this.props.dispatch(changeNetworkThrottling(enabled, profile));
-  },
+  }
 
   onChangePixelRatio(pixelRatio) {
     window.postMessage({
@@ -82,7 +102,7 @@ let App = createClass({
       pixelRatio,
     }, "*");
     this.props.dispatch(changePixelRatio(0, pixelRatio));
-  },
+  }
 
   onChangeTouchSimulation(enabled) {
     window.postMessage({
@@ -90,7 +110,7 @@ let App = createClass({
       enabled,
     }, "*");
     this.props.dispatch(changeTouchSimulation(enabled));
-  },
+  }
 
   onContentResize({ width, height }) {
     window.postMessage({
@@ -98,19 +118,19 @@ let App = createClass({
       width,
       height,
     }, "*");
-  },
+  }
 
   onDeviceListUpdate(devices) {
     updatePreferredDevices(devices);
-  },
+  }
 
   onExit() {
     window.postMessage({ type: "exit" }, "*");
-  },
+  }
 
   onRemoveCustomDevice(device) {
     this.props.dispatch(removeCustomDevice(device));
-  },
+  }
 
   onRemoveDeviceAssociation(id) {
     // TODO: Bug 1332754: Move messaging and logic into the action creator so that device
@@ -118,33 +138,32 @@ let App = createClass({
     this.props.dispatch(removeDeviceAssociation(id));
     this.props.dispatch(changeTouchSimulation(false));
     this.props.dispatch(changePixelRatio(id, 0));
-  },
+  }
 
   onResizeViewport(id, width, height) {
     this.props.dispatch(resizeViewport(id, width, height));
-  },
+  }
 
   onRotateViewport(id) {
     this.props.dispatch(rotateViewport(id));
-  },
+  }
 
   onScreenshot() {
     this.props.dispatch(takeScreenshot());
-  },
+  }
 
   onUpdateDeviceDisplayed(device, deviceType, displayed) {
     this.props.dispatch(updateDeviceDisplayed(device, deviceType, displayed));
-  },
+  }
 
   onUpdateDeviceModal(isOpen, modalOpenedFromViewport) {
     this.props.dispatch(updateDeviceModal(isOpen, modalOpenedFromViewport));
-  },
+  }
 
   render() {
     let {
       devices,
       displayPixelRatio,
-      location,
       networkThrottling,
       screenshot,
       touchSimulation,
@@ -203,7 +222,6 @@ let App = createClass({
       }),
       Viewports({
         devices,
-        location,
         screenshot,
         viewports,
         onBrowserMounted,
@@ -224,8 +242,7 @@ let App = createClass({
         onUpdateDeviceModal,
       })
     );
-  },
-
-});
+  }
+}
 
 module.exports = connect(state => state)(App);

@@ -31,7 +31,7 @@
 
 typedef mozilla::net::LoadContextInfo LoadContextInfo;
 
-// nsWyciwygChannel methods 
+// nsWyciwygChannel methods
 nsWyciwygChannel::nsWyciwygChannel()
   : mMode(NONE),
     mStatus(NS_OK),
@@ -44,10 +44,11 @@ nsWyciwygChannel::nsWyciwygChannel()
 {
 }
 
-nsWyciwygChannel::~nsWyciwygChannel() 
+nsWyciwygChannel::~nsWyciwygChannel()
 {
   if (mLoadInfo) {
-    NS_ReleaseOnMainThread(mLoadInfo.forget(), false);
+    NS_ReleaseOnMainThreadSystemGroup(
+      "nsWyciwygChannel::mLoadInfo", mLoadInfo.forget(), false);
   }
 }
 
@@ -80,7 +81,7 @@ nsWyciwygChannel::GetName(nsACString &aName)
 {
   return mURI->GetSpec(aName);
 }
- 
+
 NS_IMETHODIMP
 nsWyciwygChannel::IsPending(bool *aIsPending)
 {
@@ -107,7 +108,7 @@ nsWyciwygChannel::Cancel(nsresult status)
   // else we're waiting for OnCacheEntryAvailable
   return NS_OK;
 }
- 
+
 NS_IMETHODIMP
 nsWyciwygChannel::Suspend()
 {
@@ -116,7 +117,7 @@ nsWyciwygChannel::Suspend()
   // XXX else, we'll ignore this ... and that's probably bad!
   return NS_OK;
 }
- 
+
 NS_IMETHODIMP
 nsWyciwygChannel::Resume()
 {
@@ -164,6 +165,12 @@ nsWyciwygChannel::GetLoadFlags(uint32_t * aLoadFlags)
 {
   *aLoadFlags = mLoadFlags;
   return NS_OK;
+}
+
+NS_IMETHODIMP
+nsWyciwygChannel::GetIsDocument(bool *aIsDocument)
+{
+  return NS_GetIsDocumentChannel(this, aIsDocument);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -249,7 +256,7 @@ nsWyciwygChannel::SetNotificationCallbacks(nsIInterfaceRequestor* aNotificationC
   return NS_OK;
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsWyciwygChannel::GetSecurityInfo(nsISupports * *aSecurityInfo)
 {
   NS_IF_ADDREF(*aSecurityInfo = mSecurityInfo);
@@ -273,7 +280,7 @@ nsWyciwygChannel::SetContentType(const nsACString &aContentType)
 NS_IMETHODIMP
 nsWyciwygChannel::GetContentCharset(nsACString &aContentCharset)
 {
-  aContentCharset.AssignLiteral("UTF-16");
+  aContentCharset.AssignLiteral("UTF-16LE");
   return NS_OK;
 }
 
@@ -466,7 +473,6 @@ nsWyciwygChannel::CloseCacheEntry(nsresult reason)
   if (mCacheEntry) {
     LOG(("nsWyciwygChannel::CloseCacheEntry [this=%p ]", this));
     mCacheOutputStream = nullptr;
-    mCacheInputStream = nullptr;
 
     if (NS_FAILED(reason)) {
       mCacheEntry->AsyncDoom(nullptr);
@@ -526,14 +532,14 @@ nsWyciwygChannel::GetCharsetAndSource(int32_t* aSource, nsACString& aCharset)
     return NS_ERROR_NOT_AVAILABLE;
   }
 
-  nsXPIDLCString data;
+  nsCString data;
   mCacheEntry->GetMetaDataElement("charset", getter_Copies(data));
 
   if (data.IsEmpty()) {
     return NS_ERROR_NOT_AVAILABLE;
   }
 
-  nsXPIDLCString sourceStr;
+  nsCString sourceStr;
   mCacheEntry->GetMetaDataElement("charset-source", getter_Copies(sourceStr));
 
   int32_t source;
@@ -572,7 +578,7 @@ nsWyciwygChannel::OnCacheEntryAvailable(nsICacheEntry *aCacheEntry,
   MOZ_RELEASE_ASSERT(!aNew, "New entry must not be returned when flag "
                             "OPEN_READONLY is used!");
 
-  // if the channel's already fired onStopRequest, 
+  // if the channel's already fired onStopRequest,
   // then we should ignore this event.
   if (!mIsPending)
     return NS_OK;
@@ -594,8 +600,10 @@ nsWyciwygChannel::OnCacheEntryAvailable(nsICacheEntry *aCacheEntry,
     LOG(("channel was canceled [this=%p status=%" PRIx32 "]\n", this, static_cast<uint32_t>(mStatus)));
     // Since OnCacheEntryAvailable can be called directly from AsyncOpen
     // we must dispatch.
-    NS_DispatchToCurrentThread(mozilla::NewRunnableMethod(
-      this, &nsWyciwygChannel::NotifyListener));
+    NS_DispatchToCurrentThread(
+      mozilla::NewRunnableMethod("nsWyciwygChannel::NotifyListener",
+                                 this,
+                                 &nsWyciwygChannel::NotifyListener));
   }
 
   return NS_OK;
@@ -760,12 +768,13 @@ nsWyciwygChannel::ReadFromCache()
     mLoadFlags |= INHIBIT_PERSISTENT_CACHING;
 
   // Get a transport to the cached data...
-  rv = mCacheEntry->OpenInputStream(0, getter_AddRefs(mCacheInputStream));
+  nsCOMPtr<nsIInputStream> inputStream;
+  rv = mCacheEntry->OpenInputStream(0, getter_AddRefs(inputStream));
   if (NS_FAILED(rv))
     return rv;
-  NS_ENSURE_TRUE(mCacheInputStream, NS_ERROR_UNEXPECTED);
+  NS_ENSURE_TRUE(inputStream, NS_ERROR_UNEXPECTED);
 
-  rv = NS_NewInputStreamPump(getter_AddRefs(mPump), mCacheInputStream);
+  rv = NS_NewInputStreamPump(getter_AddRefs(mPump), inputStream.forget());
   if (NS_FAILED(rv)) return rv;
 
   // Pump the cache data downstream

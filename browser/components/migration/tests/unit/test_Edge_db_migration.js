@@ -171,7 +171,7 @@ let eseDBWritingHelpers = {
       loadLibraries();
 
       KERNEL.SystemTimeToFileTime = gLibs.kernel.declare("SystemTimeToFileTime",
-          ctypes.default_abi, ctypes.bool, KERNEL.SYSTEMTIME.ptr, KERNEL.FILETIME.ptr);
+          ctypes.winapi_abi, ctypes.bool, KERNEL.SYSTEMTIME.ptr, KERNEL.FILETIME.ptr);
 
       declareESEFunction("CreateDatabaseW", ESE.JET_SESID, ESE.JET_PCWSTR,
                          ESE.JET_PCWSTR, ESE.JET_DBID.ptr, ESE.JET_GRBIT);
@@ -290,7 +290,7 @@ let eseDBWritingHelpers = {
   },
 };
 
-add_task(function*() {
+add_task(async function() {
   let tempFile = Services.dirsvc.get("TmpD", Ci.nsIFile);
   tempFile.append("fx-xpcshell-edge-db");
   tempFile.createUnique(tempFile.DIRECTORY_TYPE, 0o600);
@@ -439,7 +439,7 @@ add_task(function*() {
   };
   PlacesUtils.bookmarks.addObserver(bookmarkObserver);
 
-  let migrateResult = yield new Promise(resolve => bookmarksMigrator.migrate(resolve)).catch(ex => {
+  let migrateResult = await new Promise(resolve => bookmarksMigrator.migrate(resolve)).catch(ex => {
     Cu.reportError(ex);
     Assert.ok(false, "Got an exception trying to migrate data! " + ex);
     return false;
@@ -517,7 +517,7 @@ add_task(function*() {
 
   let readingListMigrator = migrator.wrappedJSObject.getReadingListMigratorForTesting(db);
   Assert.ok(readingListMigrator.exists, "Should recognize db we just created");
-  migrateResult = yield new Promise(resolve => readingListMigrator.migrate(resolve)).catch(ex => {
+  migrateResult = await new Promise(resolve => readingListMigrator.migrate(resolve)).catch(ex => {
     Cu.reportError(ex);
     Assert.ok(false, "Got an exception trying to migrate data! " + ex);
     return false;

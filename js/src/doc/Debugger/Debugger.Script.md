@@ -85,6 +85,14 @@ no such emphasized headings will appear.
 A `Debugger.Script` instance inherits the following accessor properties
 from its prototype:
 
+`isGeneratorFunction`
+:   True if this instance refers to a `JSScript` for a function defined with a
+    `function*` expression or statement. False otherwise.
+
+`isAsyncFunction`
+:   True if this instance refers to a `JSScript` for an async function, defined
+    with an `async function` expression or statement. False otherwise.
+
 `displayName`
 :   **If the instance refers to a `JSScript`**, this is the script's display
     name, if it has one. If the script has no display name &mdash; for example,
@@ -125,8 +133,12 @@ from its prototype:
 
 `url`
 :   **If the instance refers to a `JSScript`**, the filename or URL from which
-    this script's code was loaded. If the `source` property is non-`null`,
-    then this is equal to `source.url`.
+    this script's code was loaded. For scripts created by `eval` or the
+    `Function` constructor, this may be a synthesized filename, starting with a
+    valid URL and followed by information tracking how the code was introduced
+    into the system; the entire string is not a valid URL. For
+    `Function.prototype`'s script, this is `null`. If this `Debugger.Script`'s
+    `source` property is non-`null`, then this is equal to `source.url`.
 
     **If the instance refers to WebAssembly code**, throw a `TypeError`.
 
@@ -342,7 +354,7 @@ methods of other kinds of objects.
 
     **If the instance refers to WebAssembly code**, throw a `TypeError`.
 
-<code>clearBreakpoints(handler, [<i>offset</i>])</code>
+<code>clearBreakpoint(handler, [<i>offset</i>])</code>
 :   **If the instance refers to a `JSScript`**, remove all breakpoints set in
     this [`Debugger`][debugger-object] instance that use <i>handler</i> as
     their handler. If <i>offset</i> is given, remove only those breakpoints

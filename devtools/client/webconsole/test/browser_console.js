@@ -17,12 +17,12 @@ const TEST_XHR_ERROR_URI = `http://example.com/404.html?${Date.now()}`;
 const TEST_IMAGE = "http://example.com/browser/devtools/client/webconsole/" +
                    "test/test-image.png";
 
-"use strict";
+const ObjectClient = require("devtools/shared/client/object-client");
 
 add_task(function* () {
   yield loadTab(TEST_URI);
 
-  let opened = waitForConsole();
+  let opened = waitForBrowserConsole();
 
   let hud = HUDService.getBrowserConsole();
   ok(!hud, "browser console is not open");
@@ -31,11 +31,11 @@ add_task(function* () {
 
   hud = yield opened;
   ok(hud, "browser console opened");
-
-  yield consoleOpened(hud);
+  yield testMessages(hud);
+  yield testCPOWInspection(hud);
 });
 
-function consoleOpened(hud) {
+function testMessages(hud) {
   hud.jsterm.clearOutput(true);
 
   expectUncaughtException();
@@ -62,10 +62,16 @@ function consoleOpened(hud) {
   Cu.nukeSandbox(sandbox);
 
   // Add a message from a content window.
-  content.console.log("bug587757b");
+  gBrowser.contentWindowAsCPOW.console.log("bug587757b");
 
   // Test eval.
   hud.jsterm.execute("document.location.href");
+
+  // Test eval frame script
+  hud.jsterm.execute(`
+    gBrowser.selectedBrowser.messageManager.loadFrameScript('data:application/javascript,console.log("framescript-message")', false);
+    "framescript-eval";
+  `);
 
   // Check for network requests.
   let xhr = new XMLHttpRequest();
@@ -129,6 +135,18 @@ function consoleOpened(hud) {
         severity: SEVERITY_LOG,
       },
       {
+        name: "jsterm eval result 2",
+        text: "framescript-eval",
+        category: CATEGORY_OUTPUT,
+        severity: SEVERITY_LOG,
+      },
+      {
+        name: "frame script message",
+        text: "framescript-message",
+        category: CATEGORY_WEBDEV,
+        severity: SEVERITY_LOG,
+      },
+      {
         name: "exception message",
         text: "foobarExceptionBug587757",
         category: CATEGORY_JS,
@@ -159,19 +177,70 @@ function consoleOpened(hud) {
   });
 }
 
-function waitForConsole() {
-  let deferred = promise.defer();
+function* testCPOWInspection(hud) {
+  // Directly request evaluation to get an actor for the selected browser.
+  // Note that this doesn't actually render a message, and instead allows us
+  // us to assert that inspecting an object doesn't throw in the server.
+  // This would be done in a mochitest-chrome suite, but that doesn't run in
+  // e10s, so it's harder to get ahold of a CPOW.
+  let cpowEval = yield hud.jsterm.requestEvaluation("gBrowser.selectedBrowser");
+  info("Creating an ObjectClient with: " + cpowEval.result.actor);
 
-  Services.obs.addObserver(function observer(aSubject) {
-    Services.obs.removeObserver(observer, "web-console-created");
-    aSubject.QueryInterface(Ci.nsISupportsString);
+  let objectClient = new ObjectClient(hud.jsterm.hud.proxy.client, {
+    actor: cpowEval.result.actor,
+  });
 
-    let hud = HUDService.getBrowserConsole();
-    ok(hud, "browser console is open");
-    is(aSubject.data, hud.hudId, "notification hudId is correct");
+  // Before the fix for Bug 1382833, this wouldn't resolve due to a CPOW error
+  // in the ObjectActor.
+  let prototypeAndProperties = yield objectClient.getPrototypeAndProperties();
 
-    executeSoon(() => deferred.resolve(hud));
-  }, "web-console-created");
+  // Just a sanity check to make sure a valid packet came back
+  is(prototypeAndProperties.prototype.class, "XBL prototype JSClass",
+    "Looks like a valid response");
 
-  return deferred.promise;
+  // The CPOW is in the _contentWindow property.
+  let cpow = prototypeAndProperties.ownProperties._contentWindow.value;
+
+  // But it's only a CPOW in e10s.
+  let e10sCheck = yield hud.jsterm.requestEvaluation(
+    "Cu.isCrossProcessWrapper(gBrowser.selectedBrowser._contentWindow)");
+  if (!e10sCheck.result) {
+    is(cpow.class, "Window", "The object is not a CPOW.");
+    return;
+  }
+
+  is(cpow.class, "CPOW: Window", "The CPOW grip has the right class.");
+
+  // Check that various protocol request methods work for the CPOW.
+  let response, slice;
+  let objClient = new ObjectClient(hud.jsterm.hud.proxy.client, cpow);
+
+  response = yield objClient.getPrototypeAndProperties();
+  is(Reflect.ownKeys(response.ownProperties).length, 0, "No property was retrieved.");
+  is(response.ownSymbols.length, 0, "No symbol property was retrieved.");
+  is(response.prototype.type, "null", "The prototype is null.");
+
+  response = yield objClient.enumProperties({ignoreIndexedProperties: true});
+  slice = yield response.iterator.slice(0, response.iterator.count);
+  is(Reflect.ownKeys(slice.ownProperties).length, 0, "No property was retrieved.");
+
+  response = yield objClient.enumProperties({});
+  slice = yield response.iterator.slice(0, response.iterator.count);
+  is(Reflect.ownKeys(slice.ownProperties).length, 0, "No property was retrieved.");
+
+  response = yield objClient.getOwnPropertyNames();
+  is(response.ownPropertyNames.length, 0, "No property was retrieved.");
+
+  response = yield objClient.getProperty("x");
+  is(response.descriptor, undefined, "The property does not exist.");
+
+  response = yield objClient.enumSymbols();
+  slice = yield response.iterator.slice(0, response.iterator.count);
+  is(slice.ownSymbols.length, 0, "No symbol property was retrieved.");
+
+  response = yield objClient.getPrototype();
+  is(response.prototype.type, "null", "The prototype is null.");
+
+  response = yield objClient.getDisplayString();
+  is(response.displayString, "<cpow>", "The CPOW stringifies to <cpow>");
 }

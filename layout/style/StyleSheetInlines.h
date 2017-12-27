@@ -129,9 +129,11 @@ StyleSheet::GetIntegrity(dom::SRIMetadata& aResult) const
   aResult = SheetInfo().mIntegrity;
 }
 
-void StyleSheet::WillDirty() { MOZ_STYLO_FORWARD(WillDirty, ()) }
-void StyleSheet::DidDirty() { MOZ_STYLO_FORWARD(DidDirty, ()) }
-
+bool
+StyleSheet::HasUniqueInner() const
+{
+  return mInner->mSheets.Length() == 1;
+}
 
 }
 

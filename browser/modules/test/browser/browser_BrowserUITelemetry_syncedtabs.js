@@ -36,6 +36,7 @@ function mockSyncedTabs() {
   // configure our broadcasters so we are in the right state.
   document.getElementById("sync-reauth-state").hidden = true;
   document.getElementById("sync-setup-state").hidden = true;
+  document.getElementById("sync-unverified-state").hidden = true;
   document.getElementById("sync-syncnow-state").hidden = false;
 
   registerCleanupFunction(() => {
@@ -43,6 +44,7 @@ function mockSyncedTabs() {
 
     document.getElementById("sync-reauth-state").hidden = true;
     document.getElementById("sync-setup-state").hidden = false;
+    document.getElementById("sync-unverified-state").hidden = true;
     document.getElementById("sync-syncnow-state").hidden = true;
   });
 }
@@ -58,19 +60,19 @@ function promiseTabsUpdated() {
   });
 }
 
-add_task(function* test_menu() {
+add_task(async function test_menu() {
   // Reset BrowserUITelemetry's world.
   BUIT._countableEvents = {};
 
   let tabsUpdated = promiseTabsUpdated();
 
   // check the button's functionality
-  yield PanelUI.show();
+  CustomizableUI.addWidgetToArea("sync-button", "nav-bar");
 
   let syncButton = document.getElementById("sync-button");
   syncButton.click();
 
-  yield tabsUpdated;
+  await tabsUpdated;
   // Get our 1 tab and click on it.
   let tabList = document.getElementById("PanelUI-remotetabs-tabslist");
   let tabEntry = tabList.firstChild.nextSibling;
@@ -81,25 +83,26 @@ add_task(function* test_menu() {
     "click-builtin-item": { "sync-button": { left: 1 } },
     "synced-tabs": { open: { "toolbarbutton-subview": 1 } },
   });
+  CustomizableUI.reset();
 });
 
-add_task(function* test_sidebar() {
+add_task(async function test_sidebar() {
   // Reset BrowserUITelemetry's world.
   BUIT._countableEvents = {};
 
-  yield SidebarUI.show("viewTabsSidebar");
+  await SidebarUI.show("viewTabsSidebar");
 
   let syncedTabsDeckComponent = SidebarUI.browser.contentWindow.syncedTabsDeckComponent;
 
-  syncedTabsDeckComponent._accountStatus = () => Promise.resolve(true);
+  syncedTabsDeckComponent._getSignedInUser = () => Promise.resolve({verified: true});
 
   // Once the tabs container has been selected (which here means "'selected'
   // added to the class list") we are ready to test.
   let container = SidebarUI.browser.contentDocument.querySelector(".tabs-container");
   let promiseUpdated = BrowserTestUtils.waitForAttribute("class", container);
 
-  yield syncedTabsDeckComponent.updatePanel();
-  yield promiseUpdated;
+  await syncedTabsDeckComponent.updatePanel();
+  await promiseUpdated;
 
   let selectedPanel = syncedTabsDeckComponent.container.querySelector(".sync-state.selected");
   let tab = selectedPanel.querySelector(".tab");
@@ -111,5 +114,5 @@ add_task(function* test_sidebar() {
     },
     "synced-tabs": { open: { sidebar: 1 } }
   });
-  yield SidebarUI.hide();
+  await SidebarUI.hide();
 });

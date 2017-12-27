@@ -36,8 +36,7 @@ else:
 config = {
     "buildbot_json_path": "buildprops.json",
     "exes": {
-        "python": "/tools/buildbot/bin/python",
-        "virtualenv": ["/tools/buildbot/bin/python", "/tools/misc-python/virtualenv.py"],
+        "virtualenv": "/tools/virtualenv/bin/virtualenv",
         "tooltool.py": "/tools/tooltool.py",
     },
     "find_links": [
@@ -116,6 +115,8 @@ config = {
                 "--use-test-media-devices",
                 "--screenshot-on-fail",
                 "--cleanup-crashes",
+                "--marionette-startup-timeout=180",
+                "--sandbox-read-whitelist=%(abs_work_dir)s",
             ],
             "run_filename": "runtests.py",
             "testsdir": "mochitest"
@@ -147,6 +148,8 @@ config = {
                 "--log-raw=%(raw_log_file)s",
                 "--log-errorsummary=%(error_summary_file)s",
                 "--cleanup-crashes",
+                "--marionette-startup-timeout=180",
+                "--sandbox-read-whitelist=%(abs_work_dir)s",
             ],
             "run_filename": "runreftest.py",
             "testsdir": "reftest"
@@ -196,16 +199,12 @@ config = {
         "browser-chrome-addons": ["--flavor=browser", "--chunk-by-runtime", "--tag=addons"],
         "browser-chrome-coverage": ["--flavor=browser", "--chunk-by-runtime", "--timeout=1200"],
         "browser-chrome-screenshots": ["--flavor=browser", "--subsuite=screenshots"],
+        "browser-chrome-instrumentation": ["--flavor=browser"],
         "mochitest-gl": ["--subsuite=webgl"],
         "mochitest-devtools-chrome": ["--flavor=browser", "--subsuite=devtools"],
         "mochitest-devtools-chrome-chunked": ["--flavor=browser", "--subsuite=devtools", "--chunk-by-runtime"],
         "mochitest-devtools-chrome-coverage": ["--flavor=browser", "--subsuite=devtools", "--chunk-by-runtime", "--timeout=1200"],
-        "jetpack-package": ["--flavor=jetpack-package"],
-        "jetpack-package-clipboard": ["--flavor=jetpack-package", "--subsuite=clipboard"],
-        "jetpack-addon": ["--flavor=jetpack-addon"],
         "a11y": ["--flavor=a11y"],
-        "plain-style": ["--failure-pattern-file=stylo-failures.md", "layout/style/test"],
-        "chrome-style": ["--flavor=chrome", "--failure-pattern-file=../stylo-failures.md", "layout/style/test/chrome"],
     },
     # local reftest suites
     "all_reftest_suites": {
@@ -219,17 +218,19 @@ config = {
             "tests": ["tests/jsreftest/tests/jstests.list"]
         },
         "reftest": {
-            "options": ["--suite=reftest"],
+            "options": ["--suite=reftest",
+                        "--setpref=layers.acceleration.force-enabled=true"],
             "tests": ["tests/reftest/tests/layout/reftests/reftest.list"]
         },
         "reftest-no-accel": {
             "options": ["--suite=reftest",
-                        "--setpref=layers.acceleration.force-enabled=disabled"],
-            "tests": ["tests/reftest/tests/layout/reftests/reftest.list"]},
+                        "--setpref=layers.acceleration.disabled=true"],
+            "tests": ["tests/reftest/tests/layout/reftests/reftest.list"]
+        },
         "reftest-stylo": {
             "options": ["--suite=reftest",
                         "--setpref=reftest.compareStyloToGecko=true"],
-            "tests": ["tests/reftest/tests/layout/reftests/reftest-stylo.list"],
+            "tests": ["tests/reftest/tests/layout/reftests/reftest.list"],
         },
     },
     "all_xpcshell_suites": {
@@ -291,12 +292,11 @@ config = {
     ],
     "vcs_output_timeout": 1000,
     "minidump_save_path": "%(abs_work_dir)s/../minidumps",
-    "buildbot_max_log_size": 52428800,
+    "buildbot_max_log_size": 209715200,
     "default_blob_upload_servers": [
         "https://blobupload.elasticbeanstalk.com",
     ],
-    "unstructured_flavors": {"mochitest": ['jetpack'],
-                            "xpcshell": [],
+    "unstructured_flavors": {"xpcshell": [],
                             "gtest": [],
                             "mozmill": [],
                             "cppunittest": [],
@@ -307,7 +307,7 @@ config = {
     "download_minidump_stackwalk": True,
     "minidump_stackwalk_path": MINIDUMP_STACKWALK_PATH,
     "minidump_tooltool_manifest_path": TOOLTOOL_MANIFEST_PATH,
-    "tooltool_cache": "/home/worker/tooltool-cache",
+    "tooltool_cache": "/builds/worker/tooltool-cache",
     "download_nodejs": True,
     "nodejs_path": NODEJS_PATH,
     "nodejs_tooltool_manifest_path": NODEJS_TOOLTOOL_MANIFEST_PATH,

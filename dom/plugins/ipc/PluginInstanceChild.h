@@ -26,7 +26,6 @@
 #include "npfunctions.h"
 #include "nsAutoPtr.h"
 #include "nsTArray.h"
-#include "ChildAsyncCall.h"
 #include "ChildTimer.h"
 #include "nsRect.h"
 #include "nsTHashtable.h"
@@ -165,12 +164,6 @@ protected:
             NPError* rv,
             uint16_t* stype) override;
 
-    virtual mozilla::ipc::IPCResult
-    RecvAsyncNPP_NewStream(
-        PBrowserStreamChild* actor,
-        const nsCString& mimeType,
-        const bool& seekable) override;
-
     virtual PBrowserStreamChild*
     AllocPBrowserStreamChild(const nsCString& url,
                              const uint32_t& length,
@@ -180,14 +173,6 @@ protected:
 
     virtual bool
     DeallocPBrowserStreamChild(PBrowserStreamChild* stream) override;
-
-    virtual PPluginStreamChild*
-    AllocPPluginStreamChild(const nsCString& mimeType,
-                            const nsCString& target,
-                            NPError* result) override;
-
-    virtual bool
-    DeallocPPluginStreamChild(PPluginStreamChild* stream) override;
 
     virtual PStreamNotifyChild*
     AllocPStreamNotifyChild(const nsCString& url, const nsCString& target,
@@ -251,10 +236,6 @@ public:
 
     uint32_t ScheduleTimer(uint32_t interval, bool repeat, TimerFunc func);
     void UnscheduleTimer(uint32_t id);
-
-    void AsyncCall(PluginThreadCallback aFunc, void* aUserData);
-    // This function is a more general version of AsyncCall
-    void PostChildAsyncCall(already_AddRefed<ChildAsyncCall> aTask);
 
     int GetQuirks();
 
@@ -343,7 +324,7 @@ private:
     static LONG_PTR WINAPI SetWindowLongPtrWHook(HWND hWnd,
                                                  int nIndex,
                                                  LONG_PTR newLong);
-                      
+
 #else
     static LONG WINAPI SetWindowLongAHook(HWND hWnd,
                                           int nIndex,
@@ -362,15 +343,13 @@ private:
     static BOOL WINAPI ImmNotifyIME(HIMC aIMC, DWORD aAction, DWORD aIndex,
                                     DWORD aValue);
 
-    class FlashThrottleAsyncMsg : public ChildAsyncCall
+    class FlashThrottleMsg : public CancelableRunnable
     {
       public:
-        FlashThrottleAsyncMsg();
-        FlashThrottleAsyncMsg(PluginInstanceChild* aInst, 
-                              HWND aWnd, UINT aMsg,
-                              WPARAM aWParam, LPARAM aLParam,
-                              bool isWindowed)
-          : ChildAsyncCall(aInst, nullptr, nullptr),
+        FlashThrottleMsg(PluginInstanceChild* aInstance, HWND aWnd, UINT aMsg,
+                         WPARAM aWParam, LPARAM aLParam, bool isWindowed)
+          : CancelableRunnable("FlashThrottleMsg"),
+          mInstance(aInstance),
           mWnd(aWnd),
           mMsg(aMsg),
           mWParam(aWParam),
@@ -379,6 +358,7 @@ private:
         {}
 
         NS_IMETHOD Run() override;
+        nsresult Cancel() override;
 
         WNDPROC GetProc();
         HWND GetWnd() { return mWnd; }
@@ -387,6 +367,7 @@ private:
         LPARAM GetLParam() { return mLParam; }
 
       private:
+        PluginInstanceChild* mInstance;
         HWND                 mWnd;
         UINT                 mMsg;
         WPARAM               mWParam;
@@ -462,10 +443,9 @@ private:
     HWND mWinlessHiddenMsgHWND;
 #endif
 
-    friend class ChildAsyncCall;
-
-    Mutex mAsyncCallMutex;
-    nsTArray<ChildAsyncCall*> mPendingAsyncCalls;
+#if defined(OS_WIN)
+    nsTArray<FlashThrottleMsg*> mPendingFlashThrottleMsgs;
+#endif
     nsTArray<nsAutoPtr<ChildTimer> > mTimers;
 
     /**
@@ -492,7 +472,7 @@ public:
     const NPCocoaEvent* getCurrentEvent() {
         return mCurrentEvent;
     }
-  
+
     bool CGDraw(CGContextRef ref, nsIntRect aUpdateRect);
 
 #if defined(__i386__)
@@ -598,7 +578,7 @@ private:
 #ifdef XP_MACOSX
     // Current IOSurface available for rendering
     // We can't use thebes gfxASurface like other platforms.
-    PluginUtilsOSX::nsDoubleBufferCARenderer mDoubleBufferCARenderer; 
+    PluginUtilsOSX::nsDoubleBufferCARenderer mDoubleBufferCARenderer;
 #endif
 
     // (Not to be confused with mBackSurface).  This is a recent copy

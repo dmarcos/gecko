@@ -15,7 +15,14 @@ let gContainersManager = {
     "briefcase",
     "dollar",
     "cart",
-    "circle"
+    "circle",
+    "gift",
+    "vacation",
+    "food",
+    "fruit",
+    "pet",
+    "tree",
+    "chill"
   ],
 
   colors: [
@@ -167,11 +174,11 @@ let gContainersManager = {
         icon,
         color);
     }
-    window.parent.location.reload()
+    window.parent.location.reload();
   },
 
   onWindowKeyPress(aEvent) {
     if (aEvent.keyCode == KeyEvent.DOM_VK_ESCAPE)
       window.close();
   }
-}
+};

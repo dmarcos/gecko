@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -43,24 +44,18 @@ NS_QUERYFRAME_HEAD(nsDeckFrame)
   NS_QUERYFRAME_ENTRY(nsDeckFrame)
 NS_QUERYFRAME_TAIL_INHERITING(nsBoxFrame)
 
-
 nsDeckFrame::nsDeckFrame(nsStyleContext* aContext)
-  : nsBoxFrame(aContext), mIndex(0)
+  : nsBoxFrame(aContext, kClassID)
+  , mIndex(0)
 {
   nsCOMPtr<nsBoxLayout> layout;
   NS_NewStackLayout(layout);
   SetXULLayoutManager(layout);
 }
 
-nsIAtom*
-nsDeckFrame::GetType() const
-{
-  return nsGkAtoms::deckFrame;
-}
-
 nsresult
 nsDeckFrame::AttributeChanged(int32_t         aNameSpaceID,
-                              nsIAtom*        aAttribute,
+                              nsAtom*        aAttribute,
                               int32_t         aModType)
 {
   nsresult rv = nsBoxFrame::AttributeChanged(aNameSpaceID, aAttribute,
@@ -116,6 +111,13 @@ nsDeckFrame::IndexChanged()
                                   currentBox, GetSelectedBox());
   }
 #endif
+
+  // Force any popups that might be anchored on elements within hidden
+  // box to update.
+  nsXULPopupManager* pm = nsXULPopupManager::GetInstance();
+  if (pm && currentBox) {
+    pm->UpdatePopupPositions(currentBox->PresContext()->RefreshDriver());
+  }
 }
 
 int32_t
@@ -137,22 +139,21 @@ nsDeckFrame::GetSelectedIndex()
   return index;
 }
 
-nsIFrame* 
+nsIFrame*
 nsDeckFrame::GetSelectedBox()
 {
-  return (mIndex >= 0) ? mFrames.FrameAt(mIndex) : nullptr; 
+  return (mIndex >= 0) ? mFrames.FrameAt(mIndex) : nullptr;
 }
 
 void
 nsDeckFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                              const nsRect&           aDirtyRect,
                               const nsDisplayListSet& aLists)
 {
   // if a tab is hidden all its children are too.
   if (!StyleVisibility()->mVisible)
     return;
-    
-  nsBoxFrame::BuildDisplayList(aBuilder, aDirtyRect, aLists);
+
+  nsBoxFrame::BuildDisplayList(aBuilder, aLists);
 }
 
 void
@@ -177,7 +178,7 @@ nsDeckFrame::RemoveFrame(ChildListID aListID,
       // This is going to cause us to handle the index change in IndexedChanged,
       // but since the new index will match mIndex, it's essentially a noop.
       nsContentUtils::AddScriptRunner(new nsSetAttrRunnable(
-        mContent, nsGkAtoms::selectedIndex, mIndex));
+        mContent->AsElement(), nsGkAtoms::selectedIndex, mIndex));
     }
   }
   nsBoxFrame::RemoveFrame(aListID, aOldFrame);
@@ -185,7 +186,6 @@ nsDeckFrame::RemoveFrame(ChildListID aListID,
 
 void
 nsDeckFrame::BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
-                                         const nsRect&           aDirtyRect,
                                          const nsDisplayListSet& aLists)
 {
   // only paint the selected box
@@ -196,7 +196,7 @@ nsDeckFrame::BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
   // Putting the child in the background list. This is a little weird but
   // it matches what we were doing before.
   nsDisplayListSet set(aLists, aLists.BlockBorderBackgrounds());
-  BuildDisplayListForChild(aBuilder, box, aDirtyRect, set);
+  BuildDisplayListForChild(aBuilder, box, set);
 }
 
 NS_IMETHODIMP
@@ -214,10 +214,10 @@ nsDeckFrame::DoXULLayout(nsBoxLayoutState& aState)
   nsIFrame* box = nsBox::GetChildXULBox(this);
 
   nscoord count = 0;
-  while (box) 
+  while (box)
   {
     // make collapsed children not show up
-    if (count != mIndex) 
+    if (count != mIndex)
       HideBox(box);
 
     box = GetNextXULBox(box);

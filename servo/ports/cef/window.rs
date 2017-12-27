@@ -14,32 +14,32 @@ use eutil::Downcast;
 use interfaces::CefApp;
 use interfaces::CefBrowser;
 use render_handler::CefRenderHandlerExtensions;
-use types::{cef_cursor_handle_t, cef_cursor_type_t, cef_rect_t};
+use types::{cef_cursor_handle_t, cef_cursor_type_t, cef_rect_t, CefScreenInfo};
 use wrappers::CefWrap;
 
-use compositing::compositor_thread::{self, CompositorProxy, CompositorReceiver};
+use compositing::compositor_thread::EventLoopWaker;
 use compositing::windowing::{WindowEvent, WindowMethods};
-use euclid::point::{Point2D, TypedPoint2D};
-use euclid::rect::TypedRect;
-use euclid::scale_factor::ScaleFactor;
-use euclid::size::{Size2D, TypedSize2D};
+use euclid::{Point2D, TypedPoint2D, Size2D, TypedSize2D, TypedScale};
 use gleam::gl;
 use msg::constellation_msg::{Key, KeyModifiers};
 use net_traits::net_error_list::NetError;
-use script_traits::DevicePixel;
+use script_traits::LoadData;
+use servo::BrowserId;
+use servo::ipc_channel::ipc::IpcSender;
 use servo_geometry::DeviceIndependentPixel;
 use std::cell::RefCell;
 use std::ffi::CString;
 use std::os::raw::{c_char, c_void};
 use std::ptr;
 use std::rc::Rc;
-use std::sync::mpsc::{Sender, channel};
 use servo_url::ServoUrl;
 use style_traits::cursor::Cursor;
+use style_traits::DevicePixel;
 #[cfg(target_os="linux")]
 extern crate x11;
 #[cfg(target_os="linux")]
 use self::x11::xlib::{XInitThreads,XOpenDisplay};
+use webrender_api::{DeviceUintSize, DeviceUintRect};
 
 #[cfg(target_os="linux")]
 pub static mut DISPLAY: *mut c_void = 0 as *mut c_void;
@@ -48,7 +48,7 @@ pub static mut DISPLAY: *mut c_void = 0 as *mut c_void;
 #[derive(Clone)]
 pub struct Window {
     cef_browser: RefCell<Option<CefBrowser>>,
-    size: TypedSize2D<u32, DevicePixel>,
+    size: DeviceUintSize,
     gl: Rc<gl::Gl>,
 }
 
@@ -169,6 +169,19 @@ impl Window {
     fn cursor_handle_for_cursor(&self, _: Cursor) -> cef_cursor_handle_t {
         0
     }
+
+    fn screen_info(&self) -> CefScreenInfo {
+        let mut screen_info = CefScreenInfo::default();
+        let browser = self.cef_browser.borrow();
+        if let Some(ref browser) = *browser {
+            browser.get_host()
+                   .get_client()
+                   .get_render_handler()
+                   .get_screen_info(browser.clone(), &mut screen_info);
+        }
+        screen_info
+    }
+
 }
 
 impl WindowMethods for Window {
@@ -176,7 +189,7 @@ impl WindowMethods for Window {
         self.gl.clone()
     }
 
-    fn framebuffer_size(&self) -> TypedSize2D<u32, DevicePixel> {
+    fn framebuffer_size(&self) -> DeviceUintSize {
         let browser = self.cef_browser.borrow();
         match *browser {
             None => self.size,
@@ -207,16 +220,16 @@ impl WindowMethods for Window {
                         }
                     }
 
-                    TypedSize2D::new(rect.width as u32, rect.height as u32)
+                    DeviceUintSize::new(rect.width as u32, rect.height as u32)
                 }
             }
         }
     }
 
-    fn window_rect(&self) -> TypedRect<u32, DevicePixel> {
+    fn window_rect(&self) -> DeviceUintRect {
         let size = self.framebuffer_size();
         let origin = TypedPoint2D::zero();
-        TypedRect::new(origin, size)
+        DeviceUintRect::new(origin, size)
     }
 
     fn size(&self) -> TypedSize2D<f32, DeviceIndependentPixel> {
@@ -234,7 +247,7 @@ impl WindowMethods for Window {
         }
     }
 
-    fn client_window(&self) -> (Size2D<u32>, Point2D<i32>) {
+    fn client_window(&self, _: BrowserId) -> (Size2D<u32>, Point2D<i32>) {
         let size = self.size().to_untyped();
         let width = size.width as u32;
         let height = size.height as u32;
@@ -242,15 +255,15 @@ impl WindowMethods for Window {
         (Size2D::new(width, height), Point2D::zero())
     }
 
-    fn set_inner_size(&self, _size: Size2D<u32>) {
+    fn set_inner_size(&self, _: BrowserId, _size: Size2D<u32>) {
 
     }
 
-    fn set_position(&self, _point: Point2D<i32>) {
+    fn set_position(&self, _: BrowserId, _point: Point2D<i32>) {
 
     }
 
-    fn set_fullscreen_state(&self, _state: bool) {
+    fn set_fullscreen_state(&self, _: BrowserId, _state: bool) {
     }
 
     fn present(&self) {
@@ -263,11 +276,11 @@ impl WindowMethods for Window {
         }
     }
 
-    fn hidpi_factor(&self) -> ScaleFactor<f32, DeviceIndependentPixel, DevicePixel> {
+    fn hidpi_factor(&self) -> TypedScale<f32, DeviceIndependentPixel, DevicePixel> {
         if cfg!(target_os="macos") {
             let browser = self.cef_browser.borrow();
             match *browser {
-                None => ScaleFactor::new(1.0),
+                None => TypedScale::new(1.0),
                 Some(ref browser) => {
                     let mut view_rect = cef_rect_t::zero();
                     if check_ptr_exist!(browser.get_host().get_client(), get_render_handler) &&
@@ -285,23 +298,27 @@ impl WindowMethods for Window {
                                .get_render_handler()
                                .get_backing_rect((*browser).clone(), &mut backing_rect);
                     }
-                    ScaleFactor::new(backing_rect.width as f32 / view_rect.width as f32)
+                    TypedScale::new(backing_rect.width as f32 / view_rect.width as f32)
                 }
             }
         } else {
             // FIXME(zmike)
             // need to figure out a method for actually getting the scale factor instead of this nonsense
-            ScaleFactor::new(1.0 as f32)
+            TypedScale::new(1.0 as f32)
         }
     }
 
-    fn create_compositor_channel(&self)
-                                 -> (Box<CompositorProxy+Send>, Box<CompositorReceiver>) {
-        let (sender, receiver) = channel();
-        (box CefCompositorProxy {
-             sender: sender,
-         } as Box<CompositorProxy+Send>,
-         box receiver as Box<CompositorReceiver>)
+    fn create_event_loop_waker(&self) -> Box<EventLoopWaker> {
+        struct CefEventLoopWaker;
+        impl EventLoopWaker for CefEventLoopWaker {
+            fn wake(&self) {
+                app_wakeup();
+            }
+            fn clone(&self) -> Box<EventLoopWaker + Send> {
+                Box::new(CefEventLoopWaker)
+            }
+        }
+        Box::new(CefEventLoopWaker)
     }
 
     fn prepare_for_composite(&self, width: usize, height: usize) -> bool {
@@ -324,7 +341,7 @@ impl WindowMethods for Window {
         }
     }
 
-    fn set_favicon(&self, url: ServoUrl) {
+    fn set_favicon(&self, _: BrowserId, url: ServoUrl) {
         let browser = self.cef_browser.borrow();
         let browser = match *browser {
             None => return,
@@ -333,7 +350,7 @@ impl WindowMethods for Window {
         browser.downcast().favicons.borrow_mut().push(url.into_string());
     }
 
-    fn status(&self, info: Option<String>) {
+    fn status(&self, _: BrowserId, info: Option<String>) {
         let browser = self.cef_browser.borrow();
         let browser = match *browser {
             None => return,
@@ -350,15 +367,15 @@ impl WindowMethods for Window {
         }
     }
 
-    fn load_start(&self, back: bool, forward: bool) {
+    fn load_start(&self, _: BrowserId) {
         let browser = self.cef_browser.borrow();
         let browser = match *browser {
             None => return,
             Some(ref browser) => browser,
         };
+        let back = browser.downcast().back.get();
+        let forward = browser.downcast().forward.get();
         browser.downcast().loading.set(true);
-        browser.downcast().back.set(back);
-        browser.downcast().forward.set(forward);
         browser.downcast().favicons.borrow_mut().clear();
         if check_ptr_exist!(browser.get_host().get_client(), get_load_handler) &&
            check_ptr_exist!(browser.get_host().get_client().get_load_handler(), on_loading_state_change) {
@@ -369,16 +386,16 @@ impl WindowMethods for Window {
         }
     }
 
-    fn load_end(&self, back: bool, forward: bool, _: bool) {
+    fn load_end(&self, _: BrowserId) {
         // FIXME(pcwalton): The status code 200 is a lie.
         let browser = self.cef_browser.borrow();
         let browser = match *browser {
             None => return,
             Some(ref browser) => browser,
         };
+        let back = browser.downcast().back.get();
+        let forward = browser.downcast().forward.get();
         browser.downcast().loading.set(false);
-        browser.downcast().back.set(back);
-        browser.downcast().forward.set(forward);
         if check_ptr_exist!(browser.get_host().get_client(), get_load_handler) &&
            check_ptr_exist!(browser.get_host().get_client().get_load_handler(), on_loading_state_change) {
             browser.get_host()
@@ -395,7 +412,7 @@ impl WindowMethods for Window {
         }
     }
 
-    fn load_error(&self, code: NetError, url: String) {
+    fn load_error(&self, _: BrowserId, code: NetError, url: String) {
         let browser = self.cef_browser.borrow();
         let browser = match *browser {
             None => return,
@@ -412,7 +429,7 @@ impl WindowMethods for Window {
         }
     }
 
-    fn head_parsed(&self) {
+    fn head_parsed(&self, _: BrowserId) {
         let browser = self.cef_browser.borrow();
         let browser = match *browser {
             None => return,
@@ -424,7 +441,7 @@ impl WindowMethods for Window {
         }
     }
 
-    fn set_page_title(&self, string: Option<String>) {
+    fn set_page_title(&self, _: BrowserId, string: Option<String>) {
         let browser = self.cef_browser.borrow();
         let browser = match *browser {
             None => return,
@@ -432,7 +449,6 @@ impl WindowMethods for Window {
         };
         let frame = browser.get_main_frame();
         let frame = frame.downcast();
-        let mut title_visitor = frame.title_visitor.borrow_mut();
         let str = match string {
             Some(s) => s.encode_utf16().collect(),
             None => vec![]
@@ -443,25 +459,24 @@ impl WindowMethods for Window {
             browser.get_host().get_client().get_display_handler().on_title_change((*browser).clone(), str.as_slice());
         }
 
-        if let Some(ref mut visitor) = *title_visitor {
-            visitor.visit(&str);
-        }
+        *frame.title.borrow_mut() = str;
     }
 
-    fn set_page_url(&self, url: ServoUrl) {
-        // it seems to be the case that load start is always called
-        // IMMEDIATELY before address change, so just stick it here
-        on_load_start(self);
+    fn history_changed(&self, _: BrowserId, history: Vec<LoadData>, current: usize) {
         let browser = self.cef_browser.borrow();
         let browser = match *browser {
             None => return,
             Some(ref browser) => browser,
         };
+
+        let can_go_back = current > 0;
+        let can_go_forward = current < history.len() - 1;
+
+        browser.downcast().back.set(can_go_back);
+        browser.downcast().forward.set(can_go_forward);
         let frame = browser.get_main_frame();
-        let servoframe = frame.downcast();
-        // FIXME(https://github.com/rust-lang/rust/issues/23338)
-        let mut frame_url = servoframe.url.borrow_mut();
-        *frame_url = url.into_string();
+        let mut frame_url = frame.downcast().url.borrow_mut();
+        *frame_url = history[current].url.to_string();
         let utf16_chars: Vec<u16> = frame_url.encode_utf16().collect();
         if check_ptr_exist!(browser.get_host().get_client(), get_display_handler) &&
            check_ptr_exist!(browser.get_host().get_client().get_display_handler(), on_address_change) {
@@ -469,7 +484,7 @@ impl WindowMethods for Window {
         }
     }
 
-    fn handle_key(&self, _: Option<char>, _: Key, _: KeyModifiers) {
+    fn handle_key(&self, _: Option<BrowserId>, _: Option<char>, _: Key, _: KeyModifiers) {
         // TODO(negge)
     }
 
@@ -490,44 +505,24 @@ impl WindowMethods for Window {
         }
     }
 
-    fn allow_navigation(&self, _: ServoUrl) -> bool {
-        true
+    fn allow_navigation(&self, _: BrowserId, _: ServoUrl, response_chan: IpcSender<bool>) {
+        if let Err(e) = response_chan.send(true) {
+            warn!("Failed to send allow_navigation() response: {}", e);
+        };
     }
 
     fn supports_clipboard(&self) -> bool {
         false
     }
-}
 
-struct CefCompositorProxy {
-    sender: Sender<compositor_thread::Msg>,
-}
-
-impl CompositorProxy for CefCompositorProxy {
-    fn send(&self, msg: compositor_thread::Msg) {
-        self.sender.send(msg).unwrap();
-        app_wakeup();
+    fn screen_size(&self, _: BrowserId) -> Size2D<u32> {
+        let screen_info = self.screen_info();
+        Size2D::new(screen_info.rect.width as u32, screen_info.rect.height as u32)
     }
 
-    fn clone_compositor_proxy(&self) -> Box<CompositorProxy+Send> {
-        box CefCompositorProxy {
-            sender: self.sender.clone(),
-        } as Box<CompositorProxy+Send>
-    }
-}
-
-fn on_load_start(window: &Window) {
-    let browser = window.cef_browser.borrow();
-    let browser = match *browser {
-        None => return,
-        Some(ref browser) => browser,
-    };
-    if check_ptr_exist!(browser.get_host().get_client(), get_load_handler) &&
-       check_ptr_exist!(browser.get_host().get_client().get_load_handler(), on_load_start) {
-        browser.get_host()
-               .get_client()
-               .get_load_handler()
-               .on_load_start((*browser).clone(), browser.get_main_frame());
+    fn screen_avail_size(&self, _: BrowserId) -> Size2D<u32> {
+        let screen_info = self.screen_info();
+        Size2D::new(screen_info.available_rect.width as u32, screen_info.available_rect.height as u32)
     }
 }
 

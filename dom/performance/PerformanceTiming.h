@@ -116,7 +116,8 @@ public:
   // PerformanceNavigation WebIDL methods
   DOMTimeMilliSec NavigationStart() const
   {
-    if (!nsContentUtils::IsPerformanceTimingEnabled()) {
+    if (!nsContentUtils::IsPerformanceTimingEnabled() ||
+        nsContentUtils::ShouldResistFingerprinting()) {
       return 0;
     }
     return GetDOMTiming()->GetNavigationStart();
@@ -124,7 +125,8 @@ public:
 
   DOMTimeMilliSec UnloadEventStart()
   {
-    if (!nsContentUtils::IsPerformanceTimingEnabled()) {
+    if (!nsContentUtils::IsPerformanceTimingEnabled() ||
+        nsContentUtils::ShouldResistFingerprinting()) {
       return 0;
     }
     return GetDOMTiming()->GetUnloadEventStart();
@@ -132,13 +134,14 @@ public:
 
   DOMTimeMilliSec UnloadEventEnd()
   {
-    if (!nsContentUtils::IsPerformanceTimingEnabled()) {
+    if (!nsContentUtils::IsPerformanceTimingEnabled() ||
+        nsContentUtils::ShouldResistFingerprinting()) {
       return 0;
     }
     return GetDOMTiming()->GetUnloadEventEnd();
   }
 
-  uint16_t GetRedirectCount() const;
+  uint8_t GetRedirectCount() const;
 
   // Checks if the resource is either same origin as the page that started
   // the load, or if the response contains the Timing-Allow-Origin header
@@ -154,13 +157,19 @@ public:
   // the timing-allow-origin check in HttpBaseChannel::TimingAllowCheck
   bool ShouldReportCrossOriginRedirect() const;
 
+  // The last channel's AsyncOpen time.  This may occur before the FetchStart
+  // in some cases.
+  DOMHighResTimeStamp AsyncOpenHighRes();
+
   // High resolution (used by resource timing)
+  DOMHighResTimeStamp WorkerStartHighRes();
   DOMHighResTimeStamp FetchStartHighRes();
   DOMHighResTimeStamp RedirectStartHighRes();
   DOMHighResTimeStamp RedirectEndHighRes();
   DOMHighResTimeStamp DomainLookupStartHighRes();
   DOMHighResTimeStamp DomainLookupEndHighRes();
   DOMHighResTimeStamp ConnectStartHighRes();
+  DOMHighResTimeStamp SecureConnectionStartHighRes();
   DOMHighResTimeStamp ConnectEndHighRes();
   DOMHighResTimeStamp RequestStartHighRes();
   DOMHighResTimeStamp ResponseStartHighRes();
@@ -173,6 +182,7 @@ public:
   DOMTimeMilliSec DomainLookupStart();
   DOMTimeMilliSec DomainLookupEnd();
   DOMTimeMilliSec ConnectStart();
+  DOMTimeMilliSec SecureConnectionStart();
   DOMTimeMilliSec ConnectEnd();
   DOMTimeMilliSec RequestStart();
   DOMTimeMilliSec ResponseStart();
@@ -180,7 +190,8 @@ public:
 
   DOMTimeMilliSec DomLoading()
   {
-    if (!nsContentUtils::IsPerformanceTimingEnabled()) {
+    if (!nsContentUtils::IsPerformanceTimingEnabled() ||
+        nsContentUtils::ShouldResistFingerprinting()) {
       return 0;
     }
     return GetDOMTiming()->GetDomLoading();
@@ -188,7 +199,8 @@ public:
 
   DOMTimeMilliSec DomInteractive() const
   {
-    if (!nsContentUtils::IsPerformanceTimingEnabled()) {
+    if (!nsContentUtils::IsPerformanceTimingEnabled() ||
+        nsContentUtils::ShouldResistFingerprinting()) {
       return 0;
     }
     return GetDOMTiming()->GetDomInteractive();
@@ -196,7 +208,8 @@ public:
 
   DOMTimeMilliSec DomContentLoadedEventStart() const
   {
-    if (!nsContentUtils::IsPerformanceTimingEnabled()) {
+    if (!nsContentUtils::IsPerformanceTimingEnabled() ||
+        nsContentUtils::ShouldResistFingerprinting()) {
       return 0;
     }
     return GetDOMTiming()->GetDomContentLoadedEventStart();
@@ -204,7 +217,8 @@ public:
 
   DOMTimeMilliSec DomContentLoadedEventEnd() const
   {
-    if (!nsContentUtils::IsPerformanceTimingEnabled()) {
+    if (!nsContentUtils::IsPerformanceTimingEnabled() ||
+        nsContentUtils::ShouldResistFingerprinting()) {
       return 0;
     }
     return GetDOMTiming()->GetDomContentLoadedEventEnd();
@@ -212,7 +226,8 @@ public:
 
   DOMTimeMilliSec DomComplete() const
   {
-    if (!nsContentUtils::IsPerformanceTimingEnabled()) {
+    if (!nsContentUtils::IsPerformanceTimingEnabled() ||
+        nsContentUtils::ShouldResistFingerprinting()) {
       return 0;
     }
     return GetDOMTiming()->GetDomComplete();
@@ -220,7 +235,8 @@ public:
 
   DOMTimeMilliSec LoadEventStart() const
   {
-    if (!nsContentUtils::IsPerformanceTimingEnabled()) {
+    if (!nsContentUtils::IsPerformanceTimingEnabled() ||
+        nsContentUtils::ShouldResistFingerprinting()) {
       return 0;
     }
     return GetDOMTiming()->GetLoadEventStart();
@@ -228,10 +244,20 @@ public:
 
   DOMTimeMilliSec LoadEventEnd() const
   {
-    if (!nsContentUtils::IsPerformanceTimingEnabled()) {
+    if (!nsContentUtils::IsPerformanceTimingEnabled() ||
+        nsContentUtils::ShouldResistFingerprinting()) {
       return 0;
     }
     return GetDOMTiming()->GetLoadEventEnd();
+  }
+
+  DOMTimeMilliSec TimeToNonBlankPaint() const
+  {
+    if (!nsContentUtils::IsPerformanceTimingEnabled() ||
+        nsContentUtils::ShouldResistFingerprinting()) {
+      return 0;
+    }
+    return GetDOMTiming()->GetTimeToNonBlankPaint();
   }
 
 private:
@@ -239,6 +265,8 @@ private:
 
   bool IsInitialized() const;
   void InitializeTimingInfo(nsITimedChannel* aChannel);
+
+  bool IsTopLevelContentDocument() const;
 
   RefPtr<Performance> mPerformance;
   DOMHighResTimeStamp mFetchStart;
@@ -255,13 +283,20 @@ private:
   TimeStamp mDomainLookupStart;
   TimeStamp mDomainLookupEnd;
   TimeStamp mConnectStart;
+  TimeStamp mSecureConnectionStart;
   TimeStamp mConnectEnd;
   TimeStamp mRequestStart;
   TimeStamp mResponseStart;
   TimeStamp mCacheReadStart;
   TimeStamp mResponseEnd;
   TimeStamp mCacheReadEnd;
-  uint16_t mRedirectCount;
+
+  // ServiceWorker interception timing information
+  TimeStamp mWorkerStart;
+  TimeStamp mWorkerRequestStart;
+  TimeStamp mWorkerResponseEnd;
+
+  uint8_t mRedirectCount;
   bool mTimingAllowed;
   bool mAllRedirectsSameOrigin;
   bool mInitialized;
@@ -270,6 +305,8 @@ private:
   // redirectEnd attributes. It is false if there were no redirects, or if
   // any of the responses didn't pass the timing-allow-check
   bool mReportCrossOriginRedirect;
+
+  bool mSecureConnection;
 };
 
 } // namespace dom

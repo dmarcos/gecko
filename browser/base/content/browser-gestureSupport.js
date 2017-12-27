@@ -2,6 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// This file is loaded into the browser window scope.
+/* eslint-env mozilla/browser-window */
+
 // Simple gestures support
 //
 // As per bug #412486, web content must not be allowed to receive any
@@ -139,12 +142,12 @@ var gGestureSupport = {
       offset += updateEvent.delta;
 
       // Check if the cumulative deltas exceed the threshold
-      if (Math.abs(offset) > aPref["threshold"]) {
+      if (Math.abs(offset) > aPref.threshold) {
         // Trigger the action if we don't care about latching; otherwise, make
         // sure either we're not latched and going the same direction of the
         // initial motion; or we're latched and going the opposite way
         let sameDir = (latchDir ^ offset) >= 0;
-        if (!aPref["latched"] || (isLatched ^ sameDir)) {
+        if (!aPref.latched || (isLatched ^ sameDir)) {
           this._doAction(updateEvent, [aGesture, offset > 0 ? aInc : aDec]);
 
           // We must be getting latched or leaving it, so just toggle
@@ -244,7 +247,7 @@ var gGestureSupport = {
 
       this._doUpdate = function() {};
       this._doEnd = function() {};
-    }
+    };
   },
 
   /**
@@ -334,7 +337,8 @@ var gGestureSupport = {
         let cmdEvent = document.createEvent("xulcommandevent");
         cmdEvent.initCommandEvent("command", true, true, window, 0,
                                   aEvent.ctrlKey, aEvent.altKey,
-                                  aEvent.shiftKey, aEvent.metaKey, aEvent);
+                                  aEvent.shiftKey, aEvent.metaKey,
+                                  aEvent, aEvent.mozInputSource);
         node.dispatchEvent(cmdEvent);
       }
 
@@ -429,7 +433,7 @@ var gGestureSupport = {
         getFunc = "Bool";
       else if (type == "number")
         getFunc = "Int";
-      return gPrefService["get" + getFunc + "Pref"](branch + aPref);
+      return Services.prefs["get" + getFunc + "Pref"](branch + aPref);
     } catch (e) {
       return aDef;
     }
@@ -529,7 +533,7 @@ var gGestureSupport = {
    * image
    */
   restoreRotationState() {
-    // Bug 863514 - Make gesture support work in electrolysis
+    // Bug 1108553 - Cannot rotate images in stand-alone image documents with e10s
     if (gMultiProcessBrowser)
       return;
 
@@ -660,7 +664,7 @@ var gHistorySwipeAnimation = {
           this._lastSwipeDir = "";
         }
         this.updateAnimation(0);
-      }
+      };
       SessionStore.getSessionHistory(gBrowser.selectedTab, updateSessionHistory);
     }
   },
@@ -832,7 +836,7 @@ var gHistorySwipeAnimation = {
         this._navigateToHistoryIndex();
       else
         this.stopAnimation();
-    }
+    };
     SessionStore.getSessionHistory(gBrowser.selectedTab, updateSessionHistory);
   },
 
@@ -1010,7 +1014,7 @@ var gHistorySwipeAnimation = {
    * This limit is a global limit and is valid across all open tabs.
    */
   _getMaxSnapshots: function HSA__getMaxSnapshots() {
-    return gPrefService.getIntPref("browser.snapshots.limit");
+    return Services.prefs.getIntPref("browser.snapshots.limit");
   },
 
   /**

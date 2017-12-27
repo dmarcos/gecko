@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,8 +8,6 @@
 
 #include "PingPongRegion.h"
 #include "gtest/gtest.h"
-#include "gtest/MozGTestBench.h"
-#include "nsRect.h"
 #include "nsRegion.h"
 #include "RegionBuilder.h"
 #include "mozilla/gfx/TiledRegion.h"
@@ -67,7 +66,7 @@ public:
       EXPECT_TRUE(r2.IsComplex()) << "nsRegion code got unexpectedly smarter!";
 
       nsRect largest = r2.GetLargestRectangle();
-      EXPECT_TRUE(largest.width * largest.height == tests[i].expectedArea) <<
+      EXPECT_TRUE(largest.Width() * largest.Height() == tests[i].expectedArea) <<
         "Did not successfully find largest rectangle in non-rectangular region on iteration " << i;
     }
 
@@ -93,7 +92,7 @@ public:
       EXPECT_TRUE(r2.IsComplex()) << "nsRegion code got unexpectedly smarter!";
 
       nsRect largest = r2.GetLargestRectangle();
-      EXPECT_TRUE(largest.width * largest.height == tests[i].expectedArea) <<
+      EXPECT_TRUE(largest.Width() * largest.Height() == tests[i].expectedArea) <<
         "Did not successfully find largest rectangle in two-rect-subtract region on iteration " << i;
     }
   }
@@ -386,8 +385,8 @@ struct RegionBitmap {
     clear();
     for (auto iter = region.RectIter(); !iter.Done(); iter.Next()) {
       const nsRect& r = iter.Get();
-      for (int y = r.y; y < r.YMost(); y++) {
-        for (int x = r.x; x < r.XMost(); x++) {
+      for (int y = r.Y(); y < r.YMost(); y++) {
+        for (int x = r.X(); x < r.XMost(); x++) {
           bitmap[x + y * width] = REGION_VALUE;
         }
       }
@@ -770,68 +769,3 @@ TEST(Gfx, TiledRegionNegativeRect) {
   EXPECT_TRUE(tiledRegion.Contains(nsIntRect(0, 0, -1, -1)));
   EXPECT_TRUE(tiledRegion.Contains(nsIntRect(100, 100, -1, -1)));
 }
-
-MOZ_GTEST_BENCH(GfxBench, RegionOr, []{
-  const int size = 5000;
-
-  nsRegion r;
-  for (int i = 0; i < size; i++) {
-    r = r.Or(r, nsRect(i, i, i + 10, i + 10));
-  }
-
-  nsIntRegion rInt;
-  for (int i = 0; i < size; i++) {
-    rInt = rInt.Or(rInt, nsIntRect(i, i, i + 10, i + 10));
-  }
-});
-
-MOZ_GTEST_BENCH(GfxBench, RegionAnd, []{
-  const int size = 5000;
-  nsRegion r(nsRect(0, 0, size, size));
-  for (int i = 0; i < size; i++) {
-    nsRegion rMissingPixel(nsRect(0, 0, size, size));
-    rMissingPixel = rMissingPixel.Sub(rMissingPixel, nsRect(i, i, 1, 1));
-    r = r.And(r, rMissingPixel);
-  }
-});
-
-void BenchRegionBuilderOr() {
-  const int size = 5000;
-
-  RegionBuilder<nsRegion> r;
-  for (int i = 0; i < size; i++) {
-    r.OrWith(nsRect(i, i, i + 10, i + 10));
-  }
-  r.ToRegion();
-
-  RegionBuilder<nsIntRegion> rInt;
-  for (int i = 0; i < size; i++) {
-    rInt.OrWith(nsIntRect(i, i, i + 10, i + 10));
-  }
-  rInt.ToRegion();
-}
-
-MOZ_GTEST_BENCH(GfxBench, RegionBuilderOr, []{
-  BenchRegionBuilderOr();
-});
-
-void BenchPingPongRegionOr() {
-  const int size = 5000;
-
-  PingPongRegion<nsRegion> r;
-  for (int i = 0; i < size; i++) {
-    r.OrWith(nsRect(i, i, i + 10, i + 10));
-  }
-  r.Region();
-
-  PingPongRegion<nsIntRegion> rInt;
-  for (int i = 0; i < size; i++) {
-    rInt.OrWith(nsIntRect(i, i, i + 10, i + 10));
-  }
-  rInt.Region();
-}
-
-MOZ_GTEST_BENCH(GfxBench, PingPongRegionOr, []{
-  BenchPingPongRegionOr();
-});
-

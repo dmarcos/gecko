@@ -40,13 +40,13 @@ pub fn href(url: &Url) -> &str {
 
 /// Setter for https://url.spec.whatwg.org/#dom-url-href
 pub fn set_href(url: &mut Url, value: &str) -> Result<(), ParseError> {
-    *url = try!(Url::parse(value));
+    *url = Url::parse(value)?;
     Ok(())
 }
 
 /// Getter for https://url.spec.whatwg.org/#dom-url-origin
 pub fn origin(url: &Url) -> String {
-    url.origin().unicode_serialization()
+    url.origin().ascii_serialization()
 }
 
 /// Getter for https://url.spec.whatwg.org/#dom-url-protocol

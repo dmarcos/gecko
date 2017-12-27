@@ -12,8 +12,10 @@
 #include "mozilla/ToString.h"
 #include "nsCanvasFrame.h"
 #include "nsCaret.h"
+#include "nsCSSFrameConstructor.h"
 #include "nsDOMTokenList.h"
 #include "nsIFrame.h"
+#include "nsPlaceholderFrame.h"
 
 namespace mozilla {
 using namespace dom;
@@ -262,6 +264,17 @@ AccessibleCaret::RemoveCaretElement(nsIDocument* aDocument)
   CaretElement()->RemoveEventListener(NS_LITERAL_STRING("touchstart"),
                                       mDummyTouchListener, false);
 
+  if (nsIFrame* frame = CaretElement()->GetPrimaryFrame()) {
+    if (frame->HasAnyStateBits(NS_FRAME_OUT_OF_FLOW)) {
+      frame = frame->GetPlaceholderFrame();
+    }
+    nsAutoScriptBlocker scriptBlocker;
+    nsCSSFrameConstructor* fc = frame->PresShell()->FrameConstructor();
+    fc->BeginUpdate();
+    frame->GetParent()->RemoveFrame(nsIFrame::kPrincipalList, frame);
+    fc->EndUpdate();
+  }
+
   ErrorResult rv;
   aDocument->RemoveAnonymousContent(*mCaretElementHolder, rv);
   // It's OK rv is failed since nsCanvasFrame might not exists now.
@@ -392,7 +405,7 @@ AccessibleCaret::GetZoomLevel()
   // Full zoom on desktop.
   float fullZoom = mPresShell->GetPresContext()->GetFullZoom();
 
-  // Pinch-zoom on B2G or fennec.
+  // Pinch-zoom on fennec.
   float resolution = mPresShell->GetCumulativeResolution();
 
   return fullZoom * resolution;

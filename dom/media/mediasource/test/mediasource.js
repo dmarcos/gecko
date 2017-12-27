@@ -1,7 +1,9 @@
 // Helpers for Media Source Extensions tests
 
 var gMSETestPrefs = [
-  [ "media.mediasource.enabled", true ]
+  [ "media.mediasource.enabled", true ],
+  ['media.audio-max-decode-error', 0],
+  ['media.video-max-decode-error', 0],
 ];
 
 // Called before runWithMSE() to set the prefs before running MSE tests.
@@ -20,9 +22,8 @@ function runWithMSE(testFunction) {
     document.body.appendChild(el);
     SimpleTest.registerCleanupFunction(function () {
       el.remove();
-      // Don't trigger load algorithm to prevent 'error' events.
-      el.preload = "none";
-      el.src = null;
+      el.removeAttribute("src");
+      el.load();
     });
 
     testFunction(ms, el);

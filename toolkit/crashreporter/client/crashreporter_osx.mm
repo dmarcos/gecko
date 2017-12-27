@@ -111,6 +111,12 @@ static bool RestartApplication()
   gQueryParameters = queryParameters;
   gSendURL = sendURL;
 
+  if (gAutoSubmit) {
+    gDidTrySend = true;
+    [self sendReport];
+    return;
+  }
+
   [mWindow setTitle:Str(ST_CRASHREPORTERTITLE)];
   [mHeaderLabel setStringValue:Str(ST_CRASHREPORTERHEADER)];
 
@@ -169,14 +175,12 @@ static bool RestartApplication()
   // load default state of submit checkbox
   // we don't just do this via IB because we want the default to be
   // off a certain percentage of the time
-  BOOL submitChecked = NO;
+  BOOL submitChecked = YES;
   NSUserDefaults* userDefaults = [NSUserDefaults standardUserDefaults];
   if (nil != [userDefaults objectForKey:@"submitReport"]) {
-    submitChecked =  [userDefaults boolForKey:@"submitReport"];
+    submitChecked = [userDefaults boolForKey:@"submitReport"];
   }
   else {
-    // use compile-time specified enable percentage
-    submitChecked = ShouldEnableSending();
     [userDefaults setBool:submitChecked forKey:@"submitReport"];
   }
   [mSubmitReportButton setState:(submitChecked ? NSOnState : NSOffState)];
@@ -539,12 +543,17 @@ static bool RestartApplication()
 {
   if (![self setupPost]) {
     LogMessage("Crash report submission failed: could not set up POST data");
-   [self setStringFitVertically:mProgressText
+
+    if (gAutoSubmit) {
+      [NSApp terminate:self];
+    }
+
+    [self setStringFitVertically:mProgressText
                           string:Str(ST_SUBMITFAILED)
                     resizeWindow:YES];
-   // quit after 5 seconds
-   [self performSelector:@selector(closeMeDown:) withObject:nil
-    afterDelay:5.0];
+    // quit after 5 seconds
+    [self performSelector:@selector(closeMeDown:) withObject:nil
+     afterDelay:5.0];
   }
 
   [NSThread detachNewThreadSelector:@selector(uploadThread:)
@@ -628,6 +637,10 @@ static bool RestartApplication()
   }
 
   SendCompleted(success, reply);
+
+  if (gAutoSubmit) {
+    [NSApp terminate:self];
+  }
 
   [mProgressIndicator stopAnimation:self];
   if (success) {
@@ -768,8 +781,12 @@ bool UIInit()
       gStrings["isRTL"] == "yes")
     gRTLlayout = true;
 
-  [NSBundle loadNibNamed:(gRTLlayout ? @"MainMenuRTL" : @"MainMenu")
-                   owner:NSApp];
+  if (gAutoSubmit) {
+    gUI = [[CrashReporterUI alloc] init];
+  } else {
+    [NSBundle loadNibNamed:(gRTLlayout ? @"MainMenuRTL" : @"MainMenu")
+                     owner:NSApp];
+  }
 
   return true;
 }

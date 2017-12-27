@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -16,12 +17,12 @@
 
 class nsMathMLmrootFrame : public nsMathMLContainerFrame {
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsMathMLmrootFrame)
 
   friend nsIFrame* NS_NewMathMLmrootFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
   virtual void
-  SetAdditionalStyleContext(int32_t          aIndex, 
+  SetAdditionalStyleContext(int32_t          aIndex,
                             nsStyleContext*  aStyleContext) override;
   virtual nsStyleContext*
   GetAdditionalStyleContext(int32_t aIndex) const override;
@@ -47,11 +48,10 @@ public:
                      nscoord* aSqrOffset);
 
   virtual void
-  GetIntrinsicISizeMetrics(nsRenderingContext* aRenderingContext,
+  GetIntrinsicISizeMetrics(gfxContext* aRenderingContext,
                            ReflowOutput& aDesiredSize) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   uint8_t
@@ -63,7 +63,7 @@ public:
 protected:
   explicit nsMathMLmrootFrame(nsStyleContext* aContext);
   virtual ~nsMathMLmrootFrame();
-  
+
   nsMathMLChar mSqrChar;
   nsRect       mBarRect;
 };

@@ -1,6 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -17,19 +17,20 @@ class DrawTargetRecording : public DrawTarget
 {
 public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(DrawTargetRecording, override)
-  DrawTargetRecording(DrawEventRecorder *aRecorder, DrawTarget *aDT, bool aHasData = false);
+  DrawTargetRecording(DrawEventRecorder *aRecorder, DrawTarget *aDT, IntSize aSize, bool aHasData = false);
 
   ~DrawTargetRecording();
 
   virtual DrawTargetType GetType() const override { return mFinalDT->GetType(); }
-  virtual BackendType GetBackendType() const override { return mFinalDT->GetBackendType(); }
+  virtual BackendType GetBackendType() const override { return BackendType::RECORDING; }
   virtual bool IsRecording() const override { return true; }
 
   virtual already_AddRefed<SourceSurface> Snapshot() override;
+  virtual already_AddRefed<SourceSurface> IntoLuminanceSource(LuminanceType aLuminanceType, float aOpacity) override;
 
   virtual void DetachAllSnapshots() override;
 
-  virtual IntSize GetSize() override { return mFinalDT->GetSize(); }
+  virtual IntSize GetSize() override { return mSize; }
 
   /* Ensure that the DrawTarget backend has flushed all drawing operations to
    * this draw target. This must be called before using the backing surface of
@@ -168,8 +169,7 @@ public:
   virtual void FillGlyphs(ScaledFont *aFont,
                           const GlyphBuffer &aBuffer,
                           const Pattern &aPattern,
-                          const DrawOptions &aOptions = DrawOptions(),
-                          const GlyphRenderingOptions *aRenderingOptions = nullptr) override;
+                          const DrawOptions &aOptions = DrawOptions()) override;
 
   /*
    * This takes a source pattern and a mask, and composites the source pattern
@@ -314,14 +314,13 @@ public:
 private:
   /**
    * Used for creating a DrawTargetRecording for a CreateSimilarDrawTarget call.
-   * We have to call CreateSimilarDrawTarget on mFinalDT up front and pass it in
-   * as it can fail.
    *
    * @param aDT DrawTargetRecording on which CreateSimilarDrawTarget was called
-   * @param aSimilarDT Similar DrawTarget created from aDT.mFinalDT.
+   * @param aSize size of the the similar DrawTarget
+   * @param aFormat format of the similar DrawTarget
    */
   DrawTargetRecording(const DrawTargetRecording *aDT,
-                      DrawTarget *aSimilarDT);
+                      IntSize aSize, SurfaceFormat aFormat);
 
   Path *GetPathForPathRecording(const Path *aPath) const;
   already_AddRefed<PathRecording> EnsurePathStored(const Path *aPath);
@@ -329,6 +328,7 @@ private:
 
   RefPtr<DrawEventRecorderPrivate> mRecorder;
   RefPtr<DrawTarget> mFinalDT;
+  IntSize mSize;
 };
 
 } // namespace gfx

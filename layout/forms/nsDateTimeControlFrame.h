@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -38,19 +39,16 @@ public:
                                               nsStyleContext* aContext);
 
   void ContentStatesChanged(mozilla::EventStates aStates) override;
-  void DestroyFrom(nsIFrame* aDestructRoot) override;
+  void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
-  NS_DECL_QUERYFRAME_TARGET(nsDateTimeControlFrame)
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsDateTimeControlFrame)
 
 #ifdef DEBUG_FRAME_DUMP
   nsresult GetFrameName(nsAString& aResult) const override {
     return MakeFrameName(NS_LITERAL_STRING("DateTimeControl"), aResult);
   }
 #endif
-
-  nsIAtom* GetType() const override;
 
   bool IsFrameOfType(uint32_t aFlags) const override
   {
@@ -59,13 +57,13 @@ public:
   }
 
   // Reflow
-  nscoord GetMinISize(nsRenderingContext* aRenderingContext) override;
+  nscoord GetMinISize(gfxContext* aRenderingContext) override;
 
-  nscoord GetPrefISize(nsRenderingContext* aRenderingContext) override;
+  nscoord GetPrefISize(gfxContext* aRenderingContext) override;
 
   void Reflow(nsPresContext* aPresContext,
               ReflowOutput& aDesiredSize,
-              const ReflowInput& aReflowState,
+              const ReflowInput& aReflowInput,
               nsReflowStatus& aStatus) override;
 
   // nsIAnonymousContentCreator
@@ -73,14 +71,16 @@ public:
   void AppendAnonymousContentTo(nsTArray<nsIContent*>& aElements,
                                 uint32_t aFilter) override;
 
-  nsresult AttributeChanged(int32_t aNameSpaceID, nsIAtom* aAttribute,
+  nsresult AttributeChanged(int32_t aNameSpaceID, nsAtom* aAttribute,
                             int32_t aModType) override;
 
-  void UpdateInputBoxValue();
+  void OnValueChanged();
+  void OnMinMaxStepAttrChanged();
   void SetValueFromPicker(const DateTimeValue& aValue);
   void HandleFocusEvent();
   void HandleBlurEvent();
   void SetPickerState(bool aOpen);
+  bool HasBadInput();
 
 private:
   class SyncDisabledStateEvent;
@@ -89,7 +89,8 @@ private:
   {
   public:
     explicit SyncDisabledStateEvent(nsDateTimeControlFrame* aFrame)
-    : mFrame(aFrame)
+      : mozilla::Runnable("nsDateTimeControlFrame::SyncDisabledStateEvent")
+      , mFrame(aFrame)
     {}
 
     NS_IMETHOD Run() override
@@ -113,7 +114,7 @@ private:
 
   // Anonymous child which is bound via XBL to an element that wraps the input
   // area and reset button.
-  nsCOMPtr<nsIContent> mInputAreaContent;
+  RefPtr<mozilla::dom::Element> mInputAreaContent;
 };
 
 #endif // nsDateTimeControlFrame_h__

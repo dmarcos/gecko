@@ -97,11 +97,11 @@ public:
  * This extracts the hostname from the URI and reverses it in the
  * form that we use (always ending with a "."). So
  * "http://microsoft.com/" becomes "moc.tfosorcim."
- * 
+ *
  * The idea behind this is that we can create an index over the items in
  * the reversed host name column, and then query for as much or as little
  * of the host name as we feel like.
- * 
+ *
  * For example, the query "host >= 'gro.allizom.' AND host < 'gro.allizom/'
  * Matches all host names ending in '.mozilla.org', including
  * 'developer.mozilla.org' and just 'mozilla.org' (since we define all
@@ -174,6 +174,9 @@ PRTime RoundToMilliseconds(PRTime aTime);
  */
 PRTime RoundedPRNow();
 
+nsresult HashURL(const nsAString& aSpec, const nsACString& aMode,
+                 uint64_t *_hash);
+
 /**
  * Used to finalize a statementCache on a specified thread.
  */
@@ -193,11 +196,11 @@ public:
    */
   FinalizeStatementCacheProxy(
     mozilla::storage::StatementCache<StatementType>& aStatementCache,
-    nsISupports* aOwner
-  )
-  : mStatementCache(aStatementCache)
-  , mOwner(aOwner)
-  , mCallingThread(do_GetCurrentThread())
+    nsISupports* aOwner)
+    : Runnable("places::FinalizeStatementCacheProxy")
+    , mStatementCache(aStatementCache)
+    , mOwner(aOwner)
+    , mCallingThread(do_GetCurrentThread())
   {
   }
 
@@ -205,7 +208,8 @@ public:
   {
     mStatementCache.FinalizeStatements();
     // Release the owner back on the calling thread.
-    NS_ProxyRelease(mCallingThread, mOwner.forget());
+    NS_ProxyRelease("FinalizeStatementCacheProxy::mOwner",
+      mCallingThread, mOwner.forget());
     return NS_OK;
   }
 
@@ -214,14 +218,6 @@ protected:
   nsCOMPtr<nsISupports> mOwner;
   nsCOMPtr<nsIThread> mCallingThread;
 };
-
-/**
- * Forces a WAL checkpoint. This will cause all transactions stored in the
- * journal file to be committed to the main database.
- * 
- * @note The checkpoint will force a fsync/flush.
- */
-void ForceWALCheckpoint();
 
 /**
  * Determines if a visit should be marked as hidden given its transition type
@@ -235,23 +231,6 @@ void ForceWALCheckpoint();
  */
 bool GetHiddenState(bool aIsRedirect,
                     uint32_t aTransitionType);
-
-/**
- * Notifies a specified topic via the observer service.
- */
-class PlacesEvent : public Runnable
-{
-public:
-  NS_DECL_ISUPPORTS_INHERITED
-  NS_DECL_NSIRUNNABLE
-
-  explicit PlacesEvent(const char* aTopic);
-protected:
-  ~PlacesEvent() {}
-  void Notify();
-
-  const char* const mTopic;
-};
 
 /**
  * Used to notify a topic to system observers on async execute completion.

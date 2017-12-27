@@ -3,7 +3,7 @@
 <!-- This Source Code Form is subject to the terms of the Mozilla Public
    - License, v. 2.0. If a copy of the MPL was not distributed with this
    - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
-<!-- import-globals-from in-content/applications.js -->
+<!-- import-globals-from in-content/main.js -->
 
 <!DOCTYPE overlay [
   <!ENTITY % brandDTD SYSTEM "chrome://branding/locale/brand.dtd">
@@ -56,7 +56,7 @@
         <xul:hbox flex="1">
           <xul:menulist class="actionsMenu" flex="1" crop="end" selectedIndex="1"
                         xbl:inherits="tooltiptext=actionDescription"
-                        oncommand="gApplicationsPane.onSelectAction(event.originalTarget)">
+                        oncommand="gMainPane.onSelectAction(event.originalTarget)">
             <xul:menupopup/>
           </xul:menulist>
         </xul:hbox>
@@ -65,7 +65,7 @@
 
     <implementation>
       <constructor>
-        gApplicationsPane.rebuildActionsMenu();
+        gMainPane.rebuildActionsMenu();
       </constructor>
     </implementation>
 
@@ -76,18 +76,18 @@
       <xul:hbox flex="1" equalsize="always">
         <xul:hbox flex="1" align="center">
           <xul:hbox xbl:inherits="data-identity-icon=containerIcon,data-identity-color=containerColor" height="24" width="24" class="userContext-icon"/>
-          <xul:label flex="1" crop="end" xbl:inherits="value=containerName"/>
+          <xul:label flex="1" crop="end" xbl:inherits="xbl:text=containerName,highlightable"/>
         </xul:hbox>
         <xul:hbox flex="1" align="right">
           <xul:button anonid="preferencesButton"
                       label="&preferencesButton.label;"
                       xbl:inherits="value=userContextId"
-                      onclick="gContainersPane.onPreferenceClick(event.originalTarget)">
+                      oncommand="gContainersPane.onPreferenceCommand(event.originalTarget)">
           </xul:button>
           <xul:button anonid="removeButton"
                       label="&removeButton.label;"
                       xbl:inherits="value=userContextId"
-                      onclick="gContainersPane.onRemoveClick(event.originalTarget)">
+                      oncommand="gContainersPane.onRemoveCommand(event.originalTarget)">
           </xul:button>
         </xul:hbox>
       </xul:hbox>

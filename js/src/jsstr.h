@@ -11,6 +11,7 @@
 #include "mozilla/PodOperations.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "jsutil.h"
 #include "NamespaceImports.h"
@@ -67,51 +68,28 @@ CompareChars(const char16_t* s1, size_t len1, JSLinearString* s2);
 
 }  /* namespace js */
 
-struct JSSubString {
-    JSLinearString* base;
-    size_t          offset;
-    size_t          length;
-
-    JSSubString() { mozilla::PodZero(this); }
-
-    void initEmpty(JSLinearString* base) {
-        this->base = base;
-        offset = length = 0;
-    }
-    void init(JSLinearString* base, size_t offset, size_t length) {
-        this->base = base;
-        this->offset = offset;
-        this->length = length;
-    }
-};
-
 /*
  * Shorthands for ASCII (7-bit) decimal and hex conversion.
- * Manually inline isdigit for performance; MSVC doesn't do this for us.
+ * Manually inline isdigit and isxdigit for performance; MSVC doesn't do this for us.
  */
 #define JS7_ISDEC(c)    ((((unsigned)(c)) - '0') <= 9)
+#define JS7_ISA2F(c)    ((((((unsigned)(c)) - 'a') <= 5) || (((unsigned)(c)) - 'A') <= 5))
 #define JS7_UNDEC(c)    ((c) - '0')
 #define JS7_ISOCT(c)    ((((unsigned)(c)) - '0') <= 7)
 #define JS7_UNOCT(c)    (JS7_UNDEC(c))
-#define JS7_ISHEX(c)    ((c) < 128 && isxdigit(c))
+#define JS7_ISHEX(c)    ((c) < 128 && (JS7_ISDEC(c) || JS7_ISA2F(c)))
 #define JS7_UNHEX(c)    (unsigned)(JS7_ISDEC(c) ? (c) - '0' : 10 + tolower(c) - 'a')
 #define JS7_ISLET(c)    ((c) < 128 && isalpha(c))
 
-extern size_t
-js_strlen(const char16_t* s);
-
-extern int32_t
-js_strcmp(const char16_t* lhs, const char16_t* rhs);
+static MOZ_ALWAYS_INLINE size_t
+js_strlen(const char16_t* s)
+{
+    return std::char_traits<char16_t>::length(s);
+}
 
 template <typename CharT>
 extern const CharT*
 js_strchr_limit(const CharT* s, char16_t c, const CharT* limit);
-
-static MOZ_ALWAYS_INLINE void
-js_strncpy(char16_t* dst, const char16_t* src, size_t nelem)
-{
-    return mozilla::PodCopy(dst, src, nelem);
-}
 
 extern int32_t
 js_fputs(const char16_t* s, FILE* f);
@@ -233,10 +211,6 @@ CompareAtoms(JSAtom* atom1, JSAtom* atom2);
 extern bool
 StringEqualsAscii(JSLinearString* str, const char* asciiBytes);
 
-/* Return true if the string contains a pattern anywhere inside it. */
-extern bool
-StringHasPattern(JSLinearString* text, const char16_t* pat, uint32_t patlen);
-
 extern int
 StringFindPattern(JSLinearString* text, JSLinearString* pat, size_t start);
 
@@ -276,12 +250,11 @@ SubstringKernel(JSContext* cx, HandleString str, int32_t beginInt, int32_t lengt
 
 /*
  * Inflate bytes in ASCII encoding to char16_t code units. Return null on error,
- * otherwise return the char16_t buffer that was malloc'ed. length is updated to
- * the length of the new string (in char16_t code units). A null char is
- * appended, but it is not included in the length.
+ * otherwise return the char16_t buffer that was malloc'ed. A null char is
+ * appended.
  */
 extern char16_t*
-InflateString(JSContext* cx, const char* bytes, size_t* length);
+InflateString(JSContext* cx, const char* bytes, size_t length);
 
 /*
  * Inflate bytes to JS chars in an existing buffer. 'dst' must be large
@@ -469,7 +442,10 @@ FileEscapedString(FILE* fp, const char* chars, size_t length, uint32_t quote)
     return res;
 }
 
-JSObject*
+bool
+EncodeURI(JSContext* cx, StringBuffer& sb, const char* chars, size_t length);
+
+ArrayObject*
 str_split_string(JSContext* cx, HandleObjectGroup group, HandleString str, HandleString sep,
                  uint32_t limit);
 
@@ -482,10 +458,10 @@ str_replace_string_raw(JSContext* cx, HandleString string, HandleString pattern,
                        HandleString replacement);
 
 extern JSString*
-StringToLowerCase(JSContext* cx, HandleLinearString string);
+StringToLowerCase(JSContext* cx, HandleString string);
 
 extern JSString*
-StringToUpperCase(JSContext* cx, HandleLinearString string);
+StringToUpperCase(JSContext* cx, HandleString string);
 
 extern bool
 StringConstructor(JSContext* cx, unsigned argc, Value* vp);

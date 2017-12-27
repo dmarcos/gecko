@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,9 +12,9 @@
 #include "gfxUtils.h"
 #include "nsSVGDisplayableFrame.h"
 #include "mozilla/dom/HTMLCanvasElement.h"
+#include "mozilla/dom/IDTracker.h"
 #include "mozilla/dom/SVGFilterElement.h"
-#include "nsReferencedElement.h"
-#include "nsSVGEffects.h"
+#include "SVGObserverUtils.h"
 #include "nsSVGFilterFrame.h"
 #include "nsSVGUtils.h"
 #include "SVGContentUtils.h"
@@ -126,7 +127,7 @@ nsSVGFilterInstance::GetFilterFrame(nsIFrame* aTargetFrame)
   // aTargetFrame can be null if this filter belongs to a
   // CanvasRenderingContext2D.
   nsCOMPtr<nsIURI> url = aTargetFrame
-    ? nsSVGEffects::GetFilterURI(aTargetFrame, mFilter)
+    ? SVGObserverUtils::GetFilterURI(aTargetFrame, mFilter)
     : mFilter.GetURL()->ResolveLocalRef(mTargetContent);
 
   if (!url) {
@@ -135,7 +136,7 @@ nsSVGFilterInstance::GetFilterFrame(nsIFrame* aTargetFrame)
   }
 
   // Look up the filter element by URL.
-  nsReferencedElement filterElement;
+  IDTracker filterElement;
   bool watch = false;
   filterElement.Reset(mTargetContent, url, watch);
   Element* element = filterElement.get();
@@ -146,7 +147,7 @@ nsSVGFilterInstance::GetFilterFrame(nsIFrame* aTargetFrame)
 
   // Get the frame of the filter element.
   nsIFrame* frame = element->GetPrimaryFrame();
-  if (!frame || frame->GetType() != nsGkAtoms::svgFilterFrame) {
+  if (!frame || !frame->IsSVGFilterFrame()) {
     // The URL points to an element that's not an SVG filter element, or to an
     // element that hasn't had its frame constructed yet.
     return nullptr;

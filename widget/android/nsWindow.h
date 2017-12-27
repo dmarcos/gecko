@@ -11,7 +11,6 @@
 #include "gfxPoint.h"
 #include "nsIIdleServiceInternal.h"
 #include "nsTArray.h"
-#include "AndroidJavaWrappers.h"
 #include "EventDispatcher.h"
 #include "GeneratedJNIWrappers.h"
 #include "mozilla/EventForwards.h"
@@ -29,14 +28,19 @@ namespace mozilla {
         class CompositorBridgeChild;
         class LayerManager;
         class APZCTreeManager;
+        class UiCompositorControllerChild;
     }
 
     namespace widget {
         class GeckoEditableSupport;
     } // namespace widget
+
+    namespace ipc {
+        class Shmem;
+    } // namespace ipc
 }
 
-class nsWindow : public nsBaseWidget
+class nsWindow final : public nsBaseWidget
 {
 private:
     virtual ~nsWindow();
@@ -125,16 +129,7 @@ public:
             nsWindow* operator->() const { return mWindow; }
         };
 
-        WindowPtr(NativePtr<Impl>* aPtr, nsWindow* aWindow)
-            : mPtr(aPtr)
-            , mWindow(aWindow)
-            , mWindowLock(NativePtr<Impl>::sName)
-        {
-            MOZ_ASSERT(NS_IsMainThread());
-            if (mPtr) {
-                mPtr->mPtr = this;
-            }
-        }
+        WindowPtr(NativePtr<Impl>* aPtr, nsWindow* aWindow);
 
         ~WindowPtr()
         {
@@ -189,7 +184,7 @@ private:
     // Object that implements native GeckoEditable calls.
     // Strong referenced by the Java instance.
     NativePtr<mozilla::widget::GeckoEditableSupport> mEditableSupport;
-    mozilla::java::GeckoEditable::GlobalRef mEditable;
+    mozilla::jni::Object::GlobalRef mEditableParent;
 
     class GeckoViewSupport;
     // Object that implements native GeckoView calls and associated states.
@@ -200,6 +195,8 @@ private:
 
     // Class that implements native PresentationMediaPlayerManager calls.
     class PMPMSupport;
+
+    mozilla::Atomic<bool, mozilla::ReleaseAcquire> mContentDocumentDisplayed;
 
 public:
     static nsWindow* TopWindow();
@@ -214,7 +211,6 @@ public:
 
     void UpdateOverscrollVelocity(const float aX, const float aY);
     void UpdateOverscrollOffset(const float aX, const float aY);
-    void SetScrollingRootContent(const bool isRootContent);
 
     //
     // nsIWidget
@@ -282,11 +278,6 @@ public:
                                   LayerManagerPersistence aPersistence = LAYER_MANAGER_CURRENT) override;
 
     virtual bool NeedsPaint() override;
-    virtual bool PreRender(mozilla::widget::WidgetRenderingContext* aContext) override;
-    virtual void DrawWindowUnderlay(mozilla::widget::WidgetRenderingContext* aContext,
-                                    LayoutDeviceIntRect aRect) override;
-    virtual void DrawWindowOverlay(mozilla::widget::WidgetRenderingContext* aContext,
-                                   LayoutDeviceIntRect aRect) override;
 
     virtual bool WidgetPaintsBackground() override;
 
@@ -309,16 +300,20 @@ public:
     nsresult SynthesizeNativeMouseMove(LayoutDeviceIntPoint aPoint,
                                        nsIObserver* aObserver) override;
 
-    CompositorBridgeChild* GetCompositorBridgeChild() const;
+    mozilla::layers::CompositorBridgeChild* GetCompositorBridgeChild() const;
 
-    mozilla::jni::DependentRef<mozilla::java::GeckoLayerClient> GetLayerClient();
+    void SetContentDocumentDisplayed(bool aDisplayed);
+    bool IsContentDocumentDisplayed();
 
     // Call this function when the users activity is the direct cause of an
     // event (like a keypress or mouse click).
     void UserActivity();
 
-    mozilla::java::GeckoEditable::Ref& GetEditableParent() { return mEditable; }
+    mozilla::jni::Object::Ref& GetEditableParent() { return mEditableParent; }
 
+    void RecvToolbarAnimatorMessageFromCompositor(int32_t aMessage) override;
+    void UpdateRootFrameMetrics(const ScreenPoint& aScrollOffset, const CSSToScreenScale& aZoom) override;
+    void RecvScreenPixels(mozilla::ipc::Shmem&& aMem, const ScreenIntSize& aSize) override;
 protected:
     void BringToFront();
     nsWindow *FindTopLevel();
@@ -338,7 +333,6 @@ protected:
 
     nsCOMPtr<nsIIdleServiceInternal> mIdleService;
 
-    bool mAwaitingFullScreen;
     bool mIsFullScreen;
 
     bool UseExternalCompositingSurface() const override {
@@ -353,9 +347,25 @@ private:
     void CreateLayerManager(int aCompositorWidth, int aCompositorHeight);
     void RedrawAll();
 
-    mozilla::java::LayerRenderer::Frame::GlobalRef mLayerRendererFrame;
-
     int64_t GetRootLayerId() const;
+    RefPtr<mozilla::layers::UiCompositorControllerChild> GetUiCompositorControllerChild();
 };
+
+// Explicit template declarations to make clang be quiet.
+template<> const char nsWindow::NativePtr<nsWindow::LayerViewSupport>::sName[];
+template<> const char nsWindow::NativePtr<mozilla::widget::GeckoEditableSupport>::sName[];
+template<> const char nsWindow::NativePtr<nsWindow::NPZCSupport>::sName[];
+
+template<class Impl>
+nsWindow::WindowPtr<Impl>::WindowPtr(NativePtr<Impl>* aPtr, nsWindow* aWindow)
+    : mPtr(aPtr)
+    , mWindow(aWindow)
+    , mWindowLock(NativePtr<Impl>::sName)
+{
+    MOZ_ASSERT(NS_IsMainThread());
+    if (mPtr) {
+        mPtr->mPtr = this;
+    }
+}
 
 #endif /* NSWINDOW_H_ */

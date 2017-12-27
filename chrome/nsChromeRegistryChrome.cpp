@@ -34,7 +34,6 @@
 #include "mozilla/Preferences.h"
 #include "nsIResProtocolHandler.h"
 #include "nsIScriptError.h"
-#include "nsIXPConnect.h"
 #include "nsIXULRuntime.h"
 
 #define SELECTED_SKIN_PREF   "general.skins.selectedSkin"
@@ -129,8 +128,8 @@ nsChromeRegistryChrome::Init()
   if (!prefs) {
     NS_WARNING("Could not get pref service!");
   } else {
-    nsXPIDLCString provider;
-    rv = prefs->GetCharPref(SELECTED_SKIN_PREF, getter_Copies(provider));
+    nsAutoCString provider;
+    rv = prefs->GetCharPref(SELECTED_SKIN_PREF, provider);
     if (NS_SUCCEEDED(rv))
       mSelectedSkin = provider;
 
@@ -220,7 +219,7 @@ nsChromeRegistryChrome::GetSelectedLocale(const nsACString& aPackage,
                                           nsACString& aLocale)
 {
   nsAutoCString reqLocale;
-  if (aPackage.Equals("global")) {
+  if (aPackage.EqualsLiteral("global")) {
     LocaleService::GetInstance()->GetAppLocaleAsLangTag(reqLocale);
   } else {
     AutoTArray<nsCString, 10> requestedLocales;
@@ -252,11 +251,12 @@ nsChromeRegistryChrome::OverrideLocalePackage(const nsACString& aPackage,
                                               nsACString& aOverride)
 {
   const nsACString& pref = NS_LITERAL_CSTRING(PACKAGE_OVERRIDE_BRANCH) + aPackage;
-  nsAdoptingCString override = mozilla::Preferences::GetCString(PromiseFlatCString(pref).get());
-  if (override) {
+  nsAutoCString override;
+  nsresult rv =
+    mozilla::Preferences::GetCString(PromiseFlatCString(pref).get(), override);
+  if (NS_SUCCEEDED(rv)) {
     aOverride = override;
-  }
-  else {
+  } else {
     aOverride = aPackage;
   }
   return NS_OK;
@@ -275,8 +275,8 @@ nsChromeRegistryChrome::Observe(nsISupports *aSubject, const char *aTopic,
     NS_ConvertUTF16toUTF8 pref(someData);
 
     if (pref.EqualsLiteral(SELECTED_SKIN_PREF)) {
-      nsXPIDLCString provider;
-      rv = prefs->GetCharPref(pref.get(), getter_Copies(provider));
+      nsAutoCString provider;
+      rv = prefs->GetCharPref(pref.get(), provider);
       if (NS_FAILED(rv)) {
         NS_ERROR("Couldn't get new skin pref!");
         return rv;
@@ -329,7 +329,6 @@ SerializeURI(nsIURI* aURI,
     return;
 
   aURI->GetSpec(aSerializedURI.spec);
-  aURI->GetOriginCharset(aSerializedURI.charset);
 }
 
 void
@@ -619,15 +618,6 @@ nsChromeRegistry::ManifestProcessingContext::GetManifestURI()
   return mManifestURI;
 }
 
-nsIXPConnect*
-nsChromeRegistry::ManifestProcessingContext::GetXPConnect()
-{
-  if (!mXPConnect)
-    mXPConnect = do_GetService("@mozilla.org/js/xpc/XPConnect;1");
-
-  return mXPConnect;
-}
-
 already_AddRefed<nsIURI>
 nsChromeRegistry::ManifestProcessingContext::ResolveURI(const char* uri)
 {
@@ -737,10 +727,19 @@ nsChromeRegistryChrome::ManifestLocale(ManifestProcessingContext& cx, int lineno
     SendManifestEntry(chromePackage);
   }
 
-  if (strcmp(package, "global") == 0) {
+  // We use mainPackage as the package we track for reporting new locales being
+  // registered. For most cases it will be "global", but for Fennec it will be
+  // "browser".
+  nsAutoCString mainPackage;
+  nsresult rv = OverrideLocalePackage(NS_LITERAL_CSTRING("global"), mainPackage);
+  if (NS_FAILED(rv)) {
+    return;
+  }
+
+  if (mainPackage.Equals(package)) {
     // We should refresh the LocaleService, since the available
     // locales changed.
-    LocaleService::GetInstance()->Refresh();
+    LocaleService::GetInstance()->AvailableLocalesChanged();
   }
 }
 
@@ -859,8 +858,8 @@ nsChromeRegistryChrome::ManifestOverride(ManifestProcessingContext& cx, int line
     }
     if (chromeSkinOnly) {
       nsAutoCString chromePath, resolvedPath;
-      chromeuri->GetPath(chromePath);
-      resolveduri->GetPath(resolvedPath);
+      chromeuri->GetPathQueryRef(chromePath);
+      resolveduri->GetPathQueryRef(resolvedPath);
       chromeSkinOnly = StringBeginsWith(chromePath, NS_LITERAL_CSTRING("/skin/")) &&
                        StringBeginsWith(resolvedPath, NS_LITERAL_CSTRING("/skin/"));
     }
@@ -928,7 +927,15 @@ nsChromeRegistryChrome::ManifestResource(ManifestProcessingContext& cx, int line
     return;
   }
 
-  rv = rph->SetSubstitution(host, resolved);
+  // By default, Firefox resources are not content-accessible unless the
+  // manifests opts in.
+  bool contentAccessible = (flags & nsChromeRegistry::CONTENT_ACCESSIBLE);
+
+  uint32_t substitutionFlags = 0;
+  if (contentAccessible) {
+    substitutionFlags |= nsIResProtocolHandler::ALLOW_CONTENT_ACCESS;
+  }
+  rv = rph->SetSubstitutionWithFlags(host, resolved, substitutionFlags);
   if (NS_FAILED(rv)) {
     LogMessageWithContext(cx.GetManifestURI(), lineno, nsIScriptError::warningFlag,
                           "Warning: cannot set substitution for '%s'.",

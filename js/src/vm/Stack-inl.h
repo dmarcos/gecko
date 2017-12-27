@@ -28,20 +28,6 @@
 
 namespace js {
 
-/*
- * We cache name lookup results only for the global object or for native
- * non-global objects without prototype or with prototype that never mutates,
- * see bug 462734 and bug 487039.
- */
-static inline bool
-IsCacheableEnvironment(JSObject* obj)
-{
-    bool cacheable = obj->is<CallObject>() || obj->is<LexicalEnvironmentObject>();
-
-    MOZ_ASSERT_IF(cacheable, !obj->getOpsLookupProperty());
-    return cacheable;
-}
-
 inline HandleObject
 InterpreterFrame::environmentChain() const
 {
@@ -70,7 +56,7 @@ InterpreterFrame::extensibleLexicalEnvironment() const
 }
 
 inline void
-InterpreterFrame::initCallFrame(JSContext* cx, InterpreterFrame* prev, jsbytecode* prevpc,
+InterpreterFrame::initCallFrame(InterpreterFrame* prev, jsbytecode* prevpc,
                                 Value* prevsp, JSFunction& callee, JSScript* script, Value* argv,
                                 uint32_t nactual, MaybeConstruct constructing)
 {
@@ -324,7 +310,7 @@ InterpreterStack::pushInlineFrame(JSContext* cx, InterpreterRegs& regs, const Ca
     fp->mark_ = mark;
 
     /* Initialize frame, locals, regs. */
-    fp->initCallFrame(cx, prev, prevpc, prevsp, *callee, script, argv, args.length(),
+    fp->initCallFrame(prev, prevpc, prevsp, *callee, script, argv, args.length(),
                       constructing);
 
     regs.prepareToRun(*fp, script);
@@ -336,7 +322,7 @@ InterpreterStack::resumeGeneratorCallFrame(JSContext* cx, InterpreterRegs& regs,
                                            HandleFunction callee, HandleValue newTarget,
                                            HandleObject envChain)
 {
-    MOZ_ASSERT(callee->isStarGenerator() || callee->isLegacyGenerator() || callee->isAsync());
+    MOZ_ASSERT(callee->isGenerator() || callee->isAsync());
     RootedScript script(cx, JSFunction::getOrCreateScript(cx, callee));
     InterpreterFrame* prev = regs.fp();
     jsbytecode* prevpc = regs.pc;
@@ -366,7 +352,7 @@ InterpreterStack::resumeGeneratorCallFrame(JSContext* cx, InterpreterRegs& regs,
 
     InterpreterFrame* fp = reinterpret_cast<InterpreterFrame*>(argv + nformal + constructing);
     fp->mark_ = mark;
-    fp->initCallFrame(cx, prev, prevpc, prevsp, *callee, script, argv, 0, constructing);
+    fp->initCallFrame(prev, prevpc, prevsp, *callee, script, argv, 0, constructing);
     fp->resumeGeneratorFrame(envChain);
 
     regs.prepareToRun(*fp, script);
@@ -389,16 +375,16 @@ FrameIter::unaliasedForEachActual(JSContext* cx, Op op)
 {
     switch (data_.state_) {
       case DONE:
-      case WASM:
         break;
       case INTERP:
         interpFrame()->unaliasedForEachActual(op);
         return;
       case JIT:
-        if (data_.jitFrames_.isIonJS()) {
-            jit::MaybeReadFallback recover(cx, activation()->asJit(), &data_.jitFrames_);
+        MOZ_ASSERT(isJSJit());
+        if (jsJitFrame().isIonJS()) {
+            jit::MaybeReadFallback recover(cx, activation()->asJit(), &jsJitFrame());
             ionInlineFrames_.unaliasedForEachActual(cx, op, jit::ReadFrame_Actuals, recover);
-        } else if (data_.jitFrames_.isBailoutJS()) {
+        } else if (jsJitFrame().isBailoutJS()) {
             // :TODO: (Bug 1070962) If we are introspecting the frame which is
             // being bailed, then we might be in the middle of recovering
             // instructions. Stacking computeInstructionResults implies that we
@@ -408,8 +394,8 @@ FrameIter::unaliasedForEachActual(JSContext* cx, Op op)
             jit::MaybeReadFallback fallback;
             ionInlineFrames_.unaliasedForEachActual(cx, op, jit::ReadFrame_Actuals, fallback);
         } else {
-            MOZ_ASSERT(data_.jitFrames_.isBaselineJS());
-            data_.jitFrames_.unaliasedForEachActual(op, jit::ReadFrame_Actuals);
+            MOZ_ASSERT(jsJitFrame().isBaselineJS());
+            jsJitFrame().unaliasedForEachActual(op, jit::ReadFrame_Actuals);
         }
         return;
     }
@@ -574,14 +560,6 @@ AbstractFramePtr::hasInitialEnvironment() const
     if (isBaselineFrame())
         return asBaselineFrame()->hasInitialEnvironment();
     return asRematerializedFrame()->hasInitialEnvironment();
-}
-
-inline bool
-AbstractFramePtr::createSingleton() const
-{
-    if (isInterpreterFrame())
-        return asInterpreterFrame()->createSingleton();
-    return false;
 }
 
 inline bool
@@ -944,11 +922,8 @@ Activation::isProfiling() const
     if (isInterpreter())
         return asInterpreter()->isProfiling();
 
-    if (isJit())
-        return asJit()->isProfiling();
-
-    MOZ_ASSERT(isWasm());
-    return asWasm()->isProfiling();
+    MOZ_ASSERT(isJit());
+    return asJit()->isProfiling();
 }
 
 Activation*
@@ -1034,11 +1009,11 @@ FrameIter::hasCachedSavedFrame() const
     if (hasUsableAbstractFramePtr())
         return abstractFramePtr().hasCachedSavedFrame();
 
-    MOZ_ASSERT(data_.jitFrames_.isIonScripted());
+    MOZ_ASSERT(jsJitFrame().isIonScripted());
     // SavedFrame caching is done at the physical frame granularity (rather than
     // for each inlined frame) for ion. Therefore, it is impossible to have a
     // cached SavedFrame if this frame is not a physical frame.
-    return isPhysicalIonFrame() && data_.jitFrames_.current()->hasCachedSavedFrame();
+    return isPhysicalIonFrame() && jsJitFrame().current()->hasCachedSavedFrame();
 }
 
 inline void
@@ -1052,7 +1027,7 @@ FrameIter::setHasCachedSavedFrame()
     }
 
     MOZ_ASSERT(isPhysicalIonFrame());
-    data_.jitFrames_.current()->setHasCachedSavedFrame();
+    jsJitFrame().current()->setHasCachedSavedFrame();
 }
 
 } /* namespace js */

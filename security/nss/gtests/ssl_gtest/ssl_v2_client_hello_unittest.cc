@@ -141,22 +141,16 @@ class SSLv2ClientHelloFilter : public PacketFilter {
 
 class SSLv2ClientHelloTestF : public TlsConnectTestBase {
  public:
-  SSLv2ClientHelloTestF() : TlsConnectTestBase(STREAM, 0), filter_(nullptr) {}
+  SSLv2ClientHelloTestF()
+      : TlsConnectTestBase(ssl_variant_stream, 0), filter_(nullptr) {}
 
-  SSLv2ClientHelloTestF(Mode mode, uint16_t version)
-      : TlsConnectTestBase(mode, version), filter_(nullptr) {}
+  SSLv2ClientHelloTestF(SSLProtocolVariant variant, uint16_t version)
+      : TlsConnectTestBase(variant, version), filter_(nullptr) {}
 
   void SetUp() {
     TlsConnectTestBase::SetUp();
     filter_ = std::make_shared<SSLv2ClientHelloFilter>(client_, version_);
     client_->SetPacketFilter(filter_);
-  }
-
-  void RequireSafeRenegotiation() {
-    server_->EnsureTlsSetup();
-    SECStatus rv =
-        SSL_OptionSet(server_->ssl_fd(), SSL_REQUIRE_SAFE_NEGOTIATION, PR_TRUE);
-    EXPECT_EQ(rv, SECSuccess);
   }
 
   void SetExpectedVersion(uint16_t version) {
@@ -193,7 +187,8 @@ class SSLv2ClientHelloTestF : public TlsConnectTestBase {
 class SSLv2ClientHelloTest : public SSLv2ClientHelloTestF,
                              public ::testing::WithParamInterface<uint16_t> {
  public:
-  SSLv2ClientHelloTest() : SSLv2ClientHelloTestF(STREAM, GetParam()) {}
+  SSLv2ClientHelloTest()
+      : SSLv2ClientHelloTestF(ssl_variant_stream, GetParam()) {}
 };
 
 // Test negotiating TLS 1.0 - 1.2.
@@ -317,7 +312,7 @@ TEST_P(SSLv2ClientHelloTest, BigClientRandom) {
 // Connection must fail if we require safe renegotiation but the client doesn't
 // include TLS_EMPTY_RENEGOTIATION_INFO_SCSV in the list of cipher suites.
 TEST_P(SSLv2ClientHelloTest, RequireSafeRenegotiation) {
-  RequireSafeRenegotiation();
+  server_->SetOption(SSL_REQUIRE_SAFE_NEGOTIATION, PR_TRUE);
   SetAvailableCipherSuite(TLS_DHE_RSA_WITH_AES_128_CBC_SHA);
   ConnectExpectAlert(server_, kTlsAlertHandshakeFailure);
   EXPECT_EQ(SSL_ERROR_UNSAFE_NEGOTIATION, server_->error_code());
@@ -326,7 +321,7 @@ TEST_P(SSLv2ClientHelloTest, RequireSafeRenegotiation) {
 // Connection must succeed when requiring safe renegotiation and the client
 // includes TLS_EMPTY_RENEGOTIATION_INFO_SCSV in the list of cipher suites.
 TEST_P(SSLv2ClientHelloTest, RequireSafeRenegotiationWithSCSV) {
-  RequireSafeRenegotiation();
+  server_->SetOption(SSL_REQUIRE_SAFE_NEGOTIATION, PR_TRUE);
   std::vector<uint16_t> cipher_suites = {TLS_DHE_RSA_WITH_AES_128_CBC_SHA,
                                          TLS_EMPTY_RENEGOTIATION_INFO_SCSV};
   SetAvailableCipherSuites(cipher_suites);

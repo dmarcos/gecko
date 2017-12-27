@@ -3,7 +3,7 @@
     "message": "Wzmiće klipy a fota wobrazowki z weba a składujće je nachwilu abo na přeco."
   },
   "addonAuthorsList": {
-    "message": "Mozilla <screenshots-feedback@mozilla.org>"
+    "message": "Mozilla <screenshots-feedback@mozilla.com>"
   },
   "contextMenuLabel": {
     "message": "Foto wobrazowki činić"
@@ -29,6 +29,21 @@
   "downloadScreenshot": {
     "message": "Sćahnyć"
   },
+  "downloadOnlyNotice": {
+    "message": "Tuchwilu sće w modusu „Jenož sćahnyć“."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots w slědowacych situacijach awtomatisce do modusa „Jenož sćahnyć“ přepina:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "W priwatnym woknje."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Placki třećich poskićowarjow su znjemóžnjene."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "„Sej historiju ženje njespomjatkować“ je zmóžnjene."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Wotkaz kopěrowany"
   },
@@ -36,6 +51,28 @@
     "message": "Wotkaz k wašemu fotu wobrazowki je so do mjezyskłada kopěrował. Tłóčće $META_KEY$-V, zo byšće jón zasadźił.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Kopěrować"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Foto kopěrowane"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Waše foto je so do mjezyskłada kopěrowało. Tłóčće $META_KEY$-V, zo byšće jo zasadźił.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Tutón wobraz je so na $PIXELS$px přitřihał.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -64,32 +101,47 @@
   "selfScreenshotErrorTitle": {
     "message": "Njemóžeće wobrazowku strony Firefox Screenshots fotografować!"
   },
+  "emptySelectionErrorTitle": {
+    "message": "Waš wuběr je přemały"
+  },
+  "privateWindowErrorTitle": {
+    "message": "Firefox Screenshots je w priwatnym modusu znjemóžnjeny"
+  },
+  "privateWindowErrorDetails": {
+    "message": "Wodajće prošu njepřijomnosće. Dźěłamy na tutej funkciji za přichodne wersije."
+  },
   "genericErrorTitle": {
     "message": "Hopla! Firefox Screenshots njefunguje."
   },
   "genericErrorDetails": {
     "message": "Njejsmy sej wěsći, štož je so stało. Chceće hišće raz spytać abo chceće druhu stronu fotografować?"
   },
-  "tourBodyOne": {
+  "tourBodyIntro": {
     "message": "Čińće, składujće a dźělće fota wobrazowki bjez toho, zo byšće Firefox wopušćił."
   },
-  "tourHeaderTwo": {
+  "tourHeaderPageAction": {
+    "message": "Nowe wašnje składowanja"
+  },
+  "tourBodyPageAction": {
+    "message": "Wočińće meni akcijow strony w adresowym polu kóždy raz, hdyž chceće foto wobrazowki činić."
+  },
+  "tourHeaderClickAndDrag": {
     "message": "Fotografujće prosće, štož chceće"
   },
-  "tourBodyTwo": {
+  "tourBodyClickAndDrag": {
     "message": "Klikńće a ćehńće, zo byšće dźěl strony fotografował. Móžeće tež pokazowak myški nad nim pohibować, zo byšće swój wuběr wuzběhnył."
   },
-  "tourHeaderThree": {
-    "message": "Tak, kaž so wam spodoba"
-  },
-  "tourBodyThree": {
-    "message": "Składujće swoje přitřihane fota wobrazowki w interneće, zo byšće je lóšo dźělił, abo sćehńće je na swój ličak. Móžeće tež na tłóčatko „Moje fota wobrazowki“ kliknyć, zo byšće wšě fota wobrazowki namakał, kotrež sće činił."
-  },
-  "tourHeaderFour": {
+  "tourHeaderFullPage": {
     "message": "Wokna abo cyłe strony składować"
   },
-  "tourBodyFour": {
+  "tourBodyFullPage": {
     "message": "Wubjerće tłóčatka horjeka naprawo, zo byšće widźomny wobwod we woknje abo cyłu stronu fotografować."
+  },
+  "tourHeaderDownloadUpload": {
+    "message": "Tak, kaž so wam spodoba"
+  },
+  "tourBodyDownloadUpload": {
+    "message": "Składujće swoje přitřihane fota wobrazowki w interneće, zo byšće je lóšo dźělił, abo sćehńće je na swój ličak. Móžeće tež na tłóčatko „Moje fota wobrazowki“ kliknyć, zo byšće wšě fota wobrazowki namakał, kotrež sće činił."
   },
   "tourSkip": {
     "message": "Přeskočić"
@@ -103,8 +155,8 @@
   "tourDone": {
     "message": "Hotowo"
   },
-  "termsAndPrivacyNotice": {
-    "message": "Přez wužiwanje Firefox ScreenShots, zwoliće do $TERMSANDPRIVACYNOTICETERMSLINK$ a $TERMSANDPRIVACYNOTICEPRIVACYLINK$ Firefox Screenshots.",
+  "termsAndPrivacyNotice2": {
+    "message": "Přez wužiwanje Firefox ScreenShots, zwoliće do našich $TERMSANDPRIVACYNOTICETERMSLINK$ a $TERMSANDPRIVACYNOTICEPRIVACYLINK$ Firefox Screenshots.",
     "placeholders": {
       "termsandprivacynoticetermslink": {
         "content": "$1"
@@ -119,5 +171,8 @@
   },
   "termsAndPrivacyNoticyPrivacyLink": {
     "message": "Pokaz priwatnosće"
+  },
+  "libraryLabel": {
+    "message": "Fota wobrazowki"
   }
 }

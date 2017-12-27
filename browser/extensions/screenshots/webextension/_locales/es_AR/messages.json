@@ -3,7 +3,7 @@
     "message": "Tomá imágenes y capturas de la web y guardalos temporal o permanentemente."
   },
   "addonAuthorsList": {
-    "message": "Mozilla <screenshots-feedback@mozilla.org>"
+    "message": "Mozilla <screenshots-feedback@mozilla.com>"
   },
   "contextMenuLabel": {
     "message": "Hacer captura de pantalla"
@@ -29,13 +29,50 @@
   "downloadScreenshot": {
     "message": "Descargar"
   },
+  "downloadOnlyNotice": {
+    "message": "Estás actualmente en modo solo descargas."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots cambia automáticamente al modo solo descargas en estas situaciones:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "En una ventana de navegación privada."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Cookies de terceros están deshabilitadas."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "“Nunca recordar historial” está habilitado."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Enlace copiado"
   },
   "notificationLinkCopiedDetails": {
-    "message": "EL enlace a la captura ha sido copiado al portapapeles. Presioná $META_KEY$-V para pegar.",
+    "message": "El enlace a la captura ha sido copiado al portapapeles. Presioná $META_KEY$-V para pegar.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Copiar"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Captura copiada"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Tu captura ha sido copiada al portapapeles. Presioná $META_KEY$-V para pegar.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Esta imagen ha sido recortada a $PIXELS$px.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -50,10 +87,10 @@
     "message": "No podemos conectar a las capturas de pantalla."
   },
   "connectionErrorDetails": {
-    "message": "Verificá la conexión a Internet. Si te podés conectar a Internet, hay un problema temporal con el servicio de capturas de Firefox."
+    "message": "Verificá la conexión a Internet. Si te podés conectar a Internet, hay un problema temporal con el servicio de Firefox Screenshots."
   },
   "loginErrorDetails": {
-    "message": "No pudimos guardar la captura porque hay un problema con el servicio de capturas de Firefox. Intentá más tarde."
+    "message": "No pudimos guardar la captura porque hay un problema con el servicio de Firefox Screenshots. Intentá más tarde."
   },
   "unshootablePageErrorTitle": {
     "message": "No podemos capturar esta página."
@@ -62,37 +99,52 @@
     "message": "Esta no es una página web estándar, así que no podemos guardar una captura."
   },
   "selfScreenshotErrorTitle": {
-    "message": "¡No se puede hacer una captura de la página de capturas de Firefox!"
+    "message": "¡No se puede hacer una captura de la página de Firefox Screenshots!"
+  },
+  "emptySelectionErrorTitle": {
+    "message": "La selección es demasiado chica"
+  },
+  "privateWindowErrorTitle": {
+    "message": "Screenshots está deshabilitado en el modo de navegación privada"
+  },
+  "privateWindowErrorDetails": {
+    "message": "Lamentamos el inconveniente. Estamos trabajando en esta característica para versiones futuras."
   },
   "genericErrorTitle": {
-    "message": "¡Apa! La capturas de pantalla de Firefox se volvieron locas."
+    "message": "¡Apa! Firefox Screenshots se volvió loco."
   },
   "genericErrorDetails": {
     "message": "No estamos seguros de lo que pasó. ¿Querés intenar de nuevo o tomar una captura de una página diferente?"
   },
-  "tourBodyOne": {
+  "tourBodyIntro": {
     "message": "Hacer, guardar y compartir capturas de pantalla sin dejar Firefox."
   },
-  "tourHeaderTwo": {
+  "tourHeaderPageAction": {
+    "message": "Una nueva forma de guardar"
+  },
+  "tourBodyPageAction": {
+    "message": "Expandí el menú de acciones de página en la barra de direcciones cuando quieras tomar una captura."
+  },
+  "tourHeaderClickAndDrag": {
     "message": "Capturar sólo lo que querés"
   },
-  "tourBodyTwo": {
+  "tourBodyClickAndDrag": {
     "message": "Hacé clic y arrastrá para capturar una porción de la página. También podés pasar por encima para resaltar la selección."
   },
-  "tourHeaderThree": {
-    "message": "Como te guste"
-  },
-  "tourBodyThree": {
-    "message": "Guardá tus capturas recortadas a la web para compartir o descargarlas más fácilmente a tu computadora. También podés hacer clic en el botón Mis capturas para encontrar todas las capturas hechas."
-  },
-  "tourHeaderFour": {
+  "tourHeaderFullPage": {
     "message": "Capturar ventanas o páginas enteras"
   },
-  "tourBodyFour": {
+  "tourBodyFullPage": {
     "message": "Seleccioná los botones arriba a la derecha para capturar el área visible en la ventana o la página completa."
   },
+  "tourHeaderDownloadUpload": {
+    "message": "Como te guste"
+  },
+  "tourBodyDownloadUpload": {
+    "message": "Guardá tus capturas recortadas a la web para compartir o descargarlas más fácilmente a tu computadora. También podés hacer clic en el botón Mis capturas para encontrar todas las capturas hechas."
+  },
   "tourSkip": {
-    "message": "Saltear"
+    "message": "SALTEAR"
   },
   "tourNext": {
     "message": "Próxima diapositiva"
@@ -103,8 +155,8 @@
   "tourDone": {
     "message": "Listo"
   },
-  "termsAndPrivacyNotice": {
-    "message": "Al usar Firefox Screenshots, aceptás los $TERMSANDPRIVACYNOTICETERMSLINK$ y $TERMSANDPRIVACYNOTICEPRIVACYLINK$ de Screenshots.",
+  "termsAndPrivacyNotice2": {
+    "message": "Al usar Firefox Screenshots, aceptás los $TERMSANDPRIVACYNOTICETERMSLINK$ y $TERMSANDPRIVACYNOTICEPRIVACYLINK$.",
     "placeholders": {
       "termsandprivacynoticetermslink": {
         "content": "$1"
@@ -119,5 +171,8 @@
   },
   "termsAndPrivacyNoticyPrivacyLink": {
     "message": "Nota de privacidad"
+  },
+  "libraryLabel": {
+    "message": "Capturas"
   }
 }

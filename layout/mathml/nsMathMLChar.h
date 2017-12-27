@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,12 +15,12 @@
 #include "nsBoundingMetrics.h"
 #include "gfxTextRun.h"
 
+class gfxContext;
 class nsGlyphTable;
 class nsIFrame;
 class nsDisplayListBuilder;
 class nsDisplayListSet;
 class nsPresContext;
-class nsRenderingContext;
 struct nsBoundingMetrics;
 class nsStyleContext;
 struct nsFont;
@@ -105,9 +106,9 @@ public:
                const nsDisplayListSet& aLists,
                uint32_t                aIndex,
                const nsRect*           aSelectedRect = nullptr);
-          
-  void PaintForeground(nsPresContext* aPresContext,
-                       nsRenderingContext& aRenderingContext,
+
+  void PaintForeground(nsIFrame* aForFrame,
+                       gfxContext& aRenderingContext,
                        nsPoint aPt,
                        bool aIsSelected);
 
@@ -115,7 +116,7 @@ public:
   // @param aContainerSize - IN - suggested size for the stretched char
   // @param aDesiredStretchSize - OUT - the size that the char wants
   nsresult
-  Stretch(nsPresContext*           aPresContext,
+  Stretch(nsIFrame*                aForFrame,
           DrawTarget*              aDrawTarget,
           float                    aFontSizeInflation,
           nsStretchDirection       aStretchDirection,
@@ -165,7 +166,7 @@ public:
   // @param aStretchHint can be the value that will be passed to Stretch().
   // It is used to determine whether the operator is stretchy or a largeop.
   nscoord
-  GetMaxWidth(nsPresContext* aPresContext,
+  GetMaxWidth(nsIFrame* aForFrame,
               DrawTarget* aDrawTarget,
               float aFontSizeInflation,
               uint32_t aStretchHint = NS_STRETCH_NORMAL);
@@ -203,7 +204,7 @@ private:
   nsRect             mRect;
   nsStretchDirection mDirection;
   nsBoundingMetrics  mBoundingMetrics;
-  nsStyleContext*    mStyleContext;
+  RefPtr<nsStyleContext> mStyleContext;
   // mGlyphs/mBmData are arrays describing the glyphs used to draw the operator.
   // See the drawing methods below.
   RefPtr<gfxTextRun> mGlyphs[4];
@@ -223,7 +224,7 @@ private:
   };
   DrawingMethod mDraw;
 
-  // mMirrored indicates whether the character is mirrored. 
+  // mMirrored indicates whether the character is mirrored.
   bool               mMirrored;
 
   class StretchEnumContext;
@@ -239,7 +240,7 @@ private:
                 RefPtr<gfxFontGroup>* aFontGroup);
 
   nsresult
-  StretchInternal(nsPresContext*           aPresContext,
+  StretchInternal(nsIFrame*                aForFrame,
                   DrawTarget*              aDrawTarget,
                   float                    aFontSizeInflation,
                   nsStretchDirection&      aStretchDirection,

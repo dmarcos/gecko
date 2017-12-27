@@ -8,6 +8,7 @@
 #ifndef mozilla_EventDispatcher_h_
 #define mozilla_EventDispatcher_h_
 
+#include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/EventForwards.h"
 #include "nsCOMPtr.h"
 #include "nsTArray.h"
@@ -31,7 +32,7 @@ class EventTarget;
  * About event dispatching:
  * When either EventDispatcher::Dispatch or
  * EventDispatcher::DispatchDOMEvent is called an event target chain is
- * created. EventDispatcher creates the chain by calling GetEventTargetParent 
+ * created. EventDispatcher creates the chain by calling GetEventTargetParent
  * on each event target and the creation continues until either the mCanHandle
  * member of the EventChainPreVisitor object is false or the mParentTarget
  * does not point to a new target. The event target chain is created in the
@@ -124,6 +125,9 @@ public:
     , mWantsWillHandleEvent(false)
     , mMayHaveListenerManager(true)
     , mWantsPreHandleEvent(false)
+    , mRootOfClosedTree(false)
+    , mParentIsSlotInClosedTree(false)
+    , mParentIsChromeHandler(false)
     , mParentTarget(nullptr)
     , mEventTargetAtParent(nullptr)
   {
@@ -139,8 +143,24 @@ public:
     mWantsWillHandleEvent = false;
     mMayHaveListenerManager = true;
     mWantsPreHandleEvent = false;
+    mRootOfClosedTree = false;
+    mParentIsSlotInClosedTree = false;
+    mParentIsChromeHandler = false;
     mParentTarget = nullptr;
     mEventTargetAtParent = nullptr;
+  }
+
+  dom::EventTarget* GetParentTarget()
+  {
+    return mParentTarget;
+  }
+
+  void SetParentTarget(dom::EventTarget* aParentTarget, bool aIsChromeHandler)
+  {
+    mParentTarget = aParentTarget;
+    if (mParentTarget) {
+      mParentIsChromeHandler = aIsChromeHandler;
+    }
   }
 
   /**
@@ -195,22 +215,34 @@ public:
   bool mWantsPreHandleEvent;
 
   /**
+   * True if the current target is either closed ShadowRoot or root of
+   * chrome only access tree (for example native anonymous content).
+   */
+  bool mRootOfClosedTree;
+
+  /**
+   * True if mParentTarget is HTMLSlotElement in a closed shadow tree and the
+   * current target is assigned to that slot.
+   */
+  bool mParentIsSlotInClosedTree;
+
+  /**
+   * True if mParentTarget is a chrome handler in the event path.
+   */
+  bool mParentIsChromeHandler;
+
+private:
+  /**
    * Parent item in the event target chain.
    */
   dom::EventTarget* mParentTarget;
 
+public:
   /**
    * If the event needs to be retargeted, this is the event target,
    * which should be used when the event is handled at mParentTarget.
    */
   dom::EventTarget* mEventTargetAtParent;
-
-  /**
-   * An array of destination insertion points that need to be inserted
-   * into the event path of nodes that are distributed by the
-   * web components distribution algorithm.
-   */
-  nsTArray<nsIContent*> mDestInsertionPoints;
 };
 
 class EventChainPostVisitor : public mozilla::EventChainVisitor
@@ -244,7 +276,7 @@ class EventDispatcher
 public:
   /**
    * aTarget should QI to EventTarget.
-   * If the target of aEvent is set before calling this method, the target of 
+   * If the target of aEvent is set before calling this method, the target of
    * aEvent is used as the target (unless there is event
    * retargeting) and the originalTarget of the DOM Event.
    * aTarget is always used as the starting point for constructing the event
@@ -286,7 +318,12 @@ public:
   static already_AddRefed<dom::Event> CreateEvent(dom::EventTarget* aOwner,
                                                   nsPresContext* aPresContext,
                                                   WidgetEvent* aEvent,
-                                                  const nsAString& aEventType);
+                                                  const nsAString& aEventType,
+                                                  dom::CallerType aCallerType =
+                                                    dom::CallerType::System);
+
+  static void GetComposedPathFor(WidgetEvent* aEvent,
+                                 nsTArray<RefPtr<dom::EventTarget>>& aPath);
 
   /**
    * Called at shutting down.

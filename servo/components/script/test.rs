@@ -6,13 +6,17 @@ pub use dom::bindings::str::{ByteString, DOMString};
 pub use dom::headers::normalize_value;
 
 // For compile-fail tests only.
-pub use dom::bindings::cell::DOMRefCell;
-pub use dom::bindings::js::JS;
+pub use dom::bindings::cell::DomRefCell;
+pub use dom::bindings::root::Dom;
 pub use dom::node::Node;
 pub use dom::bindings::refcounted::TrustedPromise;
 
 pub mod area {
     pub use dom::htmlareaelement::{Area, Shape};
+}
+
+pub mod sizes {
+    pub use dom::htmlimageelement::{parse_a_sizes_attribute, Size};
 }
 
 pub mod size_of {
@@ -24,7 +28,6 @@ pub mod size_of {
     use dom::htmlspanelement::HTMLSpanElement;
     use dom::node::Node;
     use dom::text::Text;
-    use layout_wrapper::{ServoLayoutElement, ServoLayoutNode, ServoThreadSafeLayoutNode};
     use std::mem::size_of;
 
     pub fn CharacterData() -> usize {
@@ -55,19 +58,11 @@ pub mod size_of {
         size_of::<Node>()
     }
 
-    pub fn SendElement() -> usize {
-        size_of::<::style::dom::SendElement<ServoLayoutElement>>()
-    }
-
-    pub fn SendNode() -> usize {
-        size_of::<::style::dom::SendNode<ServoLayoutNode>>()
-    }
-
-    pub fn ServoThreadSafeLayoutNode() -> usize {
-        size_of::<ServoThreadSafeLayoutNode>()
-    }
-
     pub fn Text() -> usize {
         size_of::<Text>()
     }
+}
+
+pub mod srcset {
+    pub use dom::htmlimageelement::{parse_a_srcset_attribute, ImageSource, Descriptor};
 }

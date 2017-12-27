@@ -11,13 +11,9 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(CUSTOM_GET_URL);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
-  let {
-    getSortedRequests,
-  } = windowRequire("devtools/client/netmonitor/src/selectors/index");
-
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   let wait = waitForNetworkEvents(monitor, 2);
   // Timeout needed for having enough divisions on the time scale.
@@ -41,16 +37,8 @@ add_task(function* () {
   secDivs.forEach(div => info(`Second division: ${div.textContent}`));
   minDivs.forEach(div => info(`Minute division: ${div.textContent}`));
 
-  is(gStore.getState().requests.requests.size, 2,
+  is(store.getState().requests.requests.size, 2,
      "There should be only two requests made.");
-
-  let firstRequest = getSortedRequests(gStore.getState()).get(0);
-  let lastRequest = getSortedRequests(gStore.getState()).get(1);
-
-  info("First request happened at: " +
-       firstRequest.responseHeaders.headers.find(e => e.name == "Date").value);
-  info("Last request happened at: " +
-       lastRequest.responseHeaders.headers.find(e => e.name == "Date").value);
 
   ok(secDivs.length,
      "There should be at least one division on the seconds time scale.");

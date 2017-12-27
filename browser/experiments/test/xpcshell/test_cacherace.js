@@ -1,5 +1,6 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
+/* eslint-disable mozilla/no-arbitrary-setTimeout */
 
 "use strict";
 
@@ -18,13 +19,9 @@ var gPolicy              = null;
 var gManifestObject      = null;
 var gManifestHandlerURI  = null;
 
-function run_test() {
-  run_next_test();
-}
-
-add_task(function* test_setup() {
+add_task(async function test_setup() {
   loadAddonManager();
-  yield removeCacheFile();
+  await removeCacheFile();
 
   gHttpServer = new HttpServer();
   gHttpServer.start(-1);
@@ -39,7 +36,7 @@ add_task(function* test_setup() {
     response.processAsync();
     response.finish();
   });
-  do_register_cleanup(() => gHttpServer.stop(() => {}));
+  registerCleanupFunction(() => gHttpServer.stop(() => {}));
 
   Services.prefs.setBoolPref(PREF_EXPERIMENTS_ENABLED, true);
   Services.prefs.setIntPref(PREF_LOGGING_LEVEL, 0);
@@ -86,7 +83,7 @@ add_task(function* test_setup() {
     ],
   };
 
-  do_print("gManifestObject: " + JSON.stringify(gManifestObject));
+  info("gManifestObject: " + JSON.stringify(gManifestObject));
 
   // In order for the addon manager to work properly, we hack
   // Experiments.instance which is used by the XPIProvider
@@ -94,7 +91,7 @@ add_task(function* test_setup() {
   Assert.strictEqual(ExperimentsScope.gExperiments, null);
   ExperimentsScope.gExperiments = experiments;
 
-  yield experiments.updateManifest();
+  await experiments.updateManifest();
   let active = experiments._getActiveExperiment();
   Assert.ok(active);
   Assert.equal(active.branch, "racy-set");

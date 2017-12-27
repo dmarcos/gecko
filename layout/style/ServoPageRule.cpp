@@ -26,6 +26,7 @@ ServoPageRuleDeclaration::ServoPageRuleDeclaration(
 
 ServoPageRuleDeclaration::~ServoPageRuleDeclaration()
 {
+  mDecls->SetOwningRule(nullptr);
 }
 
 // QueryInterface implementation for ServoPageRuleDeclaration
@@ -56,6 +57,13 @@ nsINode*
 ServoPageRuleDeclaration::GetParentObject()
 {
   return Rule()->GetDocument();
+}
+
+DocGroup*
+ServoPageRuleDeclaration::GetDocGroup() const
+{
+  nsIDocument* document = Rule()->GetDocument();
+  return document ? document->GetDocGroup() : nullptr;
 }
 
 DeclarationBlock*
@@ -89,23 +97,26 @@ ServoPageRuleDeclaration::DocToUpdate()
 
 void
 ServoPageRuleDeclaration::GetCSSParsingEnvironment(
-  CSSParsingEnvironment& aCSSParseEnv)
+  CSSParsingEnvironment& aCSSParseEnv,
+  nsIPrincipal* aSubjectPrincipal)
 {
   MOZ_ASSERT_UNREACHABLE("GetCSSParsingEnvironment "
                          "shouldn't be calling for a Servo rule");
   GetCSSParsingEnvironmentForRule(Rule(), aCSSParseEnv);
 }
 
-URLExtraData*
-ServoPageRuleDeclaration::GetURLData() const
+nsDOMCSSDeclaration::ServoCSSParsingEnvironment
+ServoPageRuleDeclaration::GetServoCSSParsingEnvironment(
+  nsIPrincipal* aSubjectPrincipal) const
 {
-  return GetURLDataForRule(Rule());
+  return GetServoCSSParsingEnvironmentForRule(Rule());
 }
 
 // -- ServoPageRule --------------------------------------------------
 
-ServoPageRule::ServoPageRule(RefPtr<RawServoPageRule> aRawRule)
-  : CSSPageRule(0, 0)
+ServoPageRule::ServoPageRule(RefPtr<RawServoPageRule> aRawRule,
+                             uint32_t aLine, uint32_t aColumn)
+  : CSSPageRule(aLine, aColumn)
   , mRawRule(Move(aRawRule))
   , mDecls(Servo_PageRule_GetStyle(mRawRule).Consume())
 {
@@ -119,7 +130,7 @@ NS_IMPL_ADDREF_INHERITED(ServoPageRule, CSSPageRule)
 NS_IMPL_RELEASE_INHERITED(ServoPageRule, CSSPageRule)
 
 // QueryInterface implementation for PageRule
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ServoPageRule)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ServoPageRule)
 NS_INTERFACE_MAP_END_INHERITING(CSSPageRule)
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(ServoPageRule)
@@ -140,6 +151,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(ServoPageRule, CSSPageRule)
   // NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER which we can't use
   // directly because the wrapper is on the declaration, not on us.
   tmp->mDecls.ReleaseWrapper(static_cast<nsISupports*>(p));
+  tmp->mDecls.mDecls->SetOwningRule(nullptr);
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(ServoPageRule, CSSPageRule)

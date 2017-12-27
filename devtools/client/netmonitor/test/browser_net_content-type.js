@@ -11,7 +11,7 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(CONTENT_TYPE_WITHOUT_CACHE_URL);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let { L10N } = windowRequire("devtools/client/netmonitor/src/utils/l10n");
   let {
@@ -19,18 +19,25 @@ add_task(function* () {
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   let wait = waitForNetworkEvents(monitor, CONTENT_TYPE_WITHOUT_CACHE_REQUESTS);
-  yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
+  yield ContentTask.spawn(tab.linkedBrowser, {}, function () {
     content.wrappedJSObject.performRequests();
   });
   yield wait;
 
+  for (let requestItem of document.querySelectorAll(".request-list-item")) {
+    let requestsListStatus = requestItem.querySelector(".requests-list-status");
+    requestItem.scrollIntoView();
+    EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+    yield waitUntil(() => requestsListStatus.title);
+  }
+
   verifyRequestItemTarget(
     document,
-    getDisplayedRequests(gStore.getState()),
-    getSortedRequests(gStore.getState()).get(0),
+    getDisplayedRequests(store.getState()),
+    getSortedRequests(store.getState()).get(0),
     "GET",
     CONTENT_TYPE_SJS + "?fmt=xml",
     {
@@ -44,8 +51,8 @@ add_task(function* () {
   );
   verifyRequestItemTarget(
     document,
-    getDisplayedRequests(gStore.getState()),
-    getSortedRequests(gStore.getState()).get(1),
+    getDisplayedRequests(store.getState()),
+    getSortedRequests(store.getState()).get(1),
     "GET",
     CONTENT_TYPE_SJS + "?fmt=css",
     {
@@ -59,8 +66,8 @@ add_task(function* () {
   );
   verifyRequestItemTarget(
     document,
-    getDisplayedRequests(gStore.getState()),
-    getSortedRequests(gStore.getState()).get(2),
+    getDisplayedRequests(store.getState()),
+    getSortedRequests(store.getState()).get(2),
     "GET",
     CONTENT_TYPE_SJS + "?fmt=js",
     {
@@ -74,8 +81,8 @@ add_task(function* () {
   );
   verifyRequestItemTarget(
     document,
-    getDisplayedRequests(gStore.getState()),
-    getSortedRequests(gStore.getState()).get(3),
+    getDisplayedRequests(store.getState()),
+    getSortedRequests(store.getState()).get(3),
     "GET",
     CONTENT_TYPE_SJS + "?fmt=json",
     {
@@ -89,8 +96,8 @@ add_task(function* () {
   );
   verifyRequestItemTarget(
     document,
-    getDisplayedRequests(gStore.getState()),
-    getSortedRequests(gStore.getState()).get(4),
+    getDisplayedRequests(store.getState()),
+    getSortedRequests(store.getState()).get(4),
     "GET",
     CONTENT_TYPE_SJS + "?fmt=bogus",
     {
@@ -104,8 +111,8 @@ add_task(function* () {
   );
   verifyRequestItemTarget(
     document,
-    getDisplayedRequests(gStore.getState()),
-    getSortedRequests(gStore.getState()).get(5),
+    getDisplayedRequests(store.getState()),
+    getSortedRequests(store.getState()).get(5),
     "GET",
     TEST_IMAGE,
     {
@@ -120,8 +127,8 @@ add_task(function* () {
   );
   verifyRequestItemTarget(
     document,
-    getDisplayedRequests(gStore.getState()),
-    getSortedRequests(gStore.getState()).get(6),
+    getDisplayedRequests(store.getState()),
+    getSortedRequests(store.getState()).get(6),
     "GET",
     CONTENT_TYPE_SJS + "?fmt=gzip",
     {
@@ -129,31 +136,31 @@ add_task(function* () {
       statusText: "OK",
       type: "plain",
       fullMimeType: "text/plain",
-      transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 73),
+      transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 324),
       size: L10N.getFormatStrWithNumbers("networkMenu.sizeKB", 10.73),
       time: true
     }
   );
 
-  yield selectIndexAndWaitForSourceEditor(0);
+  yield selectIndexAndWaitForSourceEditor(monitor, 0);
   yield testResponseTab("xml");
 
-  yield selectIndexAndWaitForSourceEditor(1);
+  yield selectIndexAndWaitForSourceEditor(monitor, 1);
   yield testResponseTab("css");
 
-  yield selectIndexAndWaitForSourceEditor(2);
+  yield selectIndexAndWaitForSourceEditor(monitor, 2);
   yield testResponseTab("js");
 
   yield selectIndexAndWaitForJSONView(3);
   yield testResponseTab("json");
 
-  yield selectIndexAndWaitForSourceEditor(4);
+  yield selectIndexAndWaitForSourceEditor(monitor, 4);
   yield testResponseTab("html");
 
   yield selectIndexAndWaitForImageView(5);
   yield testResponseTab("png");
 
-  yield selectIndexAndWaitForSourceEditor(6);
+  yield selectIndexAndWaitForSourceEditor(monitor, 6);
   yield testResponseTab("gzip");
 
   yield teardown(monitor);
@@ -170,7 +177,7 @@ add_task(function* () {
         box != "json",
         "The response json view doesn't display");
       is(tabpanel.querySelector(".CodeMirror-code") === null,
-        box != "textarea",
+        (box !== "textarea" && box !== "json"),
         "The response editor doesn't display");
       is(tabpanel.querySelector(".response-image-box") === null,
         box != "image",
@@ -181,7 +188,7 @@ add_task(function* () {
       case "xml": {
         checkVisibility("textarea");
 
-        let text = document .querySelector(".CodeMirror-line").textContent;
+        let text = document.querySelector(".CodeMirror-line").textContent;
 
         is(text, "<label value='greeting'>Hello XML!</label>",
           "The text shown in the source editor is incorrect for the xml request.");
@@ -208,8 +215,8 @@ add_task(function* () {
       case "json": {
         checkVisibility("json");
 
-        is(tabpanel.querySelectorAll(".tree-section").length, 1,
-          "There should be 1 tree sections displayed in this tabpanel.");
+        is(tabpanel.querySelectorAll(".tree-section").length, 2,
+          "There should be 2 tree sections displayed in this tabpanel.");
         is(tabpanel.querySelectorAll(".empty-notice").length, 0,
           "The empty notice should not be displayed in this tabpanel.");
 
@@ -263,32 +270,26 @@ add_task(function* () {
     }
   }
 
-  function* selectIndexAndWaitForSourceEditor(index) {
-    let editor = document.querySelector("#response-panel .CodeMirror-code");
-    if (!editor) {
-      let waitDOM = waitForDOM(document, "#response-panel .CodeMirror-code");
-      EventUtils.sendMouseEvent({ type: "mousedown" },
-        document.querySelectorAll(".request-list-item")[index]);
-      document.querySelector("#response-tab").click();
-      yield waitDOM;
-    } else {
-      EventUtils.sendMouseEvent({ type: "mousedown" },
-        document.querySelectorAll(".request-list-item")[index]);
-    }
-  }
-
   function* selectIndexAndWaitForJSONView(index) {
+    let onResponseContent = monitor.panelWin.once(EVENTS.RECEIVED_RESPONSE_CONTENT);
     let tabpanel = document.querySelector("#response-panel");
     let waitDOM = waitForDOM(tabpanel, ".treeTable");
-    gStore.dispatch(Actions.selectRequestByIndex(index));
+    store.dispatch(Actions.selectRequestByIndex(index));
     yield waitDOM;
+    yield onResponseContent;
+
+    // Waiting for RECEIVED_RESPONSE_CONTENT isn't enough.
+    // DOM may not be fully updated yet and checkVisibility(json) may still fail.
+    yield waitForTick();
   }
 
   function* selectIndexAndWaitForImageView(index) {
+    let onResponseContent = monitor.panelWin.once(EVENTS.RECEIVED_RESPONSE_CONTENT);
     let tabpanel = document.querySelector("#response-panel");
     let waitDOM = waitForDOM(tabpanel, ".response-image");
-    gStore.dispatch(Actions.selectRequestByIndex(index));
+    store.dispatch(Actions.selectRequestByIndex(index));
     let [imageNode] = yield waitDOM;
     yield once(imageNode, "load");
+    yield onResponseContent;
   }
 });

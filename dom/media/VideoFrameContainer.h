@@ -18,9 +18,7 @@
 
 namespace mozilla {
 
-namespace dom {
-class HTMLMediaElement;
-} // namespace dom
+class MediaDecoderOwner;
 
 /**
  * This object is used in the decoder backend threads and the main thread
@@ -38,7 +36,7 @@ public:
   typedef layers::ImageContainer ImageContainer;
   typedef layers::Image Image;
 
-  VideoFrameContainer(dom::HTMLMediaElement* aElement,
+  VideoFrameContainer(MediaDecoderOwner* aOwner,
                       already_AddRefed<ImageContainer> aContainer);
 
   // Call on any thread
@@ -92,7 +90,7 @@ public:
   void Invalidate() override { InvalidateWithFlags(INVALIDATE_DEFAULT); }
   void InvalidateWithFlags(uint32_t aFlags);
   ImageContainer* GetImageContainer();
-  void ForgetElement() { mElement = nullptr; }
+  void ForgetElement() { mOwner = nullptr; }
 
   uint32_t GetDroppedImageCount() { return mImageContainer->GetDroppedImageCount(); }
 
@@ -100,10 +98,27 @@ protected:
   void SetCurrentFramesLocked(const gfx::IntSize& aIntrinsicSize,
                               const nsTArray<ImageContainer::NonOwningImage>& aImages);
 
-  // Non-addreffed pointer to the element. The element calls ForgetElement
-  // to clear this reference when the element is destroyed.
-  dom::HTMLMediaElement* mElement;
+  // Non-addreffed pointer to the owner. The ownenr calls ForgetElement
+  // to clear this reference when the owner is destroyed.
+  MediaDecoderOwner* mOwner;
   RefPtr<ImageContainer> mImageContainer;
+
+  struct
+  {
+    // True when the Image size has changed since the last time Invalidate() was
+    // called. When set, the next call to Invalidate() will ensure that the
+    // frame is fully invalidated instead of just invalidating for the image change
+    // in the ImageLayer.
+    bool mImageSizeChanged = false;
+    // The main thread mirror of the member of the same name below.
+    gfx::IntSize mIntrinsicSize;
+    // True when the intrinsic size has been changed by SetCurrentFrame() since
+    // the last call to Invalidate().
+    // The next call to Invalidate() will recalculate
+    // and update the intrinsic size on the element, request a frame reflow and
+    // then reset this flag.
+    bool mIntrinsicSizeChanged = false;
+  } mMainThreadState;
 
   // mMutex protects all the fields below.
   Mutex mMutex;
@@ -122,17 +137,6 @@ protected:
   // We record the last played video frame to avoid playing the frame again
   // with a different frame id.
   VideoFrame mLastPlayedVideoFrame;
-  // True when the intrinsic size has been changed by SetCurrentFrame() since
-  // the last call to Invalidate().
-  // The next call to Invalidate() will recalculate
-  // and update the intrinsic size on the element, request a frame reflow and
-  // then reset this flag.
-  bool mIntrinsicSizeChanged;
-  // True when the Image size has changed since the last time Invalidate() was
-  // called. When set, the next call to Invalidate() will ensure that the
-  // frame is fully invalidated instead of just invalidating for the image change
-  // in the ImageLayer.
-  bool mImageSizeChanged;
   // The last PrincipalHandle we notified mElement about.
   PrincipalHandle mLastPrincipalHandle;
   // The PrincipalHandle the client has notified us is changing with FrameID

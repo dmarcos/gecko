@@ -11,7 +11,7 @@
 // Disable automatic network detection, so tests work correctly when
 // not connected to a network.
 var ios = Cc["@mozilla.org/network/io-service;1"]
-          .getService(Ci.nsIIOService2);
+            .getService(Ci.nsIIOService);
 ios.manageOfflineStatus = false;
 ios.offline = false;
 
@@ -163,7 +163,7 @@ function runServer()
   var foStream = Cc["@mozilla.org/network/file-output-stream;1"]
                    .createInstance(Ci.nsIFileOutputStream);
   var serverAlive = Cc["@mozilla.org/file/local;1"]
-                      .createInstance(Ci.nsILocalFile);
+                      .createInstance(Ci.nsIFile);
 
   if (typeof(_PROFILE_PATH) == "undefined") {
     serverAlive.initWithFile(serverBasePath);
@@ -222,13 +222,14 @@ function createMochitestServer(serverBasePath)
   server.registerContentType("dat", "text/plain; charset=utf-8");
   server.registerContentType("frag", "text/plain"); // .frag == WebGL fragment shader
   server.registerContentType("vert", "text/plain"); // .vert == WebGL vertex shader
+  server.registerContentType("wasm", "application/wasm");
   server.setIndexHandler(defaultDirHandler);
 
   var serverRoot =
     {
       getFile: function getFile(path)
       {
-        var file = serverBasePath.clone().QueryInterface(Ci.nsILocalFile);
+        var file = serverBasePath.clone().QueryInterface(Ci.nsIFile);
         path.split("/").forEach(function(p) {
           file.appendRelativePath(p);
         });
@@ -376,7 +377,7 @@ function* dirIter(dir)
   var en = dir.directoryEntries;
   while (en.hasMoreElements()) {
     var file = en.getNext();
-    yield file.QueryInterface(Ci.nsILocalFile);
+    yield file.QueryInterface(Ci.nsIFile);
   }
 }
 

@@ -13,7 +13,7 @@
 #define READTYPE  int32_t
 #include "zlib.h"
 #ifdef MOZ_JAR_BROTLI
-#include "decode.h" // brotli
+#include "brotli/decode.h" // brotli
 #endif
 #include "nsISupportsUtils.h"
 #include "prio.h"
@@ -74,9 +74,6 @@ static const uint16_t kSyntheticDate = (1 + (1 << 5) + (0 << 9));
 static uint16_t xtoint(const uint8_t *ii);
 static uint32_t xtolong(const uint8_t *ll);
 static uint32_t HashName(const char* aName, uint16_t nameLen);
-#ifdef XP_UNIX
-static nsresult ResolveSymlink(const char *path);
-#endif
 
 class ZipArchiveLogger {
 public:
@@ -192,7 +189,7 @@ nsresult nsZipHandle::Init(nsIFile *file, nsZipHandle **ret,
   PRFileMap *map = PR_CreateFileMap(fd, size, PR_PROT_READONLY);
   if (!map)
     return NS_ERROR_FAILURE;
-  
+
   uint8_t *buf = (uint8_t*) PR_MemMap(map, 0, (uint32_t) size);
   // Bug 525755: PR_MemMap fails when fd points at something other than a normal file.
   if (!buf) {
@@ -285,7 +282,7 @@ nsresult nsZipHandle::Init(const uint8_t* aData, uint32_t aLen,
 //    pubKeyLength  : publicKey     - Contents of the author's public key.
 //    sigLength     : signature     - Signature of the ZIP content.
 //                                    Signature is created using the RSA
-//                                    algorighm with the SHA-1 hash function.
+//                                    algorithm with the SHA-1 hash function.
 nsresult nsZipHandle::findDataStart()
 {
   // In the CRX header, integers are 32 bits. Our pointer to the file is of
@@ -445,7 +442,7 @@ nsZipItem*  nsZipArchive::GetItem(const char * aEntryName)
 {
   if (aEntryName) {
     uint32_t len = strlen(aEntryName);
-    //-- If the request is for a directory, make sure that synthetic entries 
+    //-- If the request is for a directory, make sure that synthetic entries
     //-- are created for the directories without their own entry.
     if (!mBuiltSynthetics) {
         if ((len > 0) && (aEntryName[len-1] == '/')) {
@@ -456,9 +453,9 @@ nsZipItem*  nsZipArchive::GetItem(const char * aEntryName)
 MOZ_WIN_MEM_TRY_BEGIN
     nsZipItem* item = mFiles[ HashName(aEntryName, len) ];
     while (item) {
-      if ((len == item->nameLength) && 
+      if ((len == item->nameLength) &&
           (!memcmp(aEntryName, item->Name(), len))) {
-        
+
         // Successful GetItem() is a good indicator that the file is about to be read
         zipLog.Write(mURI, aEntryName);
         return item; //-- found it
@@ -475,7 +472,6 @@ MOZ_WIN_MEM_TRY_CATCH(return nullptr)
 // This extracts the item to the filehandle provided.
 // If 'aFd' is null, it only tests the extraction.
 // On extraction error(s) it removes the file.
-// When needed, it also resolves the symlink.
 //---------------------------------------------
 nsresult nsZipArchive::ExtractFile(nsZipItem *item, const char *outname,
                                    PRFileDesc* aFd)
@@ -513,15 +509,11 @@ nsresult nsZipArchive::ExtractFile(nsZipItem *item, const char *outname,
     }
   }
 
-  //-- delete the file on errors, or resolve symlink if needed
+  //-- delete the file on errors
   if (aFd) {
     PR_Close(aFd);
     if (rv != NS_OK)
       PR_Delete(outname);
-#ifdef XP_UNIX
-    else if (item->IsSymlink())
-      rv = ResolveSymlink(outname);
-#endif
   }
 
   return rv;
@@ -628,30 +620,6 @@ MOZ_WIN_MEM_TRY_CATCH(return NS_ERROR_FAILURE)
   return NS_ERROR_FILE_TARGET_DOES_NOT_EXIST;
 }
 
-#ifdef XP_UNIX
-//---------------------------------------------
-// ResolveSymlink
-//---------------------------------------------
-static nsresult ResolveSymlink(const char *path)
-{
-  PRFileDesc * fIn = PR_Open(path, PR_RDONLY, 0000);
-  if (!fIn)
-    return NS_ERROR_FILE_DISK_FULL;
-
-  char buf[PATH_MAX+1];
-  int32_t length = PR_Read(fIn, (void*)buf, PATH_MAX);
-  PR_Close(fIn);
-
-  if ( (length <= 0)
-    || ((buf[length] = 0, PR_Delete(path)) != 0)
-    || (symlink(buf, path) != 0))
-  {
-     return NS_ERROR_FILE_DISK_FULL;
-  }
-  return NS_OK;
-}
-#endif
-
 //***********************************************************
 //      nsZipArchive  --  private implementation
 //***********************************************************
@@ -680,7 +648,9 @@ MOZ_WIN_MEM_TRY_BEGIN
     // Success means optimized jar layout from bug 559961 is in effect
     uint32_t readaheadLength = xtolong(startp);
     if (readaheadLength) {
-#if defined(XP_UNIX)
+#if defined(XP_SOLARIS)
+      posix_madvise(const_cast<uint8_t*>(startp), readaheadLength, POSIX_MADV_WILLNEED);
+#elif defined(XP_UNIX)
       madvise(const_cast<uint8_t*>(startp), readaheadLength, MADV_WILLNEED);
 #elif defined(XP_WIN)
       if (aFd) {
@@ -988,10 +958,10 @@ nsZipFind::~nsZipFind()
 // helper functions
 //------------------------------------------
 
-/* 
- * HashName 
+/*
+ * HashName
  *
- * returns a hash key for the entry name 
+ * returns a hash key for the entry name
  */
 static uint32_t HashName(const char* aName, uint16_t len)
 {
@@ -1158,14 +1128,6 @@ PRTime nsZipItem::LastModTime()
   return GetModTime(Date(), Time());
 }
 
-#ifdef XP_UNIX
-bool nsZipItem::IsSymlink()
-{
-  if (isSynthetic) return false;
-  return (xtoint(central->external_attributes+2) & S_IFMT) == S_IFLNK;
-}
-#endif
-
 nsZipCursor::nsZipCursor(nsZipItem *item, nsZipArchive *aZip, uint8_t* aBuf,
                          uint32_t aBufSize, bool doCRC)
   : mItem(item)
@@ -1185,16 +1147,16 @@ nsZipCursor::nsZipCursor(nsZipItem *item, nsZipArchive *aZip, uint8_t* aBuf,
     NS_ASSERTION(status == NS_OK, "Zlib failed to initialize");
     NS_ASSERTION(aBuf, "Must pass in a buffer for DEFLATED nsZipItem");
   }
-  
+
   mZs.avail_in = item->Size();
   mZs.next_in = (Bytef*)aZip->GetData(item);
 
 #ifdef MOZ_JAR_BROTLI
   if (mItem->Compression() == MOZ_JAR_BROTLI) {
-    mBrotliState = BrotliCreateState(nullptr, nullptr, nullptr);
+    mBrotliState = BrotliDecoderCreateInstance(nullptr, nullptr, nullptr);
   }
 #endif
-  
+
   if (doCRC)
     mCRC = crc32(0L, Z_NULL, 0);
 }
@@ -1206,7 +1168,7 @@ nsZipCursor::~nsZipCursor()
   }
 #ifdef MOZ_JAR_BROTLI
   if (mItem->Compression() == MOZ_JAR_BROTLI) {
-    BrotliDestroyState(mBrotliState);
+    BrotliDecoderDestroyInstance(mBrotliState);
   }
 #endif
 }
@@ -1237,11 +1199,11 @@ MOZ_WIN_MEM_TRY_BEGIN
     buf = mBuf;
     mZs.next_out = buf;
     mZs.avail_out = mBufSize;
-    
+
     zerr = inflate(&mZs, Z_PARTIAL_FLUSH);
     if (zerr != Z_OK && zerr != Z_STREAM_END)
       return nullptr;
-    
+
     *aBytesRead = mZs.next_out - buf;
     verifyCRC = (zerr == Z_STREAM_END);
     break;
@@ -1253,19 +1215,20 @@ MOZ_WIN_MEM_TRY_BEGIN
      * unsigned int for avail_*. So use temporary stack values. */
     size_t avail_out = mBufSize;
     size_t avail_in = mZs.avail_in;
-    BrotliResult result = BrotliDecompressStream(
+    BrotliDecoderResult result = BrotliDecoderDecompressStream(
+      mBrotliState,
       &avail_in, const_cast<const unsigned char**>(&mZs.next_in),
-      &avail_out, &mZs.next_out, nullptr, mBrotliState);
+      &avail_out, &mZs.next_out, nullptr);
     /* We don't need to update avail_out, it's not used outside this
      * function. */
     mZs.avail_in = avail_in;
 
-    if (result == BROTLI_RESULT_ERROR) {
+    if (result == BROTLI_DECODER_RESULT_ERROR) {
       return nullptr;
     }
 
     *aBytesRead = mZs.next_out - buf;
-    verifyCRC = (result == BROTLI_RESULT_SUCCESS);
+    verifyCRC = (result == BROTLI_DECODER_RESULT_SUCCESS);
     break;
   }
 #endif

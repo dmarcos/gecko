@@ -43,22 +43,18 @@ var quotesTest = {
     toolbar.containerOpen = true;
 
     // test for our quoted folder
-    do_check_true(toolbar.childCount, 1);
+    Assert.ok(toolbar.childCount, 1);
     var folderNode = toolbar.getChild(0);
-    do_check_eq(folderNode.type, folderNode.RESULT_TYPE_FOLDER);
-    do_check_eq(folderNode.title, this._folderTitle);
+    Assert.equal(folderNode.type, folderNode.RESULT_TYPE_FOLDER);
+    Assert.equal(folderNode.title, this._folderTitle);
 
     // clean up
     toolbar.containerOpen = false;
   }
-}
+};
 tests.push(quotesTest);
 
-function run_test() {
-  run_next_test();
-}
-
-add_task(function* () {
+add_task(async function() {
   // make json file
   let jsonFile = OS.Path.join(OS.Constants.Path.profileDir, "bookmarks.json");
 
@@ -70,7 +66,7 @@ add_task(function* () {
   });
 
   // export json to file
-  yield BookmarkJSONUtils.exportToFile(jsonFile);
+  await BookmarkJSONUtils.exportToFile(jsonFile);
 
   // clean
   tests.forEach(function(aTest) {
@@ -78,7 +74,7 @@ add_task(function* () {
   });
 
   // restore json file
-  yield BookmarkJSONUtils.importFromFile(jsonFile, true);
+  await BookmarkJSONUtils.importFromFile(jsonFile, true);
 
   // validate
   tests.forEach(function(aTest) {
@@ -86,6 +82,6 @@ add_task(function* () {
   });
 
   // clean up
-  yield OS.File.remove(jsonFile);
+  await OS.File.remove(jsonFile);
 
 });

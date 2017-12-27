@@ -20,8 +20,6 @@ from mach.decorators import (
     Command,
 )
 
-import reftestcommandline
-
 
 parser = None
 
@@ -78,6 +76,7 @@ class ReftestRunner(MozbuildObject):
 
         args.extraProfileFiles.append(os.path.join(self.topobjdir, "dist", "plugins"))
         args.symbolsPath = os.path.join(self.topobjdir, "crashreporter-symbols")
+        args.sandboxReadWhitelist.extend([self.topsrcdir, self.topobjdir])
 
         if not args.tests:
             args.tests = [os.path.join(*default_manifest[args.suite])]
@@ -137,8 +136,11 @@ class ReftestRunner(MozbuildObject):
         args.ignoreWindowSize = True
         args.printDeviceInfo = False
 
-        from mozrunner.devices.android_device import grant_runtime_permissions
+        from mozrunner.devices.android_device import grant_runtime_permissions, get_adb_path
         grant_runtime_permissions(self)
+
+        if not args.adb_path:
+            args.adb_path = get_adb_path(self)
 
         # A symlink and some path manipulations are required so that test
         # manifests can be found both locally and remotely (via a url)
@@ -182,6 +184,8 @@ def process_test_objects(kwargs):
 
 
 def get_parser():
+    import reftestcommandline
+
     global parser
     here = os.path.abspath(os.path.dirname(__file__))
     build_obj = MozbuildObject.from_environment(cwd=here)

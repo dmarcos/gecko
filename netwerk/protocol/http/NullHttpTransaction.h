@@ -9,6 +9,7 @@
 
 #include "nsAHttpTransaction.h"
 #include "mozilla/Attributes.h"
+#include "TimingStruct.h"
 
 // This is the minimal nsAHttpTransaction implementation. A NullHttpTransaction
 // can be used to drive connection level semantics (such as SSL handshakes
@@ -56,6 +57,19 @@ public:
   // creation and be never put in a pending queue, so it's OK to just return 0.
   uint64_t TopLevelOuterContentWindowId() override { return 0; }
 
+  TimingStruct Timings() { return mTimings; }
+
+  mozilla::TimeStamp GetTcpConnectEnd() { return mTimings.tcpConnectEnd; }
+  mozilla::TimeStamp GetSecureConnectionStart()
+  {
+    return mTimings.secureConnectionStart;
+  }
+
+  void SetFastOpenStatus(uint8_t aStatus) override
+  {
+    mFastOpenStatus = aStatus;
+  }
+
 protected:
   virtual ~NullHttpTransaction();
 
@@ -75,6 +89,8 @@ private:
   Atomic<uint32_t> mCapsToClear;
   bool mIsDone;
   bool mClaimed;
+  TimingStruct mTimings;
+  uint8_t mFastOpenStatus;
 
 protected:
   RefPtr<nsAHttpConnection> mConnection;

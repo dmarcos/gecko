@@ -11,37 +11,43 @@
     use properties::longhands::{mask_mode, mask_repeat, mask_clip, mask_origin, mask_composite, mask_position_x,
                                 mask_position_y};
     use properties::longhands::{mask_size, mask_image};
-    use values::specified::position::Position;
+    use values::specified::{Position, PositionComponent};
     use parser::Parse;
 
+    // FIXME(emilio): These two mask types should be the same!
     impl From<mask_origin::single_value::SpecifiedValue> for mask_clip::single_value::SpecifiedValue {
         fn from(origin: mask_origin::single_value::SpecifiedValue) -> mask_clip::single_value::SpecifiedValue {
             match origin {
-                mask_origin::single_value::SpecifiedValue::content_box =>
-                    mask_clip::single_value::SpecifiedValue::content_box,
-                mask_origin::single_value::SpecifiedValue::padding_box =>
-                    mask_clip::single_value::SpecifiedValue::padding_box,
-                mask_origin::single_value::SpecifiedValue::border_box =>
-                    mask_clip::single_value::SpecifiedValue::border_box,
+                mask_origin::single_value::SpecifiedValue::ContentBox =>
+                    mask_clip::single_value::SpecifiedValue::ContentBox,
+                mask_origin::single_value::SpecifiedValue::PaddingBox =>
+                    mask_clip::single_value::SpecifiedValue::PaddingBox ,
+                mask_origin::single_value::SpecifiedValue::BorderBox =>
+                    mask_clip::single_value::SpecifiedValue::BorderBox,
                 % if product == "gecko":
-                mask_origin::single_value::SpecifiedValue::fill_box =>
-                    mask_clip::single_value::SpecifiedValue::fill_box,
-                mask_origin::single_value::SpecifiedValue::stroke_box =>
-                    mask_clip::single_value::SpecifiedValue::stroke_box,
-                mask_origin::single_value::SpecifiedValue::view_box =>
-                    mask_clip::single_value::SpecifiedValue::view_box,
+                mask_origin::single_value::SpecifiedValue::FillBox =>
+                    mask_clip::single_value::SpecifiedValue::FillBox ,
+                mask_origin::single_value::SpecifiedValue::StrokeBox =>
+                    mask_clip::single_value::SpecifiedValue::StrokeBox,
+                mask_origin::single_value::SpecifiedValue::ViewBox=>
+                    mask_clip::single_value::SpecifiedValue::ViewBox,
                 % endif
             }
         }
     }
 
-    pub fn parse_value(context: &ParserContext, input: &mut Parser) -> Result<Longhands, ()> {
+    pub fn parse_value<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
+                               -> Result<Longhands, ParseError<'i>> {
         % for name in "image mode position_x position_y size repeat origin clip composite".split():
-            let mut mask_${name} = mask_${name}::SpecifiedValue(Vec::new());
+            // Vec grows from 0 to 4 by default on first push().  So allocate
+            // with capacity 1, so in the common case of only one item we don't
+            // way overallocate.  Note that we always push at least one item if
+            // parsing succeeds.
+            let mut mask_${name} = mask_${name}::SpecifiedValue(Vec::with_capacity(1));
         % endfor
 
-        try!(input.parse_comma_separated(|input| {
-            % for name in "image mode position_x position_y size repeat origin clip composite".split():
+        input.parse_comma_separated(|input| {
+            % for name in "image mode position size repeat origin clip composite".split():
                 let mut ${name} = None;
             % endfor
             loop {
@@ -52,14 +58,13 @@
                         continue
                     }
                 }
-                if position_x.is_none() && position_y.is_none() {
+                if position.is_none() {
                     if let Ok(value) = input.try(|input| Position::parse(context, input)) {
-                        position_x = Some(value.horizontal);
-                        position_y = Some(value.vertical);
+                        position = Some(value);
 
                         // Parse mask size, if applicable.
                         size = input.try(|input| {
-                            try!(input.expect_delim('/'));
+                            input.expect_delim('/')?;
                             mask_size::single_value::parse(context, input)
                         }).ok();
 
@@ -83,21 +88,16 @@
                 }
             }
             let mut any = false;
-            % for name in "image mode position_x position_y size repeat origin clip composite".split():
+            % for name in "image mode position size repeat origin clip composite".split():
                 any = any || ${name}.is_some();
             % endfor
             if any {
-                if position_x.is_some() || position_y.is_some() {
-                    % for name in "position_x position_y".split():
-                        if let Some(bg_${name}) = ${name} {
-                            mask_${name}.0.push(bg_${name});
-                        }
-                    % endfor
+                if let Some(position) = position {
+                    mask_position_x.0.push(position.horizontal);
+                    mask_position_y.0.push(position.vertical);
                 } else {
-                    % for name in "position_x position_y".split():
-                        mask_${name}.0.push(mask_${name}::single_value
-                                            ::get_initial_position_value());
-                    % endfor
+                    mask_position_x.0.push(PositionComponent::zero());
+                    mask_position_y.0.push(PositionComponent::zero());
                 }
                 % for name in "image mode size repeat origin clip composite".split():
                     if let Some(m_${name}) = ${name} {
@@ -109,11 +109,11 @@
                 % endfor
                 Ok(())
             } else {
-                Err(())
+                Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
             }
-        }));
+        })?;
 
-        Ok(Longhands {
+        Ok(expanded! {
             % for name in "image mode position_x position_y size repeat origin clip composite".split():
                 mask_${name}: mask_${name},
             % endfor
@@ -161,7 +161,7 @@
                 dest.write_str(" ")?;
                 repeat.to_css(dest)?;
 
-                if *origin != Origin::border_box || *clip != Clip::border_box {
+                if *origin != Origin::BorderBox || *clip != Clip::BorderBox {
                     dest.write_str(" ")?;
                     origin.to_css(dest)?;
                     if *clip != From::from(*origin) {
@@ -186,28 +186,28 @@
     use values::specified::position::Position;
     use parser::Parse;
 
-    pub fn parse_value(context: &ParserContext, input: &mut Parser) -> Result<Longhands, ()> {
-        let mut position_x = mask_position_x::SpecifiedValue(Vec::new());
-        let mut position_y = mask_position_y::SpecifiedValue(Vec::new());
+    pub fn parse_value<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
+                               -> Result<Longhands, ParseError<'i>> {
+        // Vec grows from 0 to 4 by default on first push().  So allocate with
+        // capacity 1, so in the common case of only one item we don't way
+        // overallocate.  Note that we always push at least one item if parsing
+        // succeeds.
+        let mut position_x = mask_position_x::SpecifiedValue(Vec::with_capacity(1));
+        let mut position_y = mask_position_y::SpecifiedValue(Vec::with_capacity(1));
         let mut any = false;
 
-        try!(input.parse_comma_separated(|input| {
-            loop {
-                if let Ok(value) = input.try(|input| Position::parse(context, input)) {
-                    position_x.0.push(value.horizontal);
-                    position_y.0.push(value.vertical);
-                    any = true;
-                    continue
-                }
-                break
-            }
+        input.parse_comma_separated(|input| {
+            let value = Position::parse(context, input)?;
+            position_x.0.push(value.horizontal);
+            position_y.0.push(value.vertical);
+            any = true;
             Ok(())
-        }));
+        })?;
         if any == false {
-            return Err(());
+            return Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError));
         }
 
-        Ok(Longhands {
+        Ok(expanded! {
             mask_position_x: position_x,
             mask_position_y: position_y,
         })

@@ -4,23 +4,40 @@
 
 "use strict";
 
-const { addons, createClass, DOM: dom, PropTypes } =
-  require("devtools/client/shared/vendor/react");
+const { PureComponent } = require("devtools/client/shared/vendor/react");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
 
 const Types = require("../types");
 const { getStr } = require("../utils/l10n");
 
-module.exports = createClass({
+class GridDisplaySettings extends PureComponent {
+  static get propTypes() {
+    return {
+      highlighterSettings: PropTypes.shape(Types.highlighterSettings).isRequired,
+      onToggleShowGridAreas: PropTypes.func.isRequired,
+      onToggleShowGridLineNumbers: PropTypes.func.isRequired,
+      onToggleShowInfiniteLines: PropTypes.func.isRequired,
+    };
+  }
 
-  displayName: "GridDisplaySettings",
+  constructor(props) {
+    super(props);
+    this.onShowGridAreasCheckboxClick = this.onShowGridAreasCheckboxClick.bind(this);
+    this.onShowGridLineNumbersCheckboxClick =
+      this.onShowGridLineNumbersCheckboxClick.bind(this);
+    this.onShowInfiniteLinesCheckboxClick =
+      this.onShowInfiniteLinesCheckboxClick.bind(this);
+  }
 
-  propTypes: {
-    highlighterSettings: PropTypes.shape(Types.highlighterSettings).isRequired,
-    onToggleShowGridLineNumbers: PropTypes.func.isRequired,
-    onToggleShowInfiniteLines: PropTypes.func.isRequired,
-  },
+  onShowGridAreasCheckboxClick() {
+    let {
+      highlighterSettings,
+      onToggleShowGridAreas,
+    } = this.props;
 
-  mixins: [ addons.PureRenderMixin ],
+    onToggleShowGridAreas(!highlighterSettings.showGridAreasOverlay);
+  }
 
   onShowGridLineNumbersCheckboxClick() {
     let {
@@ -29,7 +46,7 @@ module.exports = createClass({
     } = this.props;
 
     onToggleShowGridLineNumbers(!highlighterSettings.showGridLineNumbers);
-  },
+  }
 
   onShowInfiniteLinesCheckboxClick() {
     let {
@@ -38,7 +55,7 @@ module.exports = createClass({
     } = this.props;
 
     onToggleShowInfiniteLines(!highlighterSettings.showInfiniteLines);
-  },
+  }
 
   render() {
     let {
@@ -63,12 +80,30 @@ module.exports = createClass({
             {},
             dom.input(
               {
+                id: "grid-setting-show-grid-line-numbers",
                 type: "checkbox",
-                checked: highlighterSettings.showInfiniteLines,
-                onChange: this.onShowInfiniteLinesCheckboxClick,
+                checked: highlighterSettings.showGridLineNumbers,
+                onChange: this.onShowGridLineNumbersCheckboxClick,
               }
             ),
-            getStr("layout.extendGridLinesInfinitely")
+            getStr("layout.displayLineNumbers")
+          )
+        ),
+        dom.li(
+          {
+            className: "grid-settings-item",
+          },
+          dom.label(
+           {},
+           dom.input(
+             {
+               id: "grid-setting-show-grid-areas",
+               type: "checkbox",
+               checked: highlighterSettings.showGridAreasOverlay,
+               onChange: this.onShowGridAreasCheckboxClick,
+             }
+           ),
+           getStr("layout.displayAreaNames")
           )
         ),
         dom.li(
@@ -79,16 +114,18 @@ module.exports = createClass({
             {},
             dom.input(
               {
+                id: "grid-setting-extend-grid-lines",
                 type: "checkbox",
-                checked: highlighterSettings.showGridLineNumbers,
-                onChange: this.onShowGridLineNumbersCheckboxClick,
+                checked: highlighterSettings.showInfiniteLines,
+                onChange: this.onShowInfiniteLinesCheckboxClick,
               }
             ),
-            getStr("layout.displayNumbersOnLines")
+            getStr("layout.extendLinesInfinitely")
           )
         )
       )
     );
-  },
+  }
+}
 
-});
+module.exports = GridDisplaySettings;

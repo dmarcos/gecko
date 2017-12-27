@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -40,20 +41,32 @@ class RuleNodeCacheConditions
 {
 public:
   RuleNodeCacheConditions()
-    : mFontSize(0), mBits(0) {}
+    : mFontSize(0)
+    , mBits(0)
+    , mWritingMode(0)
+  {}
+
   RuleNodeCacheConditions(const RuleNodeCacheConditions& aOther)
-    : mFontSize(aOther.mFontSize), mBits(aOther.mBits) {}
+    : mFontSize(aOther.mFontSize)
+    , mBits(aOther.mBits)
+    , mWritingMode(aOther.mWritingMode)
+  {}
+
   RuleNodeCacheConditions& operator=(const RuleNodeCacheConditions& aOther)
   {
     mFontSize = aOther.mFontSize;
     mBits = aOther.mBits;
+    mWritingMode = aOther.mWritingMode;
     return *this;
   }
+
   bool operator==(const RuleNodeCacheConditions& aOther) const
   {
     return mFontSize == aOther.mFontSize &&
-           mBits == aOther.mBits;
+           mBits == aOther.mBits &&
+           mWritingMode == aOther.mWritingMode;
   }
+
   bool operator!=(const RuleNodeCacheConditions& aOther) const
   {
     return !(*this == aOther);
@@ -85,14 +98,19 @@ public:
    */
   void SetWritingModeDependency(uint8_t aWritingMode)
   {
-    MOZ_ASSERT(!(mBits & eHaveWritingMode) || GetWritingMode() == aWritingMode);
-    mBits |= (static_cast<uint64_t>(aWritingMode) << eWritingModeShift) |
-             eHaveWritingMode;
+    MOZ_ASSERT(!(mBits & eHaveWritingMode) || mWritingMode == aWritingMode);
+    mWritingMode = aWritingMode;
+    mBits |= eHaveWritingMode;
   }
 
   void SetUncacheable()
   {
     mBits |= eUncacheable;
+  }
+
+  void Clear()
+  {
+    *this = RuleNodeCacheConditions();
   }
 
   bool Cacheable() const
@@ -102,15 +120,14 @@ public:
 
   bool CacheableWithDependencies() const
   {
-    return !(mBits & eUncacheable) &&
-           (mBits & eHaveBitsMask) != 0;
+    return Cacheable() && mBits;
   }
 
   bool CacheableWithoutDependencies() const
   {
     // We're not uncacheable and we have don't have a font-size or
     // writing mode value.
-    return (mBits & eHaveBitsMask) == 0;
+    return mBits == 0;
   }
 
 #ifdef DEBUG
@@ -119,19 +136,10 @@ public:
 
 private:
   enum {
-    eUncacheable      = 0x0001,
-    eHaveFontSize     = 0x0002,
-    eHaveWritingMode  = 0x0004,
-    eHaveBitsMask     = 0x00ff,
-    eWritingModeMask  = 0xff00,
-    eWritingModeShift = 8,
+    eUncacheable      = 1 << 0,
+    eHaveFontSize     = 1 << 1,
+    eHaveWritingMode  = 1 << 2,
   };
-
-  uint8_t GetWritingMode() const
-  {
-    return static_cast<uint8_t>(
-        (mBits & eWritingModeMask) >> eWritingModeShift);
-  }
 
   // The font size from which em units are derived.
   nscoord mFontSize;
@@ -140,10 +148,8 @@ private:
   //   bit 0:      are we set to "uncacheable"?
   //   bit 1:      do we have a font size value?
   //   bit 2:      do we have a writing mode value?
-  //   bits 3-7:   unused
-  //   bits 8-15:  writing mode (uint8_t)
-  //   bits 16-31: unused
-  uint32_t mBits;
+  uint8_t mBits;
+  uint8_t mWritingMode;
 };
 
 } // namespace mozilla

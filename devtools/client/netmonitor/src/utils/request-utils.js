@@ -6,6 +6,10 @@
 
 "use strict";
 
+const {
+  UPDATE_PROPS,
+} = require("devtools/client/netmonitor/src/constants");
+
 const CONTENT_MIME_TYPE_ABBREVIATIONS = {
   "ecmascript": "js",
   "javascript": "js",
@@ -66,6 +70,30 @@ async function fetchHeaders(headers, getLongString) {
 }
 
 /**
+ * Fetch network event update packets from actor server
+ * Expect to fetch a couple of network update packets from a given request.
+ *
+ * @param {function} requestData - requestData function for lazily fetch data
+ * @param {object} request - request object
+ * @param {array} updateTypes - a list of network event update types
+ */
+function fetchNetworkUpdatePacket(requestData, request, updateTypes) {
+  updateTypes.forEach((updateType) => {
+    // Only stackTrace will be handled differently
+    if (updateType === "stackTrace") {
+      if (request.cause.stacktraceAvailable && !request.stacktrace) {
+        requestData(request.id, updateType);
+      }
+      return;
+    }
+
+    if (request[`${updateType}Available`] && !request[updateType]) {
+      requestData(request.id, updateType);
+    }
+  });
+}
+
+/**
  * Form a data: URI given a mime type, encoding, and some text.
  *
  * @param {string} mimeType - mime type
@@ -109,6 +137,21 @@ function decodeUnicodeUrl(string) {
 }
 
 /**
+ * Decode base64 string.
+ *
+ * @param {string} url - a string
+ * @return {string} decoded string
+ */
+function decodeUnicodeBase64(string) {
+  try {
+    return decodeURIComponent(atob(string));
+  } catch (err) {
+    // Ignore error and return input string directly.
+  }
+  return string;
+}
+
+/**
  * Helper for getting an abbreviated string for a mime type.
  *
  * @param {string} mimeType - mime type
@@ -143,7 +186,7 @@ function getUrlBaseName(url) {
  * @return {string} unicode query of a url
  */
 function getUrlQuery(url) {
-  return decodeUnicodeUrl((new URL(url)).search.replace(/^\?/, ""));
+  return (new URL(url)).search.replace(/^\?/, "");
 }
 
 /**
@@ -177,6 +220,17 @@ function getUrlHost(url) {
 }
 
 /**
+ * Helpers for getting the shceme portion of a url.
+ * For example helper returns "http" from http://domain.com/path/basename
+ *
+ * @param {string} url - url string
+ * @return {string} string scheme of a url
+ */
+function getUrlScheme(url) {
+  return (new URL(url)).protocol.replace(":", "").toLowerCase();
+}
+
+/**
  * Extract several details fields from a URL at once.
  */
 function getUrlDetails(url) {
@@ -184,6 +238,7 @@ function getUrlDetails(url) {
   let host = getUrlHost(url);
   let hostname = getUrlHostName(url);
   let unicodeUrl = decodeUnicodeUrl(url);
+  let scheme = getUrlScheme(url);
 
   // Mark local hosts specially, where "local" is  as defined in the W3C
   // spec for secure contexts.
@@ -202,6 +257,7 @@ function getUrlDetails(url) {
   return {
     baseNameWithQuery,
     host,
+    scheme,
     unicodeUrl,
     isLocal
   };
@@ -288,21 +344,174 @@ function propertiesEqual(props, item1, item2) {
   return item1 === item2 || props.every(p => item1[p] === item2[p]);
 }
 
+/**
+ * Calculate the start time of a request, which is the time from start
+ * of 1st request until the start of this request.
+ *
+ * Without a firstRequestStartedMillis argument the wrong time will be returned.
+ * However, it can be omitted when comparing two start times and neither supplies
+ * a firstRequestStartedMillis.
+ */
+function getStartTime(item, firstRequestStartedMillis = 0) {
+  return item.startedMillis - firstRequestStartedMillis;
+}
+
+/**
+ * Calculate the end time of a request, which is the time from start
+ * of 1st request until the end of this response.
+ *
+ * Without a firstRequestStartedMillis argument the wrong time will be returned.
+ * However, it can be omitted when comparing two end times and neither supplies
+ * a firstRequestStartedMillis.
+ */
+function getEndTime(item, firstRequestStartedMillis = 0) {
+  let { startedMillis, totalTime } = item;
+  return startedMillis + totalTime - firstRequestStartedMillis;
+}
+
+/**
+ * Calculate the response time of a request, which is the time from start
+ * of 1st request until the beginning of download of this response.
+ *
+ * Without a firstRequestStartedMillis argument the wrong time will be returned.
+ * However, it can be omitted when comparing two response times and neither supplies
+ * a firstRequestStartedMillis.
+ */
+function getResponseTime(item, firstRequestStartedMillis = 0) {
+  let { startedMillis, totalTime, eventTimings = { timings: {} } } = item;
+  return startedMillis + totalTime - firstRequestStartedMillis -
+    eventTimings.timings.receive;
+}
+
+/**
+ * Format the protocols used by the request.
+ */
+function getFormattedProtocol(item) {
+  let { httpVersion = "", responseHeaders = { headers: [] } } = item;
+  let protocol = [httpVersion];
+  responseHeaders.headers.some(h => {
+    if (h.hasOwnProperty("name") && h.name.toLowerCase() === "x-firefox-spdy") {
+      protocol.push(h.value);
+      return true;
+    }
+    return false;
+  });
+  return protocol.join("+");
+}
+
+/**
+ * Get the value of a particular response header, or null if not
+ * present.
+ */
+function getResponseHeader(item, header) {
+  let { responseHeaders } = item;
+  if (!responseHeaders || !responseHeaders.headers.length) {
+    return null;
+  }
+  header = header.toLowerCase();
+  for (let responseHeader of responseHeaders.headers) {
+    if (responseHeader.name.toLowerCase() == header) {
+      return responseHeader.value;
+    }
+  }
+  return null;
+}
+
+/**
+ * Extracts any urlencoded form data sections from a POST request.
+ */
+async function updateFormDataSections(props) {
+  let {
+    connector,
+    request = {},
+    updateRequest,
+  } = props;
+  let {
+    id,
+    formDataSections,
+    requestHeaders,
+    requestHeadersAvailable,
+    requestHeadersFromUploadStream,
+    requestPostData,
+    requestPostDataAvailable,
+  } = request;
+
+  if (requestHeadersAvailable && !requestHeaders) {
+    requestHeaders = await connector.requestData(id, "requestHeaders");
+  }
+
+  if (requestPostDataAvailable && !requestPostData) {
+    requestPostData = await connector.requestData(id, "requestPostData");
+  }
+
+  if (!formDataSections && requestHeaders && requestPostData &&
+      requestHeadersFromUploadStream) {
+    formDataSections = await getFormDataSections(
+      requestHeaders,
+      requestHeadersFromUploadStream,
+      requestPostData,
+      connector.getLongString,
+    );
+
+    updateRequest(request.id, { formDataSections }, true);
+  }
+}
+
+/**
+ * This helper function is used for additional processing of
+ * incoming network update packets. It's used by Network and
+ * Console panel reducers.
+ */
+function processNetworkUpdates(request = {}) {
+  let result = {};
+  for (let [key, value] of Object.entries(request)) {
+    if (UPDATE_PROPS.includes(key)) {
+      result[key] = value;
+
+      switch (key) {
+        case "securityInfo":
+          result.securityState = value.state;
+          break;
+        case "totalTime":
+          result.totalTime = request.totalTime;
+          break;
+        case "requestPostData":
+          result.requestHeadersFromUploadStream = {
+            headers: [],
+            headersSize: 0,
+          };
+          break;
+      }
+    }
+  }
+  return result;
+}
+
 module.exports = {
+  decodeUnicodeBase64,
   getFormDataSections,
   fetchHeaders,
+  fetchNetworkUpdatePacket,
   formDataURI,
   writeHeaderText,
   decodeUnicodeUrl,
   getAbbreviatedMimeType,
+  getEndTime,
+  getFormattedProtocol,
+  getResponseHeader,
+  getResponseTime,
+  getStartTime,
   getUrlBaseName,
-  getUrlQuery,
   getUrlBaseNameWithQuery,
-  getUrlHostName,
-  getUrlHost,
   getUrlDetails,
+  getUrlHost,
+  getUrlHostName,
+  getUrlQuery,
+  getUrlScheme,
   parseQueryString,
   parseFormData,
+  updateFormDataSections,
+  processNetworkUpdates,
   propertiesEqual,
   ipToLong,
 };

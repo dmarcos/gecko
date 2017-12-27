@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* eslint-env mozilla/frame-script */
+/* global sendAsyncMessage */
 
 var Cc = Components.classes;
 var Ci = Components.interfaces;
@@ -19,6 +20,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
   "resource://gre/modules/BrowserUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "SelectContentHelper",
   "resource://gre/modules/SelectContentHelper.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "FindContent",
+  "resource://gre/modules/FindContent.jsm");
 
 var global = this;
 
@@ -38,6 +41,8 @@ var ClickEventHandler = {
     this._screenX = null;
     this._screenY = null;
     this._lastFrame = null;
+    this._autoscrollHandledByApz = false;
+    this._scrollId = null;
     this.autoscrollLoop = this.autoscrollLoop.bind(this);
 
     Services.els.addSystemEventListener(global, "mousedown", this, true);
@@ -70,44 +75,90 @@ var ClickEventHandler = {
     return false;
   },
 
+  isScrollableElement(aNode) {
+    if (aNode instanceof content.HTMLElement) {
+      return !(aNode instanceof content.HTMLSelectElement) || aNode.multiple;
+    }
+
+    return aNode instanceof content.XULElement;
+  },
+
+  getXBLNodes(parent, array) {
+    let anonNodes = content.document.getAnonymousNodes(parent);
+    let nodes = Array.from(anonNodes || parent.childNodes || []);
+    for (let node of nodes) {
+      if (node.nodeName == "children") {
+        return true;
+      }
+      if (this.getXBLNodes(node, array)) {
+        array.push(node);
+        return true;
+      }
+    }
+    return false;
+  },
+
+  * parentNodeIterator(aNode) {
+    while (aNode) {
+      yield aNode;
+
+      let parent = aNode.parentNode;
+      if (parent && parent instanceof content.XULElement) {
+        let anonNodes = content.document.getAnonymousNodes(parent);
+        if (anonNodes && !Array.from(anonNodes).includes(aNode)) {
+          // XBL elements are skipped by parentNode property.
+          // Yield elements between parent and <children> here.
+          let nodes = [];
+          this.getXBLNodes(parent, nodes);
+          for (let node of nodes) {
+            yield node;
+          }
+        }
+      }
+
+      aNode = parent;
+    }
+  },
+
   findNearestScrollableElement(aNode) {
     // this is a list of overflow property values that allow scrolling
     const scrollingAllowed = ["scroll", "auto"];
 
     // go upward in the DOM and find any parent element that has a overflow
     // area and can therefore be scrolled
-    for (this._scrollable = aNode; this._scrollable;
-         this._scrollable = this._scrollable.parentNode) {
+    this._scrollable = null;
+    for (let node of this.parentNodeIterator(aNode)) {
       // do not use overflow based autoscroll for <html> and <body>
-      // Elements or non-html elements such as svg or Document nodes
+      // Elements or non-html/non-xul elements such as svg or Document nodes
       // also make sure to skip select elements that are not multiline
-      if (!(this._scrollable instanceof content.HTMLElement) ||
-          ((this._scrollable instanceof content.HTMLSelectElement) && !this._scrollable.multiple)) {
+      if (!this.isScrollableElement(node)) {
         continue;
       }
 
-      var overflowx = this._scrollable.ownerGlobal
-                          .getComputedStyle(this._scrollable)
+      var overflowx = node.ownerGlobal
+                          .getComputedStyle(node)
                           .getPropertyValue("overflow-x");
-      var overflowy = this._scrollable.ownerGlobal
-                          .getComputedStyle(this._scrollable)
+      var overflowy = node.ownerGlobal
+                          .getComputedStyle(node)
                           .getPropertyValue("overflow-y");
       // we already discarded non-multiline selects so allow vertical
       // scroll for multiline ones directly without checking for a
       // overflow property
-      var scrollVert = this._scrollable.scrollTopMax &&
-        (this._scrollable instanceof content.HTMLSelectElement ||
+      var scrollVert = node.scrollTopMax &&
+        (node instanceof content.HTMLSelectElement ||
          scrollingAllowed.indexOf(overflowy) >= 0);
 
       // do not allow horizontal scrolling for select elements, it leads
       // to visual artifacts and is not the expected behavior anyway
-      if (!(this._scrollable instanceof content.HTMLSelectElement) &&
-          this._scrollable.scrollLeftMin != this._scrollable.scrollLeftMax &&
+      if (!(node instanceof content.HTMLSelectElement) &&
+          node.scrollLeftMin != node.scrollLeftMax &&
           scrollingAllowed.indexOf(overflowx) >= 0) {
         this._scrolldir = scrollVert ? "NSEW" : "EW";
+        this._scrollable = node;
         break;
       } else if (scrollVert) {
         this._scrolldir = "NS";
+        this._scrollable = node;
         break;
       }
     }
@@ -134,11 +185,33 @@ var ClickEventHandler = {
     if (!this._scrollable)
       return;
 
-    let [enabled] = sendSyncMessage("Autoscroll:Start",
-                                    {scrolldir: this._scrolldir,
-                                     screenX: event.screenX,
-                                     screenY: event.screenY});
-    if (!enabled) {
+    // In some configurations like Print Preview, content.performance
+    // (which we use below) is null. Autoscrolling is broken in Print
+    // Preview anyways (see bug 1393494), so just don't start it at all.
+    if (!content.performance)
+      return;
+
+    let domUtils = content.QueryInterface(Ci.nsIInterfaceRequestor)
+                          .getInterface(Ci.nsIDOMWindowUtils);
+    let scrollable = this._scrollable;
+    if (scrollable instanceof Ci.nsIDOMWindow) {
+      // getViewId() needs an element to operate on.
+      scrollable = scrollable.document.documentElement;
+    }
+    this._scrollId = null;
+    try {
+      this._scrollId = domUtils.getViewId(scrollable);
+    } catch (e) {
+      // No view ID - leave this._scrollId as null. Receiving side will check.
+    }
+    let presShellId = domUtils.getPresShellId();
+    let [result] = sendSyncMessage("Autoscroll:Start",
+                                   {scrolldir: this._scrolldir,
+                                    screenX: event.screenX,
+                                    screenY: event.screenY,
+                                    scrollId: this._scrollId,
+                                    presShellId});
+    if (!result.autoscrollEnabled) {
       this._scrollable = null;
       return;
     }
@@ -153,8 +226,22 @@ var ClickEventHandler = {
     this._screenY = event.screenY;
     this._scrollErrorX = 0;
     this._scrollErrorY = 0;
-    this._lastFrame = content.performance.now();
+    this._autoscrollHandledByApz = result.usingApz;
 
+    if (!result.usingApz) {
+      // If the browser didn't hand the autoscroll off to APZ,
+      // scroll here in the main thread.
+      this.startMainThreadScroll();
+    } else {
+      // Even if the browser did hand the autoscroll to APZ,
+      // APZ might reject it in which case it will notify us
+      // and we need to take over.
+      Services.obs.addObserver(this, "autoscroll-rejected-by-apz");
+    }
+  },
+
+  startMainThreadScroll() {
+    this._lastFrame = content.performance.now();
     content.requestAnimationFrame(this.autoscrollLoop);
   },
 
@@ -165,6 +252,9 @@ var ClickEventHandler = {
 
       Services.els.removeSystemEventListener(global, "mousemove", this, true);
       removeEventListener("pagehide", this, true);
+      if (this._autoscrollHandledByApz) {
+        Services.obs.removeObserver(this, "autoscroll-rejected-by-apz");
+      }
     }
   },
 
@@ -216,7 +306,7 @@ var ClickEventHandler = {
       this._scrollErrorX = (desiredScrollX - actualScrollX);
     }
 
-    const kAutoscroll = 15;  // defined in mozilla/layers/ScrollInputMethods.h
+    const kAutoscroll = 15; // defined in mozilla/layers/ScrollInputMethods.h
     Services.telemetry.getHistogramById("SCROLL_INPUT_METHODS").add(kAutoscroll);
 
     this._scrollable.scrollBy({
@@ -224,6 +314,7 @@ var ClickEventHandler = {
       top: actualScrollY,
       behavior: "instant"
     });
+
     content.requestAnimationFrame(this.autoscrollLoop);
   },
 
@@ -255,6 +346,17 @@ var ClickEventHandler = {
       case "Autoscroll:Stop": {
         this.stopScroll();
         break;
+      }
+    }
+  },
+
+  observe(subject, topic, data) {
+    if (topic === "autoscroll-rejected-by-apz") {
+      // The caller passes in the scroll id via 'data'.
+      if (data == this._scrollId) {
+        this._autoscrollHandledByApz = false;
+        this.startMainThreadScroll();
+        Services.obs.removeObserver(this, "autoscroll-rejected-by-apz");
       }
     }
   },
@@ -307,7 +409,7 @@ var PopupBlocking = {
           } else {
             // Limit 500 chars to be sent because the URI will be cropped
             // by the UI anyway, and data: URIs can be significantly larger.
-            popupWindowURIspec = popupWindowURIspec.substring(0, 500)
+            popupWindowURIspec = popupWindowURIspec.substring(0, 500);
           }
 
           popupData.push({popupWindowURIspec});
@@ -324,17 +426,17 @@ var PopupBlocking = {
       case "DOMPopupBlocked":
         return this.onPopupBlocked(ev);
       case "pageshow":
-        return this.onPageShow(ev);
+        return this._removeIrrelevantPopupData();
       case "pagehide":
-        return this.onPageHide(ev);
+        return this._removeIrrelevantPopupData(ev.target);
     }
     return undefined;
   },
 
   onPopupBlocked(ev) {
     if (!this.popupData) {
-      this.popupData = new Array();
-      this.popupDataInternal = new Array();
+      this.popupData = [];
+      this.popupDataInternal = [];
     }
 
     let obj = {
@@ -353,14 +455,15 @@ var PopupBlocking = {
     this.updateBlockedPopups(true);
   },
 
-  onPageShow(ev) {
+  _removeIrrelevantPopupData(removedDoc = null) {
     if (this.popupData) {
       let i = 0;
+      let oldLength = this.popupData.length;
       while (i < this.popupData.length) {
+        let {requestingWindow, requestingDocument} = this.popupDataInternal[i];
         // Filter out irrelevant reports.
-        if (this.popupDataInternal[i].requestingWindow &&
-            (this.popupDataInternal[i].requestingWindow.document ==
-             this.popupDataInternal[i].requestingDocument)) {
+        if (requestingWindow && requestingWindow.document == requestingDocument &&
+            requestingDocument != removedDoc) {
           i++;
         } else {
           this.popupData.splice(i, 1);
@@ -371,15 +474,9 @@ var PopupBlocking = {
         this.popupData = null;
         this.popupDataInternal = null;
       }
-      this.updateBlockedPopups(false);
-    }
-  },
-
-  onPageHide(ev) {
-    if (this.popupData) {
-      this.popupData = null;
-      this.popupDataInternal = null;
-      this.updateBlockedPopups(false);
+      if (!this.popupData || oldLength > this.popupData.length) {
+        this.updateBlockedPopups(false);
+      }
     }
   },
 
@@ -400,7 +497,7 @@ XPCOMUtils.defineLazyGetter(this, "console", () => {
 });
 
 var Printing = {
-  // Bug 1088061: nsPrintEngine's DoCommonPrint currently expects the
+  // Bug 1088061: nsPrintJob's DoCommonPrint currently expects the
   // progress listener passed to it to QI to an nsIPrintingPromptService
   // in order to know that a printing progress dialog has been shown. That's
   // really all the interface is used for, hence the fact that I don't actually
@@ -414,13 +511,13 @@ var Printing = {
     "Printing:Preview:Exit",
     "Printing:Preview:Navigate",
     "Printing:Preview:ParseDocument",
-    "Printing:Preview:UpdatePageCount",
     "Printing:Print",
   ],
 
   init() {
     this.MESSAGES.forEach(msgName => addMessageListener(msgName, this));
     addEventListener("PrintingError", this, true);
+    addEventListener("printPreviewUpdate", this, true);
   },
 
   get shouldSavePrintSettings() {
@@ -428,16 +525,49 @@ var Printing = {
            Services.prefs.getBoolPref("print.save_print_settings");
   },
 
+  printPreviewInitializingInfo: null,
+
   handleEvent(event) {
-    if (event.type == "PrintingError") {
-      let win = event.target.defaultView;
-      let wbp = win.QueryInterface(Ci.nsIInterfaceRequestor)
-                   .getInterface(Ci.nsIWebBrowserPrint);
-      let nsresult = event.detail;
-      sendAsyncMessage("Printing:Error", {
-        isPrinting: wbp.doingPrint,
-        nsresult,
-      });
+    switch (event.type) {
+      case "PrintingError": {
+        let win = event.target.defaultView;
+        let wbp = win.QueryInterface(Ci.nsIInterfaceRequestor)
+                     .getInterface(Ci.nsIWebBrowserPrint);
+        let nsresult = event.detail;
+        sendAsyncMessage("Printing:Error", {
+          isPrinting: wbp.doingPrint,
+          nsresult,
+        });
+        break;
+      }
+
+      case "printPreviewUpdate": {
+        let info = this.printPreviewInitializingInfo;
+        if (!info) {
+          // If there is no printPreviewInitializingInfo then we did not
+          // initiate the preview so ignore this event.
+          return;
+        }
+
+        // Only send Printing:Preview:Entered message on first update, indicated
+        // by printPreviewInitializingInfo.entered not being set.
+        if (!info.entered) {
+          info.entered = true;
+          sendAsyncMessage("Printing:Preview:Entered", {
+            failed: false,
+            changingBrowsers: info.changingBrowsers
+          });
+
+          // If we have another request waiting, dispatch it now.
+          if (info.nextRequest) {
+            Services.tm.dispatchToMainThread(info.nextRequest);
+          }
+        }
+
+        // Always send page count update.
+        this.updatePageCount();
+        break;
+      }
     }
   },
 
@@ -445,7 +575,7 @@ var Printing = {
     let data = message.data;
     switch (message.name) {
       case "Printing:Preview:Enter": {
-        this.enterPrintPreview(Services.wm.getOuterWindowWithId(data.windowID), data.simplifiedMode, data.defaultPrinterName);
+        this.enterPrintPreview(Services.wm.getOuterWindowWithId(data.windowID), data.simplifiedMode, data.changingBrowsers, data.defaultPrinterName);
         break;
       }
 
@@ -461,11 +591,6 @@ var Printing = {
 
       case "Printing:Preview:ParseDocument": {
         this.parseDocument(data.URL, Services.wm.getOuterWindowWithId(data.windowID));
-        break;
-      }
-
-      case "Printing:Preview:UpdatePageCount": {
-        this.updatePageCount();
         break;
       }
 
@@ -598,12 +723,6 @@ var Printing = {
       contentElement.setAttribute("class", "content");
       containerElement.appendChild(contentElement);
 
-      // Create style element for content div and import aboutReaderContent.css
-      let controlContentStyle = content.document.createElement("style");
-      controlContentStyle.setAttribute("scoped", "");
-      controlContentStyle.textContent = "@import url(\"chrome://global/skin/aboutReaderContent.css\");";
-      contentElement.appendChild(controlContentStyle);
-
       // Jam the article's content into content div
       let readerContent = content.document.createElement("div");
       readerContent.setAttribute("id", "moz-reader-content");
@@ -622,28 +741,7 @@ var Printing = {
     });
   },
 
-  enterPrintPreview(contentWindow, simplifiedMode, defaultPrinterName) {
-    // We'll call this whenever we've finished reflowing the document, or if
-    // we errored out while attempting to print preview (in which case, we'll
-    // notify the parent that we've failed).
-    let notifyEntered = (error) => {
-      removeEventListener("printPreviewUpdate", onPrintPreviewReady);
-      sendAsyncMessage("Printing:Preview:Entered", {
-        failed: !!error,
-      });
-    };
-
-    let onPrintPreviewReady = () => {
-      notifyEntered();
-    };
-
-    // We have to wait for the print engine to finish reflowing all of the
-    // documents and subdocuments before we can tell the parent to flip to
-    // the print preview UI - otherwise, the print preview UI might ask for
-    // information (like the number of pages in the document) before we have
-    // our PresShells set up.
-    addEventListener("printPreviewUpdate", onPrintPreviewReady);
-
+  enterPrintPreview(contentWindow, simplifiedMode, changingBrowsers, defaultPrinterName) {
     try {
       let printSettings = this.getPrintSettings(defaultPrinterName);
 
@@ -653,28 +751,42 @@ var Printing = {
       if (printSettings && simplifiedMode)
         printSettings.docURL = contentWindow.document.baseURI;
 
-      // The print preview docshell will be in a different TabGroup,
-      // so we run it in a separate runnable to avoid touching a
-      // different TabGroup in our own runnable.
-      Services.tm.dispatchToMainThread(() => {
+      // The print preview docshell will be in a different TabGroup, so
+      // printPreviewInitialize must be run in a separate runnable to avoid
+      // touching a different TabGroup in our own runnable.
+      let printPreviewInitialize = () => {
         try {
+          this.printPreviewInitializingInfo = { changingBrowsers };
           docShell.printPreview.printPreview(printSettings, contentWindow, this);
         } catch (error) {
           // This might fail if we, for example, attempt to print a XUL document.
           // In that case, we inform the parent to bail out of print preview.
           Components.utils.reportError(error);
-          notifyEntered(error);
+          this.printPreviewInitializingInfo = null;
+          sendAsyncMessage("Printing:Preview:Entered", { failed: true });
         }
-      });
+      };
+
+      // If printPreviewInitializingInfo.entered is not set we are still in the
+      // initial setup of a previous preview request. We delay this one until
+      // that has finished because running them at the same time will almost
+      // certainly cause failures.
+      if (this.printPreviewInitializingInfo &&
+          !this.printPreviewInitializingInfo.entered) {
+        this.printPreviewInitializingInfo.nextRequest = printPreviewInitialize;
+      } else {
+        Services.tm.dispatchToMainThread(printPreviewInitialize);
+      }
     } catch (error) {
       // This might fail if we, for example, attempt to print a XUL document.
       // In that case, we inform the parent to bail out of print preview.
       Components.utils.reportError(error);
-      notifyEntered(error);
+      sendAsyncMessage("Printing:Preview:Entered", { failed: true });
     }
   },
 
   exitPrintPreview() {
+    this.printPreviewInitializingInfo = null;
     docShell.printPreview.exitPrintPreview();
   },
 
@@ -772,7 +884,7 @@ var Printing = {
   onLocationChange(aWebProgress, aRequest, aLocation, aFlags) {},
   onStatusChange(aWebProgress, aRequest, aStatus, aMessage) {},
   onSecurityChange(aWebProgress, aRequest, aState) {},
-}
+};
 Printing.init();
 
 function SwitchDocumentDirection(aWindow) {
@@ -838,7 +950,7 @@ var FindBar = {
       let win = focusedWindow.value;
       should = BrowserUtils.shouldFastFind(elt, win);
     }
-    return { can, should }
+    return { can, should };
   },
 
   _onKeypress(event) {
@@ -1010,9 +1122,6 @@ var AudioPlaybackListener = {
       case "mediaControlStopped":
         utils.mediaSuspend = suspendTypes.SUSPENDED_STOP_DISPOSABLE;
         break;
-      case "blockInactivePageMedia":
-        utils.mediaSuspend = suspendTypes.SUSPENDED_BLOCK;
-        break;
       case "resumeMedia":
         utils.mediaSuspend = suspendTypes.NONE_SUSPENDED;
         break;
@@ -1026,10 +1135,12 @@ var AudioPlaybackListener = {
     if (topic === "audio-playback") {
       if (subject && subject.top == global.content) {
         let name = "AudioPlayback:";
-        if (data === "blockStart") {
-          name += "BlockStart";
-        } else if (data === "blockStop") {
-          name += "BlockStop";
+        if (data === "activeMediaBlockStart") {
+          name += "ActiveMediaBlockStart";
+        } else if (data === "activeMediaBlockStop") {
+          name += "ActiveMediaBlockStop";
+        } else if (data == "mediaBlockStop") {
+          name += "MediaBlockStop";
         } else {
           name += (data === "active") ? "Start" : "Stop";
         }
@@ -1045,6 +1156,23 @@ var AudioPlaybackListener = {
   },
 };
 AudioPlaybackListener.init();
+
+var UnselectedTabHoverObserver = {
+  init() {
+    addMessageListener("Browser:UnselectedTabHover", this);
+    addEventListener("UnselectedTabHover:Enable", this);
+    addEventListener("UnselectedTabHover:Disable", this);
+  },
+  receiveMessage(message) {
+    Services.obs.notifyObservers(content.window, "unselected-tab-hover",
+                                 message.data.hovered);
+  },
+  handleEvent(event) {
+    sendAsyncMessage("UnselectedTabHover:Toggle",
+                     { enable: event.type == "UnselectedTabHover:Enable" });
+  }
+};
+UnselectedTabHoverObserver.init();
 
 addMessageListener("Browser:PurgeSessionHistory", function BrowserPurgeHistory() {
   let sessionHistory = docShell.QueryInterface(Ci.nsIWebNavigation).sessionHistory;
@@ -1097,7 +1225,7 @@ var ViewSelectionSource = {
     var p = n.parentNode;
     if (n == ancestor || !p)
       return null;
-    var path = new Array();
+    var path = [];
     if (!path)
       return null;
     do {
@@ -1268,7 +1396,7 @@ var ViewSelectionSource = {
       return undefined;
 
     // serialize
-    const VIEW_SOURCE_CSS = "resource://gre-resources/viewsource.css";
+    const VIEW_SOURCE_CSS = "resource://content-accessible/viewsource.css";
     const BUNDLE_URL = "chrome://global/locale/viewSource.properties";
 
     let bundle = Services.strings.createBundle(BUNDLE_URL);
@@ -1391,35 +1519,8 @@ var ViewSelectionSource = {
       return charTable[letter];
     }
 
-    function convertEntity(letter) {
-      try {
-        var unichar = this._entityConverter
-                          .ConvertToEntity(letter, entityVersion);
-        var entity = unichar.substring(1); // extract '&'
-        return '&amp;<span class="entity">' + entity + "</span>";
-      } catch (ex) {
-        return letter;
-      }
-    }
-
-    if (!this._entityConverter) {
-      try {
-        this._entityConverter = Cc["@mozilla.org/intl/entityconverter;1"]
-                                  .createInstance(Ci.nsIEntityConverter);
-      } catch (e) { }
-    }
-
-    const entityVersion = Ci.nsIEntityConverter.entityW3C;
-
-    var str = text;
-
     // replace chars in our charTable
-    str = str.replace(/[<>&"]/g, charTableLookup);
-
-    // replace chars > 0x7f via nsIEntityConverter
-    str = str.replace(/[^\0-\u007f]/g, convertEntity);
-
-    return str;
+    return text.replace(/[<>&"]/g, charTableLookup);
   }
 };
 
@@ -1451,6 +1552,9 @@ let AutoCompletePopup = {
   init() {
     addEventListener("unload", this);
     addEventListener("DOMContentLoaded", this);
+    // WebExtension browserAction is preloaded and does not receive DCL, wait
+    // on pageshow so we can hookup the formfill controller.
+    addEventListener("pageshow", this, true);
 
     for (let messageName of this.MESSAGES) {
       addMessageListener(messageName, this);
@@ -1468,6 +1572,7 @@ let AutoCompletePopup = {
       this._connected = false;
     }
 
+    removeEventListener("pageshow", this);
     removeEventListener("unload", this);
     removeEventListener("DOMContentLoaded", this);
 
@@ -1476,22 +1581,34 @@ let AutoCompletePopup = {
     }
   },
 
+  connect() {
+    if (this._connected) {
+      return;
+    }
+    // We need to wait for a content viewer to be available
+    // before we can attach our AutoCompletePopup handler,
+    // since nsFormFillController assumes one will exist
+    // when we call attachToBrowser.
+
+    // Hook up the form fill autocomplete controller.
+    let controller = Cc["@mozilla.org/satchel/form-fill-controller;1"]
+                       .getService(Ci.nsIFormFillController);
+    controller.attachToBrowser(docShell,
+                               this.QueryInterface(Ci.nsIAutoCompletePopup));
+    this._connected = true;
+  },
+
   handleEvent(event) {
     switch (event.type) {
+      case "pageshow": {
+        removeEventListener("pageshow", this);
+        this.connect();
+        break;
+      }
+
       case "DOMContentLoaded": {
         removeEventListener("DOMContentLoaded", this);
-
-        // We need to wait for a content viewer to be available
-        // before we can attach our AutoCompletePopup handler,
-        // since nsFormFillController assumes one will exist
-        // when we call attachToBrowser.
-
-        // Hook up the form fill autocomplete controller.
-        let controller = Cc["@mozilla.org/satchel/form-fill-controller;1"]
-                           .getService(Ci.nsIFormFillController);
-        controller.attachToBrowser(docShell,
-                                   this.QueryInterface(Ci.nsIAutoCompletePopup));
-        this._connected = true;
+        this.connect();
         break;
       }
 
@@ -1612,7 +1729,7 @@ let AutoCompletePopup = {
 
     return results;
   },
-}
+};
 
 AutoCompletePopup.init();
 
@@ -1723,6 +1840,14 @@ let DateTimePickerListener = {
             (aEvent.originalTarget.type == "time" && !this.getTimePickerPref())) {
           return;
         }
+
+        if (this._inputElement) {
+          // This happens when we're trying to open a picker when another picker
+          // is still open. We ignore this request to let the first picker
+          // close gracefully.
+          return;
+        }
+
         this._inputElement = aEvent.originalTarget;
         this._inputElement.setDateTimePickerState(true);
         this.addListeners();
@@ -1737,9 +1862,10 @@ let DateTimePickerListener = {
             // element's value.
             value: Object.keys(value).length > 0 ? value
                                                  : this._inputElement.value,
-            step: this._inputElement.step,
-            min: this._inputElement.min,
-            max: this._inputElement.max,
+            min: this._inputElement.getMinimum(),
+            max: this._inputElement.getMaximum(),
+            step: this._inputElement.getStep(),
+            stepBase: this._inputElement.getStepBase(),
           },
         });
         break;
@@ -1767,7 +1893,7 @@ let DateTimePickerListener = {
         break;
     }
   },
-}
+};
 
 DateTimePickerListener.init();
 
@@ -1788,3 +1914,37 @@ addEventListener("mozshowdropdown-sourcetouch", event => {
     new SelectContentHelper(event.target, {isOpenedViaTouch: true}, this);
   }
 });
+
+let ExtFind = {
+  init() {
+    addMessageListener("ext-Finder:CollectResults", this);
+    addMessageListener("ext-Finder:HighlightResults", this);
+    addMessageListener("ext-Finder:clearHighlighting", this);
+  },
+
+  _findContent: null,
+
+  async receiveMessage(message) {
+    if (!this._findContent) {
+      this._findContent = new FindContent(docShell);
+    }
+
+    let data;
+    switch (message.name) {
+      case "ext-Finder:CollectResults":
+        this.finderInited = true;
+        data = await this._findContent.findRanges(message.data);
+        sendAsyncMessage("ext-Finder:CollectResultsFinished", data);
+        break;
+      case "ext-Finder:HighlightResults":
+        data = this._findContent.highlightResults(message.data);
+        sendAsyncMessage("ext-Finder:HighlightResultsFinished", data);
+        break;
+      case "ext-Finder:clearHighlighting":
+        this._findContent.highlighter.highlight(false);
+        break;
+    }
+  },
+};
+
+ExtFind.init();

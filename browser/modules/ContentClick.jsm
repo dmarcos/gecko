@@ -11,20 +11,20 @@ var Cu = Components.utils;
 
 this.EXPORTED_SYMBOLS = [ "ContentClick" ];
 
-Cu.import("resource:///modules/PlacesUIUtils.jsm");
-Cu.import("resource://gre/modules/PrivateBrowsingUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "PlacesUIUtils",
+                                  "resource:///modules/PlacesUIUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
+                                  "resource://gre/modules/PrivateBrowsingUtils.jsm");
 
 var ContentClick = {
-  init() {
-    let mm = Cc["@mozilla.org/globalmessagemanager;1"].getService(Ci.nsIMessageListenerManager);
-    mm.addMessageListener("Content:Click", this);
-  },
-
+  // Listeners are added in nsBrowserGlue.js
   receiveMessage(message) {
     switch (message.name) {
       case "Content:Click":
-        this.contentAreaClick(message.json, message.target)
+        this.contentAreaClick(message.json, message.target);
         break;
     }
   },
@@ -47,14 +47,14 @@ var ContentClick = {
       // This is the Opera convention for a special link that, when clicked,
       // allows to add a sidebar panel.  The link's title attribute contains
       // the title that should be used for the sidebar panel.
-      PlacesUIUtils.showBookmarkDialog({ action: "add"
-                                       , type: "bookmark"
-                                       , uri: Services.io.newURI(json.href)
-                                       , title: json.title
-                                       , loadBookmarkInSidebar: true
-                                       , hiddenRows: [ "description"
-                                                     , "location"
-                                                     , "keyword" ]
+      PlacesUIUtils.showBookmarkDialog({ action: "add",
+                                         type: "bookmark",
+                                         uri: Services.io.newURI(json.href),
+                                         title: json.title,
+                                         loadBookmarkInSidebar: true,
+                                         hiddenRows: [ "description",
+                                                        "location",
+                                                        "keyword" ]
                                        }, window);
       return;
     }

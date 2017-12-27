@@ -7,7 +7,7 @@
 const URL1 = MAIN_DOMAIN + "navigate-first.html";
 const URL2 = MAIN_DOMAIN + "navigate-second.html";
 
-var events = require("sdk/event/core");
+var EventEmitter = require("devtools/shared/event-emitter");
 var client;
 
 SpecialPowers.pushPrefEnv(
@@ -110,7 +110,7 @@ function getServerTabActor(callback) {
     let actorID = form.actor;
     client.attachTab(actorID, function (response, tabClient) {
       // !Hack! Retrieve a server side object, the BrowserTabActor instance
-      let tabActor = DebuggerServer._searchAllConnectionsForActor(actorID);
+      let tabActor = DebuggerServer.searchAllConnectionsForActor(actorID);
       callback(tabActor);
     });
   });
@@ -125,10 +125,10 @@ function test() {
   addTab(URL1).then(function (browser) {
     getServerTabActor(function (tabActor) {
       // In order to listen to internal will-navigate/navigate events
-      events.on(tabActor, "will-navigate", function (data) {
+      EventEmitter.on(tabActor, "will-navigate", function (data) {
         assertEvent("will-navigate", data);
       });
-      events.on(tabActor, "navigate", function (data) {
+      EventEmitter.on(tabActor, "navigate", function (data) {
         assertEvent("navigate", data);
       });
 

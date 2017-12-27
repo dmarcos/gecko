@@ -9,10 +9,15 @@ description = "Testing code for libgkrust"
 bindgen = ["gkrust-shared/bindgen"]
 servo = ["gkrust-shared/servo"]
 quantum_render = ["gkrust-shared/quantum_render"]
+cubeb-remoting = ["gkrust-shared/cubeb-remoting"]
+cubeb_pulse_rust = ["gkrust-shared/cubeb_pulse_rust"]
+gecko_debug = ["gkrust-shared/gecko_debug"]
+simd-accel = ["gkrust-shared/simd-accel"]
+no-static-ideograph-encoder-tables = ["gkrust-shared/no-static-ideograph-encoder-tables"]
 
 [dependencies]
 mp4parse-gtest = { path = "../../../../dom/media/gtest" }
-nsstring-gtest = { path = "../../../../xpcom/rust/nsstring/gtest" }
+nsstring-gtest = { path = "../../../../xpcom/rust/gtest/nsstring" }
 gkrust-shared = { path = "../../rust/shared" }
 
 [lib]
@@ -28,7 +33,6 @@ harness = false
 # Explicitly specify what our profiles use.
 [profile.dev]
 opt-level = 1
-debug = true
 rpath = false
 lto = false
 debug-assertions = true
@@ -37,8 +41,11 @@ panic = "abort"
 
 [profile.release]
 opt-level = 2
-debug = true
 rpath = false
-lto = true
 debug-assertions = false
 panic = "abort"
+
+[patch.crates-io]
+libudev-sys = { path = "../../../../dom/webauthn/libudev-sys" }
+serde = { git = "https://github.com/gankro/serde", branch = "deserialize_from_enums3" }
+serde_derive = { git = "https://github.com/gankro/serde", branch = "deserialize_from_enums3", feature = "deserialize_from" }

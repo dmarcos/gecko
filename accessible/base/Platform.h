@@ -8,8 +8,7 @@
 #define mozilla_a11y_Platform_h
 
 #include <stdint.h>
-
-class nsString;
+#include "nsStringFwd.h"
 
 namespace mozilla {
 namespace a11y {
@@ -44,6 +43,19 @@ void PreInit();
 bool ShouldA11yBeEnabled();
 #endif
 
+#if defined(XP_WIN)
+/*
+ * Do we have AccessibleHandler.dll registered.
+ */
+bool IsHandlerRegistered();
+
+/*
+ * Name of platform service that instantiated accessibility
+ */
+void SetInstantiator(const uint32_t aInstantiatorPid);
+bool GetInstantiator(nsIFile** aOutInstantiator);
+#endif
+
 /**
  * Called to initialize platform specific accessibility support.
  * Note this is called after internal accessibility support is initialized.
@@ -74,7 +86,15 @@ void ProxyDestroyed(ProxyAccessible*);
 void ProxyEvent(ProxyAccessible* aTarget, uint32_t aEventType);
 void ProxyStateChangeEvent(ProxyAccessible* aTarget, uint64_t aState,
                            bool aEnabled);
+
+#if defined(XP_WIN)
+void ProxyFocusEvent(ProxyAccessible* aTarget,
+                     const LayoutDeviceIntRect& aCaretRect);
+void ProxyCaretMoveEvent(ProxyAccessible* aTarget,
+                         const LayoutDeviceIntRect& aCaretRect);
+#else
 void ProxyCaretMoveEvent(ProxyAccessible* aTarget, int32_t aOffset);
+#endif
 void ProxyTextChangeEvent(ProxyAccessible* aTarget, const nsString& aStr,
                           int32_t aStart, uint32_t aLen, bool aIsInsert,
                           bool aFromUser);

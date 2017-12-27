@@ -218,7 +218,7 @@ function checkNotification(panel, checkIcon, permissions) {
   let header = document.getElementById("addon-webext-perm-intro");
 
   if (checkIcon instanceof RegExp) {
-    ok(checkIcon.test(icon), "Notification icon is correct");
+    ok(checkIcon.test(icon), `Notification icon is correct ${JSON.stringify(icon)} ~= ${checkIcon}`);
   } else if (typeof checkIcon == "function") {
     ok(checkIcon(icon), "Notification icon is correct");
   } else {
@@ -315,8 +315,10 @@ async function testInstallMethod(installFn, telemetryBase) {
         ["webextPerms.hostDescription.wildcard", "wildcard.domain"],
         ["webextPerms.hostDescription.oneSite", "singlehost.domain"],
         ["webextPerms.description.nativeMessaging"],
-        ["webextPerms.description.tabs"],
+        // The below permissions are deliberately in this order as permissions
+        // are sorted alphabetically by the permission string to match AMO.
         ["webextPerms.description.history"],
+        ["webextPerms.description.tabs"],
       ]);
     } else if (filename == NO_PERMS_XPI) {
       checkNotification(panel, isDefaultIcon, []);

@@ -2,6 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// This file is loaded into the browser window scope.
+/* eslint-env mozilla/browser-window */
+
 /**
  * Controls the "full zoom" setting and its site-specific preferences.
  */
@@ -10,6 +13,7 @@ var FullZoom = {
   name: "browser.content.full-zoom",
 
   // browser.zoom.siteSpecific preference cache
+  // Enabling privacy.resistFingerprinting implies disabling browser.zoom.siteSpecific.
   _siteSpecificPref: undefined,
 
   // browser.zoom.updateBackgroundTabs preference cache
@@ -25,6 +29,11 @@ var FullZoom = {
   _initialLocations: new WeakMap(),
 
   get siteSpecific() {
+    if (this._siteSpecificPref === undefined) {
+      this._siteSpecificPref =
+        !Services.prefs.getBoolPref("privacy.resistFingerprinting") &&
+        Services.prefs.getBoolPref("browser.zoom.siteSpecific");
+    }
     return this._siteSpecificPref;
   },
 
@@ -46,13 +55,16 @@ var FullZoom = {
                  getService(Ci.nsIContentPrefService2);
     this._cps2.addObserverForName(this.name, this);
 
-    this._siteSpecificPref =
-      gPrefService.getBoolPref("browser.zoom.siteSpecific");
     this.updateBackgroundTabs =
-      gPrefService.getBoolPref("browser.zoom.updateBackgroundTabs");
+      Services.prefs.getBoolPref("browser.zoom.updateBackgroundTabs");
+
     // Listen for changes to the browser.zoom branch so we can enable/disable
     // updating background tabs and per-site saving and restoring of zoom levels.
-    gPrefService.addObserver("browser.zoom.", this, true);
+    Services.prefs.addObserver("browser.zoom.", this, true);
+
+    // Also need to listen to privacy.resistFingerprinting in order to update
+    // this._siteSpecificPref.
+    Services.prefs.addObserver("privacy.resistFingerprinting", this, true);
 
     // If we received onLocationChange events for any of the current browsers
     // before we were initialized we want to replay those upon initialization.
@@ -67,7 +79,7 @@ var FullZoom = {
   },
 
   destroy: function FullZoom_destroy() {
-    gPrefService.removeObserver("browser.zoom.", this);
+    Services.prefs.removeObserver("browser.zoom.", this);
     this._cps2.removeObserverForName(this.name, this);
     gBrowser.removeEventListener("ZoomChangeUsingMouseWheel", this);
   },
@@ -93,13 +105,15 @@ var FullZoom = {
     switch (aTopic) {
       case "nsPref:changed":
         switch (aData) {
+          case "privacy.resistFingerprinting":
+            // fall through
           case "browser.zoom.siteSpecific":
-            this._siteSpecificPref =
-              gPrefService.getBoolPref("browser.zoom.siteSpecific");
+            // Invalidate pref cache.
+            this._siteSpecificPref = undefined;
             break;
           case "browser.zoom.updateBackgroundTabs":
             this.updateBackgroundTabs =
-              gPrefService.getBoolPref("browser.zoom.updateBackgroundTabs");
+              Services.prefs.getBoolPref("browser.zoom.updateBackgroundTabs");
             break;
         }
         break;
@@ -155,10 +169,10 @@ var FullZoom = {
     let token = this._getBrowserToken(browser);
     this._cps2.getByDomainAndName(browser.currentURI.spec, this.name, ctxt, {
       handleResult() { hasPref = true; },
-      handleCompletion: function() {
+      handleCompletion: () => {
         if (!hasPref && token.isCurrent)
           this._applyPrefToZoom(undefined, browser);
-      }.bind(this)
+      }
     });
   },
 
@@ -224,14 +238,14 @@ var FullZoom = {
     let token = this._getBrowserToken(browser);
     this._cps2.getByDomainAndName(aURI.spec, this.name, ctxt, {
       handleResult(resultPref) { value = resultPref.value; },
-      handleCompletion: function() {
+      handleCompletion: () => {
         if (!token.isCurrent) {
           this._notifyOnLocationChange(browser);
           return;
         }
         this._applyPrefToZoom(value, browser,
                               this._notifyOnLocationChange.bind(this, browser));
-      }.bind(this)
+      }
     });
   },
 
@@ -287,7 +301,6 @@ var FullZoom = {
       if (token.isCurrent) {
         ZoomManager.setZoomForBrowser(browser, value === undefined ? 1 : value);
         this._ignorePendingZoomAccesses(browser);
-        Services.obs.notifyObservers(browser, "browser-fullZoom:zoomReset");
       }
     });
     this._removePref(browser);
@@ -355,7 +368,6 @@ var FullZoom = {
    * @param browser  The zoom of this browser will be saved.  Required.
    */
   _applyZoomToPref: function FullZoom__applyZoomToPref(browser) {
-    Services.obs.notifyObservers(browser, "browser-fullZoom:zoomChange");
     if (!this.siteSpecific ||
         gInPrintPreviewMode ||
         browser.isSyntheticDocument)
@@ -364,9 +376,9 @@ var FullZoom = {
     this._cps2.set(browser.currentURI.spec, this.name,
                    ZoomManager.getZoomForBrowser(browser),
                    this._loadContextFromBrowser(browser), {
-      handleCompletion: function() {
+      handleCompletion: () => {
         this._isNextContentPrefChangeInternal = true;
-      }.bind(this),
+      },
     });
   },
 
@@ -376,14 +388,13 @@ var FullZoom = {
    * @param browser  The zoom of this browser will be removed.  Required.
    */
   _removePref: function FullZoom__removePref(browser) {
-    Services.obs.notifyObservers(browser, "browser-fullZoom:zoomReset");
     if (browser.isSyntheticDocument)
       return;
     let ctxt = this._loadContextFromBrowser(browser);
     this._cps2.removeByDomainAndName(browser.currentURI.spec, this.name, ctxt, {
-      handleCompletion: function() {
+      handleCompletion: () => {
         this._isNextContentPrefChangeInternal = true;
-      }.bind(this),
+      },
     });
   },
 

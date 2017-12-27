@@ -41,10 +41,10 @@
 // to handle multiple arguments.
 
 const TP_CMDLINE_CONTRACTID     = "@mozilla.org/commandlinehandler/general-startup;1?type=tp";
-const TP_CMDLINE_CLSID          = Components.ID('{8AF052F5-8EFE-4359-8266-E16498A82E8B}');
+const TP_CMDLINE_CLSID          = Components.ID("{8AF052F5-8EFE-4359-8266-E16498A82E8B}");
 const CATMAN_CONTRACTID         = "@mozilla.org/categorymanager;1";
 const nsISupports               = Components.interfaces.nsISupports;
-  
+
 const nsICategoryManager        = Components.interfaces.nsICategoryManager;
 const nsICommandLine            = Components.interfaces.nsICommandLine;
 const nsICommandLineHandler     = Components.interfaces.nsICommandLineHandler;
@@ -58,7 +58,7 @@ function PageLoaderCmdLineHandler() {}
 PageLoaderCmdLineHandler.prototype =
 {
   /* nsISupports */
-  QueryInterface : function handler_QI(iid) {
+  QueryInterface: function handler_QI(iid) {
     if (iid.equals(nsISupports))
       return this;
 
@@ -69,82 +69,34 @@ PageLoaderCmdLineHandler.prototype =
   },
 
   /* nsICommandLineHandler */
-  handle : function handler_handle(cmdLine) {
+  handle: function handler_handle(cmdLine) {
     var args = {};
-    try {
-      var uristr = cmdLine.handleFlagWithParam("tp", false);
-      if (uristr == null)
-        return;
-      try {
-        args.manifest = cmdLine.resolveURI(uristr).spec;
-      } catch (e) {
-        return;
-      }
 
-      args.numCycles = cmdLine.handleFlagWithParam("tpcycles", false);
-      args.numPageCycles = cmdLine.handleFlagWithParam("tppagecycles", false);
-      args.startIndex = cmdLine.handleFlagWithParam("tpstart", false);
-      args.endIndex = cmdLine.handleFlagWithParam("tpend", false);
-      args.filter = cmdLine.handleFlagWithParam("tpfilter", false);
-      args.useBrowserChrome = cmdLine.handleFlag("tpchrome", false);
-      args.doRender = cmdLine.handleFlag("tprender", false);
-      args.width = cmdLine.handleFlagWithParam("tpwidth", false);
-      args.height = cmdLine.handleFlagWithParam("tpheight", false);
-      args.profilinginfo = cmdLine.handleFlagWithParam("tpprofilinginfo", false);
-      args.offline = cmdLine.handleFlag("tpoffline", false);
-      args.noisy = cmdLine.handleFlag("tpnoisy", false);
-      args.timeout = cmdLine.handleFlagWithParam("tptimeout", false);
-      args.delay = cmdLine.handleFlagWithParam("tpdelay", false);
-      args.noForceCC = cmdLine.handleFlag("tpnoforcecc", false);
-      args.mozafterpaint = cmdLine.handleFlag("tpmozafterpaint", false);
-      args.loadnocache = cmdLine.handleFlag("tploadnocache", false);
-      args.scrolltest = cmdLine.handleFlag("tpscrolltest", false);
-      args.disableE10s = cmdLine.handleFlag("tpdisable_e10s", false);
-      args.rss = cmdLine.handleFlag("rss", false);
-    }
-    catch (e) {
+    var tpmanifest = Services.prefs.getCharPref("talos.tpmanifest", null);
+    if (tpmanifest == null) {
+      // pageloader tests as well as startup tests use this pageloader add-on; pageloader tests
+      // pass in a 'tpmanifest' which has been set to the talos.tpmanifest pref; startup tests
+      // don't use 'tpmanifest' but pass in the test page which is forwarded onto the Firefox cmd
+      // line. If this is a startup test exit here as we don't need a pageloader window etc.
       return;
     }
 
     let chromeURL = "chrome://pageloader/content/pageloader.xul";
 
     args.wrappedJSObject = args;
+
     Services.ww.openWindow(null, chromeURL, "_blank",
                             "chrome,dialog=no,all", args);
 
     // Don't pass command line to the default app processor
     cmdLine.preventDefault = true;
   },
-
-  helpInfo :
-  "  -tp <file>         Run pageload perf tests on given manifest\n" +
-  "  -tpfilter str      Only include pages from manifest that contain str (regexp)\n" +
-  "  -tpcycles n        Loop through pages n times\n" +
-  "  -tppagecycles n    Loop through each page n times before going onto the next page\n" +
-  "  -tpstart n         Start at index n in the manifest\n" +
-  "  -tpend n           End with index n in the manifest\n" +
-  "  -tpchrome          Test with normal browser chrome\n" +
-  "  -tprender          Run render-only benchmark for each page\n" +
-  "  -tpwidth width     Width of window\n" +
-  "  -tpheight height   Height of window\n" +
-  "  -tbprofilinginfo   A JSON object describing profiler settings\n" +
-  "  -tpoffline         Force offline mode\n" +
-  "  -tpnoisy           Dump the name of the last loaded page to console\n" + 
-  "  -tptimeout         Max amount of time given for a page to load, quit if exceeded\n" +
-  "  -tpdelay           Amount of time to wait between each pageload\n" +
-  "  -tpnoforcecc       Don't force cycle collection between each pageload\n" +
-  "  -tpmozafterpaint   Measure Time after recieving MozAfterPaint event instead of load event\n" +
-  "  -tpscrolltest      Unknown\n" +
-  "  -tpdisable_e10s    disable pageloader e10s code path\n" +
-  "  -rss               Dump RSS after each page is loaded\n"
-
 };
 
 
 var PageLoaderCmdLineFactory =
 {
-  createInstance : function(outer, iid)
-  {
+  createInstance(outer, iid) {
     if (outer != null) {
       throw Components.results.NS_ERROR_NO_AGGREGATION;
     }
@@ -162,8 +114,7 @@ function NSGetFactory(cid) {
 
 var PageLoaderCmdLineModule =
 {
-  registerSelf : function(compMgr, fileSpec, location, type)
-  {
+  registerSelf(compMgr, fileSpec, location, type) {
     compMgr = compMgr.QueryInterface(nsIComponentRegistrar);
 
     compMgr.registerFactoryLocation(TP_CMDLINE_CLSID,
@@ -179,23 +130,20 @@ var PageLoaderCmdLineModule =
                             TP_CMDLINE_CONTRACTID, true, true);
   },
 
-  unregisterSelf : function(compMgr, fileSpec, location)
-  {
+  unregisterSelf(compMgr, fileSpec, location) {
     compMgr = compMgr.QueryInterface(nsIComponentRegistrar);
 
     compMgr.unregisterFactoryLocation(TP_CMDLINE_CLSID, fileSpec);
-    catman = Components.classes[CATMAN_CONTRACTID].getService(nsICategoryManager);
+    var catman = Components.classes[CATMAN_CONTRACTID].getService(nsICategoryManager);
     catman.deleteCategoryEntry("command-line-handler",
                                "m-tp", true);
   },
 
-  getClassObject : function(compMgr, cid, iid)
-  {
+  getClassObject(compMgr, cid, iid) {
     return NSGetFactory(cid);
   },
 
-  canUnload : function(compMgr)
-  {
+  canUnload(compMgr) {
     return true;
   }
 };

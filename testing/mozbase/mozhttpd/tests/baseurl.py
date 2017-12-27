@@ -1,3 +1,5 @@
+from __future__ import absolute_import
+
 import mozhttpd
 import unittest
 
@@ -16,6 +18,7 @@ class BaseUrlTest(unittest.TestCase):
                          httpd.httpd.server_port,
                          httpd.get_url(path="/cheezburgers.html"))
         httpd.stop()
+
 
 if __name__ == '__main__':
     mozunit.main()

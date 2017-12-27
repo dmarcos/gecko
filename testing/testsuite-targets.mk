@@ -91,12 +91,6 @@ REMOTE_CPPUNITTESTS = \
 cppunittests-remote:
 	$(call REMOTE_CPPUNITTESTS);
 
-jetpack-tests:
-	cd $(topsrcdir)/addon-sdk/source && $(PYTHON) bin/cfx -b $(abspath $(browser_path)) --parseable testpkgs
-
-pgo-profile-run:
-	$(PYTHON) $(topsrcdir)/build/pgo/profileserver.py $(EXTRA_TEST_ARGS)
-
 # Package up the tests and test harnesses
 include $(topsrcdir)/toolkit/mozapps/installer/package-name.mk
 
@@ -108,7 +102,6 @@ stage-all: \
   stage-extensions \
   stage-mochitest \
   stage-jstests \
-  stage-jetpack \
   test-packages-manifest \
   $(NULL)
 ifdef MOZ_WEBRTC
@@ -119,23 +112,26 @@ ifdef COMPILE_ENVIRONMENT
 stage-all: stage-cppunittests
 endif
 
-TEST_PKGS := \
+TEST_PKGS_ZIP := \
   common \
   cppunittest \
   mochitest \
   reftest \
   talos \
   awsy \
-  web-platform \
   xpcshell \
+  $(NULL)
+
+TEST_PKGS_TARGZ := \
+  web-platform \
   $(NULL)
 
 ifdef LINK_GTEST_DURING_COMPILE
 stage-all: stage-gtest
-TEST_PKGS += gtest
+TEST_PKGS_ZIP += gtest
 endif
 
-PKG_ARG = --$(1) '$(PKG_BASENAME).$(1).tests.zip'
+PKG_ARG = --$(1) '$(PKG_BASENAME).$(1).tests.$(2)'
 
 test-packages-manifest:
 	@rm -f $(MOZ_TEST_PACKAGES_FILE)
@@ -143,8 +139,9 @@ test-packages-manifest:
 	$(PYTHON) $(topsrcdir)/build/gen_test_packages_manifest.py \
       --jsshell $(JSSHELL_NAME) \
       --dest-file '$(MOZ_TEST_PACKAGES_FILE)' \
-      $(call PKG_ARG,common) \
-      $(foreach pkg,$(TEST_PKGS),$(call PKG_ARG,$(pkg)))
+      $(call PKG_ARG,common,zip) \
+      $(foreach pkg,$(TEST_PKGS_ZIP),$(call PKG_ARG,$(pkg),zip)) \
+      $(foreach pkg,$(TEST_PKGS_TARGZ),$(call PKG_ARG,$(pkg),tar.gz))
 
 package-tests-prepare-dest:
 	@rm -f '$(DIST)/$(PKG_PATH)$(TEST_PACKAGE)'
@@ -154,15 +151,15 @@ define package_archive
 package-tests-$(1): stage-all package-tests-prepare-dest
 	$$(call py_action,test_archive, \
 		$(1) \
-		'$$(abspath $$(DIST))/$$(PKG_PATH)/$$(PKG_BASENAME).$(1).tests.zip')
+		'$$(abspath $$(DIST))/$$(PKG_PATH)/$$(PKG_BASENAME).$(1).tests.$(2)')
 package-tests: package-tests-$(1)
 endef
 
-$(foreach name,$(TEST_PKGS),$(eval $(call package_archive,$(name))))
+$(foreach name,$(TEST_PKGS_ZIP),$(eval $(call package_archive,$(name),zip)))
+$(foreach name,$(TEST_PKGS_TARGZ),$(eval $(call package_archive,$(name),tar.gz)))
 
 ifeq ($(MOZ_BUILD_APP),mobile/android)
 stage-all: stage-android
-stage-all: stage-instrumentation-tests
 endif
 
 # Prepare _tests before any of the other staging/packaging steps.
@@ -174,7 +171,6 @@ make-stage-dir: install-test-files
 	$(NSINSTALL) -D $(PKG_STAGE)/bin/components
 	$(NSINSTALL) -D $(PKG_STAGE)/certs
 	$(NSINSTALL) -D $(PKG_STAGE)/config
-	$(NSINSTALL) -D $(PKG_STAGE)/jetpack
 	$(NSINSTALL) -D $(PKG_STAGE)/modules
 	$(NSINSTALL) -D $(PKG_STAGE)/tools/mach
 
@@ -223,9 +219,8 @@ endif
 stage-android: make-stage-dir
 	$(NSINSTALL) $(topsrcdir)/mobile/android/fonts $(DEPTH)/_tests/reftest
 	$(NSINSTALL) $(topsrcdir)/mobile/android/fonts $(DEPTH)/_tests/testing/mochitest
-
-stage-jetpack: make-stage-dir
-	$(MAKE) -C $(DEPTH)/addon-sdk stage-tests-package
+	$(NSINSTALL) -D $(DEPTH)/_tests/reftest/hyphenation
+	$(NSINSTALL) $(wildcard $(topsrcdir)/intl/locales/*/hyphenation/*.dic) $(DEPTH)/_tests/reftest/hyphenation
 
 CPP_UNIT_TEST_BINS=$(wildcard $(DIST)/cppunittests/*)
 
@@ -247,9 +242,6 @@ stage-steeplechase: make-stage-dir
 	cp -RL $(DEPTH)/_tests/steeplechase $(PKG_STAGE)/steeplechase/tests
 	cp -RL $(DIST)/xpi-stage/specialpowers $(PKG_STAGE)/steeplechase
 	cp -RL $(topsrcdir)/testing/profiles/prefs_general.js $(PKG_STAGE)/steeplechase
-
-stage-instrumentation-tests: make-stage-dir
-	$(MAKE) -C $(DEPTH)/testing/instrumentation stage-package
 
 TEST_EXTENSIONS := \
     specialpowers@mozilla.org.xpi \
@@ -281,9 +273,7 @@ check::
   stage-mochitest \
   stage-jstests \
   stage-android \
-  stage-jetpack \
   stage-steeplechase \
-  stage-instrumentation-tests \
   test-packages-manifest \
   check \
   $(NULL)

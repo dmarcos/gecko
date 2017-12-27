@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -44,6 +45,7 @@ public:
   ~ImageHost();
 
   virtual CompositableType GetType() override { return mTextureInfo.mCompositableType; }
+  virtual ImageHost* AsImageHost() override { return this; }
 
   virtual void Composite(Compositor* aCompositor,
                          LayerComposite* aLayer,
@@ -88,6 +90,31 @@ public:
   virtual void CleanupResources() override;
 
   bool IsOpaque();
+
+  struct RenderInfo {
+    int imageIndex;
+    TimedImage* img;
+    RefPtr<TextureHost> host;
+
+    RenderInfo() : imageIndex(-1), img(nullptr)
+    {}
+  };
+
+  // Acquire rendering information for the current frame.
+  bool PrepareToRender(TextureSourceProvider* aProvider, RenderInfo* aOutInfo);
+
+  // Acquire the TextureSource for the currently prepared frame.
+  RefPtr<TextureSource> AcquireTextureSource(const RenderInfo& aInfo);
+
+  // Send ImageComposite notifications and update the ChooseImage bias.
+  void FinishRendering(const RenderInfo& aInfo);
+
+  // This should only be called inside a lock, or during rendering. It is
+  // infallible to enforce this.
+  TextureHost* CurrentTextureHost() const {
+    MOZ_ASSERT(mCurrentTextureHost);
+    return mCurrentTextureHost;
+  }
 
 protected:
   // ImageComposite

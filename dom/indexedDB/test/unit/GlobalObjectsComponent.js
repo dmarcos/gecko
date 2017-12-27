@@ -18,7 +18,7 @@ GlobalObjectsComponent.prototype =
 
   QueryInterface: XPCOMUtils.generateQI([Components.interfaces.nsISupports]),
 
-  runTest: function() {
+  runTest() {
     const name = "Splendid Test";
 
     let ok = this.ok;
@@ -31,12 +31,12 @@ GlobalObjectsComponent.prototype =
     request.onerror = function(event) {
       ok(false, "indexedDB error, '" + event.target.error.name + "'");
       finishTest();
-    }
+    };
     request.onsuccess = function(event) {
       let db = event.target.result;
       ok(db, "Got database");
       finishTest();
-    }
+    };
   }
 };
 

@@ -2,19 +2,12 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
-// This verifies that localized properties work as expected
-
-const PREF_MATCH_OS_LOCALE = "intl.locale.matchOS";
-const PREF_SELECTED_LOCALE = "general.useragent.locale";
-
-
 function run_test() {
   do_test_pending();
 
   // Setup for test
   createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "1.9.2");
-  Services.prefs.setBoolPref(PREF_MATCH_OS_LOCALE, false);
-  Services.prefs.setCharPref(PREF_SELECTED_LOCALE, "fr-FR");
+  Services.locale.setRequestedLocales(["fr-FR"]);
 
   startupManager();
 
@@ -24,8 +17,8 @@ function run_test() {
 // Tests that the localized properties are visible before installation
 function run_test_1() {
   AddonManager.getInstallForFile(do_get_addon("test_locale"), function(install) {
-    do_check_eq(install.addon.name, "fr-FR Name");
-    do_check_eq(install.addon.description, "fr-FR Description");
+    Assert.equal(install.addon.name, "fr-FR Name");
+    Assert.equal(install.addon.description, "fr-FR Description");
 
     prepare_test({
       "addon1@tests.mozilla.org": [
@@ -44,13 +37,13 @@ function run_test_2() {
   restartManager();
 
   AddonManager.getAddonByID("addon1@tests.mozilla.org", function(addon) {
-    do_check_neq(addon, null);
+    Assert.notEqual(addon, null);
 
-    do_check_eq(addon.name, "fr-FR Name");
-    do_check_eq(addon.description, "fr-FR Description");
+    Assert.equal(addon.name, "fr-FR Name");
+    Assert.equal(addon.description, "fr-FR Description");
 
     addon.userDisabled = true;
-    do_execute_soon(run_test_3);
+    executeSoon(run_test_3);
   });
 }
 
@@ -59,10 +52,10 @@ function run_test_3() {
   restartManager();
 
   AddonManager.getAddonByID("addon1@tests.mozilla.org", function(addon) {
-    do_check_neq(addon, null);
-    do_check_eq(addon.name, "fr-FR Name");
+    Assert.notEqual(addon, null);
+    Assert.equal(addon.name, "fr-FR Name");
 
-    do_execute_soon(run_test_4);
+    executeSoon(run_test_4);
   });
 }
 
@@ -74,46 +67,46 @@ function run_test_4() {
   restartManager();
 
   AddonManager.getAddonByID("addon1@tests.mozilla.org", function(addon) {
-    do_check_neq(addon, null);
-    do_check_eq(addon.name, "fr-FR Name");
+    Assert.notEqual(addon, null);
+    Assert.equal(addon.name, "fr-FR Name");
     let contributors = addon.contributors;
-    do_check_eq(contributors.length, 3);
-    do_check_eq(contributors[0], "Fr Contributor 1");
-    do_check_eq(contributors[1], "Fr Contributor 2");
-    do_check_eq(contributors[2], "Fr Contributor 3");
+    Assert.equal(contributors.length, 3);
+    Assert.equal(contributors[0], "Fr Contributor 1");
+    Assert.equal(contributors[1], "Fr Contributor 2");
+    Assert.equal(contributors[2], "Fr Contributor 3");
 
-    do_execute_soon(run_test_5);
+    executeSoon(run_test_5);
   });
 }
 
 // Test that changing locale works
 function run_test_5() {
-  Services.prefs.setCharPref(PREF_SELECTED_LOCALE, "de-DE");
+  Services.locale.setRequestedLocales(["de-DE"]);
   restartManager();
 
   AddonManager.getAddonByID("addon1@tests.mozilla.org", function(addon) {
-    do_check_neq(addon, null);
+    Assert.notEqual(addon, null);
 
-    do_check_eq(addon.name, "de-DE Name");
-    do_check_eq(addon.description, null);
+    Assert.equal(addon.name, "de-DE Name");
+    Assert.equal(addon.description, null);
 
-    do_execute_soon(run_test_6);
+    executeSoon(run_test_6);
   });
 }
 
 // Test that missing locales use the fallbacks
 function run_test_6() {
-  Services.prefs.setCharPref(PREF_SELECTED_LOCALE, "nl-NL");
+  Services.locale.setRequestedLocales(["nl-NL"]);
   restartManager();
 
   AddonManager.getAddonByID("addon1@tests.mozilla.org", callback_soon(function(addon) {
-    do_check_neq(addon, null);
+    Assert.notEqual(addon, null);
 
-    do_check_eq(addon.name, "Fallback Name");
-    do_check_eq(addon.description, "Fallback Description");
+    Assert.equal(addon.name, "Fallback Name");
+    Assert.equal(addon.description, "Fallback Description");
 
     addon.userDisabled = false;
-    do_execute_soon(run_test_7);
+    executeSoon(run_test_7);
   }));
 }
 
@@ -122,28 +115,28 @@ function run_test_7() {
   restartManager();
 
   AddonManager.getAddonByID("addon1@tests.mozilla.org", function(addon) {
-    do_check_neq(addon, null);
+    Assert.notEqual(addon, null);
 
-    do_check_eq(addon.name, "Name from prefs");
+    Assert.equal(addon.name, "Name from prefs");
 
-    do_execute_soon(run_test_8);
+    executeSoon(run_test_8);
   });
 }
 
 // Test that the prefs will override localized values from the manifest
 function run_test_8() {
-  Services.prefs.setCharPref(PREF_SELECTED_LOCALE, "fr-FR");
+  Services.locale.setRequestedLocales(["fr-FR"]);
   restartManager();
 
   AddonManager.getAddonByID("addon1@tests.mozilla.org", function(addon) {
-    do_check_neq(addon, null);
+    Assert.notEqual(addon, null);
 
-    do_check_eq(addon.name, "Name from prefs");
+    Assert.equal(addon.name, "Name from prefs");
     let contributors = addon.contributors;
-    do_check_eq(contributors.length, 2);
-    do_check_eq(contributors[0], "Contributor 1");
-    do_check_eq(contributors[1], "Contributor 2");
+    Assert.equal(contributors.length, 2);
+    Assert.equal(contributors[0], "Contributor 1");
+    Assert.equal(contributors[1], "Contributor 2");
 
-    do_execute_soon(do_test_finished);
+    executeSoon(do_test_finished);
   });
 }

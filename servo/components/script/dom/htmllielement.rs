@@ -5,14 +5,14 @@
 use dom::bindings::codegen::Bindings::HTMLLIElementBinding;
 use dom::bindings::codegen::Bindings::HTMLLIElementBinding::HTMLLIElementMethods;
 use dom::bindings::inheritance::Castable;
-use dom::bindings::js::Root;
+use dom::bindings::root::DomRoot;
 use dom::bindings::str::DOMString;
 use dom::document::Document;
 use dom::htmlelement::HTMLElement;
 use dom::node::Node;
 use dom::virtualmethods::VirtualMethods;
 use dom_struct::dom_struct;
-use html5ever_atoms::LocalName;
+use html5ever::{LocalName, Prefix};
 use style::attr::AttrValue;
 
 #[dom_struct]
@@ -21,7 +21,7 @@ pub struct HTMLLIElement {
 }
 
 impl HTMLLIElement {
-    fn new_inherited(local_name: LocalName, prefix: Option<DOMString>, document: &Document) -> HTMLLIElement {
+    fn new_inherited(local_name: LocalName, prefix: Option<Prefix>, document: &Document) -> HTMLLIElement {
         HTMLLIElement {
             htmlelement: HTMLElement::new_inherited(local_name, prefix, document)
         }
@@ -29,9 +29,9 @@ impl HTMLLIElement {
 
     #[allow(unrooted_must_root)]
     pub fn new(local_name: LocalName,
-               prefix: Option<DOMString>,
-               document: &Document) -> Root<HTMLLIElement> {
-        Node::reflect_node(box HTMLLIElement::new_inherited(local_name, prefix, document),
+               prefix: Option<Prefix>,
+               document: &Document) -> DomRoot<HTMLLIElement> {
+        Node::reflect_node(Box::new(HTMLLIElement::new_inherited(local_name, prefix, document)),
                            document,
                            HTMLLIElementBinding::Wrap)
     }

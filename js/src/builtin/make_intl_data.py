@@ -173,7 +173,10 @@ def writeMappingsVar(intlData, dict, name, description, fileDate, url):
         variable name and a comment with description, fileDate, and URL.
     """
     intlData.write("\n")
-    intlData.write("// {0}.\n".format(description))
+    if type(description) is not list:
+        description = [description]
+    for desc in description:
+        intlData.write("// {0}\n".format(desc))
     intlData.write("// Derived from IANA Language Subtag Registry, file date {0}.\n".format(fileDate))
     intlData.write("// {0}\n".format(url))
     intlData.write("var {0} = {{\n".format(name))
@@ -184,7 +187,9 @@ def writeMappingsVar(intlData, dict, name, description, fileDate, url):
         else:
             preferred = dict[key]["preferred"]
             prefix = dict[key]["prefix"]
-            value = '{{preferred: "{0}", prefix: "{1}"}}'.format(preferred, prefix)
+            if key != preferred:
+                raise Exception("Expected '{0}' matches preferred locale '{1}'".format(key, preferred))
+            value = '"{0}"'.format(prefix)
         intlData.write('    "{0}": {1},\n'.format(key, value))
     intlData.write("};\n")
 
@@ -192,11 +197,15 @@ def writeMappingsVar(intlData, dict, name, description, fileDate, url):
 def writeLanguageTagData(intlData, fileDate, url, langTagMappings, langSubtagMappings, extlangMappings):
     """ Writes the language tag data to the Intl data file. """
     writeMappingsVar(intlData, langTagMappings, "langTagMappings",
-                     "Mappings from complete tags to preferred values", fileDate, url)
+                     "Mappings from complete tags to preferred values.", fileDate, url)
     writeMappingsVar(intlData, langSubtagMappings, "langSubtagMappings",
-                     "Mappings from non-extlang subtags to preferred values", fileDate, url)
+                     "Mappings from non-extlang subtags to preferred values.", fileDate, url)
     writeMappingsVar(intlData, extlangMappings, "extlangMappings",
-                     "Mappings from extlang subtags to preferred values", fileDate, url)
+                     ["Mappings from extlang subtags to preferred values.",
+                      "All current deprecated extlang subtags have the form `<prefix>-<extlang>`",
+                      "and their preferred value is exactly equal to `<extlang>`. So each key in",
+                      "extlangMappings acts both as the extlang subtag and its preferred value."],
+                     fileDate, url)
 
 def updateLangTags(args):
     """ Update the IntlData.js file. """
@@ -477,6 +486,11 @@ def readICUTimeZonesFromTimezoneTypes(icuTzDir):
     # Remove the ICU placeholder time zone "Etc/Unknown".
     zones.remove(Zone("Etc/Unknown"))
 
+    # tzdata2017c removed the link Canada/East-Saskatchewan -> America/Regina,
+    # but it is still present in ICU sources. Manually remove it to keep our
+    # tables consistent with IANA.
+    del links[Zone("Canada/East-Saskatchewan")]
+
     validateTimeZones(zones, links)
 
     return (zones, links)
@@ -507,6 +521,11 @@ def readICUTimeZonesFromZoneInfo(icuTzDir, ignoreFactory):
 
     # Remove the ICU placeholder time zone "Etc/Unknown".
     zones.remove(Zone("Etc/Unknown"))
+
+    # tzdata2017c removed the link Canada/East-Saskatchewan -> America/Regina,
+    # but it is still present in ICU sources. Manually remove it to keep our
+    # tables consistent with IANA.
+    del links[Zone("Canada/East-Saskatchewan")]
 
     # Remove the placeholder time zone "Factory".
     if ignoreFactory:
@@ -566,6 +585,11 @@ def readICULegacyZones(icuDir):
 
     # Remove the ICU placeholder time zone "Etc/Unknown".
     zones.remove(Zone("Etc/Unknown"))
+
+    # tzdata2017c removed the link Canada/East-Saskatchewan -> America/Regina,
+    # but it is still present in ICU sources. Manually tag it as a legacy time
+    # zone so our tables are kept consistent with IANA.
+    links[Zone("Canada/East-Saskatchewan")] = "America/Regina"
 
     return (zones, links)
 

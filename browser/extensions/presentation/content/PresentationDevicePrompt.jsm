@@ -126,7 +126,7 @@ PresentationPermissionPrompt.prototype = {
       notificationIcon.setAttribute("role", "button");
       notificationIcon.setAttribute("tooltiptext",
                                     GetString("presentation.urlbar.tooltiptext"));
-      notificationIcon.style.filter = "url('chrome://global/skin/filters.svg#fill')";
+      notificationIcon.style.setProperty("-moz-context-properties", "fill");
       notificationIcon.style.fill = "currentcolor";
       notificationIcon.style.opacity = "0.4";
       notificationPopupBox.appendChild(notificationIcon);
@@ -167,7 +167,7 @@ PresentationPermissionPrompt.prototype = {
   // PRIVATE APIs
   get _domainName() {
     if (this.principal.URI instanceof Ci.nsIFileURL) {
-      return this.principal.URI.path.split("/")[1];
+      return this.principal.URI.pathQueryRef.split("/")[1];
     }
     return this.principal.URI.hostPort;
   },

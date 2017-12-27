@@ -4,15 +4,16 @@
 
 //! Little helpers for `nsCSSValue`.
 
-use app_units::Au;
 use gecko_bindings::bindings;
+use gecko_bindings::structs;
 use gecko_bindings::structs::{nsCSSValue, nsCSSUnit};
-use gecko_bindings::structs::{nsCSSValue_Array, nscolor};
+use gecko_bindings::structs::{nsCSSValue_Array, nsCSSValueList, nscolor};
 use gecko_string_cache::Atom;
+use std::marker::PhantomData;
 use std::mem;
 use std::ops::{Index, IndexMut};
 use std::slice;
-use values::computed::LengthOrPercentage;
+use values::computed::{Angle, Length, LengthOrPercentage, Percentage};
 use values::specified::url::SpecifiedUrl;
 
 impl nsCSSValue {
@@ -20,6 +21,12 @@ impl nsCSSValue {
     #[inline]
     pub fn null() -> Self {
         unsafe { mem::zeroed() }
+    }
+
+    /// Returns true if this nsCSSValue is none.
+    #[inline]
+    pub fn is_none(&self) -> bool {
+        self.mUnit == nsCSSUnit::eCSSUnit_None
     }
 
     /// Returns this nsCSSValue value as an integer, unchecked in release
@@ -73,11 +80,11 @@ impl nsCSSValue {
     /// Sets LengthOrPercentage value to this nsCSSValue.
     pub unsafe fn set_lop(&mut self, lop: LengthOrPercentage) {
         match lop {
-            LengthOrPercentage::Length(au) => {
-                bindings::Gecko_CSSValue_SetAbsoluteLength(self, au.0)
+            LengthOrPercentage::Length(px) => {
+                self.set_px(px.px())
             }
             LengthOrPercentage::Percentage(pc) => {
-                bindings::Gecko_CSSValue_SetPercentage(self, pc)
+                self.set_percentage(pc.0)
             }
             LengthOrPercentage::Calc(calc) => {
                 bindings::Gecko_CSSValue_SetCalc(self, calc.into())
@@ -85,14 +92,24 @@ impl nsCSSValue {
         }
     }
 
+    /// Sets a px value to this nsCSSValue.
+    pub unsafe fn set_px(&mut self, px: f32) {
+        bindings::Gecko_CSSValue_SetPixelLength(self, px)
+    }
+
+    /// Sets a percentage value to this nsCSSValue.
+    pub unsafe fn set_percentage(&mut self, unit_value: f32) {
+        bindings::Gecko_CSSValue_SetPercentage(self, unit_value)
+    }
+
     /// Returns LengthOrPercentage value.
     pub unsafe fn get_lop(&self) -> LengthOrPercentage {
         match self.mUnit {
             nsCSSUnit::eCSSUnit_Pixel => {
-                LengthOrPercentage::Length(Au(bindings::Gecko_CSSValue_GetAbsoluteLength(self)))
+                LengthOrPercentage::Length(Length::new(bindings::Gecko_CSSValue_GetNumber(self)))
             },
             nsCSSUnit::eCSSUnit_Percent => {
-                LengthOrPercentage::Percentage(bindings::Gecko_CSSValue_GetPercentage(self))
+                LengthOrPercentage::Percentage(Percentage(bindings::Gecko_CSSValue_GetPercentage(self)))
             },
             nsCSSUnit::eCSSUnit_Calc => {
                 LengthOrPercentage::Calc(bindings::Gecko_CSSValue_GetCalc(self).into())
@@ -101,9 +118,34 @@ impl nsCSSValue {
         }
     }
 
+    /// Returns Length  value.
+    pub unsafe fn get_length(&self) -> Length {
+        match self.mUnit {
+            nsCSSUnit::eCSSUnit_Pixel => {
+                Length::new(bindings::Gecko_CSSValue_GetNumber(self))
+            },
+            x => panic!("The unit should not be {:?}", x),
+        }
+    }
+
+    fn set_valueless_unit(&mut self, unit: nsCSSUnit) {
+        debug_assert_eq!(self.mUnit, nsCSSUnit::eCSSUnit_Null);
+        debug_assert!(unit as u32 <= nsCSSUnit::eCSSUnit_DummyInherit as u32, "Not a valueless unit");
+        self.mUnit = unit;
+    }
+
+    /// Set to an auto value
+    ///
+    /// This method requires the current value to be null.
+    pub fn set_auto(&mut self) {
+        self.set_valueless_unit(nsCSSUnit::eCSSUnit_Auto);
+    }
+
     /// Set to a normal value
+    ///
+    /// This method requires the current value to be null.
     pub fn set_normal(&mut self) {
-        unsafe { bindings::Gecko_CSSValue_SetNormal(self) }
+        self.set_valueless_unit(nsCSSUnit::eCSSUnit_Normal);
     }
 
     fn set_string_internal(&mut self, s: &str, unit: nsCSSUnit) {
@@ -124,9 +166,19 @@ impl nsCSSValue {
         self.set_string_from_atom_internal(s, nsCSSUnit::eCSSUnit_String)
     }
 
+    /// Set to a ident value from the given atom
+    pub fn set_ident_from_atom(&mut self, s: &Atom) {
+        self.set_string_from_atom_internal(s, nsCSSUnit::eCSSUnit_Ident)
+    }
+
     /// Set to an identifier value
     pub fn set_ident(&mut self, s: &str) {
         self.set_string_internal(s, nsCSSUnit::eCSSUnit_Ident)
+    }
+
+    /// Set to an atom identifier value
+    pub fn set_atom_ident(&mut self, s: Atom) {
+        unsafe { bindings::Gecko_CSSValue_SetAtomIdent(self, s.into_addrefed()) }
     }
 
     /// Set to a font format
@@ -165,14 +217,149 @@ impl nsCSSValue {
     }
 
     /// Generic set from any value that implements the ToNsCssValue trait.
-    pub fn set_from<T: ToNsCssValue>(&mut self, value: &T) {
+    pub fn set_from<T: ToNsCssValue>(&mut self, value: T) {
         value.convert(self)
+    }
+
+    /// Returns an `Angle` value from this `nsCSSValue`.
+    ///
+    /// Panics if the unit is not `eCSSUnit_Degree` `eCSSUnit_Grad`, `eCSSUnit_Turn`
+    /// or `eCSSUnit_Radian`.
+    pub fn get_angle(&self) -> Angle {
+        Angle::from_gecko_values(self.float_unchecked(), self.mUnit)
+    }
+
+    /// Sets Angle value to this nsCSSValue.
+    pub fn set_angle(&mut self, angle: Angle) {
+        debug_assert_eq!(self.mUnit, nsCSSUnit::eCSSUnit_Null);
+        let (value, unit) = angle.to_gecko_values();
+        self.mUnit = unit;
+        unsafe {
+            *self.mValue.mFloat.as_mut() = value;
+        }
+    }
+
+    /// Set to a pair value
+    ///
+    /// This is only supported on the main thread.
+    pub fn set_pair(&mut self, x: &nsCSSValue, y: &nsCSSValue) {
+        unsafe { bindings::Gecko_CSSValue_SetPair(self, x, y) }
+    }
+
+    /// Set to a list value
+    ///
+    /// This is only supported on the main thread.
+    pub fn set_list<I>(&mut self, values: I) where I: ExactSizeIterator<Item=nsCSSValue> {
+        debug_assert!(values.len() > 0, "Empty list is not supported");
+        unsafe { bindings::Gecko_CSSValue_SetList(self, values.len() as u32); }
+        debug_assert_eq!(self.mUnit, nsCSSUnit::eCSSUnit_List);
+        let list: &mut structs::nsCSSValueList = &mut unsafe {
+            self.mValue.mList.as_ref() // &*nsCSSValueList_heap
+                .as_mut().expect("List pointer should be non-null")
+        }._base;
+        for (item, new_value) in list.into_iter().zip(values) {
+            *item = new_value;
+        }
+    }
+
+    /// Set to a pair list value
+    ///
+    /// This is only supported on the main thread.
+    pub fn set_pair_list<I>(&mut self, mut values: I)
+    where I: ExactSizeIterator<Item=(nsCSSValue, nsCSSValue)> {
+        debug_assert!(values.len() > 0, "Empty list is not supported");
+        unsafe { bindings::Gecko_CSSValue_SetPairList(self, values.len() as u32); }
+        debug_assert_eq!(self.mUnit, nsCSSUnit::eCSSUnit_PairList);
+        let mut item_ptr = &mut unsafe {
+            self.mValue.mPairList.as_ref() // &*nsCSSValuePairList_heap
+                .as_mut().expect("List pointer should be non-null")
+        }._base as *mut structs::nsCSSValuePairList;
+        while let Some(item) = unsafe { item_ptr.as_mut() } {
+            let value = values.next().expect("Values shouldn't have been exhausted");
+            item.mXValue = value.0;
+            item.mYValue = value.1;
+            item_ptr = item.mNext;
+        }
+        debug_assert!(values.next().is_none(), "Values should have been exhausted");
+    }
+
+    /// Set a shared list
+    pub fn set_shared_list<I>(&mut self, values: I) where I: ExactSizeIterator<Item=nsCSSValue> {
+        debug_assert!(values.len() > 0, "Empty list is not supported");
+        unsafe { bindings::Gecko_CSSValue_InitSharedList(self, values.len() as u32) };
+        debug_assert_eq!(self.mUnit, nsCSSUnit::eCSSUnit_SharedList);
+        let list = unsafe {
+            self.mValue.mSharedList.as_ref()
+                .as_mut().expect("List pointer should be non-null").mHead.as_mut()
+        };
+        debug_assert!(list.is_some(), "New created shared list shouldn't be null");
+        for (item, new_value) in list.unwrap().into_iter().zip(values) {
+            *item = new_value;
+        }
     }
 }
 
 impl Drop for nsCSSValue {
     fn drop(&mut self) {
         unsafe { bindings::Gecko_CSSValue_Drop(self) };
+    }
+}
+
+/// Iterator of nsCSSValueList.
+#[allow(non_camel_case_types)]
+pub struct nsCSSValueListIterator<'a> {
+    current: Option<&'a nsCSSValueList>,
+}
+
+impl<'a> Iterator for nsCSSValueListIterator<'a> {
+    type Item = &'a nsCSSValue;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.current {
+            Some(item) => {
+                self.current = unsafe { item.mNext.as_ref() };
+                Some(&item.mValue)
+            },
+            None => None
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a nsCSSValueList {
+    type Item = &'a nsCSSValue;
+    type IntoIter = nsCSSValueListIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        nsCSSValueListIterator { current: Some(self) }
+    }
+}
+
+/// Mutable Iterator of nsCSSValueList.
+#[allow(non_camel_case_types)]
+pub struct nsCSSValueListMutIterator<'a> {
+    current: *mut nsCSSValueList,
+    phantom: PhantomData<&'a mut nsCSSValue>,
+}
+
+impl<'a> Iterator for nsCSSValueListMutIterator<'a> {
+    type Item = &'a mut nsCSSValue;
+    fn next(&mut self) -> Option<Self::Item> {
+        match unsafe { self.current.as_mut() } {
+            Some(item) => {
+                self.current = item.mNext;
+                Some(&mut item.mValue)
+            },
+            None => None
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a mut nsCSSValueList {
+    type Item = &'a mut nsCSSValue;
+    type IntoIter = nsCSSValueListMutIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        nsCSSValueListMutIterator { current: self as *mut nsCSSValueList,
+                                    phantom: PhantomData }
     }
 }
 
@@ -219,5 +406,5 @@ impl IndexMut<usize> for nsCSSValue_Array {
 /// Generic conversion to nsCSSValue
 pub trait ToNsCssValue {
     /// Convert
-    fn convert(&self, nscssvalue: &mut nsCSSValue);
+    fn convert(self, nscssvalue: &mut nsCSSValue);
 }

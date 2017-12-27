@@ -214,7 +214,7 @@
         <body>
           <![CDATA[
             if (element.previousSibling instanceof Text) {
-              element.previousSibling.appendData(element.textContent)
+              element.previousSibling.appendData(element.textContent);
             } else {
               element.parentNode.insertBefore(element.firstChild, element);
             }
@@ -335,8 +335,8 @@
             // if the scheme is not an exposed protocol, then opening this link
             // should be deferred to the system's external protocol handler
             if (!protocolSvc.isExposedProtocol(uri.scheme)) {
-              protocolSvc.loadUrl(uri);
-              aEvent.preventDefault()
+              protocolSvc.loadURI(uri);
+              aEvent.preventDefault();
               return;
             }
 
@@ -362,7 +362,7 @@
 
           // otherwise, fall back to opening the anchor directly
           var win = window;
-          if (window instanceof Components.interfaces.nsIDOMChromeWindow) {
+          if (window.isChromeWindow) {
             while (win.opener && !win.opener.closed)
               win = win.opener;
           }

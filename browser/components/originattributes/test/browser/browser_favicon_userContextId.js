@@ -7,6 +7,10 @@ const { classes: Cc, Constructor: CC, interfaces: Ci, utils: Cu } = Components;
 XPCOMUtils.defineLazyModuleGetter(this, "Promise",
   "resource://gre/modules/Promise.jsm");
 
+let EventUtils = {};
+Services.scriptloader.loadSubScript(
+  "chrome://mochikit/content/tests/SimpleTest/EventUtils.js", EventUtils);
+
 const TEST_SITE = "http://example.net";
 const TEST_THIRD_PARTY_SITE = "http://mochi.test:8888";
 
@@ -29,7 +33,7 @@ function clearAllImageCaches() {
   var tools = SpecialPowers.Cc["@mozilla.org/image/tools;1"]
                              .getService(SpecialPowers.Ci.imgITools);
   var imageCache = tools.getImgCacheForDocument(window.document);
-  imageCache.clearCache(true);  // true=chrome
+  imageCache.clearCache(true); // true=chrome
   imageCache.clearCache(false); // false=content
 }
 
@@ -52,8 +56,8 @@ function clearAllPlacesFavicons() {
   });
 }
 
-function FaviconObserver(aUserContextId, aExpectedCookie, aPageURI, aFaviconURL) {
-  this.reset(aUserContextId, aExpectedCookie, aPageURI, aFaviconURL);
+function FaviconObserver(aUserContextId, aExpectedCookie, aPageURI, aFaviconURL, aOnlyXUL) {
+  this.reset(aUserContextId, aExpectedCookie, aPageURI, aFaviconURL, aOnlyXUL);
 }
 
 FaviconObserver.prototype = {
@@ -108,13 +112,14 @@ FaviconObserver.prototype = {
     }
   },
 
-  reset(aUserContextId, aExpectedCookie, aPageURI, aFaviconURL) {
+  reset(aUserContextId, aExpectedCookie, aPageURI, aFaviconURL, aOnlyXUL) {
     this._curUserContextId = aUserContextId;
     this._expectedCookie = aExpectedCookie;
     this._expectedPrincipal = Services.scriptSecurityManager
                                       .createCodebasePrincipal(aPageURI, { userContextId: aUserContextId });
     this._faviconReqXUL = false;
-    this._faviconReqPlaces = false;
+    // If aOnlyXUL is true, we only care about the favicon request from XUL.
+    this._faviconReqPlaces = aOnlyXUL === true;
     this._faviconURL = aFaviconURL;
     this._faviconLoaded = new Promise.defer();
   },
@@ -141,32 +146,32 @@ function waitOnFaviconLoaded(aFaviconURL) {
   });
 }
 
-function* generateCookies(aHost) {
+async function generateCookies(aHost) {
   // we generate two different cookies for two userContextIds.
   let cookies = [];
   cookies.push(Math.random().toString());
   cookies.push(Math.random().toString());
 
   // Then, we add cookies into the site for 'personal' and 'work'.
-  let tabInfoA = yield openTabInUserContext(aHost, USER_CONTEXT_ID_PERSONAL);
-  let tabInfoB = yield openTabInUserContext(aHost, USER_CONTEXT_ID_WORK);
+  let tabInfoA = await openTabInUserContext(aHost, USER_CONTEXT_ID_PERSONAL);
+  let tabInfoB = await openTabInUserContext(aHost, USER_CONTEXT_ID_WORK);
 
-  yield ContentTask.spawn(tabInfoA.browser, cookies[0], function* (value) {
+  await ContentTask.spawn(tabInfoA.browser, cookies[0], async function(value) {
     content.document.cookie = value;
   });
 
-  yield ContentTask.spawn(tabInfoB.browser, cookies[1], function* (value) {
+  await ContentTask.spawn(tabInfoB.browser, cookies[1], async function(value) {
     content.document.cookie = value;
   });
 
-  yield BrowserTestUtils.removeTab(tabInfoA.tab);
-  yield BrowserTestUtils.removeTab(tabInfoB.tab);
+  await BrowserTestUtils.removeTab(tabInfoA.tab);
+  await BrowserTestUtils.removeTab(tabInfoB.tab);
 
   return cookies;
 }
 
-function* doTest(aTestPage, aFaviconHost, aFaviconURL) {
-  let cookies = yield generateCookies(aFaviconHost);
+async function doTest(aTestPage, aFaviconHost, aFaviconURL) {
+  let cookies = await generateCookies(aFaviconHost);
   let pageURI = makeURI(aTestPage);
 
   // Create the observer object for observing request channels of the personal
@@ -179,31 +184,112 @@ function* doTest(aTestPage, aFaviconHost, aFaviconURL) {
   Services.obs.addObserver(observer, "http-on-modify-request");
 
   // Open the tab with the personal container.
-  let tabInfo = yield openTabInUserContext(aTestPage, USER_CONTEXT_ID_PERSONAL);
+  let tabInfo = await openTabInUserContext(aTestPage, USER_CONTEXT_ID_PERSONAL);
 
   // Waiting for favicon requests are all made.
-  yield observer.promise;
+  await observer.promise;
   // Waiting for favicon loaded.
-  yield promiseWaitOnFaviconLoaded;
+  await promiseWaitOnFaviconLoaded;
 
   // Close the tab.
-  yield BrowserTestUtils.removeTab(tabInfo.tab);
+  await BrowserTestUtils.removeTab(tabInfo.tab);
 
   // Reset the observer for observing requests for the work container.
   observer.reset(USER_CONTEXT_ID_WORK, cookies[1], pageURI, aFaviconURL);
-  tabInfo = yield openTabInUserContext(aTestPage, USER_CONTEXT_ID_WORK);
+  tabInfo = await openTabInUserContext(aTestPage, USER_CONTEXT_ID_WORK);
 
   // Waiting for favicon requests are all made.
-  yield observer.promise;
+  await observer.promise;
 
   Services.obs.removeObserver(observer, "http-on-modify-request");
 
-  yield BrowserTestUtils.removeTab(tabInfo.tab);
+  await BrowserTestUtils.removeTab(tabInfo.tab);
 }
 
-add_task(function* setup() {
+async function doTestForAllTabsFavicon(aTestPage, aFaviconHost, aFaviconURL) {
+  let cookies = await generateCookies(aFaviconHost);
+  let pageURI = makeURI(aTestPage);
+
+  // Set the 'overflow' attribute to make allTabs button available.
+  let tabBrowser = document.getElementById("tabbrowser-tabs");
+  let allTabsBtn = document.getElementById("alltabs-button");
+  tabBrowser.setAttribute("overflow", true);
+
+  // Create the observer object for observing request channels of the personal
+  // container.
+  let observer = new FaviconObserver(USER_CONTEXT_ID_PERSONAL, cookies[0], pageURI, aFaviconURL, true);
+
+  // Add the observer earlier in case we miss it.
+  let promiseWaitOnFaviconLoaded = waitOnFaviconLoaded(aFaviconURL);
+
+  // Open the tab with the personal container.
+  let tabInfo = await openTabInUserContext(aTestPage, USER_CONTEXT_ID_PERSONAL);
+
+  // Waiting for favicon loaded.
+  await promiseWaitOnFaviconLoaded;
+
+  // We need to clear the image cache here for making sure the network request will
+  // be made for the favicon of allTabs menuitem.
+  clearAllImageCaches();
+
+  // Add the observer for listening favicon requests.
+  Services.obs.addObserver(observer, "http-on-modify-request");
+
+  // Make the popup of allTabs showing up and trigger the loading of the favicon.
+  let allTabsPopupShownPromise = BrowserTestUtils.waitForEvent(allTabsBtn, "popupshown");
+  EventUtils.synthesizeMouseAtCenter(allTabsBtn, {});
+  await observer.promise;
+  await allTabsPopupShownPromise;
+
+  // Close the popup of allTabs and wait until it's done.
+  let allTabsPopupHiddenPromise = BrowserTestUtils.waitForEvent(allTabsBtn, "popuphidden");
+  EventUtils.synthesizeMouseAtCenter(allTabsBtn, {});
+  await allTabsPopupHiddenPromise;
+
+  // Remove the observer for not receiving the favicon requests for opening a tab
+  // since we want to focus on the favicon of allTabs menu here.
+  Services.obs.removeObserver(observer, "http-on-modify-request");
+
+  // Close the tab.
+  await BrowserTestUtils.removeTab(tabInfo.tab);
+
+  // Open the tab under the work container and wait until the favicon is loaded.
+  promiseWaitOnFaviconLoaded = waitOnFaviconLoaded(aFaviconURL);
+  tabInfo = await openTabInUserContext(aTestPage, USER_CONTEXT_ID_WORK);
+  await promiseWaitOnFaviconLoaded;
+
+  // Clear the image cache again.
+  clearAllImageCaches();
+
+  // Reset the observer for observing requests for the work container.
+  observer.reset(USER_CONTEXT_ID_WORK, cookies[1], pageURI, aFaviconURL, true);
+
+  // Add the observer back for listening the favicon requests for allTabs menuitem.
+  Services.obs.addObserver(observer, "http-on-modify-request");
+
+  // Make the popup of allTabs showing up again.
+  allTabsPopupShownPromise = BrowserTestUtils.waitForEvent(allTabsBtn, "popupshown");
+  EventUtils.synthesizeMouseAtCenter(allTabsBtn, {});
+  await observer.promise;
+  await allTabsPopupShownPromise;
+
+  // Close the popup of allTabs and wait until it's done.
+  allTabsPopupHiddenPromise = BrowserTestUtils.waitForEvent(allTabsBtn, "popuphidden");
+  EventUtils.synthesizeMouseAtCenter(allTabsBtn, {});
+  await allTabsPopupHiddenPromise;
+
+  Services.obs.removeObserver(observer, "http-on-modify-request");
+
+  // Close the tab.
+  await BrowserTestUtils.removeTab(tabInfo.tab);
+
+  // Reset the 'overflow' attribute to make the allTabs button hidden again.
+  tabBrowser.removeAttribute("overflow");
+}
+
+add_task(async function setup() {
   // Make sure userContext is enabled.
-  yield SpecialPowers.pushPrefEnv({"set": [
+  await SpecialPowers.pushPrefEnv({"set": [
       ["privacy.userContext.enabled", true]
   ]});
 });
@@ -211,47 +297,65 @@ add_task(function* setup() {
 // A clean up function to prevent affecting other tests.
 registerCleanupFunction(() => {
   // Clear all cookies.
-  let cookieMgr = Cc["@mozilla.org/cookiemanager;1"]
-                     .getService(Ci.nsICookieManager);
-  cookieMgr.removeAll();
+  Services.cookies.removeAll();
 
   // Clear all image caches and network caches.
   clearAllImageCaches();
 
-  let networkCache = Cc["@mozilla.org/netwerk/cache-storage-service;1"]
-                        .getService(Ci.nsICacheStorageService);
-  networkCache.clear();
+  Services.cache2.clear();
 
   // Clear Places favicon caches.
   clearAllPlacesFavicons();
 });
 
-add_task(function* test_favicon_userContextId() {
+add_task(async function test_favicon_userContextId() {
   // Clear all image caches before running the test.
   clearAllImageCaches();
 
   // Clear all network caches.
-  let networkCache = Cc["@mozilla.org/netwerk/cache-storage-service;1"]
-                        .getService(Ci.nsICacheStorageService);
-  networkCache.clear();
+  Services.cache2.clear();
 
   // Clear Places favicon caches.
-  yield clearAllPlacesFavicons();
+  await clearAllPlacesFavicons();
 
-  yield doTest(TEST_PAGE, TEST_SITE, FAVICON_URI);
+  await doTest(TEST_PAGE, TEST_SITE, FAVICON_URI);
 });
 
-add_task(function* test_thirdPartyFavicon_userContextId() {
+add_task(async function test_thirdPartyFavicon_userContextId() {
   // Clear all image caches before running the test.
   clearAllImageCaches();
 
   // Clear all network caches.
-  let networkCache = Cc["@mozilla.org/netwerk/cache-storage-service;1"]
-                        .getService(Ci.nsICacheStorageService);
-  networkCache.clear();
+  Services.cache2.clear();
 
   // Clear Places favicon caches.
-  yield clearAllPlacesFavicons();
+  await clearAllPlacesFavicons();
 
-  yield doTest(TEST_THIRD_PARTY_PAGE, TEST_THIRD_PARTY_SITE, THIRD_PARTY_FAVICON_URI);
+  await doTest(TEST_THIRD_PARTY_PAGE, TEST_THIRD_PARTY_SITE, THIRD_PARTY_FAVICON_URI);
+});
+
+add_task(async function test_allTabs_favicon_userContextId() {
+  // Clear all image caches before running the test.
+  clearAllImageCaches();
+
+  // Clear all network caches.
+  Services.cache2.clear();
+
+  // Clear Places favicon caches.
+  await clearAllPlacesFavicons();
+
+  await doTestForAllTabsFavicon(TEST_PAGE, TEST_SITE, FAVICON_URI);
+});
+
+add_task(async function test_allTabs_thirdPartyFavicon_userContextId() {
+  // Clear all image caches before running the test.
+  clearAllImageCaches();
+
+  // Clear all network caches.
+  Services.cache2.clear();
+
+  // Clear Places favicon caches.
+  await clearAllPlacesFavicons();
+
+  await doTestForAllTabsFavicon(TEST_THIRD_PARTY_PAGE, TEST_THIRD_PARTY_SITE, THIRD_PARTY_FAVICON_URI);
 });

@@ -4,6 +4,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 import mozfile
 import mozprofile
 import os
@@ -72,6 +74,7 @@ class TestProfilePrint(unittest.TestCase):
         ff_pref_lines = ['+%s: %s' % (key, value)
                          for key, value in mozprofile.FirefoxProfile.preferences.items()]
         self.assertTrue(set(ff_pref_lines).issubset(lines))
+
 
 if __name__ == '__main__':
     mozunit.main()

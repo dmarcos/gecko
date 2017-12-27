@@ -39,11 +39,18 @@ namespace widget {
 struct AutoCacheNativeKeyCommands;
 
 class PuppetWidget : public nsBaseWidget
+                   , public TextEventDispatcherListener
 {
+  typedef mozilla::CSSRect CSSRect;
   typedef mozilla::dom::TabChild TabChild;
   typedef mozilla::gfx::DrawTarget DrawTarget;
+
+  // Avoiding to make compiler confused between mozilla::widget and nsIWidget.
+  typedef mozilla::widget::TextEventDispatcher TextEventDispatcher;
+  typedef mozilla::widget::TextEventDispatcherListener
+                             TextEventDispatcherListener;
+
   typedef nsBaseWidget Base;
-  typedef mozilla::CSSRect CSSRect;
 
   // The width and height of the "widget" are clamped to this.
   static const size_t kMaxDimension;
@@ -133,7 +140,7 @@ public:
   { return NS_ERROR_UNEXPECTED; }
 
   virtual LayoutDeviceIntPoint WidgetToScreenOffset() override
-  { return LayoutDeviceIntPoint::FromUnknownPoint(GetWindowPosition() + GetChromeDimensions()); }
+  { return GetWindowPosition() + GetChromeOffset(); }
 
   int32_t RoundsWidgetCoordinatesTo() override;
 
@@ -150,11 +157,10 @@ public:
                              const mozilla::Maybe<ZoomConstraints>& aConstraints) override;
   bool AsyncPanZoomEnabled() const override;
 
-  virtual bool
-  ExecuteNativeKeyBinding(NativeKeyBindingsType aType,
-                          const mozilla::WidgetKeyboardEvent& aEvent,
-                          DoCommandCallback aCallback,
-                          void* aCallbackData) override;
+  virtual void GetEditCommands(
+                 NativeKeyBindingsType aType,
+                 const mozilla::WidgetKeyboardEvent& aEvent,
+                 nsTArray<mozilla::CommandInt>& aCommands) override;
 
   friend struct AutoCacheNativeKeyCommands;
 
@@ -176,16 +182,27 @@ public:
                   LayersBackend aBackendHint = mozilla::layers::LayersBackend::LAYERS_NONE,
                   LayerManagerPersistence aPersistence = LAYER_MANAGER_CURRENT) override;
 
-  // This is used after a compositor reset.
-  LayerManager* RecreateLayerManager(PLayerTransactionChild* aShadowManager);
+  // This is used for creating remote layer managers and for re-creating
+  // them after a compositor reset. The lambda aInitializeFunc is used to perform
+  // any caller-required initialization for the newly created layer
+  // manager; in the event of a failure, return false and it will destroy the
+  // new layer manager without changing the state of the widget.
+  bool CreateRemoteLayerManager(const std::function<bool(LayerManager*)>& aInitializeFunc);
+
+  bool HasLayerManager()
+  {
+    return !!mLayerManager;
+  }
 
   virtual void SetInputContext(const InputContext& aContext,
                                const InputContextAction& aAction) override;
   virtual InputContext GetInputContext() override;
   virtual NativeIMEContext GetNativeIMEContext() override;
-  virtual IMENotificationRequests GetIMENotificationRequests() override;
   TextEventDispatcherListener* GetNativeTextEventDispatcherListener() override
-  { return mNativeTextEventDispatcherListener; }
+  {
+    return mNativeTextEventDispatcherListener ?
+             mNativeTextEventDispatcherListener.get() : this;
+  }
   void SetNativeTextEventDispatcherListener(TextEventDispatcherListener* aListener)
   { mNativeTextEventDispatcherListener = aListener; }
 
@@ -218,11 +235,11 @@ public:
 
   nsIntSize GetScreenDimensions();
 
-  // Get the size of the chrome of the window that this tab belongs to.
-  nsIntPoint GetChromeDimensions();
+  // Get the offset to the chrome of the window that this tab belongs to.
+  LayoutDeviceIntPoint GetChromeOffset();
 
   // Get the screen position of the application window.
-  nsIntPoint GetWindowPosition();
+  LayoutDeviceIntPoint GetWindowPosition();
 
   virtual LayoutDeviceIntRect GetScreenBounds() override;
 
@@ -281,6 +298,7 @@ public:
 
   void HandledWindowedPluginKeyEvent(const NativeEventData& aKeyEventData,
                                      bool aIsConsumed);
+
   virtual nsresult OnWindowedPluginKeyEvent(
                      const NativeEventData& aKeyEventData,
                      nsIKeyEventInPluginCallback* aCallback) override;
@@ -291,9 +309,18 @@ public:
                  const bool aIsVertical,
                  const LayoutDeviceIntPoint& aPoint) override;
 
-protected:
-  virtual nsresult NotifyIMEInternal(
-                     const IMENotification& aIMENotification) override;
+  // TextEventDispatcherListener
+  using nsBaseWidget::NotifyIME;
+  NS_IMETHOD NotifyIME(TextEventDispatcher* aTextEventDispatcher,
+                       const IMENotification& aNotification) override;
+  NS_IMETHOD_(IMENotificationRequests) GetIMENotificationRequests() override;
+  NS_IMETHOD_(void) OnRemovedFrom(
+                      TextEventDispatcher* aTextEventDispatcher) override;
+  NS_IMETHOD_(void) WillDispatchKeyboardEvent(
+                      TextEventDispatcher* aTextEventDispatcher,
+                      WidgetKeyboardEvent& aKeyboardEvent,
+                      uint32_t aIndexOfKeypress,
+                      void* aData) override;
 
 private:
   nsresult Paint();
@@ -371,11 +398,6 @@ private:
   int32_t mRounding;
   double mDefaultScale;
 
-  // Precomputed answers for ExecuteNativeKeyBinding
-  InfallibleTArray<mozilla::CommandInt> mSingleLineCommands;
-  InfallibleTArray<mozilla::CommandInt> mMultiLineCommands;
-  InfallibleTArray<mozilla::CommandInt> mRichTextCommands;
-
   nsCOMPtr<imgIContainer> mCustomCursor;
   uint32_t mCursorHotspotX, mCursorHotspotY;
 
@@ -389,52 +411,14 @@ protected:
 
 private:
   bool mNeedIMEStateInit;
-  bool mNativeKeyCommandsValid;
-};
-
-struct AutoCacheNativeKeyCommands
-{
-  explicit AutoCacheNativeKeyCommands(PuppetWidget* aWidget)
-    : mWidget(aWidget)
-  {
-    mSavedValid = mWidget->mNativeKeyCommandsValid;
-    mSavedSingleLine = mWidget->mSingleLineCommands;
-    mSavedMultiLine = mWidget->mMultiLineCommands;
-    mSavedRichText = mWidget->mRichTextCommands;
-  }
-
-  void Cache(const InfallibleTArray<mozilla::CommandInt>& aSingleLineCommands,
-             const InfallibleTArray<mozilla::CommandInt>& aMultiLineCommands,
-             const InfallibleTArray<mozilla::CommandInt>& aRichTextCommands)
-  {
-    mWidget->mNativeKeyCommandsValid = true;
-    mWidget->mSingleLineCommands = aSingleLineCommands;
-    mWidget->mMultiLineCommands = aMultiLineCommands;
-    mWidget->mRichTextCommands = aRichTextCommands;
-  }
-
-  void CacheNoCommands()
-  {
-    mWidget->mNativeKeyCommandsValid = true;
-    mWidget->mSingleLineCommands.Clear();
-    mWidget->mMultiLineCommands.Clear();
-    mWidget->mRichTextCommands.Clear();
-  }
-
-  ~AutoCacheNativeKeyCommands()
-  {
-    mWidget->mNativeKeyCommandsValid = mSavedValid;
-    mWidget->mSingleLineCommands = mSavedSingleLine;
-    mWidget->mMultiLineCommands = mSavedMultiLine;
-    mWidget->mRichTextCommands = mSavedRichText;
-  }
-
-private:
-  PuppetWidget* mWidget;
-  bool mSavedValid;
-  InfallibleTArray<mozilla::CommandInt> mSavedSingleLine;
-  InfallibleTArray<mozilla::CommandInt> mSavedMultiLine;
-  InfallibleTArray<mozilla::CommandInt> mSavedRichText;
+  // When remote process requests to commit/cancel a composition, the
+  // composition may have already been committed in the main process.  In such
+  // case, this will receive remaining composition events for the old
+  // composition even after requesting to commit/cancel the old composition
+  // but the TextComposition for the old composition has already been destroyed.
+  // So, until this meets new eCompositionStart, following composition events
+  // should be ignored if this is set to true.
+  bool mIgnoreCompositionEvents;
 };
 
 class PuppetScreen : public nsBaseScreen

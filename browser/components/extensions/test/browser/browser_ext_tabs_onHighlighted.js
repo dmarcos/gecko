@@ -1,8 +1,9 @@
 /* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* vim: set sts=2 sw=2 et tw=80: */
+/* eslint-disable mozilla/no-arbitrary-setTimeout */
 "use strict";
 
-add_task(function* testTabEvents() {
+add_task(async function testTabEvents() {
   async function background() {
     /** The list of active tab ID's */
     let tabIds = [];
@@ -73,7 +74,7 @@ add_task(function* testTabEvents() {
      */
     async function openTab(windowId) {
       browser.test.assertEq(0, Object.keys(events).length,
-                           "No events remaining before testing openTab.");
+                            "No events remaining before testing openTab.");
 
       let tab = await browser.tabs.create({windowId});
 
@@ -94,7 +95,7 @@ add_task(function* testTabEvents() {
      */
     async function openWindow(urls) {
       browser.test.assertEq(0, Object.keys(events).length,
-                           "No events remaining before testing openWindow.");
+                            "No events remaining before testing openWindow.");
 
       let window = await browser.windows.create({url: urls});
       browser.test.log(`Opened new window ${window.id}`);
@@ -104,9 +105,9 @@ add_task(function* testTabEvents() {
         tabIds.push(tab.id);
 
         let expectedEvents = [
-            "onCreated",
-            "onActivated",
-            "onHighlighted",
+          "onCreated",
+          "onActivated",
+          "onHighlighted",
         ];
         if (i !== 0) {
           expectedEvents.splice(1);
@@ -122,7 +123,7 @@ add_task(function* testTabEvents() {
      */
     async function highlightTab(tabId) {
       browser.test.assertEq(0, Object.keys(events).length,
-                           "No events remaining before testing highlightTab.");
+                            "No events remaining before testing highlightTab.");
 
       browser.test.log(`Highlighting tab ${tabId}`);
       let tab = await browser.tabs.update(tabId, {active: true});
@@ -175,7 +176,7 @@ add_task(function* testTabEvents() {
     background,
   });
 
-  yield extension.startup();
-  yield extension.awaitFinish("tabs.highlight");
-  yield extension.unload();
+  await extension.startup();
+  await extension.awaitFinish("tabs.highlight");
+  await extension.unload();
 });

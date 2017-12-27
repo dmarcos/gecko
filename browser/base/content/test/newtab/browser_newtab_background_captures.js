@@ -8,16 +8,17 @@
 
 const CAPTURE_PREF = "browser.pagethumbnails.capturing_disabled";
 
-add_task(function* () {
-  let imports = {};
-  Cu.import("resource://gre/modules/PageThumbs.jsm", imports);
+XPCOMUtils.defineLazyServiceGetter(this, "PageThumbsStorageService",
+  "@mozilla.org/thumbnails/pagethumbs-service;1",
+  "nsIPageThumbsStorageService");
 
+add_task(async function() {
   // Disable captures.
-  yield pushPrefs([CAPTURE_PREF, false]);
+  await pushPrefs([CAPTURE_PREF, false]);
 
   // Make sure the thumbnail doesn't exist yet.
   let url = "http://example.com/";
-  let path = imports.PageThumbsStorage.getFilePathForURL(url);
+  let path = PageThumbsStorageService.getFilePathForURL(url);
   let file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
   file.initWithPath(path);
   try {
@@ -25,7 +26,7 @@ add_task(function* () {
   } catch (err) {}
 
   // Add a top site.
-  yield setLinks("-1");
+  await setLinks("-1");
 
   // We need a handle to a hidden, pre-loaded newtab so we can verify that it
   // doesn't allow background captures. Ensure we have a preloaded browser.
@@ -33,7 +34,7 @@ add_task(function* () {
 
   // Wait for the preloaded browser to load.
   if (gBrowser._preloadedBrowser.contentDocument.readyState != "complete") {
-    yield BrowserTestUtils.waitForEvent(gBrowser._preloadedBrowser, "load", true);
+    await BrowserTestUtils.waitForEvent(gBrowser._preloadedBrowser, "load", true);
   }
 
   // We're now ready to use the preloaded browser.
@@ -53,9 +54,9 @@ add_task(function* () {
   });
 
   // Enable captures.
-  yield pushPrefs([CAPTURE_PREF, false]);
+  await pushPrefs([CAPTURE_PREF, false]);
 
-  yield thumbnailCreatedPromise;
+  await thumbnailCreatedPromise;
 
   // Test finished!
   gBrowser.removeTab(tab);

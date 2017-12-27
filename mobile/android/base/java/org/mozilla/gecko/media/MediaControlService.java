@@ -27,6 +27,7 @@ import android.util.Log;
 import org.mozilla.gecko.BrowserApp;
 import org.mozilla.gecko.GeckoApp;
 import org.mozilla.gecko.GeckoAppShell;
+import org.mozilla.gecko.IntentHelper;
 import org.mozilla.gecko.PrefsHelper;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Tab;
@@ -46,7 +47,6 @@ public class MediaControlService extends Service implements Tabs.OnTabsChangedLi
     public static final String ACTION_PAUSE_BY_AUDIO_FOCUS  = "action_pause_audio_focus";
     public static final String ACTION_START_AUDIO_DUCK      = "action_start_audio_duck";
     public static final String ACTION_STOP_AUDIO_DUCK       = "action_stop_audio_duck";
-    private static final int MEDIA_CONTROL_ID = 1;
     private static final String MEDIA_CONTROL_PREF = "dom.audiochannel.mediaControl";
 
     // This is maximum volume level difference when audio ducking. The number is arbitrary.
@@ -167,7 +167,11 @@ public class MediaControlService extends Service implements Tabs.OnTabsChangedLi
 
         Log.d(LOGTAG, "initialize");
         getGeckoPreference();
-        initMediaSession();
+        if (!initMediaSession()) {
+             Log.e(LOGTAG, "initialization fail!");
+             stopSelf();
+             return;
+        }
 
         coverSize = (int) getResources().getDimension(R.dimen.notification_media_cover);
         minCoverSize = getResources().getDimensionPixelSize(R.dimen.favicon_bg);
@@ -280,12 +284,17 @@ public class MediaControlService extends Service implements Tabs.OnTabsChangedLi
         PrefsHelper.addObserver(mPrefs, mPrefsObserver);
     }
 
-    private void initMediaSession() {
+    private boolean initMediaSession() {
         // Android MediaSession is introduced since version L.
-        mSession = new MediaSession(getApplicationContext(),
-                "fennec media session");
-        mController = new MediaController(getApplicationContext(),
-                mSession.getSessionToken());
+        try {
+            mSession = new MediaSession(getApplicationContext(),
+                                        "fennec media session");
+            mController = new MediaController(getApplicationContext(),
+                                              mSession.getSessionToken());
+        } catch (IllegalStateException e) {
+            Log.e(LOGTAG, "can't create MediaSession and MediaController!");
+            return false;
+        }
 
         int volumeControl = mController.getPlaybackInfo().getVolumeControl();
         if (volumeControl == VolumeProvider.VOLUME_CONTROL_ABSOLUTE ||
@@ -332,7 +341,15 @@ public class MediaControlService extends Service implements Tabs.OnTabsChangedLi
                 mTabReference = new WeakReference<>(null);
             }
         });
+        return true;
+    }
 
+    private void setMediaStateForTab(boolean isTabPlaying) {
+        final Tab tab = mTabReference.get();
+        if (tab == null) {
+            return;
+        }
+        tab.setIsMediaPlaying(isTabPlaying);
     }
 
     private void notifyObservers(String topic, String data) {
@@ -345,6 +362,7 @@ public class MediaControlService extends Service implements Tabs.OnTabsChangedLi
 
     private void setState(State newState) {
         mMediaState = newState;
+        setMediaStateForTab(mMediaState.equals(State.PLAYING));
         onStateChanged();
     }
 
@@ -357,7 +375,7 @@ public class MediaControlService extends Service implements Tabs.OnTabsChangedLi
 
         if (isNeedToRemoveControlInterface(mMediaState)) {
             stopForeground(false);
-            NotificationManagerCompat.from(this).cancel(MEDIA_CONTROL_ID);
+            NotificationManagerCompat.from(this).cancel(R.id.mediaControlNotification);
             return;
         }
 
@@ -390,11 +408,11 @@ public class MediaControlService extends Service implements Tabs.OnTabsChangedLi
             Notification.VISIBILITY_PRIVATE : Notification.VISIBILITY_PUBLIC;
 
         final Notification notification = new Notification.Builder(this)
-            .setSmallIcon(R.drawable.flat_icon)
+            .setSmallIcon(R.drawable.ic_status_logo)
             .setLargeIcon(generateCoverArt(tab))
             .setContentTitle(tab.getTitle())
             .setContentText(tab.getURL())
-            .setContentIntent(createContentIntent(tab.getId()))
+            .setContentIntent(createContentIntent(tab))
             .setDeleteIntent(createDeleteIntent())
             .setStyle(style)
             .addAction(createNotificationAction())
@@ -405,11 +423,11 @@ public class MediaControlService extends Service implements Tabs.OnTabsChangedLi
             .build();
 
         if (isPlaying) {
-            startForeground(MEDIA_CONTROL_ID, notification);
+            startForeground(R.id.mediaControlNotification, notification);
         } else {
             stopForeground(false);
             NotificationManagerCompat.from(this)
-                .notify(MEDIA_CONTROL_ID, notification);
+                .notify(R.id.mediaControlNotification, notification);
         }
     }
 
@@ -439,10 +457,8 @@ public class MediaControlService extends Service implements Tabs.OnTabsChangedLi
         return intent;
     }
 
-    private PendingIntent createContentIntent(int tabId) {
-        Intent intent = new Intent(getApplicationContext(), BrowserApp.class);
-        intent.setAction(GeckoApp.ACTION_SWITCH_TAB);
-        intent.putExtra("TabId", tabId);
+    private PendingIntent createContentIntent(Tab tab) {
+        Intent intent = IntentHelper.getTabSwitchIntent(tab);
         return PendingIntent.getActivity(getApplicationContext(), 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
     }
 

@@ -12,6 +12,7 @@
 #include "jit/BaselineJIT.h"
 #include "jit/IonAnalysis.h"
 #include "vm/EnvironmentObject.h"
+#include "vm/RegExpObject.h"
 #include "wasm/AsmJS.h"
 
 #include "jscompartmentinlines.h"
@@ -177,14 +178,14 @@ JSScript::principals()
 }
 
 inline void
-JSScript::setBaselineScript(JSRuntime* maybeRuntime, js::jit::BaselineScript* baselineScript)
+JSScript::setBaselineScript(JSRuntime* rt, js::jit::BaselineScript* baselineScript)
 {
     if (hasBaselineScript())
         js::jit::BaselineScript::writeBarrierPre(zone(), baseline);
-    MOZ_ASSERT(!hasIonScript());
+    MOZ_ASSERT(!ion || ion == ION_DISABLED_SCRIPT);
     baseline = baselineScript;
     resetWarmUpResetCounter();
-    updateBaselineOrIonRaw(maybeRuntime);
+    updateJitCodeRaw(rt);
 }
 
 inline bool

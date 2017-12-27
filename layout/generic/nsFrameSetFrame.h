@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,7 +18,7 @@ class  nsIContent;
 class  nsPresContext;
 struct nsRect;
 struct nsSize;
-class  nsIAtom;
+class  nsAtom;
 class  nsHTMLFramesetBorderFrame;
 class  nsHTMLFramesetFrame;
 
@@ -26,7 +27,7 @@ class  nsHTMLFramesetFrame;
 // defined at HTMLFrameSetElement.h
 struct nsFramesetSpec;
 
-struct nsBorderColor 
+struct nsBorderColor
 {
   nscolor mLeft;
   nscolor mRight;
@@ -51,10 +52,10 @@ struct nsFramesetDrag {
   bool                 mVertical;  // vertical if true, otherwise horizontal
 
   nsFramesetDrag();
-  void Reset(bool                 aVertical, 
-             int32_t              aIndex, 
-             int32_t              aChange, 
-             nsHTMLFramesetFrame* aSource); 
+  void Reset(bool                 aVertical,
+             int32_t              aIndex,
+             int32_t              aChange,
+             nsHTMLFramesetFrame* aSource);
   void UnSet();
 };
 
@@ -64,9 +65,8 @@ struct nsFramesetDrag {
 class nsHTMLFramesetFrame : public nsContainerFrame
 {
 public:
-  NS_DECL_QUERYFRAME_TARGET(nsHTMLFramesetFrame)
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsHTMLFramesetFrame)
 
   explicit nsHTMLFramesetFrame(nsStyleContext* aContext);
 
@@ -89,7 +89,7 @@ public:
                         mozilla::LogicalSize&  aSize,
                         nsIntPoint& aCellIndex);
 
-  virtual nsresult HandleEvent(nsPresContext* aPresContext, 
+  virtual nsresult HandleEvent(nsPresContext* aPresContext,
                                mozilla::WidgetGUIEvent* aEvent,
                                nsEventStatus* aEventStatus) override;
 
@@ -97,7 +97,6 @@ public:
                              nsIFrame::Cursor& aCursor) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual void Reflow(nsPresContext*           aPresContext,
@@ -105,18 +104,15 @@ public:
                       const ReflowInput& aReflowInput,
                       nsReflowStatus&          aStatus) override;
 
-  virtual nsIAtom* GetType() const override;
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override;
 #endif
 
-  virtual bool IsLeaf() const override;
-  
   void StartMouseDrag(nsPresContext* aPresContext,
                       nsHTMLFramesetBorderFrame* aBorder,
                       mozilla::WidgetGUIEvent* aEvent);
 
-  void MouseDrag(nsPresContext* aPresContext, 
+  void MouseDrag(nsPresContext* aPresContext,
                  mozilla::WidgetGUIEvent* aEvent);
 
   void EndMouseDrag(nsPresContext* aPresContext);
@@ -130,16 +126,16 @@ public:
   void RecalculateBorderResize();
 
 protected:
-  void Scale(nscoord  aDesired, 
-             int32_t  aNumIndicies, 
-             int32_t* aIndicies, 
+  void Scale(nscoord  aDesired,
+             int32_t  aNumIndicies,
+             int32_t* aIndicies,
              int32_t  aNumItems,
              int32_t* aItems);
 
-  void CalculateRowCol(nsPresContext*       aPresContext, 
-                       nscoord               aSize, 
-                       int32_t               aNumSpecs, 
-                       const nsFramesetSpec* aSpecs, 
+  void CalculateRowCol(nsPresContext*       aPresContext,
+                       nscoord               aSize,
+                       int32_t               aNumSpecs,
+                       const nsFramesetSpec* aSpecs,
                        nscoord*              aValues);
 
   void GenerateRowCol(nsPresContext*       aPresContext,
@@ -172,19 +168,19 @@ protected:
 
   nscolor GetBorderColor(nsIContent* aFrameContent);
 
-  bool GetNoResize(nsIFrame* aChildFrame); 
-  
+  bool GetNoResize(nsIFrame* aChildFrame);
+
   void ReflowPlaceChild(nsIFrame*                aChild,
                         nsPresContext*          aPresContext,
                         const ReflowInput& aReflowInput,
                         nsPoint&                 aOffset,
                         nsSize&                  aSize,
                         nsIntPoint*              aCellIndex = 0);
-  
-  bool CanResize(bool aVertical, bool aLeft); 
+
+  bool CanResize(bool aVertical, bool aLeft);
 
   bool CanChildResize(bool aVertical, bool aLeft, int32_t aChildX);
-  
+
   void SetBorderResize(nsHTMLFramesetBorderFrame* aBorderFrame);
 
   template<typename T, class D = mozilla::DefaultDelete<T>>
@@ -203,8 +199,8 @@ protected:
   mozilla::LayoutDeviceIntPoint mFirstDragPoint;
   int32_t          mNumRows;
   int32_t          mNumCols;
-  int32_t          mNonBorderChildCount; 
-  int32_t          mNonBlankChildCount; 
+  int32_t          mNonBorderChildCount;
+  int32_t          mNonBlankChildCount;
   int32_t          mEdgeVisibility;
   nsFrameborder    mParentFrameborder;
   nscolor          mParentBorderColor;

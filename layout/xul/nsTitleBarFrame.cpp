@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -33,8 +34,8 @@ NS_NewTitleBarFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 
 NS_IMPL_FRAMEARENA_HELPERS(nsTitleBarFrame)
 
-nsTitleBarFrame::nsTitleBarFrame(nsStyleContext* aContext)
-:nsBoxFrame(aContext, false)
+nsTitleBarFrame::nsTitleBarFrame(nsStyleContext* aContext, ClassID aID)
+  : nsBoxFrame(aContext, aID, false)
 {
   mTrackingMouseMove = false;
   UpdateMouseThrough();
@@ -42,7 +43,6 @@ nsTitleBarFrame::nsTitleBarFrame(nsStyleContext* aContext)
 
 void
 nsTitleBarFrame::BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
-                                             const nsRect&           aDirtyRect,
                                              const nsDisplayListSet& aLists)
 {
   // override, since we don't want children to get events
@@ -51,7 +51,7 @@ nsTitleBarFrame::BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
                                nsGkAtoms::_true, eCaseMatters))
       return;
   }
-  nsBoxFrame::BuildDisplayListForChildren(aBuilder, aDirtyRect, aLists);
+  nsBoxFrame::BuildDisplayListForChildren(aBuilder, aLists);
 }
 
 nsresult
@@ -167,6 +167,23 @@ nsTitleBarFrame::HandleEvent(nsPresContext* aPresContext,
 void
 nsTitleBarFrame::MouseClicked(WidgetMouseEvent* aEvent)
 {
+  bool isTrusted = false;
+  bool isShift = false;
+  bool isControl = false;
+  bool isAlt = false;
+  bool isMeta = false;
+  uint16_t inputSource = nsIDOMMouseEvent::MOZ_SOURCE_UNKNOWN;
+
+  if(aEvent) {
+    isShift = aEvent->IsShift();
+    isControl = aEvent->IsControl();
+    isAlt = aEvent->IsAlt();
+    isMeta = aEvent->IsMeta();
+    inputSource = aEvent->inputSource;
+  }
+
   // Execute the oncommand event handler.
-  nsContentUtils::DispatchXULCommand(mContent, aEvent && aEvent->IsTrusted());
+  nsContentUtils::DispatchXULCommand(mContent, isTrusted, nullptr,
+                                     nullptr, isControl, isAlt,
+                                     isShift, isMeta, inputSource);
 }

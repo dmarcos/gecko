@@ -37,16 +37,15 @@
 #include "jsobjinlines.h"
 
 #ifdef XP_WIN
-# define PATH_MAX (MAX_PATH > _MAX_DIR ? MAX_PATH : _MAX_DIR)
+# ifndef PATH_MAX
+#  define PATH_MAX (MAX_PATH > _MAX_DIR ? MAX_PATH : _MAX_DIR)
+# endif
 # define getcwd _getcwd
 #else
 # include <libgen.h>
 #endif
 
 using js::shell::RCFile;
-
-static RCFile** gErrFilePtr = nullptr;
-static RCFile** gOutFilePtr = nullptr;
 
 namespace js {
 namespace shell {
@@ -126,7 +125,7 @@ ResolvePath(JSContext* cx, HandleString filenameStr, PathResolutionMode resolveM
             resolveMode = RootRelative;
     }
 
-    static char buffer[PATH_MAX+1];
+    char buffer[PATH_MAX+1];
     if (resolveMode == ScriptRelative) {
 #ifdef XP_WIN
         // The docs say it can return EINVAL, but the compiler says it's void
@@ -235,7 +234,7 @@ FileAsTypedArray(JSContext* cx, JS::HandleString pathnameStr)
 UniqueChars
 GetCWD()
 {
-    static char buffer[PATH_MAX + 1];
+    char buffer[PATH_MAX + 1];
     const char* cwd = getcwd(buffer, PATH_MAX);
     if (!cwd)
         return UniqueChars();
@@ -448,9 +447,8 @@ class FileObject : public JSObject {
 static const js::ClassOps FileObjectClassOps = {
     nullptr,               /* addProperty */
     nullptr,               /* delProperty */
-    nullptr,               /* getProperty */
-    nullptr,               /* setProperty */
     nullptr,               /* enumerate */
+    nullptr,               /* newEnumerate */
     nullptr,               /* resolve */
     nullptr,               /* mayResolve */
     FileObject::finalize,  /* finalize */
@@ -555,13 +553,15 @@ Redirect(JSContext* cx, const CallArgs& args, RCFile** outFile)
 static bool
 osfile_redirectOutput(JSContext* cx, unsigned argc, Value* vp) {
     CallArgs args = CallArgsFromVp(argc, vp);
-    return Redirect(cx, args, gOutFilePtr);
+    ShellContext* scx = GetShellContext(cx);
+    return Redirect(cx, args, scx->outFilePtr);
 }
 
 static bool
 osfile_redirectError(JSContext* cx, unsigned argc, Value* vp) {
     CallArgs args = CallArgsFromVp(argc, vp);
-    return Redirect(cx, args, gErrFilePtr);
+    ShellContext* scx = GetShellContext(cx);
+    return Redirect(cx, args, scx->errFilePtr);
 }
 
 static bool
@@ -590,8 +590,9 @@ osfile_close(JSContext* cx, unsigned argc, Value* vp) {
 static const JSFunctionSpecWithHelp osfile_functions[] = {
     JS_FN_HELP("readFile", osfile_readFile, 1, 0,
 "readFile(filename, [\"binary\"])",
-"  Read filename into returned string. Filename is relative to the current\n"
-               "  working directory."),
+"  Read entire contents of filename. Returns a string, unless \"binary\" is passed\n"
+"  as the second argument, in which case it returns a Uint8Array. Filename is\n"
+"  relative to the current working directory."),
 
     JS_FN_HELP("readRelativeToScript", osfile_readRelativeToScript, 1, 0,
 "readRelativeToScript(filename, [\"binary\"])",
@@ -1010,8 +1011,9 @@ DefineOS(JSContext* cx, HandleObject global,
     if (!GenerateInterfaceHelp(cx, obj, "os"))
         return false;
 
-    gOutFilePtr = shellOut;
-    gErrFilePtr = shellErr;
+    ShellContext* scx = GetShellContext(cx);
+    scx->outFilePtr = shellOut;
+    scx->errFilePtr = shellErr;
 
     // For backwards compatibility, expose various os.file.* functions as
     // direct methods on the global.

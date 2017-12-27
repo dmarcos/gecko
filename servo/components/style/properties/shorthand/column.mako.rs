@@ -4,11 +4,15 @@
 
 <%namespace name="helpers" file="/helpers.mako.rs" />
 
-<%helpers:shorthand name="columns" sub_properties="column-count column-width" experimental="True"
+<%helpers:shorthand name="columns"
+                    sub_properties="column-width column-count"
+                    servo_pref="layout.columns.enabled",
+                    derive_serialize="True"
                     extra_prefixes="moz" spec="https://drafts.csswg.org/css-multicol/#propdef-columns">
     use properties::longhands::{column_count, column_width};
 
-    pub fn parse_value(context: &ParserContext, input: &mut Parser) -> Result<Longhands, ()> {
+    pub fn parse_value<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
+                               -> Result<Longhands, ParseError<'i>> {
 
         let mut column_count = None;
         let mut column_width = None;
@@ -40,32 +44,25 @@
 
         let values = autos + column_count.iter().len() + column_width.iter().len();
         if values == 0 || values > 2 {
-            Err(())
+            Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
         } else {
-            Ok(Longhands {
+            Ok(expanded! {
                 column_count: unwrap_or_initial!(column_count),
                 column_width: unwrap_or_initial!(column_width),
             })
-        }
-    }
-
-    impl<'a> ToCss for LonghandsToSerialize<'a>  {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            try!(self.column_width.to_css(dest));
-            try!(write!(dest, " "));
-
-            self.column_count.to_css(dest)
         }
     }
 </%helpers:shorthand>
 
 <%helpers:shorthand name="column-rule" products="gecko" extra_prefixes="moz"
     sub_properties="column-rule-width column-rule-style column-rule-color"
+    derive_serialize="True"
     spec="https://drafts.csswg.org/css-multicol/#propdef-column-rule">
     use properties::longhands::{column_rule_width, column_rule_style};
     use properties::longhands::column_rule_color;
 
-    pub fn parse_value(context: &ParserContext, input: &mut Parser) -> Result<Longhands, ()> {
+    pub fn parse_value<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
+                               -> Result<Longhands, ParseError<'i>> {
         % for name in "width style color".split():
         let mut column_rule_${name} = None;
         % endfor
@@ -86,23 +83,13 @@
             break
         }
         if any {
-            Ok(Longhands {
+            Ok(expanded! {
                 column_rule_width: unwrap_or_initial!(column_rule_width),
                 column_rule_style: unwrap_or_initial!(column_rule_style),
                 column_rule_color: unwrap_or_initial!(column_rule_color),
             })
         } else {
-            Err(())
-        }
-    }
-
-    impl<'a> ToCss for LonghandsToSerialize<'a>  {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            self.column_rule_width.to_css(dest)?;
-            dest.write_str(" ")?;
-            self.column_rule_style.to_css(dest)?;
-            dest.write_str(" ")?;
-            self.column_rule_color.to_css(dest)
+            Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
         }
     }
 </%helpers:shorthand>

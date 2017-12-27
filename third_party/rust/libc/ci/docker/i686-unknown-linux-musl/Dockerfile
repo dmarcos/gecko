@@ -1,8 +1,9 @@
-FROM ubuntu:16.10
+FROM ubuntu:17.10
 
+RUN dpkg --add-architecture i386
 RUN apt-get update
 RUN apt-get install -y --no-install-recommends \
-  gcc make libc6-dev git curl ca-certificates
+  gcc-multilib make libc6-dev git curl ca-certificates libc6:i386
 # Below we're cross-compiling musl for i686 using the system compiler on an
 # x86_64 system. This is an awkward thing to be doing and so we have to jump
 # through a couple hoops to get musl to be happy. In particular:
@@ -17,6 +18,13 @@ RUN curl https://www.musl-libc.org/releases/musl-1.1.15.tar.gz | \
     CC=gcc CFLAGS=-m32 ./configure --prefix=/musl-i686 --disable-shared --target=i686 && \
     make CROSS_COMPILE= install -j4 && \
     cd .. && \
-    rm -rf musl-1.1.15
+    rm -rf musl-1.1.15 && \
+# Install linux kernel headers sanitized for use with musl
+    curl -L  https://github.com/sabotage-linux/kernel-headers/archive/v3.12.6-5.tar.gz | \
+    tar xzf - && \
+    cd kernel-headers-3.12.6-5 && \
+    make ARCH=i386 prefix=/musl-i686 install -j4 && \
+    cd .. && \
+    rm -rf kernel-headers-3.12.6-5
 ENV PATH=$PATH:/musl-i686/bin:/rust/bin \
     CC_i686_unknown_linux_musl=musl-gcc

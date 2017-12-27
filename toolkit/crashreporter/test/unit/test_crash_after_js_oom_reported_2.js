@@ -9,17 +9,17 @@ function run_test() {
       crashType = CrashTestUtils.CRASH_MOZ_CRASH;
       crashReporter.annotateCrashReport("TestingOOMCrash", "Yes");
       Components.utils.getJSTestingFunctions().reportOutOfMemory();
-      Components.utils.forceGC();  // recover from first OOM
+      Components.utils.forceGC(); // recover from first OOM
       Components.utils.getJSTestingFunctions().reportOutOfMemory();
     },
     function(mdump, extra) {
-      do_check_eq(extra.TestingOOMCrash, "Yes");
+      Assert.equal(extra.TestingOOMCrash, "Yes");
 
       // Technically, GC can happen at any time, but it would be really
       // peculiar for it to happen again heuristically right after a GC was
       // forced. If extra.JSOutOfMemory is "Recovered" here, that's most
       // likely a bug in the error reporting machinery.
-      do_check_eq(extra.JSOutOfMemory, "Reported");
+      Assert.equal(extra.JSOutOfMemory, "Reported");
     },
     true);
 }

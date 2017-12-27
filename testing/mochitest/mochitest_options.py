@@ -59,22 +59,6 @@ ALL_FLAVORS = {
             'flavor': 'browser',
         }
     },
-    'jetpack-package': {
-        'suite': 'jetpack-package',
-        'aliases': ('jetpack-package', 'mochitest-jetpack-package', 'jpp'),
-        'enabled_apps': ('firefox',),
-        'extra_args': {
-            'flavor': 'jetpack-package',
-        }
-    },
-    'jetpack-addon': {
-        'suite': 'jetpack-addon',
-        'aliases': ('jetpack-addon', 'mochitest-jetpack-addon', 'jpa'),
-        'enabled_apps': ('firefox',),
-        'extra_args': {
-            'flavor': 'jetpack-addon',
-        }
-    },
     'a11y': {
         'suite': 'a11y',
         'aliases': ('a11y', 'mochitest-a11y', 'accessibility'),
@@ -229,11 +213,12 @@ class MochitestArguments(ArgumentContainer):
                   "chunkByDir directories.",
           "default": 0,
           }],
-        [["--run-by-dir"],
+        [["--run-by-manifest"],
          {"action": "store_true",
-          "dest": "runByDir",
-          "help": "Run each directory in a single browser instance with a fresh profile.",
+          "dest": "runByManifest",
+          "help": "Run each manifest in a single browser instance with a fresh profile.",
           "default": False,
+          "suppress": True,
           }],
         [["--shuffle"],
          {"action": "store_true",
@@ -439,13 +424,6 @@ class MochitestArguments(ArgumentContainer):
           "default": None,
           "suppress": True,
           }],
-        [["--strict-content-sandbox"],
-         {"action": "store_true",
-          "default": False,
-          "dest": "strictContentSandbox",
-          "help": "Run tests with a more strict content sandbox (Windows only).",
-          "suppress": not mozinfo.isWin,
-          }],
         [["--nested_oop"],
          {"action": "store_true",
           "default": False,
@@ -455,12 +433,6 @@ class MochitestArguments(ArgumentContainer):
          {"action": "store_true",
           "default": False,
           "help": "Run tests with DMD active.",
-          }],
-        [["--dmd-path"],
-         {"default": None,
-          "dest": "dmdPath",
-          "help": "Specifies the path to the directory containing the shared library for DMD.",
-          "suppress": True,
           }],
         [["--dump-output-directory"],
          {"default": None,
@@ -495,6 +467,12 @@ class MochitestArguments(ArgumentContainer):
           "dest": "quiet",
           "default": False,
           "help": "Do not print test log lines unless a failure occurs.",
+          }],
+        [["--headless"],
+         {"action": "store_true",
+          "dest": "headless",
+          "default": False,
+          "help": "Run tests in headless mode.",
           }],
         [["--pidfile"],
          {"dest": "pidFile",
@@ -574,14 +552,14 @@ class MochitestArguments(ArgumentContainer):
          {"default": None,
           "help": "host:port to use when connecting to Marionette",
           }],
-        [["--marionette-port-timeout"],
-         {"default": None,
-          "help": "Timeout while waiting for the marionette port to open.",
-          "suppress": True,
-          }],
         [["--marionette-socket-timeout"],
          {"default": None,
           "help": "Timeout while waiting to receive a message from the marionette server.",
+          "suppress": True,
+          }],
+        [["--marionette-startup-timeout"],
+         {"default": None,
+          "help": "Timeout while waiting for marionette server startup.",
           "suppress": True,
           }],
         [["--cleanup-crashes"],
@@ -601,6 +579,24 @@ class MochitestArguments(ArgumentContainer):
           "dest": "failure_pattern_file",
           "help": "File describes all failure patterns of the tests.",
           "suppress": True,
+          }],
+        [["--sandbox-read-whitelist"],
+         {"default": [],
+          "dest": "sandboxReadWhitelist",
+          "action": "append",
+          "help": "Path to add to the sandbox whitelist.",
+          "suppress": True,
+          }],
+        [["--verify"],
+         {"action": "store_true",
+          "default": False,
+          "help": "Run tests in verification mode: Run many times in different "
+                  "ways, to see if there are intermittent failures.",
+          }],
+        [["--verify-max-time"],
+         {"type": int,
+          "default": 3600,
+          "help": "Maximum time, in seconds, to run in --verify mode.",
           }],
     ]
 
@@ -623,8 +619,6 @@ class MochitestArguments(ArgumentContainer):
     def validate(self, parser, options, context):
         """Validate generic options."""
 
-        # for test manifest parsing.
-        mozinfo.update({"strictContentSandbox": options.strictContentSandbox})
         # for test manifest parsing.
         mozinfo.update({"nested_oop": options.nested_oop})
 
@@ -701,16 +695,6 @@ class MochitestArguments(ArgumentContainer):
         if options.profilePath:
             options.profilePath = self.get_full_path(options.profilePath, parser.oldcwd)
 
-        if options.dmdPath:
-            options.dmdPath = self.get_full_path(options.dmdPath, parser.oldcwd)
-
-        if options.dmd and not options.dmdPath:
-            if build_obj:
-                options.dmdPath = build_obj.bindir
-            else:
-                parser.error(
-                    "could not find dmd libraries, specify them with --dmd-path")
-
         if options.utilityPath:
             options.utilityPath = self.get_full_path(options.utilityPath, parser.oldcwd)
 
@@ -742,7 +726,7 @@ class MochitestArguments(ArgumentContainer):
         if options.valgrind or options.debugger:
             # valgrind and some debuggers may cause Gecko to start slowly. Make sure
             # marionette waits long enough to connect.
-            options.marionette_port_timeout = 900
+            options.marionette_startup_timeout = 900
             options.marionette_socket_timeout = 540
 
         if options.store_chrome_manifest:
@@ -760,24 +744,19 @@ class MochitestArguments(ArgumentContainer):
                     "data." % options.jscov_dir_prefix)
 
         if options.testingModulesDir is None:
+            # Try to guess the testing modules directory.
+            possible = [os.path.join(here, os.path.pardir, 'modules')]
             if build_obj:
-                options.testingModulesDir = os.path.join(
-                    build_obj.topobjdir, '_tests', 'modules')
-            else:
-                # Try to guess the testing modules directory.
-                # This somewhat grotesque hack allows the buildbot machines to find the
-                # modules directory without having to configure the buildbot hosts. This
-                # code should never be executed in local runs because the build system
-                # should always set the flag that populates this variable. If buildbot ever
-                # passes this argument, this code can be deleted.
-                possible = os.path.join(here, os.path.pardir, 'modules')
+                possible.insert(0, os.path.join(build_obj.topobjdir, '_tests', 'modules'))
 
-                if os.path.isdir(possible):
-                    options.testingModulesDir = possible
+            for p in possible:
+                if os.path.isdir(p):
+                    options.testingModulesDir = p
+                    break
 
         if build_obj:
             plugins_dir = os.path.join(build_obj.distdir, 'plugins')
-            if plugins_dir not in options.extraProfileFiles:
+            if os.path.isdir(plugins_dir) and plugins_dir not in options.extraProfileFiles:
                 options.extraProfileFiles.append(plugins_dir)
 
         # Even if buildbot is updated, we still want this, as the path we pass in
@@ -836,10 +815,14 @@ class MochitestArguments(ArgumentContainer):
 
         options.leakThresholds = {
             "default": options.defaultLeakThreshold,
-            "tab": 10000,  # See dependencies of bug 1051230.
+            "tab": options.defaultLeakThreshold,
             # GMP rarely gets a log, but when it does, it leaks a little.
             "geckomediaplugin": 20000,
         }
+
+        # See the dependencies of bug 1401764.
+        if mozinfo.isWin:
+            options.leakThresholds["tab"] = 1000
 
         # XXX We can't normalize test_paths in the non build_obj case here,
         # because testRoot depends on the flavor, which is determined by the
@@ -1020,10 +1003,7 @@ class AndroidArguments(ArgumentContainer):
 
             if not options.robocopApk and build_obj:
                 if build_obj.substs.get('MOZ_BUILD_MOBILE_ANDROID_WITH_GRADLE'):
-                    options.robocopApk = os.path.join(build_obj.topobjdir, 'gradle', 'build',
-                                                      'mobile', 'android', 'app', 'outputs', 'apk',
-                                                      'app-automation-debug-androidTest-'
-                                                      'unaligned.apk')
+                    options.robocopApk = build_obj.substs.get('GRADLE_ANDROID_APP_ANDROIDTEST_APK')
                 else:
                     options.robocopApk = os.path.join(build_obj.topobjdir, 'mobile', 'android',
                                                       'tests', 'browser',

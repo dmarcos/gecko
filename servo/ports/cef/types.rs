@@ -373,6 +373,7 @@ pub struct cef_point {
 //
 // Structure representing a rectangle.
 //
+#[derive(Default)]
 pub struct cef_rect {
   pub x: c_int,
   pub y: c_int,
@@ -727,11 +728,6 @@ pub struct cef_settings {
   // of the background color but will be otherwise ignored.
   //
   pub background_color: cef_color_t,
-
-  //
-  // Determines how many rendering threads are used.
-  //
-  pub rendering_threads: c_int,
 }
 
 //
@@ -1604,6 +1600,7 @@ pub enum cef_cursor_type_t {
 // passed as a parameter to CefRenderHandler::GetScreenInfo and should be filled
 // in by the client.
 ///
+#[derive(Default)]
 pub struct _cef_screen_info {
   ///
   // Device scale factor. Specifies the ratio between physical and logical

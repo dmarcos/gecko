@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=99: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -29,7 +29,10 @@ VsyncBridgeChild::Create(RefPtr<VsyncIOThreadHolder> aThread,
   RefPtr<VsyncBridgeChild> child = new VsyncBridgeChild(aThread, aProcessToken);
 
   RefPtr<nsIRunnable> task = NewRunnableMethod<Endpoint<PVsyncBridgeChild>&&>(
-    child, &VsyncBridgeChild::Open, Move(aEndpoint));
+    "gfx::VsyncBridgeChild::Open",
+    child,
+    &VsyncBridgeChild::Open,
+    Move(aEndpoint));
   aThread->GetThread()->Dispatch(task.forget(), nsIThread::DISPATCH_NORMAL);
 
   return child;
@@ -58,9 +61,10 @@ public:
   NotifyVsyncTask(RefPtr<VsyncBridgeChild> aVsyncBridge,
                   TimeStamp aTimeStamp,
                   const uint64_t& aLayersId)
-   : mVsyncBridge(aVsyncBridge),
-     mTimeStamp(aTimeStamp),
-     mLayersId(aLayersId)
+    : Runnable("gfx::NotifyVsyncTask")
+    , mVsyncBridge(aVsyncBridge)
+    , mTimeStamp(aTimeStamp)
+    , mLayersId(aLayersId)
   {}
 
   NS_IMETHOD Run() override {
@@ -106,7 +110,8 @@ void
 VsyncBridgeChild::Close()
 {
   if (!IsOnVsyncIOThread()) {
-    mLoop->PostTask(NewRunnableMethod(this, &VsyncBridgeChild::Close));
+    mLoop->PostTask(NewRunnableMethod(
+      "gfx::VsyncBridgeChild::Close", this, &VsyncBridgeChild::Close));
     return;
   }
 

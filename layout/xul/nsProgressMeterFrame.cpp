@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -36,12 +37,14 @@ public:
   nsFrameState mBitToAdd;
 };
 
-nsReflowFrameRunnable::nsReflowFrameRunnable(nsIFrame* aFrame,
-                          nsIPresShell::IntrinsicDirty aIntrinsicDirty,
-                          nsFrameState aBitToAdd)
-  : mWeakFrame(aFrame),
-    mIntrinsicDirty(aIntrinsicDirty),
-    mBitToAdd(aBitToAdd)
+nsReflowFrameRunnable::nsReflowFrameRunnable(
+  nsIFrame* aFrame,
+  nsIPresShell::IntrinsicDirty aIntrinsicDirty,
+  nsFrameState aBitToAdd)
+  : mozilla::Runnable("nsReflowFrameRunnable")
+  , mWeakFrame(aFrame)
+  , mIntrinsicDirty(aIntrinsicDirty)
+  , mBitToAdd(aBitToAdd)
 {
 }
 
@@ -49,7 +52,7 @@ NS_IMETHODIMP
 nsReflowFrameRunnable::Run()
 {
   if (mWeakFrame.IsAlive()) {
-    mWeakFrame->PresContext()->PresShell()->
+    mWeakFrame->PresShell()->
       FrameNeedsReflow(mWeakFrame, mIntrinsicDirty, mBitToAdd);
   }
   return NS_OK;
@@ -109,7 +112,7 @@ nsProgressMeterFrame::DoXULLayout(nsBoxLayoutState& aState)
   if (mNeedsReflowCallback) {
     nsIReflowCallback* cb = new nsAsyncProgressMeterInit(this);
     if (cb) {
-      PresContext()->PresShell()->PostReflowCallback(cb);
+      PresShell()->PostReflowCallback(cb);
     }
     mNeedsReflowCallback = false;
   }
@@ -118,7 +121,7 @@ nsProgressMeterFrame::DoXULLayout(nsBoxLayoutState& aState)
 
 nsresult
 nsProgressMeterFrame::AttributeChanged(int32_t aNameSpaceID,
-                                       nsIAtom* aAttribute,
+                                       nsAtom* aAttribute,
                                        int32_t aModType)
 {
   NS_ASSERTION(!nsContentUtils::IsSafeToRunScript(),
@@ -136,11 +139,11 @@ nsProgressMeterFrame::AttributeChanged(int32_t aNameSpaceID,
       (!undetermined &&
        (nsGkAtoms::value == aAttribute || nsGkAtoms::max == aAttribute))) {
     nsIFrame* barChild = PrincipalChildList().FirstChild();
-    if (!barChild) return NS_OK;
+    if (!barChild || !barChild->GetContent()->IsElement()) return NS_OK;
     nsIFrame* remainderChild = barChild->GetNextSibling();
     if (!remainderChild) return NS_OK;
     nsCOMPtr<nsIContent> remainderContent = remainderChild->GetContent();
-    if (!remainderContent) return NS_OK;
+    if (!remainderContent->IsElement()) return NS_OK;
 
     int32_t flex = 1, maxFlex = 1;
     if (!undetermined) {
@@ -166,9 +169,9 @@ nsProgressMeterFrame::AttributeChanged(int32_t aNameSpaceID,
     }
 
     nsContentUtils::AddScriptRunner(new nsSetAttrRunnable(
-      barChild->GetContent(), nsGkAtoms::flex, flex));
+      barChild->GetContent()->AsElement(), nsGkAtoms::flex, flex));
     nsContentUtils::AddScriptRunner(new nsSetAttrRunnable(
-      remainderContent, nsGkAtoms::flex, maxFlex - flex));
+      remainderContent->AsElement(), nsGkAtoms::flex, maxFlex - flex));
     nsContentUtils::AddScriptRunner(new nsReflowFrameRunnable(
       this, nsIPresShell::eTreeChange, NS_FRAME_IS_DIRTY));
   }

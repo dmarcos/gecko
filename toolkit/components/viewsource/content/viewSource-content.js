@@ -9,8 +9,6 @@ var { utils: Cu, interfaces: Ci, classes: Cc } = Components;
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
-  "resource://gre/modules/BrowserUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "DeferredTask",
   "resource://gre/modules/DeferredTask.jsm");
 
@@ -33,12 +31,6 @@ var global = this;
  */
 var ViewSourceContent = {
   /**
-   * We'll act as an nsISelectionListener as well so that we can send
-   * updates to the view source window's status bar.
-   */
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsISelectionListener]),
-
-  /**
    * These are the messages that ViewSourceContent is prepared to listen
    * for. If you need ViewSourceContent to handle more messages, add them
    * here.
@@ -59,16 +51,6 @@ var ViewSourceContent = {
    * set true when there is a pending request to draw selection.
    */
   needsDrawSelection: false,
-
-  /**
-   * ViewSourceContent is attached as an nsISelectionListener on pageshow,
-   * and removed on pagehide. When the initial about:blank is transitioned
-   * away from, a pagehide is fired without us having attached ourselves
-   * first. We use this boolean to keep track of whether or not we're
-   * attached, so we don't attempt to remove our listener when it's not
-   * yet there (which throws).
-   */
-  selectionListenerAttached: false,
 
   get isViewSource() {
     let uri = content.document.documentURI;
@@ -111,11 +93,6 @@ var ViewSourceContent = {
     removeEventListener("unload", this);
 
     Services.els.removeSystemEventListener(global, "contextmenu", this, false);
-
-    // Cancel any pending toolbar updates.
-    if (this.updateStatusTask) {
-      this.updateStatusTask.disarm();
-    }
   },
 
   /**
@@ -330,7 +307,7 @@ var ViewSourceContent = {
     let shEntrySource = pageDescriptor.QueryInterface(Ci.nsISHEntry);
     let shEntry = Cc["@mozilla.org/browser/session-history-entry;1"]
                     .createInstance(Ci.nsISHEntry);
-    shEntry.setURI(BrowserUtils.makeURI(viewSrcURL, null, null));
+    shEntry.setURI(Services.io.newURI(viewSrcURL));
     shEntry.setTitle(viewSrcURL);
     let systemPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
     shEntry.triggeringPrincipal = systemPrincipal;
@@ -382,21 +359,9 @@ var ViewSourceContent = {
     if (/^about:blocked/.test(errorDoc.documentURI)) {
       // The event came from a button on a malware/phishing block page
 
-      if (target == errorDoc.getElementById("getMeOutButton")) {
+      if (target == errorDoc.getElementById("goBackButton")) {
         // Instead of loading some safe page, just close the window
         sendAsyncMessage("ViewSource:Close");
-      } else if (target == errorDoc.getElementById("reportButton")) {
-        // This is the "Why is this site blocked" button. We redirect
-        // to the generic page describing phishing/malware protection.
-        let URL = Services.urlFormatter.formatURLPref("app.support.baseURL");
-        sendAsyncMessage("ViewSource:OpenURL", { URL })
-      } else if (target == errorDoc.getElementById("ignoreWarningButton")) {
-        // Allow users to override and continue through to the site
-        docShell.QueryInterface(Ci.nsIWebNavigation)
-                .loadURIWithOptions(content.location.href,
-                                    Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CLASSIFIER,
-                                    null, Ci.nsIHttpChannel.REFERRER_POLICY_UNSET,
-                                    null, null, null);
       }
     }
   },
@@ -408,12 +373,6 @@ var ViewSourceContent = {
    *        The pageshow event being handled.
    */
   onPageShow(event) {
-    let selection = content.getSelection();
-    if (selection) {
-      selection.QueryInterface(Ci.nsISelectionPrivate)
-               .addSelectionListener(this);
-      this.selectionListenerAttached = true;
-    }
     content.focus();
 
     // If we need to draw the selection, wait until an actual view source page
@@ -438,28 +397,10 @@ var ViewSourceContent = {
    *        The pagehide event being handled.
    */
   onPageHide(event) {
-    // The initial about:blank will fire pagehide before we
-    // ever set a selectionListener, so we have a boolean around
-    // to keep track of when the listener is attached.
-    if (this.selectionListenerAttached) {
-      content.getSelection()
-             .QueryInterface(Ci.nsISelectionPrivate)
-             .removeSelectionListener(this);
-      this.selectionListenerAttached = false;
-    }
     sendAsyncMessage("ViewSource:SourceUnloaded");
   },
 
   onContextMenu(event) {
-    let addonInfo = {};
-    let subject = {
-      event,
-      addonInfo,
-    };
-
-    subject.wrappedJSObject = subject;
-    Services.obs.notifyObservers(subject, "content-contextmenu");
-
     let node = event.target;
 
     let result = {
@@ -725,43 +666,6 @@ var ViewSourceContent = {
   },
 
   /**
-   * A reference to a DeferredTask that is armed every time the
-   * selection changes.
-   */
-  updateStatusTask: null,
-
-  /**
-   * Called once the DeferredTask fires. Sends a message up to the
-   * parent to update the status bar text.
-   */
-  updateStatus() {
-    let selection = content.getSelection();
-
-    if (!selection.focusNode) {
-      sendAsyncMessage("ViewSource:UpdateStatus", { label: "" });
-      return;
-    }
-    if (selection.focusNode.nodeType != Ci.nsIDOMNode.TEXT_NODE) {
-      return;
-    }
-
-    let selCon = this.selectionController;
-    selCon.setDisplaySelection(Ci.nsISelectionController.SELECTION_ON);
-    selCon.setCaretVisibilityDuringSelection(true);
-
-    let interlinePosition = selection.QueryInterface(Ci.nsISelectionPrivate)
-                                     .interlinePosition;
-
-    let result = {};
-    this.findLocation(null, -1,
-        selection.focusNode, selection.focusOffset, interlinePosition, result);
-
-    let label = this.bundle.formatStringFromName("statusBarLineCol",
-                                                 [result.line, result.col], 2);
-    sendAsyncMessage("ViewSource:UpdateStatus", { label });
-  },
-
-  /**
    * Loads a view source selection showing the given view-source url and
    * highlight the selection.
    *
@@ -777,28 +681,9 @@ var ViewSourceContent = {
     let referrerPolicy = Ci.nsIHttpChannel.REFERRER_POLICY_UNSET;
     let webNav = docShell.QueryInterface(Ci.nsIWebNavigation);
     webNav.loadURIWithOptions(uri, loadFlags,
-                              null, referrerPolicy,  // referrer
-                              null, null,  // postData, headers
+                              null, referrerPolicy, // referrer
+                              null, null, // postData, headers
                               Services.io.newURI(baseURI));
-  },
-
-  /**
-   * nsISelectionListener
-   */
-
-  /**
-   * Gets called every time the selection is changed. Coalesces frequent
-   * changes, and calls updateStatus after 100ms of no selection change
-   * activity.
-   */
-  notifySelectionChanged(doc, sel, reason) {
-    if (!this.updateStatusTask) {
-      this.updateStatusTask = new DeferredTask(() => {
-        this.updateStatus();
-      }, 100);
-    }
-
-    this.updateStatusTask.arm();
   },
 
   /**
@@ -950,7 +835,7 @@ var ViewSourceContent = {
       if (itemSpec.accesskey) {
         let accesskeyName = `context_${itemSpec.id}_accesskey`;
         item.setAttribute("accesskey",
-                          this.bundle.GetStringFromName(accesskeyName))
+                          this.bundle.GetStringFromName(accesskeyName));
       }
       menu.appendChild(item);
     });

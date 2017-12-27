@@ -5,12 +5,23 @@ authors = ["The Mozilla Project Developers"]
 license = "MPL-2.0"
 
 [dependencies]
-webrender_traits = {path = "../webrender_traits", version = "0.32.0"}
-euclid = "0.11"
-app_units = "0.4"
-gleam = "0.4"
+rayon = "0.8"
+thread_profiler = "0.1.1"
+euclid = "0.16"
+app_units = "0.6"
+gleam = "0.4.15"
+log = "0.3"
 
 [dependencies.webrender]
 path = "../webrender"
-version = "0.31.0"
+version = "0.56.1"
 default-features = false
+
+[target.'cfg(target_os = "windows")'.dependencies]
+dwrote = "0.4.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.4.6"
+core-graphics = "0.12.3"
+foreign-types = "0.3.0"
+

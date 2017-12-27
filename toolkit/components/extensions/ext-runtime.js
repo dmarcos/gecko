@@ -1,22 +1,23 @@
 "use strict";
 
+// The ext-* files are imported into the same scopes.
+/* import-globals-from ext-toolkit.js */
+
 XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
                                   "resource://gre/modules/AddonManager.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "AddonManagerPrivate",
                                   "resource://gre/modules/AddonManager.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Extension",
-                                  "resource://gre/modules/Extension.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "ExtensionManagement",
-                                  "resource://gre/modules/ExtensionManagement.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
-                                  "resource://gre/modules/NetUtil.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "ExtensionParent",
+                                  "resource://gre/modules/ExtensionParent.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Services",
+                                  "resource://gre/modules/Services.jsm");
 
 this.runtime = class extends ExtensionAPI {
   getAPI(context) {
     let {extension} = context;
     return {
       runtime: {
-        onStartup: new SingletonEventManager(context, "runtime.onStartup", fire => {
+        onStartup: new EventManager(context, "runtime.onStartup", fire => {
           if (context.incognito) {
             // This event should not fire if we are operating in a private profile.
             return () => {};
@@ -32,19 +33,25 @@ this.runtime = class extends ExtensionAPI {
           };
         }).api(),
 
-        onInstalled: new SingletonEventManager(context, "runtime.onInstalled", fire => {
+        onInstalled: new EventManager(context, "runtime.onInstalled", fire => {
+          let temporary = !!extension.addonData.temporarilyInstalled;
+
           let listener = () => {
             switch (extension.startupReason) {
               case "APP_STARTUP":
                 if (AddonManagerPrivate.browserUpdated) {
-                  fire.sync({reason: "browser_update"});
+                  fire.sync({reason: "browser_update", temporary});
                 }
                 break;
               case "ADDON_INSTALL":
-                fire.sync({reason: "install"});
+                fire.sync({reason: "install", temporary});
                 break;
               case "ADDON_UPGRADE":
-                fire.sync({reason: "update", previousVersion: extension.addonData.oldVersion});
+                fire.sync({
+                  reason: "update",
+                  previousVersion: extension.addonData.oldVersion,
+                  temporary,
+                });
                 break;
             }
           };
@@ -54,7 +61,7 @@ this.runtime = class extends ExtensionAPI {
           };
         }).api(),
 
-        onUpdateAvailable: new SingletonEventManager(context, "runtime.onUpdateAvailable", fire => {
+        onUpdateAvailable: new EventManager(context, "runtime.onUpdateAvailable", fire => {
           let instanceID = extension.addonData.instanceID;
           AddonManager.addUpgradeListener(instanceID, upgrade => {
             extension.upgrade = upgrade;
@@ -64,7 +71,9 @@ this.runtime = class extends ExtensionAPI {
             fire.sync(details);
           });
           return () => {
-            AddonManager.removeUpgradeListener(instanceID);
+            AddonManager.removeUpgradeListener(instanceID).catch(e => {
+              // This can happen if we try this after shutdown is complete.
+            });
           };
         }).api(),
 
@@ -94,7 +103,7 @@ this.runtime = class extends ExtensionAPI {
         },
 
         getPlatformInfo: function() {
-          return Promise.resolve(ExtensionUtils.PlatformInfo);
+          return Promise.resolve(ExtensionParent.PlatformInfo);
         },
 
         openOptionsPage: function() {
@@ -102,6 +111,9 @@ this.runtime = class extends ExtensionAPI {
             return Promise.reject({message: "No `options_ui` declared"});
           }
 
+          // This expects openOptionsPage to be defined in the file using this,
+          // e.g. the browser/ version of ext-runtime.js
+          /* global openOptionsPage:false */
           return openOptionsPage(extension).then(() => {});
         },
 
@@ -112,12 +124,12 @@ this.runtime = class extends ExtensionAPI {
 
           let uri;
           try {
-            uri = NetUtil.newURI(url);
+            uri = new URL(url);
           } catch (e) {
             return Promise.reject({message: `Invalid URL: ${JSON.stringify(url)}`});
           }
 
-          if (uri.scheme != "http" && uri.scheme != "https") {
+          if (uri.protocol != "http:" && uri.protocol != "https:") {
             return Promise.reject({message: "url must have the scheme http or https"});
           }
 

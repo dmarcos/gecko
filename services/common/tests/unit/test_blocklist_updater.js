@@ -1,4 +1,5 @@
 Cu.import("resource://testing-common/httpd.js");
+const { UptakeTelemetry } = Cu.import("resource://services-common/uptake-telemetry.js", {});
 
 var server;
 
@@ -8,9 +9,12 @@ const PREF_LAST_UPDATE = "services.blocklist.last_update_seconds";
 const PREF_LAST_ETAG = "services.blocklist.last_etag";
 const PREF_CLOCK_SKEW_SECONDS = "services.blocklist.clock_skew_seconds";
 
+// Telemetry report result.
+const TELEMETRY_HISTOGRAM_KEY = "settings-changes-monitoring";
+
 // Check to ensure maybeSync is called with correct values when a changes
 // document contains information on when a collection was last modified
-add_task(function* test_check_maybeSync() {
+add_task(async function test_check_maybeSync() {
   const changesPath = "/v1/buckets/monitor/collections/changes/records";
 
   // register a handler
@@ -54,35 +58,47 @@ add_task(function* test_check_maybeSync() {
 
   let updater = Cu.import("resource://services-common/blocklist-updater.js", {});
 
-  let syncPromise = new Promise(function(resolve, reject) {
-    // add a test kinto client that will respond to lastModified information
-    // for a collection called 'test-collection'
-    updater.addTestBlocklistClient("test-collection", {
-      bucketName: "blocklists",
-      maybeSync(lastModified, serverTime) {
-        do_check_eq(lastModified, 1000);
-        do_check_eq(serverTime, 2000);
-        resolve();
-      }
-    });
-    updater.checkVersions();
+  // ensure we get the maybeSync call
+  // add a test kinto client that will respond to lastModified information
+  // for a collection called 'test-collection'
+  updater.addTestBlocklistClient("test-collection", {
+    bucketName: "blocklists",
+    maybeSync(lastModified, serverTime) {
+      Assert.equal(lastModified, 1000);
+      Assert.equal(serverTime, 2000);
+    }
   });
 
-  // ensure we get the maybeSync call
-  yield syncPromise;
+  const startHistogram = getUptakeTelemetrySnapshot(TELEMETRY_HISTOGRAM_KEY);
+
+  let notificationObserved = false;
+
+  // Ensure that the blocklist-updater-versions-checked notification works
+  let certblockObserver = {
+    observe(aSubject, aTopic, aData) {
+      Services.obs.removeObserver(this, "blocklist-updater-versions-checked");
+      notificationObserved = true;
+    }
+  };
+
+  Services.obs.addObserver(certblockObserver, "blocklist-updater-versions-checked");
+
+  await updater.checkVersions();
+
+  Assert.ok(notificationObserved, "a notification should have been observed");
 
   // check the last_update is updated
-  do_check_eq(Services.prefs.getIntPref(PREF_LAST_UPDATE), 2);
+  Assert.equal(Services.prefs.getIntPref(PREF_LAST_UPDATE), 2);
 
   // How does the clock difference look?
   let endTime = Date.now();
   let clockDifference = Services.prefs.getIntPref(PREF_CLOCK_SKEW_SECONDS);
   // we previously set the serverTime to 2 (seconds past epoch)
-  do_check_true(clockDifference <= endTime / 1000
+  Assert.ok(clockDifference <= endTime / 1000
               && clockDifference >= Math.floor(startTime / 1000) - 2);
   // Last timestamp was saved. An ETag header value is a quoted string.
   let lastEtag = Services.prefs.getCharPref(PREF_LAST_ETAG);
-  do_check_eq(lastEtag, "\"1100\"");
+  Assert.equal(lastEtag, "\"1100\"");
 
   // Simulate a poll with up-to-date collection.
   Services.prefs.setIntPref(PREF_LAST_UPDATE, 0);
@@ -90,9 +106,9 @@ add_task(function* test_check_maybeSync() {
   updater.addTestBlocklistClient("test-collection", {
     maybeSync: () => { throw new Error("Should not be called"); }
   });
-  yield updater.checkVersions();
+  await updater.checkVersions();
   // Last update is overwritten
-  do_check_eq(Services.prefs.getIntPref(PREF_LAST_UPDATE), 2);
+  Assert.equal(Services.prefs.getIntPref(PREF_LAST_UPDATE), 2);
 
 
   // Simulate a server error.
@@ -107,27 +123,31 @@ add_task(function* test_check_maybeSync() {
     response.setStatusLine(null, 503, "Service Unavailable");
   }
   server.registerPathHandler(changesPath, simulateErrorResponse);
-  // checkVersions() fails with adequate error.
+
+  // checkVersions() fails with adequate error and no notification.
   let error;
+  notificationObserved = false;
+  Services.obs.addObserver(certblockObserver, "blocklist-updater-versions-checked");
   try {
-    yield updater.checkVersions();
+    await updater.checkVersions();
   } catch (e) {
     error = e;
   }
-  do_check_eq(error.message, "Polling for changes failed.");
+  Assert.ok(!notificationObserved, "a notification should not have been observed");
+  Assert.ok(/Polling for changes failed/.test(error.message));
   // When an error occurs, last update was not overwritten (see Date header above).
-  do_check_eq(Services.prefs.getIntPref(PREF_LAST_UPDATE), 2);
+  Assert.equal(Services.prefs.getIntPref(PREF_LAST_UPDATE), 2);
 
   // check negative clock skew times
 
   // set to a time in the future
   server.registerPathHandler(changesPath, handleResponse.bind(null, Date.now() + 10000));
 
-  yield updater.checkVersions();
+  await updater.checkVersions();
 
   clockDifference = Services.prefs.getIntPref(PREF_CLOCK_SKEW_SECONDS);
   // we previously set the serverTime to Date.now() + 10000 ms past epoch
-  do_check_true(clockDifference <= 0 && clockDifference >= -10);
+  Assert.ok(clockDifference <= 0 && clockDifference >= -10);
 
   //
   // Backoff
@@ -140,21 +160,40 @@ add_task(function* test_check_maybeSync() {
   }
   server.registerPathHandler(changesPath, simulateBackoffResponse);
   // First will work.
-  yield updater.checkVersions();
+  await updater.checkVersions();
   // Second will fail because we haven't waited.
   try {
-    yield updater.checkVersions();
+    await updater.checkVersions();
     // The previous line should have thrown an error.
-    do_check_true(false);
+    Assert.ok(false);
   } catch (e) {
-    do_check_true(/Server is asking clients to back off; retry in \d+s./.test(e.message));
+    Assert.ok(/Server is asking clients to back off; retry in \d+s./.test(e.message));
   }
   // Once backoff time has expired, polling for changes can start again.
   server.registerPathHandler(changesPath, handleResponse.bind(null, 2000));
   Services.prefs.setCharPref(PREF_SETTINGS_SERVER_BACKOFF, `${Date.now() - 1000}`);
-  yield updater.checkVersions();
+  await updater.checkVersions();
   // Backoff tracking preference was cleared.
-  do_check_false(Services.prefs.prefHasUserValue(PREF_SETTINGS_SERVER_BACKOFF));
+  Assert.ok(!Services.prefs.prefHasUserValue(PREF_SETTINGS_SERVER_BACKOFF));
+
+
+  // Simulate a network error (to check telemetry report).
+  Services.prefs.setCharPref(PREF_SETTINGS_SERVER, "http://localhost:42/v1");
+  try {
+    await updater.checkVersions();
+  } catch (e) {}
+
+  const endHistogram = getUptakeTelemetrySnapshot(TELEMETRY_HISTOGRAM_KEY);
+  // ensure that we've accumulated the correct telemetry
+  const expectedIncrements = {
+    [UptakeTelemetry.STATUS.UP_TO_DATE]: 4,
+    [UptakeTelemetry.STATUS.SUCCESS]: 1,
+    [UptakeTelemetry.STATUS.BACKOFF]: 1,
+    [UptakeTelemetry.STATUS.SERVER_ERROR]: 1,
+    [UptakeTelemetry.STATUS.NETWORK_ERROR]: 1,
+    [UptakeTelemetry.STATUS.UNKNOWN_ERROR]: 0,
+  };
+  checkUptakeTelemetry(startHistogram, endHistogram, expectedIncrements);
 });
 
 function run_test() {
@@ -164,7 +203,7 @@ function run_test() {
 
   run_next_test();
 
-  do_register_cleanup(function() {
+  registerCleanupFunction(function() {
     server.stop(function() { });
   });
 }

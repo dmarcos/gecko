@@ -5,6 +5,7 @@
 import ConfigParser
 import os
 import re
+import sys
 
 import mozinfo
 
@@ -359,15 +360,14 @@ class SoftwareUpdate(BaseLib):
 
         :param update_url: URL to the update snippet
         """
-        snippet = None
+        import urllib2
         try:
-            import urllib2
             response = urllib2.urlopen(update_url)
-            snippet = response.read()
-        except Exception:
-            pass
-
-        return snippet
+            return response.read()
+        except urllib2.URLError:
+            exc, val, tb = sys.exc_info()
+            raise Exception, "Failed to retrieve update snippet '{}': {}".format(
+                update_url, val), tb
 
     def get_formatted_update_url(self, force=False):
         """Retrieve the formatted AUS update URL the update snippet is retrieved from.
@@ -376,10 +376,17 @@ class SoftwareUpdate(BaseLib):
 
         :returns: The URL of the update snippet
         """
-        # Format the URL by replacing placeholders
-        url = self.marionette.execute_script("""
-          Components.utils.import("resource://gre/modules/UpdateUtils.jsm")
-          return UpdateUtils.formatUpdateURL(arguments[0]);
+        url = self.marionette.execute_async_script("""
+          Components.utils.import("resource://gre/modules/UpdateUtils.jsm");
+          let res = UpdateUtils.formatUpdateURL(arguments[0]);
+          // Format the URL by replacing placeholders
+          // In 56 we switched the method to be async.
+          // For now, support both approaches.
+          if (res.then) {
+            res.then(marionetteScriptFinished);
+          } else {
+            marionetteScriptFinished(res);
+          }
         """, script_args=[self.update_url])
 
         if force:

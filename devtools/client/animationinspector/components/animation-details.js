@@ -7,7 +7,6 @@
 "use strict";
 
 const {Task} = require("devtools/shared/task");
-const EventEmitter = require("devtools/shared/event-emitter");
 const {createNode, getCssPropertyName} =
   require("devtools/client/animationinspector/utils");
 const {Keyframes} = require("devtools/client/animationinspector/components/keyframes");
@@ -25,8 +24,6 @@ const L10N =
  * @param {Object} serverTraits The list of server-side capabilities.
  */
 function AnimationDetails(serverTraits) {
-  EventEmitter.decorate(this);
-
   this.keyframeComponents = [];
   this.serverTraits = serverTraits;
 }
@@ -85,67 +82,6 @@ AnimationDetails.prototype = {
   },
 
   /**
-   * Get a list of the tracks of the animation actor
-   * @return {Object} A list of tracks, one per animated property, each
-   * with a list of keyframes
-   */
-  getTracks: Task.async(function* () {
-    let tracks = {};
-
-    /*
-     * getFrames is a AnimationPlayorActor method that returns data about the
-     * keyframes of the animation.
-     * In FF48, the data it returns change, and will hold only longhand
-     * properties ( e.g. borderLeftWidth ), which does not match what we
-     * want to display in the animation detail.
-     * A new AnimationPlayerActor function, getProperties, is introduced,
-     * that returns the animated css properties of the animation and their
-     * keyframes values.
-     * If the animation actor has the getProperties function, we use it, and if
-     * not, we fall back to getFrames, which then returns values we used to
-     * handle.
-     */
-    if (this.serverTraits.hasGetProperties) {
-      let properties = yield this.animation.getProperties();
-      for (let {name, values} of properties) {
-        if (!tracks[name]) {
-          tracks[name] = [];
-        }
-
-        for (let {value, offset, easing, distance} of values) {
-          distance = distance ? distance : 0;
-          tracks[name].push({value, offset, easing, distance});
-        }
-      }
-    } else {
-      let frames = yield this.animation.getFrames();
-      for (let frame of frames) {
-        for (let name in frame) {
-          if (this.NON_PROPERTIES.indexOf(name) != -1) {
-            continue;
-          }
-
-          // We have to change to CSS property name
-          // since GetKeyframes returns JS property name.
-          const propertyCSSName = getCssPropertyName(name);
-          if (!tracks[propertyCSSName]) {
-            tracks[propertyCSSName] = [];
-          }
-
-          tracks[propertyCSSName].push({
-            value: frame[name],
-            offset: frame.computedOffset,
-            easing: frame.easing,
-            distance: 0
-          });
-        }
-      }
-    }
-
-    return tracks;
-  }),
-
-  /**
    * Get animation types of given CSS property names.
    * @param {Array} CSS property names.
    *                e.g. ["background-color", "opacity", ...]
@@ -165,22 +101,20 @@ AnimationDetails.prototype = {
     return Promise.resolve(animationTypes);
   }),
 
-  render: Task.async(function* (animation) {
+  render: Task.async(function* (animation, tracks) {
     this.unrender();
 
     if (!animation) {
       return;
     }
     this.animation = animation;
+    this.tracks = tracks;
 
     // We might have been destroyed in the meantime, or the component might
     // have been re-rendered.
     if (!this.containerEl || this.animation !== animation) {
       return;
     }
-
-    // Build an element for each animated property track.
-    this.tracks = yield this.getTracks(animation, this.serverTraits);
 
     // Get animation type for each CSS properties.
     const animationTypes = yield this.getAnimationTypes(Object.keys(this.tracks));
@@ -199,10 +133,6 @@ AnimationDetails.prototype = {
     });
     this.dummyAnimation =
       new this.win.Animation(new this.win.KeyframeEffect(null, null, timing), null);
-
-    // Useful for tests to know when rendering of all animation detail UIs
-    // have been completed.
-    this.emit("animation-detail-rendering-completed");
   }),
 
   renderAnimatedPropertiesHeader: function () {

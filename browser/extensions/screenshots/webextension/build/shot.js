@@ -1,6 +1,5 @@
-window.shot = (function () {let exports={}; // Note: in this library we can't use any "system" dependencies because this can be used from multiple
+this.shot = (function () {let exports={}; // Note: in this library we can't use any "system" dependencies because this can be used from multiple
 // environments
-/* globals console */
 
 /** Throws an error if the condition isn't true.  Any extra arguments after the condition
     are used as console.error() arguments. */
@@ -9,60 +8,68 @@ function assert(condition, ...args) {
     return;
   }
   console.error("Failed assertion", ...args);
-  throw new Error("Failed assertion", ...args);
+  throw new Error(`Failed assertion: ${args.join(" ")}`);
 }
 
 /** True if `url` is a valid URL */
 function isUrl(url) {
   // FIXME: this is rather naive, obviously
-  if ((/^about:.+$/i).test(url)) {
+  if ((/^about:.{1,8000}$/i).test(url)) {
     return true;
   }
-  if ((/^file:\/.*$/i).test(url)) {
+  if ((/^file:\/.{0,8000}$/i).test(url)) {
     return true;
   }
   if ((/^data:.*$/i).test(url)) {
     return true;
   }
-  if ((/^chrome:.*/i).test(url)) {
+  if ((/^chrome:.{0,8000}/i).test(url)) {
     return true;
   }
   if ((/^view-source:/i).test(url)) {
     return isUrl(url.substr("view-source:".length));
   }
-  return (/^https?:\/\/[a-z0-9\.\-]+[a-z0-9](:[0-9]+)?\/?/i).test(url);
+  return (/^https?:\/\/[a-z0-9._-]{1,8000}[a-z0-9](:[0-9]{1,8000})?\/?/i).test(url);
+}
+
+function isValidClipImageUrl(url) {
+    return isUrl(url) && !(url.indexOf(')') > -1);
 }
 
 function assertUrl(url) {
-  if (! url) {
+  if (!url) {
     throw new Error("Empty value is not URL");
   }
-  if (! isUrl(url)) {
+  if (!isUrl(url)) {
     let exc = new Error("Not a URL");
     exc.scheme = url.split(":")[0];
     throw exc;
   }
 }
 
+function isSecureWebUri(url) {
+  return (/^https?:\/\/[a-z0-9._-]{1,8000}[a-z0-9](:[0-9]{1,8000})?\/?/i).test(url);
+}
+
 function assertOrigin(url) {
   assertUrl(url);
   if (url.search(/^https?:/i) != -1) {
-    let match = (/^https?:\/\/[^/:]+\/?$/i).exec(url);
-    if (! match) {
+    let match = (/^https?:\/\/[^/:]{1,4000}\/?$/i).exec(url);
+    if (!match) {
       throw new Error("Bad origin, might include path");
     }
   }
 }
 
 function originFromUrl(url) {
-  if (! url) {
+  if (!url) {
     return null;
   }
   if (url.search(/^https?:/i) == -1) {
     // Non-HTTP URLs don't have an origin
     return null;
   }
-  let match = (/^https?:\/\/[^/:]+/i).exec(url);
+  let match = (/^https?:\/\/[^/:]{1,4000}/i).exec(url);
   if (match) {
     return match[0];
   }
@@ -77,7 +84,7 @@ function checkObject(obj, required, optional) {
   }
   required = required || [];
   for (let attr of required) {
-    if (! (attr in obj)) {
+    if (!(attr in obj)) {
       return false;
     }
   }
@@ -122,11 +129,16 @@ function resolveUrl(base, url) {
   }
   if (url.indexOf("/") === 0) {
     // Domain-relative URL
-    return (/^https?:\/\/[a-z0-9\.\-]+/i).exec(base)[0] + url;
+    return (/^https?:\/\/[a-z0-9._-]{1,4000}/i).exec(base)[0] + url;
   }
   // Otherwise, a full relative URL
   while (url.indexOf("./") === 0) {
     url = url.substr(2);
+  }
+  if (!base) {
+    // It's not an absolute URL, and we don't have a base URL, so we have
+    // to throw away the URL
+    return null;
   }
   let match = (/.*\//).exec(base)[0];
   if (match.search(/^https?:\/$/i) === 0) {
@@ -146,14 +158,14 @@ function deepEqual(a, b) {
     return a === b;
   }
   if (Array.isArray(a)) {
-    if (! Array.isArray(b)) {
+    if (!Array.isArray(b)) {
       return false;
     }
     if (a.length != b.length) {
       return false;
     }
-    for (let i=0; i<a.length; i++) {
-      if (! deepEqual(a[i], b[i])) {
+    for (let i = 0; i < a.length; i++) {
+      if (!deepEqual(a[i], b[i])) {
         return false;
       }
     }
@@ -163,14 +175,14 @@ function deepEqual(a, b) {
   }
   let seen = new Set();
   for (let attr of Object.keys(a)) {
-    if (! deepEqual(a[attr], b[attr])) {
+    if (!deepEqual(a[attr], b[attr])) {
       return false;
     }
     seen.add(attr);
   }
   for (let attr of Object.keys(b)) {
-    if (! seen.has(attr)) {
-      if (! deepEqual(a[attr], b[attr])) {
+    if (!seen.has(attr)) {
+      if (!deepEqual(a[attr], b[attr])) {
         return false;
       }
     }
@@ -183,7 +195,7 @@ function makeRandomId() {
   let id = "";
   while (id.length < 12) {
     let num;
-    if (! id) {
+    if (!id) {
       num = Date.now() % Math.pow(36, 3);
     } else {
       num = Math.floor(Math.random() * Math.pow(36, 3));
@@ -197,14 +209,20 @@ class AbstractShot {
 
   constructor(backend, id, attrs) {
     attrs = attrs || {};
-    assert((/^[a-zA-Z0-9]+\/[a-z0-9\.-]+$/).test(id), "Bad ID (should be alphanumeric):", JSON.stringify(id));
+    assert((/^[a-zA-Z0-9]{1,4000}\/[a-z0-9._-]{1,4000}$/).test(id), "Bad ID (should be alphanumeric):", JSON.stringify(id));
     this._backend = backend;
     this._id = id;
     this.origin = attrs.origin || null;
     this.fullUrl = attrs.fullUrl || null;
-    if ((! attrs.fullUrl) && attrs.url) {
+    if ((!attrs.fullUrl) && attrs.url) {
       console.warn("Received deprecated attribute .url");
       this.fullUrl = attrs.url;
+    }
+    if (this.origin && !isSecureWebUri(this.origin)) {
+      this.origin = "";
+    }
+    if (this.fullUrl && !isSecureWebUri(this.fullUrl)) {
+      this.fullUrl = "";
     }
     this.docTitle = attrs.docTitle || null;
     this.userTitle = attrs.userTitle || null;
@@ -254,7 +272,7 @@ class AbstractShot {
         if (val.asJson) {
           val = val.asJson();
         }
-        if (! deepEqual(json[attr], val)) {
+        if (!deepEqual(json[attr], val)) {
           this[attr] = json[attr];
         }
       } else if (json[attr] !== this[attr] &&
@@ -264,11 +282,11 @@ class AbstractShot {
     }
     if (json.clips) {
       for (let clipId in json.clips) {
-        if (! json.clips[clipId]) {
+        if (!json.clips[clipId]) {
           this.delClip(clipId);
-        } else if (! this.getClip(clipId)) {
+        } else if (!this.getClip(clipId)) {
           this.setClip(clipId, json.clips[clipId]);
-        } else if (! deepEqual(this.getClip(clipId).asJson(), json.clips[clipId])) {
+        } else if (!deepEqual(this.getClip(clipId).asJson(), json.clips[clipId])) {
           this.setClip(clipId, json.clips[clipId]);
         }
       }
@@ -347,8 +365,9 @@ class AbstractShot {
   get filename() {
     let filenameTitle = this.title;
     let date = new Date(this.createdDate);
-    filenameTitle = filenameTitle.replace(/[\/!@&*.|\n\r\t]/g, " ");
-    filenameTitle = filenameTitle.replace(/\s+/g, " ");
+    // eslint-disable-next-line no-control-regex
+    filenameTitle = filenameTitle.replace(/[:\\<>/!@&?"*.|\x00-\x1F]/g, " ");
+    filenameTitle = filenameTitle.replace(/\s{1,4000}/g, " ");
     let clipFilename = `Screenshot-${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()} ${filenameTitle}`;
     const clipFilenameBytesSize = clipFilename.length * 2; // JS STrings are UTF-16
     if (clipFilenameBytesSize > 251) { // 255 bytes (Usual filesystems max) - 4 for the ".png" file extension string
@@ -356,26 +375,32 @@ class AbstractShot {
       clipFilename = clipFilename.substring(0, clipFilename.length - excedingchars);
       clipFilename = clipFilename + '[...]';
     }
-    return clipFilename + '.png';
+    let clip = this.getClip(this.clipNames()[0]);
+    let extension = ".png";
+    if (clip && clip.image && clip.image.type) {
+      if (clip.image.type == "jpeg") {
+        extension = ".jpg";
+      }
+    }
+    return clipFilename + extension;
   }
 
   get urlDisplay() {
-    if (! this.url) {
+    if (!this.url) {
       return null;
     }
-    if (this.url.search(/^https?/i) != -1) {
+    if (/^https?:\/\//i.test(this.url)) {
       let txt = this.url;
-      txt = txt.replace(/^[a-z]+:\/\//i, "");
-      txt = txt.replace(/\/.*/, "");
+      txt = txt.replace(/^[a-z]{1,4000}:\/\//i, "");
+      txt = txt.replace(/\/.{0,4000}/, "");
       txt = txt.replace(/^www\./i, "");
       return txt;
     } else if (this.url.startsWith("data:")) {
       return "data:url";
-    } else {
-      let txt = this.url;
-      txt = txt.replace(/\?.*/, "");
-      return txt;
     }
+    let txt = this.url;
+    txt = txt.replace(/\?.{0,4000}/, "");
+    return txt;
   }
 
   get viewUrl() {
@@ -448,6 +473,9 @@ class AbstractShot {
     if (Array.isArray(title)) {
       title = title[0];
     }
+    if (!title) {
+      title = "Screenshot";
+    }
     return title;
   }
 
@@ -463,7 +491,11 @@ class AbstractShot {
     return this._favicon;
   }
   set favicon(val) {
-    assert(val === null || isUrl(val), "Bad favicon URL:", val);
+    // We allow but ignore bad favicon URLs, as they seem somewhat common
+    val = val || null;
+    if (!isUrl(val)) {
+      val = null;
+    }
     if (val) {
       val = resolveUrl(this.url, val);
     }
@@ -472,7 +504,7 @@ class AbstractShot {
 
   clipNames() {
     let names = Object.getOwnPropertyNames(this._clips);
-    names.sort(function (a, b) {
+    names.sort(function(a, b) {
       return a.sortOrder < b.sortOrder ? 1 : 0;
     });
     return names;
@@ -490,10 +522,13 @@ class AbstractShot {
     this._clips[name] = clip;
   }
   delClip(name) {
-    if (! this._clips[name]) {
+    if (!this._clips[name]) {
       throw new Error("No existing clip with id: " + name);
     }
     delete this._clips[name];
+  }
+  delAllClips() {
+    this._clips = {};
   }
   biggestClipSortOrder() {
     let biggest = 0;
@@ -515,7 +550,7 @@ class AbstractShot {
     return this._siteName || null;
   }
   set siteName(val) {
-    assert(typeof val == "string" || ! val);
+    assert(typeof val == "string" || !val);
     this._siteName = val;
   }
 
@@ -523,7 +558,7 @@ class AbstractShot {
     return this._documentSize;
   }
   set documentSize(val) {
-    assert(typeof val == "object" || ! val);
+    assert(typeof val == "object" || !val);
     if (val) {
       assert(checkObject(val, ["height", "width"], "Bad attr to documentSize:", Object.keys(val)));
       assert(typeof val.height == "number");
@@ -538,7 +573,7 @@ class AbstractShot {
     return this._fullScreenThumbnail;
   }
   set fullScreenThumbnail(val) {
-    assert(typeof val == "string" || ! val);
+    assert(typeof val == "string" || !val);
     if (val) {
       assert(isUrl(val));
       this._fullScreenThumbnail = val;
@@ -556,7 +591,7 @@ class AbstractShot {
       return;
     }
     assert(typeof val == "object", "abTests should be an object, not:", typeof val);
-    assert(! Array.isArray(val), "abTests should not be an Array");
+    assert(!Array.isArray(val), "abTests should not be an Array");
     for (let name in val) {
       assert(val[name] && typeof val[name] == "string", `abTests.${name} should be a string:`, typeof val[name]);
     }
@@ -606,13 +641,13 @@ class _Image {
     assert(checkObject(json, ["url"], ["dimensions", "title", "alt"]), "Bad attrs for Image:", Object.keys(json));
     assert(isUrl(json.url), "Bad Image url:", json.url);
     this.url = json.url;
-    assert((! json.dimensions) ||
+    assert((!json.dimensions) ||
            (typeof json.dimensions.x == "number" && typeof json.dimensions.y == "number"),
            "Bad Image dimensions:", json.dimensions);
     this.dimensions = json.dimensions;
-    assert(typeof json.title == "string" || ! json.title, "Bad Image title:", json.title);
+    assert(typeof json.title == "string" || !json.title, "Bad Image title:", json.title);
     this.title = json.title;
-    assert(typeof json.alt == "string" || ! json.alt, "Bad Image alt:", json.alt);
+    assert(typeof json.alt == "string" || !json.alt, "Bad Image alt:", json.alt);
     this.alt = json.alt;
   }
 
@@ -632,7 +667,7 @@ class _Clip {
     this._id = id;
     this.createdDate = json.createdDate;
     if ('sortOrder' in json) {
-      assert(typeof json.sortOrder == "number" || ! json.sortOrder, "Bad Clip sortOrder:", json.sortOrder);
+      assert(typeof json.sortOrder == "number" || !json.sortOrder, "Bad Clip sortOrder:", json.sortOrder);
     }
     if ('sortOrder' in json) {
       this.sortOrder = json.sortOrder;
@@ -659,7 +694,7 @@ class _Clip {
     return this._createdDate;
   }
   set createdDate(val) {
-    assert(typeof val == "number" || ! val, "Bad Clip createdDate:", val);
+    assert(typeof val == "number" || !val, "Bad Clip createdDate:", val);
     this._createdDate = val;
   }
 
@@ -667,16 +702,26 @@ class _Clip {
     return this._image;
   }
   set image(image) {
-    if (! image) {
+    if (!image) {
       this._image = undefined;
       return;
     }
-    assert(checkObject(image, ["url"], ["dimensions", "text", "location", "captureType"]), "Bad attrs for Clip Image:", Object.keys(image));
-    assert(isUrl(image.url), "Bad Clip image URL:", image.url);
-    assert(image.captureType == "madeSelection" || image.captureType == "selection" || image.captureType == "visible" || image.captureType == "auto" || image.captureType == "fullPage" || ! image.captureType, "Bad image.captureType:", image.captureType);
-    assert(typeof image.text == "string" || ! image.text, "Bad Clip image text:", image.text);
+    assert(checkObject(image, ["url"], ["dimensions", "text", "location", "captureType", "type"]), "Bad attrs for Clip Image:", Object.keys(image));
+    assert(isValidClipImageUrl(image.url), "Bad Clip image URL:", image.url);
+    assert(
+      image.captureType == "madeSelection" ||
+      image.captureType == "selection" ||
+      image.captureType == "visible" ||
+      image.captureType == "auto" ||
+      image.captureType == "fullPage" ||
+      image.captureType == "fullPageTruncated" ||
+      !image.captureType, "Bad image.captureType:", image.captureType);
+    assert(typeof image.text == "string" || !image.text, "Bad Clip image text:", image.text);
     if (image.dimensions) {
       assert(typeof image.dimensions.x == "number" && typeof image.dimensions.y == "number", "Bad Clip image dimensions:", image.dimensions);
+    }
+    if (image.type) {
+      assert(image.type == "png" || image.type == "jpeg", "Unexpected image type:", image.type);
     }
     assert(image.location &&
       typeof image.location.left == "number" &&
@@ -702,13 +747,14 @@ class _Clip {
     if (this.image) {
       return this.image.url.startsWith("data:");
     }
+    return false;
   }
 
   get sortOrder() {
     return this._sortOrder || null;
   }
   set sortOrder(val) {
-    assert(typeof val == "number" || ! val, "Bad Clip sortOrder:", val);
+    assert(typeof val == "number" || !val, "Bad Clip sortOrder:", val);
     this._sortOrder = val;
   }
 
@@ -719,6 +765,7 @@ AbstractShot.prototype.Clip = _Clip;
 if (typeof exports != "undefined") {
   exports.AbstractShot = AbstractShot;
   exports.originFromUrl = originFromUrl;
+  exports.isValidClipImageUrl = isValidClipImageUrl;
 }
 
 return exports;

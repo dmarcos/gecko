@@ -21,7 +21,6 @@
 #include "nsMenuFrame.h"
 #include "prlink.h"
 #include "nsIDOMHTMLInputElement.h"
-#include "nsRenderingContext.h"
 #include "nsGkAtoms.h"
 #include "nsAttrValueInlines.h"
 
@@ -70,8 +69,7 @@ nsNativeThemeGTK::nsNativeThemeGTK()
     mozilla::services::GetObserverService();
   obsServ->AddObserver(this, "xpcom-shutdown", false);
 
-  memset(mDisabledWidgetTypes, 0, sizeof(mDisabledWidgetTypes));
-  memset(mSafeWidgetStates, 0, sizeof(mSafeWidgetStates));
+  ThemeChanged();
 }
 
 nsNativeThemeGTK::~nsNativeThemeGTK() {
@@ -115,10 +113,12 @@ static bool IsFrameContentNodeInNamespace(nsIFrame *aFrame, uint32_t aNamespace)
 }
 
 static bool IsWidgetTypeDisabled(uint8_t* aDisabledVector, uint8_t aWidgetType) {
+  MOZ_ASSERT(aWidgetType < ThemeWidgetType_COUNT);
   return (aDisabledVector[aWidgetType >> 3] & (1 << (aWidgetType & 7))) != 0;
 }
 
 static void SetWidgetTypeDisabled(uint8_t* aDisabledVector, uint8_t aWidgetType) {
+  MOZ_ASSERT(aWidgetType < ThemeWidgetType_COUNT);
   aDisabledVector[aWidgetType >> 3] |= (1 << (aWidgetType & 7));
 }
 
@@ -137,7 +137,8 @@ static bool IsWidgetStateSafe(uint8_t* aSafeVector,
                                 uint8_t aWidgetType,
                                 GtkWidgetState *aWidgetState)
 {
-  uint8_t key = GetWidgetStateKey(aWidgetType, aWidgetState);
+  MOZ_ASSERT(aWidgetType < ThemeWidgetType_COUNT);
+  uint16_t key = GetWidgetStateKey(aWidgetType, aWidgetState);
   return (aSafeVector[key >> 3] & (1 << (key & 7))) != 0;
 }
 
@@ -145,7 +146,8 @@ static void SetWidgetStateSafe(uint8_t *aSafeVector,
                                uint8_t aWidgetType,
                                GtkWidgetState *aWidgetState)
 {
-  uint8_t key = GetWidgetStateKey(aWidgetType, aWidgetState);
+  MOZ_ASSERT(aWidgetType < ThemeWidgetType_COUNT);
+  uint16_t key = GetWidgetStateKey(aWidgetType, aWidgetState);
   aSafeVector[key >> 3] |= (1 << (key & 7));
 }
 
@@ -197,7 +199,7 @@ nsNativeThemeGTK::GetGtkWidgetAndState(uint8_t aWidgetType, nsIFrame* aFrame,
                    aWidgetType == NS_THEME_CHECKBOX_LABEL ||
                    aWidgetType == NS_THEME_RADIO_LABEL)) {
 
-      nsIAtom* atom = nullptr;
+      nsAtom* atom = nullptr;
       if (IsFrameContentNodeInNamespace(aFrame, kNameSpaceID_XUL)) {
         if (aWidgetType == NS_THEME_CHECKBOX_LABEL ||
             aWidgetType == NS_THEME_RADIO_LABEL) {
@@ -436,6 +438,9 @@ nsNativeThemeGTK::GetGtkWidgetAndState(uint8_t aWidgetType, nsIFrame* aFrame,
     break;
   case NS_THEME_SCROLLBARTHUMB_HORIZONTAL:
     aGtkWidgetType = MOZ_GTK_SCROLLBAR_THUMB_HORIZONTAL;
+    break;
+  case NS_THEME_INNER_SPIN_BUTTON:
+    aGtkWidgetType = MOZ_GTK_INNER_SPIN_BUTTON;
     break;
   case NS_THEME_SPINNER:
     aGtkWidgetType = MOZ_GTK_SPINBUTTON;
@@ -700,6 +705,24 @@ nsNativeThemeGTK::GetGtkWidgetAndState(uint8_t aWidgetType, nsIFrame* aFrame,
     break;
   case NS_THEME_GTK_INFO_BAR:
     aGtkWidgetType = MOZ_GTK_INFO_BAR;
+    break;
+  case NS_THEME_WINDOW_TITLEBAR:
+    aGtkWidgetType = MOZ_GTK_HEADER_BAR;
+    break;
+  case NS_THEME_WINDOW_TITLEBAR_MAXIMIZED:
+    aGtkWidgetType = MOZ_GTK_HEADER_BAR_MAXIMIZED;
+    break;
+  case NS_THEME_WINDOW_BUTTON_CLOSE:
+    aGtkWidgetType = MOZ_GTK_HEADER_BAR_BUTTON_CLOSE;
+    break;
+  case NS_THEME_WINDOW_BUTTON_MINIMIZE:
+    aGtkWidgetType = MOZ_GTK_HEADER_BAR_BUTTON_MINIMIZE;
+    break;
+  case NS_THEME_WINDOW_BUTTON_MAXIMIZE:
+    aGtkWidgetType = MOZ_GTK_HEADER_BAR_BUTTON_MAXIMIZE;
+    break;
+  case NS_THEME_WINDOW_BUTTON_RESTORE:
+    aGtkWidgetType = MOZ_GTK_HEADER_BAR_BUTTON_MAXIMIZE;
     break;
   default:
     return false;
@@ -986,19 +1009,11 @@ DrawThemeWithCairo(gfxContext* aContext, DrawTarget* aDrawTarget,
       dataSurface->Unmap();
 
       if (cr) {
-        if (!aSnapped || aTransparency != nsITheme::eOpaque) {
-          // The widget either needs to be masked or has transparency, so use the slower drawing path.
-          aDrawTarget->DrawSurface(dataSurface,
-                                   Rect(aSnapped ? drawOffset - aDrawTarget->GetTransform().GetTranslation() : drawOffset,
-                                        Size(aDrawSize)),
-                                   Rect(0, 0, aDrawSize.width, aDrawSize.height));
-        } else {
-          // The widget is a simple opaque rectangle, so just copy it out.
-          aDrawTarget->CopySurface(dataSurface,
-                                   IntRect(0, 0, aDrawSize.width, aDrawSize.height),
-                                   TruncatedToInt(drawOffset));
-        }
-
+        // The widget either needs to be masked or has transparency, so use the slower drawing path.
+        aDrawTarget->DrawSurface(dataSurface,
+                                 Rect(aSnapped ? drawOffset - aDrawTarget->GetTransform().GetTranslation() : drawOffset,
+                                      Size(aDrawSize)),
+                                 Rect(0, 0, aDrawSize.width, aDrawSize.height));
         cairo_destroy(cr);
       }
 
@@ -1026,24 +1041,6 @@ nsNativeThemeGTK::GetExtraSizeForWidget(nsIFrame* aFrame, uint8_t aWidgetType,
     aExtra->left = aExtra->right = 1;
     break;
 
-  // Include the indicator spacing (the padding around the control).
-  case NS_THEME_CHECKBOX:
-  case NS_THEME_RADIO:
-    {
-      gint indicator_size, indicator_spacing;
-
-      if (aWidgetType == NS_THEME_CHECKBOX) {
-        moz_gtk_checkbox_get_metrics(&indicator_size, &indicator_spacing);
-      } else {
-        moz_gtk_radio_get_metrics(&indicator_size, &indicator_spacing);
-      }
-
-      aExtra->top = indicator_spacing;
-      aExtra->right = indicator_spacing;
-      aExtra->bottom = indicator_spacing;
-      aExtra->left = indicator_spacing;
-      break;
-    }
   case NS_THEME_BUTTON :
     {
       if (IsDefaultButton(aFrame)) {
@@ -1099,7 +1096,7 @@ nsNativeThemeGTK::GetExtraSizeForWidget(nsIFrame* aFrame, uint8_t aWidgetType,
 }
 
 NS_IMETHODIMP
-nsNativeThemeGTK::DrawWidgetBackground(nsRenderingContext* aContext,
+nsNativeThemeGTK::DrawWidgetBackground(gfxContext* aContext,
                                        nsIFrame* aFrame,
                                        uint8_t aWidgetType,
                                        const nsRect& aRect,
@@ -1113,7 +1110,7 @@ nsNativeThemeGTK::DrawWidgetBackground(nsRenderingContext* aContext,
                             &flags))
     return NS_OK;
 
-  gfxContext* ctx = aContext->ThebesContext();
+  gfxContext* ctx = aContext;
   nsPresContext *presContext = aFrame->PresContext();
 
   gfxRect rect = presContext->AppUnitsToGfxUnits(aRect);
@@ -1178,11 +1175,11 @@ nsNativeThemeGTK::DrawWidgetBackground(nsRenderingContext* aContext,
   gfxContextAutoSaveRestore autoSR(ctx);
   gfxMatrix matrix;
   if (!snapped) { // else rects are in device coords
-    matrix = ctx->CurrentMatrix();
+    matrix = ctx->CurrentMatrixDouble();
   }
   matrix.Translate(origin);
   matrix.Scale(scaleFactor, scaleFactor); // Draw in GDK coords
-  ctx->SetMatrix(matrix);
+  ctx->SetMatrixDouble(matrix);
 
   // The gdk_clip is just advisory here, meaning "you don't
   // need to draw outside this rect if you don't feel like it!"
@@ -1256,6 +1253,34 @@ nsNativeThemeGTK::NativeThemeToGtkTheme(uint8_t aWidgetType, nsIFrame* aFrame)
     return MOZ_GTK_WINDOW;
   }
   return gtkWidgetType;
+}
+
+void
+nsNativeThemeGTK::GetCachedWidgetBorder(nsIFrame* aFrame, uint8_t aWidgetType,
+                                        GtkTextDirection aDirection,
+                                        nsIntMargin* aResult)
+{
+  aResult->SizeTo(0, 0, 0, 0);
+
+  WidgetNodeType gtkWidgetType;
+  gint unusedFlags;
+  if (GetGtkWidgetAndState(aWidgetType, aFrame, gtkWidgetType, nullptr,
+                           &unusedFlags)) {
+    MOZ_ASSERT(0 <= gtkWidgetType && gtkWidgetType < MOZ_GTK_WIDGET_NODE_COUNT);
+    uint8_t cacheIndex = gtkWidgetType / 8;
+    uint8_t cacheBit = 1u << (gtkWidgetType % 8);
+
+    if (mBorderCacheValid[cacheIndex] & cacheBit) {
+      *aResult = mBorderCache[gtkWidgetType];
+    } else {
+      moz_gtk_get_widget_border(gtkWidgetType, &aResult->left, &aResult->top,
+                                &aResult->right, &aResult->bottom, aDirection);
+      if (aWidgetType != MOZ_GTK_DROPDOWN) { // depends on aDirection
+        mBorderCacheValid[cacheIndex] |= cacheBit;
+        mBorderCache[gtkWidgetType] = *aResult;
+      }
+    }
+  }
 }
 
 NS_IMETHODIMP
@@ -1333,14 +1358,7 @@ nsNativeThemeGTK::GetWidgetBorder(nsDeviceContext* aContext, nsIFrame* aFrame,
     MOZ_FALLTHROUGH;
   default:
     {
-      WidgetNodeType gtkWidgetType;
-      gint unusedFlags;
-      if (GetGtkWidgetAndState(aWidgetType, aFrame, gtkWidgetType, nullptr,
-                               &unusedFlags)) {
-        moz_gtk_get_widget_border(gtkWidgetType, &aResult->left, &aResult->top,
-                                  &aResult->right, &aResult->bottom, direction,
-                                  IsFrameContentNodeInNamespace(aFrame, kNameSpaceID_XHTML));
-      }
+      GetCachedWidgetBorder(aFrame, aWidgetType, direction, aResult);
     }
   }
 
@@ -1360,6 +1378,10 @@ nsNativeThemeGTK::GetWidgetPadding(nsDeviceContext* aContext,
   switch (aWidgetType) {
     case NS_THEME_BUTTON_FOCUS:
     case NS_THEME_TOOLBARBUTTON:
+    case NS_THEME_WINDOW_BUTTON_CLOSE:
+    case NS_THEME_WINDOW_BUTTON_MINIMIZE:
+    case NS_THEME_WINDOW_BUTTON_MAXIMIZE:
+    case NS_THEME_WINDOW_BUTTON_RESTORE:
     case NS_THEME_DUALBUTTON:
     case NS_THEME_TAB_SCROLL_ARROW_BACK:
     case NS_THEME_TAB_SCROLL_ARROW_FORWARD:
@@ -1385,14 +1407,8 @@ nsNativeThemeGTK::GetWidgetPadding(nsDeviceContext* aContext,
         if (!IsRegularMenuItem(aFrame))
           return false;
 
-        aResult->SizeTo(0, 0, 0, 0);
-        WidgetNodeType gtkWidgetType;
-        if (GetGtkWidgetAndState(aWidgetType, aFrame, gtkWidgetType, nullptr,
-                                 nullptr)) {
-          moz_gtk_get_widget_border(gtkWidgetType, &aResult->left, &aResult->top,
-                                    &aResult->right, &aResult->bottom, GetTextDirection(aFrame),
-                                    IsFrameContentNodeInNamespace(aFrame, kNameSpaceID_XHTML));
-        }
+        GetCachedWidgetBorder(aFrame, aWidgetType, GetTextDirection(aFrame),
+                              aResult);
 
         gint horizontal_padding;
 
@@ -1586,17 +1602,9 @@ nsNativeThemeGTK::GetMinimumWidgetSize(nsPresContext* aPresContext,
   case NS_THEME_CHECKBOX:
   case NS_THEME_RADIO:
     {
-      gint indicator_size, indicator_spacing;
-
-      if (aWidgetType == NS_THEME_CHECKBOX) {
-        moz_gtk_checkbox_get_metrics(&indicator_size, &indicator_spacing);
-      } else {
-        moz_gtk_radio_get_metrics(&indicator_size, &indicator_spacing);
-      }
-
-      // Include space for the indicator and the padding around it.
-      aResult->width = indicator_size;
-      aResult->height = indicator_size;
+      const ToggleGTKMetrics* metrics = GetToggleMetrics(aWidgetType == NS_THEME_RADIO);
+      aResult->width = metrics->minSizeWithBorder.width;
+      aResult->height = metrics->minSizeWithBorder.height;
     }
     break;
   case NS_THEME_TOOLBARBUTTON_DROPDOWN:
@@ -1618,6 +1626,10 @@ nsNativeThemeGTK::GetMinimumWidgetSize(nsPresContext* aPresContext,
   case NS_THEME_MENULIST:
   case NS_THEME_TOOLBARBUTTON:
   case NS_THEME_TREEHEADERCELL:
+  case NS_THEME_WINDOW_BUTTON_CLOSE:
+  case NS_THEME_WINDOW_BUTTON_MINIMIZE:
+  case NS_THEME_WINDOW_BUTTON_MAXIMIZE:
+  case NS_THEME_WINDOW_BUTTON_RESTORE:
     {
       if (aWidgetType == NS_THEME_MENULIST) {
         // Include the arrow size.
@@ -1652,6 +1664,7 @@ nsNativeThemeGTK::GetMinimumWidgetSize(nsPresContext* aPresContext,
       aResult->width = separator_width;
     }
     break;
+  case NS_THEME_INNER_SPIN_BUTTON:
   case NS_THEME_SPINNER:
     // hard code these sizes
     aResult->width = 14;
@@ -1688,7 +1701,7 @@ nsNativeThemeGTK::GetMinimumWidgetSize(nsPresContext* aPresContext,
 
 NS_IMETHODIMP
 nsNativeThemeGTK::WidgetStateChanged(nsIFrame* aFrame, uint8_t aWidgetType, 
-                                     nsIAtom* aAttribute, bool* aShouldRepaint,
+                                     nsAtom* aAttribute, bool* aShouldRepaint,
                                      const nsAttrValue* aOldValue)
 {
   // Some widget types just never change state.
@@ -1777,6 +1790,8 @@ NS_IMETHODIMP
 nsNativeThemeGTK::ThemeChanged()
 {
   memset(mDisabledWidgetTypes, 0, sizeof(mDisabledWidgetTypes));
+  memset(mSafeWidgetStates, 0, sizeof(mSafeWidgetStates));
+  memset(mBorderCacheValid, 0, sizeof(mBorderCacheValid));
   return NS_OK;
 }
 
@@ -1837,6 +1852,7 @@ nsNativeThemeGTK::ThemeSupportsWidget(nsPresContext* aPresContext,
     case NS_THEME_TAB_SCROLL_ARROW_BACK:
     case NS_THEME_TAB_SCROLL_ARROW_FORWARD:
   case NS_THEME_TOOLTIP:
+  case NS_THEME_INNER_SPIN_BUTTON:
   case NS_THEME_SPINNER:
   case NS_THEME_SPINNER_UPBUTTON:
   case NS_THEME_SPINNER_DOWNBUTTON:
@@ -1883,6 +1899,17 @@ nsNativeThemeGTK::ThemeSupportsWidget(nsPresContext* aPresContext,
   case NS_THEME_GTK_INFO_BAR:
 #endif
     return !IsWidgetStyled(aPresContext, aFrame, aWidgetType);
+
+  case NS_THEME_WINDOW_BUTTON_CLOSE:
+  case NS_THEME_WINDOW_BUTTON_MINIMIZE:
+  case NS_THEME_WINDOW_BUTTON_MAXIMIZE:
+  case NS_THEME_WINDOW_BUTTON_RESTORE:
+  case NS_THEME_WINDOW_TITLEBAR:
+  case NS_THEME_WINDOW_TITLEBAR_MAXIMIZED:
+    // GtkHeaderBar is available on GTK 3.10+, which is used for styling
+    // title bars and title buttons.
+    return gtk_check_version(3, 10, 0) == nullptr &&
+           !IsWidgetStyled(aPresContext, aFrame, aWidgetType);
 
   case NS_THEME_MENULIST_BUTTON:
     if (aFrame && aFrame->GetWritingMode().IsVertical()) {

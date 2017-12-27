@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -46,7 +47,7 @@ NS_NewResizerFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 NS_IMPL_FRAMEARENA_HELPERS(nsResizerFrame)
 
 nsResizerFrame::nsResizerFrame(nsStyleContext* aContext)
-:nsTitleBarFrame(aContext)
+  : nsTitleBarFrame(aContext, kClassID)
 {
 }
 
@@ -104,7 +105,7 @@ nsResizerFrame::HandleEvent(nsPresContext* aPresContext,
           // for native drags, don't set the fields below
           if (rv != NS_ERROR_NOT_IMPLEMENTED)
              break;
-             
+
           // if there's no native resize support, we need to do window
           // resizing ourselves
           window->GetPositionAndSize(&mMouseDownRect.x, &mMouseDownRect.y,
@@ -202,7 +203,7 @@ nsResizerFrame::HandleEvent(nsPresContext* aPresContext,
         nsCOMPtr<nsIScreen> screen;
         nsCOMPtr<nsIScreenManager> sm(do_GetService("@mozilla.org/gfx/screenmanager;1"));
         if (sm) {
-          nsIntRect frameRect = GetScreenRect();
+          CSSIntRect frameRect = GetScreenRect();
           // ScreenForRect requires display pixels, so scale from device pix
           double scale;
           window->GetUnscaledDevicePixelsPerCSSPixel(&scale);
@@ -415,13 +416,14 @@ nsResizerFrame::ResizeContent(nsIContent* aContent, const Direction& aDirection,
     }
     // only set the property if the element could have changed in that direction
     if (aDirection.mHorizontal) {
-      aContent->SetAttr(kNameSpaceID_None, nsGkAtoms::width, aSizeInfo.width, true);
+      aContent->AsElement()->SetAttr(kNameSpaceID_None, nsGkAtoms::width,
+                                     aSizeInfo.width, true);
     }
     if (aDirection.mVertical) {
-      aContent->SetAttr(kNameSpaceID_None, nsGkAtoms::height, aSizeInfo.height, true);
+      aContent->AsElement()->SetAttr(kNameSpaceID_None, nsGkAtoms::height,
+                                     aSizeInfo.height, true);
     }
-  }
-  else {
+  } else {
     nsCOMPtr<nsStyledElement> inlineStyleContent =
       do_QueryInterface(aContent);
     if (inlineStyleContent) {
@@ -533,6 +535,23 @@ nsResizerFrame::GetDirection()
 void
 nsResizerFrame::MouseClicked(WidgetMouseEvent* aEvent)
 {
+  bool isTrusted = false;
+  bool isShift = false;
+  bool isControl = false;
+  bool isAlt = false;
+  bool isMeta = false;
+  uint16_t inputSource = nsIDOMMouseEvent::MOZ_SOURCE_UNKNOWN;
+
+  if(aEvent) {
+    isShift = aEvent->IsShift();
+    isControl = aEvent->IsControl();
+    isAlt = aEvent->IsAlt();
+    isMeta = aEvent->IsMeta();
+    inputSource = aEvent->inputSource;
+  }
+
   // Execute the oncommand event handler.
-  nsContentUtils::DispatchXULCommand(mContent, aEvent && aEvent->IsTrusted());
+  nsContentUtils::DispatchXULCommand(mContent, isTrusted, nullptr,
+                                     nullptr, isControl, isAlt,
+                                     isShift, isMeta, inputSource);
 }

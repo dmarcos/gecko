@@ -8,18 +8,21 @@
 #define jsatom_h
 
 #include "mozilla/HashFunctions.h"
+#include "mozilla/Maybe.h"
 
 #include "jsalloc.h"
 
-#include "gc/Barrier.h"
-#include "gc/Marking.h"
 #include "gc/Rooting.h"
-#include "js/GCAPI.h"
 #include "js/GCHashTable.h"
 #include "vm/CommonPropertyNames.h"
 
 class JSAtom;
 class JSAutoByteString;
+
+namespace JS {
+class Value;
+struct Zone;
+} // namespace JS
 
 namespace js {
 
@@ -68,33 +71,8 @@ class AtomStateEntry
 
 struct AtomHasher
 {
-    struct Lookup
-    {
-        union {
-            const JS::Latin1Char* latin1Chars;
-            const char16_t* twoByteChars;
-        };
-        bool isLatin1;
-        size_t length;
-        const JSAtom* atom; /* Optional. */
-        JS::AutoCheckCannotGC nogc;
-
-        HashNumber hash;
-
-        MOZ_ALWAYS_INLINE Lookup(const char16_t* chars, size_t length)
-          : twoByteChars(chars), isLatin1(false), length(length), atom(nullptr)
-        {
-            hash = mozilla::HashString(chars, length);
-        }
-        MOZ_ALWAYS_INLINE Lookup(const JS::Latin1Char* chars, size_t length)
-          : latin1Chars(chars), isLatin1(true), length(length), atom(nullptr)
-        {
-            hash = mozilla::HashString(chars, length);
-        }
-        inline explicit Lookup(const JSAtom* atom);
-    };
-
-    static HashNumber hash(const Lookup& l) { return l.hash; }
+    struct Lookup;
+    static inline HashNumber hash(const Lookup& l);
     static MOZ_ALWAYS_INLINE bool match(const AtomStateEntry& entry, const Lookup& lookup);
     static void rekey(AtomStateEntry& k, const AtomStateEntry& newKey) { k = newKey; }
 };
@@ -141,7 +119,7 @@ AtomIsPinnedInRuntime(JSRuntime* rt, JSAtom* atom);
 #endif // DEBUG
 
 /* Well-known predefined C strings. */
-#define DECLARE_PROTO_STR(name,code,init,clasp) extern const char js_##name##_str[];
+#define DECLARE_PROTO_STR(name,init,clasp) extern const char js_##name##_str[];
 JS_FOR_EACH_PROTOTYPE(DECLARE_PROTO_STR)
 #undef DECLARE_PROTO_STR
 
@@ -179,7 +157,8 @@ enum PinningBehavior
 
 extern JSAtom*
 Atomize(JSContext* cx, const char* bytes, size_t length,
-        js::PinningBehavior pin = js::DoNotPinAtom);
+        js::PinningBehavior pin = js::DoNotPinAtom,
+        const mozilla::Maybe<uint32_t>& indexValue = mozilla::Nothing());
 
 template <typename CharT>
 extern JSAtom*
@@ -194,7 +173,7 @@ AtomizeString(JSContext* cx, JSString* str, js::PinningBehavior pin = js::DoNotP
 
 template <AllowGC allowGC>
 extern JSAtom*
-ToAtom(JSContext* cx, typename MaybeRooted<Value, allowGC>::HandleType v);
+ToAtom(JSContext* cx, typename MaybeRooted<JS::Value, allowGC>::HandleType v);
 
 enum XDRMode {
     XDR_ENCODE,
@@ -210,9 +189,9 @@ XDRAtom(XDRState<mode>* xdr, js::MutableHandleAtom atomp);
 
 #ifdef DEBUG
 
-bool AtomIsMarked(Zone* zone, JSAtom* atom);
-bool AtomIsMarked(Zone* zone, jsid id);
-bool AtomIsMarked(Zone* zone, const Value& value);
+bool AtomIsMarked(JS::Zone* zone, JSAtom* atom);
+bool AtomIsMarked(JS::Zone* zone, jsid id);
+bool AtomIsMarked(JS::Zone* zone, const JS::Value& value);
 
 #endif // DEBUG
 

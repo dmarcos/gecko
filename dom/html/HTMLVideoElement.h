@@ -9,8 +9,12 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/HTMLMediaElement.h"
+#include "MediaPrefs.h"
 
 namespace mozilla {
+
+class FrameStatistics;
+
 namespace dom {
 
 class WakeLock;
@@ -32,16 +36,18 @@ public:
   }
 
   virtual bool ParseAttribute(int32_t aNamespaceID,
-                              nsIAtom* aAttribute,
+                              nsAtom* aAttribute,
                               const nsAString& aValue,
+                              nsIPrincipal* aMaybeScriptedPrincipal,
                               nsAttrValue& aResult) override;
-  NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const override;
+  NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* aAttribute) const override;
 
   static void Init();
 
   virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const override;
 
-  virtual nsresult Clone(NodeInfo *aNodeInfo, nsINode **aResult) const override;
+  virtual nsresult Clone(NodeInfo *aNodeInfo, nsINode **aResult,
+                         bool aPreallocateChildren) const override;
 
   // Set size with the current video frame's height and width.
   // If there is no video frame, returns NS_ERROR_FAILURE.
@@ -124,16 +130,26 @@ public:
 
   bool MozHasAudio() const;
 
-  bool MozUseScreenWakeLock() const;
-
-  void SetMozUseScreenWakeLock(bool aValue);
-
-  void NotifyOwnerDocumentActivityChanged() override;
-
   // Gives access to the decoder's frame statistics, if present.
   FrameStatistics* GetFrameStatistics();
 
   already_AddRefed<VideoPlaybackQuality> GetVideoPlaybackQuality();
+
+
+  bool MozOrientationLockEnabled() const
+  {
+    return MediaPrefs::VideoOrientationLockEnabled();
+  }
+
+  bool MozIsOrientationLocked() const
+  {
+    return mIsOrientationLocked;
+  }
+
+  void SetMozIsOrientationLocked(bool aLock)
+  {
+    mIsOrientationLocked = aLock;
+  }
 
 protected:
   virtual ~HTMLVideoElement();
@@ -144,12 +160,16 @@ protected:
   virtual void WakeLockRelease() override;
   void UpdateScreenWakeLock();
 
-  bool mUseScreenWakeLock;
   RefPtr<WakeLock> mScreenWakeLock;
+
+  bool mIsOrientationLocked;
 
 private:
   static void MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
                                     GenericSpecifiedValues* aGenericData);
+
+  static bool IsVideoStatsEnabled();
+  double TotalPlayTime() const;
 };
 
 } // namespace dom

@@ -38,7 +38,8 @@ namespace net {
 
 Http2Stream::Http2Stream(nsAHttpTransaction *httpTransaction,
                          Http2Session *session,
-                         int32_t priority)
+                         int32_t priority,
+                         uint64_t windowId)
   : mStreamID(0)
   , mSession(session)
   , mSegmentReader(nullptr)
@@ -72,10 +73,12 @@ Http2Stream::Http2Stream(nsAHttpTransaction *httpTransaction,
   , mTotalRead(0)
   , mPushSource(nullptr)
   , mAttempting0RTT(false)
+  , mCurrentForegroundTabOuterContentWindowId(windowId)
+  , mTransactionTabId(0)
   , mIsTunnel(false)
   , mPlainTextTunnel(false)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   LOG3(("Http2Stream::Http2Stream %p", this));
 
@@ -100,12 +103,19 @@ Http2Stream::Http2Stream(nsAHttpTransaction *httpTransaction,
   }
   MOZ_ASSERT(httpPriority >= 0);
   SetPriority(static_cast<uint32_t>(httpPriority));
+
+  nsHttpTransaction *trans = mTransaction->QueryHttpTransaction();
+  if (trans) {
+    mTransactionTabId = trans->TopLevelOuterContentWindowId();
+  }
 }
 
 Http2Stream::~Http2Stream()
 {
   ClearTransactionsBlockedOnTunnel();
   mStreamID = Http2Session::kDeadStreamID;
+
+  LOG3(("Http2Stream::~Http2Stream %p", this));
 }
 
 // ReadSegments() is used to write data down the socket. Generally, HTTP
@@ -121,7 +131,7 @@ Http2Stream::ReadSegments(nsAHttpSegmentReader *reader,
   LOG3(("Http2Stream %p ReadSegments reader=%p count=%d state=%x",
         this, reader, count, mUpstreamState));
 
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   nsresult rv = NS_ERROR_UNEXPECTED;
   mRequestBlockedOnRead = 0;
@@ -288,7 +298,7 @@ Http2Stream::WriteSegments(nsAHttpSegmentWriter *writer,
                            uint32_t count,
                            uint32_t *countWritten)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(!mSegmentWriter, "segment writer in progress");
 
   LOG3(("Http2Stream::WriteSegments %p count=%d state=%x",
@@ -349,7 +359,7 @@ Http2Stream::CreatePushHashKey(const nsCString &scheme,
                                const nsCString &hostHeader,
                                const mozilla::OriginAttributes &originAttributes,
                                uint64_t serial,
-                               const nsCSubstring &pathInfo,
+                               const nsACString& pathInfo,
                                nsCString &outOrigin,
                                nsCString &outKey)
 {
@@ -390,7 +400,7 @@ Http2Stream::ParseHttpRequestHeaders(const char *buf,
   // Returns NS_OK even if the headers are incomplete
   // set mRequestHeadersDone flag if they are complete
 
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(mUpstreamState == GENERATING_HEADERS);
   MOZ_ASSERT(!mRequestHeadersDone);
 
@@ -433,7 +443,8 @@ Http2Stream::ParseHttpRequestHeaders(const char *buf,
   head->RequestURI(requestURI);
 
   mozilla::OriginAttributes originAttributes;
-  mSocketTransport->GetOriginAttributes(&originAttributes),
+  mSocketTransport->GetOriginAttributes(&originAttributes);
+
   CreatePushHashKey(nsDependentCString(head->IsHTTPS() ? "https" : "http"),
                     authorityHeader, originAttributes, mSession->Serial(),
                     requestURI,
@@ -973,7 +984,7 @@ Http2Stream::GenerateDataFrameHeader(uint32_t dataLength, bool lastFrame)
   LOG3(("Http2Stream::GenerateDataFrameHeader %p len=%d last=%d",
         this, dataLength, lastFrame));
 
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(!mTxInlineFrameUsed, "inline frame not empty");
   MOZ_ASSERT(!mTxStreamFrameSize, "stream frame not empty");
 
@@ -1041,6 +1052,8 @@ Http2Stream::ConvertResponseHeaders(Http2Decompressor *decompressor,
     if ((httpResponseCode / 100) != 2) {
       MapStreamToPlainText();
     }
+    MapStreamToHttpConnection();
+    ClearTransactionsBlockedOnTunnel();
   }
 
   if (httpResponseCode == 101) {
@@ -1064,8 +1077,8 @@ Http2Stream::ConvertResponseHeaders(Http2Decompressor *decompressor,
   // The decoding went ok. Now we can customize and clean up.
 
   aHeadersIn.Truncate();
-  aHeadersOut.Append("X-Firefox-Spdy: h2");
-  aHeadersOut.Append("\r\n\r\n");
+  aHeadersOut.AppendLiteral("X-Firefox-Spdy: h2");
+  aHeadersOut.AppendLiteral("\r\n\r\n");
   LOG (("decoded response headers are:\n%s", aHeadersOut.BeginReading()));
   if (mIsTunnel && !mPlainTextTunnel) {
     aHeadersOut.Truncate();
@@ -1150,11 +1163,6 @@ Http2Stream::SetAllHeadersReceived()
   }
 
   mAllHeadersReceived = 1;
-  if (mIsTunnel) {
-    MapStreamToHttpConnection();
-    ClearTransactionsBlockedOnTunnel();
-  }
-  return;
 }
 
 bool
@@ -1200,6 +1208,40 @@ Http2Stream::SetPriorityDependency(uint32_t newDependency, uint8_t newWeight,
         exclusive));
 }
 
+static uint32_t
+GetPriorityDependencyFromTransaction(nsHttpTransaction *trans)
+{
+  MOZ_ASSERT(trans);
+
+  uint32_t classFlags = trans->ClassOfService();
+
+  if (classFlags & nsIClassOfService::UrgentStart) {
+    return Http2Session::kUrgentStartGroupID;
+  }
+
+  if (classFlags & nsIClassOfService::Leader) {
+    return Http2Session::kLeaderGroupID;
+  }
+
+  if (classFlags & nsIClassOfService::Follower) {
+    return Http2Session::kFollowerGroupID;
+  }
+
+  if (classFlags & nsIClassOfService::Speculative) {
+    return Http2Session::kSpeculativeGroupID;
+  }
+
+  if (classFlags & nsIClassOfService::Background) {
+    return Http2Session::kBackgroundGroupID;
+  }
+
+  if (classFlags & nsIClassOfService::Unblocked) {
+    return Http2Session::kOtherGroupID;
+  }
+
+  return Http2Session::kFollowerGroupID; // unmarked followers
+}
+
 void
 Http2Stream::UpdatePriorityDependency()
 {
@@ -1212,39 +1254,79 @@ Http2Stream::UpdatePriorityDependency()
     return;
   }
 
-  // we create 5 fake dependency streams per session,
+  // we create 6 fake dependency streams per session,
   // these streams are never opened with HEADERS. our first opened stream is 0xd
   // 3 depends 0, weight 200, leader class (kLeaderGroupID)
   // 5 depends 0, weight 100, other (kOtherGroupID)
   // 7 depends 0, weight 0, background (kBackgroundGroupID)
   // 9 depends 7, weight 0, speculative (kSpeculativeGroupID)
   // b depends 3, weight 0, follower class (kFollowerGroupID)
+  // d depends 0, weight 240, urgent-start class (kUrgentStartGroupID)
   //
   // streams for leaders (html, js, css) depend on 3
   // streams for folowers (images) depend on b
   // default streams (xhr, async js) depend on 5
   // explicit bg streams (beacon, etc..) depend on 7
   // spculative bg streams depend on 9
+  // urgent-start streams depend on d
 
-  uint32_t classFlags = trans->ClassOfService();
+  mPriorityDependency = GetPriorityDependencyFromTransaction(trans);
 
-  if (classFlags & nsIClassOfService::Leader) {
-    mPriorityDependency = Http2Session::kLeaderGroupID;
-  } else if (classFlags & nsIClassOfService::Follower) {
-    mPriorityDependency = Http2Session::kFollowerGroupID;
-  } else if (classFlags & nsIClassOfService::Speculative) {
-    mPriorityDependency = Http2Session::kSpeculativeGroupID;
-  } else if (classFlags & nsIClassOfService::Background) {
+  if (gHttpHandler->ActiveTabPriority() &&
+      mTransactionTabId != mCurrentForegroundTabOuterContentWindowId &&
+      mPriorityDependency != Http2Session::kUrgentStartGroupID) {
+    LOG3(("Http2Stream::UpdatePriorityDependency %p "
+          " depends on background group for trans %p\n",
+          this, trans));
     mPriorityDependency = Http2Session::kBackgroundGroupID;
-  } else if (classFlags & nsIClassOfService::Unblocked) {
-    mPriorityDependency = Http2Session::kOtherGroupID;
-  } else {
-    mPriorityDependency = Http2Session::kFollowerGroupID; // unmarked followers
+
+    nsHttp::NotifyActiveTabLoadOptimization();
   }
 
   LOG3(("Http2Stream::UpdatePriorityDependency %p "
-        "classFlags %X depends on stream 0x%X\n",
-        this, classFlags, mPriorityDependency));
+        "depends on stream 0x%X\n",
+        this, mPriorityDependency));
+}
+
+void
+Http2Stream::TopLevelOuterContentWindowIdChanged(uint64_t windowId)
+{
+  MOZ_ASSERT(gHttpHandler->ActiveTabPriority());
+
+  LOG3(("Http2Stream::TopLevelOuterContentWindowIdChanged "
+        "%p windowId=%" PRIx64 "\n",
+        this, windowId));
+
+  mCurrentForegroundTabOuterContentWindowId = windowId;
+
+  if (!mSession->UseH2Deps()) {
+    return;
+  }
+
+  // Urgent start takes an absolute precedence, so don't
+  // change mPriorityDependency here.
+  if (mPriorityDependency == Http2Session::kUrgentStartGroupID) {
+    return;
+  }
+
+  if (mTransactionTabId != mCurrentForegroundTabOuterContentWindowId) {
+    mPriorityDependency = Http2Session::kBackgroundGroupID;
+    LOG3(("Http2Stream::TopLevelOuterContentWindowIdChanged %p "
+          "move into background group.\n", this));
+
+    nsHttp::NotifyActiveTabLoadOptimization();
+  } else {
+    nsHttpTransaction *trans = mTransaction->QueryHttpTransaction();
+    if (!trans) {
+      return;
+    }
+
+    mPriorityDependency = GetPriorityDependencyFromTransaction(trans);
+    LOG3(("Http2Stream::TopLevelOuterContentWindowIdChanged %p "
+          "depends on stream 0x%X\n", this, mPriorityDependency));
+  }
+
+  mSession->SendPriorityFrame(mStreamID, mPriorityDependency, mPriorityWeight);
 }
 
 void
@@ -1305,7 +1387,7 @@ Http2Stream::OnReadSegment(const char *buf,
   LOG3(("Http2Stream::OnReadSegment %p count=%d state=%x",
         this, count, mUpstreamState));
 
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(mSegmentReader, "OnReadSegment with null mSegmentReader");
 
   nsresult rv = NS_ERROR_UNEXPECTED;
@@ -1450,7 +1532,7 @@ Http2Stream::OnWriteSegment(char *buf,
   LOG3(("Http2Stream::OnWriteSegment %p count=%d state=%x 0x%X\n",
         this, count, mUpstreamState, mStreamID));
 
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(mSegmentWriter);
 
   if (mPushSource) {
@@ -1484,7 +1566,7 @@ Http2Stream::OnWriteSegment(char *buf,
 void
 Http2Stream::ClearTransactionsBlockedOnTunnel()
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   if (!mIsTunnel) {
     return;
@@ -1551,6 +1633,15 @@ Http2Stream::Finish0RTT(bool aRestart, bool aAlpnChanged)
   return rv;
 }
 
+nsresult
+Http2Stream::GetOriginAttributes(mozilla::OriginAttributes *oa)
+{
+  if (!mSocketTransport) {
+    return NS_ERROR_UNEXPECTED;
+  }
+
+  return mSocketTransport->GetOriginAttributes(oa);
+}
 
 } // namespace net
 } // namespace mozilla

@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+from __future__ import absolute_import
+
 import io
 import os
 
@@ -54,6 +56,7 @@ class ProcTestOutput(proctest.ProcTest):
         buf.close()
 
         self.determine_status(p, False, ())
+
 
 if __name__ == '__main__':
     mozunit.main()

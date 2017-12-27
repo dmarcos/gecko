@@ -7,25 +7,12 @@
   <browser id="thebrowser" type="content" remote="true" />
   <script type="application/javascript"><![CDATA[
     Components.utils.import("resource://gre/modules/Services.jsm");
+    Components.utils.import("resource://testing-common/BrowserTestUtils.jsm");
 
     const ok = window.opener.wrappedJSObject.ok;
     const is = window.opener.wrappedJSObject.is;
     const done = window.opener.wrappedJSObject.done;
     const SimpleTest = window.opener.wrappedJSObject.SimpleTest;
-
-    function getMinidumpDirectory() {
-      var dir = Services.dirsvc.get('ProfD', Components.interfaces.nsIFile);
-      dir.append("minidumps");
-      return dir;
-    }
-
-    function removeFile(directory, filename) {
-      var file = directory.clone();
-      file.append(filename);
-      if (file.exists()) {
-        file.remove(false);
-      }
-    }
 
     function crashObserver(subject, topic, data) {
       is(topic, 'ipc:content-shutdown', 'Received correct observer topic.');
@@ -38,25 +25,13 @@
         ok(dumpID, "dumpID is present and not an empty string");
       }
 
-      let p = Promise.resolve();
-
-      if (dumpID) {
-        var minidumpDirectory = getMinidumpDirectory();
-        p = Services.crashmanager.ensureCrashIsPresent(dumpID).then(() => {
-          removeFile(minidumpDirectory, dumpID + '.dmp');
-          removeFile(minidumpDirectory, dumpID + '.extra');
-        });
-      }
-
       Services.obs.removeObserver(crashObserver, 'ipc:content-shutdown');
-      p.then(done);
+      done();
     }
+
     Services.obs.addObserver(crashObserver, 'ipc:content-shutdown');
 
-    document.getElementById('thebrowser')
-            .QueryInterface(Components.interfaces.nsIFrameLoaderOwner)
-            .frameLoader.messageManager
-            .loadFrameScript('chrome://mochitests/content/chrome/dom/ipc/tests/process_error_contentscript.js', true);
+    BrowserTestUtils.crashBrowser(document.getElementById('thebrowser'));
   ]]></script>
 
 </window>

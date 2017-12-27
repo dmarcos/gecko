@@ -1,27 +1,27 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-add_task(function* insert_separator_notification() {
+add_task(async function insert_separator_notification() {
   let observer = expectNotifications();
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_SEPARATOR,
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_SEPARATOR,
                                                 parentGuid: PlacesUtils.bookmarks.unfiledGuid});
-  let itemId = yield PlacesUtils.promiseItemId(bm.guid);
-  let parentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
+  let itemId = await PlacesUtils.promiseItemId(bm.guid);
+  let parentId = await PlacesUtils.promiseItemId(bm.parentGuid);
   observer.check([ { name: "onItemAdded",
                      arguments: [ itemId, parentId, bm.index, bm.type,
-                                  null, null, bm.dateAdded * 1000,
+                                  null, "", bm.dateAdded * 1000,
                                   bm.guid, bm.parentGuid,
                                   Ci.nsINavBookmarksService.SOURCE_DEFAULT ] }
                  ]);
 });
 
-add_task(function* insert_folder_notification() {
+add_task(async function insert_folder_notification() {
   let observer = expectNotifications();
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
                                                 parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                                 title: "a folder" });
-  let itemId = yield PlacesUtils.promiseItemId(bm.guid);
-  let parentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
+  let itemId = await PlacesUtils.promiseItemId(bm.guid);
+  let parentId = await PlacesUtils.promiseItemId(bm.parentGuid);
   observer.check([ { name: "onItemAdded",
                      arguments: [ itemId, parentId, bm.index, bm.type,
                                   null, bm.title, bm.dateAdded * 1000,
@@ -30,28 +30,29 @@ add_task(function* insert_folder_notification() {
                  ]);
 });
 
-add_task(function* insert_folder_notitle_notification() {
+add_task(async function insert_folder_notitle_notification() {
   let observer = expectNotifications();
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
                                                 parentGuid: PlacesUtils.bookmarks.unfiledGuid });
-  let itemId = yield PlacesUtils.promiseItemId(bm.guid);
-  let parentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
+  strictEqual(bm.title, "", "Should return empty string for untitled folder");
+  let itemId = await PlacesUtils.promiseItemId(bm.guid);
+  let parentId = await PlacesUtils.promiseItemId(bm.parentGuid);
   observer.check([ { name: "onItemAdded",
                      arguments: [ itemId, parentId, bm.index, bm.type,
-                                  null, null, bm.dateAdded * 1000,
+                                  null, "", bm.dateAdded * 1000,
                                   bm.guid, bm.parentGuid,
                                   Ci.nsINavBookmarksService.SOURCE_DEFAULT ] }
                  ]);
 });
 
-add_task(function* insert_bookmark_notification() {
+add_task(async function insert_bookmark_notification() {
   let observer = expectNotifications();
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                 parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                                 url: new URL("http://example.com/"),
                                                 title: "a bookmark" });
-  let itemId = yield PlacesUtils.promiseItemId(bm.guid);
-  let parentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
+  let itemId = await PlacesUtils.promiseItemId(bm.guid);
+  let parentId = await PlacesUtils.promiseItemId(bm.parentGuid);
   observer.check([ { name: "onItemAdded",
                      arguments: [ itemId, parentId, bm.index, bm.type,
                                   bm.url, bm.title, bm.dateAdded * 1000,
@@ -60,41 +61,42 @@ add_task(function* insert_bookmark_notification() {
                  ]);
 });
 
-add_task(function* insert_bookmark_notitle_notification() {
+add_task(async function insert_bookmark_notitle_notification() {
   let observer = expectNotifications();
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                 parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                                 url: new URL("http://example.com/") });
-  let itemId = yield PlacesUtils.promiseItemId(bm.guid);
-  let parentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
+  strictEqual(bm.title, "", "Should return empty string for untitled bookmark");
+  let itemId = await PlacesUtils.promiseItemId(bm.guid);
+  let parentId = await PlacesUtils.promiseItemId(bm.parentGuid);
   observer.check([ { name: "onItemAdded",
                      arguments: [ itemId, parentId, bm.index, bm.type,
-                                  bm.url, null, bm.dateAdded * 1000,
+                                  bm.url, "", bm.dateAdded * 1000,
                                   bm.guid, bm.parentGuid,
                                   Ci.nsINavBookmarksService.SOURCE_DEFAULT ] }
                  ]);
 });
 
-add_task(function* insert_bookmark_tag_notification() {
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+add_task(async function insert_bookmark_tag_notification() {
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                 parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                                 url: new URL("http://tag.example.com/") });
-  let itemId = yield PlacesUtils.promiseItemId(bm.guid);
-  let parentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
+  let itemId = await PlacesUtils.promiseItemId(bm.guid);
+  let parentId = await PlacesUtils.promiseItemId(bm.parentGuid);
 
-  let tagFolder = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
+  let tagFolder = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
                                                        parentGuid: PlacesUtils.bookmarks.tagsGuid,
                                                        title: "tag" });
   let observer = expectNotifications();
-  let tag = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+  let tag = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                  parentGuid: tagFolder.guid,
                                                  url: new URL("http://tag.example.com/") });
-  let tagId = yield PlacesUtils.promiseItemId(tag.guid);
-  let tagParentId = yield PlacesUtils.promiseItemId(tag.parentGuid);
+  let tagId = await PlacesUtils.promiseItemId(tag.guid);
+  let tagParentId = await PlacesUtils.promiseItemId(tag.parentGuid);
 
   observer.check([ { name: "onItemAdded",
                      arguments: [ tagId, tagParentId, tag.index, tag.type,
-                                  tag.url, null, tag.dateAdded * 1000,
+                                  tag.url, "", tag.dateAdded * 1000,
                                   tag.guid, tag.parentGuid,
                                   Ci.nsINavBookmarksService.SOURCE_DEFAULT ] },
                    { name: "onItemChanged",
@@ -105,15 +107,15 @@ add_task(function* insert_bookmark_tag_notification() {
                  ]);
 });
 
-add_task(function* update_bookmark_lastModified() {
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+add_task(async function update_bookmark_lastModified() {
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                 parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                                 url: new URL("http://lastmod.example.com/") });
   let observer = expectNotifications();
-  bm = yield PlacesUtils.bookmarks.update({ guid: bm.guid,
+  bm = await PlacesUtils.bookmarks.update({ guid: bm.guid,
                                             lastModified: new Date() });
-  let itemId = yield PlacesUtils.promiseItemId(bm.guid);
-  let parentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
+  let itemId = await PlacesUtils.promiseItemId(bm.guid);
+  let parentId = await PlacesUtils.promiseItemId(bm.parentGuid);
 
   observer.check([ { name: "onItemChanged",
                      arguments: [ itemId, "lastModified", false,
@@ -123,15 +125,15 @@ add_task(function* update_bookmark_lastModified() {
                  ]);
 });
 
-add_task(function* update_bookmark_title() {
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+add_task(async function update_bookmark_title() {
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                 parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                                 url: new URL("http://title.example.com/") });
   let observer = expectNotifications();
-  bm = yield PlacesUtils.bookmarks.update({ guid: bm.guid,
+  bm = await PlacesUtils.bookmarks.update({ guid: bm.guid,
                                             title: "new title" });
-  let itemId = yield PlacesUtils.promiseItemId(bm.guid);
-  let parentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
+  let itemId = await PlacesUtils.promiseItemId(bm.guid);
+  let parentId = await PlacesUtils.promiseItemId(bm.parentGuid);
 
   observer.check([ { name: "onItemChanged",
                      arguments: [ itemId, "title", false, bm.title,
@@ -140,15 +142,15 @@ add_task(function* update_bookmark_title() {
                  ]);
 });
 
-add_task(function* update_bookmark_uri() {
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+add_task(async function update_bookmark_uri() {
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                 parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                                 url: new URL("http://url.example.com/") });
   let observer = expectNotifications();
-  bm = yield PlacesUtils.bookmarks.update({ guid: bm.guid,
+  bm = await PlacesUtils.bookmarks.update({ guid: bm.guid,
                                             url: "http://mozilla.org/" });
-  let itemId = yield PlacesUtils.promiseItemId(bm.guid);
-  let parentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
+  let itemId = await PlacesUtils.promiseItemId(bm.guid);
+  let parentId = await PlacesUtils.promiseItemId(bm.parentGuid);
 
   observer.check([ { name: "onItemChanged",
                      arguments: [ itemId, "uri", false, bm.url.href,
@@ -158,20 +160,20 @@ add_task(function* update_bookmark_uri() {
                  ]);
 });
 
-add_task(function* update_move_same_folder() {
+add_task(async function update_move_same_folder() {
   // Ensure there are at least two items in place (others test do so for us,
   // but we don't have to depend on that).
-  yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_SEPARATOR,
+  await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_SEPARATOR,
                                        parentGuid: PlacesUtils.bookmarks.unfiledGuid });
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                 parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                                 url: new URL("http://move.example.com/") });
-  let bmItemId = yield PlacesUtils.promiseItemId(bm.guid);
-  let bmParentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
+  let bmItemId = await PlacesUtils.promiseItemId(bm.guid);
+  let bmParentId = await PlacesUtils.promiseItemId(bm.parentGuid);
   let bmOldIndex = bm.index;
 
   let observer = expectNotifications();
-  bm = yield PlacesUtils.bookmarks.update({ guid: bm.guid,
+  bm = await PlacesUtils.bookmarks.update({ guid: bm.guid,
                                             parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                             index: 0 });
   Assert.equal(bm.index, 0);
@@ -184,7 +186,7 @@ add_task(function* update_move_same_folder() {
   // Test that we get the right index for DEFAULT_INDEX input.
   bmOldIndex = 0;
   observer = expectNotifications();
-  bm = yield PlacesUtils.bookmarks.update({ guid: bm.guid,
+  bm = await PlacesUtils.bookmarks.update({ guid: bm.guid,
                                             parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                             index: PlacesUtils.bookmarks.DEFAULT_INDEX });
   Assert.ok(bm.index > 0);
@@ -195,22 +197,22 @@ add_task(function* update_move_same_folder() {
                  ]);
 });
 
-add_task(function* update_move_different_folder() {
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+add_task(async function update_move_different_folder() {
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                 parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                                 url: new URL("http://move.example.com/") });
-  let folder = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
+  let folder = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
                                                     parentGuid: PlacesUtils.bookmarks.unfiledGuid });
-  let bmItemId = yield PlacesUtils.promiseItemId(bm.guid);
+  let bmItemId = await PlacesUtils.promiseItemId(bm.guid);
   let bmOldParentId = PlacesUtils.unfiledBookmarksFolderId;
   let bmOldIndex = bm.index;
 
   let observer = expectNotifications();
-  bm = yield PlacesUtils.bookmarks.update({ guid: bm.guid,
+  bm = await PlacesUtils.bookmarks.update({ guid: bm.guid,
                                             parentGuid: folder.guid,
                                             index: PlacesUtils.bookmarks.DEFAULT_INDEX });
   Assert.equal(bm.index, 0);
-  let bmNewParentId = yield PlacesUtils.promiseItemId(folder.guid);
+  let bmNewParentId = await PlacesUtils.promiseItemId(folder.guid);
   observer.check([ { name: "onItemMoved",
                      arguments: [ bmItemId, bmOldParentId, bmOldIndex, bmNewParentId,
                                   bm.index, bm.type, bm.guid,
@@ -220,17 +222,15 @@ add_task(function* update_move_different_folder() {
                  ]);
 });
 
-add_task(function* remove_bookmark() {
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+add_task(async function remove_bookmark() {
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                 parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                                 url: new URL("http://remove.example.com/") });
-  let itemId = yield PlacesUtils.promiseItemId(bm.guid);
-  let parentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
+  let itemId = await PlacesUtils.promiseItemId(bm.guid);
+  let parentId = await PlacesUtils.promiseItemId(bm.parentGuid);
 
   let observer = expectNotifications();
-  bm = yield PlacesUtils.bookmarks.remove(bm.guid);
-  // TODO (Bug 653910): onItemAnnotationRemoved notified even if there were no
-  // annotations.
+  await PlacesUtils.bookmarks.remove(bm.guid);
   observer.check([ { name: "onItemRemoved",
                      arguments: [ itemId, parentId, bm.index, bm.type, bm.url,
                                   bm.guid, bm.parentGuid,
@@ -238,14 +238,39 @@ add_task(function* remove_bookmark() {
                  ]);
 });
 
-add_task(function* remove_folder() {
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
-                                                parentGuid: PlacesUtils.bookmarks.unfiledGuid });
-  let itemId = yield PlacesUtils.promiseItemId(bm.guid);
-  let parentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
+add_task(async function remove_multiple_bookmarks() {
+  let bm1 = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+                                                 parentGuid: PlacesUtils.bookmarks.unfiledGuid,
+                                                 url: "http://remove.example.com/" });
+  let bm2 = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+                                                 parentGuid: PlacesUtils.bookmarks.unfiledGuid,
+                                                 url: "http://remove1.example.com/" });
+  let itemId1 = await PlacesUtils.promiseItemId(bm1.guid);
+  let parentId1 = await PlacesUtils.promiseItemId(bm1.parentGuid);
+  let itemId2 = await PlacesUtils.promiseItemId(bm2.guid);
+  let parentId2 = await PlacesUtils.promiseItemId(bm2.parentGuid);
 
   let observer = expectNotifications();
-  bm = yield PlacesUtils.bookmarks.remove(bm.guid);
+  await PlacesUtils.bookmarks.remove([bm1, bm2]);
+  observer.check([ { name: "onItemRemoved",
+                     arguments: [ itemId1, parentId1, bm1.index, bm1.type, bm1.url,
+                                  bm1.guid, bm1.parentGuid,
+                                  Ci.nsINavBookmarksService.SOURCE_DEFAULT ] },
+                   { name: "onItemRemoved",
+                     arguments: [ itemId2, parentId2, bm2.index, bm2.type, bm2.url,
+                                  bm2.guid, bm2.parentGuid,
+                                  Ci.nsINavBookmarksService.SOURCE_DEFAULT ] }
+                 ]);
+});
+
+add_task(async function remove_folder() {
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
+                                                parentGuid: PlacesUtils.bookmarks.unfiledGuid });
+  let itemId = await PlacesUtils.promiseItemId(bm.guid);
+  let parentId = await PlacesUtils.promiseItemId(bm.parentGuid);
+
+  let observer = expectNotifications();
+  await PlacesUtils.bookmarks.remove(bm.guid);
   observer.check([ { name: "onItemRemoved",
                      arguments: [ itemId, parentId, bm.index, bm.type, null,
                                   bm.guid, bm.parentGuid,
@@ -253,24 +278,24 @@ add_task(function* remove_folder() {
                  ]);
 });
 
-add_task(function* remove_bookmark_tag_notification() {
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+add_task(async function remove_bookmark_tag_notification() {
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                 parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                                 url: new URL("http://untag.example.com/") });
-  let itemId = yield PlacesUtils.promiseItemId(bm.guid);
-  let parentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
+  let itemId = await PlacesUtils.promiseItemId(bm.guid);
+  let parentId = await PlacesUtils.promiseItemId(bm.parentGuid);
 
-  let tagFolder = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
+  let tagFolder = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
                                                        parentGuid: PlacesUtils.bookmarks.tagsGuid,
                                                        title: "tag" });
-  let tag = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+  let tag = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                  parentGuid: tagFolder.guid,
                                                  url: new URL("http://untag.example.com/") });
-  let tagId = yield PlacesUtils.promiseItemId(tag.guid);
-  let tagParentId = yield PlacesUtils.promiseItemId(tag.parentGuid);
+  let tagId = await PlacesUtils.promiseItemId(tag.guid);
+  let tagParentId = await PlacesUtils.promiseItemId(tag.parentGuid);
 
   let observer = expectNotifications();
-  yield PlacesUtils.bookmarks.remove(tag.guid);
+  await PlacesUtils.bookmarks.remove(tag.guid);
 
   observer.check([ { name: "onItemRemoved",
                      arguments: [ tagId, tagParentId, tag.index, tag.type,
@@ -284,28 +309,28 @@ add_task(function* remove_bookmark_tag_notification() {
                  ]);
 });
 
-add_task(function* remove_folder_notification() {
-  let folder1 = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
+add_task(async function remove_folder_notification() {
+  let folder1 = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
                                                      parentGuid: PlacesUtils.bookmarks.unfiledGuid });
-  let folder1Id = yield PlacesUtils.promiseItemId(folder1.guid);
-  let folder1ParentId = yield PlacesUtils.promiseItemId(folder1.parentGuid);
+  let folder1Id = await PlacesUtils.promiseItemId(folder1.guid);
+  let folder1ParentId = await PlacesUtils.promiseItemId(folder1.parentGuid);
 
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                 parentGuid: folder1.guid,
                                                 url: new URL("http://example.com/") });
-  let bmItemId = yield PlacesUtils.promiseItemId(bm.guid);
+  let bmItemId = await PlacesUtils.promiseItemId(bm.guid);
 
-  let folder2 = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
+  let folder2 = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
                                                      parentGuid: folder1.guid });
-  let folder2Id = yield PlacesUtils.promiseItemId(folder2.guid);
+  let folder2Id = await PlacesUtils.promiseItemId(folder2.guid);
 
-  let bm2 = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+  let bm2 = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                  parentGuid: folder2.guid,
                                                  url: new URL("http://example.com/") });
-  let bm2ItemId = yield PlacesUtils.promiseItemId(bm2.guid);
+  let bm2ItemId = await PlacesUtils.promiseItemId(bm2.guid);
 
   let observer = expectNotifications();
-  yield PlacesUtils.bookmarks.remove(folder1.guid);
+  await PlacesUtils.bookmarks.remove(folder1.guid);
 
   observer.check([ { name: "onItemRemoved",
                      arguments: [ bm2ItemId, folder2Id, bm2.index, bm2.type,
@@ -328,40 +353,40 @@ add_task(function* remove_folder_notification() {
                  ]);
 });
 
-add_task(function* eraseEverything_notification() {
+add_task(async function eraseEverything_notification() {
   // Let's start from a clean situation.
-  yield PlacesUtils.bookmarks.eraseEverything();
+  await PlacesUtils.bookmarks.eraseEverything();
 
-  let folder1 = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
+  let folder1 = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
                                                      parentGuid: PlacesUtils.bookmarks.unfiledGuid });
-  let folder1Id = yield PlacesUtils.promiseItemId(folder1.guid);
-  let folder1ParentId = yield PlacesUtils.promiseItemId(folder1.parentGuid);
+  let folder1Id = await PlacesUtils.promiseItemId(folder1.guid);
+  let folder1ParentId = await PlacesUtils.promiseItemId(folder1.parentGuid);
 
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                 parentGuid: folder1.guid,
                                                 url: new URL("http://example.com/") });
-  let itemId = yield PlacesUtils.promiseItemId(bm.guid);
-  let parentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
+  let itemId = await PlacesUtils.promiseItemId(bm.guid);
+  let parentId = await PlacesUtils.promiseItemId(bm.parentGuid);
 
-  let folder2 = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
+  let folder2 = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
                                                      parentGuid: PlacesUtils.bookmarks.unfiledGuid });
-  let folder2Id = yield PlacesUtils.promiseItemId(folder2.guid);
-  let folder2ParentId = yield PlacesUtils.promiseItemId(folder2.parentGuid);
+  let folder2Id = await PlacesUtils.promiseItemId(folder2.guid);
+  let folder2ParentId = await PlacesUtils.promiseItemId(folder2.parentGuid);
 
-  let toolbarBm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+  let toolbarBm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                        parentGuid: PlacesUtils.bookmarks.toolbarGuid,
                                                        url: new URL("http://example.com/") });
-  let toolbarBmId = yield PlacesUtils.promiseItemId(toolbarBm.guid);
-  let toolbarBmParentId = yield PlacesUtils.promiseItemId(toolbarBm.parentGuid);
+  let toolbarBmId = await PlacesUtils.promiseItemId(toolbarBm.guid);
+  let toolbarBmParentId = await PlacesUtils.promiseItemId(toolbarBm.parentGuid);
 
-  let menuBm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+  let menuBm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                     parentGuid: PlacesUtils.bookmarks.menuGuid,
                                                     url: new URL("http://example.com/") });
-  let menuBmId = yield PlacesUtils.promiseItemId(menuBm.guid);
-  let menuBmParentId = yield PlacesUtils.promiseItemId(menuBm.parentGuid);
+  let menuBmId = await PlacesUtils.promiseItemId(menuBm.guid);
+  let menuBmParentId = await PlacesUtils.promiseItemId(menuBm.parentGuid);
 
   let observer = expectNotifications();
-  yield PlacesUtils.bookmarks.eraseEverything();
+  await PlacesUtils.bookmarks.eraseEverything();
 
   // Bookmarks should always be notified before their parents.
   observer.check([ { name: "onItemRemoved",
@@ -393,31 +418,31 @@ add_task(function* eraseEverything_notification() {
                  ]);
 });
 
-add_task(function* eraseEverything_reparented_notification() {
+add_task(async function eraseEverything_reparented_notification() {
   // Let's start from a clean situation.
-  yield PlacesUtils.bookmarks.eraseEverything();
+  await PlacesUtils.bookmarks.eraseEverything();
 
-  let folder1 = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
+  let folder1 = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
                                                      parentGuid: PlacesUtils.bookmarks.unfiledGuid });
-  let folder1Id = yield PlacesUtils.promiseItemId(folder1.guid);
-  let folder1ParentId = yield PlacesUtils.promiseItemId(folder1.parentGuid);
+  let folder1Id = await PlacesUtils.promiseItemId(folder1.guid);
+  let folder1ParentId = await PlacesUtils.promiseItemId(folder1.parentGuid);
 
-  let bm = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
+  let bm = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                 parentGuid: folder1.guid,
                                                 url: new URL("http://example.com/") });
-  let itemId = yield PlacesUtils.promiseItemId(bm.guid);
+  let itemId = await PlacesUtils.promiseItemId(bm.guid);
 
-  let folder2 = yield PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
+  let folder2 = await PlacesUtils.bookmarks.insert({ type: PlacesUtils.bookmarks.TYPE_FOLDER,
                                                      parentGuid: PlacesUtils.bookmarks.unfiledGuid });
-  let folder2Id = yield PlacesUtils.promiseItemId(folder2.guid);
-  let folder2ParentId = yield PlacesUtils.promiseItemId(folder2.parentGuid);
+  let folder2Id = await PlacesUtils.promiseItemId(folder2.guid);
+  let folder2ParentId = await PlacesUtils.promiseItemId(folder2.parentGuid);
 
   bm.parentGuid = folder2.guid;
-  bm = yield PlacesUtils.bookmarks.update(bm);
-  let parentId = yield PlacesUtils.promiseItemId(bm.parentGuid);
+  bm = await PlacesUtils.bookmarks.update(bm);
+  let parentId = await PlacesUtils.promiseItemId(bm.parentGuid);
 
   let observer = expectNotifications();
-  yield PlacesUtils.bookmarks.eraseEverything();
+  await PlacesUtils.bookmarks.eraseEverything();
 
   // Bookmarks should always be notified before their parents.
   observer.check([ { name: "onItemRemoved",
@@ -437,7 +462,7 @@ add_task(function* eraseEverything_reparented_notification() {
                  ]);
 });
 
-add_task(function* reorder_notification() {
+add_task(async function reorder_notification() {
   let bookmarks = [
     { type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
       url: "http://example1.com/",
@@ -460,20 +485,20 @@ add_task(function* reorder_notification() {
   ];
   let sorted = [];
   for (let bm of bookmarks) {
-    sorted.push(yield PlacesUtils.bookmarks.insert(bm));
+    sorted.push(await PlacesUtils.bookmarks.insert(bm));
   }
 
   // Randomly reorder the array.
   sorted.sort(() => 0.5 - Math.random());
 
   let observer = expectNotifications();
-  yield PlacesUtils.bookmarks.reorder(PlacesUtils.bookmarks.unfiledGuid,
+  await PlacesUtils.bookmarks.reorder(PlacesUtils.bookmarks.unfiledGuid,
                                       sorted.map(bm => bm.guid));
 
   let expectedNotifications = [];
   for (let i = 0; i < sorted.length; ++i) {
     let child = sorted[i];
-    let childId = yield PlacesUtils.promiseItemId(child.guid);
+    let childId = await PlacesUtils.promiseItemId(child.guid);
     expectedNotifications.push({ name: "onItemMoved",
                                  arguments: [ childId,
                                               PlacesUtils.unfiledBookmarksFolderId,
@@ -488,6 +513,54 @@ add_task(function* reorder_notification() {
                                             ] });
   }
   observer.check(expectedNotifications);
+});
+
+add_task(async function update_notitle_notification() {
+  let toolbarBmURI = Services.io.newURI("https://example.com");
+  let toolbarBmId =
+    PlacesUtils.bookmarks.insertBookmark(PlacesUtils.toolbarFolderId,
+                                         toolbarBmURI, 0, "Bookmark");
+  let toolbarBmGuid = await PlacesUtils.promiseItemGuid(toolbarBmId);
+
+  let menuFolder = await PlacesUtils.bookmarks.insert({
+    parentGuid: PlacesUtils.bookmarks.menuGuid,
+    type: PlacesUtils.bookmarks.TYPE_FOLDER,
+    index: 0,
+    title: "Folder"
+  });
+  let menuFolderId = await PlacesUtils.promiseItemId(menuFolder.guid);
+
+  let observer = expectNotifications();
+
+  PlacesUtils.bookmarks.setItemTitle(toolbarBmId, null);
+  strictEqual(PlacesUtils.bookmarks.getItemTitle(toolbarBmId), "",
+    "Legacy API should return empty string for untitled bookmark");
+
+  let updatedMenuBm = await PlacesUtils.bookmarks.update({
+    guid: menuFolder.guid,
+    title: null,
+  });
+  strictEqual(updatedMenuBm.title, "",
+    "Async API should return empty string for untitled bookmark");
+
+  let toolbarBmModified =
+    PlacesUtils.toDate(PlacesUtils.bookmarks.getItemLastModified(toolbarBmId));
+  observer.check([{
+    name: "onItemChanged",
+    arguments: [toolbarBmId, "title", false, "", toolbarBmModified * 1000,
+                PlacesUtils.bookmarks.TYPE_BOOKMARK,
+                PlacesUtils.toolbarFolderId, toolbarBmGuid,
+                PlacesUtils.bookmarks.toolbarGuid,
+                "", PlacesUtils.bookmarks.SOURCES.DEFAULT],
+  }, {
+    name: "onItemChanged",
+    arguments: [menuFolderId, "title", false, "",
+                updatedMenuBm.lastModified * 1000,
+                PlacesUtils.bookmarks.TYPE_FOLDER,
+                PlacesUtils.bookmarksMenuFolderId, menuFolder.guid,
+                PlacesUtils.bookmarks.menuGuid,
+                "", PlacesUtils.bookmarks.SOURCES.DEFAULT],
+  }]);
 });
 
 function expectNotifications() {
@@ -505,12 +578,10 @@ function expectNotifications() {
           let args = Array.from(origArgs, arg => {
             if (arg && arg instanceof Ci.nsIURI)
               return new URL(arg.spec);
-            if (arg && typeof(arg) == "number" && arg >= Date.now() * 1000)
-              return new Date(parseInt(arg / 1000));
             return arg;
           });
           notifications.push({ name, arguments: args });
-        }
+        };
       }
 
       if (name in target)
@@ -520,8 +591,4 @@ function expectNotifications() {
   });
   PlacesUtils.bookmarks.addObserver(observer);
   return observer;
-}
-
-function run_test() {
-  run_next_test();
 }

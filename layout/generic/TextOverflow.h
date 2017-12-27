@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set shiftwidth=2 tabstop=8 autoindent cindent expandtab: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,7 +9,9 @@
 
 #include "nsDisplayList.h"
 #include "nsTHashtable.h"
+#include "mozilla/Attributes.h"
 #include "mozilla/Likely.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/WritingModes.h"
 #include <algorithm>
 
@@ -25,20 +27,30 @@ namespace css {
  *  1. allocate an object using WillProcessLines
  *  2. then call ProcessLine for each line you are building display lists for
  */
-class TextOverflow {
+class MOZ_HEAP_CLASS TextOverflow final {
  public:
   /**
    * Allocate an object for text-overflow processing.
    * @return nullptr if no processing is necessary.  The caller owns the object.
    */
-  static TextOverflow* WillProcessLines(nsDisplayListBuilder*   aBuilder,
-                                        nsIFrame*               aBlockFrame);
+  static UniquePtr<TextOverflow>
+  WillProcessLines(nsDisplayListBuilder* aBuilder,
+                   nsIFrame*             aBlockFrame);
+
+  /**
+   * Constructor, which client code SHOULD NOT use directly. Instead, clients
+   * should call WillProcessLines(), which is basically the factory function
+   * for TextOverflow instances.
+   */
+  TextOverflow(nsDisplayListBuilder* aBuilder,
+               nsIFrame* aBlockFrame);
+
   /**
    * Analyze the display lists for text overflow and what kind of item is at
    * the content edges.  Add display items for text-overflow markers as needed
    * and remove or clip items that would overlap a marker.
    */
-  void ProcessLine(const nsDisplayListSet& aLists, nsLineBox* aLine);
+  void ProcessLine(const nsDisplayListSet& aLists, nsLineBox* aLine, uint32_t aLineNumber);
 
   /**
    * Get the resulting text-overflow markers (the list may be empty).
@@ -55,12 +67,9 @@ class TextOverflow {
    */
   static bool CanHaveTextOverflow(nsIFrame* aBlockFrame);
 
-  typedef nsTHashtable<nsPtrHashKey<nsIFrame> > FrameHashtable;
+  typedef nsTHashtable<nsPtrHashKey<nsIFrame>> FrameHashtable;
 
- protected:
-  TextOverflow(nsDisplayListBuilder* aBuilder,
-               nsIFrame* aBlockFrame);
-
+ private:
   typedef mozilla::WritingMode WritingMode;
   typedef mozilla::LogicalRect LogicalRect;
 
@@ -174,12 +183,12 @@ class TextOverflow {
    * @param aClippedMarkerEdges the innermost edges of all text and atomic
    *   inline-level frames that are clipped by the current marker width
    */
-  void AnalyzeMarkerEdges(nsIFrame*       aFrame,
-                          const nsIAtom*  aFrameType,
+  void AnalyzeMarkerEdges(nsIFrame* aFrame,
+                          mozilla::LayoutFrameType aFrameType,
                           const LogicalRect& aInsideMarkersArea,
                           FrameHashtable* aFramesToHide,
                           AlignmentEdges* aAlignmentEdges,
-                          bool*           aFoundVisibleTextOrAtomic,
+                          bool* aFoundVisibleTextOrAtomic,
                           InnerClipEdges* aClippedMarkerEdges);
 
   /**
@@ -206,7 +215,8 @@ class TextOverflow {
   void CreateMarkers(const nsLineBox* aLine,
                      bool aCreateIStart, bool aCreateIEnd,
                      const LogicalRect& aInsideMarkersArea,
-                     const LogicalRect& aContentArea);
+                     const LogicalRect& aContentArea,
+                     uint32_t aLineNumber);
 
   LogicalRect            mContentArea;
   nsDisplayListBuilder*  mBuilder;

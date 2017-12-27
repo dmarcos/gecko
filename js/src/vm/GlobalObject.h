@@ -13,7 +13,6 @@
 #include "jsfun.h"
 #include "jsnum.h"
 
-#include "builtin/RegExp.h"
 #include "js/Vector.h"
 #include "vm/ArrayBufferObject.h"
 #include "vm/ErrorObject.h"
@@ -72,30 +71,15 @@ class GlobalObject : public NativeObject
         EVAL = APPLICATION_SLOTS + STANDARD_CLASS_SLOTS,
         THROWTYPEERROR,
 
-        /*
-         * Instances of the internal createArrayFromBuffer function used by the
-         * typed array code, one per typed array element type.
-         */
-        FROM_BUFFER_UINT8,
-        FROM_BUFFER_INT8,
-        FROM_BUFFER_UINT16,
-        FROM_BUFFER_INT16,
-        FROM_BUFFER_UINT32,
-        FROM_BUFFER_INT32,
-        FROM_BUFFER_FLOAT32,
-        FROM_BUFFER_FLOAT64,
-        FROM_BUFFER_UINT8CLAMPED,
-
         /* One-off properties stored after slots for built-ins. */
         LEXICAL_ENVIRONMENT,
         EMPTY_GLOBAL_SCOPE,
         ITERATOR_PROTO,
         ARRAY_ITERATOR_PROTO,
         STRING_ITERATOR_PROTO,
-        LEGACY_GENERATOR_OBJECT_PROTO,
-        STAR_GENERATOR_OBJECT_PROTO,
-        STAR_GENERATOR_FUNCTION_PROTO,
-        STAR_GENERATOR_FUNCTION,
+        GENERATOR_OBJECT_PROTO,
+        GENERATOR_FUNCTION_PROTO,
+        GENERATOR_FUNCTION,
         ASYNC_FUNCTION_PROTO,
         ASYNC_FUNCTION,
         ASYNC_ITERATOR_PROTO,
@@ -111,11 +95,12 @@ class GlobalObject : public NativeObject
         DATE_TIME_FORMAT,
         DATE_TIME_FORMAT_PROTO,
         PLURAL_RULES_PROTO,
+        RELATIVE_TIME_FORMAT_PROTO,
         MODULE_PROTO,
         IMPORT_ENTRY_PROTO,
         EXPORT_ENTRY_PROTO,
+        REQUESTED_MODULE_PROTO,
         REGEXP_STATICS,
-        WARNED_ONCE_FLAGS,
         RUNTIME_CODEGEN_ENABLED,
         DEBUGGERS,
         INTRINSICS,
@@ -134,18 +119,6 @@ class GlobalObject : public NativeObject
      */
     static_assert(JSCLASS_GLOBAL_SLOT_COUNT == RESERVED_SLOTS,
                   "global object slot counts are inconsistent");
-
-    enum WarnOnceFlag : int32_t {
-        WARN_WATCH_DEPRECATED                   = 1 << 0,
-    };
-
-    // Emit the specified warning if the given slot in |obj|'s global isn't
-    // true, then set the slot to true.  Thus calling this method warns once
-    // for each global object it's called on, and every other call does
-    // nothing.
-    static bool
-    warnOnceAbout(JSContext* cx, HandleObject obj, WarnOnceFlag flag, unsigned errorNumber);
-
 
   public:
     LexicalEnvironmentObject& lexicalEnvironment() const;
@@ -260,21 +233,6 @@ class GlobalObject : public NativeObject
         return classIsInitialized(JSProto_DataView);
     }
 
-    Value createArrayFromBufferHelper(uint32_t slot) const {
-        MOZ_ASSERT(FROM_BUFFER_UINT8 <= slot && slot <= FROM_BUFFER_UINT8CLAMPED);
-        return getSlot(slot);
-    }
-
-    void setCreateArrayFromBufferHelper(uint32_t slot, Handle<JSFunction*> fun) {
-        MOZ_ASSERT(getSlotRef(slot).isUndefined());
-        setSlot(slot, ObjectValue(*fun));
-    }
-
-  public:
-    template<typename T>
-    inline void setCreateArrayFromBuffer(Handle<JSFunction*> fun);
-
-  private:
     // Disallow use of unqualified JSObject::create in GlobalObject.
     static GlobalObject* create(...) = delete;
 
@@ -407,6 +365,13 @@ class GlobalObject : public NativeObject
         return &global->getPrototype(JSProto_SavedFrame).toObject().as<NativeObject>();
     }
 
+    static JSFunction*
+    getOrCreateArrayBufferConstructor(JSContext* cx, Handle<GlobalObject*> global) {
+        if (!ensureConstructor(cx, global, JSProto_ArrayBuffer))
+            return nullptr;
+        return &global->getConstructor(JSProto_ArrayBuffer).toObject().as<JSFunction>();
+    }
+
     static JSObject*
     getOrCreateArrayBufferPrototype(JSContext* cx, Handle<GlobalObject*> global) {
         if (!ensureConstructor(cx, global, JSProto_ArrayBuffer))
@@ -481,10 +446,6 @@ class GlobalObject : public NativeObject
 
     TypedObjectModuleObject& getTypedObjectModule() const;
 
-    JSObject* getLegacyIteratorPrototype() {
-        return &getPrototype(JSProto_Iterator).toObject();
-    }
-
     static JSObject*
     getOrCreateCollatorPrototype(JSContext* cx, Handle<GlobalObject*> global) {
         return getOrCreateObject(cx, global, COLLATOR_PROTO, initIntlObject);
@@ -517,6 +478,11 @@ class GlobalObject : public NativeObject
         return getOrCreateObject(cx, global, PLURAL_RULES_PROTO, initIntlObject);
     }
 
+    static JSObject*
+    getOrCreateRelativeTimeFormatPrototype(JSContext* cx, Handle<GlobalObject*> global) {
+        return getOrCreateObject(cx, global, RELATIVE_TIME_FORMAT_PROTO, initIntlObject);
+    }
+
     static bool ensureModulePrototypesCreated(JSContext *cx, Handle<GlobalObject*> global);
 
     JSObject* maybeGetModulePrototype() {
@@ -534,6 +500,11 @@ class GlobalObject : public NativeObject
         return value.isUndefined() ? nullptr : &value.toObject();
     }
 
+    JSObject* maybeGetRequestedModulePrototype() {
+        Value value = getSlot(REQUESTED_MODULE_PROTO);
+        return value.isUndefined() ? nullptr : &value.toObject();
+    }
+
     JSObject* getModulePrototype() {
         JSObject* proto = maybeGetModulePrototype();
         MOZ_ASSERT(proto);
@@ -548,6 +519,12 @@ class GlobalObject : public NativeObject
 
     JSObject* getExportEntryPrototype() {
         JSObject* proto = maybeGetExportEntryPrototype();
+        MOZ_ASSERT(proto);
+        return proto;
+    }
+
+    JSObject* getRequestedModulePrototype() {
+        JSObject* proto = maybeGetRequestedModulePrototype();
         MOZ_ASSERT(proto);
         return proto;
     }
@@ -600,27 +577,21 @@ class GlobalObject : public NativeObject
     }
 
     static NativeObject*
-    getOrCreateLegacyGeneratorObjectPrototype(JSContext* cx, Handle<GlobalObject*> global) {
-        return MaybeNativeObject(getOrCreateObject(cx, global, LEGACY_GENERATOR_OBJECT_PROTO,
-                                                   initLegacyGeneratorProto));
-    }
-
-    static NativeObject*
-    getOrCreateStarGeneratorObjectPrototype(JSContext* cx, Handle<GlobalObject*> global)
+    getOrCreateGeneratorObjectPrototype(JSContext* cx, Handle<GlobalObject*> global)
     {
-        return MaybeNativeObject(getOrCreateObject(cx, global, STAR_GENERATOR_OBJECT_PROTO,
-                                                   initStarGenerators));
+        return MaybeNativeObject(getOrCreateObject(cx, global, GENERATOR_OBJECT_PROTO,
+                                                   initGenerators));
     }
 
     static NativeObject*
-    getOrCreateStarGeneratorFunctionPrototype(JSContext* cx, Handle<GlobalObject*> global) {
-        return MaybeNativeObject(getOrCreateObject(cx, global, STAR_GENERATOR_FUNCTION_PROTO,
-                                                   initStarGenerators));
+    getOrCreateGeneratorFunctionPrototype(JSContext* cx, Handle<GlobalObject*> global) {
+        return MaybeNativeObject(getOrCreateObject(cx, global, GENERATOR_FUNCTION_PROTO,
+                                                   initGenerators));
     }
 
     static JSObject*
-    getOrCreateStarGeneratorFunction(JSContext* cx, Handle<GlobalObject*> global) {
-        return getOrCreateObject(cx, global, STAR_GENERATOR_FUNCTION, initStarGenerators);
+    getOrCreateGeneratorFunction(JSContext* cx, Handle<GlobalObject*> global) {
+        return getOrCreateObject(cx, global, GENERATOR_FUNCTION, initGenerators);
     }
 
     static NativeObject*
@@ -779,19 +750,7 @@ class GlobalObject : public NativeObject
         return &v.toObject();
     }
 
-    template<typename T>
-    inline Value createArrayFromBuffer() const;
-
     static bool isRuntimeCodeGenEnabled(JSContext* cx, Handle<GlobalObject*> global);
-
-    // Warn about use of the deprecated watch/unwatch functions in the global
-    // in which |obj| was created, if no prior warning was given.
-    static bool warnOnceAboutWatch(JSContext* cx, HandleObject obj) {
-        // Temporarily disabled until we've provided a watch/unwatch workaround for
-        // debuggers like Firebug (bug 934669).
-        //return warnOnceAbout(cx, obj, WARN_WATCH_DEPRECATED, JSMSG_OBJECT_WATCH_DEPRECATED);
-        return true;
-    }
 
     static bool getOrCreateEval(JSContext* cx, Handle<GlobalObject*> global,
                                 MutableHandleObject eval);
@@ -805,8 +764,7 @@ class GlobalObject : public NativeObject
     static bool initStringIteratorProto(JSContext* cx, Handle<GlobalObject*> global);
 
     // Implemented in vm/GeneratorObject.cpp.
-    static bool initLegacyGeneratorProto(JSContext* cx, Handle<GlobalObject*> global);
-    static bool initStarGenerators(JSContext* cx, Handle<GlobalObject*> global);
+    static bool initGenerators(JSContext* cx, Handle<GlobalObject*> global);
 
     static bool initAsyncFunction(JSContext* cx, Handle<GlobalObject*> global);
 
@@ -818,12 +776,13 @@ class GlobalObject : public NativeObject
 
     // Implemented in Intl.cpp.
     static bool initIntlObject(JSContext* cx, Handle<GlobalObject*> global);
-    static bool addPluralRulesConstructor(JSContext* cx, HandleObject intl);
+    static bool addRelativeTimeFormatConstructor(JSContext* cx, HandleObject intl);
 
     // Implemented in builtin/ModuleObject.cpp
     static bool initModuleProto(JSContext* cx, Handle<GlobalObject*> global);
     static bool initImportEntryProto(JSContext* cx, Handle<GlobalObject*> global);
     static bool initExportEntryProto(JSContext* cx, Handle<GlobalObject*> global);
+    static bool initRequestedModuleProto(JSContext* cx, Handle<GlobalObject*> global);
 
     // Implemented in builtin/TypedObject.cpp
     static bool initTypedObjectModule(JSContext* cx, Handle<GlobalObject*> global);
@@ -883,137 +842,11 @@ class GlobalObject : public NativeObject
         return &value.toObject().as<JSFunction>();
     }
 
-    // Returns either this global's star-generator function prototype, or null
-    // if that object was never created.  Dodgy; for use only in also-dodgy
+    // Returns either this global's generator function prototype, or null if
+    // that object was never created.  Dodgy; for use only in also-dodgy
     // GlobalHelperThreadState::mergeParseTaskCompartment().
-    JSObject* getStarGeneratorFunctionPrototype();
+    JSObject* getGeneratorFunctionPrototype();
 };
-
-template<>
-inline void
-GlobalObject::setCreateArrayFromBuffer<uint8_t>(Handle<JSFunction*> fun)
-{
-    setCreateArrayFromBufferHelper(FROM_BUFFER_UINT8, fun);
-}
-
-template<>
-inline void
-GlobalObject::setCreateArrayFromBuffer<int8_t>(Handle<JSFunction*> fun)
-{
-    setCreateArrayFromBufferHelper(FROM_BUFFER_INT8, fun);
-}
-
-template<>
-inline void
-GlobalObject::setCreateArrayFromBuffer<uint16_t>(Handle<JSFunction*> fun)
-{
-    setCreateArrayFromBufferHelper(FROM_BUFFER_UINT16, fun);
-}
-
-template<>
-inline void
-GlobalObject::setCreateArrayFromBuffer<int16_t>(Handle<JSFunction*> fun)
-{
-    setCreateArrayFromBufferHelper(FROM_BUFFER_INT16, fun);
-}
-
-template<>
-inline void
-GlobalObject::setCreateArrayFromBuffer<uint32_t>(Handle<JSFunction*> fun)
-{
-    setCreateArrayFromBufferHelper(FROM_BUFFER_UINT32, fun);
-}
-
-template<>
-inline void
-GlobalObject::setCreateArrayFromBuffer<int32_t>(Handle<JSFunction*> fun)
-{
-    setCreateArrayFromBufferHelper(FROM_BUFFER_INT32, fun);
-}
-
-template<>
-inline void
-GlobalObject::setCreateArrayFromBuffer<float>(Handle<JSFunction*> fun)
-{
-    setCreateArrayFromBufferHelper(FROM_BUFFER_FLOAT32, fun);
-}
-
-template<>
-inline void
-GlobalObject::setCreateArrayFromBuffer<double>(Handle<JSFunction*> fun)
-{
-    setCreateArrayFromBufferHelper(FROM_BUFFER_FLOAT64, fun);
-}
-
-template<>
-inline void
-GlobalObject::setCreateArrayFromBuffer<uint8_clamped>(Handle<JSFunction*> fun)
-{
-    setCreateArrayFromBufferHelper(FROM_BUFFER_UINT8CLAMPED, fun);
-}
-
-template<>
-inline Value
-GlobalObject::createArrayFromBuffer<uint8_t>() const
-{
-    return createArrayFromBufferHelper(FROM_BUFFER_UINT8);
-}
-
-template<>
-inline Value
-GlobalObject::createArrayFromBuffer<int8_t>() const
-{
-    return createArrayFromBufferHelper(FROM_BUFFER_INT8);
-}
-
-template<>
-inline Value
-GlobalObject::createArrayFromBuffer<uint16_t>() const
-{
-    return createArrayFromBufferHelper(FROM_BUFFER_UINT16);
-}
-
-template<>
-inline Value
-GlobalObject::createArrayFromBuffer<int16_t>() const
-{
-    return createArrayFromBufferHelper(FROM_BUFFER_INT16);
-}
-
-template<>
-inline Value
-GlobalObject::createArrayFromBuffer<uint32_t>() const
-{
-    return createArrayFromBufferHelper(FROM_BUFFER_UINT32);
-}
-
-template<>
-inline Value
-GlobalObject::createArrayFromBuffer<int32_t>() const
-{
-    return createArrayFromBufferHelper(FROM_BUFFER_INT32);
-}
-
-template<>
-inline Value
-GlobalObject::createArrayFromBuffer<float>() const
-{
-    return createArrayFromBufferHelper(FROM_BUFFER_FLOAT32);
-}
-
-template<>
-inline Value
-GlobalObject::createArrayFromBuffer<double>() const
-{
-    return createArrayFromBufferHelper(FROM_BUFFER_FLOAT64);
-}
-
-template<>
-inline Value
-GlobalObject::createArrayFromBuffer<uint8_clamped>() const
-{
-    return createArrayFromBufferHelper(FROM_BUFFER_UINT8CLAMPED);
-}
 
 /*
  * Unless otherwise specified, define ctor.prototype = proto as non-enumerable,

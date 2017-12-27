@@ -10,7 +10,6 @@ use platform::font::{FontHandle, FontTable};
 use platform::font_context::FontContextHandle;
 use platform::font_template::FontTemplateData;
 use smallvec::SmallVec;
-use std::ascii::AsciiExt;
 use std::borrow::ToOwned;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -24,7 +23,7 @@ use text::glyph::{ByteIndex, GlyphData, GlyphId, GlyphStore};
 use text::shaping::ShaperMethods;
 use time;
 use unicode_script::Script;
-use webrender_traits;
+use webrender_api;
 
 macro_rules! ot_tag {
     ($t1:expr, $t2:expr, $t3:expr, $t4:expr) => (
@@ -112,7 +111,7 @@ pub struct Font {
     shaper: Option<Shaper>,
     shape_cache: RefCell<HashMap<ShapeCacheEntry, Arc<GlyphStore>>>,
     glyph_advance_cache: RefCell<HashMap<u32, FractionalPixel>>,
-    pub font_key: webrender_traits::FontKey,
+    pub font_key: webrender_api::FontInstanceKey,
 }
 
 impl Font {
@@ -121,7 +120,7 @@ impl Font {
                descriptor: FontTemplateDescriptor,
                requested_pt_size: Au,
                actual_pt_size: Au,
-               font_key: webrender_traits::FontKey) -> Font {
+               font_key: webrender_api::FontInstanceKey) -> Font {
         let metrics = handle.metrics();
         Font {
             handle: handle,
@@ -139,22 +138,22 @@ impl Font {
 }
 
 bitflags! {
-    pub flags ShapingFlags: u8 {
+    pub struct ShapingFlags: u8 {
         #[doc = "Set if the text is entirely whitespace."]
-        const IS_WHITESPACE_SHAPING_FLAG = 0x01,
+        const IS_WHITESPACE_SHAPING_FLAG = 0x01;
         #[doc = "Set if we are to ignore ligatures."]
-        const IGNORE_LIGATURES_SHAPING_FLAG = 0x02,
+        const IGNORE_LIGATURES_SHAPING_FLAG = 0x02;
         #[doc = "Set if we are to disable kerning."]
-        const DISABLE_KERNING_SHAPING_FLAG = 0x04,
+        const DISABLE_KERNING_SHAPING_FLAG = 0x04;
         #[doc = "Text direction is right-to-left."]
-        const RTL_FLAG = 0x08,
+        const RTL_FLAG = 0x08;
         #[doc = "Set if word-break is set to keep-all."]
-        const KEEP_ALL_FLAG = 0x10,
+        const KEEP_ALL_FLAG = 0x10;
     }
 }
 
 /// Various options that control text shaping.
-#[derive(Clone, Eq, PartialEq, Hash, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ShapingOptions {
     /// Spacing to add between each letter. Corresponds to the CSS 2.1 `letter-spacing` property.
     /// NB: You will probably want to set the `IGNORE_LIGATURES_SHAPING_FLAG` if this is non-null.
@@ -168,7 +167,7 @@ pub struct ShapingOptions {
 }
 
 /// An entry in the shape cache.
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ShapeCacheEntry {
     text: String,
     options: ShapingOptions,
@@ -186,8 +185,8 @@ impl Font {
         let result = self.shape_cache.borrow_mut().entry(lookup_key).or_insert_with(|| {
             let start_time = time::precise_time_ns();
             let mut glyphs = GlyphStore::new(text.len(),
-                                             options.flags.contains(IS_WHITESPACE_SHAPING_FLAG),
-                                             options.flags.contains(RTL_FLAG));
+                                             options.flags.contains(ShapingFlags::IS_WHITESPACE_SHAPING_FLAG),
+                                             options.flags.contains(ShapingFlags::RTL_FLAG));
 
             if self.can_do_fast_shaping(text, options) {
                 debug!("shape_text: Using ASCII fast path.");
@@ -211,7 +210,7 @@ impl Font {
 
     fn can_do_fast_shaping(&self, text: &str, options: &ShapingOptions) -> bool {
         options.script == Script::Latin &&
-            !options.flags.contains(RTL_FLAG) &&
+            !options.flags.contains(ShapingFlags::RTL_FLAG) &&
             self.handle.can_do_fast_shaping() &&
             text.is_ascii()
     }
@@ -262,8 +261,8 @@ impl Font {
     #[inline]
     pub fn glyph_index(&self, codepoint: char) -> Option<GlyphId> {
         let codepoint = match self.variant {
-            font_variant_caps::T::small_caps => codepoint.to_uppercase().next().unwrap(), //FIXME: #5938
-            font_variant_caps::T::normal => codepoint,
+            font_variant_caps::T::SmallCaps => codepoint.to_uppercase().next().unwrap(), //FIXME: #5938
+            font_variant_caps::T::Normal => codepoint,
         };
         self.handle.glyph_index(codepoint)
     }

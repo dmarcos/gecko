@@ -16,24 +16,18 @@ const TEST_URI =
   </script>
   `;
 
-add_task(function* () {
-  let hud = yield openNewTabAndConsole(TEST_URI);
+add_task(async function () {
+  let hud = await openNewTabAndConsole(TEST_URI);
   info("Web Console opened");
-
   const outputScroller = hud.ui.outputScroller;
-
-  yield waitFor(() => findMessages(hud, "").length == 100);
-
+  await waitFor(() => findMessages(hud, "").length == 100);
   let currentPosition = outputScroller.scrollTop;
   const bottom = currentPosition;
-
-  EventUtils.sendMouseEvent({type: "click"}, hud.jsterm.inputNode);
-
+  hud.jsterm.inputNode.focus();
   // Page up.
   EventUtils.synthesizeKey("VK_PAGE_UP", {});
   isnot(outputScroller.scrollTop, currentPosition,
     "scroll position changed after page up");
-
   // Page down.
   currentPosition = outputScroller.scrollTop;
   EventUtils.synthesizeKey("VK_PAGE_DOWN", {});
@@ -59,13 +53,13 @@ add_task(function* () {
     clearShortcut = WCUL10n.getStr("webconsole.clear.key");
   }
   synthesizeKeyShortcut(clearShortcut);
-  yield waitFor(() => findMessages(hud, "").length == 0);
-  is(hud.jsterm.inputNode.getAttribute("focused"), "true", "jsterm input is focused");
+  await waitFor(() => findMessages(hud, "").length == 0);
+  ok(hasFocus(hud.jsterm.inputNode), "jsterm input is focused");
 
   // Focus filter
   info("try ctrl-f to focus filter");
   synthesizeKeyShortcut(WCUL10n.getStr("webconsole.find.key"));
-  ok(!hud.jsterm.inputNode.getAttribute("focused"), "jsterm input is not focused");
+  ok(!hasFocus(hud.jsterm.inputNode), "jsterm input is not focused");
   is(hud.ui.filterBox, outputScroller.ownerDocument.activeElement,
     "filter input is focused");
 });

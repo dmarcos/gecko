@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,7 +10,7 @@
 #include "mozilla/Attributes.h"
 #include "nsRepeatService.h"
 #include "nsBoxFrame.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsCOMPtr.h"
 #include "nsITimer.h"
 #include "nsIDOMEventListener.h"
@@ -37,11 +38,10 @@ protected:
   virtual ~nsSliderMediator() {}
 };
 
-class nsSliderFrame : public nsBoxFrame
+class nsSliderFrame final : public nsBoxFrame
 {
 public:
-  NS_DECL_FRAMEARENA_HELPERS
-  NS_DECL_QUERYFRAME_TARGET(nsSliderFrame)
+  NS_DECL_FRAMEARENA_HELPERS(nsSliderFrame)
   NS_DECL_QUERYFRAME
 
   friend class nsSliderMediator;
@@ -61,18 +61,16 @@ public:
   NS_IMETHOD DoXULLayout(nsBoxLayoutState& aBoxLayoutState) override;
 
   // nsIFrame overrides
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
   virtual void BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
-                                           const nsRect&           aDirtyRect,
                                            const nsDisplayListSet& aLists) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
- 
+
   virtual nsresult AttributeChanged(int32_t aNameSpaceID,
-                                    nsIAtom* aAttribute,
+                                    nsAtom* aAttribute,
                                     int32_t aModType) override;
 
   virtual void Init(nsIContent*       aContent,
@@ -83,8 +81,6 @@ public:
   virtual nsresult HandleEvent(nsPresContext* aPresContext,
                                mozilla::WidgetGUIEvent* aEvent,
                                nsEventStatus* aEventStatus) override;
-
-  virtual nsIAtom* GetType() const override;
 
   // nsContainerFrame overrides
   virtual void SetInitialChildList(ChildListID     aListID,
@@ -107,7 +103,7 @@ public:
   static int32_t GetMaxPosition(nsIContent* content);
   static int32_t GetIncrement(nsIContent* content);
   static int32_t GetPageIncrement(nsIContent* content);
-  static int32_t GetIntegerAttribute(nsIContent* content, nsIAtom* atom, int32_t defaultValue);
+  static int32_t GetIntegerAttribute(nsIContent* content, nsAtom* atom, int32_t defaultValue);
   void EnsureOrient();
 
   NS_IMETHOD HandlePress(nsPresContext* aPresContext,
@@ -141,6 +137,11 @@ public:
   // StartAPZDrag() was rejected by APZ, and the slider frame should
   // fall back to main-thread dragging.
   void AsyncScrollbarDragRejected();
+
+  bool OnlySystemGroupDispatch(mozilla::EventMessage aMessage) const override;
+
+  // Returns the associated scrollframe that contains this slider if any.
+  nsIScrollableFrame* GetScrollFrame();
 
 private:
 
@@ -179,7 +180,7 @@ private:
     (static_cast<nsSliderFrame*>(aData))->Notify();
   }
   void PageScroll(nscoord aChange);
- 
+
   nsPoint mDestinationPoint;
   RefPtr<nsSliderMediator> mMediator;
 

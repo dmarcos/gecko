@@ -16,7 +16,7 @@
 #  include <pthread_np.h>
 # endif
 
-# if defined(ANDROID)
+# if defined(ANDROID) && !defined(__aarch64__)
 #  include <sys/types.h>
 #  include <unistd.h>
 # endif
@@ -31,32 +31,8 @@
 void*
 js::GetNativeStackBaseImpl()
 {
-# if defined(_M_IX86) && defined(_MSC_VER)
-    /*
-     * offset 0x18 from the FS segment register gives a pointer to
-     * the thread information block for the current thread
-     */
-    NT_TIB* pTib;
-    __asm {
-        MOV EAX, FS:[18h]
-        MOV pTib, EAX
-    }
-    return static_cast<void*>(pTib->StackBase);
-
-# elif defined(_M_X64)
-    PNT_TIB64 pTib = reinterpret_cast<PNT_TIB64>(NtCurrentTeb());
-    return reinterpret_cast<void*>(pTib->StackBase);
-
-# elif defined(_M_ARM)
     PNT_TIB pTib = reinterpret_cast<PNT_TIB>(NtCurrentTeb());
     return static_cast<void*>(pTib->StackBase);
-
-# elif defined(_WIN32) && defined(__GNUC__)
-    NT_TIB* pTib;
-    asm ("movl %%fs:0x18, %0\n" : "=r" (pTib));
-    return static_cast<void*>(pTib->StackBase);
-
-# endif
 }
 
 #elif defined(SOLARIS)
@@ -120,11 +96,11 @@ js::GetNativeStackBaseImpl()
     rc = pthread_stackseg_np(pthread_self(), &ss);
     stackBase = (void*)((size_t) ss.ss_sp - ss.ss_size);
     stackSize = ss.ss_size;
-# elif defined(ANDROID)
+# elif defined(ANDROID) && !defined(__aarch64__)
     if (gettid() == getpid()) {
-        // bionic's pthread_attr_getstack doesn't tell the truth for the main
-        // thread (see bug 846670). So we scan /proc/self/maps to find the
-        // segment which contains the stack.
+        // bionic's pthread_attr_getstack prior to API 21 doesn't tell the truth
+        // for the main thread (see bug 846670). So we scan /proc/self/maps to
+        // find the segment which contains the stack.
         rc = -1;
 
         // Put the string on the stack, otherwise there is the danger that it

@@ -22,7 +22,7 @@
 
 #include "prinit.h"
 
-#include "nsStringGlue.h"
+#include "nsString.h"
 
 #ifndef MOZ_CALLSTACK_DISABLED
 #include "nsTArray.h"
@@ -50,7 +50,7 @@ class BlockingResourceBase
 {
 public:
   // Needs to be kept in sync with kResourceTypeNames.
-  enum BlockingResourceType { eMutex, eReentrantMonitor, eCondVar };
+  enum BlockingResourceType { eMutex, eReentrantMonitor, eCondVar, eRecursiveMutex };
 
   /**
    * kResourceTypeName

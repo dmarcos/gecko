@@ -4,12 +4,14 @@
 
 <%namespace name="helpers" file="/helpers.mako.rs" />
 
-<%helpers:shorthand name="text-emphasis" products="gecko" sub_properties="text-emphasis-color
-    text-emphasis-style"
+<%helpers:shorthand name="text-emphasis" products="gecko"
+    sub_properties="text-emphasis-style text-emphasis-color"
+    derive_serialize="True"
     spec="https://drafts.csswg.org/css-text-decor-3/#text-emphasis-property">
     use properties::longhands::{text_emphasis_color, text_emphasis_style};
 
-    pub fn parse_value(context: &ParserContext, input: &mut Parser) -> Result<Longhands, ()> {
+    pub fn parse_value<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
+                               -> Result<Longhands, ParseError<'i>> {
         let mut color = None;
         let mut style = None;
 
@@ -29,20 +31,12 @@
             break
         }
         if color.is_some() || style.is_some() {
-            Ok(Longhands {
+            Ok(expanded! {
                 text_emphasis_color: unwrap_or_initial!(text_emphasis_color, color),
                 text_emphasis_style: unwrap_or_initial!(text_emphasis_style, style),
             })
         } else {
-            Err(())
-        }
-    }
-
-    impl<'a> ToCss for LonghandsToSerialize<'a>  {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            self.text_emphasis_style.to_css(dest)?;
-            dest.write_str(" ")?;
-            self.text_emphasis_color.to_css(dest)
+            Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
         }
     }
 </%helpers:shorthand>
@@ -50,13 +44,16 @@
 // CSS Compatibility
 // https://compat.spec.whatwg.org/
 <%helpers:shorthand name="-webkit-text-stroke"
-                    sub_properties="-webkit-text-stroke-color
-                                    -webkit-text-stroke-width"
+                    sub_properties="-webkit-text-stroke-width
+                                    -webkit-text-stroke-color"
+                    gecko_pref="layout.css.prefixes.webkit"
                     products="gecko"
+                    derive_serialize="True"
                     spec="https://compat.spec.whatwg.org/#the-webkit-text-stroke">
     use properties::longhands::{_webkit_text_stroke_color, _webkit_text_stroke_width};
 
-    pub fn parse_value(context: &ParserContext, input: &mut Parser) -> Result<Longhands, ()> {
+    pub fn parse_value<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
+                               -> Result<Longhands, ParseError<'i>> {
         let mut color = None;
         let mut width = None;
         loop {
@@ -77,20 +74,12 @@
         }
 
         if color.is_some() || width.is_some() {
-            Ok(Longhands {
+            Ok(expanded! {
                 _webkit_text_stroke_color: unwrap_or_initial!(_webkit_text_stroke_color, color),
                 _webkit_text_stroke_width: unwrap_or_initial!(_webkit_text_stroke_width, width),
             })
         } else {
-            Err(())
-        }
-    }
-
-    impl<'a> ToCss for LonghandsToSerialize<'a>  {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            self._webkit_text_stroke_width.to_css(dest)?;
-            dest.write_str(" ")?;
-            self._webkit_text_stroke_color.to_css(dest)
+            Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
         }
     }
 </%helpers:shorthand>

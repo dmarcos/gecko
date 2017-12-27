@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -26,15 +27,15 @@ protected:
 
 public:
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsSVGForeignObjectFrame)
 
   // nsIFrame:
   virtual void Init(nsIContent*       aContent,
                     nsContainerFrame* aParent,
                     nsIFrame*         aPrevInFlow) override;
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
   virtual nsresult  AttributeChanged(int32_t         aNameSpaceID,
-                                     nsIAtom*        aAttribute,
+                                     nsAtom*        aAttribute,
                                      int32_t         aModType) override;
 
   virtual nsContainerFrame* GetContentInsertionFrame() override {
@@ -47,15 +48,7 @@ public:
                       nsReflowStatus&          aStatus) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
-
-  /**
-   * Get the "type" of the frame
-   *
-   * @see nsGkAtoms::svgForeignObjectFrame
-   */
-  virtual nsIAtom* GetType() const override;
 
   virtual bool IsFrameOfType(uint32_t aFlags) const override
   {
@@ -74,10 +67,10 @@ public:
 #endif
 
   // nsSVGDisplayableFrame interface:
-  virtual DrawResult PaintSVG(gfxContext& aContext,
-                              const gfxMatrix& aTransform,
-                              const nsIntRect* aDirtyRect = nullptr,
-                              uint32_t aFlags = 0) override;
+  virtual void PaintSVG(gfxContext& aContext,
+                        const gfxMatrix& aTransform,
+                        imgDrawingParams& aImgParams,
+                        const nsIntRect* aDirtyRect = nullptr) override;
   virtual nsIFrame* GetFrameForPoint(const gfxPoint& aPoint) override;
   virtual void ReflowSVG() override;
   virtual void NotifySVGChanged(uint32_t aFlags) override;
@@ -89,12 +82,8 @@ public:
 
   nsRect GetInvalidRegion();
 
-  /**
-   * Update the style of our ::-moz-svg-foreign-content anonymous box.
-   */
-  void DoUpdateStyleOfOwnedAnonBoxes(mozilla::ServoStyleSet& aStyleSet,
-                                     nsStyleChangeList& aChangeList,
-                                     nsChangeHint aHintForThisFrame) override;
+  // Return our ::-moz-svg-foreign-content anonymous box.
+  void AppendDirectlyOwnedAnonBoxes(nsTArray<OwnedAnonBox>& aResult) override;
 
 protected:
   // implementation helpers:

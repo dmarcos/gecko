@@ -119,11 +119,15 @@ protected:
    nsresult SetRootShellSize(int32_t aWidth,
                              int32_t aHeight);
 
-   NS_IMETHOD SizeShellTo(nsIDocShellTreeItem* aShellItem, int32_t aCX, 
+   NS_IMETHOD SizeShellTo(nsIDocShellTreeItem* aShellItem, int32_t aCX,
       int32_t aCY);
    NS_IMETHOD ExitModalLoop(nsresult aStatus);
    NS_IMETHOD CreateNewChromeWindow(int32_t aChromeFlags, nsITabParent* aOpeningTab, mozIDOMWindowProxy* aOpenerWindow, nsIXULWindow **_retval);
-   NS_IMETHOD CreateNewContentWindow(int32_t aChromeFlags, nsITabParent* aOpeningTab, mozIDOMWindowProxy* aOpenerWindow, nsIXULWindow **_retval);
+   NS_IMETHOD CreateNewContentWindow(int32_t aChromeFlags,
+                                     nsITabParent* aOpeningTab,
+                                     mozIDOMWindowProxy* aOpenerWindow,
+                                     uint64_t aNextTabParentId,
+                                     nsIXULWindow **_retval);
    NS_IMETHOD GetHasPrimaryContent(bool* aResult);
 
    void       EnableParent(bool aEnable);
@@ -152,7 +156,7 @@ protected:
    bool                    mDebuting;       // being made visible right now
    bool                    mChromeLoaded; // True when chrome has loaded
    bool                    mShowAfterLoad;
-   bool                    mIntrinsicallySized; 
+   bool                    mIntrinsicallySized;
    bool                    mCenterAfterLoad;
    bool                    mIsHiddenWindow;
    bool                    mLockedUntilChromeLoad;
@@ -167,12 +171,16 @@ protected:
    uint32_t                mPersistentAttributesDirty; // persistentAttributes
    uint32_t                mPersistentAttributesMask;
    uint32_t                mChromeFlags;
+   uint64_t                mNextTabParentId;
    nsString                mTitle;
    nsIntRect               mOpenerScreenRect; // the screen rect of the opener
 
    nsCOMPtr<nsITabParent> mPrimaryTabParent;
 private:
-   nsresult GetPrimaryTabParentSize(int32_t* aWidth, int32_t* aHeight);
+   // GetPrimaryTabParentSize is called from xpidl methods and we don't have a
+   // good way to annotate those with MOZ_CAN_RUN_SCRIPT yet.  It takes no
+   // refcounted args other than "this", and the "this" uses seem ok.
+   MOZ_CAN_RUN_SCRIPT_BOUNDARY nsresult GetPrimaryTabParentSize(int32_t* aWidth, int32_t* aHeight);
    nsresult GetPrimaryContentShellSize(int32_t* aWidth, int32_t* aHeight);
    nsresult SetPrimaryTabParentSize(int32_t aWidth, int32_t aHeight);
 };

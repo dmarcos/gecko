@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=8 et tw=80 : */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,14 +17,16 @@ class MultiTouchInput;
 class ScrollWheelInput;
 class MouseInput;
 class PanGestureInput;
+class KeyboardInput;
 
 namespace layers {
 
-class CancelableBlockState;
+class InputBlockState;
 class TouchBlockState;
 class WheelBlockState;
 class DragBlockState;
 class PanGestureBlockState;
+class KeyboardBlockState;
 
 /**
  * This lightweight class holds a pointer to an input event that has not yet
@@ -38,9 +40,10 @@ public:
   QueuedInput(const ScrollWheelInput& aInput, WheelBlockState& aBlock);
   QueuedInput(const MouseInput& aInput, DragBlockState& aBlock);
   QueuedInput(const PanGestureInput& aInput, PanGestureBlockState& aBlock);
+  QueuedInput(const KeyboardInput& aInput, KeyboardBlockState& aBlock);
 
   InputData* Input();
-  CancelableBlockState* Block();
+  InputBlockState* Block();
 
 private:
   // A copy of the input event that is provided to the constructor. This must
@@ -49,7 +52,7 @@ private:
   UniquePtr<InputData> mInput;
   // A pointer to the block that the input event is associated with. This must
   // be non-null.
-  RefPtr<CancelableBlockState> mBlock;
+  RefPtr<InputBlockState> mBlock;
 };
 
 } // namespace layers

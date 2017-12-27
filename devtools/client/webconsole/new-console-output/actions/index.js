@@ -7,11 +7,10 @@
 "use strict";
 
 const actionModules = [
-  "enhancers",
-  "filters",
-  "messages",
-  "ui",
-].map(filename => require(`./${filename}`));
+  require("./filters"),
+  require("./messages"),
+  require("./ui"),
+];
 
 const actions = Object.assign({}, ...actionModules);
 

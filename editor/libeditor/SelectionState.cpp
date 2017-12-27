@@ -94,9 +94,7 @@ SelectionState::IsCollapsed()
   }
   RefPtr<nsRange> range = mArray[0]->GetRange();
   NS_ENSURE_TRUE(range, false);
-  bool bIsCollapsed = false;
-  range->GetCollapsed(&bIsCollapsed);
-  return bIsCollapsed;
+  return range->Collapsed();
 }
 
 bool
@@ -232,33 +230,18 @@ RangeUpdater::SelAdjCreateNode(nsINode* aParent,
     RangeItem* item = mArray[i];
     NS_ENSURE_TRUE(item, NS_ERROR_NULL_POINTER);
 
-    if (item->startNode == aParent && item->startOffset > aPosition) {
-      item->startOffset++;
+    if (item->mStartContainer == aParent && item->mStartOffset > aPosition) {
+      item->mStartOffset++;
     }
-    if (item->endNode == aParent && item->endOffset > aPosition) {
-      item->endOffset++;
+    if (item->mEndContainer == aParent && item->mEndOffset > aPosition) {
+      item->mEndOffset++;
     }
   }
   return NS_OK;
 }
 
 nsresult
-RangeUpdater::SelAdjCreateNode(nsIDOMNode* aParent,
-                               int32_t aPosition)
-{
-  nsCOMPtr<nsINode> parent = do_QueryInterface(aParent);
-  return SelAdjCreateNode(parent, aPosition);
-}
-
-nsresult
 RangeUpdater::SelAdjInsertNode(nsINode* aParent,
-                               int32_t aPosition)
-{
-  return SelAdjCreateNode(aParent, aPosition);
-}
-
-nsresult
-RangeUpdater::SelAdjInsertNode(nsIDOMNode* aParent,
                                int32_t aPosition)
 {
   return SelAdjCreateNode(aParent, aPosition);
@@ -285,87 +268,85 @@ RangeUpdater::SelAdjDeleteNode(nsINode* aNode)
     RangeItem* item = mArray[i];
     MOZ_ASSERT(item);
 
-    if (item->startNode == parent && item->startOffset > offset) {
-      item->startOffset--;
+    if (item->mStartContainer == parent && item->mStartOffset > offset) {
+      item->mStartOffset--;
     }
-    if (item->endNode == parent && item->endOffset > offset) {
-      item->endOffset--;
+    if (item->mEndContainer == parent && item->mEndOffset > offset) {
+      item->mEndOffset--;
     }
 
     // check for range endpoints that are in aNode
-    if (item->startNode == aNode) {
-      item->startNode   = parent;
-      item->startOffset = offset;
+    if (item->mStartContainer == aNode) {
+      item->mStartContainer = parent;
+      item->mStartOffset = offset;
     }
-    if (item->endNode == aNode) {
-      item->endNode   = parent;
-      item->endOffset = offset;
+    if (item->mEndContainer == aNode) {
+      item->mEndContainer = parent;
+      item->mEndOffset = offset;
     }
 
     // check for range endpoints that are in descendants of aNode
     nsCOMPtr<nsINode> oldStart;
-    if (EditorUtils::IsDescendantOf(item->startNode, aNode)) {
-      oldStart = item->startNode;  // save for efficiency hack below.
-      item->startNode   = parent;
-      item->startOffset = offset;
+    if (EditorUtils::IsDescendantOf(*item->mStartContainer, *aNode)) {
+      oldStart = item->mStartContainer;  // save for efficiency hack below.
+      item->mStartContainer = parent;
+      item->mStartOffset = offset;
     }
 
     // avoid having to call IsDescendantOf() for common case of range startnode == range endnode.
-    if (item->endNode == oldStart ||
-        EditorUtils::IsDescendantOf(item->endNode, aNode)) {
-      item->endNode   = parent;
-      item->endOffset = offset;
+    if (item->mEndContainer == oldStart ||
+        EditorUtils::IsDescendantOf(*item->mEndContainer, *aNode)) {
+      item->mEndContainer = parent;
+      item->mEndOffset = offset;
     }
   }
 }
 
-void
-RangeUpdater::SelAdjDeleteNode(nsIDOMNode* aNode)
-{
-  nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
-  NS_ENSURE_TRUE_VOID(node);
-  return SelAdjDeleteNode(node);
-}
-
 nsresult
-RangeUpdater::SelAdjSplitNode(nsIContent& aOldRightNode,
-                              int32_t aOffset,
+RangeUpdater::SelAdjSplitNode(nsIContent& aRightNode,
                               nsIContent* aNewLeftNode)
 {
   if (mLock) {
     // lock set by Will/DidReplaceParent, etc...
     return NS_OK;
   }
-  NS_ENSURE_TRUE(aNewLeftNode, NS_ERROR_NULL_POINTER);
+  if (NS_WARN_IF(!aNewLeftNode)) {
+    return NS_ERROR_FAILURE;
+  }
+
   size_t count = mArray.Length();
   if (!count) {
     return NS_OK;
   }
 
-  nsCOMPtr<nsINode> parent = aOldRightNode.GetParentNode();
-  int32_t offset = parent ? parent->IndexOf(&aOldRightNode) : -1;
+  EditorRawDOMPoint atLeftNode(aNewLeftNode);
+  nsresult rv =
+    SelAdjInsertNode(atLeftNode.GetContainer(), atLeftNode.Offset());
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
 
-  // first part is same as inserting aNewLeftnode
-  nsresult rv = SelAdjInsertNode(parent, offset - 1);
-  NS_ENSURE_SUCCESS(rv, rv);
+  // If point in the ranges is in left node, change its container to the left
+  // node.  If point in the ranges is in right node, subtract numbers of
+  // children moved to left node from the offset.
+  int32_t lengthOfLeftNode = aNewLeftNode->Length();
+  for (RefPtr<RangeItem>& item : mArray) {
+    if (NS_WARN_IF(!item)) {
+      return NS_ERROR_FAILURE;
+    }
 
-  // next step is to check for range enpoints inside aOldRightNode
-  for (size_t i = 0; i < count; i++) {
-    RangeItem* item = mArray[i];
-    NS_ENSURE_TRUE(item, NS_ERROR_NULL_POINTER);
-
-    if (item->startNode == &aOldRightNode) {
-      if (item->startOffset > aOffset) {
-        item->startOffset -= aOffset;
+    if (item->mStartContainer == &aRightNode) {
+      if (item->mStartOffset > lengthOfLeftNode) {
+        item->mStartOffset -= lengthOfLeftNode;
       } else {
-        item->startNode = aNewLeftNode;
+        item->mStartContainer = aNewLeftNode;
       }
     }
-    if (item->endNode == &aOldRightNode) {
-      if (item->endOffset > aOffset) {
-        item->endOffset -= aOffset;
+    if (item->mEndContainer == &aRightNode) {
+      if (item->mEndOffset > lengthOfLeftNode) {
+        item->mEndOffset -= lengthOfLeftNode;
       } else {
-        item->endNode = aNewLeftNode;
+        item->mEndContainer = aNewLeftNode;
       }
     }
   }
@@ -392,38 +373,38 @@ RangeUpdater::SelAdjJoinNodes(nsINode& aLeftNode,
     RangeItem* item = mArray[i];
     NS_ENSURE_TRUE(item, NS_ERROR_NULL_POINTER);
 
-    if (item->startNode == &aParent) {
+    if (item->mStartContainer == &aParent) {
       // adjust start point in aParent
-      if (item->startOffset > aOffset) {
-        item->startOffset--;
-      } else if (item->startOffset == aOffset) {
+      if (item->mStartOffset > aOffset) {
+        item->mStartOffset--;
+      } else if (item->mStartOffset == aOffset) {
         // join keeps right hand node
-        item->startNode = &aRightNode;
-        item->startOffset = aOldLeftNodeLength;
+        item->mStartContainer = &aRightNode;
+        item->mStartOffset = aOldLeftNodeLength;
       }
-    } else if (item->startNode == &aRightNode) {
+    } else if (item->mStartContainer == &aRightNode) {
       // adjust start point in aRightNode
-      item->startOffset += aOldLeftNodeLength;
-    } else if (item->startNode == &aLeftNode) {
+      item->mStartOffset += aOldLeftNodeLength;
+    } else if (item->mStartContainer == &aLeftNode) {
       // adjust start point in aLeftNode
-      item->startNode = &aRightNode;
+      item->mStartContainer = &aRightNode;
     }
 
-    if (item->endNode == &aParent) {
+    if (item->mEndContainer == &aParent) {
       // adjust end point in aParent
-      if (item->endOffset > aOffset) {
-        item->endOffset--;
-      } else if (item->endOffset == aOffset) {
+      if (item->mEndOffset > aOffset) {
+        item->mEndOffset--;
+      } else if (item->mEndOffset == aOffset) {
         // join keeps right hand node
-        item->endNode = &aRightNode;
-        item->endOffset = aOldLeftNodeLength;
+        item->mEndContainer = &aRightNode;
+        item->mEndOffset = aOldLeftNodeLength;
       }
-    } else if (item->endNode == &aRightNode) {
+    } else if (item->mEndContainer == &aRightNode) {
       // adjust end point in aRightNode
-       item->endOffset += aOldLeftNodeLength;
-    } else if (item->endNode == &aLeftNode) {
+       item->mEndOffset += aOldLeftNodeLength;
+    } else if (item->mEndContainer == &aLeftNode) {
       // adjust end point in aLeftNode
-      item->endNode = &aRightNode;
+      item->mEndContainer = &aRightNode;
     }
   }
 
@@ -450,14 +431,13 @@ RangeUpdater::SelAdjInsertText(Text& aTextNode,
     RangeItem* item = mArray[i];
     MOZ_ASSERT(item);
 
-    if (item->startNode == &aTextNode && item->startOffset > aOffset) {
-      item->startOffset += len;
+    if (item->mStartContainer == &aTextNode && item->mStartOffset > aOffset) {
+      item->mStartOffset += len;
     }
-    if (item->endNode == &aTextNode && item->endOffset > aOffset) {
-      item->endOffset += len;
+    if (item->mEndContainer == &aTextNode && item->mEndOffset > aOffset) {
+      item->mEndOffset += len;
     }
   }
-  return;
 }
 
 nsresult
@@ -480,16 +460,16 @@ RangeUpdater::SelAdjDeleteText(nsIContent* aTextNode,
     RangeItem* item = mArray[i];
     NS_ENSURE_TRUE(item, NS_ERROR_NULL_POINTER);
 
-    if (item->startNode == aTextNode && item->startOffset > aOffset) {
-      item->startOffset -= aLength;
-      if (item->startOffset < 0) {
-        item->startOffset = 0;
+    if (item->mStartContainer == aTextNode && item->mStartOffset > aOffset) {
+      item->mStartOffset -= aLength;
+      if (item->mStartOffset < 0) {
+        item->mStartOffset = 0;
       }
     }
-    if (item->endNode == aTextNode && item->endOffset > aOffset) {
-      item->endOffset -= aLength;
-      if (item->endOffset < 0) {
-        item->endOffset = 0;
+    if (item->mEndContainer == aTextNode && item->mEndOffset > aOffset) {
+      item->mEndOffset -= aLength;
+      if (item->mEndOffset < 0) {
+        item->mEndOffset = 0;
       }
     }
   }
@@ -532,11 +512,11 @@ RangeUpdater::DidReplaceContainer(Element* aOriginalNode,
     RangeItem* item = mArray[i];
     NS_ENSURE_TRUE(item, NS_ERROR_NULL_POINTER);
 
-    if (item->startNode == aOriginalNode) {
-      item->startNode = aNewNode;
+    if (item->mStartContainer == aOriginalNode) {
+      item->mStartContainer = aNewNode;
     }
-    if (item->endNode == aOriginalNode) {
-      item->endNode = aNewNode;
+    if (item->mEndContainer == aOriginalNode) {
+      item->mEndContainer = aNewNode;
     }
   }
   return NS_OK;
@@ -571,18 +551,19 @@ RangeUpdater::DidRemoveContainer(nsINode* aNode,
     RangeItem* item = mArray[i];
     NS_ENSURE_TRUE(item, NS_ERROR_NULL_POINTER);
 
-    if (item->startNode == aNode) {
-      item->startNode = aParent;
-      item->startOffset += aOffset;
-    } else if (item->startNode == aParent && item->startOffset > aOffset) {
-      item->startOffset += (int32_t)aNodeOrigLen - 1;
+    if (item->mStartContainer == aNode) {
+      item->mStartContainer = aParent;
+      item->mStartOffset += aOffset;
+    } else if (item->mStartContainer == aParent &&
+               item->mStartOffset > aOffset) {
+      item->mStartOffset += (int32_t)aNodeOrigLen - 1;
     }
 
-    if (item->endNode == aNode) {
-      item->endNode = aParent;
-      item->endOffset += aOffset;
-    } else if (item->endNode == aParent && item->endOffset > aOffset) {
-      item->endOffset += (int32_t)aNodeOrigLen - 1;
+    if (item->mEndContainer == aNode) {
+      item->mEndContainer = aParent;
+      item->mEndOffset += aOffset;
+    } else if (item->mEndContainer == aParent && item->mEndOffset > aOffset) {
+      item->mEndOffset += (int32_t)aNodeOrigLen - 1;
     }
   }
   return NS_OK;
@@ -637,19 +618,21 @@ RangeUpdater::DidMoveNode(nsINode* aOldParent, int32_t aOldOffset,
     NS_ENSURE_TRUE_VOID(item);
 
     // like a delete in aOldParent
-    if (item->startNode == aOldParent && item->startOffset > aOldOffset) {
-      item->startOffset--;
+    if (item->mStartContainer == aOldParent &&
+        item->mStartOffset > aOldOffset) {
+      item->mStartOffset--;
     }
-    if (item->endNode == aOldParent && item->endOffset > aOldOffset) {
-      item->endOffset--;
+    if (item->mEndContainer == aOldParent && item->mEndOffset > aOldOffset) {
+      item->mEndOffset--;
     }
 
     // and like an insert in aNewParent
-    if (item->startNode == aNewParent && item->startOffset > aNewOffset) {
-      item->startOffset++;
+    if (item->mStartContainer == aNewParent &&
+        item->mStartOffset > aNewOffset) {
+      item->mStartOffset++;
     }
-    if (item->endNode == aNewParent && item->endOffset > aNewOffset) {
-      item->endOffset++;
+    if (item->mEndContainer == aNewParent && item->mEndOffset > aNewOffset) {
+      item->mEndOffset++;
     }
   }
 }
@@ -668,7 +651,7 @@ RangeItem::~RangeItem()
 {
 }
 
-NS_IMPL_CYCLE_COLLECTION(RangeItem, startNode, endNode)
+NS_IMPL_CYCLE_COLLECTION(RangeItem, mStartContainer, mEndContainer)
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(RangeItem, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(RangeItem, Release)
 
@@ -676,17 +659,18 @@ void
 RangeItem::StoreRange(nsRange* aRange)
 {
   MOZ_ASSERT(aRange);
-  startNode = aRange->GetStartParent();
-  startOffset = aRange->StartOffset();
-  endNode = aRange->GetEndParent();
-  endOffset = aRange->EndOffset();
+  mStartContainer = aRange->GetStartContainer();
+  mStartOffset = aRange->StartOffset();
+  mEndContainer = aRange->GetEndContainer();
+  mEndOffset = aRange->EndOffset();
 }
 
 already_AddRefed<nsRange>
 RangeItem::GetRange()
 {
-  RefPtr<nsRange> range = new nsRange(startNode);
-  if (NS_FAILED(range->Set(startNode, startOffset, endNode, endOffset))) {
+  RefPtr<nsRange> range = new nsRange(mStartContainer);
+  if (NS_FAILED(range->SetStartAndEnd(mStartContainer, mStartOffset,
+                                      mEndContainer, mEndOffset))) {
     return nullptr;
   }
   return range.forget();

@@ -100,7 +100,9 @@ class MacroAssemblerX86Shared : public Assembler
     MacroAssemblerX86Shared()
     { }
 
-    bool asmMergeWith(const MacroAssemblerX86Shared& other);
+    bool appendRawCode(const uint8_t* code, size_t numBytes) {
+        return masm.appendRawCode(code, numBytes);
+    }
 
     // Evaluate srcDest = minmax<isMax>{Float32,Double}(srcDest, second).
     // Checks for NaN if canBeNaN is true.
@@ -185,6 +187,7 @@ class MacroAssemblerX86Shared : public Assembler
     template <typename T>
     void atomicFetchAdd8SignExtend(Register src, const T& mem, Register temp, Register output) {
         CHECK_BYTEREGS(src, output);
+        MOZ_ASSERT(temp == InvalidReg);
         if (src != output)
             movl(src, output);
         lock_xaddb(output, Operand(mem));
@@ -359,8 +362,10 @@ class MacroAssemblerX86Shared : public Assembler
         lock_xaddl(output, Operand(mem));
     }
 
-    // requires output == eax
+    // Requires output == eax.  Note src can be an Imm and we can't directly
+    // assert that it's different from output or tmp.
 #define ATOMIC_BITOP_BODY(LOAD, OP, LOCK_CMPXCHG) \
+        MOZ_ASSERT(output != temp);               \
         MOZ_ASSERT(output == eax);                \
         LOAD(Operand(mem), eax);                  \
         Label again;                              \
@@ -372,14 +377,14 @@ class MacroAssemblerX86Shared : public Assembler
 
     template <typename S, typename T>
     void atomicFetchAnd8SignExtend(const S& src, const T& mem, Register temp, Register output) {
-        ATOMIC_BITOP_BODY(movb, andl, lock_cmpxchgb)
         CHECK_BYTEREG(temp);
+        ATOMIC_BITOP_BODY(movb, andl, lock_cmpxchgb)
         movsbl(eax, eax);
     }
     template <typename S, typename T>
     void atomicFetchAnd8ZeroExtend(const S& src, const T& mem, Register temp, Register output) {
-        ATOMIC_BITOP_BODY(movb, andl, lock_cmpxchgb)
         CHECK_BYTEREG(temp);
+        ATOMIC_BITOP_BODY(movb, andl, lock_cmpxchgb)
         movzbl(eax, eax);
     }
     template <typename S, typename T>
@@ -399,14 +404,14 @@ class MacroAssemblerX86Shared : public Assembler
 
     template <typename S, typename T>
     void atomicFetchOr8SignExtend(const S& src, const T& mem, Register temp, Register output) {
-        ATOMIC_BITOP_BODY(movb, orl, lock_cmpxchgb)
         CHECK_BYTEREG(temp);
+        ATOMIC_BITOP_BODY(movb, orl, lock_cmpxchgb)
         movsbl(eax, eax);
     }
     template <typename S, typename T>
     void atomicFetchOr8ZeroExtend(const S& src, const T& mem, Register temp, Register output) {
-        ATOMIC_BITOP_BODY(movb, orl, lock_cmpxchgb)
         CHECK_BYTEREG(temp);
+        ATOMIC_BITOP_BODY(movb, orl, lock_cmpxchgb)
         movzbl(eax, eax);
     }
     template <typename S, typename T>
@@ -426,14 +431,14 @@ class MacroAssemblerX86Shared : public Assembler
 
     template <typename S, typename T>
     void atomicFetchXor8SignExtend(const S& src, const T& mem, Register temp, Register output) {
-        ATOMIC_BITOP_BODY(movb, xorl, lock_cmpxchgb)
         CHECK_BYTEREG(temp);
+        ATOMIC_BITOP_BODY(movb, xorl, lock_cmpxchgb)
         movsbl(eax, eax);
     }
     template <typename S, typename T>
     void atomicFetchXor8ZeroExtend(const S& src, const T& mem, Register temp, Register output) {
-        ATOMIC_BITOP_BODY(movb, xorl, lock_cmpxchgb)
         CHECK_BYTEREG(temp);
+        ATOMIC_BITOP_BODY(movb, xorl, lock_cmpxchgb)
         movzbl(eax, eax);
     }
     template <typename S, typename T>
@@ -538,6 +543,9 @@ class MacroAssemblerX86Shared : public Assembler
     }
     void jump(JitCode* code) {
         jmp(code);
+    }
+    void jump(TrampolinePtr code) {
+        jmp(ImmPtr(code.value));
     }
     void jump(RepatchLabel* label) {
         jmp(label);
@@ -681,6 +689,7 @@ class MacroAssemblerX86Shared : public Assembler
     }
     template <typename T>
     void atomicExchange8ZeroExtend(const T& mem, Register value, Register output) {
+        CHECK_BYTEREG(output);
         if (value != output)
             movl(value, output);
         xchgb(output, Operand(mem));
@@ -688,6 +697,7 @@ class MacroAssemblerX86Shared : public Assembler
     }
     template <typename T>
     void atomicExchange8SignExtend(const T& mem, Register value, Register output) {
+        CHECK_BYTEREG(output);
         if (value != output)
             movl(value, output);
         xchgb(output, Operand(mem));

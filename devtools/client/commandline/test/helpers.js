@@ -24,6 +24,7 @@ var { helpers, assert } = (function () {
 
   var { require } = Cu.import("resource://devtools/shared/Loader.jsm", {});
   var { TargetFactory } = require("devtools/client/framework/target");
+  var { gDevToolsBrowser } = require("devtools/client/framework/devtools-browser");
   var Services = require("Services");
 
   var assert = { ok: ok, is: is, log: info };
@@ -104,7 +105,7 @@ var { helpers, assert } = (function () {
  *
  * The options used by addTab include:
  * - chromeWindow: XUL window parent of created tab. a.k.a 'window' in mochitest
- * - tab: The new XUL tab element, as returned by gBrowser.addTab()
+ * - tab: The new XUL tab element, as returned by BrowserTestUtils.addTab(gBrowser)
  * - target: The debug target as defined by the devtools framework
  * - browser: The XUL browser element for the given tab
  * - isFirefox: Always true. Allows test sharing with GCLI
@@ -131,10 +132,10 @@ var { helpers, assert } = (function () {
     options.browser = tabbrowser.getBrowserForTab(options.tab);
     options.target = TargetFactory.forTab(options.tab);
 
-    var loaded = helpers.listenOnce(options.browser, "load", true).then(function (ev) {
+    var loaded = BrowserTestUtils.browserLoaded(options.browser).then(function () {
       var reply = callback.call(null, options);
 
-      return Promise.resolve(reply).then(null, function (error) {
+      return Promise.resolve(reply).catch(function (error) {
         ok(false, error);
       }).then(function () {
         tabbrowser.removeTab(options.tab);
@@ -148,7 +149,7 @@ var { helpers, assert } = (function () {
       });
     });
 
-    options.browser.contentWindow.location = url;
+    options.browser.loadURI(url);
     return loaded;
   };
 
@@ -211,8 +212,8 @@ var { helpers, assert } = (function () {
     options = options || {};
     options.chromeWindow = options.chromeWindow || window;
 
-    return options.chromeWindow.DeveloperToolbar.show(true).then(function () {
-      var toolbar = options.chromeWindow.DeveloperToolbar;
+    var toolbar = gDevToolsBrowser.getDeveloperToolbar(options.chromeWindow);
+    return toolbar.show(true).then(function () {
       options.automator = createDeveloperToolbarAutomator(toolbar);
       options.requisition = toolbar.requisition;
       return options;
@@ -243,7 +244,8 @@ var { helpers, assert } = (function () {
  * @return A promise resolved (with undefined) when the toolbar is closed
  */
   helpers.closeToolbar = function (options) {
-    return options.chromeWindow.DeveloperToolbar.hide().then(function () {
+    var toolbar = gDevToolsBrowser.getDeveloperToolbar(options.chromeWindow).hide();
+    return toolbar.then(function () {
       delete options.automator;
       delete options.requisition;
     });
@@ -268,13 +270,13 @@ var { helpers, assert } = (function () {
  * @return A promise resolved with the event object when the event first happens
  */
   helpers.listenOnce = function (element, event, useCapture) {
-    return new Promise(function (resolve, reject) {
+    return new Promise((resolve, reject) => {
       var onEvent = function (ev) {
         element.removeEventListener(event, onEvent, useCapture);
         resolve(ev);
       };
       element.addEventListener(event, onEvent, useCapture);
-    }.bind(this));
+    });
   };
 
 /**
@@ -287,13 +289,13 @@ var { helpers, assert } = (function () {
  * function other parameters are dropped.
  */
   helpers.observeOnce = function (topic, ownsWeak = false) {
-    return new Promise(function (resolve, reject) {
+    return new Promise((resolve, reject) => {
       let resolver = function (subject) {
         Services.obs.removeObserver(resolver, topic);
         resolve(subject);
       };
       Services.obs.addObserver(resolver, topic, ownsWeak);
-    }.bind(this));
+    });
   };
 
 /**
@@ -323,18 +325,18 @@ var { helpers, assert } = (function () {
     return helpers.addTab(url, function (innerOptions) {
       var win = innerOptions.chromeWindow;
 
-      return win.DeveloperToolbar.show(true).then(function () {
-        var toolbar = win.DeveloperToolbar;
+      var toolbar = gDevToolsBrowser.getDeveloperToolbar(win);
+      return toolbar.show(true).then(function () {
         innerOptions.automator = createDeveloperToolbarAutomator(toolbar);
         innerOptions.requisition = toolbar.requisition;
 
         var reply = callback.call(null, innerOptions);
 
-        return Promise.resolve(reply).then(null, function (error) {
+        return Promise.resolve(reply).catch(function (error) {
           ok(false, error);
           console.error(error);
         }).then(function () {
-          win.DeveloperToolbar.hide().then(function () {
+          toolbar.hide().then(function () {
             delete innerOptions.automator;
           });
         });
@@ -553,9 +555,9 @@ var { helpers, assert } = (function () {
     },
 
     unassigned: function (options) {
-      return options.requisition._unassigned.map(function (assignment) {
+      return options.requisition._unassigned.map(assignment => {
         return assignment.arg.toString();
-      }.bind(this));
+      });
     },
 
     outputState: function (options) {
@@ -604,7 +606,7 @@ var { helpers, assert } = (function () {
     var hintsPromise = helpers._actual.hints(options);
     var predictionsPromise = helpers._actual.predictions(options);
 
-    return Promise.all([ hintsPromise, predictionsPromise ]).then(function (values) {
+    return Promise.all([ hintsPromise, predictionsPromise ]).then(values => {
       var hints = values[0];
       var predictions = values[1];
       var output = "";
@@ -674,7 +676,7 @@ var { helpers, assert } = (function () {
       output += "]);";
 
       return output;
-    }.bind(this), util.errorHandler);
+    }, util.errorHandler);
   };
 
 /**
@@ -1001,7 +1003,7 @@ var { helpers, assert } = (function () {
     }
 
     try {
-      return requisition.exec({ hidden: true }).then(function (output) {
+      return requisition.exec({ hidden: true }).then(output => {
         if ("type" in expected) {
           assert.is(output.type,
                   expected.type,
@@ -1084,7 +1086,7 @@ var { helpers, assert } = (function () {
           }
           return { output: output, text: textOutput };
         });
-      }.bind(this)).then(function (data) {
+      }).then(function (data) {
         if (expected.error) {
           cli.logErrors = origLogErrors;
         }

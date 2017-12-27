@@ -128,7 +128,7 @@ fails-if(gtkWidget) random-if(winWidget) == semantics-1.xhtml semantics-1-ref.xh
 == mathbackground-4.xml mathbackground-4-ref.xml
 == mstyle-1.xhtml mstyle-1-ref.xhtml
 == mstyle-2.xhtml mstyle-2-ref.xhtml
-== mstyle-3.xhtml mstyle-3-ref.xhtml
+fuzzy-if(OSX,16,8) == mstyle-3.xhtml mstyle-3-ref.xhtml
 == mstyle-4.xhtml mstyle-4-ref.xhtml
 == mstyle-5.xhtml mstyle-5-ref.xhtml # Bug 787215
 == scale-stretchy-1.xhtml scale-stretchy-1-ref.xhtml
@@ -205,7 +205,7 @@ random-if(winWidget&&!d2d) == opentype-stretchy.html opentype-stretchy-ref.html
 == operator-1.xhtml operator-1-ref.xhtml
 == scriptshift-1.xhtml scriptshift-1-ref.xhtml
 == number-size-1.xhtml number-size-1-ref.xhtml
-fuzzy-if(skiaContent,1,80) skip-if(winWidget) == multiscripts-1.html multiscripts-1-ref.html # Windows: bug 1314684
+fuzzy-if(skiaContent,1,80) fuzzy-if(Android,255,105) skip-if(winWidget) == multiscripts-1.html multiscripts-1-ref.html # Windows: bug 1314684; Android: bug 1392254
 == mathml-mmultiscript-base.html mathml-mmultiscript-base-ref.html
 == mathml-mmultiscript-mprescript.html mathml-mmultiscript-mprescript-ref.html
 != menclose-1a.html menclose-1-ref.html
@@ -368,13 +368,13 @@ fuzzy-if(OSX,1,100) fuzzy-if(skiaContent,1,14) == mfrac-D-1.html mfrac-D-1-ref.h
 == mfrac-D-4.html mfrac-D-4-ref.html
 == mfrac-E-1.html mfrac-E-1-ref.html
 test-pref(dom.webcomponents.enabled,true) == shadow-dom-1.html shadow-dom-1-ref.html
-pref(font.size.inflation.emPerLine,25) == font-inflation-1.html font-inflation-1-ref.html
+pref(dom.meta-viewport.enabled,true) pref(font.size.inflation.emPerLine,25) == font-inflation-1.html font-inflation-1-ref.html
 test-pref(font.minimum-size.x-math,40) == default-font.html default-font-ref.html
 != radicalbar-1.html about:blank
 != radicalbar-1a.html about:blank
 != radicalbar-1b.html about:blank
 != radicalbar-1c.html about:blank
-!= radicalbar-1d.html about:blank
+fails-if(webrender) != radicalbar-1d.html about:blank
 != radicalbar-2.html about:blank
 != radicalbar-2a.html about:blank
 != radicalbar-2b.html about:blank

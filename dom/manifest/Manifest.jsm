@@ -75,8 +75,19 @@ class Manifest {
   }
 
   async initialise() {
-    this._store = new JSONFile({path: this._path});
+    this._store = new JSONFile({path: this._path, saveDelayMs: 100});
     await this._store.load();
+  }
+
+  async prefetch(browser) {
+    const manifestData = await ManifestObtainer.browserObtainManifest(browser);
+    const icon = await ManifestIcons.browserFetchIcon(browser, manifestData, 192);
+    const data = {
+      installed: false,
+      manifest: manifestData,
+      cached_icon: icon
+    };
+    return data;
   }
 
   async install() {
@@ -109,6 +120,7 @@ class Manifest {
 
   get name() {
     return this._store.data.manifest.short_name ||
+      this._store.data.manifest.name ||
       this._store.data.manifest.short_url;
   }
 
@@ -140,7 +152,7 @@ var Manifests = {
       return this.started;
     }
 
-    this.started = (async function() {
+    this.started = (async () => {
 
       // Make sure the manifests have the folder needed to save into
       await OS.File.makeDir(MANIFESTS_DIR, {ignoreExisting: true});
@@ -159,7 +171,7 @@ var Manifests = {
       // and we do not want multiple file handles
       this.manifestObjs = {};
 
-    }).bind(this)();
+    })();
 
     return this.started;
   },

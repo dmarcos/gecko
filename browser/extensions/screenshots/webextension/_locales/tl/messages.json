@@ -3,7 +3,7 @@
     "message": "Dalhin ang clip at mga screenshot mula sa Web at i-save ang mga ito pansamantala o permanente."
   },
   "addonAuthorsList": {
-    "message": "Mozilla <screenshots-feedback@mozilla.org>"
+    "message": "Mozilla <screenshots-feedback@mozilla.com>"
   },
   "contextMenuLabel": {
     "message": "Kumuha ng Screenshot"
@@ -70,26 +70,29 @@
   "genericErrorDetails": {
     "message": "Hindi kami sigurado kung ano ang nangyari. Pag-aalaga upang subukang muli o kumuha ng isang shot ng isang iba't ibang mga pahina?"
   },
-  "tourBodyOne": {
+  "tourBodyIntro": {
     "message": "Dumaan, i-save, at ibahagi ang mga screenshot nang hindi umaalis sa Firefox."
   },
-  "tourHeaderTwo": {
+  "tourHeaderPageAction": {
+    "message": "Ang bagong paraan para mag-save"
+  },
+  "tourHeaderClickAndDrag": {
     "message": "Kunan Kung Ano Ang Gusto Mo"
   },
-  "tourBodyTwo": {
+  "tourBodyClickAndDrag": {
     "message": "I-click at i-drag upang makuha lamang ang isang bahagi ng isang pahina. Maaari mo ring i-hover upang i-highlight ang iyong pagpili."
   },
-  "tourHeaderThree": {
-    "message": "Bilang Nagustuhan Mo ito"
-  },
-  "tourBodyThree": {
-    "message": "I-save ang iyong crop shot sa Web para sa madaling pagbabahagi, o i-download ito sa iyong computer. Maaari mo ring i-click sa pindutan ng My Shots upang mahanap ang lahat ng mga pag-shot na kinunan mo."
-  },
-  "tourHeaderFour": {
+  "tourHeaderFullPage": {
     "message": "I-capture ang Windows o Buong Pahina"
   },
-  "tourBodyFour": {
+  "tourBodyFullPage": {
     "message": "Piliin ang pindutan sa kanang itaas upang makuha ang nakikitang lugar sa window o upang makuha ang isang buong pahina."
+  },
+  "tourHeaderDownloadUpload": {
+    "message": "Bilang Nagustuhan Mo ito"
+  },
+  "tourBodyDownloadUpload": {
+    "message": "I-save ang iyong crop shot sa Web para sa madaling pagbabahagi, o i-download ito sa iyong computer. Maaari mo ring i-click sa pindutan ng My Shots upang mahanap ang lahat ng mga pag-shot na kinunan mo."
   },
   "tourSkip": {
     "message": "Laktawan"
@@ -103,21 +106,13 @@
   "tourDone": {
     "message": "Tapos"
   },
-  "termsAndPrivacyNotice": {
-    "message": "Sa pamamagitan ng paggamit ng Firefox screenshot, sumasang-ayon ka sa mga screenshot $TERMSANDPRIVACYNOTICETERMSLINK$ at $TERMSANDPRIVACYNOTICEPRIVACYLINK$.",
-    "placeholders": {
-      "termsandprivacynoticetermslink": {
-        "content": "$1"
-      },
-      "termsandprivacynoticeprivacylink": {
-        "content": "$2"
-      }
-    }
-  },
   "termsAndPrivacyNoticeTermsLink": {
     "message": "Mga tuntunin"
   },
   "termsAndPrivacyNoticyPrivacyLink": {
     "message": "Abiso sa Privacy"
+  },
+  "libraryLabel": {
+    "message": "Mga screenshot"
   }
 }

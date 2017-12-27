@@ -26,8 +26,8 @@ txUnknownHandler::~txUnknownHandler()
 }
 
 nsresult
-txUnknownHandler::attribute(nsIAtom* aPrefix, nsIAtom* aLocalName,
-                            nsIAtom* aLowercaseLocalName, int32_t aNsID,
+txUnknownHandler::attribute(nsAtom* aPrefix, nsAtom* aLocalName,
+                            nsAtom* aLowercaseLocalName, int32_t aNsID,
                             const nsString& aValue)
 {
     return mFlushed ?
@@ -38,7 +38,7 @@ txUnknownHandler::attribute(nsIAtom* aPrefix, nsIAtom* aLocalName,
 }
 
 nsresult
-txUnknownHandler::attribute(nsIAtom* aPrefix, const nsSubstring& aLocalName,
+txUnknownHandler::attribute(nsAtom* aPrefix, const nsAString& aLocalName,
                             const int32_t aNsID, const nsString& aValue)
 {
     return mFlushed ?
@@ -47,7 +47,7 @@ txUnknownHandler::attribute(nsIAtom* aPrefix, const nsSubstring& aLocalName,
 }
 
 nsresult
-txUnknownHandler::characters(const nsSubstring& aData, bool aDOE)
+txUnknownHandler::characters(const nsAString& aData, bool aDOE)
 {
     return mFlushed ?
            mEs->mResultHandler->characters(aData, aDOE) :
@@ -113,8 +113,8 @@ txUnknownHandler::startDocument()
 }
 
 nsresult
-txUnknownHandler::startElement(nsIAtom* aPrefix, nsIAtom* aLocalName,
-                               nsIAtom* aLowercaseLocalName, int32_t aNsID)
+txUnknownHandler::startElement(nsAtom* aPrefix, nsAtom* aLocalName,
+                               nsAtom* aLowercaseLocalName, int32_t aNsID)
 {
     if (!mFlushed) {
         // Make sure that mEs->mResultHandler == this is true, otherwise we'll
@@ -122,7 +122,7 @@ txUnknownHandler::startElement(nsIAtom* aPrefix, nsIAtom* aLocalName,
         NS_ASSERTION(mEs->mResultHandler == this,
                      "We're leaking mEs->mResultHandler.");
 
-        nsCOMPtr<nsIAtom> owner;
+        RefPtr<nsAtom> owner;
         if (!aLowercaseLocalName) {
             owner = TX_ToLowerCaseAtom(aLocalName);
             NS_ENSURE_TRUE(owner, NS_ERROR_OUT_OF_MEMORY);
@@ -147,7 +147,7 @@ txUnknownHandler::startElement(nsIAtom* aPrefix, nsIAtom* aLocalName,
 }
 
 nsresult
-txUnknownHandler::startElement(nsIAtom* aPrefix, const nsSubstring& aLocalName,
+txUnknownHandler::startElement(nsAtom* aPrefix, const nsAString& aLocalName,
                                const int32_t aNsID)
 {
     if (!mFlushed) {
@@ -167,7 +167,7 @@ txUnknownHandler::startElement(nsIAtom* aPrefix, const nsSubstring& aLocalName,
 }
 
 nsresult txUnknownHandler::createHandlerAndFlush(bool aHTMLRoot,
-                                                 const nsSubstring& aName,
+                                                 const nsAString& aName,
                                                  const int32_t aNsID)
 {
     NS_ENSURE_TRUE(mBuffer, NS_ERROR_NOT_INITIALIZED);

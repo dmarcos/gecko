@@ -6,17 +6,18 @@
 #ifndef __mozinlinespellchecker_h__
 #define __mozinlinespellchecker_h__
 
-#include "mozilla/EditorBase.h"
-#include "nsRange.h"
-#include "nsIEditorSpellCheck.h"
-#include "nsIEditActionListener.h"
-#include "nsIInlineSpellChecker.h"
-#include "nsIDOMTreeWalker.h"
-#include "nsWeakReference.h"
-#include "nsIDOMEventListener.h"
-#include "nsWeakReference.h"
+#include "mozilla/TextEditor.h"
+
 #include "mozISpellI18NUtil.h"
+
 #include "nsCycleCollectionParticipant.h"
+#include "nsIDOMEventListener.h"
+#include "nsIDOMTreeWalker.h"
+#include "nsIEditActionListener.h"
+#include "nsIEditorSpellCheck.h"
+#include "nsIInlineSpellChecker.h"
+#include "nsRange.h"
+#include "nsWeakReference.h"
 
 // X.h defines KeyPress
 #ifdef KeyPress
@@ -36,13 +37,13 @@ public:
   explicit mozInlineSpellStatus(mozInlineSpellChecker* aSpellChecker);
 
   nsresult InitForEditorChange(EditAction aAction,
-                               nsIDOMNode* aAnchorNode, int32_t aAnchorOffset,
-                               nsIDOMNode* aPreviousNode, int32_t aPreviousOffset,
-                               nsIDOMNode* aStartNode, int32_t aStartOffset,
-                               nsIDOMNode* aEndNode, int32_t aEndOffset);
+                               nsINode* aAnchorNode, uint32_t aAnchorOffset,
+                               nsINode* aPreviousNode, uint32_t aPreviousOffset,
+                               nsINode* aStartNode, uint32_t aStartOffset,
+                               nsINode* aEndNode, uint32_t aEndOffset);
   nsresult InitForNavigation(bool aForceCheck, int32_t aNewPositionOffset,
-                             nsIDOMNode* aOldAnchorNode, int32_t aOldAnchorOffset,
-                             nsIDOMNode* aNewAnchorNode, int32_t aNewAnchorOffset,
+                             nsINode* aOldAnchorNode, uint32_t aOldAnchorOffset,
+                             nsINode* aNewAnchorNode, uint32_t aNewAnchorOffset,
                              bool* aContinue);
   nsresult InitForSelection();
   nsresult InitForRange(nsRange* aRange);
@@ -85,7 +86,7 @@ public:
   // (such as for the intial check of everything).
   //
   // For mOp == eOpNavigation, this is the NEW position of the cursor
-  nsCOMPtr<nsIDOMRange> mAnchorRange;
+  RefPtr<nsRange> mAnchorRange;
 
   // -----
   // The following members are only for navigation events and are only
@@ -93,7 +94,7 @@ public:
   // -----
 
   // this is the OLD position of the cursor
-  nsCOMPtr<nsIDOMRange> mOldNavigationAnchorRange;
+  RefPtr<nsRange> mOldNavigationAnchorRange;
 
   // Set when we should force checking the current word. See
   // mozInlineSpellChecker::HandleNavigationEvent for a description of why we
@@ -108,10 +109,9 @@ protected:
 
   nsresult FillNoCheckRangeFromAnchor(mozInlineSpellWordUtil& aWordUtil);
 
-  nsresult GetDocument(nsIDOMDocument** aDocument);
-  nsresult PositionToCollapsedRange(nsIDOMDocument* aDocument,
-                                    nsIDOMNode* aNode, int32_t aOffset,
-                                    nsIDOMRange** aRange);
+  already_AddRefed<nsIDocument> GetDocument();
+  already_AddRefed<nsRange> PositionToCollapsedRange(nsINode* aNode,
+                                                     uint32_t aOffset);
 };
 
 class mozInlineSpellChecker final : public nsIInlineSpellChecker,
@@ -132,7 +132,7 @@ private:
                             SpellCheck_Available = 1};
   static SpellCheckingState gCanEnableSpellChecking;
 
-  nsWeakPtr mEditor; 
+  RefPtr<mozilla::TextEditor> mTextEditor;
   nsCOMPtr<nsIEditorSpellCheck> mSpellCheck;
   nsCOMPtr<nsIEditorSpellCheck> mPendingSpellCheck;
   nsCOMPtr<nsIDOMTreeWalker> mTreeWalker;
@@ -150,8 +150,8 @@ private:
 
   // we need to keep track of the current text position in the document
   // so we can spell check the old word when the user clicks around the document.
-  nsCOMPtr<nsIDOMNode> mCurrentSelectionAnchorNode;
-  int32_t              mCurrentSelectionOffset;
+  nsCOMPtr<nsINode> mCurrentSelectionAnchorNode;
+  uint32_t mCurrentSelectionOffset;
 
   // Tracks the number of pending spell checks *and* async operations that may
   // lead to spell checks, like updating the current dictionary.  This is
@@ -178,9 +178,6 @@ private:
   // Set when we have a pending mozInlineSpellResume which will check
   // the whole document.
   bool mFullSpellCheckScheduled;
-
-  // Maintains state during the asynchronous UpdateCurrentDictionary call.
-  nsString mPreviousDictionary;
 
 public:
 
@@ -210,7 +207,7 @@ public:
   // examines the dom node in question and returns true if the inline spell
   // checker should skip the node (i.e. the text is inside of a block quote
   // or an e-mail signature...)
-  bool ShouldSpellCheckNode(nsIEditor* aEditor, nsINode *aNode);
+  bool ShouldSpellCheckNode(mozilla::TextEditor* aTextEditor, nsINode *aNode);
 
   nsresult SpellCheckAfterChange(nsIDOMNode* aCursorNode, int32_t aCursorOffset,
                                  nsIDOMNode* aPreviousNode, int32_t aPreviousOffset,
@@ -218,14 +215,13 @@ public:
 
   // spell check the text contained within aRange, potentially scheduling
   // another check in the future if the time threshold is reached
-  nsresult ScheduleSpellCheck(const mozInlineSpellStatus& aStatus);
+  nsresult ScheduleSpellCheck(mozilla::UniquePtr<mozInlineSpellStatus>&& aStatus);
 
   nsresult DoSpellCheckSelection(mozInlineSpellWordUtil& aWordUtil,
-                                 mozilla::dom::Selection* aSpellCheckSelection,
-                                 mozInlineSpellStatus* aStatus);
+                                 mozilla::dom::Selection* aSpellCheckSelection);
   nsresult DoSpellCheck(mozInlineSpellWordUtil& aWordUtil,
                         mozilla::dom::Selection *aSpellCheckSelection,
-                        mozInlineSpellStatus* aStatus,
+                        const mozilla::UniquePtr<mozInlineSpellStatus>& aStatus,
                         bool* aDoneChecking);
 
   // helper routine to determine if a point is inside of the passed in selection.
@@ -250,10 +246,10 @@ public:
   nsresult UnregisterEventListeners();
   nsresult HandleNavigationEvent(bool aForceWordSpellCheck, int32_t aNewPositionOffset = 0);
 
-  nsresult GetSpellCheckSelection(nsISelection ** aSpellCheckSelection);
+  already_AddRefed<mozilla::dom::Selection> GetSpellCheckSelection();
   nsresult SaveCurrentSelectionPosition();
 
-  nsresult ResumeCheck(mozInlineSpellStatus* aStatus);
+  nsresult ResumeCheck(mozilla::UniquePtr<mozInlineSpellStatus>&& aStatus);
 
 protected:
   virtual ~mozInlineSpellChecker();
@@ -265,8 +261,8 @@ protected:
   // track the number of pending spell checks and async operations that may lead
   // to spell checks, notifying observers accordingly
   void ChangeNumPendingSpellChecks(int32_t aDelta,
-                                   nsIEditor* aEditor = nullptr);
-  void NotifyObservers(const char* aTopic, nsIEditor* aEditor);
+                                   mozilla::TextEditor* aTextEditor = nullptr);
+  void NotifyObservers(const char* aTopic, mozilla::TextEditor* aTextEditor);
 };
 
 #endif /* __mozinlinespellchecker_h__ */

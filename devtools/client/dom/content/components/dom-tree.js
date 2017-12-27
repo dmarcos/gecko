@@ -6,52 +6,64 @@
 "use strict";
 
 // React & Redux
-const React = require("devtools/client/shared/vendor/react");
+const { Component, createFactory } = require("devtools/client/shared/vendor/react");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
+
 const { connect } = require("devtools/client/shared/vendor/react-redux");
 
-const TreeView = React.createFactory(require("devtools/client/shared/components/tree/tree-view"));
-
+const TreeView = createFactory(require("devtools/client/shared/components/tree/TreeView"));
 // Reps
 const { REPS, MODE } = require("devtools/client/shared/components/reps/reps");
-const Rep = React.createFactory(REPS.Rep);
-const Grip = REPS.Grip;
+const { Rep } = REPS;
 
+const Grip = REPS.Grip;
 // DOM Panel
 const { GripProvider } = require("../grip-provider");
-const { DomDecorator } = require("../dom-decorator");
 
-// Shortcuts
-const PropTypes = React.PropTypes;
+const { DomDecorator } = require("../dom-decorator");
 
 /**
  * Renders DOM panel tree.
  */
-var DomTree = React.createClass({
-  displayName: "DomTree",
+class DomTree extends Component {
+  static get propTypes() {
+    return {
+      dispatch: PropTypes.func.isRequired,
+      filter: PropTypes.string,
+      grips: PropTypes.object,
+      object: PropTypes.any,
+      openLink: PropTypes.func,
+    };
+  }
 
-  propTypes: {
-    object: PropTypes.any,
-    filter: PropTypes.string,
-    dispatch: PropTypes.func.isRequired,
-    grips: PropTypes.object,
-  },
+  constructor(props) {
+    super(props);
+    this.onFilter = this.onFilter.bind(this);
+  }
 
   /**
    * Filter DOM properties. Return true if the object
    * should be visible in the tree.
    */
-  onFilter: function (object) {
+  onFilter(object) {
     if (!this.props.filter) {
       return true;
     }
 
     return (object.name && object.name.indexOf(this.props.filter) > -1);
-  },
+  }
 
   /**
    * Render DOM panel content
    */
-  render: function () {
+  render() {
+    let {
+      dispatch,
+      grips,
+      object,
+      openLink,
+    } = this.props;
+
     let columns = [{
       "id": "value"
     }];
@@ -68,17 +80,18 @@ var DomTree = React.createClass({
 
     return (
       TreeView({
-        object: this.props.object,
-        provider: new GripProvider(this.props.grips, this.props.dispatch),
+        columns,
         decorator: new DomDecorator(),
         mode: MODE.SHORT,
-        columns: columns,
-        renderValue: renderValue,
-        onFilter: this.onFilter
+        object,
+        onFilter: this.onFilter,
+        openLink,
+        provider: new GripProvider(grips, dispatch),
+        renderValue,
       })
     );
   }
-});
+}
 
 const mapStateToProps = (state) => {
   return {

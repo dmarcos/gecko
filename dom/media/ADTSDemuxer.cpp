@@ -8,15 +8,14 @@
 
 #include "TimeUnits.h"
 #include "VideoUtils.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/UniquePtr.h"
 #include <inttypes.h>
 
 extern mozilla::LazyLogModule gMediaDemuxerLog;
-#define ADTSLOG(msg, ...) \
-  MOZ_LOG(gMediaDemuxerLog, LogLevel::Debug, ("ADTSDemuxer " msg, ##__VA_ARGS__))
-#define ADTSLOGV(msg, ...) \
-  MOZ_LOG(gMediaDemuxerLog, LogLevel::Verbose, ("ADTSDemuxer " msg, ##__VA_ARGS__))
+#define ADTSLOG(msg, ...)                                                      \
+  DDMOZ_LOG(gMediaDemuxerLog, LogLevel::Debug, msg, ##__VA_ARGS__)
+#define ADTSLOGV(msg, ...)                                                     \
+  DDMOZ_LOG(gMediaDemuxerLog, LogLevel::Verbose, msg, ##__VA_ARGS__)
 
 namespace mozilla {
 namespace adts {
@@ -235,48 +234,6 @@ private:
   Frame mFrame;
 };
 
-
-// Return the AAC Profile Level Indication based upon sample rate and channels
-// Information based upon table 1.10 from ISO/IEC 14496-3:2005(E)
-static int8_t
-ProfileLevelIndication(const Frame& frame)
-{
-  const FrameHeader& header = frame.Header();
-  MOZ_ASSERT(header.IsValid());
-
-  if (!header.IsValid()) {
-    return 0;
-  }
-
-  const int channels = header.mChannels;
-  const int sampleRate = header.mSampleRate;
-
-  if (channels <= 2) {
-    if (sampleRate <= 24000) {
-      // AAC Profile  L1
-      return 0x28;
-    }
-    else if (sampleRate <= 48000) {
-      // AAC Profile  L2
-      return 0x29;
-    }
-  }
-  else if (channels <= 5) {
-    if (sampleRate <= 48000) {
-      // AAC Profile  L4
-      return 0x2A;
-    }
-    else if (sampleRate <= 96000) {
-      // AAC Profile  L5
-      return 0x2B;
-    }
-  }
-
-  // TODO: Should this be 0xFE for 'no audio profile specified'?
-  return 0;
-}
-
-
 // Initialize the AAC AudioSpecificConfig.
 // Only handles two-byte version for AAC-LC.
 static void
@@ -299,11 +256,14 @@ InitAudioSpecificConfig(const Frame& frame,
 
 } // namespace adts
 
+using media::TimeUnit;
+
 // ADTSDemuxer
 
 ADTSDemuxer::ADTSDemuxer(MediaResource* aSource)
   : mSource(aSource)
 {
+  DDLINKCHILD("source", aSource);
 }
 
 bool
@@ -311,6 +271,7 @@ ADTSDemuxer::InitInternal()
 {
   if (!mTrackDemuxer) {
     mTrackDemuxer = new ADTSTrackDemuxer(mSource);
+    DDLINKCHILD("track demuxer", mTrackDemuxer.get());
   }
   return mTrackDemuxer->Init();
 }
@@ -327,12 +288,6 @@ ADTSDemuxer::Init()
 
   ADTSLOG("Init() successful");
   return InitPromise::CreateAndResolve(NS_OK, __func__);
-}
-
-bool
-ADTSDemuxer::HasTrackType(TrackInfo::TrackType aType) const
-{
-  return aType == TrackInfo::kAudioTrack;
 }
 
 uint32_t
@@ -373,6 +328,7 @@ ADTSTrackDemuxer::ADTSTrackDemuxer(MediaResource* aSource)
   , mSamplesPerSecond(0)
   , mChannels(0)
 {
+  DDLINKCHILD("source", aSource);
   Reset();
 }
 
@@ -384,7 +340,7 @@ ADTSTrackDemuxer::~ADTSTrackDemuxer()
 bool
 ADTSTrackDemuxer::Init()
 {
-  FastSeek(media::TimeUnit());
+  FastSeek(TimeUnit::Zero());
   // Read the first frame to fetch sample rate and other meta data.
   RefPtr<MediaRawData> frame(GetNextFrame(FindNextFrame(true)));
 
@@ -396,7 +352,7 @@ ADTSTrackDemuxer::Init()
   }
 
   // Rewind back to the stream begin to avoid dropping the first frame.
-  FastSeek(media::TimeUnit());
+  FastSeek(TimeUnit::Zero());
 
   if (!mInfo) {
     mInfo = MakeUnique<AudioInfo>();
@@ -411,15 +367,10 @@ ADTSTrackDemuxer::Init()
   mInfo->mMimeType = "audio/mp4a-latm";
 
   // Configure AAC codec-specific values.
-
-  // According to
-  // https://msdn.microsoft.com/en-us/library/windows/desktop/dd742784%28v=vs.85%29.aspx,
-  // wAudioProfileLevelIndication, which is passed mInfo->mProfile, is
-  // a value from Table 1.12 -- audioProfileLevelIndication values, ISO/IEC 14496-3.
-  mInfo->mProfile = ProfileLevelIndication(mParser->FirstFrame());
-  // For AAC, mExtendedProfile contains the audioObjectType from Table
-  // 1.3 -- Audio Profile definition, ISO/IEC 14496-3. Eg. 2 == AAC LC
-  mInfo->mExtendedProfile = mParser->FirstFrame().Header().mObjectType;
+  // For AAC, mProfile and mExtendedProfile contain the audioObjectType from
+  // Table 1.3 -- Audio Profile definition, ISO/IEC 14496-3. Eg. 2 == AAC LC
+  mInfo->mProfile = mInfo->mExtendedProfile =
+    mParser->FirstFrame().Header().mObjectType;
   InitAudioSpecificConfig(mParser->FirstFrame(), mInfo->mCodecSpecificConfig);
 
   ADTSLOG("Init mInfo={mRate=%u mChannels=%u mBitDepth=%u mDuration=%" PRId64
@@ -437,18 +388,18 @@ ADTSTrackDemuxer::GetInfo() const
 }
 
 RefPtr<ADTSTrackDemuxer::SeekPromise>
-ADTSTrackDemuxer::Seek(const media::TimeUnit& aTime)
+ADTSTrackDemuxer::Seek(const TimeUnit& aTime)
 {
   // Efficiently seek to the position.
   FastSeek(aTime);
   // Correct seek position by scanning the next frames.
-  const media::TimeUnit seekTime = ScanUntil(aTime);
+  const TimeUnit seekTime = ScanUntil(aTime);
 
   return SeekPromise::CreateAndResolve(seekTime, __func__);
 }
 
-media::TimeUnit
-ADTSTrackDemuxer::FastSeek(const media::TimeUnit& aTime)
+TimeUnit
+ADTSTrackDemuxer::FastSeek(const TimeUnit& aTime)
 {
   ADTSLOG("FastSeek(%" PRId64 ") avgFrameLen=%f mNumParsedFrames=%" PRIu64
          " mFrameIndex=%" PRId64 " mOffset=%" PRIu64,
@@ -480,8 +431,8 @@ ADTSTrackDemuxer::FastSeek(const media::TimeUnit& aTime)
   return Duration(mFrameIndex);
 }
 
-media::TimeUnit
-ADTSTrackDemuxer::ScanUntil(const media::TimeUnit& aTime)
+TimeUnit
+ADTSTrackDemuxer::ScanUntil(const TimeUnit& aTime)
 {
   ADTSLOG("ScanUntil(%" PRId64 ") avgFrameLen=%f mNumParsedFrames=%" PRIu64
           " mFrameIndex=%" PRId64 " mOffset=%" PRIu64,
@@ -532,7 +483,7 @@ ADTSTrackDemuxer::GetSamples(int32_t aNumSamples)
     frames->mSamples.AppendElement(frame);
   }
 
-  ADTSLOGV("GetSamples() End mSamples.Size()=%" PRIuSIZE " aNumSamples=%d mOffset=%" PRIu64
+  ADTSLOGV("GetSamples() End mSamples.Size()=%zu aNumSamples=%d mOffset=%" PRIu64
            " mNumParsedFrames=%" PRIu64 " mFrameIndex=%" PRId64
            " mTotalFrameLen=%" PRIu64
            " mSamplesPerFrame=%d mSamplesPerSecond=%d "
@@ -557,12 +508,11 @@ ADTSTrackDemuxer::Reset()
   if (mParser) {
     mParser->Reset();
   }
-  FastSeek(media::TimeUnit());
+  FastSeek(TimeUnit::Zero());
 }
 
 RefPtr<ADTSTrackDemuxer::SkipAccessPointPromise>
-ADTSTrackDemuxer::SkipToNextRandomAccessPoint(
-  const media::TimeUnit& aTimeThreshold)
+ADTSTrackDemuxer::SkipToNextRandomAccessPoint(const TimeUnit& aTimeThreshold)
 {
   // Will not be called for audio-only resources.
   return SkipAccessPointPromise::CreateAndReject(
@@ -578,9 +528,9 @@ ADTSTrackDemuxer::GetResourceOffset() const
 media::TimeIntervals
 ADTSTrackDemuxer::GetBuffered()
 {
-  media::TimeUnit duration = Duration();
+  auto duration = Duration();
 
-  if (duration <= media::TimeUnit()) {
+  if (!duration.IsPositive()) {
     return media::TimeIntervals();
   }
 
@@ -594,28 +544,28 @@ ADTSTrackDemuxer::StreamLength() const
   return mSource.GetLength();
 }
 
-media::TimeUnit
+TimeUnit
 ADTSTrackDemuxer::Duration() const
 {
   if (!mNumParsedFrames) {
-    return media::TimeUnit::FromMicroseconds(-1);
+    return TimeUnit::FromMicroseconds(-1);
   }
 
   const int64_t streamLen = StreamLength();
   if (streamLen < 0) {
     // Unknown length, we can't estimate duration.
-    return media::TimeUnit::FromMicroseconds(-1);
+    return TimeUnit::FromMicroseconds(-1);
   }
   const int64_t firstFrameOffset = mParser->FirstFrame().Offset();
   int64_t numFrames = (streamLen - firstFrameOffset) / AverageFrameLength();
   return Duration(numFrames);
 }
 
-media::TimeUnit
+TimeUnit
 ADTSTrackDemuxer::Duration(int64_t aNumFrames) const
 {
   if (!mSamplesPerSecond) {
-    return media::TimeUnit::FromMicroseconds(-1);
+    return TimeUnit::FromMicroseconds(-1);
   }
 
   return FramesToTimeUnit(aNumFrames * mSamplesPerFrame, mSamplesPerSecond);
@@ -688,7 +638,7 @@ ADTSTrackDemuxer::FindNextFrame(bool findFirstFrame /*= false*/)
   }
 
   if (!foundFrame || !mParser->CurrentFrame().Length()) {
-    ADTSLOG("FindNext() Exit foundFrame=%d mParser->CurrentFrame().Length()=%" PRIuSIZE " ",
+    ADTSLOG("FindNext() Exit foundFrame=%d mParser->CurrentFrame().Length()=%zu ",
            foundFrame, mParser->CurrentFrame().Length());
     mParser->Reset();
     return mParser->CurrentFrame();
@@ -726,8 +676,8 @@ ADTSTrackDemuxer::SkipNextFrame(const adts::Frame& aFrame)
 already_AddRefed<MediaRawData>
 ADTSTrackDemuxer::GetNextFrame(const adts::Frame& aFrame)
 {
-  ADTSLOG("GetNext() Begin({mOffset=%" PRId64 " HeaderSize()=%" PRIuSIZE
-          " Length()=%" PRIuSIZE "})",
+  ADTSLOG("GetNext() Begin({mOffset=%" PRId64 " HeaderSize()=%zu"
+          " Length()=%zu})",
          aFrame.Offset(), aFrame.Header().HeaderSize(), aFrame.PayloadLength());
   if (!aFrame.IsValid())
     return nullptr;
@@ -746,18 +696,18 @@ ADTSTrackDemuxer::GetNextFrame(const adts::Frame& aFrame)
 
   const uint32_t read = Read(frameWriter->Data(), offset, length);
   if (read != length) {
-    ADTSLOG("GetNext() Exit read=%u frame->Size()=%" PRIuSIZE, read, frame->Size());
+    ADTSLOG("GetNext() Exit read=%u frame->Size()=%zu", read, frame->Size());
     return nullptr;
   }
 
   UpdateState(aFrame);
 
-  frame->mTime = Duration(mFrameIndex - 1).ToMicroseconds();
+  frame->mTime = Duration(mFrameIndex - 1);
   frame->mDuration = Duration(1);
   frame->mTimecode = frame->mTime;
   frame->mKeyframe = true;
 
-  MOZ_ASSERT(frame->mTime >= 0);
+  MOZ_ASSERT(!frame->mTime.IsNegative());
   MOZ_ASSERT(frame->mDuration.IsPositive());
 
   ADTSLOGV("GetNext() End mOffset=%" PRIu64 " mNumParsedFrames=%" PRIu64
@@ -784,7 +734,7 @@ ADTSTrackDemuxer::FrameIndexFromOffset(int64_t aOffset) const
 }
 
 int64_t
-ADTSTrackDemuxer::FrameIndexFromTime(const media::TimeUnit& aTime) const
+ADTSTrackDemuxer::FrameIndexFromTime(const TimeUnit& aTime) const
 {
   int64_t frameIndex = 0;
   if (mSamplesPerSecond > 0 && mSamplesPerFrame > 0) {
@@ -858,6 +808,9 @@ ADTSTrackDemuxer::AverageFrameLength() const
 ADTSDemuxer::ADTSSniffer(const uint8_t* aData, const uint32_t aLength)
 {
   if (aLength < 7) {
+    return false;
+  }
+  if (!adts::FrameHeader::MatchesSync(aData)) {
     return false;
   }
   auto parser = MakeUnique<adts::FrameParser>();

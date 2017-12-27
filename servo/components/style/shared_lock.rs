@@ -8,9 +8,12 @@
 use atomic_refcell::{AtomicRefCell, AtomicRef, AtomicRefMut};
 #[cfg(feature = "servo")]
 use parking_lot::RwLock;
+use servo_arc::Arc;
 use std::cell::UnsafeCell;
 use std::fmt;
-use std::sync::Arc;
+#[cfg(feature = "gecko")]
+use std::ptr;
+use stylesheets::Origin;
 
 /// A shared read/write lock that can protect multiple objects.
 ///
@@ -23,10 +26,10 @@ use std::sync::Arc;
 /// but that may not be web-compatible and may need to be changed (at which
 /// point Servo could use AtomicRefCell too).
 #[derive(Clone)]
-#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[cfg_attr(feature = "servo", derive(MallocSizeOf))]
 pub struct SharedRwLock {
     #[cfg(feature = "servo")]
-    #[cfg_attr(feature = "servo", ignore_heap_size_of = "Arc")]
+    #[cfg_attr(feature = "servo", ignore_malloc_size_of = "Arc")]
     arc: Arc<RwLock<()>>,
 
     #[cfg(feature = "gecko")]
@@ -149,12 +152,12 @@ impl<T: fmt::Debug> fmt::Debug for Locked<T> {
 impl<T> Locked<T> {
     #[cfg(feature = "servo")]
     fn same_lock_as(&self, lock: &SharedRwLock) -> bool {
-        ::arc_ptr_eq(&self.shared_lock.arc, &lock.arc)
+        Arc::ptr_eq(&self.shared_lock.arc, &lock.arc)
     }
 
     #[cfg(feature = "gecko")]
     fn same_lock_as(&self, derefed_guard: &SomethingZeroSizedButTyped) -> bool {
-        ::ptr_eq(self.shared_lock.cell.as_ptr(), derefed_guard)
+        ptr::eq(self.shared_lock.cell.as_ptr(), derefed_guard)
     }
 
     /// Access the data for reading.
@@ -172,6 +175,13 @@ impl<T> Locked<T> {
         unsafe {
             &*ptr
         }
+    }
+
+    /// Access the data for reading without verifying the lock. Use with caution.
+    #[cfg(feature = "gecko")]
+    pub unsafe fn read_unchecked<'a>(&'a self) -> &'a T {
+        let ptr = self.data.get();
+        &*ptr
     }
 
     /// Access the data for writing.
@@ -226,10 +236,34 @@ pub trait ToCssWithGuard {
     }
 }
 
+/// Parameters needed for deep clones.
+#[cfg(feature = "gecko")]
+pub struct DeepCloneParams {
+    /// The new sheet we're cloning rules into.
+    pub reference_sheet: *const ::gecko_bindings::structs::ServoStyleSheet,
+}
+
+/// Parameters needed for deep clones.
+#[cfg(feature = "servo")]
+pub struct DeepCloneParams;
+
+
+/// A trait to do a deep clone of a given CSS type. Gets a lock and a read
+/// guard, in order to be able to read and clone nested structures.
+pub trait DeepCloneWithLock : Sized {
+    /// Deep clones this object.
+    fn deep_clone_with_lock(
+        &self,
+        lock: &SharedRwLock,
+        guard: &SharedRwLockReadGuard,
+        params: &DeepCloneParams,
+    ) -> Self;
+}
+
 /// Guards for a document
 #[derive(Clone)]
 pub struct StylesheetGuards<'a> {
-    /// For author-origin stylesheets
+    /// For author-origin stylesheets.
     pub author: &'a SharedRwLockReadGuard<'a>,
 
     /// For user-agent-origin and user-origin stylesheets
@@ -237,6 +271,14 @@ pub struct StylesheetGuards<'a> {
 }
 
 impl<'a> StylesheetGuards<'a> {
+    /// Get the guard for a given stylesheet origin.
+    pub fn for_origin(&self, origin: Origin) -> &SharedRwLockReadGuard<'a> {
+        match origin {
+            Origin::Author => &self.author,
+            _ => &self.ua_or_user,
+        }
+    }
+
     /// Same guard for all origins
     pub fn same(guard: &'a SharedRwLockReadGuard<'a>) -> Self {
         StylesheetGuards {

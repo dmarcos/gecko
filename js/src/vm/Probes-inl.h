@@ -11,8 +11,6 @@
 
 #include "jscntxt.h"
 
-#include "gc/Zone.h"
-
 namespace js {
 
 /*
@@ -41,10 +39,9 @@ probes::EnterScript(JSContext* cx, JSScript* script, JSFunction* maybeFun,
 
     JSRuntime* rt = cx->runtime();
     if (rt->geckoProfiler().enabled()) {
-        if (!rt->geckoProfiler().enter(cx, script, maybeFun))
+        if (!cx->geckoProfiler().enter(cx, script, maybeFun))
             return false;
-        MOZ_ASSERT_IF(!fp->script()->isStarGenerator() &&
-                      !fp->script()->isLegacyGenerator() &&
+        MOZ_ASSERT_IF(!fp->script()->isGenerator() &&
                       !fp->script()->isAsync(),
                       !fp->hasPushedGeckoProfilerFrame());
         fp->setPushedGeckoProfilerFrame();
@@ -62,7 +59,7 @@ probes::ExitScript(JSContext* cx, JSScript* script, JSFunction* maybeFun, bool p
 #endif
 
     if (popProfilerFrame)
-        cx->runtime()->geckoProfiler().exit(script, maybeFun);
+        cx->geckoProfiler().exit(script, maybeFun);
 }
 
 inline bool

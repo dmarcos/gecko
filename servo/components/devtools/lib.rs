@@ -12,18 +12,14 @@
 
 #![allow(non_snake_case)]
 #![deny(unsafe_code)]
-#![feature(box_syntax)]
 
 extern crate devtools_traits;
-extern crate encoding;
 extern crate hyper;
 extern crate ipc_channel;
 #[macro_use]
 extern crate log;
 extern crate msg;
-extern crate serde;
-#[macro_use]
-extern crate serde_derive;
+#[macro_use] extern crate serde;
 extern crate serde_json;
 extern crate time;
 
@@ -146,9 +142,9 @@ fn run_server(sender: Sender<DevtoolsControlMsg>,
 
     let mut registry = ActorRegistry::new();
 
-    let root = box RootActor {
+    let root = Box::new(RootActor {
         tabs: vec!(),
-    };
+    });
 
     registry.register(root);
     registry.find::<RootActor>("root");
@@ -265,17 +261,17 @@ fn run_server(sender: Sender<DevtoolsControlMsg>,
                 id: id,
             };
             actor_workers.insert((pipeline, id), worker.name.clone());
-            actors.register(box worker);
+            actors.register(Box::new(worker));
         }
 
         actor_pipelines.insert(pipeline, tab.name.clone());
-        actors.register(box tab);
-        actors.register(box console);
-        actors.register(box inspector);
-        actors.register(box timeline);
-        actors.register(box profiler);
-        actors.register(box performance);
-        actors.register(box thread);
+        actors.register(Box::new(tab));
+        actors.register(Box::new(console));
+        actors.register(Box::new(inspector));
+        actors.register(Box::new(timeline));
+        actors.register(Box::new(profiler));
+        actors.register(Box::new(performance));
+        actors.register(Box::new(thread));
     }
 
     fn handle_console_message(actors: Arc<Mutex<ActorRegistry>>,
@@ -309,7 +305,7 @@ fn run_server(sender: Sender<DevtoolsControlMsg>,
                 columnNumber: console_message.columnNumber,
             },
         };
-        for mut stream in &mut *console_actor.streams.borrow_mut() {
+        for stream in &mut *console_actor.streams.borrow_mut() {
             stream.write_json_packet(&msg);
         }
     }
@@ -321,16 +317,10 @@ fn run_server(sender: Sender<DevtoolsControlMsg>,
                           actor_pipelines: &HashMap<PipelineId, String>) -> Option<String> {
         let actors = actors.lock().unwrap();
         if let Some(worker_id) = worker_id {
-            let actor_name = match (*actor_workers).get(&(id, worker_id)) {
-                Some(name) => name,
-                None => return None,
-            };
+            let actor_name = (*actor_workers).get(&(id, worker_id))?;
             Some(actors.find::<WorkerActor>(actor_name).console.clone())
         } else {
-            let actor_name = match (*actor_pipelines).get(&id) {
-                Some(name) => name,
-                None => return None,
-            };
+            let actor_name = (*actor_pipelines).get(&id)?;
             Some(actors.find::<TabActor>(actor_name).console.clone())
         }
     }
@@ -470,7 +460,7 @@ fn run_server(sender: Sender<DevtoolsControlMsg>,
                 let actor_name = actors.new_name("netevent");
                 let actor = NetworkEventActor::new(actor_name.clone());
                 entry.insert(actor_name.clone());
-                actors.register(box actor);
+                actors.register(Box::new(actor));
                 actor_name
             }
         }
@@ -515,8 +505,8 @@ fn run_server(sender: Sender<DevtoolsControlMsg>,
                     message: css_error.msg,
                     logLevel: LogLevel::Warn,
                     filename: css_error.filename,
-                    lineNumber: css_error.line,
-                    columnNumber: css_error.column,
+                    lineNumber: css_error.line as usize,
+                    columnNumber: css_error.column as usize,
                 };
                 handle_console_message(actors.clone(), id, None, console_message,
                                        &actor_pipelines, &actor_workers)

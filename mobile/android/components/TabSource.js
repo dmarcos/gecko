@@ -2,7 +2,7 @@
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-"use strict"
+"use strict";
 
 const { classes: Cc, interfaces: Ci, manager: Cm, utils: Cu, results: Cr } = Components;
 
@@ -25,29 +25,30 @@ TabSource.prototype = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsITabSource]),
 
   getTabToStream: function() {
-    let app = Services.wm.getMostRecentWindow("navigator:browser").BrowserApp;
-    let tabs = app.tabs;
-    if (tabs == null || tabs.length == 0) {
+    let win = Services.wm.getMostRecentWindow("navigator:browser");
+    let app = win && win.BrowserApp;
+    let tabs = app && app.tabs;
+    if (!tabs || tabs.length == 0) {
       Services.console.logStringMessage("ERROR: No tabs");
       return null;
     }
 
     let bundle = Services.strings.createBundle("chrome://browser/locale/browser.properties");
-    let title = bundle.GetStringFromName("tabshare.title")
+    let title = bundle.GetStringFromName("tabshare.title");
 
     let prompt = new Prompt({
+      window: win,
       title: title,
-      window: null
     }).setSingleChoiceItems(tabs.map(function(tab) {
       let label;
       if (tab.browser.contentTitle)
         label = tab.browser.contentTitle;
       else if (tab.browser.contentURI)
-        label = tab.browser.contentURI.spec;
+        label = tab.browser.contentURI.displaySpec;
       else
-        label = tab.originalURI.spec;
+        label = tab.originalURI.displaySpec;
       return { label: label,
-               icon: "thumbnail:" + tab.id }
+               icon: "thumbnail:" + tab.id };
     }));
 
     let result = null;
@@ -56,10 +57,7 @@ TabSource.prototype = {
     });
 
     // Spin this thread while we wait for a result.
-    let thread = Services.tm.currentThread;
-    while (result == null) {
-      thread.processNextEvent(true);
-    }
+    Services.tm.spinEventLoopUntil(() => result != null);
 
     if (result == -1) {
       return null;

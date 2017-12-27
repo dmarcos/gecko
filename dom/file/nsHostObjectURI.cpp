@@ -187,6 +187,9 @@ nsHostObjectURI::CloneInternal(mozilla::net::nsSimpleURI::RefHandlingEnum aRefHa
   u->mPrincipal = mPrincipal;
   u->mBlobImpl = mBlobImpl;
 
+  nsHostObjectProtocolHandler::StoreClonedURI(newRef, simpleClone);
+
+  NS_TryToSetImmutable(simpleClone);
   simpleClone.forget(aClone);
   return NS_OK;
 }
@@ -200,7 +203,7 @@ nsHostObjectURI::EqualsInternal(nsIURI* aOther,
     *aResult = false;
     return NS_OK;
   }
-  
+
   RefPtr<nsHostObjectURI> otherUri;
   aOther->QueryInterface(kHOSTOBJECTURICID, getter_AddRefs(otherUri));
   if (!otherUri) {
@@ -227,8 +230,22 @@ nsHostObjectURI::EqualsInternal(nsIURI* aOther,
   return NS_OK;
 }
 
+NS_IMPL_ISUPPORTS(nsHostObjectURI::Mutator, nsIURISetters, nsIURIMutator)
+
+NS_IMETHODIMP
+nsHostObjectURI::Mutate(nsIURIMutator** aMutator)
+{
+    RefPtr<nsHostObjectURI::Mutator> mutator = new nsHostObjectURI::Mutator();
+    nsresult rv = mutator->InitFromURI(this);
+    if (NS_FAILED(rv)) {
+        return rv;
+    }
+    mutator.forget(aMutator);
+    return NS_OK;
+}
+
 // nsIClassInfo methods:
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsHostObjectURI::GetInterfaces(uint32_t *count, nsIID * **array)
 {
   *count = 0;
@@ -236,30 +253,30 @@ nsHostObjectURI::GetInterfaces(uint32_t *count, nsIID * **array)
   return NS_OK;
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsHostObjectURI::GetScriptableHelper(nsIXPCScriptable **_retval)
 {
   *_retval = nullptr;
   return NS_OK;
 }
 
-NS_IMETHODIMP 
-nsHostObjectURI::GetContractID(char * *aContractID)
+NS_IMETHODIMP
+nsHostObjectURI::GetContractID(nsACString& aContractID)
 {
   // Make sure to modify any subclasses as needed if this ever
   // changes.
-  *aContractID = nullptr;
+  aContractID.SetIsVoid(true);
   return NS_OK;
 }
 
-NS_IMETHODIMP 
-nsHostObjectURI::GetClassDescription(char * *aClassDescription)
+NS_IMETHODIMP
+nsHostObjectURI::GetClassDescription(nsACString& aClassDescription)
 {
-  *aClassDescription = nullptr;
+  aClassDescription.SetIsVoid(true);
   return NS_OK;
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsHostObjectURI::GetClassID(nsCID * *aClassID)
 {
   // Make sure to modify any subclasses as needed if this ever
@@ -270,14 +287,14 @@ nsHostObjectURI::GetClassID(nsCID * *aClassID)
   return GetClassIDNoAlloc(*aClassID);
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsHostObjectURI::GetFlags(uint32_t *aFlags)
 {
   *aFlags = nsIClassInfo::MAIN_THREAD_ONLY;
   return NS_OK;
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsHostObjectURI::GetClassIDNoAlloc(nsCID *aClassIDNoAlloc)
 {
   *aClassIDNoAlloc = kHOSTOBJECTURICID;

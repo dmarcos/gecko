@@ -7,7 +7,6 @@
 use clipboard_provider::ClipboardProvider;
 use dom::bindings::str::DOMString;
 use dom::keyboardevent::KeyboardEvent;
-use msg::constellation_msg::{ALT, CONTROL, SHIFT, SUPER};
 use msg::constellation_msg::{Key, KeyModifiers};
 use std::borrow::ToOwned;
 use std::cmp::{max, min};
@@ -16,13 +15,13 @@ use std::ops::Range;
 use std::usize;
 use unicode_segmentation::UnicodeSegmentation;
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum Selection {
     Selected,
     NotSelected
 }
 
-#[derive(JSTraceable, PartialEq, Copy, Clone, HeapSizeOf)]
+#[derive(Clone, Copy, Debug, JSTraceable, MallocSizeOf, PartialEq)]
 pub enum SelectionDirection {
     Forward,
     Backward,
@@ -49,7 +48,7 @@ impl From<SelectionDirection> for DOMString {
     }
 }
 
-#[derive(JSTraceable, Copy, Clone, HeapSizeOf, PartialEq)]
+#[derive(Clone, Copy, JSTraceable, MallocSizeOf, PartialEq)]
 pub struct TextPoint {
     /// 0-based line number
     pub line: usize,
@@ -58,7 +57,7 @@ pub struct TextPoint {
 }
 
 /// Encapsulated state for handling keyboard input in a single or multiline text input control.
-#[derive(JSTraceable, HeapSizeOf)]
+#[derive(JSTraceable, MallocSizeOf)]
 pub struct TextInput<T: ClipboardProvider> {
     /// Current text input content, split across lines without trailing '\n'
     lines: Vec<DOMString>,
@@ -68,11 +67,11 @@ pub struct TextInput<T: ClipboardProvider> {
     pub selection_begin: Option<TextPoint>,
     /// Is this a multiline input?
     multiline: bool,
-    #[ignore_heap_size_of = "Can't easily measure this generic type"]
+    #[ignore_malloc_size_of = "Can't easily measure this generic type"]
     clipboard_provider: T,
     /// The maximum number of UTF-16 code units this text input is allowed to hold.
     ///
-    /// https://html.spec.whatwg.org/multipage/#attr-fe-maxlength
+    /// <https://html.spec.whatwg.org/multipage/#attr-fe-maxlength>
     pub max_length: Option<usize>,
     pub min_length: Option<usize>,
     pub selection_direction: SelectionDirection,
@@ -96,14 +95,14 @@ impl Default for TextPoint {
 }
 
 /// Control whether this control should allow multiple lines.
-#[derive(PartialEq, Eq)]
+#[derive(Eq, PartialEq)]
 pub enum Lines {
     Single,
     Multiple,
 }
 
 /// The direction in which to delete a character.
-#[derive(PartialEq, Eq, Copy, Clone)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub enum Direction {
     Forward,
     Backward
@@ -114,12 +113,12 @@ pub enum Direction {
 /// i.e. cmd on Mac OS or ctrl on other platforms.
 #[cfg(target_os = "macos")]
 fn is_control_key(mods: KeyModifiers) -> bool {
-    mods.contains(SUPER) && !mods.contains(CONTROL | ALT)
+    mods.contains(KeyModifiers::SUPER) && !mods.contains(KeyModifiers::CONTROL | KeyModifiers::ALT)
 }
 
 #[cfg(not(target_os = "macos"))]
 fn is_control_key(mods: KeyModifiers) -> bool {
-    mods.contains(CONTROL) && !mods.contains(SUPER | ALT)
+    mods.contains(KeyModifiers::CONTROL) && !mods.contains(KeyModifiers::SUPER | KeyModifiers::ALT)
 }
 
 /// The length in bytes of the first n characters in a UTF-8 string.
@@ -236,7 +235,7 @@ impl<T: ClipboardProvider> TextInput<T> {
     /// The length of the selected text in UTF-16 code units.
     fn selection_utf16_len(&self) -> usize {
         self.fold_selection_slices(0usize,
-            |len, slice| *len += slice.chars().map(char::len_utf16).sum())
+            |len, slice| *len += slice.chars().map(char::len_utf16).sum::<usize>())
     }
 
     /// Run the callback on a series of slices that, concatenated, make up the selected text.
@@ -585,45 +584,50 @@ impl<T: ClipboardProvider> TextInput<T> {
                               printable: Option<char>,
                               key: Key,
                               mods: KeyModifiers) -> KeyReaction {
-        let maybe_select = if mods.contains(SHIFT) { Selection::Selected } else { Selection::NotSelected };
+        let maybe_select = if mods.contains(KeyModifiers::SHIFT) {
+                Selection::Selected
+            } else {
+                Selection::NotSelected
+        };
+
         match (printable, key) {
-            (_, Key::B) if mods.contains(CONTROL | ALT) => {
+            (_, Key::B) if mods.contains(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 self.adjust_horizontal_by_word(Direction::Backward, maybe_select);
                 KeyReaction::RedrawSelection
             },
-            (_, Key::F) if mods.contains(CONTROL | ALT) => {
+            (_, Key::F) if mods.contains(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 self.adjust_horizontal_by_word(Direction::Forward, maybe_select);
                 KeyReaction::RedrawSelection
             },
-            (_, Key::A) if mods.contains(CONTROL | ALT) => {
+            (_, Key::A) if mods.contains(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 self.adjust_horizontal_to_line_end(Direction::Backward, maybe_select);
                 KeyReaction::RedrawSelection
             },
-            (_, Key::E) if mods.contains(CONTROL | ALT) => {
+            (_, Key::E) if mods.contains(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 self.adjust_horizontal_to_line_end(Direction::Forward, maybe_select);
                 KeyReaction::RedrawSelection
             },
             #[cfg(target_os = "macos")]
-            (None, Key::A) if mods == CONTROL => {
+            (None, Key::A) if mods == KeyModifiers::CONTROL => {
                 self.adjust_horizontal_to_line_end(Direction::Backward, maybe_select);
                 KeyReaction::RedrawSelection
             },
             #[cfg(target_os = "macos")]
-            (None, Key::E) if mods == CONTROL => {
+            (None, Key::E) if mods == KeyModifiers::CONTROL => {
                 self.adjust_horizontal_to_line_end(Direction::Forward, maybe_select);
                 KeyReaction::RedrawSelection
             },
-            (Some('a'), _) if is_control_key(mods) => {
+            (_, Key::A) if is_control_key(mods) => {
                 self.select_all();
                 KeyReaction::RedrawSelection
             },
-            (Some('c'), _) if is_control_key(mods) => {
+            (_, Key::C) if is_control_key(mods) => {
                 if let Some(text) = self.get_selection_text() {
                     self.clipboard_provider.set_clipboard_contents(text);
                 }
                 KeyReaction::DispatchInput
             },
-            (Some('v'), _) if is_control_key(mods) => {
+            (_, Key::V) if is_control_key(mods) => {
                 let contents = self.clipboard_provider.clipboard_contents();
                 self.insert_string(contents);
                 KeyReaction::DispatchInput
@@ -631,14 +635,6 @@ impl<T: ClipboardProvider> TextInput<T> {
             (Some(c), _) => {
                 self.insert_char(c);
                 KeyReaction::DispatchInput
-            },
-            #[cfg(target_os = "macos")]
-            (None, Key::Home) => {
-                KeyReaction::RedrawSelection
-            },
-            #[cfg(target_os = "macos")]
-            (None, Key::End) => {
-                KeyReaction::RedrawSelection
             },
             (None, Key::Delete) => {
                 self.delete_char(Direction::Forward);
@@ -649,30 +645,30 @@ impl<T: ClipboardProvider> TextInput<T> {
                 KeyReaction::DispatchInput
             },
             #[cfg(target_os = "macos")]
-            (None, Key::Left) if mods.contains(SUPER) => {
+            (None, Key::Left) if mods.contains(KeyModifiers::SUPER) => {
                 self.adjust_horizontal_to_line_end(Direction::Backward, maybe_select);
                 KeyReaction::RedrawSelection
             },
             #[cfg(target_os = "macos")]
-            (None, Key::Right) if mods.contains(SUPER) => {
+            (None, Key::Right) if mods.contains(KeyModifiers::SUPER) => {
                 self.adjust_horizontal_to_line_end(Direction::Forward, maybe_select);
                 KeyReaction::RedrawSelection
             },
             #[cfg(target_os = "macos")]
-            (None, Key::Up) if mods.contains(SUPER) => {
+            (None, Key::Up) if mods.contains(KeyModifiers::SUPER) => {
                 self.adjust_horizontal_to_limit(Direction::Backward, maybe_select);
                 KeyReaction::RedrawSelection
             },
             #[cfg(target_os = "macos")]
-            (None, Key::Down) if mods.contains(SUPER) => {
+            (None, Key::Down) if mods.contains(KeyModifiers::SUPER) => {
                 self.adjust_horizontal_to_limit(Direction::Forward, maybe_select);
                 KeyReaction::RedrawSelection
             },
-            (None, Key::Left) if mods.contains(ALT) => {
+            (None, Key::Left) if mods.contains(KeyModifiers::ALT) => {
                 self.adjust_horizontal_by_word(Direction::Backward, maybe_select);
                 KeyReaction::RedrawSelection
             },
-            (None, Key::Right) if mods.contains(ALT) => {
+            (None, Key::Right) if mods.contains(KeyModifiers::ALT) => {
                 self.adjust_horizontal_by_word(Direction::Forward, maybe_select);
                 KeyReaction::RedrawSelection
             },
@@ -694,12 +690,18 @@ impl<T: ClipboardProvider> TextInput<T> {
             },
             (None, Key::Enter) | (None, Key::KpEnter) => self.handle_return(),
             (None, Key::Home) => {
-                self.edit_point.index = 0;
+                #[cfg(not(target_os = "macos"))]
+                {
+                    self.edit_point.index = 0;
+                }
                 KeyReaction::RedrawSelection
             },
             (None, Key::End) => {
-                self.edit_point.index = self.current_line_length();
-                self.assert_ok_selection();
+                #[cfg(not(target_os = "macos"))]
+                {
+                    self.edit_point.index = self.current_line_length();
+                    self.assert_ok_selection();
+                }
                 KeyReaction::RedrawSelection
             },
             (None, Key::PageUp) => {
@@ -752,11 +754,27 @@ impl<T: ClipboardProvider> TextInput<T> {
         DOMString::from(content)
     }
 
+    /// Get a reference to the contents of a single-line text input. Panics if self is a multiline input.
+    pub fn single_line_content(&self) -> &DOMString {
+        assert!(!self.multiline);
+        &self.lines[0]
+    }
+
+    /// Get a mutable reference to the contents of a single-line text input. Panics if self is a multiline input.
+    pub fn single_line_content_mut(&mut self) -> &mut DOMString {
+        assert!(!self.multiline);
+        &mut self.lines[0]
+    }
+
     /// Set the current contents of the text input. If this is control supports multiple lines,
     /// any \n encountered will be stripped and force a new logical line.
     pub fn set_content(&mut self, content: DOMString) {
         self.lines = if self.multiline {
-            content.split('\n').map(DOMString::from).collect()
+            // https://html.spec.whatwg.org/multipage/#textarea-line-break-normalisation-transformation
+            content.replace("\r\n", "\n")
+                   .split(|c| c == '\n' || c == '\r')
+                   .map(DOMString::from)
+                   .collect()
         } else {
             vec!(content)
         };
@@ -807,7 +825,7 @@ impl<T: ClipboardProvider> TextInput<T> {
         }
     }
 
-    pub fn set_selection_range(&mut self, start: u32, end: u32) {
+    pub fn set_selection_range(&mut self, start: u32, end: u32, direction: SelectionDirection) {
         let mut start = start as usize;
         let mut end = end as usize;
         let text_end = self.get_content().len();
@@ -819,7 +837,9 @@ impl<T: ClipboardProvider> TextInput<T> {
             start = end;
         }
 
-        match self.selection_direction {
+        self.selection_direction = direction;
+
+        match direction {
             SelectionDirection::None |
             SelectionDirection::Forward => {
                 self.selection_begin = Some(self.get_text_point_for_absolute_point(start));

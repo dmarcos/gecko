@@ -42,7 +42,7 @@ class RobocopTestRunner(MochitestDesktop):
         """
            Simple one-time initialization.
         """
-        MochitestDesktop.__init__(self, options.flavor, options)
+        MochitestDesktop.__init__(self, options.flavor, vars(options))
 
         self.auto = automation
         self.dm = devmgr
@@ -83,10 +83,10 @@ class RobocopTestRunner(MochitestDesktop):
         # Despite our efforts to clean up servers started by this script, in practice
         # we still see infrequent cases where a process is orphaned and interferes
         # with future tests, typically because the old server is keeping the port in use.
-        # Try to avoid those failures by checking for and killing orphan servers before
+        # Try to avoid those failures by checking for and killing servers before
         # trying to start new ones.
-        self.killNamedOrphans('ssltunnel')
-        self.killNamedOrphans('xpcshell')
+        self.killNamedProc('ssltunnel')
+        self.killNamedProc('xpcshell')
         self.auto.deleteANRs()
         self.auto.deleteTombstones()
         procName = self.options.app.split('/')[-1]
@@ -226,7 +226,6 @@ class RobocopTestRunner(MochitestDesktop):
         self.options.extraPrefs.append('layout.css.devPixelsPerPx=1.0')
         self.options.extraPrefs.append('browser.chrome.dynamictoolbar=false')
         self.options.extraPrefs.append('browser.snippets.enabled=false')
-        self.options.extraPrefs.append('browser.casting.enabled=true')
         self.options.extraPrefs.append('extensions.autoupdate.enabled=false')
 
         # Override the telemetry init delay for integration testing.
@@ -459,7 +458,7 @@ class RobocopTestRunner(MochitestDesktop):
             timeout = self.options.timeout
             if not timeout:
                 timeout = self.NO_OUTPUT_TIMEOUT
-            result = self.auto.runApp(
+            result, _ = self.auto.runApp(
                 None, browserEnv, "am", self.localProfile, browserArgs,
                 timeout=timeout, symbolsPath=self.options.symbolsPath)
             self.log.debug("runApp completes with status %d" % result)
@@ -587,6 +586,7 @@ def main(args=sys.argv[1:]):
     parser = MochitestArgumentParser(app='android')
     options = parser.parse_args(args)
     return run_test_harness(parser, options)
+
 
 if __name__ == "__main__":
     sys.exit(main())

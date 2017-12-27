@@ -1,5 +1,6 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
+/* eslint-disable mozilla/no-arbitrary-setTimeout */
 
 var tabState = {
   entries: [{
@@ -17,7 +18,7 @@ function test() {
     Services.prefs.clearUserPref("browser.sessionstore.interval");
   });
 
-  let tab = gBrowser.addTab("about:blank");
+  let tab = BrowserTestUtils.addTab(gBrowser, "about:blank");
 
   let browser = tab.linkedBrowser;
 
@@ -41,11 +42,12 @@ function test() {
           waitForBrowserState(blankState, finish);
         });
 
-        // reload the browser to deprecate the subframes
-        browser.reload();
+        // Force reload the browser to deprecate the subframes.
+        browser.reloadWithFlags(Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE);
       });
 
-      // create a dynamic subframe
+      // Create a dynamic subframe.
+      // eslint-disable-next-line mozilla/no-cpows-in-tests
       let doc = browser.contentDocument;
       let iframe = doc.createElement("iframe");
       doc.body.appendChild(iframe);

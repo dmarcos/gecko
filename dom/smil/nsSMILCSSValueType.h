@@ -11,12 +11,11 @@
 
 #include "nsISMILType.h"
 #include "nsCSSPropertyID.h"
+#include "nsStringFwd.h"
 #include "mozilla/Attributes.h"
 
-class nsAString;
-
 namespace mozilla {
-class StyleAnimationValue;
+struct AnimationValue;
 namespace dom {
 class Element;
 } // namespace dom
@@ -29,7 +28,7 @@ class nsSMILCSSValueType : public nsISMILType
 {
 public:
   typedef mozilla::dom::Element Element;
-  typedef mozilla::StyleAnimationValue StyleAnimationValue;
+  typedef mozilla::AnimationValue AnimationValue;
 
   // Singleton for nsSMILValue objects to hold onto.
   static nsSMILCSSValueType sSingleton;
@@ -37,22 +36,24 @@ public:
 protected:
   // nsISMILType Methods
   // -------------------
-  virtual void     Init(nsSMILValue& aValue) const override;
-  virtual void     Destroy(nsSMILValue&) const override;
-  virtual nsresult Assign(nsSMILValue& aDest,
-                          const nsSMILValue& aSrc) const override;
-  virtual bool     IsEqual(const nsSMILValue& aLeft,
-                           const nsSMILValue& aRight) const override;
-  virtual nsresult Add(nsSMILValue& aDest,
-                       const nsSMILValue& aValueToAdd,
-                       uint32_t aCount) const override;
-  virtual nsresult ComputeDistance(const nsSMILValue& aFrom,
-                                   const nsSMILValue& aTo,
-                                   double& aDistance) const override;
-  virtual nsresult Interpolate(const nsSMILValue& aStartVal,
-                               const nsSMILValue& aEndVal,
-                               double aUnitDistance,
-                               nsSMILValue& aResult) const override;
+  void     Init(nsSMILValue& aValue) const override;
+  void     Destroy(nsSMILValue&) const override;
+  nsresult Assign(nsSMILValue& aDest,
+                  const nsSMILValue& aSrc) const override;
+  bool     IsEqual(const nsSMILValue& aLeft,
+                   const nsSMILValue& aRight) const override;
+  nsresult Add(nsSMILValue& aDest,
+               const nsSMILValue& aValueToAdd,
+               uint32_t aCount) const override;
+  nsresult SandwichAdd(nsSMILValue& aDest,
+                       const nsSMILValue& aValueToAdd) const override;
+  nsresult ComputeDistance(const nsSMILValue& aFrom,
+                           const nsSMILValue& aTo,
+                           double& aDistance) const override;
+  nsresult Interpolate(const nsSMILValue& aStartVal,
+                       const nsSMILValue& aEndVal,
+                       double aUnitDistance,
+                       nsSMILValue& aResult) const override;
 
 public:
   // Helper Methods
@@ -99,21 +100,19 @@ public:
    */
   static nsSMILValue ValueFromAnimationValue(nsCSSPropertyID aPropID,
                                              Element* aTargetElement,
-                                             const StyleAnimationValue& aValue);
+                                             const AnimationValue& aValue);
 
   /**
    * Creates a string representation of the given nsSMILValue.
    *
    * Note: aValue is expected to be of this type (that is, it's expected to
    * have been initialized by nsSMILCSSValueType::sSingleton).  If aValue is a
-   * freshly-initialized value, this method will succeed, though the resulting
-   * string will be empty.
+   * freshly-initialized value the resulting string will be empty.
    *
    * @param       aValue   The nsSMILValue to be converted into a string.
    * @param [out] aString  The string to be populated with the given value.
-   * @return               true on success, false on failure.
    */
-  static bool ValueToString(const nsSMILValue& aValue, nsAString& aString);
+  static void ValueToString(const nsSMILValue& aValue, nsAString& aString);
 
   /**
    * Return the CSS property animated by the specified value.
@@ -124,6 +123,22 @@ public:
    *                   |aValue| is not nsSMILCSSValueType.
    */
   static nsCSSPropertyID PropertyFromValue(const nsSMILValue& aValue);
+
+  /**
+   * If |aValue| is an empty value, converts it to a suitable zero value by
+   * matching the type of value stored in |aValueToMatch|.
+   *
+   * There is no indication if this method fails. If a suitable zero value could
+   * not be created, |aValue| is simply unmodified.
+   *
+   * @param aValue        The nsSMILValue (of type nsSMILCSSValueType) to
+   *                      possibly update.
+   * @param aValueToMatch A nsSMILValue (of type nsSMILCSSValueType) for which
+   *                      a corresponding zero value will be created if |aValue|
+   *                      is empty.
+   */
+  static void FinalizeValue(nsSMILValue& aValue,
+                            const nsSMILValue& aValueToMatch);
 
 private:
   // Private constructor: prevent instances beyond my singleton.

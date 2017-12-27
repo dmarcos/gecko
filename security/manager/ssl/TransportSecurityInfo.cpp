@@ -25,7 +25,7 @@
 #include "pkix/pkixtypes.h"
 #include "secerr.h"
 
-//#define DEBUG_SSL_VERBOSE //Enable this define to get minimal 
+//#define DEBUG_SSL_VERBOSE //Enable this define to get minimal
                             //reports when doing SSL read/write
 
 //#define DUMP_BUFFER  //Enable this define along with
@@ -38,13 +38,13 @@
 namespace mozilla { namespace psm {
 
 TransportSecurityInfo::TransportSecurityInfo()
-  : mMutex("TransportSecurityInfo::mMutex"),
-    mSecurityState(nsIWebProgressListener::STATE_IS_INSECURE),
-    mSubRequestsBrokenSecurity(0),
-    mSubRequestsNoSecurity(0),
-    mErrorCode(0),
-    mErrorMessageType(PlainErrorMessage),
-    mPort(0)
+  : mMutex("TransportSecurityInfo::mMutex")
+  , mSecurityState(nsIWebProgressListener::STATE_IS_INSECURE)
+  , mSubRequestsBrokenSecurity(0)
+  , mSubRequestsNoSecurity(0)
+  , mErrorCode(0)
+  , mErrorMessageType(SSLErrorMessageType::Plain)
+  , mPort(0)
 {
 }
 
@@ -76,34 +76,26 @@ TransportSecurityInfo::SetHostName(const char* host)
   mHostName.Assign(host);
 }
 
-nsresult
+void
 TransportSecurityInfo::SetPort(int32_t aPort)
 {
   mPort = aPort;
-  return NS_OK;
 }
 
-nsresult
-TransportSecurityInfo::GetPort(int32_t *aPort)
-{
-  *aPort = mPort;
-  return NS_OK;
-}
-
-nsresult
+void
 TransportSecurityInfo::SetOriginAttributes(
   const OriginAttributes& aOriginAttributes)
 {
   mOriginAttributes = aOriginAttributes;
-  return NS_OK;
 }
 
-PRErrorCode
-TransportSecurityInfo::GetErrorCode() const
+NS_IMETHODIMP
+TransportSecurityInfo::GetErrorCode(int32_t* state)
 {
   MutexAutoLock lock(mMutex);
 
-  return mErrorCode;
+  *state = mErrorCode;
+  return NS_OK;
 }
 
 void
@@ -124,11 +116,10 @@ TransportSecurityInfo::GetSecurityState(uint32_t* state)
   return NS_OK;
 }
 
-nsresult
+void
 TransportSecurityInfo::SetSecurityState(uint32_t aState)
 {
   mSecurityState = aState;
-  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -183,7 +174,7 @@ TransportSecurityInfo::GetErrorMessage(char16_t** aText)
   MutexAutoLock lock(mMutex);
 
   if (mErrorMessageCached.IsEmpty()) {
-    nsresult rv = formatErrorMessage(lock, 
+    nsresult rv = formatErrorMessage(lock,
                                      mErrorCode, mErrorMessageType,
                                      true, true, mErrorMessageCached);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -241,11 +232,11 @@ TransportSecurityInfo::formatErrorMessage(const MutexAutoLock& /*proofOfLock*/,
   }
 
   nsresult rv;
-  MOZ_ASSERT(errorMessageType != OverridableCertErrorMessage ||
+  MOZ_ASSERT(errorMessageType != SSLErrorMessageType::OverridableCert ||
                (mSSLStatus && mSSLStatus->HasServerCert() &&
                 mSSLStatus->mHaveCertErrorBits),
              "formatErrorMessage() called for cert error without cert");
-  if (errorMessageType == OverridableCertErrorMessage &&
+  if (errorMessageType == SSLErrorMessageType::OverridableCert &&
       mSSLStatus && mSSLStatus->HasServerCert()) {
     rv = formatOverridableCertErrorMessage(*mSSLStatus, errorCode,
                                            mHostName, mPort,
@@ -253,7 +244,7 @@ TransportSecurityInfo::formatErrorMessage(const MutexAutoLock& /*proofOfLock*/,
                                            wantsHtml,
                                            result);
   } else {
-    rv = formatPlainErrorMessage(mHostName, mPort, 
+    rv = formatPlainErrorMessage(mHostName, mPort,
                                  errorCode,
                                  suppressPort443,
                                  result);
@@ -264,13 +255,6 @@ TransportSecurityInfo::formatErrorMessage(const MutexAutoLock& /*proofOfLock*/,
   }
 
   return rv;
-}
-
-NS_IMETHODIMP
-TransportSecurityInfo::GetErrorCode(int32_t* state)
-{
-  *state = GetErrorCode();
-  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -448,16 +432,16 @@ TransportSecurityInfo::GetScriptableHelper(nsIXPCScriptable **_retval)
 }
 
 NS_IMETHODIMP
-TransportSecurityInfo::GetContractID(char * *aContractID)
+TransportSecurityInfo::GetContractID(nsACString& aContractID)
 {
-  *aContractID = nullptr;
+  aContractID.SetIsVoid(true);
   return NS_OK;
 }
 
 NS_IMETHODIMP
-TransportSecurityInfo::GetClassDescription(char * *aClassDescription)
+TransportSecurityInfo::GetClassDescription(nsACString& aClassDescription)
 {
-  *aClassDescription = nullptr;
+  aClassDescription.SetIsVoid(true);
   return NS_OK;
 }
 
@@ -497,12 +481,10 @@ TransportSecurityInfo::GetSSLStatus(nsISSLStatus** _result)
   return NS_OK;
 }
 
-nsresult
+void
 TransportSecurityInfo::SetSSLStatus(nsSSLStatus *aSSLStatus)
 {
   mSSLStatus = aSSLStatus;
-
-  return NS_OK;
 }
 
 /* Formats an error message for non-certificate-related SSL errors
@@ -802,16 +784,16 @@ AppendErrorTextTime(nsIX509Cert* ix509,
   GetDateBoundary(ix509, formattedDate, nowDate, trueExpired_falseNotYetValid);
 
   const char16_t *params[2];
-  params[0] = formattedDate.get(); // might be empty, if helper function had a problem 
+  params[0] = formattedDate.get(); // might be empty, if helper function had a problem
   params[1] = nowDate.get();
 
-  const char *key = trueExpired_falseNotYetValid ? 
+  const char *key = trueExpired_falseNotYetValid ?
                     "certErrorExpiredNow" : "certErrorNotYetValidNow";
   nsresult rv;
   nsString formattedString;
   rv = component->PIPBundleFormatStringFromName(
            key,
-           params, 
+           params,
            ArrayLength(params),
            formattedString);
   if (NS_SUCCEEDED(rv))
@@ -838,7 +820,7 @@ AppendErrorTextCode(PRErrorCode errorCodeToReport,
     nsString formattedString;
     nsresult rv;
     rv = component->PIPBundleFormatStringFromName("certErrorCodePrefix2",
-                                                  params, 1, 
+                                                  params, 1,
                                                   formattedString);
     if (NS_SUCCEEDED(rv)) {
       returnedMessage.Append('\n');
@@ -904,7 +886,7 @@ formatOverridableCertErrorMessage(nsISSLStatus& sslStatus,
   rv = sslStatus.GetIsUntrusted(&isUntrusted);
   NS_ENSURE_SUCCESS(rv, rv);
   if (isUntrusted) {
-    AppendErrorTextUntrusted(errorCodeToReport, hostWithoutPort, ix509, 
+    AppendErrorTextUntrusted(errorCodeToReport, hostWithoutPort, ix509,
                              component, returnedMessage);
   }
 
@@ -948,15 +930,9 @@ GetHostPortKey(TransportSecurityInfo* infoObject, /*out*/ nsCString& result)
 
   result.Truncate();
 
-  int32_t port;
-  nsresult rv = infoObject->GetPort(&port);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
   result.Assign(infoObject->GetHostName());
   result.Append(':');
-  result.AppendInt(port);
+  result.AppendInt(infoObject->GetPort());
 
   return NS_OK;
 }
@@ -1036,13 +1012,14 @@ TransportSecurityInfo::SetStatusErrorBits(nsNSSCertificate* cert,
   }
 
   mSSLStatus->SetServerCert(cert, EVStatus::NotEV);
+  mSSLStatus->SetFailedCertChain(mFailedCertChain);
 
   mSSLStatus->mHaveCertErrorBits = true;
-  mSSLStatus->mIsDomainMismatch = 
+  mSSLStatus->mIsDomainMismatch =
     collected_errors & nsICertOverrideService::ERROR_MISMATCH;
-  mSSLStatus->mIsNotValidAtThisTime = 
+  mSSLStatus->mIsNotValidAtThisTime =
     collected_errors & nsICertOverrideService::ERROR_TIME;
-  mSSLStatus->mIsUntrusted = 
+  mSSLStatus->mIsUntrusted =
     collected_errors & nsICertOverrideService::ERROR_UNTRUSTED;
 
   RememberCertErrorsTable::GetInstance().RememberCertHasError(this,

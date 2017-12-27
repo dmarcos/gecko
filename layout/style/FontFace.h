@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -18,6 +19,7 @@ class nsCSSFontFaceRule;
 
 namespace mozilla {
 struct CSSFontFaceDescriptors;
+class PostTraversalTask;
 namespace dom {
 class FontFaceBufferSource;
 struct FontFaceDescriptors;
@@ -33,6 +35,7 @@ namespace dom {
 class FontFace final : public nsISupports,
                        public nsWrapperCache
 {
+  friend class mozilla::PostTraversalTask;
   friend class mozilla::dom::FontFaceBufferSource;
   friend class Entry;
 
@@ -48,7 +51,7 @@ public:
           uint8_t aStyle,
           const nsTArray<gfxFontFeature>& aFeatureSettings,
           uint32_t aLanguageOverride,
-          gfxSparseBitSet* aUnicodeRanges,
+          gfxCharacterMap* aUnicodeRanges,
           uint8_t aFontDisplay)
       : gfxUserFontEntry(aFontSet, aFontFaceSrcList, aWeight, aStretch,
                          aStyle, aFeatureSettings, aLanguageOverride,
@@ -127,6 +130,11 @@ public:
    * ArrayBuffer or ArrayBufferView.
    */
   bool GetData(uint8_t*& aBuffer, uint32_t& aLength);
+
+  /**
+   * Returns the value of the unicode-range descriptor as a gfxCharacterMap.
+   */
+  gfxCharacterMap* GetUnicodeRangeAsCharacterMap();
 
   // Web IDL
   static already_AddRefed<FontFace>
@@ -207,6 +215,9 @@ private:
   // reject mLoaded based on mStatus and mLoadedRejection.
   void EnsurePromise();
 
+  void DoResolve();
+  void DoReject(nsresult aResult);
+
   nsCOMPtr<nsISupports> mParent;
 
   // A Promise that is fulfilled once the font represented by this FontFace is
@@ -251,6 +262,10 @@ private:
   // the descriptors stored in mRule.
   nsAutoPtr<mozilla::CSSFontFaceDescriptors> mDescriptors;
 
+  // The value of the unicode-range descriptor as a gfxCharacterMap.  Valid
+  // only when mUnicodeRangeDirty is false.
+  RefPtr<gfxCharacterMap> mUnicodeRange;
+
   // The primary FontFaceSet this FontFace is associated with,
   // regardless of whether it is currently "in" the set.
   RefPtr<FontFaceSet> mFontFaceSet;
@@ -258,6 +273,10 @@ private:
   // Other FontFaceSets (apart from mFontFaceSet) that this FontFace
   // appears in.
   nsTArray<RefPtr<FontFaceSet>> mOtherFontFaceSets;
+
+  // Whether mUnicodeRange needs to be rebuilt before being returned from
+  // GetUnicodeRangeAsCharacterMap.
+  bool mUnicodeRangeDirty;
 
   // Whether this FontFace appears in mFontFaceSet.
   bool mInFontFaceSet;

@@ -6,6 +6,7 @@
 
 #include "DocAccessibleChild.h"
 
+#include "nsAccessibilityService.h"
 #include "Accessible-inl.h"
 #include "ProxyAccessible.h"
 #include "Relation.h"
@@ -276,7 +277,7 @@ DocAccessibleChild::RecvLandmarkRole(const uint64_t& aID, nsString* aLandmark)
     return IPC_OK();
   }
 
-  if (nsIAtom* roleAtom = acc->LandmarkRole()) {
+  if (nsAtom* roleAtom = acc->LandmarkRole()) {
     roleAtom->ToString(*aLandmark);
   }
 
@@ -292,7 +293,7 @@ DocAccessibleChild::RecvARIARoleAtom(const uint64_t& aID, nsString* aRole)
   }
 
   if (const nsRoleMapEntry* roleMap = acc->ARIARoleMap()) {
-    if (nsIAtom* roleAtom = *(roleMap->roleAtom)) {
+    if (nsAtom* roleAtom = *(roleMap->roleAtom)) {
       roleAtom->ToString(*aRole);
     }
   }
@@ -1995,11 +1996,18 @@ DocAccessibleChild::RecvDOMNodeID(const uint64_t& aID, nsString* aDOMNodeID)
     return IPC_OK();
   }
 
-  nsIAtom* id = content->GetID();
+  nsAtom* id = content->GetID();
   if (id) {
     id->ToString(*aDOMNodeID);
   }
 
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult
+DocAccessibleChild::RecvRestoreFocus()
+{
+  FocusMgr()->ForceFocusEvent();
   return IPC_OK();
 }
 

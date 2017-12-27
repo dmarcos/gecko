@@ -3,6 +3,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// This file is loaded into the browser window scope.
+/* eslint-env mozilla/browser-window */
+
 // Removes a doorhanger notification if all of the installs it was notifying
 // about have ended in some way.
 function removeNotificationOnEnd(notification, installs) {
@@ -29,7 +32,7 @@ function removeNotificationOnEnd(notification, installs) {
   }
 }
 
-const gXPInstallObserver = {
+var gXPInstallObserver = {
   _findChildShell(aDocShell, aSoughtShell) {
     if (aDocShell == aSoughtShell)
       return aDocShell;
@@ -75,7 +78,7 @@ const gXPInstallObserver = {
       let pending = this.pendingInstalls.get(browser);
       if (pending && pending.length)
         this.showInstallConfirmation(browser, pending.shift());
-    }
+    };
 
     // If all installs have already been cancelled in some way then just show
     // the next confirmation
@@ -241,7 +244,7 @@ const gXPInstallObserver = {
       notificationID = "xpinstall-disabled";
       let secondaryActions = null;
 
-      if (gPrefService.prefIsLocked("xpinstall.enabled")) {
+      if (Services.prefs.prefIsLocked("xpinstall.enabled")) {
         messageString = gNavigatorBundle.getString("xpinstallDisabledMessageLocked");
       } else {
         messageString = gNavigatorBundle.getString("xpinstallDisabledMessage");
@@ -250,7 +253,7 @@ const gXPInstallObserver = {
           label: gNavigatorBundle.getString("xpinstallDisabledButton"),
           accessKey: gNavigatorBundle.getString("xpinstallDisabledButton.accesskey"),
           callback: function editPrefs() {
-            gPrefService.setBoolPref("xpinstall.enabled", true);
+            Services.prefs.setBoolPref("xpinstall.enabled", true);
           }
         };
 
@@ -271,7 +274,7 @@ const gXPInstallObserver = {
       options.removeOnDismissal = true;
       options.persistent = false;
 
-      let secHistogram = Components.classes["@mozilla.org/base/telemetry;1"].getService(Ci.nsITelemetry).getHistogramById("SECURITY_UI");
+      let secHistogram = Services.telemetry.getHistogramById("SECURITY_UI");
       secHistogram.add(Ci.nsISecurityUITelemetry.WARNING_ADDON_ASKING_PREVENTED);
       let popup = PopupNotifications.show(browser, notificationID,
                                           messageString, anchorID,
@@ -282,7 +285,7 @@ const gXPInstallObserver = {
       messageString = gNavigatorBundle.getFormattedString("xpinstallPromptMessage",
                         [brandShortName]);
 
-      let secHistogram = Components.classes["@mozilla.org/base/telemetry;1"].getService(Ci.nsITelemetry).getHistogramById("SECURITY_UI");
+      let secHistogram = Services.telemetry.getHistogramById("SECURITY_UI");
       action = {
         label: gNavigatorBundle.getString("xpinstallPromptAllowButton"),
         accessKey: gNavigatorBundle.getString("xpinstallPromptAllowButton.accesskey"),
@@ -306,7 +309,7 @@ const gXPInstallObserver = {
     case "addon-install-started": {
       let needsDownload = function needsDownload(aInstall) {
         return aInstall.state != AddonManager.STATE_DOWNLOADED;
-      }
+      };
       // If all installs have already been downloaded then there is no need to
       // show the download progress
       if (!installInfo.installs.some(needsDownload))
@@ -324,7 +327,7 @@ const gXPInstallObserver = {
             let notificationElement = [...this.owner.panel.childNodes]
                                       .find(n => n.notification == this);
             if (notificationElement) {
-              if (Preferences.get("xpinstall.customConfirmationUI", false)) {
+              if (Services.prefs.getBoolPref("xpinstall.customConfirmationUI", false)) {
                 notificationElement.setAttribute("mainactiondisabled", "true");
               } else {
                 notificationElement.button.hidden = true;
@@ -438,10 +441,19 @@ const gXPInstallObserver = {
       });
 
       let secondaryActions = null;
+      let numAddons = installInfo.installs.length;
 
       if (needsRestart) {
         notificationID = "addon-install-restart";
-        messageString = gNavigatorBundle.getString("addonsInstalledNeedsRestart");
+        if (numAddons == 1) {
+          messageString = gNavigatorBundle.getFormattedString("addonInstalledNeedsRestart",
+                                                              [installInfo.installs[0].name, brandShortName]);
+        } else {
+          messageString = gNavigatorBundle.getString("addonsGenericInstalledNeedsRestart");
+          messageString = PluralForm.get(numAddons, messageString);
+          messageString = messageString.replace("#1", numAddons);
+          messageString = messageString.replace("#2", brandShortName);
+        }
         action = {
           label: gNavigatorBundle.getString("addonInstallRestartButton"),
           accessKey: gNavigatorBundle.getString("addonInstallRestartButton.accesskey"),
@@ -455,14 +467,16 @@ const gXPInstallObserver = {
           callback: () => {},
         }];
       } else {
-        messageString = gNavigatorBundle.getString("addonsInstalled");
+        if (numAddons == 1) {
+          messageString = gNavigatorBundle.getFormattedString("addonInstalled",
+                                                              [installInfo.installs[0].name]);
+        } else {
+          messageString = gNavigatorBundle.getString("addonsGenericInstalled");
+          messageString = PluralForm.get(numAddons, messageString);
+          messageString = messageString.replace("#1", numAddons);
+        }
         action = null;
       }
-
-      messageString = PluralForm.get(installInfo.installs.length, messageString);
-      messageString = messageString.replace("#1", installInfo.installs[0].name);
-      messageString = messageString.replace("#2", installInfo.installs.length);
-      messageString = messageString.replace("#3", brandShortName);
 
       // Remove notification on dismissal, since it's possible to cancel the
       // install through the addons manager UI, making the "restart" prompt
@@ -482,7 +496,7 @@ const gXPInstallObserver = {
   }
 };
 
-const gExtensionsNotifications = {
+var gExtensionsNotifications = {
   initialized: false,
   init() {
     this.updateAlerts();
@@ -500,41 +514,37 @@ const gExtensionsNotifications = {
     ExtensionsUI.off("change", this.boundUpdate);
   },
 
+  _createAddonButton(text, icon, callback) {
+    let button = document.createElement("toolbarbutton");
+    button.setAttribute("label", text);
+    const DEFAULT_EXTENSION_ICON =
+      "chrome://mozapps/skin/extensions/extensionGeneric.svg";
+    button.setAttribute("image", icon || DEFAULT_EXTENSION_ICON);
+    button.className = "addon-banner-item";
+
+    button.addEventListener("click", callback);
+    PanelUI.addonNotificationContainer.appendChild(button);
+  },
+
   updateAlerts() {
     let sideloaded = ExtensionsUI.sideloaded;
     let updates = ExtensionsUI.updates;
-    if (sideloaded.size + updates.size == 0) {
-      PanelUI.removeNotification("addon-alert");
-    } else {
-      PanelUI.showBadgeOnlyNotification("addon-alert");
-    }
 
-    let container = document.getElementById("PanelUI-footer-addons");
+    let container = PanelUI.addonNotificationContainer;
 
     while (container.firstChild) {
       container.firstChild.remove();
     }
 
-    const DEFAULT_EXTENSION_ICON =
-      "chrome://mozapps/skin/extensions/extensionGeneric.svg";
     let items = 0;
     for (let update of updates) {
       if (++items > 4) {
         break;
       }
-
-      let button = document.createElement("toolbarbutton");
       let text = gNavigatorBundle.getFormattedString("webextPerms.updateMenuItem", [update.addon.name]);
-      button.setAttribute("label", text);
-
-      let icon = update.addon.iconURL || DEFAULT_EXTENSION_ICON;
-      button.setAttribute("image", icon);
-
-      button.addEventListener("click", evt => {
+      this._createAddonButton(text, update.addon.iconURL, evt => {
         ExtensionsUI.showUpdate(gBrowser, update);
       });
-
-      container.appendChild(button);
     }
 
     let appName;
@@ -547,18 +557,10 @@ const gExtensionsNotifications = {
         appName = brandBundle.getString("brandShortName");
       }
 
-      let button = document.createElement("toolbarbutton");
       let text = gNavigatorBundle.getFormattedString("webextPerms.sideloadMenuItem", [addon.name, appName]);
-      button.setAttribute("label", text);
-
-      let icon = addon.iconURL || DEFAULT_EXTENSION_ICON;
-      button.setAttribute("image", icon);
-
-      button.addEventListener("click", evt => {
+      this._createAddonButton(text, addon.iconURL, evt => {
         ExtensionsUI.showSideloaded(gBrowser, addon);
       });
-
-      container.appendChild(button);
     }
   },
 };

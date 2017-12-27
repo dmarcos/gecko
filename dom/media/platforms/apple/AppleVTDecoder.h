@@ -17,7 +17,12 @@
 
 namespace mozilla {
 
-class AppleVTDecoder : public MediaDataDecoder {
+DDLoggedTypeDeclNameAndBase(AppleVTDecoder, MediaDataDecoder);
+
+class AppleVTDecoder
+  : public MediaDataDecoder
+  , public DecoderDoctorLifeLogger<AppleVTDecoder>
+{
 public:
   AppleVTDecoder(const VideoInfo& aConfig,
                  TaskQueue* aTaskQueue,
@@ -32,8 +37,8 @@ public:
     bool is_sync_point;
 
     explicit AppleFrameRef(const MediaRawData& aSample)
-      : decode_timestamp(media::TimeUnit::FromMicroseconds(aSample.mTimecode))
-      , composition_timestamp(media::TimeUnit::FromMicroseconds(aSample.mTime))
+      : decode_timestamp(aSample.mTimecode)
+      , composition_timestamp(aSample.mTime)
       , duration(aSample.mDuration)
       , byte_offset(aSample.mOffset)
       , is_sync_point(aSample.mKeyframe)
@@ -53,11 +58,11 @@ public:
     return mIsHardwareAccelerated;
   }
 
-  const char* GetDescriptionName() const override
+  nsCString GetDescriptionName() const override
   {
     return mIsHardwareAccelerated
-           ? "apple hardware VT decoder"
-           : "apple software VT decoder";
+           ? NS_LITERAL_CSTRING("apple hardware VT decoder")
+           : NS_LITERAL_CSTRING("apple software VT decoder");
   }
 
   ConversionRequired NeedsConversion() const override
@@ -91,7 +96,7 @@ private:
   const uint32_t mDisplayHeight;
 
   // Method to set up the decompression session.
-  nsresult InitializeSession();
+  MediaResult InitializeSession();
   nsresult WaitForAsynchronousFrames();
   CFDictionaryRef CreateDecoderSpecification();
   CFDictionaryRef CreateDecoderExtensions();

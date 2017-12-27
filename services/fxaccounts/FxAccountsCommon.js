@@ -13,9 +13,6 @@ Cu.import("resource://gre/modules/Log.jsm");
 // default.  Note "Debug" is usually appropriate so that when this log is
 // included in the Sync file logs we get verbose output.
 const PREF_LOG_LEVEL = "identity.fxaccounts.loglevel";
-// The level of messages that will be dumped to the console.  If not specified,
-// "Error" will be used.
-const PREF_LOG_LEVEL_DUMP = "identity.fxaccounts.log.appender.dump";
 
 // A pref that can be set so "sensitive" information (eg, personally
 // identifiable info, credentials, etc) will be logged.
@@ -25,30 +22,7 @@ var exports = Object.create(null);
 
 XPCOMUtils.defineLazyGetter(exports, "log", function() {
   let log = Log.repository.getLogger("FirefoxAccounts");
-  // We set the log level to debug, but the default dump appender is set to
-  // the level reflected in the pref.  Other code that consumes FxA may then
-  // choose to add another appender at a different level.
-  log.level = Log.Level.Debug;
-  let appender = new Log.DumpAppender();
-  appender.level = Log.Level.Error;
-
-  log.addAppender(appender);
-  try {
-    // The log itself.
-    let level =
-      Services.prefs.getPrefType(PREF_LOG_LEVEL) == Ci.nsIPrefBranch.PREF_STRING
-      && Services.prefs.getCharPref(PREF_LOG_LEVEL);
-    log.level = Log.Level[level] || Log.Level.Debug;
-
-    // The appender.
-    level =
-      Services.prefs.getPrefType(PREF_LOG_LEVEL_DUMP) == Ci.nsIPrefBranch.PREF_STRING
-      && Services.prefs.getCharPref(PREF_LOG_LEVEL_DUMP);
-    appender.level = Log.Level[level] || Log.Level.Error;
-  } catch (e) {
-    log.error(e);
-  }
-
+  log.manageLevelFromPref(PREF_LOG_LEVEL);
   return log;
 });
 
@@ -76,12 +50,12 @@ exports.ASSERTION_LIFETIME = 1000 * 3600 * 24 * 365 * 25; // 25 years
 // valid after we generate it (e.g., the signed cert won't expire in this
 // period).
 exports.ASSERTION_USE_PERIOD = 1000 * 60 * 5; // 5 minutes
-exports.CERT_LIFETIME      = 1000 * 3600 * 6;  // 6 hours
+exports.CERT_LIFETIME      = 1000 * 3600 * 6; // 6 hours
 exports.KEY_LIFETIME       = 1000 * 3600 * 12; // 12 hours
 
 // After we start polling for account verification, we stop polling when this
 // many milliseconds have elapsed.
-exports.POLL_SESSION       = 1000 * 60 * 20;   // 20 minutes
+exports.POLL_SESSION       = 1000 * 60 * 20; // 20 minutes
 
 // Observer notifications.
 exports.ONLOGIN_NOTIFICATION = "fxaccounts:onlogin";
@@ -94,7 +68,9 @@ exports.ON_DEVICE_DISCONNECTED_NOTIFICATION = "fxaccounts:device_disconnected";
 exports.ON_PROFILE_UPDATED_NOTIFICATION = "fxaccounts:profile_updated"; // Push
 exports.ON_PASSWORD_CHANGED_NOTIFICATION = "fxaccounts:password_changed";
 exports.ON_PASSWORD_RESET_NOTIFICATION = "fxaccounts:password_reset";
+exports.ON_ACCOUNT_DESTROYED_NOTIFICATION = "fxaccounts:account_destroyed";
 exports.ON_COLLECTION_CHANGED_NOTIFICATION = "sync:collection_changed";
+exports.ON_VERIFY_LOGIN_NOTIFICATION = "fxaccounts:verify_login";
 
 exports.FXA_PUSH_SCOPE_ACCOUNT_UPDATE = "chrome://fxa-device-update";
 
@@ -110,6 +86,8 @@ exports.FX_OAUTH_CLIENT_ID = "5882386c6d801776";
 
 // Firefox Accounts WebChannel ID
 exports.WEBCHANNEL_ID = "account_updates";
+
+exports.PREF_LAST_FXA_USER = "identity.fxaccounts.lastSignedInUserHash";
 
 // Server errno.
 // From https://github.com/mozilla/fxa-auth-server/blob/master/docs/api.md#response-format

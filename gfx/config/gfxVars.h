@@ -1,5 +1,5 @@
-/* -*- Mode: C++; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* vim: set sts=2 ts=8 sw=2 tw=99 et: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -36,10 +36,23 @@ class gfxVarReceiver;
   _(DXInterop2Blocked,          bool,             false)                \
   _(UseWebRender,               bool,             false)                \
   _(UseWebRenderANGLE,          bool,             false)                \
+  _(UseWebRenderProgramBinary,  bool,             false)                \
+  _(WebRenderDebugFlags,        int32_t,          0)                    \
   _(ScreenDepth,                int32_t,          0)                    \
   _(GREDirectory,               nsCString,        nsCString())          \
+  _(UseOMTP,                    bool,             false)                \
+  _(AllowD3D11KeyedMutex,       bool,             false)                \
 
   /* Add new entries above this line. */
+
+// Define the default animation backend on the compositor. Now we don't use
+// stylo on the compositor only on Android, and this is a fixed flag. If
+// we want to update this flag, please add a new gfxVars for it.
+#if defined(MOZ_STYLO) && !defined(ANDROID)
+  #define USE_STYLO_ON_COMPOSITOR true
+#else
+  #define USE_STYLO_ON_COMPOSITOR false
+#endif
 
 // Some graphics settings are computed on the UI process and must be
 // communicated to content and GPU processes. gfxVars helps facilitate
@@ -57,6 +70,10 @@ class gfxVarReceiver;
 class gfxVars final
 {
 public:
+  // These values will be used during the Initialize() call if set.  Any
+  // updates that come before initialization will get added to this array.
+  static void SetValuesForInitialize(const nsTArray<GfxVarUpdate>& aInitUpdates);
+
   static void Initialize();
   static void Shutdown();
 

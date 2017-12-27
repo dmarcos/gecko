@@ -26,6 +26,8 @@
 #include "nsStreamUtils.h"
 #include <algorithm>
 
+using namespace mozilla;
+
 using mozilla::net::ReferrerPolicy;
 
 /**
@@ -176,8 +178,8 @@ nsSyncLoader::LoadDocument(nsIChannel* aChannel,
     // Start the document load. Do this before we attach the load listener
     // since we reset the document which drops all observers.
     nsCOMPtr<nsIStreamListener> listener;
-    rv = document->StartDocumentLoad(kLoadAsData, mChannel, 
-                                     loadGroup, nullptr, 
+    rv = document->StartDocumentLoad(kLoadAsData, mChannel,
+                                     loadGroup, nullptr,
                                      getter_AddRefs(listener),
                                      true);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -227,7 +229,7 @@ nsSyncLoader::PushAsyncStream(nsIStreamListener* aListener)
         mLoading = true;
         nsIThread *thread = NS_GetCurrentThread();
         while (mLoading && NS_SUCCEEDED(rv)) {
-            bool processedEvent; 
+            bool processedEvent;
             rv = thread->ProcessNextEvent(true, &processedEvent);
             if (NS_SUCCEEDED(rv) && !processedEvent)
                 rv = NS_ERROR_UNEXPECTED;
@@ -252,9 +254,10 @@ nsSyncLoader::PushSyncStream(nsIStreamListener* aListener)
     NS_ENSURE_SUCCESS(rv, rv);
 
     mLoading = true;
-    rv = nsSyncLoadService::PushSyncStreamToListener(in, aListener, mChannel);
+    rv = nsSyncLoadService::PushSyncStreamToListener(in.forget(), aListener,
+                                                     mChannel);
     mLoading = false;
-    
+
     return rv;
 }
 
@@ -338,14 +341,16 @@ nsSyncLoadService::LoadDocument(nsIURI *aURI,
 
 /* static */
 nsresult
-nsSyncLoadService::PushSyncStreamToListener(nsIInputStream* aIn,
+nsSyncLoadService::PushSyncStreamToListener(already_AddRefed<nsIInputStream> aIn,
                                             nsIStreamListener* aListener,
                                             nsIChannel* aChannel)
 {
+    nsCOMPtr<nsIInputStream> in = Move(aIn);
+
     // Set up buffering stream
     nsresult rv;
     nsCOMPtr<nsIInputStream> bufferedStream;
-    if (!NS_InputStreamIsBuffered(aIn)) {
+    if (!NS_InputStreamIsBuffered(in)) {
         int64_t chunkSize;
         rv = aChannel->GetContentLength(&chunkSize);
         if (NS_FAILED(rv) || chunkSize < 1) {
@@ -353,11 +358,11 @@ nsSyncLoadService::PushSyncStreamToListener(nsIInputStream* aIn,
         }
         chunkSize = std::min(int64_t(UINT16_MAX), chunkSize);
 
-        rv = NS_NewBufferedInputStream(getter_AddRefs(bufferedStream), aIn,
-                                       chunkSize);
+        rv = NS_NewBufferedInputStream(getter_AddRefs(bufferedStream),
+                                       in.forget(), chunkSize);
         NS_ENSURE_SUCCESS(rv, rv);
 
-        aIn = bufferedStream;
+        in = bufferedStream;
     }
 
     // Load
@@ -366,7 +371,7 @@ nsSyncLoadService::PushSyncStreamToListener(nsIInputStream* aIn,
         uint64_t sourceOffset = 0;
         while (1) {
             uint64_t readCount = 0;
-            rv = aIn->Available(&readCount);
+            rv = in->Available(&readCount);
             if (NS_FAILED(rv) || !readCount) {
                 if (rv == NS_BASE_STREAM_CLOSED) {
                     // End of file, but not an error
@@ -378,7 +383,7 @@ nsSyncLoadService::PushSyncStreamToListener(nsIInputStream* aIn,
             if (readCount > UINT32_MAX)
                 readCount = UINT32_MAX;
 
-            rv = aListener->OnDataAvailable(aChannel, nullptr, aIn,
+            rv = aListener->OnDataAvailable(aChannel, nullptr, in,
                                             (uint32_t)std::min(sourceOffset, (uint64_t)UINT32_MAX),
                                             (uint32_t)readCount);
             if (NS_FAILED(rv)) {

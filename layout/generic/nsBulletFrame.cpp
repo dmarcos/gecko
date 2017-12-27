@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,12 +9,14 @@
 #include "nsBulletFrame.h"
 
 #include "gfx2DGlue.h"
+#include "gfxContext.h"
 #include "gfxPrefs.h"
 #include "gfxUtils.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/layers/LayersMessages.h"
-#include "mozilla/layers/WebRenderDisplayItemLayer.h"
+#include "mozilla/layers/StackingContextHelper.h"
+#include "mozilla/layers/WebRenderLayerManager.h"
 #include "mozilla/layers/WebRenderMessages.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/Move.h"
@@ -25,11 +28,11 @@
 #include "nsPresContext.h"
 #include "nsIPresShell.h"
 #include "nsIDocument.h"
-#include "nsRenderingContext.h"
 #include "nsDisplayList.h"
 #include "nsCounterManager.h"
 #include "nsBidiUtils.h"
 #include "CounterStyleManager.h"
+#include "UnitTransforms.h"
 
 #include "imgIContainer.h"
 #include "ImageLayers.h"
@@ -60,11 +63,10 @@ NS_QUERYFRAME_TAIL_INHERITING(nsFrame)
 
 nsBulletFrame::~nsBulletFrame()
 {
-  NS_ASSERTION(!mBlockingOnload, "Still blocking onload in destructor?");
 }
 
 void
-nsBulletFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsBulletFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   // Stop image loading first.
   DeregisterAndCancelImageRequest();
@@ -74,7 +76,7 @@ nsBulletFrame::DestroyFrom(nsIFrame* aDestructRoot)
   }
 
   // Let base class do the rest
-  nsFrame::DestroyFrom(aDestructRoot);
+  nsFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 #ifdef DEBUG_FRAME_DUMP
@@ -85,12 +87,6 @@ nsBulletFrame::GetFrameName(nsAString& aResult) const
 }
 #endif
 
-nsIAtom*
-nsBulletFrame::GetType() const
-{
-  return nsGkAtoms::bulletFrame;
-}
-
 bool
 nsBulletFrame::IsEmpty()
 {
@@ -100,7 +96,7 @@ nsBulletFrame::IsEmpty()
 bool
 nsBulletFrame::IsSelfEmpty()
 {
-  return StyleList()->GetCounterStyle()->IsNone();
+  return StyleList()->mCounterStyle->IsNone();
 }
 
 /* virtual */ void
@@ -136,7 +132,9 @@ nsBulletFrame::DidSetStyleContext(nsStyleContext* aOldStyleContext)
 
     if (needNewRequest) {
       RefPtr<imgRequestProxy> newRequestClone;
-      newRequest->Clone(mListener, getter_AddRefs(newRequestClone));
+      newRequest->SyncClone(mListener,
+                            PresContext()->Document(),
+                            getter_AddRefs(newRequestClone));
 
       // Deregister the old request. We wait until after Clone is done in case
       // the old request and the new request are the same underlying image
@@ -161,11 +159,11 @@ nsBulletFrame::DidSetStyleContext(nsStyleContext* aOldStyleContext)
       const nsStyleList* oldStyleList = aOldStyleContext->PeekStyleList();
       if (oldStyleList) {
         bool hadBullet = oldStyleList->GetListStyleImage() ||
-          !oldStyleList->GetCounterStyle()->IsNone();
+          !oldStyleList->mCounterStyle->IsNone();
 
         const nsStyleList* newStyleList = StyleList();
         bool hasBullet = newStyleList->GetListStyleImage() ||
-          !newStyleList->GetCounterStyle()->IsNone();
+          !newStyleList->mCounterStyle->IsNone();
 
         if (hadBullet != hasBullet) {
           accService->UpdateListBullet(PresContext()->GetPresShell(), mContent,
@@ -190,6 +188,11 @@ public:
     mOrdinal = f->GetOrdinal();
   }
 
+  virtual bool InvalidateForSyncDecodeImages() const override
+  {
+    return ShouldInvalidateToSyncDecodeImages();
+  }
+
   int32_t mOrdinal;
 };
 
@@ -212,6 +215,15 @@ public:
     MOZ_ASSERT(IsPathType());
   }
 
+  BulletRenderer(const LayoutDeviceRect& aPathRect, nscolor color, int32_t listStyleType)
+    : mPathRect(aPathRect)
+    , mColor(color)
+    , mListStyleType(listStyleType)
+  {
+    MOZ_ASSERT(IsPathType());
+  }
+
+
   BulletRenderer(const nsString& text,
                  nsFontMetrics* fm,
                  nscolor color,
@@ -226,14 +238,16 @@ public:
     MOZ_ASSERT(IsTextType());
   }
 
-  void
+  bool
   CreateWebRenderCommands(nsDisplayItem* aItem,
                           wr::DisplayListBuilder& aBuilder,
-                          nsTArray<layers::WebRenderParentCommand>& aParentCommands,
-                          layers::WebRenderDisplayItemLayer* aLayer);
+                          wr::IpcResourceUpdateQueue& aResources,
+                          const layers::StackingContextHelper& aSc,
+                          mozilla::layers::WebRenderLayerManager* aManager,
+                          nsDisplayListBuilder* aDisplayListBuilder);
 
-  DrawResult
-  Paint(nsRenderingContext& aRenderingContext, nsPoint aPt,
+  ImgDrawResult
+  Paint(gfxContext& aRenderingContext, nsPoint aPt,
         const nsRect& aDirtyRect, uint32_t aFlags,
         bool aDisableSubpixelAA, nsIFrame* aFrame);
 
@@ -246,12 +260,11 @@ public:
   bool
   IsPathType() const
   {
-    return (mListStyleType == NS_STYLE_LIST_STYLE_DISC ||
-            mListStyleType == NS_STYLE_LIST_STYLE_CIRCLE ||
-            mListStyleType == NS_STYLE_LIST_STYLE_SQUARE ||
-            mListStyleType == NS_STYLE_LIST_STYLE_DISCLOSURE_OPEN ||
-            mListStyleType == NS_STYLE_LIST_STYLE_DISCLOSURE_CLOSED) &&
-           mPath;
+    return mListStyleType == NS_STYLE_LIST_STYLE_DISC ||
+           mListStyleType == NS_STYLE_LIST_STYLE_CIRCLE ||
+           mListStyleType == NS_STYLE_LIST_STYLE_SQUARE ||
+           mListStyleType == NS_STYLE_LIST_STYLE_DISCLOSURE_OPEN ||
+           mListStyleType == NS_STYLE_LIST_STYLE_DISCLOSURE_CLOSED;
   }
 
   bool
@@ -269,31 +282,53 @@ public:
   bool
   BuildGlyphForText(nsDisplayItem* aItem, bool disableSubpixelAA);
 
+  void
+  PaintTextToContext(nsIFrame* aFrame,
+                     gfxContext* aCtx,
+                     bool aDisableSubpixelAA);
+
   bool
   IsImageContainerAvailable(layers::LayerManager* aManager, uint32_t aFlags);
 
 private:
-  void
+  bool
   CreateWebRenderCommandsForImage(nsDisplayItem* aItem,
-                                 wr::DisplayListBuilder& aBuilder,
-                                  nsTArray<layers::WebRenderParentCommand>& aParentCommands,
-                                  layers::WebRenderDisplayItemLayer* aLayer);
+                                  wr::DisplayListBuilder& aBuilder,
+                                  wr::IpcResourceUpdateQueue& aResources,
+                                  const layers::StackingContextHelper& aSc,
+                                  mozilla::layers::WebRenderLayerManager* aManager,
+                                  nsDisplayListBuilder* aDisplayListBuilder);
 
-  void
+  bool
   CreateWebRenderCommandsForPath(nsDisplayItem* aItem,
                                  wr::DisplayListBuilder& aBuilder,
-                                 layers::WebRenderDisplayItemLayer* aLayer);
+                                 wr::IpcResourceUpdateQueue& aResources,
+                                 const layers::StackingContextHelper& aSc,
+                                 mozilla::layers::WebRenderLayerManager* aManager,
+                                 nsDisplayListBuilder* aDisplayListBuilder);
 
-  void
+  bool
   CreateWebRenderCommandsForText(nsDisplayItem* aItem,
                                  wr::DisplayListBuilder& aBuilder,
-                                 layers::WebRenderDisplayItemLayer* aLayer);
+                                 wr::IpcResourceUpdateQueue& aResources,
+                                 const layers::StackingContextHelper& aSc,
+                                 mozilla::layers::WebRenderLayerManager* aManager,
+                                 nsDisplayListBuilder* aDisplayListBuilder);
 
 private:
   // mImage and mDest are the properties for list-style-image.
   // mImage is the image content and mDest is the image position.
   RefPtr<imgIContainer> mImage;
   nsRect mDest;
+
+  // Some bullet types are stored as a rect (in device pixels) instead of a Path to allow
+  // generating proper WebRender commands. When webrender is disabled the Path is lazily created
+  // for these items before painting.
+  // TODO: The size of this structure doesn't seem to be an issue since it has so many fields
+  // that are specific to a bullet style or another, but if it becomes one we can easily
+  // store mDest and mPathRect into the same memory location since they are never used by
+  // the same bullet types.
+  LayoutDeviceRect mPathRect;
 
   // mColor indicate the color of list-style. Both text and path type would use this memeber.
   nscolor mColor;
@@ -314,30 +349,35 @@ private:
   int32_t mListStyleType;
 };
 
-void
+bool
 BulletRenderer::CreateWebRenderCommands(nsDisplayItem* aItem,
                                         wr::DisplayListBuilder& aBuilder,
-                                        nsTArray<layers::WebRenderParentCommand>& aParentCommands,
-                                        layers::WebRenderDisplayItemLayer* aLayer)
+                                        wr::IpcResourceUpdateQueue& aResources,
+                                        const layers::StackingContextHelper& aSc,
+                                        mozilla::layers::WebRenderLayerManager* aManager,
+                                        nsDisplayListBuilder* aDisplayListBuilder)
 {
   if (IsImageType()) {
-    CreateWebRenderCommandsForImage(aItem, aBuilder, aParentCommands, aLayer);
+    return CreateWebRenderCommandsForImage(aItem, aBuilder, aResources,
+                                    aSc, aManager, aDisplayListBuilder);
   } else if (IsPathType()) {
-    CreateWebRenderCommandsForPath(aItem, aBuilder, aLayer);
+    return CreateWebRenderCommandsForPath(aItem, aBuilder, aResources,
+                                   aSc, aManager, aDisplayListBuilder);
   } else {
     MOZ_ASSERT(IsTextType());
-    CreateWebRenderCommandsForText(aItem, aBuilder, aLayer);
+    return CreateWebRenderCommandsForText(aItem, aBuilder, aResources, aSc,
+                                          aManager, aDisplayListBuilder);
   }
 }
 
-DrawResult
-BulletRenderer::Paint(nsRenderingContext& aRenderingContext, nsPoint aPt,
+ImgDrawResult
+BulletRenderer::Paint(gfxContext& aRenderingContext, nsPoint aPt,
                       const nsRect& aDirtyRect, uint32_t aFlags,
                       bool aDisableSubpixelAA, nsIFrame* aFrame)
 {
   if (IsImageType()) {
     SamplingFilter filter = nsLayoutUtils::GetSamplingFilterForFrame(aFrame);
-    return nsLayoutUtils::DrawSingleImage(*aRenderingContext.ThebesContext(),
+    return nsLayoutUtils::DrawSingleImage(aRenderingContext,
                                           aFrame->PresContext(), mImage, filter,
                                           mDest, aDirtyRect,
                                           /* no SVGImageContext */ Nothing(),
@@ -346,16 +386,31 @@ BulletRenderer::Paint(nsRenderingContext& aRenderingContext, nsPoint aPt,
 
   if (IsPathType()) {
     DrawTarget* drawTarget = aRenderingContext.GetDrawTarget();
+
+    if (!mPath) {
+      RefPtr<PathBuilder> builder = drawTarget->CreatePathBuilder();
+      switch (mListStyleType) {
+      case NS_STYLE_LIST_STYLE_CIRCLE:
+      case NS_STYLE_LIST_STYLE_DISC:
+        AppendEllipseToPath(builder, mPathRect.Center().ToUnknownPoint(), mPathRect.Size().ToUnknownSize());
+        break;
+      case NS_STYLE_LIST_STYLE_SQUARE:
+        AppendRectToPath(builder, mPathRect.ToUnknownRect());
+        break;
+      default:
+        MOZ_ASSERT(false, "Should have a parth.");
+      }
+      mPath = builder->Finish();
+    }
+
     switch (mListStyleType) {
     case NS_STYLE_LIST_STYLE_CIRCLE:
-      MOZ_ASSERT(mPath);
       drawTarget->Stroke(mPath, ColorPattern(ToDeviceColor(mColor)));
       break;
     case NS_STYLE_LIST_STYLE_DISC:
     case NS_STYLE_LIST_STYLE_SQUARE:
     case NS_STYLE_LIST_STYLE_DISCLOSURE_CLOSED:
     case NS_STYLE_LIST_STYLE_DISCLOSURE_OPEN:
-      MOZ_ASSERT(mPath);
       drawTarget->Fill(mPath, ColorPattern(ToDeviceColor(mColor)));
       break;
     default:
@@ -364,22 +419,10 @@ BulletRenderer::Paint(nsRenderingContext& aRenderingContext, nsPoint aPt,
   }
 
   if (IsTextType()) {
-    DrawTarget* drawTarget = aRenderingContext.GetDrawTarget();
-    DrawTargetAutoDisableSubpixelAntialiasing
-      disable(drawTarget, aDisableSubpixelAA);
-
-    aRenderingContext.ThebesContext()->SetColor(
-      Color::FromABGR(mColor));
-
-    nsPresContext* presContext = aFrame->PresContext();
-    if (!presContext->BidiEnabled() && HasRTLChars(mText)) {
-      presContext->SetBidiEnabled();
-    }
-    nsLayoutUtils::DrawString(aFrame, *mFontMetrics, &aRenderingContext,
-                              mText.get(), mText.Length(), mPoint);
+    PaintTextToContext(aFrame, &aRenderingContext, aDisableSubpixelAA);
   }
 
-  return DrawResult::SUCCESS;
+  return ImgDrawResult::SUCCESS;
 }
 
 bool
@@ -387,26 +430,15 @@ BulletRenderer::BuildGlyphForText(nsDisplayItem* aItem, bool disableSubpixelAA)
 {
   MOZ_ASSERT(IsTextType());
 
+  RefPtr<DrawTarget> screenTarget = gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget();
   RefPtr<DrawTargetCapture> capture =
-    gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget()->CreateCaptureDT(IntSize());
+    Factory::CreateCaptureDrawTarget(screenTarget->GetBackendType(),
+                                     IntSize(),
+                                     screenTarget->GetFormat());
+
   RefPtr<gfxContext> captureCtx = gfxContext::CreateOrNull(capture);
-  nsRenderingContext ctx(captureCtx);
 
-  {
-    DrawTargetAutoDisableSubpixelAntialiasing
-      disable(capture, disableSubpixelAA);
-
-    ctx.ThebesContext()->SetColor(
-      Color::FromABGR(mColor));
-
-    nsPresContext* presContext = aItem->Frame()->PresContext();
-    if (!presContext->BidiEnabled() && HasRTLChars(mText)) {
-      presContext->SetBidiEnabled();
-    }
-
-    nsLayoutUtils::DrawString(aItem->Frame(), *mFontMetrics, &ctx,
-                              mText.get(), mText.Length(), mPoint);
-  }
+  PaintTextToContext(aItem->Frame(), captureCtx, disableSubpixelAA);
 
   layers::GlyphArray* g = mGlyphs.AppendElement();
   std::vector<Glyph> glyphs;
@@ -424,6 +456,27 @@ BulletRenderer::BuildGlyphForText(nsDisplayItem* aItem, bool disableSubpixelAA)
   return true;
 }
 
+void
+BulletRenderer::PaintTextToContext(nsIFrame* aFrame,
+                                   gfxContext* aCtx,
+                                   bool aDisableSubpixelAA)
+{
+  MOZ_ASSERT(IsTextType());
+
+  DrawTarget* drawTarget = aCtx->GetDrawTarget();
+  DrawTargetAutoDisableSubpixelAntialiasing
+    disable(drawTarget, aDisableSubpixelAA);
+
+  aCtx->SetColor(Color::FromABGR(mColor));
+
+  nsPresContext* presContext = aFrame->PresContext();
+  if (!presContext->BidiEnabled() && HasRTLChars(mText)) {
+    presContext->SetBidiEnabled();
+  }
+  nsLayoutUtils::DrawString(aFrame, *mFontMetrics, aCtx,
+                            mText.get(), mText.Length(), mPoint);
+}
+
 bool
 BulletRenderer::IsImageContainerAvailable(layers::LayerManager* aManager, uint32_t aFlags)
 {
@@ -432,85 +485,134 @@ BulletRenderer::IsImageContainerAvailable(layers::LayerManager* aManager, uint32
   return mImage->IsImageContainerAvailable(aManager, aFlags);
 }
 
-void
+bool
 BulletRenderer::CreateWebRenderCommandsForImage(nsDisplayItem* aItem,
                                                 wr::DisplayListBuilder& aBuilder,
-                                                nsTArray<layers::WebRenderParentCommand>& aParentCommands,
-                                                layers::WebRenderDisplayItemLayer* aLayer)
+                                                wr::IpcResourceUpdateQueue& aResources,
+                                                const layers::StackingContextHelper& aSc,
+                                                mozilla::layers::WebRenderLayerManager* aManager,
+                                                nsDisplayListBuilder* aDisplayListBuilder)
 {
-  MOZ_ASSERT(IsImageType());
+  MOZ_RELEASE_ASSERT(IsImageType());
+  MOZ_RELEASE_ASSERT(mImage);
 
-  if (!mImage) {
-     return;
+  uint32_t flags = imgIContainer::FLAG_ASYNC_NOTIFY;
+  if (aDisplayListBuilder->IsPaintingToWindow()) {
+    flags |= imgIContainer::FLAG_HIGH_QUALITY_SCALING;
   }
-
-  layers::WebRenderDisplayItemLayer* layer = static_cast<layers::WebRenderDisplayItemLayer*>(aLayer);
-  nsDisplayListBuilder* builder = layer->GetDisplayListBuilder();
-  uint32_t flags = builder->ShouldSyncDecodeImages() ?
-                   imgIContainer::FLAG_SYNC_DECODE :
-                   imgIContainer::FLAG_NONE;
-
-  RefPtr<layers::ImageContainer> container =
-    mImage->GetImageContainer(aLayer->WrManager(), flags);
-  if (!container) {
-    return;
-  }
-
-  Maybe<wr::ImageKey> key = layer->SendImageContainer(container, aParentCommands);
-  if (key.isNothing()) {
-    return;
+  if (aDisplayListBuilder->ShouldSyncDecodeImages()) {
+    flags |= imgIContainer::FLAG_SYNC_DECODE;
   }
 
   const int32_t appUnitsPerDevPixel = aItem->Frame()->PresContext()->AppUnitsPerDevPixel();
-  Rect destRect =
-    NSRectToRect(mDest, appUnitsPerDevPixel);
-  Rect destRectTransformed = aLayer->RelativeToParent(destRect);
-  IntRect dest = RoundedToInt(destRectTransformed);
+  LayoutDeviceRect destRect = LayoutDeviceRect::FromAppUnits(mDest, appUnitsPerDevPixel);
+  Maybe<SVGImageContext> svgContext;
+  gfx::IntSize decodeSize =
+    nsLayoutUtils::ComputeImageContainerDrawingParameters(mImage, aItem->Frame(), destRect,
+                                                          aSc, flags, svgContext);
+  RefPtr<layers::ImageContainer> container =
+    mImage->GetImageContainerAtSize(aManager, decodeSize, svgContext, flags);
+  if (!container) {
+    return false;
+  }
 
-  WrClipRegion clipRegion = aBuilder.BuildClipRegion(wr::ToWrRect(dest));
+  gfx::IntSize size;
+  Maybe<wr::ImageKey> key = aManager->CommandBuilder().CreateImageKey(aItem, container, aBuilder, aResources,
+                                                                      aSc, size, Nothing());
+  if (key.isNothing()) {
+    return true;  // Nothing to do
+  }
 
-  aBuilder.PushImage(wr::ToWrRect(dest),
-                     clipRegion,
-                     WrImageRendering::Auto,
+  wr::LayoutRect dest = aSc.ToRelativeLayoutRect(destRect);
+
+  aBuilder.PushImage(dest,
+                     dest,
+                     !aItem->BackfaceIsHidden(),
+                     wr::ImageRendering::Auto,
                      key.value());
+
+  return true;
 }
 
-void
+bool
 BulletRenderer::CreateWebRenderCommandsForPath(nsDisplayItem* aItem,
                                                wr::DisplayListBuilder& aBuilder,
-                                               layers::WebRenderDisplayItemLayer* aLayer)
+                                               wr::IpcResourceUpdateQueue& aResources,
+                                               const layers::StackingContextHelper& aSc,
+                                               mozilla::layers::WebRenderLayerManager* aManager,
+                                               nsDisplayListBuilder* aDisplayListBuilder)
 {
   MOZ_ASSERT(IsPathType());
-  // Not supported yet.
-  MOZ_CRASH("unreachable");
+  wr::LayoutRect dest = aSc.ToRelativeLayoutRect(mPathRect);
+  auto color = wr::ToColorF(ToDeviceColor(mColor));
+  bool isBackfaceVisible = !aItem->BackfaceIsHidden();
+  switch (mListStyleType) {
+    case NS_STYLE_LIST_STYLE_CIRCLE: {
+      LayoutDeviceSize radii = mPathRect.Size() / 2.0;
+      auto borderWidths = wr::ToBorderWidths(1.0, 1.0, 1.0, 1.0);
+      wr::BorderSide side = { color, wr::BorderStyle::Solid };
+      wr::BorderSide sides[4] = { side, side, side, side };
+      Range<const wr::BorderSide> sidesRange(sides, 4);
+      aBuilder.PushBorder(dest, dest, isBackfaceVisible, borderWidths,
+                          sidesRange,
+                          wr::ToBorderRadius(radii, radii, radii, radii));
+      return true;
+    }
+    case NS_STYLE_LIST_STYLE_DISC: {
+      nsTArray<wr::ComplexClipRegion> clips;
+      clips.AppendElement(wr::ToComplexClipRegion(
+        RoundedRect(ThebesRect(mPathRect.ToUnknownRect()),
+                    RectCornerRadii(dest.size.width / 2.0))
+      ));
+      auto clipId = aBuilder.DefineClip(Nothing(), Nothing(), dest, &clips, nullptr);
+      aBuilder.PushClip(clipId);
+      aBuilder.PushRect(dest, dest, isBackfaceVisible, color);
+      aBuilder.PopClip();
+      return true;
+    }
+    case NS_STYLE_LIST_STYLE_SQUARE: {
+      aBuilder.PushRect(dest, dest, isBackfaceVisible, color);
+      return true;
+    }
+    default:
+      if (!aManager->CommandBuilder().PushItemAsImage(aItem, aBuilder, aResources, aSc, aDisplayListBuilder)) {
+        NS_WARNING("Fail to create WebRender commands for Bullet path.");
+        return false;
+      }
+  }
+
+  return true;
 }
 
-void
+bool
 BulletRenderer::CreateWebRenderCommandsForText(nsDisplayItem* aItem,
                                                wr::DisplayListBuilder& aBuilder,
-                                               layers::WebRenderDisplayItemLayer* aLayer)
+                                               wr::IpcResourceUpdateQueue& aResources,
+                                               const layers::StackingContextHelper& aSc,
+                                               mozilla::layers::WebRenderLayerManager* aManager,
+                                               nsDisplayListBuilder* aDisplayListBuilder)
 {
   MOZ_ASSERT(IsTextType());
-  MOZ_ASSERT(mFont);
-  MOZ_ASSERT(!mGlyphs.IsEmpty());
 
-  layers::WebRenderDisplayItemLayer* layer = static_cast<layers::WebRenderDisplayItemLayer*>(aLayer);
-  nsDisplayListBuilder* builder = layer->GetDisplayListBuilder();
-  const int32_t appUnitsPerDevPixel = aItem->Frame()->PresContext()->AppUnitsPerDevPixel();
   bool dummy;
-  Rect destRect =
-    NSRectToRect(aItem->GetBounds(builder, &dummy), appUnitsPerDevPixel);
-  Rect destRectTransformed = aLayer->RelativeToParent(destRect);
+  nsRect bounds = aItem->GetBounds(aDisplayListBuilder, &dummy);
 
-  layer->WrBridge()->PushGlyphs(aBuilder, mGlyphs, mFont, aLayer->GetOffsetToParent(),
-                                destRectTransformed, destRectTransformed);
+  if (bounds.IsEmpty()) {
+    return true;
+  }
+
+  RefPtr<TextDrawTarget> textDrawer = new TextDrawTarget(aBuilder, aSc, aManager, aItem, bounds);
+  RefPtr<gfxContext> captureCtx = gfxContext::CreateOrNull(textDrawer);
+  PaintTextToContext(aItem->Frame(), captureCtx, aItem);
+  textDrawer->TerminateShadows();
+
+  return !textDrawer->HasUnsupportedFeatures();
 }
 
 class nsDisplayBullet final : public nsDisplayItem {
 public:
   nsDisplayBullet(nsDisplayListBuilder* aBuilder, nsBulletFrame* aFrame)
     : nsDisplayItem(aBuilder, aFrame)
-    , mDisableSubpixelAA(false)
   {
     MOZ_COUNT_CTOR(nsDisplayBullet);
   }
@@ -521,7 +623,7 @@ public:
 #endif
 
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
-                           bool* aSnap) override
+                           bool* aSnap) const override
   {
     *aSnap = false;
     return mFrame->GetVisualOverflowRectRelativeToSelf() + ToReferenceFrame();
@@ -535,9 +637,11 @@ public:
                                              LayerManager* aManager,
                                              const ContainerLayerParameters& aParameters) override;
 
-  virtual void CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
-                                       nsTArray<layers::WebRenderParentCommand>& aParentCommands,
-                                       layers::WebRenderDisplayItemLayer* aLayer) override;
+  virtual bool CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
+                                       mozilla::wr::IpcResourceUpdateQueue&,
+                                       const StackingContextHelper& aSc,
+                                       mozilla::layers::WebRenderLayerManager* aManager,
+                                       nsDisplayListBuilder* aDisplayListBuilder) override;
 
   virtual void HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect,
                        HitTestState* aState,
@@ -545,17 +649,13 @@ public:
     aOutFrames->AppendElement(mFrame);
   }
   virtual void Paint(nsDisplayListBuilder* aBuilder,
-                     nsRenderingContext* aCtx) override;
+                     gfxContext* aCtx) override;
   NS_DISPLAY_DECL_NAME("Bullet", TYPE_BULLET)
 
-  virtual nsRect GetComponentAlphaBounds(nsDisplayListBuilder* aBuilder) override
+  virtual nsRect GetComponentAlphaBounds(nsDisplayListBuilder* aBuilder) const override
   {
     bool snap;
     return GetBounds(aBuilder, &snap);
-  }
-
-  virtual void DisableComponentAlpha() override {
-    mDisableSubpixelAA = true;
   }
 
   virtual nsDisplayItemGeometry* AllocateGeometry(nsDisplayListBuilder* aBuilder) override
@@ -565,7 +665,7 @@ public:
 
   virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
                                          const nsDisplayItemGeometry* aGeometry,
-                                         nsRegion *aInvalidRegion) override
+                                         nsRegion *aInvalidRegion) const override
   {
     const nsDisplayBulletGeometry* geometry = static_cast<const nsDisplayBulletGeometry*>(aGeometry);
     nsBulletFrame* f = static_cast<nsBulletFrame*>(mFrame);
@@ -587,7 +687,6 @@ public:
   }
 
 protected:
-  bool mDisableSubpixelAA;
   Maybe<BulletRenderer> mBulletRenderer;
 };
 
@@ -596,23 +695,16 @@ nsDisplayBullet::GetLayerState(nsDisplayListBuilder* aBuilder,
                                LayerManager* aManager,
                                const ContainerLayerParameters& aParameters)
 {
-  if (!gfxPrefs::LayersAllowBulletLayers()) {
+  if (!ShouldUseAdvancedLayer(aManager, gfxPrefs::LayersAllowBulletLayers)) {
     return LAYER_NONE;
   }
-
-  RefPtr<gfxContext> screenRefCtx =
-    gfxContext::CreateOrNull(gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget());
-  nsRenderingContext ctx(screenRefCtx);
+  RefPtr<gfxContext> screenRefCtx = gfxContext::CreateOrNull(
+    gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget().get());
 
   Maybe<BulletRenderer> br = static_cast<nsBulletFrame*>(mFrame)->
-    CreateBulletRenderer(ctx, ToReferenceFrame());
+    CreateBulletRenderer(*screenRefCtx, ToReferenceFrame());
 
   if (!br) {
-    return LAYER_NONE;
-  }
-
-  // Only support image and text type.
-  if (!br->IsImageType() && !br->IsTextType()) {
     return LAYER_NONE;
   }
 
@@ -648,26 +740,37 @@ nsDisplayBullet::BuildLayer(nsDisplayListBuilder* aBuilder,
   return BuildDisplayItemLayer(aBuilder, aManager, aContainerParameters);
 }
 
-void
+bool
 nsDisplayBullet::CreateWebRenderCommands(wr::DisplayListBuilder& aBuilder,
-                                         nsTArray<layers::WebRenderParentCommand>& aParentCommands,
-                                         layers::WebRenderDisplayItemLayer* aLayer)
+                                         wr::IpcResourceUpdateQueue& aResources,
+                                         const StackingContextHelper& aSc,
+                                         mozilla::layers::WebRenderLayerManager* aManager,
+                                         nsDisplayListBuilder* aDisplayListBuilder)
 {
-  if (!mBulletRenderer)
-    return;
+  // FIXME: avoid needing to make this target if we're drawing text
+  // (non-trivial refactor of all this code)
+  RefPtr<gfxContext> screenRefCtx = gfxContext::CreateOrNull(
+    gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget().get());
+  Maybe<BulletRenderer> br = static_cast<nsBulletFrame*>(mFrame)->
+    CreateBulletRenderer(*screenRefCtx, ToReferenceFrame());
 
-  mBulletRenderer->CreateWebRenderCommands(this, aBuilder, aParentCommands, aLayer);
+  if (!br) {
+    return false;
+  }
+
+  return br->CreateWebRenderCommands(this, aBuilder, aResources, aSc,
+                                     aManager, aDisplayListBuilder);
 }
 
 void nsDisplayBullet::Paint(nsDisplayListBuilder* aBuilder,
-                            nsRenderingContext* aCtx)
+                            gfxContext* aCtx)
 {
   uint32_t flags = imgIContainer::FLAG_NONE;
   if (aBuilder->ShouldSyncDecodeImages()) {
     flags |= imgIContainer::FLAG_SYNC_DECODE;
   }
 
-  DrawResult result = static_cast<nsBulletFrame*>(mFrame)->
+  ImgDrawResult result = static_cast<nsBulletFrame*>(mFrame)->
     PaintBullet(*aCtx, ToReferenceFrame(), mVisibleRect, flags,
                 mDisableSubpixelAA);
 
@@ -676,7 +779,6 @@ void nsDisplayBullet::Paint(nsDisplayListBuilder* aBuilder,
 
 void
 nsBulletFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists)
 {
   if (!IsVisibleForPainting(aBuilder))
@@ -684,15 +786,15 @@ nsBulletFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 
   DO_GLOBAL_REFLOW_COUNT_DSP("nsBulletFrame");
 
-  aLists.Content()->AppendNewToTop(
+  aLists.Content()->AppendToTop(
     new (aBuilder) nsDisplayBullet(aBuilder, this));
 }
 
 Maybe<BulletRenderer>
-nsBulletFrame::CreateBulletRenderer(nsRenderingContext& aRenderingContext, nsPoint aPt)
+nsBulletFrame::CreateBulletRenderer(gfxContext& aRenderingContext, nsPoint aPt)
 {
   const nsStyleList* myList = StyleList();
-  CounterStyle* listStyleType = myList->GetCounterStyle();
+  CounterStyle* listStyleType = myList->mCounterStyle;
   nsMargin padding = mPadding.GetPhysicalMargin(GetWritingMode());
 
   if (myList->GetListStyleImage() && mImageRequest) {
@@ -728,13 +830,8 @@ nsBulletFrame::CreateBulletRenderer(nsRenderingContext& aRenderingContext, nsPoi
                   padding.top + aPt.y,
                   mRect.width - (padding.left + padding.right),
                   mRect.height - (padding.top + padding.bottom));
-      Rect devPxRect = NSRectToRect(rect, appUnitsPerDevPixel);
-      RefPtr<PathBuilder> builder = drawTarget->CreatePathBuilder();
-      AppendEllipseToPath(builder, devPxRect.Center(), devPxRect.Size());
-
-      RefPtr<Path> path = builder->Finish();
-      BulletRenderer br(path, color, listStyleType->GetStyle());
-      return Some(br);
+      auto devPxRect = LayoutDeviceRect::FromAppUnits(rect, appUnitsPerDevPixel);
+      return Some(BulletRenderer(devPxRect, color, listStyleType->GetStyle()));
     }
 
   case NS_STYLE_LIST_STYLE_SQUARE:
@@ -754,14 +851,8 @@ nsBulletFrame::CreateBulletRenderer(nsRenderingContext& aRenderingContext, nsPoi
                       pc->RoundAppUnitsToNearestDevPixels(rect.height));
       snapRect.MoveBy((rect.width - snapRect.width) / 2,
                       (rect.height - snapRect.height) / 2);
-      Rect devPxRect =
-        NSRectToSnappedRect(snapRect, appUnitsPerDevPixel, *drawTarget);
-      RefPtr<PathBuilder> builder = drawTarget->CreatePathBuilder();
-      AppendRectToPath(builder, devPxRect);
-
-      RefPtr<Path> path = builder->Finish();
-      BulletRenderer br(path, color, listStyleType->GetStyle());
-      return Some(br);
+      auto devPxRect = LayoutDeviceRect::FromAppUnits(snapRect, appUnitsPerDevPixel);
+      return Some(BulletRenderer(devPxRect, color, listStyleType->GetStyle()));
     }
 
   case NS_STYLE_LIST_STYLE_DISCLOSURE_CLOSED:
@@ -825,19 +916,18 @@ nsBulletFrame::CreateBulletRenderer(nsRenderingContext& aRenderingContext, nsPoi
       nscoord ascent = wm.IsLineInverted()
                          ? fm->MaxDescent() : fm->MaxAscent();
       aPt.MoveBy(padding.left, padding.top);
-      gfxContext *ctx = aRenderingContext.ThebesContext();
       if (wm.IsVertical()) {
         if (wm.IsVerticalLR()) {
           aPt.x = NSToCoordRound(nsLayoutUtils::GetSnappedBaselineX(
-                                   this, ctx, aPt.x, ascent));
+                                   this, &aRenderingContext, aPt.x, ascent));
         } else {
           aPt.x = NSToCoordRound(nsLayoutUtils::GetSnappedBaselineX(
-                                   this, ctx, aPt.x + mRect.width,
+                                   this, &aRenderingContext, aPt.x + mRect.width,
                                    -ascent));
         }
       } else {
         aPt.y = NSToCoordRound(nsLayoutUtils::GetSnappedBaselineY(
-                                 this, ctx, aPt.y, ascent));
+                                 this, &aRenderingContext, aPt.y, ascent));
       }
 
       BulletRenderer br(text, fm, color, aPt, listStyleType->GetStyle());
@@ -849,15 +939,15 @@ nsBulletFrame::CreateBulletRenderer(nsRenderingContext& aRenderingContext, nsPoi
   return Nothing();
 }
 
-DrawResult
-nsBulletFrame::PaintBullet(nsRenderingContext& aRenderingContext, nsPoint aPt,
+ImgDrawResult
+nsBulletFrame::PaintBullet(gfxContext& aRenderingContext, nsPoint aPt,
                            const nsRect& aDirtyRect, uint32_t aFlags,
                            bool aDisableSubpixelAA)
 {
   Maybe<BulletRenderer> br = CreateBulletRenderer(aRenderingContext, aPt);
 
   if (!br) {
-    return DrawResult::SUCCESS;
+    return ImgDrawResult::SUCCESS;
   }
 
   return br->Paint(aRenderingContext, aPt, aDirtyRect,
@@ -900,7 +990,7 @@ nsBulletFrame::SetListItemOrdinal(int32_t aNextOrdinal,
 void
 nsBulletFrame::GetListItemText(nsAString& aResult)
 {
-  CounterStyle* style = StyleList()->GetCounterStyle();
+  CounterStyle* style = StyleList()->mCounterStyle;
   NS_ASSERTION(style->GetStyle() != NS_STYLE_LIST_STYLE_NONE &&
                style->GetStyle() != NS_STYLE_LIST_STYLE_DISC &&
                style->GetStyle() != NS_STYLE_LIST_STYLE_CIRCLE &&
@@ -940,7 +1030,7 @@ nsBulletFrame::AppendSpacingToPadding(nsFontMetrics* aFontMetrics,
 
 void
 nsBulletFrame::GetDesiredSize(nsPresContext*  aCX,
-                              nsRenderingContext *aRenderingContext,
+                              gfxContext *aRenderingContext,
                               ReflowOutput& aMetrics,
                               float aFontSizeInflation,
                               LogicalMargin* aPadding)
@@ -987,7 +1077,7 @@ nsBulletFrame::GetDesiredSize(nsPresContext*  aCX,
   nscoord bulletSize;
 
   nsAutoString text;
-  switch (myList->GetCounterStyle()->GetStyle()) {
+  switch (myList->mCounterStyle->GetStyle()) {
     case NS_STYLE_LIST_STYLE_NONE:
       finalSize.ISize(wm) = finalSize.BSize(wm) = 0;
       aMetrics.SetBlockStartAscent(0);
@@ -1041,6 +1131,7 @@ nsBulletFrame::Reflow(nsPresContext* aPresContext,
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsBulletFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowInput, aMetrics, aStatus);
+  MOZ_ASSERT(aStatus.IsEmpty(), "The reflow status should be empty!");
 
   float inflation = nsLayoutUtils::FontSizeInflationFor(this);
   SetFontSizeInflation(inflation);
@@ -1071,12 +1162,11 @@ nsBulletFrame::Reflow(nsPresContext* aPresContext,
   // 397294).
   aMetrics.SetOverflowAreasToDesiredBounds();
 
-  aStatus.Reset();
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowInput, aMetrics);
 }
 
 /* virtual */ nscoord
-nsBulletFrame::GetMinISize(nsRenderingContext *aRenderingContext)
+nsBulletFrame::GetMinISize(gfxContext *aRenderingContext)
 {
   WritingMode wm = GetWritingMode();
   ReflowOutput reflowOutput(wm);
@@ -1088,7 +1178,7 @@ nsBulletFrame::GetMinISize(nsRenderingContext *aRenderingContext)
 }
 
 /* virtual */ nscoord
-nsBulletFrame::GetPrefISize(nsRenderingContext *aRenderingContext)
+nsBulletFrame::GetPrefISize(gfxContext *aRenderingContext)
 {
   WritingMode wm = GetWritingMode();
   ReflowOutput metrics(wm);
@@ -1109,12 +1199,12 @@ IsIgnoreable(const nsIFrame* aFrame, nscoord aISize)
     return false;
   }
   auto listStyle = aFrame->StyleList();
-  return listStyle->GetCounterStyle()->IsNone() &&
+  return listStyle->mCounterStyle->IsNone() &&
          !listStyle->GetListStyleImage();
 }
 
 /* virtual */ void
-nsBulletFrame::AddInlineMinISize(nsRenderingContext* aRenderingContext,
+nsBulletFrame::AddInlineMinISize(gfxContext* aRenderingContext,
                                  nsIFrame::InlineMinISizeData* aData)
 {
   nscoord isize = nsLayoutUtils::IntrinsicForContainer(aRenderingContext,
@@ -1125,7 +1215,7 @@ nsBulletFrame::AddInlineMinISize(nsRenderingContext* aRenderingContext,
 }
 
 /* virtual */ void
-nsBulletFrame::AddInlinePrefISize(nsRenderingContext* aRenderingContext,
+nsBulletFrame::AddInlinePrefISize(gfxContext* aRenderingContext,
                                   nsIFrame::InlinePrefISizeData* aData)
 {
   nscoord isize = nsLayoutUtils::IntrinsicForContainer(aRenderingContext,
@@ -1189,42 +1279,6 @@ nsBulletFrame::Notify(imgIRequest *aRequest, int32_t aType, const nsIntRect* aDa
       }
     }
   }
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsBulletFrame::BlockOnload(imgIRequest* aRequest)
-{
-  if (aRequest != mImageRequest) {
-    return NS_OK;
-  }
-
-  NS_ASSERTION(!mBlockingOnload, "Double BlockOnload for an nsBulletFrame?");
-
-  nsIDocument* doc = GetOurCurrentDoc();
-  if (doc) {
-    mBlockingOnload = true;
-    doc->BlockOnload();
-  }
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsBulletFrame::UnblockOnload(imgIRequest* aRequest)
-{
-  if (aRequest != mImageRequest) {
-    return NS_OK;
-  }
-
-  NS_ASSERTION(!mBlockingOnload, "Double UnblockOnload for an nsBulletFrame?");
-
-  nsIDocument* doc = GetOurCurrentDoc();
-  if (doc) {
-    doc->UnblockOnload(false);
-  }
-  mBlockingOnload = false;
 
   return NS_OK;
 }
@@ -1307,7 +1361,7 @@ nsBulletFrame::GetFontSizeInflation() const
   if (!HasFontSizeInflation()) {
     return 1.0f;
   }
-  return Properties().Get(FontSizeInflationProperty());
+  return GetProperty(FontSizeInflationProperty());
 }
 
 void
@@ -1316,13 +1370,13 @@ nsBulletFrame::SetFontSizeInflation(float aInflation)
   if (aInflation == 1.0f) {
     if (HasFontSizeInflation()) {
       RemoveStateBits(BULLET_FRAME_HAS_FONT_INFLATION);
-      Properties().Delete(FontSizeInflationProperty());
+      DeleteProperty(FontSizeInflationProperty());
     }
     return;
   }
 
   AddStateBits(BULLET_FRAME_HAS_FONT_INFLATION);
-  Properties().Set(FontSizeInflationProperty(), aInflation);
+  SetProperty(FontSizeInflationProperty(), aInflation);
 }
 
 already_AddRefed<imgIContainer>
@@ -1346,7 +1400,7 @@ nsBulletFrame::GetLogicalBaseline(WritingMode aWritingMode) const
   } else {
     RefPtr<nsFontMetrics> fm =
       nsLayoutUtils::GetFontMetricsForFrame(this, GetFontSizeInflation());
-    CounterStyle* listStyleType = StyleList()->GetCounterStyle();
+    CounterStyle* listStyleType = StyleList()->mCounterStyle;
     switch (listStyleType->GetStyle()) {
       case NS_STYLE_LIST_STYLE_NONE:
         break;
@@ -1383,7 +1437,7 @@ nsBulletFrame::GetLogicalBaseline(WritingMode aWritingMode) const
 void
 nsBulletFrame::GetSpokenText(nsAString& aText)
 {
-  CounterStyle* style = StyleList()->GetCounterStyle();
+  CounterStyle* style = StyleList()->mCounterStyle;
   bool isBullet;
   style->GetSpokenCounterText(mOrdinal, GetWritingMode(), aText, isBullet);
   if (isBullet) {
@@ -1435,15 +1489,6 @@ nsBulletFrame::DeregisterAndCancelImageRequest()
 
     isRequestRegistered = mRequestRegistered;
 
-    // Unblock onload if we blocked it.
-    if (mBlockingOnload) {
-      nsIDocument* doc = GetOurCurrentDoc();
-      if (doc) {
-        doc->UnblockOnload(false);
-      }
-      mBlockingOnload = false;
-    }
-
     // Cancel the image request and forget about it.
     mImageRequest->CancelAndForgetObserver(NS_ERROR_FAILURE);
     mImageRequest = nullptr;
@@ -1473,22 +1518,4 @@ nsBulletListener::Notify(imgIRequest *aRequest, int32_t aType, const nsIntRect* 
     return NS_ERROR_FAILURE;
   }
   return mFrame->Notify(aRequest, aType, aData);
-}
-
-NS_IMETHODIMP
-nsBulletListener::BlockOnload(imgIRequest* aRequest)
-{
-  if (!mFrame) {
-    return NS_ERROR_FAILURE;
-  }
-  return mFrame->BlockOnload(aRequest);
-}
-
-NS_IMETHODIMP
-nsBulletListener::UnblockOnload(imgIRequest* aRequest)
-{
-  if (!mFrame) {
-    return NS_ERROR_FAILURE;
-  }
-  return mFrame->UnblockOnload(aRequest);
 }

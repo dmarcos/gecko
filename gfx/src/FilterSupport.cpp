@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -2132,7 +2133,6 @@ AttributeMap::GetType(FilterAttribute* aAttribute)
   }                                                                  \
   void                                                               \
   AttributeMap::Set(AttributeName aName, type aValue) {              \
-    mMap.Remove(aName);                                              \
     mMap.Put(aName, new Attribute(aValue));                          \
   }
 
@@ -2144,7 +2144,6 @@ AttributeMap::GetType(FilterAttribute* aAttribute)
   }                                                                  \
   void                                                               \
   AttributeMap::Set(AttributeName aName, const className& aValue) {  \
-    mMap.Remove(aName);                                              \
     mMap.Put(aName, new Attribute(aValue));                          \
   }
 
@@ -2166,18 +2165,14 @@ MAKE_ATTRIBUTE_HANDLERS_CLASS(AttributeMap)
 const nsTArray<float>&
 AttributeMap::GetFloats(AttributeName aName) const
 {
-  Attribute* value = mMap.Get(aName);
-  if (!value) {
-    value = new Attribute(nullptr, 0);
-    mMap.Put(aName, value);
-  }
+  Attribute* value = mMap.LookupForAdd(aName).OrInsert(
+    [] () { return new Attribute(nullptr, 0); });
   return value->AsFloats();
 }
 
 void
 AttributeMap::Set(AttributeName aName, const float* aValues, int32_t aLength)
 {
-  mMap.Remove(aName);
   mMap.Put(aName, new Attribute(aValues, aLength));
 }
 

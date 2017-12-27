@@ -19,6 +19,7 @@
 #include "nsIServiceManager.h"
 #include "nsISocketTransportService.h"
 #include "nsServiceManagerUtils.h"
+#include "nsString.h"
 
 #include "transportflow.h"
 #include "transportlayerloopback.h"
@@ -28,18 +29,16 @@ namespace mozilla {
 MOZ_MTLOG_MODULE("mtransport")
 
 nsresult TransportLayerLoopback::Init() {
-  timer_ = do_CreateInstance(NS_TIMER_CONTRACTID);
-  MOZ_ASSERT(timer_);
-  if (!timer_)
-    return NS_ERROR_FAILURE;
-
   nsresult rv;
   target_ = do_GetService(NS_SOCKETTRANSPORTSERVICE_CONTRACTID, &rv);
   MOZ_ASSERT(NS_SUCCEEDED(rv));
   if (!NS_SUCCEEDED(rv))
     return rv;
 
-  timer_->SetTarget(target_);
+  timer_ = NS_NewTimer(target_);
+  MOZ_ASSERT(timer_);
+  if (!timer_)
+    return NS_ERROR_FAILURE;
 
   packets_lock_ = PR_NewLock();
   MOZ_ASSERT(packets_lock_);
@@ -118,7 +117,7 @@ void TransportLayerLoopback::DeliverPackets() {
   }
 }
 
-NS_IMPL_ISUPPORTS(TransportLayerLoopback::Deliverer, nsITimerCallback)
+NS_IMPL_ISUPPORTS(TransportLayerLoopback::Deliverer, nsITimerCallback, nsINamed)
 
 NS_IMETHODIMP TransportLayerLoopback::Deliverer::Notify(nsITimer *timer) {
   if (!layer_)
@@ -128,4 +127,10 @@ NS_IMETHODIMP TransportLayerLoopback::Deliverer::Notify(nsITimer *timer) {
 
   return NS_OK;
 }
+
+NS_IMETHODIMP TransportLayerLoopback::Deliverer::GetName(nsACString& aName) {
+  aName.AssignLiteral("TransportLayerLoopback::Deliverer");
+  return NS_OK;
+}
+
 }  // close namespace

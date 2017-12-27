@@ -2,7 +2,6 @@
 
 import argparse
 import json
-import logging
 import re
 import os
 import platform
@@ -24,7 +23,7 @@ def directories(pathmodule, cwd, fixup=lambda s: s):
     js_src = pathmodule.abspath(pathmodule.join(scripts, "..", ".."))
     source = pathmodule.abspath(pathmodule.join(js_src, "..", ".."))
     tooltool = pathmodule.abspath(env.get('TOOLTOOL_CHECKOUT',
-                                          pathmodule.join(source, "..")))
+                                          pathmodule.join(source, "..", "..")))
     return Dirs(scripts, js_src, source, tooltool)
 
 # Some scripts will be called with sh, which cannot use backslashed
@@ -33,6 +32,7 @@ def directories(pathmodule, cwd, fixup=lambda s: s):
 DIR = directories(os.path, os.getcwd())
 PDIR = directories(posixpath, os.environ["PWD"],
                    fixup=lambda s: re.sub(r'^(\w):', r'/\1', s))
+env['CPP_UNIT_TESTS_DIR_JS_SRC'] = DIR.js_src
 
 parser = argparse.ArgumentParser(
     description='Run a spidermonkey shell build job')
@@ -46,7 +46,7 @@ parser.add_argument('--timeout', '-t', type=int, metavar='TIMEOUT',
                     default=10800,
                     help='kill job after TIMEOUT seconds')
 parser.add_argument('--objdir', type=str, metavar='DIR',
-                    default=env.get('OBJDIR', 'obj-spider'),
+                    default=env.get('OBJDIR', os.path.join(DIR.source, 'obj-spider')),
                     help='object directory')
 group = parser.add_mutually_exclusive_group()
 group.add_argument('--optimize', action='store_true',
@@ -62,6 +62,14 @@ group.add_argument('--no-debug', action='store_false',
                    dest='debug',
                    help='generate a non-debug build. Overrides variant setting.')
 group.set_defaults(debug=None)
+group = parser.add_mutually_exclusive_group()
+group.add_argument('--jemalloc', action='store_true',
+                   dest='jemalloc',
+                   help='use mozilla\'s jemalloc instead of the default allocator')
+group.add_argument('--no-jemalloc', action='store_false',
+                   dest='jemalloc',
+                   help='use the default allocator instead of mozilla\'s jemalloc')
+group.set_defaults(jemalloc=None)
 parser.add_argument('--run-tests', '--tests', type=str, metavar='TESTSUITE',
                     default='',
                     help="comma-separated set of test suites to add to the variant's default set")
@@ -78,6 +86,13 @@ parser.add_argument('--nobuild', action='store_true',
 parser.add_argument('variant', type=str,
                     help='type of job requested, see variants/ subdir')
 args = parser.parse_args()
+
+OBJDIR = args.objdir
+OUTDIR = os.path.join(OBJDIR, "out")
+POBJDIR = posixpath.join(PDIR.source, args.objdir)
+AUTOMATION = env.get('AUTOMATION', False)
+MAKE = env.get('MAKE', 'make')
+MAKEFLAGS = env.get('MAKEFLAGS', '-j6' + ('' if AUTOMATION else ' -s'))
 
 
 def set_vars_from_script(script, vars):
@@ -125,11 +140,15 @@ def set_vars_from_script(script, vars):
                 env[var] = "%s;%s" % (env[var], originals[var])
 
 
-def ensure_dir_exists(name, clobber=True):
+def ensure_dir_exists(name, clobber=True, creation_marker_filename="CREATED-BY-AUTOSPIDER"):
+    marker = os.path.join(name, creation_marker_filename)
     if clobber:
+        if not AUTOMATION and os.path.exists(name) and not os.path.exists(marker):
+            raise Exception("Refusing to delete objdir %s because it was not created by autospider" % name)
         shutil.rmtree(name, ignore_errors=True)
     try:
         os.mkdir(name)
+        open(marker, 'a').close()
     except OSError:
         if clobber:
             raise
@@ -142,16 +161,11 @@ if args.variant == 'nonunified':
     # Note that this modifies the current checkout.
     for dirpath, dirnames, filenames in os.walk(DIR.js_src):
         if 'moz.build' in filenames:
-            subprocess.check_call(['sed', '-i', 's/UNIFIED_SOURCES/SOURCES/',
-                                   os.path.join(dirpath, 'moz.build')])
-
-OBJDIR = os.path.join(DIR.source, args.objdir)
-OUTDIR = os.path.join(OBJDIR, "out")
-POBJDIR = posixpath.join(PDIR.source, args.objdir)
-AUTOMATION = env.get('AUTOMATION', False)
-MAKE = env.get('MAKE', 'make')
-MAKEFLAGS = env.get('MAKEFLAGS', '-j6' + ('' if AUTOMATION else ' -s'))
-UNAME_M = subprocess.check_output(['uname', '-m']).strip()
+            in_place = ['-i']
+            if platform.system() == 'Darwin':
+                in_place.append('')
+            subprocess.check_call(['sed'] + in_place + ['s/UNIFIED_SOURCES/SOURCES/',
+                                                        os.path.join(dirpath, 'moz.build')])
 
 CONFIGURE_ARGS = variant['configure-args']
 
@@ -169,6 +183,10 @@ if opt is None:
     opt = variant.get('debug')
 if opt is not None:
     CONFIGURE_ARGS += (" --enable-debug" if opt else " --disable-debug")
+
+opt = args.jemalloc
+if opt is not None:
+    CONFIGURE_ARGS += (" --enable-jemalloc" if opt else " --disable-jemalloc")
 
 # Any jobs that wish to produce additional output can save them into the upload
 # directory if there is such a thing, falling back to OBJDIR.
@@ -189,7 +207,7 @@ if word_bits is None and args.platform:
 
 # Fall back to the word size of the host.
 if word_bits is None:
-    word_bits = 64 if UNAME_M == 'x86_64' else 32
+    word_bits = 64 if platform.architecture()[0] == '64bit' else 32
 
 if 'compiler' in variant:
     compiler = variant['compiler']
@@ -212,6 +230,10 @@ else:
     env.setdefault('CC', compiler)
     env.setdefault('CXX', cxx)
 
+bindir = os.path.join(OBJDIR, 'dist', 'bin')
+env['LD_LIBRARY_PATH'] = ':'.join(
+    p for p in (bindir, env.get('LD_LIBRARY_PATH')) if p)
+
 rust_dir = os.path.join(DIR.tooltool, 'rustc')
 if os.path.exists(os.path.join(rust_dir, 'bin', 'rustc')):
     env.setdefault('RUSTC', os.path.join(rust_dir, 'bin', 'rustc'))
@@ -233,26 +255,16 @@ elif platform.system() == 'Windows':
                          ['PATH', 'INCLUDE', 'LIB', 'LIBPATH', 'CC', 'CXX',
                           'WINDOWSSDKDIR'])
 
-# Compiler flags, based on word length
-if word_bits == 32:
-    if compiler == 'clang':
-        env['CC'] = '{CC} -arch i386'.format(**env)
-        env['CXX'] = '{CXX} -arch i386'.format(**env)
-    elif compiler == 'gcc':
-        env['CC'] = '{CC} -m32'.format(**env)
-        env['CXX'] = '{CXX} -m32'.format(**env)
-        env['AR'] = 'ar'
-
 # Configure flags, based on word length and cross-compilation
 if word_bits == 32:
     if platform.system() == 'Windows':
         CONFIGURE_ARGS += ' --target=i686-pc-mingw32 --host=i686-pc-mingw32'
     elif platform.system() == 'Linux':
-        if UNAME_M != 'arm':
+        if not platform.machine().startswith('arm'):
             CONFIGURE_ARGS += ' --target=i686-pc-linux --host=i686-pc-linux'
 
     # Add SSE2 support for x86/x64 architectures.
-    if UNAME_M != 'arm':
+    if not platform.machine().startswith('arm'):
         if platform.system() == 'Windows':
             sse_flags = '-arch:SSE2'
         else:
@@ -281,7 +293,8 @@ ensure_dir_exists(OUTDIR, clobber=not args.keep)
 
 
 def run_command(command, check=False, **kwargs):
-    proc = Popen(command, cwd=OBJDIR, **kwargs)
+    kwargs.setdefault('cwd', OBJDIR)
+    proc = Popen(command, **kwargs)
     ACTIVE_PROCESSES.add(proc)
     stdout, stderr = None, None
     try:
@@ -296,12 +309,33 @@ def run_command(command, check=False, **kwargs):
 # Add in environment variable settings for this variant. Normally used to
 # modify the flags passed to the shell or to set the GC zeal mode.
 for k, v in variant.get('env', {}).items():
-    env[k] = v.format(
+    env[k.encode('ascii')] = v.encode('ascii').format(
         DIR=DIR.scripts,
         TOOLTOOL_CHECKOUT=DIR.tooltool,
         MOZ_UPLOAD_DIR=env['MOZ_UPLOAD_DIR'],
         OUTDIR=OUTDIR,
     )
+
+if AUTOMATION:
+    # Currently only supported on linux64.
+    if platform.system() == 'Linux' and platform.machine() == 'x86_64':
+        use_minidump = variant.get('use_minidump', True)
+    else:
+        use_minidump = False
+else:
+    use_minidump = False
+
+if use_minidump:
+    env.setdefault('MINIDUMP_SAVE_PATH', env['MOZ_UPLOAD_DIR'])
+    injector_lib = None
+    if platform.system() == 'Linux':
+        injector_lib = os.path.join(DIR.tooltool, 'breakpad-tools', 'libbreakpadinjector.so')
+        env.setdefault('MINIDUMP_STACKWALK',
+                       os.path.join(DIR.tooltool, 'breakpad-tools', 'minidump_stackwalk'))
+    elif platform.system() == 'Darwin':
+        injector_lib = os.path.join(DIR.tooltool, 'breakpad-tools', 'breakpadinjector.dylib')
+    if not injector_lib or not os.path.exists(injector_lib):
+        use_minidump=False
 
 def need_updating_configure(configure):
     if not os.path.exists(configure):
@@ -334,10 +368,26 @@ if not args.nobuild:
     # Run make
     run_command('%s -w %s' % (MAKE, MAKEFLAGS), shell=True, check=True)
 
+    if use_minidump:
+        # Convert symbols to breakpad format.
+        hostdir = os.path.join(OBJDIR, "dist", "host", "bin")
+        if not os.path.isdir(hostdir):
+            os.makedirs(hostdir)
+        shutil.copy(os.path.join(DIR.tooltool, "breakpad-tools", "dump_syms"),
+                    os.path.join(hostdir, 'dump_syms'))
+        run_command([
+            'make',
+            'recurse_syms',
+            'MOZ_SOURCE_REPO=file://' + DIR.source,
+            'RUST_TARGET=0', 'RUSTC_COMMIT=0',
+            'MOZ_CRASHREPORTER=1',
+            'MOZ_AUTOMATION_BUILD_SYMBOLS=1',
+        ], check=True)
+
 COMMAND_PREFIX = []
 # On Linux, disable ASLR to make shell builds a bit more reproducible.
 if subprocess.call("type setarch >/dev/null 2>&1", shell=True) == 0:
-    COMMAND_PREFIX.extend(['setarch', UNAME_M, '-R'])
+    COMMAND_PREFIX.extend(['setarch', platform.machine(), '-R'])
 
 
 def run_test_command(command, **kwargs):
@@ -378,6 +428,21 @@ test_suites -= set(normalize_tests(args.skip_tests.split(",")))
 if 'all' in args.skip_tests.split(","):
     test_suites = []
 
+# Bug 1391877 - Windows test runs are getting mysterious timeouts when run
+# through taskcluster, but only when running multiple jit-test jobs in
+# parallel. Work around them for now.
+if platform.system() == 'Windows':
+    env['JITTEST_EXTRA_ARGS'] = "-j1 " + env.get('JITTEST_EXTRA_ARGS', '')
+
+if use_minidump:
+    # Set up later js invocations to run with the breakpad injector loaded.
+    # Originally, I intended for this to be used with LD_PRELOAD, but when
+    # cross-compiling from 64- to 32-bit, that will fail and produce stderr
+    # output when running any 64-bit commands, which breaks eg mozconfig
+    # processing. So use the --dll command line mechanism universally.
+    for v in ('JSTESTS_EXTRA_ARGS', 'JITTEST_EXTRA_ARGS'):
+        env[v] = "--args='--dll %s' %s" % (injector_lib, env.get(v, ''))
+
 # Always run all enabled tests, even if earlier ones failed. But return the
 # first failed status.
 results = []
@@ -392,7 +457,10 @@ if 'jittest' in test_suites:
     results.append(run_test_command([MAKE, 'check-jit-test']))
 if 'jsapitests' in test_suites:
     jsapi_test_binary = os.path.join(OBJDIR, 'dist', 'bin', 'jsapi-tests')
-    st = run_test_command([jsapi_test_binary])
+    test_env = env.copy()
+    if use_minidump and platform.system() == 'Linux':
+        test_env['LD_PRELOAD'] = injector_lib
+    st = run_test_command([jsapi_test_binary], env=test_env)
     if st < 0:
         print("PROCESS-CRASH | jsapi-tests | application crashed")
         print("Return code: {}".format(st))
@@ -432,13 +500,8 @@ if args.variant in ('tsan', 'msan'):
             print >> outfh, "%d %s" % (count, location)
     print(open(summary_filename, 'rb').read())
 
-    max_allowed = None
     if 'max-errors' in variant:
         max_allowed = variant['max-errors']
-    elif 'expect-errors' in variant:
-        max_allowed = len(variant['expect-errors'])
-
-    if max_allowed is not None:
         print("Found %d errors out of %d allowed" % (len(sites), max_allowed))
         if len(sites) > max_allowed:
             results.append(1)
@@ -467,12 +530,18 @@ if args.variant in ('tsan', 'msan'):
             # expect-errors is an array of (filename, function) tuples.
             expect = tuple(expect)
             if remaining[expect] == 0:
-                print("Did not see expected error in %s function %s" % expect)
+                print("Did not see known error in %s function %s" % expect)
             else:
                 remaining[expect] -= 1
 
+        status = 0
         for filename, function in (e for e, c in remaining.items() if c > 0):
-            print("*** tsan error in %s function %s" % (filename, function))
+            if AUTOMATION:
+                print("TinderboxPrint: tsan error<br/>%s function %s" % (filename, function))
+                status = 1
+            else:
+                print("*** tsan error in %s function %s" % (filename, function))
+        results.append(status)
 
     # Gather individual results into a tarball. Note that these are
     # distinguished only by pid of the JS process running within each test, so
@@ -482,6 +551,16 @@ if args.variant in ('tsan', 'msan'):
                os.path.join(env['MOZ_UPLOAD_DIR'], '%s.tar.gz' % args.variant)]
     command += files
     subprocess.call(command)
+
+# Generate stacks from minidumps.
+if use_minidump:
+    venv_python = os.path.join(OBJDIR, "_virtualenv", "bin", "python")
+    run_command([
+        venv_python,
+        os.path.join(DIR.source, "testing/mozbase/mozcrash/mozcrash/mozcrash.py"),
+        os.getenv("TMPDIR", "/tmp"),
+        os.path.join(OBJDIR, "dist/crashreporter-symbols"),
+    ])
 
 for st in results:
     if st != 0:

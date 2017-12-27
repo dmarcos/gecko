@@ -91,12 +91,10 @@ this.Async = {
    */
   waitForSyncCallback: function waitForSyncCallback(callback) {
     // Grab the current thread so we can make it give up priority.
-    let thread = Cc["@mozilla.org/thread-manager;1"].getService().currentThread;
+    let tm = Cc["@mozilla.org/thread-manager;1"].getService();
 
     // Keep waiting until our callback is triggered (unless the app is quitting).
-    while (Async.checkAppReady() && callback.state == CB_READY) {
-      thread.processNextEvent(true);
-    }
+    tm.spinEventLoopUntil(() => !Async.checkAppReady || callback.state != CB_READY);
 
     // Reset the state of the callback to prepare for another call.
     let state = callback.state;
@@ -119,7 +117,7 @@ this.Async = {
     // Watch for app-quit notification to stop any sync calls
     Services.obs.addObserver(function onQuitApplication() {
       Services.obs.removeObserver(onQuitApplication, "quit-application");
-      Async.checkAppReady = function() {
+      Async.checkAppReady = Async.promiseYield = function() {
         let exception = Components.Exception("App. Quitting", Cr.NS_ERROR_ABORT);
         exception.appIsShuttingDown = true;
         throw exception;
@@ -135,7 +133,7 @@ this.Async = {
    */
   isAppReady() {
     try {
-      return Async.checkAppReady()
+      return Async.checkAppReady();
     } catch (ex) {
       if (!Async.isShutdownException(ex)) {
         throw ex;
@@ -169,61 +167,6 @@ this.Async = {
     return callback;
   },
 
-  // Prototype for mozIStorageCallback, used in querySpinningly.
-  // This allows us to define the handle* functions just once rather
-  // than on every querySpinningly invocation.
-  _storageCallbackPrototype: {
-    results: null,
-
-    // These are set by queryAsync.
-    names: null,
-    syncCb: null,
-
-    handleResult: function handleResult(results) {
-      if (!this.names) {
-        return;
-      }
-      if (!this.results) {
-        this.results = [];
-      }
-      let row;
-      while ((row = results.getNextRow()) != null) {
-        let item = {};
-        for (let name of this.names) {
-          item[name] = row.getResultByName(name);
-        }
-        this.results.push(item);
-      }
-    },
-    handleError: function handleError(error) {
-      this.syncCb.throw(error);
-    },
-    handleCompletion: function handleCompletion(reason) {
-
-      // If we got an error, handleError will also have been called, so don't
-      // call the callback! We never cancel statements, so we don't need to
-      // address that quandary.
-      if (reason == REASON_ERROR)
-        return;
-
-      // If we were called with column names but didn't find any results,
-      // the calling code probably still expects an array as a return value.
-      if (this.names && !this.results) {
-        this.results = [];
-      }
-      this.syncCb(this.results);
-    }
-  },
-
-  querySpinningly: function querySpinningly(query, names) {
-    // 'Synchronously' asyncExecute, fetching all results by name.
-    let storageCallback = Object.create(Async._storageCallbackPrototype);
-    storageCallback.names = names;
-    storageCallback.syncCb = Async.makeSyncCallback();
-    query.executeAsync(storageCallback);
-    return Async.waitForSyncCallback(storageCallback.syncCb);
-  },
-
   promiseSpinningly(promise) {
     let cb = Async.makeSpinningCallback();
     promise.then(result => {
@@ -233,4 +176,32 @@ this.Async = {
     });
     return cb.wait();
   },
+
+  /**
+   * A "tight loop" of promises can still lock up the browser for some time.
+   * Periodically waiting for a promise returned by this function will solve
+   * that.
+   * You should probably not use this method directly and instead use jankYielder
+   * below.
+   * Some reference here:
+   * - https://gist.github.com/jesstelford/bbb30b983bddaa6e5fef2eb867d37678
+   * - https://bugzilla.mozilla.org/show_bug.cgi?id=1094248
+   */
+  promiseYield() {
+    return new Promise(resolve => {
+      Services.tm.currentThread.dispatch(resolve, Ci.nsIThread.DISPATCH_NORMAL);
+    });
+  },
+
+  // Returns a method that yields every X calls.
+  // Common case is calling the returned method every iteration in a loop.
+  jankYielder(yieldEvery = 50) {
+    let iterations = 0;
+    return async () => {
+      Async.checkAppReady(); // Let it throw!
+      if (++iterations % yieldEvery === 0) {
+        await Async.promiseYield();
+      }
+    };
+  }
 };

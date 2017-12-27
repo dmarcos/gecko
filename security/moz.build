@@ -91,8 +91,10 @@ else:
     # in the environment, which isn't true here. I don't know that
     # setting that would be harmful, but we already have this information
     # anyway.
-    if CONFIG['CLANG_CXX'] or CONFIG['CLANG_CL']:
+    if CONFIG['CC_TYPE'] in ('clang', 'clang-cl'):
         gyp_vars['cc_is_clang'] = 1
+    if CONFIG['GCC_USE_GNU_LD']:
+        gyp_vars['cc_use_gnu_ld'] = 1
 
     GYP_DIRS += ['nss']
     GYP_DIRS['nss'].input = 'nss/nss.gyp'
@@ -101,9 +103,11 @@ else:
     sandbox_vars = {
         # NSS explicitly exports its public symbols
         # with linker scripts.
-        'NO_VISIBILITY_FLAGS': True,
-        # XXX: We should fix these warnings.
-        'ALLOW_COMPILER_WARNINGS': True,
+        'COMPILE_FLAGS': {
+            'VISIBILITY': [],
+            # XXX: We should fix these warnings.
+            'WARNINGS_AS_ERRORS': [],
+        },
         # NSS' build system doesn't currently build NSS with PGO.
         # We could probably do so, but not without a lot of
         # careful consideration.
@@ -113,6 +117,8 @@ else:
         if CONFIG['CPU_ARCH'] == 'x86':
             # This should really be the default.
             sandbox_vars['ASFLAGS'] = ['-safeseh']
+        if CONFIG['MOZ_FOLD_LIBS_FLAGS']:
+            sandbox_vars['CFLAGS'] = CONFIG['MOZ_FOLD_LIBS_FLAGS']
     if CONFIG['OS_TARGET'] == 'Android':
         sandbox_vars['CFLAGS'] = [
             '-include', TOPSRCDIR + '/security/manager/android_stub.h',

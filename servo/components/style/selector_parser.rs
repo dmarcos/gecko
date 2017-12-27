@@ -6,11 +6,11 @@
 
 #![deny(missing_docs)]
 
-use cssparser::Parser as CssParser;
-use selectors::Element;
+use cssparser::{Parser as CssParser, ParserInput};
 use selectors::parser::SelectorList;
-use std::fmt::Debug;
-use stylesheets::{Origin, Namespaces};
+use std::fmt::{self, Debug, Write};
+use style_traits::{ParseError, ToCss};
+use stylesheets::{Origin, Namespaces, UrlExtraData};
 
 /// A convenient alias for the type that represents an attribute value used for
 /// selector parser implementation.
@@ -34,23 +34,16 @@ pub use servo::restyle_damage::ServoRestyleDamage as RestyleDamage;
 #[cfg(feature = "gecko")]
 pub use gecko::restyle_damage::GeckoRestyleDamage as RestyleDamage;
 
-/// A type that represents the previous computed values needed for restyle
-/// damage calculation.
-#[cfg(feature = "servo")]
-pub type PreExistingComputedValues = ::std::sync::Arc<::properties::ServoComputedValues>;
-
-/// A type that represents the previous computed values needed for restyle
-/// damage calculation.
-#[cfg(feature = "gecko")]
-pub type PreExistingComputedValues = ::gecko_bindings::structs::nsStyleContext;
-
 /// Servo's selector parser.
-#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[cfg_attr(feature = "servo", derive(MallocSizeOf))]
 pub struct SelectorParser<'a> {
     /// The origin of the stylesheet we're parsing.
     pub stylesheet_origin: Origin,
     /// The namespace set of the stylesheet.
     pub namespaces: &'a Namespaces,
+    /// The extra URL data of the stylesheet, which is used to look up
+    /// whether we are parsing a chrome:// URL style sheet.
+    pub url_data: Option<&'a UrlExtraData>,
 }
 
 impl<'a> SelectorParser<'a> {
@@ -59,18 +52,27 @@ impl<'a> SelectorParser<'a> {
     ///
     /// This is used for some DOM APIs like `querySelector`.
     pub fn parse_author_origin_no_namespace(input: &str)
-                                            -> Result<SelectorList<SelectorImpl>, ()> {
+                                            -> Result<SelectorList<SelectorImpl>, ParseError> {
         let namespaces = Namespaces::default();
         let parser = SelectorParser {
             stylesheet_origin: Origin::Author,
             namespaces: &namespaces,
+            url_data: None,
         };
-        SelectorList::parse(&parser, &mut CssParser::new(input))
+        let mut input = ParserInput::new(input);
+        SelectorList::parse(&parser, &mut CssParser::new(&mut input))
     }
 
     /// Whether we're parsing selectors in a user-agent stylesheet.
     pub fn in_user_agent_stylesheet(&self) -> bool {
         matches!(self.stylesheet_origin, Origin::UserAgent)
+    }
+
+    /// Whether we're parsing selectors in a stylesheet that has chrome
+    /// privilege.
+    pub fn chrome_rules_enabled(&self) -> bool {
+        self.url_data.map_or(false, |d| d.is_chrome()) ||
+            self.stylesheet_origin == Origin::User
     }
 }
 
@@ -78,7 +80,7 @@ impl<'a> SelectorParser<'a> {
 ///
 /// If you're implementing a public selector for `Servo` that the end-user might
 /// customize, then you probably need to make it eager.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PseudoElementCascadeType {
     /// Eagerly cascaded pseudo-elements are "normal" pseudo-elements (i.e.
     /// `::before` and `::after`). They inherit styles normally as another
@@ -101,31 +103,97 @@ pub enum PseudoElementCascadeType {
     Precomputed,
 }
 
-/// An extension to rust-selector's `Element` trait.
-pub trait ElementExt: Element<Impl=SelectorImpl> + Debug {
-    /// Whether this element is a `link`.
-    fn is_link(&self) -> bool;
-
-    /// Whether this element should match user and author rules.
-    ///
-    /// We use this for Native Anonymous Content in Gecko.
-    fn matches_user_and_author_rules(&self) -> bool;
+/// A per-pseudo map, from a given pseudo to a `T`.
+#[derive(MallocSizeOf)]
+pub struct PerPseudoElementMap<T> {
+    entries: [Option<T>; PSEUDO_COUNT],
 }
 
-impl SelectorImpl {
-    /// A helper to traverse each precomputed pseudo-element, executing `fun` on
-    /// it.
-    ///
-    /// The optimization comment in `each_eagerly_cascaded_pseudo_element` also
-    /// applies here.
-    #[inline]
-    pub fn each_precomputed_pseudo_element<F>(mut fun: F)
-        where F: FnMut(PseudoElement),
-    {
-        Self::each_pseudo_element(|pseudo| {
-            if pseudo.is_precomputed() {
-                fun(pseudo)
+impl<T> Default for PerPseudoElementMap<T> {
+    fn default() -> Self {
+        Self {
+            entries: PseudoElement::pseudo_none_array(),
+        }
+    }
+}
+
+impl<T> Debug for PerPseudoElementMap<T>
+where
+    T: Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("[")?;
+        let mut first = true;
+        for entry in self.entries.iter() {
+            if !first {
+                f.write_str(", ")?;
             }
-        })
+            first = false;
+            entry.fmt(f)?;
+        }
+        f.write_str("]")
+    }
+}
+
+impl<T> PerPseudoElementMap<T> {
+    /// Get an entry in the map.
+    pub fn get(&self, pseudo: &PseudoElement) -> Option<&T> {
+        self.entries[pseudo.index()].as_ref()
+    }
+
+    /// Clear this enumerated array.
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Set an entry value.
+    ///
+    /// Returns an error if the element is not a simple pseudo.
+    pub fn set(&mut self, pseudo: &PseudoElement, value: T) {
+        self.entries[pseudo.index()] = Some(value);
+    }
+
+    /// Get an entry for `pseudo`, or create it with calling `f`.
+    pub fn get_or_insert_with<F>(
+        &mut self,
+        pseudo: &PseudoElement,
+        f: F,
+    ) -> &mut T
+    where
+        F: FnOnce() -> T,
+    {
+        let index = pseudo.index();
+        if self.entries[index].is_none() {
+            self.entries[index] = Some(f());
+        }
+        self.entries[index].as_mut().unwrap()
+    }
+
+    /// Get an iterator for the entries.
+    pub fn iter(&self) -> ::std::slice::Iter<Option<T>> {
+        self.entries.iter()
+    }
+}
+
+/// Values for the :dir() pseudo class
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Direction {
+    /// left-to-right semantic directionality
+    Ltr,
+    /// right-to-left semantic directionality
+    Rtl,
+    /// Some other provided directionality value
+    Other(Box<str>),
+}
+
+impl ToCss for Direction {
+    fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: Write {
+        let dir_str = match *self {
+            Direction::Rtl => "rtl",
+            Direction::Ltr => "ltr",
+            // FIXME: This should be escaped as an identifier; see #19231
+            Direction::Other(ref other) => other,
+        };
+        dest.write_str(dir_str)
     }
 }

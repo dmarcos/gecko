@@ -1,15 +1,13 @@
-add_task(function* test() {
+add_task(async function test() {
   let appD = make_fake_appdir();
   let crD = appD.clone();
   crD.append("Crash Reports");
   let crashes = add_fake_crashes(crD, 5);
   // sanity check
-  let dirSvc = Components.classes["@mozilla.org/file/directory_service;1"]
-                         .getService(Components.interfaces.nsIProperties);
-  let appDtest = dirSvc.get("UAppData", Components.interfaces.nsILocalFile);
+  let appDtest = Services.dirsvc.get("UAppData", Components.interfaces.nsIFile);
   ok(appD.equals(appDtest), "directory service provider registered ok");
 
-  yield BrowserTestUtils.withNewTab({ gBrowser, url: "about:crashes" }, function(browser) {
+  await BrowserTestUtils.withNewTab({ gBrowser, url: "about:crashes" }, function(browser) {
     info("about:crashes loaded");
     return ContentTask.spawn(browser, crashes, function(crashes) {
       let doc = content.document;

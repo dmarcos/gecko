@@ -80,8 +80,14 @@ PKG_SRCPACK_PATH =
 SYMBOL_FULL_ARCHIVE_BASENAME = $(PKG_BASENAME).crashreporter-symbols-full
 SYMBOL_ARCHIVE_BASENAME = $(PKG_BASENAME).crashreporter-symbols
 
+# Generated file package naming
+GENERATED_SOURCE_FILE_PACKAGE = $(PKG_BASENAME).generated-files.tar.gz
+
 # Code coverage package naming
 CODE_COVERAGE_ARCHIVE_BASENAME = $(PKG_BASENAME).code-coverage-gcno
+
+# Mozsearch package naming
+MOZSEARCH_ARCHIVE_BASENAME = $(PKG_BASENAME).mozsearch-index
 
 # Mozharness naming
 MOZHARNESS_PACKAGE = mozharness.zip
@@ -92,7 +98,7 @@ CPP_TEST_PACKAGE = $(PKG_BASENAME).cppunittest.tests.zip
 XPC_TEST_PACKAGE = $(PKG_BASENAME).xpcshell.tests.zip
 MOCHITEST_PACKAGE = $(PKG_BASENAME).mochitest.tests.zip
 REFTEST_PACKAGE = $(PKG_BASENAME).reftest.tests.zip
-WP_TEST_PACKAGE = $(PKG_BASENAME).web-platform.tests.zip
+WP_TEST_PACKAGE = $(PKG_BASENAME).web-platform.tests.tar.gz
 TALOS_PACKAGE = $(PKG_BASENAME).talos.tests.zip
 AWSY_PACKAGE = $(PKG_BASENAME).awsy.tests.zip
 GTEST_PACKAGE = $(PKG_BASENAME).gtest.tests.zip

@@ -7,6 +7,12 @@
 #ifndef gc_NurseryAwareHashMap_h
 #define gc_NurseryAwareHashMap_h
 
+#include "gc/Barrier.h"
+#include "gc/Marking.h"
+#include "js/GCHashTable.h"
+#include "js/GCPolicyAPI.h"
+#include "js/HashTable.h"
+
 namespace js {
 
 namespace detail {
@@ -81,6 +87,7 @@ class NurseryAwareHashMap
     using Lookup = typename MapType::Lookup;
     using Ptr = typename MapType::Ptr;
     using Range = typename MapType::Range;
+    using Entry = typename MapType::Entry;
 
     explicit NurseryAwareHashMap(AllocPolicy a = AllocPolicy()) : map(a) {}
 
@@ -157,6 +164,10 @@ class NurseryAwareHashMap
     void sweep() {
         MOZ_ASSERT(nurseryEntries.empty());
         map.sweep();
+    }
+
+    bool hasNurseryEntries() const {
+        return !nurseryEntries.empty();
     }
 };
 

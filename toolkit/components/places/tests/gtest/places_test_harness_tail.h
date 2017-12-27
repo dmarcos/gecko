@@ -6,9 +6,7 @@
 
 #include "nsWidgetsCID.h"
 #include "nsIComponentRegistrar.h"
-#ifdef MOZ_CRASHREPORTER
 #include "nsICrashReporter.h"
-#endif
 
 #ifndef TEST_NAME
 #error "Must #define TEST_NAME before including places_test_harness_tail.h"
@@ -21,6 +19,7 @@ int gTestsIndex = 0;
 class RunNextTest : public mozilla::Runnable
 {
 public:
+  RunNextTest() : mozilla::Runnable("RunNextTest") {}
   NS_IMETHOD Run() override
   {
     NS_ASSERTION(NS_IsMainThread(), "Not running on the main thread?");
@@ -87,9 +86,7 @@ TEST(IHistory, Test)
   run_next_test();
 
   // Spin the event loop until we've run out of tests to run.
-  while (gPendingTests) {
-    (void)NS_ProcessNextEvent();
-  }
+  mozilla::SpinEventLoopUntil([&]() { return !gPendingTests; });
 
   // And let any other events finish before we quit.
   (void)NS_ProcessPendingEvents(nullptr);

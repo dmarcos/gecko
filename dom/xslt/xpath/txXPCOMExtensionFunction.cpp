@@ -6,8 +6,9 @@
 #include "nsAutoPtr.h"
 #include "nsComponentManagerUtils.h"
 #include "nsDependentString.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsIInterfaceInfoManager.h"
+#include "nsMemory.h"
 #include "nsServiceManagerUtils.h"
 #include "txExpr.h"
 #include "txIFunctionEvaluationContext.h"
@@ -106,7 +107,7 @@ public:
     txXPCOMExtensionFunctionCall(nsISupports *aHelper, const nsIID &aIID,
                                  uint16_t aMethodIndex,
 #ifdef TX_TO_STRING
-                                 nsIAtom *aName,
+                                 nsAtom *aName,
 #endif
                                  nsISupports *aState);
 
@@ -120,7 +121,7 @@ private:
     nsIID mIID;
     uint16_t mMethodIndex;
 #ifdef TX_TO_STRING
-    nsCOMPtr<nsIAtom> mName;
+    RefPtr<nsAtom> mName;
 #endif
     nsCOMPtr<nsISupports> mState;
 };
@@ -129,7 +130,7 @@ txXPCOMExtensionFunctionCall::txXPCOMExtensionFunctionCall(nsISupports *aHelper,
                                                            const nsIID &aIID,
                                                            uint16_t aMethodIndex,
 #ifdef TX_TO_STRING
-                                                           nsIAtom *aName,
+                                                           nsAtom *aName,
 #endif
                                                            nsISupports *aState)
     : mHelper(aHelper),
@@ -160,7 +161,7 @@ private:
 };
 
 static nsresult
-LookupFunction(const char *aContractID, nsIAtom* aName, nsIID &aIID,
+LookupFunction(const char *aContractID, nsAtom* aName, nsIID &aIID,
                uint16_t &aMethodIndex, nsISupports **aHelper)
 {
     nsresult rv;
@@ -239,7 +240,7 @@ LookupFunction(const char *aContractID, nsIAtom* aName, nsIID &aIID,
 /* static */
 nsresult
 TX_ResolveFunctionCallXPCOM(const nsCString &aContractID, int32_t aNamespaceID,
-                            nsIAtom* aName, nsISupports *aState,
+                            nsAtom* aName, nsISupports *aState,
                             FunctionCall **aFunction)
 {
     nsIID iid;
@@ -345,7 +346,9 @@ txParamArrayHolder::~txParamArrayHolder()
                            variant.type.TagPart() == nsXPTType::T_INTERFACE_IS,
                            "We only support cleanup of strings and interfaces "
                            "here, and this looks like neither!");
-                static_cast<nsISupports*>(variant.val.p)->Release();
+                if (variant.val.p != nullptr) {
+                    static_cast<nsISupports*>(variant.val.p)->Release();
+                }
             }
         }
     }
@@ -608,7 +611,7 @@ txXPCOMExtensionFunctionCall::isSensitiveTo(ContextSensitivity aContext)
 
 #ifdef TX_TO_STRING
 nsresult
-txXPCOMExtensionFunctionCall::getNameAtom(nsIAtom** aAtom)
+txXPCOMExtensionFunctionCall::getNameAtom(nsAtom** aAtom)
 {
     NS_ADDREF(*aAtom = mName);
 

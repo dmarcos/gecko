@@ -97,7 +97,7 @@ function createAndLoadTemporaryFile()
   // Write the temporary file.
   let fout = Cc["@mozilla.org/network/file-output-stream;1"].
              createInstance(Ci.nsIFileOutputStream);
-  fout.init(gFile.QueryInterface(Ci.nsILocalFile), 0x02 | 0x08 | 0x20,
+  fout.init(gFile.QueryInterface(Ci.nsIFile), 0x02 | 0x08 | 0x20,
             0o644, fout.DEFER_OPEN);
 
   let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"].
@@ -115,7 +115,7 @@ function tempFileSaved(aStatus)
 
   // Import the file into Scratchpad.
   gScratchpad.setFilename(gFile.path);
-  gScratchpad.importFromFile(gFile.QueryInterface(Ci.nsILocalFile), true,
+  gScratchpad.importFromFile(gFile.QueryInterface(Ci.nsIFile), true,
                              testAfterSaved);
 }
 
@@ -123,11 +123,11 @@ function test()
 {
   waitForExplicitFinish();
 
-  gBrowser.selectedTab = gBrowser.addTab();
-  gBrowser.selectedBrowser.addEventListener("load", function () {
+  gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
+  BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser).then(function () {
     openScratchpad(startTest);
-  }, {capture: true, once: true});
+  });
 
-  content.location = "data:text/html,<p>test reverting to last saved state of" +
-                     " a file </p>";
+  gBrowser.loadURI("data:text/html,<p>test reverting to last saved state of" +
+                   " a file </p>");
 }

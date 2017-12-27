@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -16,6 +17,7 @@
 #include "gfxQuad.h"                    // for gfxQuad
 #include "gfxRect.h"                    // for gfxRect
 #include "gfxTypes.h"                   // for gfxFloat
+#include "gfxUtils.h"                   // for TransformToQuad
 #include "mozilla/gfx/BasePoint3D.h"    // for BasePoint3D
 #include "mozilla/Sprintf.h"            // for SprintfLiteral
 #include "nsRegion.h"                   // for nsIntRegion
@@ -89,8 +91,8 @@ static LayerSortOrder CompareDepth(Layer* aOne, Layer* aTwo) {
     aTwo->GetLocalTransform() * aTwo->GetParent()->GetEffectiveTransform();
 
   // Transform both rectangles and project into 2d space.
-  gfxQuad ourTransformedRect = ourRect.TransformToQuad(ourTransform);
-  gfxQuad otherTransformedRect = otherRect.TransformToQuad(otherTransform);
+  gfxQuad ourTransformedRect = gfxUtils::TransformToQuad(ourRect, ourTransform);
+  gfxQuad otherTransformedRect = gfxUtils::TransformToQuad(otherRect, otherTransform);
 
   gfxRect ourBounds = ourTransformedRect.GetBounds();
   gfxRect otherBounds = otherTransformedRect.GetBounds();

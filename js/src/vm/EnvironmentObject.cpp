@@ -8,13 +8,11 @@
 
 #include "mozilla/PodOperations.h"
 #include "mozilla/ScopeExit.h"
-#include "mozilla/SizePrintfMacros.h"
 
 #include "jscompartment.h"
 #include "jsiter.h"
 
 #include "builtin/ModuleObject.h"
-#include "frontend/ParseNode.h"
 #include "gc/Policy.h"
 #include "vm/ArgumentsObject.h"
 #include "vm/AsyncFunction.h"
@@ -25,11 +23,12 @@
 #include "wasm/WasmInstance.h"
 
 #include "jsatominlines.h"
-#include "jsobjinlines.h"
 #include "jsscriptinlines.h"
 
+#include "gc/Marking-inl.h"
 #include "vm/NativeObject-inl.h"
 #include "vm/Stack-inl.h"
+#include "vm/TypeInference-inl.h"
 
 using namespace js;
 using namespace js::gc;
@@ -407,17 +406,22 @@ const ObjectOps ModuleEnvironmentObject::objectOps_ = {
     ModuleEnvironmentObject::setProperty,
     ModuleEnvironmentObject::getOwnPropertyDescriptor,
     ModuleEnvironmentObject::deleteProperty,
-    nullptr, nullptr,                                    /* watch/unwatch */
     nullptr,                                             /* getElements */
-    ModuleEnvironmentObject::enumerate,
     nullptr
+};
+
+const ClassOps ModuleEnvironmentObject::classOps_ = {
+    nullptr,    /* addProperty */
+    nullptr,    /* delProperty */
+    nullptr,    /* enumerate */
+    ModuleEnvironmentObject::newEnumerate
 };
 
 const Class ModuleEnvironmentObject::class_ = {
     "ModuleEnvironmentObject",
     JSCLASS_HAS_RESERVED_SLOTS(ModuleEnvironmentObject::RESERVED_SLOTS) |
     JSCLASS_IS_ANONYMOUS,
-    JS_NULL_CLASS_OPS,
+    &ModuleEnvironmentObject::classOps_,
     JS_NULL_CLASS_SPEC,
     JS_NULL_CLASS_EXT,
     &ModuleEnvironmentObject::objectOps_
@@ -490,10 +494,8 @@ ModuleEnvironmentObject::createImportBinding(JSContext* cx, HandleAtom importNam
     RootedId importNameId(cx, AtomToId(importName));
     RootedId localNameId(cx, AtomToId(localName));
     RootedModuleEnvironmentObject env(cx, &module->initialEnvironment());
-    if (!importBindings().putNew(cx, importNameId, env, localNameId)) {
-        ReportOutOfMemory(cx);
+    if (!importBindings().put(cx, importNameId, env, localNameId))
         return false;
-    }
 
     return true;
 }
@@ -573,7 +575,7 @@ ModuleEnvironmentObject::setProperty(JSContext* cx, HandleObject obj, HandleId i
     if (self->importBindings().has(id))
         return result.failReadOnly();
 
-    return NativeSetProperty(cx, self, id, v, receiver, Qualified, result);
+    return NativeSetProperty<Qualified>(cx, self, id, v, receiver, result);
 }
 
 /* static */ bool
@@ -604,8 +606,8 @@ ModuleEnvironmentObject::deleteProperty(JSContext* cx, HandleObject obj, HandleI
 }
 
 /* static */ bool
-ModuleEnvironmentObject::enumerate(JSContext* cx, HandleObject obj, AutoIdVector& properties,
-                                   bool enumerableOnly)
+ModuleEnvironmentObject::newEnumerate(JSContext* cx, HandleObject obj, AutoIdVector& properties,
+                                      bool enumerableOnly)
 {
     RootedModuleEnvironmentObject self(cx, &obj->as<ModuleEnvironmentObject>());
     const IndirectBindingMap& bs(self->importBindings());
@@ -630,13 +632,46 @@ ModuleEnvironmentObject::enumerate(JSContext* cx, HandleObject obj, AutoIdVector
 
 /*****************************************************************************/
 
+const Class WasmInstanceEnvironmentObject::class_ = {
+    "WasmInstance",
+    JSCLASS_IS_ANONYMOUS | JSCLASS_HAS_RESERVED_SLOTS(WasmInstanceEnvironmentObject::RESERVED_SLOTS)
+};
+
+/* static */ WasmInstanceEnvironmentObject*
+WasmInstanceEnvironmentObject::createHollowForDebug(JSContext* cx, Handle<WasmInstanceScope*> scope)
+{
+    RootedObjectGroup group(cx, ObjectGroup::defaultNewGroup(cx, &class_, TaggedProto(nullptr)));
+    if (!group)
+        return nullptr;
+
+    RootedShape shape(cx, scope->getEmptyEnvironmentShape(cx));
+    if (!shape)
+        return nullptr;
+
+    gc::AllocKind kind = gc::GetGCObjectKind(shape->numFixedSlots());
+    MOZ_ASSERT(CanBeFinalizedInBackground(kind, &class_));
+    kind = gc::GetBackgroundAllocKind(kind);
+
+    JSObject* obj;
+    JS_TRY_VAR_OR_RETURN_NULL(cx, obj, NativeObject::create(cx, kind, gc::DefaultHeap, shape, group));
+
+    Rooted<WasmInstanceEnvironmentObject*> callobj(cx, &obj->as<WasmInstanceEnvironmentObject>());
+    callobj->initEnclosingEnvironment(&cx->global()->lexicalEnvironment());
+    callobj->initReservedSlot(SCOPE_SLOT, PrivateGCThingValue(scope));
+
+    return callobj;
+}
+
+/*****************************************************************************/
+
 const Class WasmFunctionCallObject::class_ = {
     "WasmCall",
     JSCLASS_IS_ANONYMOUS | JSCLASS_HAS_RESERVED_SLOTS(WasmFunctionCallObject::RESERVED_SLOTS)
 };
 
 /* static */ WasmFunctionCallObject*
-WasmFunctionCallObject::createHollowForDebug(JSContext* cx, Handle<WasmFunctionScope*> scope)
+WasmFunctionCallObject::createHollowForDebug(JSContext* cx, HandleObject enclosing,
+                                             Handle<WasmFunctionScope*> scope)
 {
     RootedObjectGroup group(cx, ObjectGroup::defaultNewGroup(cx, &class_, TaggedProto(nullptr)));
     if (!group)
@@ -654,7 +689,7 @@ WasmFunctionCallObject::createHollowForDebug(JSContext* cx, Handle<WasmFunctionS
     JS_TRY_VAR_OR_RETURN_NULL(cx, obj, NativeObject::create(cx, kind, gc::DefaultHeap, shape, group));
 
     Rooted<WasmFunctionCallObject*> callobj(cx, &obj->as<WasmFunctionCallObject>());
-    callobj->initEnclosingEnvironment(&cx->global()->lexicalEnvironment());
+    callobj->initEnclosingEnvironment(enclosing);
     callobj->initReservedSlot(SCOPE_SLOT, PrivateGCThingValue(scope));
 
     return callobj;
@@ -820,9 +855,7 @@ static const ObjectOps WithEnvironmentObjectOps = {
     with_SetProperty,
     with_GetOwnPropertyDescriptor,
     with_DeleteProperty,
-    nullptr, nullptr,    /* watch/unwatch */
     nullptr,             /* getElements */
-    nullptr,             /* enumerate (native enumeration of target doesn't work) */
     nullptr,
 };
 
@@ -941,7 +974,8 @@ LexicalEnvironmentObject::createGlobal(JSContext* cx, Handle<GlobalObject*> glob
 }
 
 /* static */ LexicalEnvironmentObject*
-LexicalEnvironmentObject::createNonSyntactic(JSContext* cx, HandleObject enclosing)
+LexicalEnvironmentObject::createNonSyntactic(JSContext* cx, HandleObject enclosing,
+                                             HandleObject thisv)
 {
     MOZ_ASSERT(enclosing);
     MOZ_ASSERT(!IsSyntacticEnvironment(enclosing));
@@ -955,7 +989,8 @@ LexicalEnvironmentObject::createNonSyntactic(JSContext* cx, HandleObject enclosi
     if (!env)
         return nullptr;
 
-    env->initThisValue(enclosing);
+    env->initThisValue(thisv);
+
     return env;
 }
 
@@ -998,7 +1033,7 @@ LexicalEnvironmentObject::clone(JSContext* cx, Handle<LexicalEnvironmentObject*>
 {
     Rooted<LexicalScope*> scope(cx, &env->scope());
     RootedObject enclosing(cx, &env->enclosingEnvironment());
-    Rooted<LexicalEnvironmentObject*> copy(cx, create(cx, scope, enclosing, gc::TenuredHeap));
+    Rooted<LexicalEnvironmentObject*> copy(cx, create(cx, scope, enclosing, gc::DefaultHeap));
     if (!copy)
         return nullptr;
 
@@ -1016,7 +1051,7 @@ LexicalEnvironmentObject::recreate(JSContext* cx, Handle<LexicalEnvironmentObjec
 {
     Rooted<LexicalScope*> scope(cx, &env->scope());
     RootedObject enclosing(cx, &env->enclosingEnvironment());
-    return create(cx, scope, enclosing, gc::TenuredHeap);
+    return create(cx, scope, enclosing, gc::DefaultHeap);
 }
 
 bool
@@ -1031,11 +1066,11 @@ LexicalEnvironmentObject::thisValue() const
     MOZ_ASSERT(isExtensible());
     Value v = getReservedSlot(THIS_VALUE_OR_SCOPE_SLOT);
     if (v.isObject()) {
-        // If `v` is a Window, return the WindowProxy instead. We called
-        // GetThisValue (which also does ToWindowProxyIfWindow) when storing
-        // the value in THIS_VALUE_OR_SCOPE_SLOT, but it's possible the
-        // WindowProxy was attached to the global *after* we set
-        // THIS_VALUE_OR_SCOPE_SLOT.
+        // A WindowProxy may have been attached after this environment was
+        // created so check ToWindowProxyIfWindow again. For example,
+        // GlobalObject::createInternal will construct its lexical environment
+        // before SetWindowProxy can be called.
+        // See also: js::GetThisValue / js::GetThisValueOfLexical
         return ObjectValue(*ToWindowProxyIfWindow(&v.toObject()));
     }
     return v;
@@ -1186,9 +1221,7 @@ static const ObjectOps RuntimeLexicalErrorObjectObjectOps = {
     lexicalError_SetProperty,
     lexicalError_GetOwnPropertyDescriptor,
     lexicalError_DeleteProperty,
-    nullptr, nullptr,    /* watch/unwatch */
     nullptr,             /* getElements */
-    nullptr,             /* enumerate (native enumeration of target doesn't work) */
     nullptr,             /* this */
 };
 
@@ -1472,7 +1505,8 @@ class DebugEnvironmentProxyHandler : public BaseProxyHandler
             CallObject& callobj = env->as<CallObject>();
             RootedFunction fun(cx, &callobj.callee());
             RootedScript script(cx, JSFunction::getOrCreateScript(cx, fun));
-            if (!script->ensureHasTypes(cx) || !script->ensureHasAnalyzedArgsUsage(cx))
+            AutoKeepTypeScripts keepTypes(cx);
+            if (!script->ensureHasTypes(cx, keepTypes) || !script->ensureHasAnalyzedArgsUsage(cx))
                 return false;
 
             BindingIter bi(script);
@@ -1669,6 +1703,38 @@ class DebugEnvironmentProxyHandler : public BaseProxyHandler
             return true;
         }
 
+        if (env->is<WasmInstanceEnvironmentObject>()) {
+            RootedScope scope(cx, getEnvironmentScope(*env));
+            MOZ_ASSERT(scope->is<WasmInstanceScope>());
+            uint32_t index = 0;
+            for (BindingIter bi(scope); bi; bi++) {
+                if (JSID_IS_ATOM(id, bi.name()))
+                    break;
+                MOZ_ASSERT(!bi.isLast());
+                index++;
+            }
+            Rooted<WasmInstanceScope*> instanceScope(cx, &scope->as<WasmInstanceScope>());
+            wasm::Instance& instance = instanceScope->instance()->instance();
+
+            if (action == GET) {
+                if (instanceScope->memoriesStart() <= index && index < instanceScope->globalsStart()) {
+                    MOZ_ASSERT(instanceScope->memoriesStart() + 1 == instanceScope->globalsStart());
+                    vp.set(ObjectValue(*instance.memory()));
+                }
+                if (instanceScope->globalsStart() <= index) {
+                    MOZ_ASSERT(index < instanceScope->namesCount());
+                    if (!instance.debug().getGlobal(instance, index - instanceScope->globalsStart(), vp)) {
+                        ReportOutOfMemory(cx);
+                        return false;
+                    }
+                }
+                *accessResult = ACCESS_UNALIASED;
+            } else { // if (action == SET)
+                // TODO
+            }
+            return true;
+        }
+
         /* The rest of the internal scopes do not have unaliased vars. */
         MOZ_ASSERT(!IsSyntacticEnvironment(env) ||
                    env->is<WithEnvironmentObject>());
@@ -1703,6 +1769,8 @@ class DebugEnvironmentProxyHandler : public BaseProxyHandler
             return &env.as<LexicalEnvironmentObject>().scope();
         if (env.is<VarEnvironmentObject>())
             return &env.as<VarEnvironmentObject>().scope();
+        if (env.is<WasmInstanceEnvironmentObject>())
+            return &env.as<WasmInstanceEnvironmentObject>().scope();
         if (env.is<WasmFunctionCallObject>())
             return &env.as<WasmFunctionCallObject>().scope();
         return nullptr;
@@ -1857,8 +1925,7 @@ class DebugEnvironmentProxyHandler : public BaseProxyHandler
 
     static bool isFunctionEnvironmentWithThis(const JSObject& env)
     {
-        // All functions except arrows and generator expression lambdas should
-        // have their own this binding.
+        // All functions except arrows should have their own this binding.
         return isFunctionEnvironment(env) && !env.as<CallObject>().callee().hasLexicalThis();
     }
 
@@ -2268,8 +2335,8 @@ DebugEnvironmentProxy::create(JSContext* cx, EnvironmentObject& env, HandleObjec
         return nullptr;
 
     DebugEnvironmentProxy* debugEnv = &obj->as<DebugEnvironmentProxy>();
-    debugEnv->setExtra(ENCLOSING_EXTRA, ObjectValue(*enclosing));
-    debugEnv->setExtra(SNAPSHOT_EXTRA, NullValue());
+    debugEnv->setReservedSlot(ENCLOSING_SLOT, ObjectValue(*enclosing));
+    debugEnv->setReservedSlot(SNAPSHOT_SLOT, NullValue());
 
     return debugEnv;
 }
@@ -2283,13 +2350,13 @@ DebugEnvironmentProxy::environment() const
 JSObject&
 DebugEnvironmentProxy::enclosingEnvironment() const
 {
-    return extra(ENCLOSING_EXTRA).toObject();
+    return reservedSlot(ENCLOSING_SLOT).toObject();
 }
 
 ArrayObject*
 DebugEnvironmentProxy::maybeSnapshot() const
 {
-    JSObject* obj = extra(SNAPSHOT_EXTRA).toObjectOrNull();
+    JSObject* obj = reservedSlot(SNAPSHOT_SLOT).toObjectOrNull();
     return obj ? &obj->as<ArrayObject>() : nullptr;
 }
 
@@ -2297,7 +2364,7 @@ void
 DebugEnvironmentProxy::initSnapshot(ArrayObject& o)
 {
     MOZ_ASSERT(maybeSnapshot() == nullptr);
-    setExtra(SNAPSHOT_EXTRA, ObjectValue(o));
+    setReservedSlot(SNAPSHOT_SLOT, ObjectValue(o));
 }
 
 bool
@@ -2307,6 +2374,7 @@ DebugEnvironmentProxy::isForDeclarative() const
     return e.is<CallObject>() ||
            e.is<VarEnvironmentObject>() ||
            e.is<ModuleEnvironmentObject>() ||
+           e.is<WasmInstanceEnvironmentObject>() ||
            e.is<WasmFunctionCallObject>() ||
            e.is<LexicalEnvironmentObject>();
 }
@@ -2350,8 +2418,8 @@ DebugEnvironmentProxy::isOptimizedOut() const
 DebugEnvironments::DebugEnvironments(JSContext* cx, Zone* zone)
  : zone_(zone),
    proxiedEnvs(cx),
-   missingEnvs(cx->runtime()),
-   liveEnvs(cx->runtime())
+   missingEnvs(cx->zone()),
+   liveEnvs(cx->zone())
 {}
 
 DebugEnvironments::~DebugEnvironments()
@@ -2372,7 +2440,7 @@ DebugEnvironments::trace(JSTracer* trc)
 }
 
 void
-DebugEnvironments::sweep(JSRuntime* rt)
+DebugEnvironments::sweep()
 {
     /*
      * missingEnvs points to debug envs weakly so that debug envs can be
@@ -2529,8 +2597,7 @@ DebugEnvironments::addDebugEnvironment(JSContext* cx, const EnvironmentIter& ei,
     MOZ_ASSERT(cx->compartment() == debugEnv->compartment());
     // Generators should always have environments.
     MOZ_ASSERT_IF(ei.scope().is<FunctionScope>(),
-                  !ei.scope().as<FunctionScope>().canonicalFunction()->isStarGenerator() &&
-                  !ei.scope().as<FunctionScope>().canonicalFunction()->isLegacyGenerator() &&
+                  !ei.scope().as<FunctionScope>().canonicalFunction()->isGenerator() &&
                   !ei.scope().as<FunctionScope>().canonicalFunction()->isAsync());
 
     if (!CanUseDebugEnvironmentMaps(cx))
@@ -2677,11 +2744,8 @@ DebugEnvironments::onPopCall(JSContext* cx, AbstractFramePtr frame)
         if (!frame.environmentChain()->is<CallObject>())
             return;
 
-        if (frame.callee()->isStarGenerator() || frame.callee()->isLegacyGenerator() ||
-            frame.callee()->isAsync())
-        {
+        if (frame.callee()->isGenerator() || frame.callee()->isAsync())
             return;
-        }
 
         CallObject& callobj = frame.environmentChain()->as<CallObject>();
         envs->liveEnvs.remove(&callobj);
@@ -2814,11 +2878,8 @@ DebugEnvironments::updateLiveEnvironments(JSContext* cx)
             continue;
 
         if (frame.isFunctionFrame()) {
-            if (frame.callee()->isStarGenerator() || frame.callee()->isLegacyGenerator() ||
-                frame.callee()->isAsync())
-            {
+            if (frame.callee()->isGenerator() || frame.callee()->isAsync())
                 continue;
-            }
         }
 
         if (!frame.isDebuggee())
@@ -2953,6 +3014,7 @@ GetDebugEnvironmentForMissing(JSContext* cx, const EnvironmentIter& ei)
     MOZ_ASSERT(!ei.hasSyntacticEnvironment() &&
                (ei.scope().is<FunctionScope>() ||
                 ei.scope().is<LexicalScope>() ||
+                ei.scope().is<WasmInstanceScope>() ||
                 ei.scope().is<WasmFunctionScope>() ||
                 ei.scope().is<VarScope>()));
 
@@ -2980,8 +3042,7 @@ GetDebugEnvironmentForMissing(JSContext* cx, const EnvironmentIter& ei)
     if (ei.scope().is<FunctionScope>()) {
         RootedFunction callee(cx, ei.scope().as<FunctionScope>().canonicalFunction());
         // Generators should always reify their scopes.
-        MOZ_ASSERT(!callee->isStarGenerator() && !callee->isLegacyGenerator() &&
-                   !callee->isAsync());
+        MOZ_ASSERT(!callee->isGenerator() && !callee->isAsync());
 
         JS::ExposeObjectToActiveJS(callee);
         Rooted<CallObject*> callobj(cx, CallObject::createHollowForDebug(cx, callee));
@@ -2997,9 +3058,19 @@ GetDebugEnvironmentForMissing(JSContext* cx, const EnvironmentIter& ei)
             return nullptr;
 
         debugEnv = DebugEnvironmentProxy::create(cx, *env, enclosingDebug);
+    } else if (ei.scope().is<WasmInstanceScope>()) {
+        Rooted<WasmInstanceScope*> wasmInstanceScope(cx, &ei.scope().as<WasmInstanceScope>());
+        Rooted<WasmInstanceEnvironmentObject*> env(cx,
+            WasmInstanceEnvironmentObject::createHollowForDebug(cx, wasmInstanceScope));
+        if (!env)
+            return nullptr;
+
+        debugEnv = DebugEnvironmentProxy::create(cx, *env, enclosingDebug);
     } else if (ei.scope().is<WasmFunctionScope>()) {
         Rooted<WasmFunctionScope*> wasmFunctionScope(cx, &ei.scope().as<WasmFunctionScope>());
-        Rooted<WasmFunctionCallObject*> callobj(cx, WasmFunctionCallObject::createHollowForDebug(cx, wasmFunctionScope));
+        RootedObject enclosing(cx, &enclosingDebug->as<DebugEnvironmentProxy>().environment());
+        Rooted<WasmFunctionCallObject*> callobj(cx,
+            WasmFunctionCallObject::createHollowForDebug(cx, enclosing, wasmFunctionScope));
         if (!callobj)
             return nullptr;
 
@@ -3049,6 +3120,7 @@ GetDebugEnvironment(JSContext* cx, const EnvironmentIter& ei)
 
     if (ei.scope().is<FunctionScope>() ||
         ei.scope().is<LexicalScope>() ||
+        ei.scope().is<WasmInstanceScope>() ||
         ei.scope().is<WasmFunctionScope>() ||
         ei.scope().is<VarScope>())
     {
@@ -3096,23 +3168,6 @@ js::GetDebugEnvironmentForGlobalLexicalEnvironment(JSContext* cx)
     return GetDebugEnvironment(cx, ei);
 }
 
-// See declaration and documentation in jsfriendapi.h
-JS_FRIEND_API(JSObject*)
-js::GetNearestEnclosingWithEnvironmentObjectForFunction(JSFunction* fun)
-{
-    if (!fun->isInterpreted())
-        return &fun->global();
-
-    JSObject* env = fun->environment();
-    while (env && !env->is<WithEnvironmentObject>())
-        env = env->enclosingEnvironment();
-
-    if (!env)
-        return &fun->global();
-
-    return &env->as<WithEnvironmentObject>().object();
-}
-
 bool
 js::CreateObjectsForEnvironmentChain(JSContext* cx, AutoObjectVector& chain,
                                      HandleObject terminatingEnv, MutableHandleObject envObj)
@@ -3120,7 +3175,8 @@ js::CreateObjectsForEnvironmentChain(JSContext* cx, AutoObjectVector& chain,
 #ifdef DEBUG
     for (size_t i = 0; i < chain.length(); ++i) {
         assertSameCompartment(cx, chain[i]);
-        MOZ_ASSERT(!chain[i]->is<GlobalObject>());
+        MOZ_ASSERT(!chain[i]->is<GlobalObject>() &&
+                   !chain[i]->is<NonSyntacticVariablesObject>());
     }
 #endif
 
@@ -3259,7 +3315,8 @@ js::GetThisValueForDebuggerMaybeOptimizedOut(JSContext* cx, AbstractFramePtr fra
         MOZ_CRASH("'this' binding must be found");
     }
 
-    return GetNonSyntacticGlobalThis(cx, scopeChain, res);
+    GetNonSyntacticGlobalThis(cx, scopeChain, res);
+    return true;
 }
 
 bool
@@ -3652,14 +3709,14 @@ AnalyzeEntrainedVariablesInScript(JSContext* cx, HandleScript script, HandleScri
             buf.printf(" ");
         }
 
-        buf.printf("(%s:%" PRIuSIZE ") has variables entrained by ", script->filename(), script->lineno());
+        buf.printf("(%s:%zu) has variables entrained by ", script->filename(), script->lineno());
 
         if (JSAtom* name = innerScript->functionNonDelazifying()->displayAtom()) {
             buf.putString(name);
             buf.printf(" ");
         }
 
-        buf.printf("(%s:%" PRIuSIZE ") ::", innerScript->filename(), innerScript->lineno());
+        buf.printf("(%s:%zu) ::", innerScript->filename(), innerScript->lineno());
 
         for (PropertyNameSet::Range r = remainingNames.all(); !r.empty(); r.popFront()) {
             buf.printf(" ");

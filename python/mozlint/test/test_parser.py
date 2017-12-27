@@ -2,9 +2,11 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-import os
-import sys
+from __future__ import absolute_import
 
+import os
+
+import mozunit
 import pytest
 
 from mozlint.parser import Parser
@@ -25,21 +27,27 @@ def parse(lintdir):
 
 
 def test_parse_valid_linter(parse):
-    lintobj = parse('string.lint')
+    lintobj = parse('string.yml')
+    assert isinstance(lintobj, list)
+    assert len(lintobj) == 1
+
+    lintobj = lintobj[0]
     assert isinstance(lintobj, dict)
     assert 'name' in lintobj
     assert 'description' in lintobj
     assert 'type' in lintobj
     assert 'payload' in lintobj
+    assert 'extensions' in lintobj
+    assert set(lintobj['extensions']) == set(['js', 'jsm'])
 
 
 @pytest.mark.parametrize('linter', [
-    'invalid_type.lint',
-    'invalid_extension.lnt',
-    'invalid_include.lint',
-    'invalid_exclude.lint',
-    'missing_attrs.lint',
-    'missing_definition.lint',
+    'invalid_type.yml',
+    'invalid_extension.ym',
+    'invalid_include.yml',
+    'invalid_exclude.yml',
+    'missing_attrs.yml',
+    'missing_definition.yml',
 ])
 def test_parse_invalid_linter(parse, linter):
     with pytest.raises(LinterParseError):
@@ -52,4 +60,4 @@ def test_parse_non_existent_linter(parse):
 
 
 if __name__ == '__main__':
-    sys.exit(pytest.main(['--verbose', __file__]))
+    mozunit.main()

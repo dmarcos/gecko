@@ -5,12 +5,14 @@
 //! CSS transitions and animations.
 
 use context::LayoutContext;
-use flow::{self, Flow};
+use flow::{Flow, GetBaseFlow};
+use fnv::FnvHashMap;
 use gfx::display_list::OpaqueNode;
 use ipc_channel::ipc::IpcSender;
 use msg::constellation_msg::PipelineId;
+use opaque_node::OpaqueNodeMethods;
 use script_traits::{AnimationState, ConstellationControlMsg, LayoutMsg as ConstellationMsg};
-use std::collections::HashMap;
+use script_traits::UntrustedNodeAddress;
 use std::sync::mpsc::Receiver;
 use style::animation::{Animation, update_style_for_animation};
 use style::font_metrics::ServoMetricsProvider;
@@ -22,8 +24,9 @@ use style::timer::Timer;
 /// `expired_animations`.
 pub fn update_animation_state(constellation_chan: &IpcSender<ConstellationMsg>,
                               script_chan: &IpcSender<ConstellationControlMsg>,
-                              running_animations: &mut HashMap<OpaqueNode, Vec<Animation>>,
-                              expired_animations: &mut HashMap<OpaqueNode, Vec<Animation>>,
+                              running_animations: &mut FnvHashMap<OpaqueNode, Vec<Animation>>,
+                              expired_animations: &mut FnvHashMap<OpaqueNode, Vec<Animation>>,
+                              mut newly_transitioning_nodes: Option<&mut Vec<UntrustedNodeAddress>>,
                               new_animations_receiver: &Receiver<Animation>,
                               pipeline_id: PipelineId,
                               timer: &Timer) {
@@ -36,7 +39,7 @@ pub fn update_animation_state(constellation_chan: &IpcSender<ConstellationMsg>,
             // run.
             if let Some(ref mut animations) = running_animations.get_mut(node) {
                 // TODO: This being linear is probably not optimal.
-                for mut anim in animations.iter_mut() {
+                for anim in animations.iter_mut() {
                     if let Animation::Keyframes(_, ref anim_name, ref mut anim_state) = *anim {
                         if *name == *anim_name {
                             debug!("update_animation_state: Found other animation {}", name);
@@ -71,7 +74,7 @@ pub fn update_animation_state(constellation_chan: &IpcSender<ConstellationMsg>,
         let mut animations_still_running = vec![];
         for mut running_animation in running_animations.drain(..) {
             let still_running = !running_animation.is_expired() && match running_animation {
-                Animation::Transition(_, _, started_at, ref frame, _expired) => {
+                Animation::Transition(_, started_at, ref frame, _expired) => {
                     now < started_at + frame.duration
                 }
                 Animation::Keyframes(_, _, ref mut state) => {
@@ -86,8 +89,8 @@ pub fn update_animation_state(constellation_chan: &IpcSender<ConstellationMsg>,
                 continue
             }
 
-            if let Animation::Transition(_, unsafe_node, _, ref frame, _) = running_animation {
-                script_chan.send(ConstellationControlMsg::TransitionEnd(unsafe_node,
+            if let Animation::Transition(node, _, ref frame, _) = running_animation {
+                script_chan.send(ConstellationControlMsg::TransitionEnd(node.to_untrusted_node_address(),
                                                                         frame.property_animation
                                                                              .property_name().into(),
                                                                         frame.duration))
@@ -112,6 +115,17 @@ pub fn update_animation_state(constellation_chan: &IpcSender<ConstellationMsg>,
 
     // Add new running animations.
     for new_running_animation in new_running_animations {
+        if new_running_animation.is_transition() {
+            match newly_transitioning_nodes {
+                Some(ref mut nodes) => {
+                    nodes.push(new_running_animation.node().to_untrusted_node_address());
+                }
+                None => {
+                    warn!("New transition encountered from compositor-initiated layout.");
+                }
+            }
+        }
+
         running_animations.entry(*new_running_animation.node())
                           .or_insert_with(Vec::new)
                           .push(new_running_animation)
@@ -135,7 +149,7 @@ pub fn update_animation_state(constellation_chan: &IpcSender<ConstellationMsg>,
 // this should be made generic.
 pub fn recalc_style_for_animations(context: &LayoutContext,
                                    flow: &mut Flow,
-                                   animations: &HashMap<OpaqueNode,
+                                   animations: &FnvHashMap<OpaqueNode,
                                                         Vec<Animation>>) {
     let mut damage = RestyleDamage::empty();
     flow.mutate_fragments(&mut |fragment| {
@@ -146,12 +160,17 @@ pub fn recalc_style_for_animations(context: &LayoutContext,
                                            animation,
                                            &mut fragment.style,
                                            &ServoMetricsProvider);
-                damage |= RestyleDamage::compute(&old_style, &fragment.style);
+                let difference =
+                    RestyleDamage::compute_style_difference(
+                        &old_style,
+                        &fragment.style,
+                    );
+                damage |= difference.damage;
             }
         }
     });
 
-    let base = flow::mut_base(flow);
+    let base = flow.mut_base();
     base.restyle_damage.insert(damage);
     for kid in base.children.iter_mut() {
         recalc_style_for_animations(context, kid, animations)

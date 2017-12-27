@@ -95,7 +95,8 @@ ServiceWorkerJob::Start(Callback* aFinalCallback)
   mState = State::Started;
 
   nsCOMPtr<nsIRunnable> runnable =
-    NewRunnableMethod(this, &ServiceWorkerJob::AsyncExecute);
+    NewRunnableMethod("ServiceWorkerJob::AsyncExecute",
+                      this, &ServiceWorkerJob::AsyncExecute);
 
   // We may have to wait for the PBackground actor to be initialized
   // before proceeding.  We should always be able to get a ServiceWorkerManager,
@@ -103,11 +104,6 @@ ServiceWorkerJob::Start(Callback* aFinalCallback)
   RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
   if (!swm) {
     // browser shutdown
-    return;
-  }
-  if (!swm->HasBackgroundActor()) {
-    // waiting to initialize
-    swm->AppendPendingOperation(runnable);
     return;
   }
 
@@ -231,7 +227,8 @@ ServiceWorkerJob::Finish(ErrorResult& aRv)
 
   // Async release this object to ensure that our caller methods complete
   // as well.
-  NS_ReleaseOnMainThread(kungFuDeathGrip.forget(), true /* always proxy */);
+  NS_ReleaseOnMainThreadSystemGroup("ServiceWorkerJob",
+    kungFuDeathGrip.forget(), true /* always proxy */);
 }
 
 void

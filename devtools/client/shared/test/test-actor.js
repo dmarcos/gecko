@@ -14,7 +14,10 @@ const {
 } = require("devtools/shared/layout/utils");
 const defer = require("devtools/shared/defer");
 const {Task} = require("devtools/shared/task");
-const {isContentStylesheet} = require("devtools/shared/inspector/css-logic");
+const {
+  isContentStylesheet,
+  getCSSStyleRules
+} = require("devtools/shared/inspector/css-logic");
 const DOMUtils = Cc["@mozilla.org/inspector/dom-utils;1"].getService(Ci.inIDOMUtils);
 const loader = Cc["@mozilla.org/moz/jssubscript-loader;1"]
                  .getService(Ci.mozIJSSubScriptLoader);
@@ -777,7 +780,7 @@ var TestActor = exports.TestActor = protocol.ActorClassWithSpec(testSpec, {
    */
   getStyleSheetsInfoForNode: function (selector) {
     let node = this._querySelector(selector);
-    let domRules = DOMUtils.getCSSStyleRules(node);
+    let domRules = getCSSStyleRules(node);
 
     let sheets = [];
 
@@ -813,11 +816,12 @@ var TestActorFront = exports.TestActorFront = protocol.FrontClassWithSpec(testSp
   /**
    * Zoom the current page to a given level.
    * @param {Number} level The new zoom level.
+   * @param {String} actorID Optional. The highlighter actor ID.
    * @return {Promise} The returned promise will only resolve when the
    * highlighter has updated to the new zoom level.
    */
-  zoomPageTo: function (level) {
-    return this.changeZoomLevel(level, this.toolbox.highlighter.actorID);
+  zoomPageTo: function (level, actorID = this.toolbox.highlighter.actorID) {
+    return this.changeZoomLevel(level, actorID);
   },
 
   /* eslint-disable max-len */

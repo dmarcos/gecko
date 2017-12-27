@@ -13,17 +13,17 @@ const React = require("react");
 const ReactDOM = require("react-dom");
 const { bindActionCreators } = require("redux");
 const { bootstrap, renderRoot } = require("devtools-launchpad");
-const { EventEmitter } = require("devtools-modules");
 const { Services: { appinfo, pref }} = require("devtools-modules");
-const { configureStore } = require("./src/utils/create-store");
 
-require("./src/assets/styles/netmonitor.css");
-
-EventEmitter.decorate(window);
-
+// Initialize preferences as early as possible
+pref("devtools.theme", "light");
+pref("devtools.cache.disabled", false);
 pref("devtools.netmonitor.enabled", true);
 pref("devtools.netmonitor.filters", "[\"all\"]");
-pref("devtools.netmonitor.hiddenColumns", "[]");
+pref("devtools.netmonitor.visibleColumns",
+     "[\"status\",\"method\",\"file\",\"domain\",\"cause\"," +
+     "\"type\",\"transferred\",\"contentSize\",\"waterfall\"]"
+);
 pref("devtools.netmonitor.panes-network-details-width", 550);
 pref("devtools.netmonitor.panes-network-details-height", 450);
 pref("devtools.netmonitor.har.defaultLogDir", "");
@@ -35,12 +35,23 @@ pref("devtools.netmonitor.har.compress", false);
 pref("devtools.netmonitor.har.forceExport", false);
 pref("devtools.netmonitor.har.pageLoadedTimeout", 1500);
 pref("devtools.netmonitor.har.enableAutoExportToFile", false);
-pref("devtools.webconsole.persistlog", false);
+pref("devtools.netmonitor.persistlog", false);
+pref("devtools.styleeditor.enabled", true);
 
-const App = require("./src/components/app");
-const store = window.gStore = configureStore();
+require("./src/assets/styles/netmonitor.css");
+
+const EventEmitter = require("devtools-modules/src/utils/event-emitter");
+EventEmitter.decorate(window);
+
+const { configureStore } = require("./src/utils/create-store");
+const App = require("./src/components/App");
+const { Connector } = require("./src/connector/index");
+const connector = new Connector();
+const store = configureStore(connector);
 const actions = bindActionCreators(require("./src/actions"), store.dispatch);
-const { NetMonitorController } = require("./src/netmonitor-controller");
+
+// Inject to global window for testing
+window.store = store;
 
 /**
  * Stylesheet links in devtools xhtml files are using chrome or resource URLs.
@@ -66,10 +77,11 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 });
 
-bootstrap(React, ReactDOM).then(connection => {
+bootstrap(React, ReactDOM).then((connection) => {
   if (!connection) {
     return;
   }
-  renderRoot(React, ReactDOM, App, store);
-  NetMonitorController.startupNetMonitor(connection, actions);
+
+  renderRoot(React, ReactDOM, App, store, {connector});
+  connector.connect(connection, actions, store.getState);
 });

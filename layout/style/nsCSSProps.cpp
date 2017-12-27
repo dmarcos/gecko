@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -25,6 +26,7 @@
 #include "nsStaticNameTable.h"
 
 #include "mozilla/Preferences.h"
+#include "mozilla/StylePrefs.h"
 
 using namespace mozilla;
 
@@ -70,7 +72,7 @@ const char* const kCSSRawProperties[eCSSProperty_COUNT_with_aliases] = {
 #define CSS_PROP_SHORTHAND(name_, id_, method_, flags_, pref_) #name_,
 #include "nsCSSPropList.h"
 #undef CSS_PROP_SHORTHAND
-#define CSS_PROP_ALIAS(aliasname_, id_, method_, pref_) #aliasname_,
+#define CSS_PROP_ALIAS(aliasname_, aliasid_, id_, method_, pref_) #aliasname_,
 #include "nsCSSPropAliasList.h"
 #undef CSS_PROP_ALIAS
 };
@@ -153,7 +155,7 @@ enum {
 
 // The names are in kCSSRawProperties.
 static nsCSSPropertyID gAliases[eCSSAliasCount != 0 ? eCSSAliasCount : 1] = {
-#define CSS_PROP_ALIAS(aliasname_, propid_, aliasmethod_, pref_)  \
+#define CSS_PROP_ALIAS(aliasname_, aliasid_, propid_, aliasmethod_, pref_)  \
   eCSSProperty_##propid_ ,
 #include "nsCSSPropAliasList.h"
 #undef CSS_PROP_ALIAS
@@ -227,7 +229,7 @@ nsCSSProps::AddRefTable(void)
       #include "nsCSSPropList.h"
       #undef CSS_PROP_SHORTHAND
 
-      #define CSS_PROP_ALIAS(aliasname_, propid_, aliasmethod_, pref_)    \
+      #define CSS_PROP_ALIAS(aliasname_, aliasid_, propid_, aliasmethod_, pref_)    \
         OBSERVE_PROP(pref_, eCSSPropertyAlias_##aliasmethod_)
       #include "nsCSSPropAliasList.h"
       #undef CSS_PROP_ALIAS
@@ -497,7 +499,7 @@ nsCSSProps::IsInherited(nsCSSPropertyID aProperty)
   MOZ_ASSERT(!IsShorthand(aProperty));
 
   nsStyleStructID sid = kSIDTable[aProperty];
-  return nsCachedStyleData::IsInherited(sid);
+  return nsStyleContext::IsInherited(sid);
 }
 
 /* static */ bool
@@ -612,8 +614,7 @@ nsCSSProps::LookupFontDesc(const nsACString& aFontDesc)
   MOZ_ASSERT(gFontDescTable, "no lookup table, needs addref");
   nsCSSFontDesc which = nsCSSFontDesc(gFontDescTable->Lookup(aFontDesc));
 
-  if (which == eCSSFontDesc_Display &&
-      !Preferences::GetBool("layout.css.font-display.enabled")) {
+  if (which == eCSSFontDesc_Display && !StylePrefs::sFontDisplayEnabled) {
     which = eCSSFontDesc_UNKNOWN;
   } else if (which == eCSSFontDesc_UNKNOWN) {
     // check for unprefixed font-feature-settings/font-language-override
@@ -631,8 +632,7 @@ nsCSSProps::LookupFontDesc(const nsAString& aFontDesc)
   MOZ_ASSERT(gFontDescTable, "no lookup table, needs addref");
   nsCSSFontDesc which = nsCSSFontDesc(gFontDescTable->Lookup(aFontDesc));
 
-  if (which == eCSSFontDesc_Display &&
-      !Preferences::GetBool("layout.css.font-display.enabled")) {
+  if (which == eCSSFontDesc_Display && !StylePrefs::sFontDisplayEnabled) {
     which = eCSSFontDesc_UNKNOWN;
   } else if (which == eCSSFontDesc_UNKNOWN) {
     // check for unprefixed font-feature-settings/font-language-override
@@ -676,7 +676,7 @@ nsCSSProps::IsPredefinedCounterStyle(const nsACString& aStyle)
     nsStaticCaseInsensitiveNameTable::NOT_FOUND;
 }
 
-const nsAFlatCString&
+const nsCString&
 nsCSSProps::GetStringValue(nsCSSPropertyID aProperty)
 {
   MOZ_ASSERT(gPropertyTable, "no lookup table, needs addref");
@@ -688,7 +688,7 @@ nsCSSProps::GetStringValue(nsCSSPropertyID aProperty)
   }
 }
 
-const nsAFlatCString&
+const nsCString&
 nsCSSProps::GetStringValue(nsCSSFontDesc aFontDescID)
 {
   MOZ_ASSERT(gFontDescTable, "no lookup table, needs addref");
@@ -700,7 +700,7 @@ nsCSSProps::GetStringValue(nsCSSFontDesc aFontDescID)
   }
 }
 
-const nsAFlatCString&
+const nsCString&
 nsCSSProps::GetStringValue(nsCSSCounterDesc aCounterDesc)
 {
   MOZ_ASSERT(gCounterDescTable, "no lookup table, needs addref");
@@ -742,12 +742,6 @@ const KTableEntry nsCSSProps::kAnimationPlayStateKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kAppearanceKTable[] = {
-  { eCSSKeyword_auto,    NS_THEME_AUTO },
-  { eCSSKeyword_none,    NS_THEME_NONE },
-  { eCSSKeyword_UNKNOWN, -1 }
-};
-
-const KTableEntry nsCSSProps::kMozAppearanceKTable[] = {
   { eCSSKeyword_none,                   NS_THEME_NONE },
   { eCSSKeyword_button,                 NS_THEME_BUTTON },
   { eCSSKeyword_radio,                  NS_THEME_RADIO },
@@ -792,6 +786,7 @@ const KTableEntry nsCSSProps::kMozAppearanceKTable[] = {
   { eCSSKeyword_tab_scroll_arrow_back,  NS_THEME_TAB_SCROLL_ARROW_BACK },
   { eCSSKeyword_tab_scroll_arrow_forward, NS_THEME_TAB_SCROLL_ARROW_FORWARD },
   { eCSSKeyword_tooltip,                NS_THEME_TOOLTIP },
+  { eCSSKeyword_inner_spin_button,      NS_THEME_INNER_SPIN_BUTTON },
   { eCSSKeyword_spinner,                NS_THEME_SPINNER },
   { eCSSKeyword_spinner_upbutton,       NS_THEME_SPINNER_UPBUTTON },
   { eCSSKeyword_spinner_downbutton,     NS_THEME_SPINNER_DOWNBUTTON },
@@ -865,6 +860,8 @@ const KTableEntry nsCSSProps::kMozAppearanceKTable[] = {
   { eCSSKeyword__moz_win_exclude_glass,         NS_THEME_WIN_EXCLUDE_GLASS },
   { eCSSKeyword__moz_mac_vibrancy_light,        NS_THEME_MAC_VIBRANCY_LIGHT },
   { eCSSKeyword__moz_mac_vibrancy_dark,         NS_THEME_MAC_VIBRANCY_DARK },
+  { eCSSKeyword__moz_mac_vibrant_titlebar_light, NS_THEME_MAC_VIBRANT_TITLEBAR_LIGHT },
+  { eCSSKeyword__moz_mac_vibrant_titlebar_dark,  NS_THEME_MAC_VIBRANT_TITLEBAR_DARK },
   { eCSSKeyword__moz_mac_disclosure_button_open,   NS_THEME_MAC_DISCLOSURE_BUTTON_OPEN },
   { eCSSKeyword__moz_mac_disclosure_button_closed, NS_THEME_MAC_DISCLOSURE_BUTTON_CLOSED },
   { eCSSKeyword__moz_gtk_info_bar,              NS_THEME_GTK_INFO_BAR },
@@ -904,8 +901,6 @@ KTableEntry nsCSSProps::kBackgroundClipKTable[] = {
   { eCSSKeyword_border_box, StyleGeometryBox::BorderBox },
   { eCSSKeyword_padding_box, StyleGeometryBox::PaddingBox },
   { eCSSKeyword_content_box, StyleGeometryBox::ContentBox },
-  // The next entry is controlled by the layout.css.background-clip-text.enabled
-  // pref.
   { eCSSKeyword_text, StyleGeometryBox::Text },
   { eCSSKeyword_UNKNOWN, -1 }
 };
@@ -944,20 +939,20 @@ const KTableEntry nsCSSProps::kImageLayerPositionKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kImageLayerRepeatKTable[] = {
-  { eCSSKeyword_no_repeat,  NS_STYLE_IMAGELAYER_REPEAT_NO_REPEAT },
-  { eCSSKeyword_repeat,     NS_STYLE_IMAGELAYER_REPEAT_REPEAT },
-  { eCSSKeyword_repeat_x,   NS_STYLE_IMAGELAYER_REPEAT_REPEAT_X },
-  { eCSSKeyword_repeat_y,   NS_STYLE_IMAGELAYER_REPEAT_REPEAT_Y },
-  { eCSSKeyword_round,      NS_STYLE_IMAGELAYER_REPEAT_ROUND},
-  { eCSSKeyword_space,      NS_STYLE_IMAGELAYER_REPEAT_SPACE},
+  { eCSSKeyword_no_repeat,  StyleImageLayerRepeat::NoRepeat },
+  { eCSSKeyword_repeat,     StyleImageLayerRepeat::Repeat },
+  { eCSSKeyword_repeat_x,   StyleImageLayerRepeat::RepeatX },
+  { eCSSKeyword_repeat_y,   StyleImageLayerRepeat::RepeatY },
+  { eCSSKeyword_round,      StyleImageLayerRepeat::Round},
+  { eCSSKeyword_space,      StyleImageLayerRepeat::Space},
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
 const KTableEntry nsCSSProps::kImageLayerRepeatPartKTable[] = {
-  { eCSSKeyword_no_repeat,  NS_STYLE_IMAGELAYER_REPEAT_NO_REPEAT },
-  { eCSSKeyword_repeat,     NS_STYLE_IMAGELAYER_REPEAT_REPEAT },
-  { eCSSKeyword_round,      NS_STYLE_IMAGELAYER_REPEAT_ROUND},
-  { eCSSKeyword_space,      NS_STYLE_IMAGELAYER_REPEAT_SPACE},
+  { eCSSKeyword_no_repeat,  StyleImageLayerRepeat::NoRepeat },
+  { eCSSKeyword_repeat,     StyleImageLayerRepeat::Repeat },
+  { eCSSKeyword_round,      StyleImageLayerRepeat::Round},
+  { eCSSKeyword_space,      StyleImageLayerRepeat::Space},
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
@@ -1138,6 +1133,17 @@ const KTableEntry nsCSSProps::kColorKTable[] = {
   { eCSSKeyword__moz_mac_menutextselect, LookAndFeel::eColorID__moz_mac_menutextselect },
   { eCSSKeyword__moz_mac_disabledtoolbartext, LookAndFeel::eColorID__moz_mac_disabledtoolbartext },
   { eCSSKeyword__moz_mac_secondaryhighlight, LookAndFeel::eColorID__moz_mac_secondaryhighlight },
+  { eCSSKeyword__moz_mac_vibrancy_light, LookAndFeel::eColorID__moz_mac_vibrancy_light },
+  { eCSSKeyword__moz_mac_vibrancy_dark, LookAndFeel::eColorID__moz_mac_vibrancy_dark },
+  { eCSSKeyword__moz_mac_vibrant_titlebar_light, LookAndFeel::eColorID__moz_mac_vibrant_titlebar_light },
+  { eCSSKeyword__moz_mac_vibrant_titlebar_dark,  LookAndFeel::eColorID__moz_mac_vibrant_titlebar_dark },
+  { eCSSKeyword__moz_mac_menuitem, LookAndFeel::eColorID__moz_mac_menuitem },
+  { eCSSKeyword__moz_mac_active_menuitem, LookAndFeel::eColorID__moz_mac_active_menuitem },
+  { eCSSKeyword__moz_mac_menupopup, LookAndFeel::eColorID__moz_mac_menupopup },
+  { eCSSKeyword__moz_mac_source_list, LookAndFeel::eColorID__moz_mac_source_list },
+  { eCSSKeyword__moz_mac_source_list_selection, LookAndFeel::eColorID__moz_mac_source_list_selection },
+  { eCSSKeyword__moz_mac_active_source_list_selection, LookAndFeel::eColorID__moz_mac_active_source_list_selection },
+  { eCSSKeyword__moz_mac_tooltip, LookAndFeel::eColorID__moz_mac_tooltip },
   { eCSSKeyword__moz_menuhover, LookAndFeel::eColorID__moz_menuhover },
   { eCSSKeyword__moz_menuhovertext, LookAndFeel::eColorID__moz_menuhovertext },
   { eCSSKeyword__moz_menubartext, LookAndFeel::eColorID__moz_menubartext },
@@ -1145,6 +1151,8 @@ const KTableEntry nsCSSProps::kColorKTable[] = {
   { eCSSKeyword__moz_oddtreerow, LookAndFeel::eColorID__moz_oddtreerow },
   { eCSSKeyword__moz_visitedhyperlinktext, NS_COLOR_MOZ_VISITEDHYPERLINKTEXT },
   { eCSSKeyword_currentcolor, NS_COLOR_CURRENTCOLOR },
+  { eCSSKeyword__moz_win_accentcolor, LookAndFeel::eColorID__moz_win_accentcolor },
+  { eCSSKeyword__moz_win_accentcolortext, LookAndFeel::eColorID__moz_win_accentcolortext },
   { eCSSKeyword__moz_win_mediatext, LookAndFeel::eColorID__moz_win_mediatext },
   { eCSSKeyword__moz_win_communicationstext, LookAndFeel::eColorID__moz_win_communicationstext },
   { eCSSKeyword__moz_nativehyperlinktext, LookAndFeel::eColorID__moz_nativehyperlinktext },
@@ -1154,11 +1162,11 @@ const KTableEntry nsCSSProps::kColorKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kContentKTable[] = {
-  { eCSSKeyword_open_quote, NS_STYLE_CONTENT_OPEN_QUOTE },
-  { eCSSKeyword_close_quote, NS_STYLE_CONTENT_CLOSE_QUOTE },
-  { eCSSKeyword_no_open_quote, NS_STYLE_CONTENT_NO_OPEN_QUOTE },
-  { eCSSKeyword_no_close_quote, NS_STYLE_CONTENT_NO_CLOSE_QUOTE },
-  { eCSSKeyword__moz_alt_content, NS_STYLE_CONTENT_ALT_CONTENT },
+  { eCSSKeyword_open_quote, uint8_t(StyleContent::OpenQuote) },
+  { eCSSKeyword_close_quote, uint8_t(StyleContent::CloseQuote) },
+  { eCSSKeyword_no_open_quote, uint8_t(StyleContent::NoOpenQuote) },
+  { eCSSKeyword_no_close_quote, uint8_t(StyleContent::NoCloseQuote) },
+  { eCSSKeyword__moz_alt_content, uint8_t(StyleContent::AltContent) },
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
@@ -1293,7 +1301,6 @@ KTableEntry nsCSSProps::kDisplayKTable[] = {
   { eCSSKeyword_ruby_base_container, StyleDisplay::RubyBaseContainer },
   { eCSSKeyword_ruby_text,           StyleDisplay::RubyText },
   { eCSSKeyword_ruby_text_container, StyleDisplay::RubyTextContainer },
-  // The next two entries are controlled by the layout.css.grid.enabled pref.
   { eCSSKeyword_grid,                StyleDisplay::Grid },
   { eCSSKeyword_inline_grid,         StyleDisplay::InlineGrid },
   // The next 4 entries are controlled by the layout.css.prefixes.webkit pref.
@@ -1302,7 +1309,6 @@ KTableEntry nsCSSProps::kDisplayKTable[] = {
   { eCSSKeyword__webkit_flex,        StyleDisplay::Flex },
   { eCSSKeyword__webkit_inline_flex, StyleDisplay::InlineFlex },
   { eCSSKeyword_contents,            StyleDisplay::Contents },
-  // The next entry is controlled by the layout.css.display-flow-root.enabled pref.
   { eCSSKeyword_flow_root,           StyleDisplay::FlowRoot },
   { eCSSKeyword_UNKNOWN,             -1 }
 };
@@ -1716,31 +1722,6 @@ const KTableEntry nsCSSProps::kListStylePositionKTable[] = {
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
-const KTableEntry nsCSSProps::kListStyleKTable[] = {
-  // none and decimal are not redefinable, so they should not be moved.
-  { eCSSKeyword_none, NS_STYLE_LIST_STYLE_NONE },
-  { eCSSKeyword_decimal, NS_STYLE_LIST_STYLE_DECIMAL },
-  // the following graphic styles are processed in a different way.
-  { eCSSKeyword_disc, NS_STYLE_LIST_STYLE_DISC },
-  { eCSSKeyword_circle, NS_STYLE_LIST_STYLE_CIRCLE },
-  { eCSSKeyword_square, NS_STYLE_LIST_STYLE_SQUARE },
-  { eCSSKeyword_disclosure_closed, NS_STYLE_LIST_STYLE_DISCLOSURE_CLOSED },
-  { eCSSKeyword_disclosure_open, NS_STYLE_LIST_STYLE_DISCLOSURE_OPEN },
-  // the following counter styles require specific algorithms to generate.
-  { eCSSKeyword_hebrew, NS_STYLE_LIST_STYLE_HEBREW },
-  { eCSSKeyword_japanese_informal, NS_STYLE_LIST_STYLE_JAPANESE_INFORMAL },
-  { eCSSKeyword_japanese_formal, NS_STYLE_LIST_STYLE_JAPANESE_FORMAL },
-  { eCSSKeyword_korean_hangul_formal, NS_STYLE_LIST_STYLE_KOREAN_HANGUL_FORMAL },
-  { eCSSKeyword_korean_hanja_informal, NS_STYLE_LIST_STYLE_KOREAN_HANJA_INFORMAL },
-  { eCSSKeyword_korean_hanja_formal, NS_STYLE_LIST_STYLE_KOREAN_HANJA_FORMAL },
-  { eCSSKeyword_simp_chinese_informal, NS_STYLE_LIST_STYLE_SIMP_CHINESE_INFORMAL },
-  { eCSSKeyword_simp_chinese_formal, NS_STYLE_LIST_STYLE_SIMP_CHINESE_FORMAL },
-  { eCSSKeyword_trad_chinese_informal, NS_STYLE_LIST_STYLE_TRAD_CHINESE_INFORMAL },
-  { eCSSKeyword_trad_chinese_formal, NS_STYLE_LIST_STYLE_TRAD_CHINESE_FORMAL },
-  { eCSSKeyword_ethiopic_numeric, NS_STYLE_LIST_STYLE_ETHIOPIC_NUMERIC },
-  { eCSSKeyword_UNKNOWN, -1 }
-};
-
 const KTableEntry nsCSSProps::kMathVariantKTable[] = {
   { eCSSKeyword_none, NS_MATHML_MATHVARIANT_NONE },
   { eCSSKeyword_normal, NS_MATHML_MATHVARIANT_NORMAL },
@@ -1958,6 +1939,13 @@ const KTableEntry nsCSSProps::kScrollBehaviorKTable[] = {
   { eCSSKeyword_UNKNOWN,    -1 }
 };
 
+const KTableEntry nsCSSProps::kOverscrollBehaviorKTable[] = {
+  { eCSSKeyword_auto,       StyleOverscrollBehavior::Auto },
+  { eCSSKeyword_contain,    StyleOverscrollBehavior::Contain },
+  { eCSSKeyword_none,       StyleOverscrollBehavior::None },
+  { eCSSKeyword_UNKNOWN,    -1 }
+};
+
 const KTableEntry nsCSSProps::kScrollSnapTypeKTable[] = {
   { eCSSKeyword_none,      NS_STYLE_SCROLL_SNAP_TYPE_NONE },
   { eCSSKeyword_mandatory, NS_STYLE_SCROLL_SNAP_TYPE_MANDATORY },
@@ -1966,8 +1954,10 @@ const KTableEntry nsCSSProps::kScrollSnapTypeKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kStackSizingKTable[] = {
-  { eCSSKeyword_ignore, NS_STYLE_STACK_SIZING_IGNORE },
-  { eCSSKeyword_stretch_to_fit, NS_STYLE_STACK_SIZING_STRETCH_TO_FIT },
+  { eCSSKeyword_ignore, StyleStackSizing::Ignore },
+  { eCSSKeyword_stretch_to_fit, StyleStackSizing::StretchToFit },
+  { eCSSKeyword_ignore_horizontal, StyleStackSizing::IgnoreHorizontal },
+  { eCSSKeyword_ignore_vertical, StyleStackSizing::IgnoreVertical },
   { eCSSKeyword_UNKNOWN, -1 }
 };
 
@@ -2199,13 +2189,13 @@ const KTableEntry nsCSSProps::kVisibilityKTable[] = {
 };
 
 const KTableEntry nsCSSProps::kWhitespaceKTable[] = {
-  { eCSSKeyword_normal, NS_STYLE_WHITESPACE_NORMAL },
-  { eCSSKeyword_pre, NS_STYLE_WHITESPACE_PRE },
-  { eCSSKeyword_nowrap, NS_STYLE_WHITESPACE_NOWRAP },
-  { eCSSKeyword_pre_wrap, NS_STYLE_WHITESPACE_PRE_WRAP },
-  { eCSSKeyword_pre_line, NS_STYLE_WHITESPACE_PRE_LINE },
-  { eCSSKeyword__moz_pre_space, NS_STYLE_WHITESPACE_PRE_SPACE },
-  { eCSSKeyword_UNKNOWN, -1 }
+  { eCSSKeyword_normal,         StyleWhiteSpace::Normal },
+  { eCSSKeyword_pre,            StyleWhiteSpace::Pre },
+  { eCSSKeyword_nowrap,         StyleWhiteSpace::Nowrap },
+  { eCSSKeyword_pre_wrap,       StyleWhiteSpace::PreWrap },
+  { eCSSKeyword_pre_line,       StyleWhiteSpace::PreLine },
+  { eCSSKeyword__moz_pre_space, StyleWhiteSpace::PreSpace },
+  { eCSSKeyword_UNKNOWN,        -1 }
 };
 
 const KTableEntry nsCSSProps::kWidthKTable[] = {
@@ -2506,7 +2496,7 @@ nsCSSProps::ValueToKeywordEnum(int32_t aValue, const KTableEntry aTable[])
   return eCSSKeyword_UNKNOWN;
 }
 
-const nsAFlatCString&
+const nsCString&
 nsCSSProps::ValueToKeyword(int32_t aValue, const KTableEntry aTable[])
 {
   nsCSSKeyword keyword = ValueToKeywordEnum(aValue, aTable);
@@ -2529,7 +2519,7 @@ nsCSSProps::kKeywordTableTable[eCSSProperty_COUNT_no_shorthands] = {
   #undef CSS_PROP
 };
 
-const nsAFlatCString&
+const nsCString&
 nsCSSProps::LookupPropertyValue(nsCSSPropertyID aProp, int32_t aValue)
 {
   MOZ_ASSERT(aProp >= 0 && aProp < eCSSProperty_COUNT,
@@ -2694,10 +2684,6 @@ static const nsCSSPropertyID gBorderSubpropTable[] = {
   eCSSProperty_border_right_color,
   eCSSProperty_border_bottom_color,
   eCSSProperty_border_left_color,
-  eCSSProperty__moz_border_top_colors,
-  eCSSProperty__moz_border_right_colors,
-  eCSSProperty__moz_border_bottom_colors,
-  eCSSProperty__moz_border_left_colors,
   eCSSProperty_border_image_source,
   eCSSProperty_border_image_slice,
   eCSSProperty_border_image_width,
@@ -2908,8 +2894,6 @@ static const nsCSSPropertyID gGridSubpropTable[] = {
   eCSSProperty_grid_auto_flow,
   eCSSProperty_grid_auto_rows,
   eCSSProperty_grid_auto_columns,
-  eCSSProperty_grid_row_gap, // can only be reset, not get/set
-  eCSSProperty_grid_column_gap, // can only be reset, not get/set
   eCSSProperty_UNKNOWN
 };
 
@@ -2942,6 +2926,12 @@ static const nsCSSPropertyID gGridGapSubpropTable[] = {
 static const nsCSSPropertyID gOverflowSubpropTable[] = {
   eCSSProperty_overflow_x,
   eCSSProperty_overflow_y,
+  eCSSProperty_UNKNOWN
+};
+
+static const nsCSSPropertyID gOverflowClipBoxSubpropTable[] = {
+  eCSSProperty_overflow_clip_box_block,
+  eCSSProperty_overflow_clip_box_inline,
   eCSSProperty_UNKNOWN
 };
 
@@ -3022,12 +3012,18 @@ static const nsCSSPropertyID gMozTransformSubpropTable[] = {
   eCSSProperty_UNKNOWN
 };
 
+static const nsCSSPropertyID gOverscrollBehaviorSubpropTable[] = {
+  eCSSProperty_overscroll_behavior_x,
+  eCSSProperty_overscroll_behavior_y,
+  eCSSProperty_UNKNOWN
+};
+
 static const nsCSSPropertyID gScrollSnapTypeSubpropTable[] = {
   eCSSProperty_scroll_snap_type_x,
   eCSSProperty_scroll_snap_type_y,
   eCSSProperty_UNKNOWN
 };
-#ifdef MOZ_ENABLE_MASK_AS_SHORTHAND
+
 static const nsCSSPropertyID gMaskSubpropTable[] = {
   eCSSProperty_mask_image,
   eCSSProperty_mask_repeat,
@@ -3040,12 +3036,13 @@ static const nsCSSPropertyID gMaskSubpropTable[] = {
   eCSSProperty_mask_mode,
   eCSSProperty_UNKNOWN
 };
+
 static const nsCSSPropertyID gMaskPositionSubpropTable[] = {
   eCSSProperty_mask_position_x,
   eCSSProperty_mask_position_y,
   eCSSProperty_UNKNOWN
 };
-#endif
+
 // FIXME: mask-border tables should be added when we implement
 // mask-border properties.
 
@@ -3359,7 +3356,7 @@ nsCSSProps::gPropertyEnabled[eCSSProperty_COUNT_with_aliases] = {
   #include "nsCSSPropList.h"
   #undef CSS_PROP_SHORTHAND
 
-  #define CSS_PROP_ALIAS(aliasname_, propid_, aliasmethod_, pref_) \
+  #define CSS_PROP_ALIAS(aliasname_, aliasid_, propid_, aliasmethod_, pref_) \
     true,
   #include "nsCSSPropAliasList.h"
   #undef CSS_PROP_ALIAS
@@ -3380,6 +3377,17 @@ nsCSSProps::gPropertyUseCounter[eCSSProperty_COUNT_no_shorthands] = {
   #undef CSS_PROP
   #undef CSS_PROP_LIST_INCLUDE_LOGICAL
   #undef CSS_PROP_PUBLIC_OR_PRIVATE
+};
+
+const uint32_t
+nsCSSProps::kParserVariantTable[eCSSProperty_COUNT_no_shorthands] = {
+#define CSS_PROP(name_, id_, method_, flags_, pref_, parsevariant_, kwtable_, \
+                 stylestruct_, stylestructoffset_, animtype_)                 \
+  parsevariant_,
+#define CSS_PROP_LIST_INCLUDE_LOGICAL
+#include "nsCSSPropList.h"
+#undef CSS_PROP_LIST_INCLUDE_LOGICAL
+#undef CSS_PROP
 };
 
 // Check that all logical property flags are used appropriately.

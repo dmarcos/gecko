@@ -23,6 +23,7 @@ EXTRA_JS_MODULES['services-common'] += [
     'logmanager.js',
     'observers.js',
     'rest.js',
+    'uptake-telemetry.js',
     'utils.js',
 ]
 
@@ -33,13 +34,8 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] != 'android':
         'tokenserverclient.js',
     ]
 
-    TESTING_JS_MODULES.services.common += [
-        'modules-testing/storageserver.js',
-    ]
-
 TESTING_JS_MODULES.services.common += [
     'modules-testing/logging.js',
-    'modules-testing/utils.js',
 ]
 
 JS_PREFERENCE_FILES += [

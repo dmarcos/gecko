@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -18,13 +19,13 @@ class nsSplitterFrameInner;
 
 nsIFrame* NS_NewSplitterFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
-class nsSplitterFrame : public nsBoxFrame
+class nsSplitterFrame final : public nsBoxFrame
 {
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsSplitterFrame)
 
   explicit nsSplitterFrame(nsStyleContext* aContext);
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override {
@@ -34,7 +35,7 @@ public:
 
   // nsIFrame overrides
   virtual nsresult AttributeChanged(int32_t aNameSpaceID,
-                                    nsIAtom* aAttribute,
+                                    nsAtom* aAttribute,
                                     int32_t aModType) override;
 
   virtual void Init(nsIContent*       aContent,
@@ -68,10 +69,9 @@ public:
                                nsEventStatus* aEventStatus) override;
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
-  virtual void GetInitialOrientation(bool& aIsHorizontal) override; 
+  virtual void GetInitialOrientation(bool& aIsHorizontal) override;
 
 private:
 

@@ -38,10 +38,12 @@
 #include "jit/IonTypes.h"
 #include "threading/Thread.h"
 #include "vm/MutexIDs.h"
+#include "wasm/WasmCode.h"
 
 namespace js {
 namespace jit {
 
+class JitActivation;
 class Simulator;
 class Redirection;
 class CachePage;
@@ -110,11 +112,13 @@ class Simulator
     explicit Simulator(JSContext* cx);
     ~Simulator();
 
+    static bool supportsAtomics() { return HasLDSTREXBHD(); }
+
     // The currently executing Simulator instance. Potentially there can be one
     // for each native thread.
     static Simulator* Current();
 
-    static inline uintptr_t StackLimit() {
+    static uintptr_t StackLimit() {
         return Simulator::Current()->stackLimit();
     }
 
@@ -193,7 +197,9 @@ class Simulator
     T get_pc_as() const { return reinterpret_cast<T>(get_pc()); }
 
     void trigger_wasm_interrupt() {
-        MOZ_ASSERT(!wasm_interrupt_);
+        // This can be called several times if a single interrupt isn't caught
+        // and handled by the simulator, but this is fine; once the current
+        // instruction is done executing, the interrupt will be handled anyhow.
         wasm_interrupt_ = true;
     }
 
@@ -287,6 +293,7 @@ class Simulator
 
     // Handle a wasm interrupt triggered by an async signal handler.
     void handleWasmInterrupt();
+    void startWasmInterrupt(JitActivation* act);
 
     // Handle any wasm faults, returning true if the fault was handled.
     bool handleWasmFault(int32_t addr, unsigned numBytes);
@@ -417,7 +424,7 @@ class Simulator
     bool pc_modified_;
     int64_t icount_;
 
-    // wasm async interrupt support
+    // wasm async interrupt / fault support
     bool wasm_interrupt_;
 
     // Debugger input.

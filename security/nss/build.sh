@@ -15,6 +15,7 @@ set -e
 cwd=$(cd $(dirname $0); pwd -P)
 source "$cwd"/coreconf/nspr.sh
 source "$cwd"/coreconf/sanitizers.sh
+GYP=${GYP:-gyp}
 
 # Usage info
 show_help()
@@ -49,6 +50,7 @@ fuzz=0
 fuzz_tls=0
 fuzz_oss=0
 no_local_nspr=0
+armhf=0
 
 gyp_params=(--depth="$cwd" --generator-output=".")
 nspr_params=()
@@ -58,17 +60,22 @@ ninja_params=()
 arch=$(python "$cwd"/coreconf/detect_host_arch.py)
 if [ "$arch" = "x64" -o "$arch" = "aarch64" ]; then
     build_64=1
+elif [ "$arch" = "arm" ]; then
+    armhf=1
 fi
 
 # parse command line arguments
 while [ $# -gt 0 ]; do
     case $1 in
         -c) clean=1 ;;
+        -cc) clean_only=1 ;;
         --gyp|-g) rebuild_gyp=1 ;;
         --nspr) nspr_clean; rebuild_nspr=1 ;;
         -j) ninja_params+=(-j "$2"); shift ;;
         -v) ninja_params+=(-v); verbose=1 ;;
         --test) gyp_params+=(-Dtest_build=1) ;;
+        --clang) export CC=clang; export CCC=clang++; export CXX=clang++ ;;
+        --gcc) export CC=gcc; export CCC=g++; export CXX=g++ ;;
         --fuzz) fuzz=1 ;;
         --fuzz=oss) fuzz=1; fuzz_oss=1 ;;
         --fuzz=tls) fuzz=1; fuzz_tls=1 ;;
@@ -89,6 +96,8 @@ while [ $# -gt 0 ]; do
         --system-sqlite) gyp_params+=(-Duse_system_sqlite=1) ;;
         --with-nspr=?*) set_nspr_path "${1#*=}"; no_local_nspr=1 ;;
         --system-nspr) set_nspr_path "/usr/include/nspr/:"; no_local_nspr=1 ;;
+        --enable-libpkix) gyp_params+=(-Ddisable_libpkix=0) ;;
+        --enable-fips) gyp_params+=(-Ddisable_fips=0) ;;
         *) show_help; exit 2 ;;
     esac
     shift
@@ -101,7 +110,7 @@ else
 fi
 if [ "$build_64" = 1 ]; then
     nspr_params+=(--enable-64bit)
-else
+elif [ ! "$armhf" = 1 ]; then
     gyp_params+=(-Dtarget_arch=ia32)
 fi
 if [ "$fuzz" = 1 ]; then
@@ -116,10 +125,15 @@ dist_dir=$(mkdir -p "$dist_dir"; cd "$dist_dir"; pwd -P)
 gyp_params+=(-Dnss_dist_dir="$dist_dir")
 
 # -c = clean first
-if [ "$clean" = 1 ]; then
+if [ "$clean" = 1 -o "$clean_only" = 1 ]; then
     nspr_clean
     rm -rf "$cwd"/out
     rm -rf "$dist_dir"
+    # -cc = only clean, don't build
+    if [ "$clean_only" = 1 ]; then
+        echo "Cleaned"
+        exit 0
+    fi
 fi
 
 # This saves a canonical representation of arguments that we are passing to gyp
@@ -180,7 +194,10 @@ if [[ "$rebuild_nspr" = 1 && "$no_local_nspr" = 0 ]]; then
     mv -f "$nspr_config".new "$nspr_config"
 fi
 if [ "$rebuild_gyp" = 1 ]; then
-
+    if ! hash ${GYP} 2> /dev/null; then
+        echo "Please install gyp" 1>&2
+        exit 1
+    fi
     # These extra arguments aren't used in determining whether to rebuild.
     obj_dir="$dist_dir"/$target
     gyp_params+=(-Dnss_dist_obj_dir=$obj_dir)
@@ -188,7 +205,7 @@ if [ "$rebuild_gyp" = 1 ]; then
         set_nspr_path "$obj_dir/include/nspr:$obj_dir/lib"
     fi
 
-    run_verbose run_scanbuild gyp -f ninja "${gyp_params[@]}" "$cwd"/nss.gyp
+    run_verbose run_scanbuild ${GYP} -f ninja "${gyp_params[@]}" "$cwd"/nss.gyp
 
     mv -f "$gyp_config".new "$gyp_config"
 fi

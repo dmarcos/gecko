@@ -8,24 +8,27 @@ use HTMLCanvasData;
 use LayoutNodeType;
 use OpaqueStyleAndLayoutData;
 use SVGSVGData;
-use atomic_refcell::AtomicRefCell;
-use gfx_traits::{ByteIndex, FragmentType, ScrollRootId};
-use html5ever_atoms::{Namespace, LocalName};
-use msg::constellation_msg::PipelineId;
+use atomic_refcell::AtomicRef;
+use gfx_traits::{ByteIndex, FragmentType, combine_id_with_fragment_type};
+use html5ever::{Namespace, LocalName};
+use msg::constellation_msg::{BrowsingContextId, PipelineId};
 use range::Range;
+use servo_arc::Arc;
 use servo_url::ServoUrl;
 use std::fmt::Debug;
-use std::sync::Arc;
-use style::computed_values::display;
+use style::attr::AttrValue;
+use style::computed_values::display::T as Display;
 use style::context::SharedStyleContext;
 use style::data::ElementData;
-use style::dom::{LayoutIterator, NodeInfo, PresentationalHintsSynthetizer, TNode};
+use style::dom::{LayoutIterator, NodeInfo, TNode};
 use style::dom::OpaqueNode;
 use style::font_metrics::ServoMetricsProvider;
-use style::properties::{CascadeFlags, ServoComputedValues};
+use style::properties::{CascadeFlags, ComputedValues};
 use style::selector_parser::{PseudoElement, PseudoElementCascadeType, SelectorImpl};
+use style::stylist::RuleInclusion;
+use webrender_api::ClipId;
 
-#[derive(Copy, PartialEq, Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PseudoElementType<T> {
     Normal,
     Before(T),
@@ -76,7 +79,7 @@ pub trait GetLayoutData {
 }
 
 /// A wrapper so that layout can access only the methods that it should have access to. Layout must
-/// only ever see these and must never see instances of `LayoutJS`.
+/// only ever see these and must never see instances of `LayoutDom`.
 pub trait LayoutNode: Debug + GetLayoutData + TNode {
     type ConcreteThreadSafeLayoutNode: ThreadSafeLayoutNode;
     fn to_threadsafe(&self) -> Self::ConcreteThreadSafeLayoutNode;
@@ -84,6 +87,7 @@ pub trait LayoutNode: Debug + GetLayoutData + TNode {
     /// Returns the type ID of this node.
     fn type_id(&self) -> LayoutNodeType;
 
+    unsafe fn initialize_data(&self);
     unsafe fn init_style_and_layout_data(&self, data: OpaqueStyleAndLayoutData);
     unsafe fn take_style_and_layout_data(&self) -> OpaqueStyleAndLayoutData;
 
@@ -96,14 +100,6 @@ pub trait LayoutNode: Debug + GetLayoutData + TNode {
     fn traverse_preorder(self) -> TreeIterator<Self> {
         TreeIterator::new(self)
     }
-
-    fn first_child(&self) -> Option<Self>;
-
-    fn last_child(&self) -> Option<Self>;
-
-    fn prev_sibling(&self) -> Option<Self>;
-
-    fn next_sibling(&self) -> Option<Self>;
 }
 
 pub struct ReverseChildrenIterator<ConcreteNode> where ConcreteNode: LayoutNode {
@@ -165,10 +161,6 @@ pub trait ThreadSafeLayoutNode: Clone + Copy + Debug + GetLayoutData + NodeInfo 
     /// Returns `None` if this is a pseudo-element; otherwise, returns `Some`.
     fn type_id(&self) -> Option<LayoutNodeType>;
 
-    /// Returns the type ID of this node, without discarding pseudo-elements as
-    /// `type_id` does.
-    fn type_id_without_excluding_pseudo_elements(&self) -> LayoutNodeType;
-
     /// Returns the style for a text node. This is computed on the fly from the
     /// parent style to avoid traversing text nodes in the style system.
     ///
@@ -177,15 +169,7 @@ pub trait ThreadSafeLayoutNode: Clone + Copy + Debug + GetLayoutData + NodeInfo 
     /// it can be used to reach siblings and cousins. A simple immutable borrow
     /// of the parent data is fine, since the bottom-up traversal will not process
     /// the parent until all the children have been processed.
-    fn parent_style(&self) -> Arc<ServoComputedValues>;
-
-    #[inline]
-    fn is_element_or_elements_pseudo(&self) -> bool {
-        match self.type_id_without_excluding_pseudo_elements() {
-            LayoutNodeType::Element(..) => true,
-            _ => false,
-        }
-    }
+    fn parent_style(&self) -> Arc<ComputedValues>;
 
     fn get_before_pseudo(&self) -> Option<Self> {
         self.as_element().and_then(|el| el.get_before_pseudo()).map(|el| el.as_node())
@@ -213,13 +197,13 @@ pub trait ThreadSafeLayoutNode: Clone + Copy + Debug + GetLayoutData + NodeInfo 
     fn as_element(&self) -> Option<Self::ConcreteThreadSafeLayoutElement>;
 
     #[inline]
-    fn get_pseudo_element_type(&self) -> PseudoElementType<Option<display::T>> {
+    fn get_pseudo_element_type(&self) -> PseudoElementType<Option<Display>> {
         self.as_element().map_or(PseudoElementType::Normal, |el| el.get_pseudo_element_type())
     }
 
     fn get_style_and_layout_data(&self) -> Option<OpaqueStyleAndLayoutData>;
 
-    fn style(&self, context: &SharedStyleContext) -> Arc<ServoComputedValues> {
+    fn style(&self, context: &SharedStyleContext) -> Arc<ComputedValues> {
         if let Some(el) = self.as_element() {
             el.style(context)
         } else {
@@ -230,7 +214,7 @@ pub trait ThreadSafeLayoutNode: Clone + Copy + Debug + GetLayoutData + NodeInfo 
         }
     }
 
-    fn selected_style(&self) -> Arc<ServoComputedValues> {
+    fn selected_style(&self) -> Arc<ComputedValues> {
         if let Some(el) = self.as_element() {
             el.selected_style()
         } else {
@@ -270,9 +254,13 @@ pub trait ThreadSafeLayoutNode: Clone + Copy + Debug + GetLayoutData + NodeInfo 
 
     fn svg_data(&self) -> Option<SVGSVGData>;
 
+    /// If this node is an iframe element, returns its browsing context ID. If this node is
+    /// not an iframe element, fails. Returns None if there is no nested browsing context.
+    fn iframe_browsing_context_id(&self) -> Option<BrowsingContextId>;
+
     /// If this node is an iframe element, returns its pipeline ID. If this node is
-    /// not an iframe element, fails.
-    fn iframe_pipeline_id(&self) -> PipelineId;
+    /// not an iframe element, fails. Returns None if there is no nested browsing context.
+    fn iframe_pipeline_id(&self) -> Option<PipelineId>;
 
     fn get_colspan(&self) -> u32;
 
@@ -288,8 +276,9 @@ pub trait ThreadSafeLayoutNode: Clone + Copy + Debug + GetLayoutData + NodeInfo 
         }
     }
 
-    fn scroll_root_id(&self) -> ScrollRootId {
-        ScrollRootId::new_of_type(self.opaque().id() as usize, self.fragment_type())
+    fn generate_scroll_root_id(&self, pipeline_id: PipelineId) -> ClipId {
+        let id = combine_id_with_fragment_type(self.opaque().id(), self.fragment_type());
+        ClipId::new(id as u64, pipeline_id.to_webrender())
     }
 }
 
@@ -301,17 +290,21 @@ pub trait DangerousThreadSafeLayoutNode: ThreadSafeLayoutNode {
     unsafe fn dangerous_next_sibling(&self) -> Option<Self>;
 }
 
-pub trait ThreadSafeLayoutElement: Clone + Copy + Sized + Debug +
-                                   ::selectors::Element<Impl=SelectorImpl> +
-                                   GetLayoutData +
-                                   PresentationalHintsSynthetizer {
+pub trait ThreadSafeLayoutElement
+    : Clone
+    + Copy
+    + Sized
+    + Debug
+    + ::selectors::Element<Impl=SelectorImpl>
+    + GetLayoutData
+{
     type ConcreteThreadSafeLayoutNode: ThreadSafeLayoutNode<ConcreteThreadSafeLayoutElement = Self>;
 
     fn as_node(&self) -> Self::ConcreteThreadSafeLayoutNode;
 
     /// Creates a new `ThreadSafeLayoutElement` for the same `LayoutElement`
     /// with a different pseudo-element type.
-    fn with_pseudo(&self, pseudo: PseudoElementType<Option<display::T>>) -> Self;
+    fn with_pseudo(&self, pseudo: PseudoElementType<Option<Display>>) -> Self;
 
     /// Returns the type ID of this node.
     /// Returns `None` if this is a pseudo-element; otherwise, returns `Some`.
@@ -329,18 +322,16 @@ pub trait ThreadSafeLayoutElement: Clone + Copy + Sized + Debug +
     #[inline]
     fn get_attr(&self, namespace: &Namespace, name: &LocalName) -> Option<&str>;
 
-    fn get_style_data(&self) -> Option<&AtomicRefCell<ElementData>>;
+    fn get_attr_enum(&self, namespace: &Namespace, name: &LocalName) -> Option<&AttrValue>;
+
+    fn style_data(&self) -> AtomicRef<ElementData>;
 
     #[inline]
-    fn get_pseudo_element_type(&self) -> PseudoElementType<Option<display::T>>;
+    fn get_pseudo_element_type(&self) -> PseudoElementType<Option<Display>>;
 
     #[inline]
     fn get_before_pseudo(&self) -> Option<Self> {
-        if self.get_style_data()
-               .unwrap()
-               .borrow()
-               .styles().pseudos
-               .has(&PseudoElement::Before) {
+        if self.style_data().styles.pseudos.get(&PseudoElement::Before).is_some() {
             Some(self.with_pseudo(PseudoElementType::Before(None)))
         } else {
             None
@@ -349,11 +340,7 @@ pub trait ThreadSafeLayoutElement: Clone + Copy + Sized + Debug +
 
     #[inline]
     fn get_after_pseudo(&self) -> Option<Self> {
-        if self.get_style_data()
-               .unwrap()
-               .borrow()
-               .styles().pseudos
-               .has(&PseudoElement::After) {
+        if self.style_data().styles.pseudos.get(&PseudoElement::After).is_some() {
             Some(self.with_pseudo(PseudoElementType::After(None)))
         } else {
             None
@@ -377,7 +364,7 @@ pub trait ThreadSafeLayoutElement: Clone + Copy + Sized + Debug +
             let display = if self.get_attr(&ns!(), &local_name!("open")).is_some() {
                 None // Specified by the stylesheet
             } else {
-                Some(display::T::none)
+                Some(Display::None)
             };
             Some(self.with_pseudo(PseudoElementType::DetailsContent(display)))
         } else {
@@ -390,51 +377,45 @@ pub trait ThreadSafeLayoutElement: Clone + Copy + Sized + Debug +
     ///
     /// Unlike the version on TNode, this handles pseudo-elements.
     #[inline]
-    fn style(&self, context: &SharedStyleContext) -> Arc<ServoComputedValues> {
+    fn style(&self, context: &SharedStyleContext) -> Arc<ComputedValues> {
+        let data = self.style_data();
         match self.get_pseudo_element_type() {
-            PseudoElementType::Normal => self.get_style_data().unwrap().borrow()
-                                             .styles().primary.values().clone(),
+            PseudoElementType::Normal => {
+                data.styles.primary().clone()
+            },
             other => {
                 // Precompute non-eagerly-cascaded pseudo-element styles if not
                 // cached before.
                 let style_pseudo = other.style_pseudo_element();
-                let mut data = self.get_style_data().unwrap().borrow_mut();
                 match style_pseudo.cascade_type() {
                     // Already computed during the cascade.
                     PseudoElementCascadeType::Eager => {
-                        data.styles().pseudos.get(&style_pseudo)
-                            .unwrap().values().clone()
+                        self.style_data()
+                            .styles.pseudos.get(&style_pseudo)
+                            .unwrap().clone()
                     },
                     PseudoElementCascadeType::Precomputed => {
-                        if !data.styles().cached_pseudos.contains_key(&style_pseudo) {
-                            let new_style =
-                                context.stylist.precomputed_values_for_pseudo(
-                                    &context.guards,
-                                    &style_pseudo,
-                                    Some(data.styles().primary.values()),
-                                    CascadeFlags::empty(),
-                                    &ServoMetricsProvider);
-                            data.styles_mut().cached_pseudos
-                                .insert(style_pseudo.clone(), new_style);
-                        }
-                        data.styles().cached_pseudos.get(&style_pseudo)
-                            .unwrap().values().clone()
+                        context.stylist.precomputed_values_for_pseudo(
+                            &context.guards,
+                            &style_pseudo,
+                            Some(data.styles.primary()),
+                            CascadeFlags::empty(),
+                            &ServoMetricsProvider)
+                            .clone()
                     }
                     PseudoElementCascadeType::Lazy => {
-                        if !data.styles().cached_pseudos.contains_key(&style_pseudo) {
-                            let new_style =
-                                context.stylist
-                                       .lazily_compute_pseudo_element_style(
-                                           &context.guards,
-                                           unsafe { &self.unsafe_get() },
-                                           &style_pseudo,
-                                           data.styles().primary.values(),
-                                           &ServoMetricsProvider);
-                            data.styles_mut().cached_pseudos
-                                .insert(style_pseudo.clone(), new_style.unwrap());
-                        }
-                        data.styles().cached_pseudos.get(&style_pseudo)
-                            .unwrap().values().clone()
+                        context.stylist
+                               .lazily_compute_pseudo_element_style(
+                                   &context.guards,
+                                   unsafe { &self.unsafe_get() },
+                                   &style_pseudo,
+                                   RuleInclusion::All,
+                                   data.styles.primary(),
+                                   /* is_probe = */ false,
+                                   &ServoMetricsProvider,
+                                   /* matching_func = */ None)
+                               .unwrap()
+                               .clone()
                     }
                 }
             }
@@ -442,12 +423,12 @@ pub trait ThreadSafeLayoutElement: Clone + Copy + Sized + Debug +
     }
 
     #[inline]
-    fn selected_style(&self) -> Arc<ServoComputedValues> {
-        let data = self.get_style_data().unwrap().borrow();
-        data.styles().pseudos
+    fn selected_style(&self) -> Arc<ComputedValues> {
+        let data = self.style_data();
+        data.styles.pseudos
             .get(&PseudoElement::Selection).map(|s| s)
-            .unwrap_or(&data.styles().primary)
-            .values().clone()
+            .unwrap_or(data.styles.primary())
+            .clone()
     }
 
     /// Returns the already resolved style of the node.
@@ -458,14 +439,14 @@ pub trait ThreadSafeLayoutElement: Clone + Copy + Sized + Debug +
     /// This should be used just for querying layout, or when we know the
     /// element style is precomputed, not from general layout itself.
     #[inline]
-    fn resolved_style(&self) -> Arc<ServoComputedValues> {
-        let data = self.get_style_data().unwrap().borrow();
+    fn resolved_style(&self) -> Arc<ComputedValues> {
+        let data = self.style_data();
         match self.get_pseudo_element_type() {
             PseudoElementType::Normal
-                => data.styles().primary.values().clone(),
+                => data.styles.primary().clone(),
             other
-                => data.styles().pseudos
-                       .get(&other.style_pseudo_element()).unwrap().values().clone(),
+                => data.styles.pseudos
+                       .get(&other.style_pseudo_element()).unwrap().clone(),
         }
     }
 }

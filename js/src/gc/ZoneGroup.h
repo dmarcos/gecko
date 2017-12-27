@@ -7,8 +7,6 @@
 #ifndef gc_ZoneGroup_h
 #define gc_ZoneGroup_h
 
-#include "jsgc.h"
-
 #include "gc/Statistics.h"
 #include "vm/Caches.h"
 #include "vm/Stack.h"
@@ -41,12 +39,17 @@ class ZoneGroup
     // The number of times the context has entered this zone group.
     UnprotectedData<size_t> enterCount;
 
+    // If this flag is true, then we may need to block before entering this zone
+    // group. Blocking happens using JSContext::yieldToEmbedding.
+    UnprotectedData<bool> useExclusiveLocking_;
+
   public:
     CooperatingContext& ownerContext() { return ownerContext_.ref(); }
     void* addressOfOwnerContext() { return &ownerContext_.ref().cx; }
 
-    void enter();
+    void enter(JSContext* cx);
     void leave();
+    bool canEnterWithoutYielding(JSContext* cx);
     bool ownedByCurrentThread();
 
     // All zones in the group.
@@ -55,8 +58,37 @@ class ZoneGroup
   public:
     ZoneVector& zones() { return zones_.ref(); }
 
-    // Whether a zone in this group is in use by a helper thread.
-    mozilla::Atomic<bool> usedByHelperThread;
+  private:
+    enum class HelperThreadUse : uint32_t
+    {
+        None,
+        Pending,
+        Active
+    };
+
+    mozilla::Atomic<HelperThreadUse> helperThreadUse;
+
+  public:
+    // Whether a zone in this group was created for use by a helper thread.
+    bool createdForHelperThread() const {
+        return helperThreadUse != HelperThreadUse::None;
+    }
+    // Whether a zone in this group is currently in use by a helper thread.
+    bool usedByHelperThread() const {
+        return helperThreadUse == HelperThreadUse::Active;
+    }
+    void setCreatedForHelperThread() {
+        MOZ_ASSERT(helperThreadUse == HelperThreadUse::None);
+        helperThreadUse = HelperThreadUse::Pending;
+    }
+    void setUsedByHelperThread() {
+        MOZ_ASSERT(helperThreadUse == HelperThreadUse::Pending);
+        helperThreadUse = HelperThreadUse::Active;
+    }
+    void clearUsedByHelperThread() {
+        MOZ_ASSERT(helperThreadUse != HelperThreadUse::None);
+        helperThreadUse = HelperThreadUse::None;
+    }
 
     explicit ZoneGroup(JSRuntime* runtime);
     ~ZoneGroup();
@@ -66,11 +98,15 @@ class ZoneGroup
     inline Nursery& nursery();
     inline gc::StoreBuffer& storeBuffer();
 
-    // Queue a thunk to run after the next minor GC.
-    inline void callAfterMinorGC(void (*thunk)(void* data), void* data);
-
     inline bool isCollecting();
     inline bool isGCScheduled();
+
+    // See the useExclusiveLocking_ field above.
+    void setUseExclusiveLocking() { useExclusiveLocking_ = true; }
+    bool useExclusiveLocking() { return useExclusiveLocking_; }
+
+    // Delete an empty zone after its contents have been merged.
+    void deleteEmptyZone(Zone* zone);
 
 #ifdef DEBUG
   private:
@@ -95,6 +131,11 @@ class ZoneGroup
     ZoneGroupData<mozilla::LinkedList<js::Debugger>> debuggerList_;
   public:
     mozilla::LinkedList<js::Debugger>& debuggerList() { return debuggerList_.ref(); }
+
+    // Number of Ion compilations which were finished off thread and are
+    // waiting to be lazily linked. This is only set while holding the helper
+    // thread state lock, but may be read from at other times.
+    mozilla::Atomic<size_t> numFinishedBuilders;
 
   private:
     /* List of Ion compilation waiting to get linked. */

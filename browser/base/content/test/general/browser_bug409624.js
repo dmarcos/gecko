@@ -5,10 +5,10 @@
 XPCOMUtils.defineLazyModuleGetter(this, "FormHistory",
                                   "resource://gre/modules/FormHistory.jsm");
 
-add_task(function* test() {
+add_task(async function test() {
   // This test relies on the form history being empty to start with delete
   // all the items first.
-  yield new Promise((resolve, reject) => {
+  await new Promise((resolve, reject) => {
     FormHistory.update({ op: "remove" },
                        { handleError(error) {
                            reject(error);
@@ -23,16 +23,12 @@ add_task(function* test() {
                        });
   });
 
-  let prefService = Cc["@mozilla.org/preferences-service;1"]
-                    .getService(Components.interfaces.nsIPrefService);
-
   let tempScope = {};
-  Cc["@mozilla.org/moz/jssubscript-loader;1"].getService(Ci.mozIJSSubScriptLoader)
-                                             .loadSubScript("chrome://browser/content/sanitize.js", tempScope);
+  Services.scriptloader.loadSubScript("chrome://browser/content/sanitize.js", tempScope);
   let Sanitizer = tempScope.Sanitizer;
   let s = new Sanitizer();
   s.prefDomain = "privacy.cpd.";
-  let prefBranch = prefService.getBranch(s.prefDomain);
+  let prefBranch = Services.prefs.getBranch(s.prefDomain);
 
   prefBranch.setBoolPref("cache", false);
   prefBranch.setBoolPref("cookies", false);
@@ -45,13 +41,13 @@ add_task(function* test() {
   prefBranch.setBoolPref("siteSettings", false);
 
   // Sanitize now so we can test the baseline point.
-  yield s.sanitize();
+  await s.sanitize();
   ok(!gFindBar.hasTransactions, "pre-test baseline for sanitizer");
 
   gFindBar.getElement("findbar-textbox").value = "m";
   ok(gFindBar.hasTransactions, "formdata can be cleared after input");
 
-  yield s.sanitize();
+  await s.sanitize();
   is(gFindBar.getElement("findbar-textbox").value, "", "findBar textbox should be empty after sanitize");
   ok(!gFindBar.hasTransactions, "No transactions after sanitize");
 });

@@ -50,18 +50,18 @@ function run_test() {
 
   // Make sure that getting both nsIAuthPrompt and nsIAuthPrompt2 works
   // (these should work independently of whether the application has
-  // nsIPromptService2)
+  // nsIPromptService)
   var ww = Cc["@mozilla.org/embedcomp/window-watcher;1"].getService();
 
   authPromptRequestReceived = false;
 
-  do_check_neq(ww.nsIPromptFactory.getPrompt(null, Ci.nsIAuthPrompt), null);
+  Assert.notEqual(ww.nsIPromptFactory.getPrompt(null, Ci.nsIAuthPrompt), null);
 
-  do_check_true(authPromptRequestReceived);
+  Assert.ok(authPromptRequestReceived);
 
   authPromptRequestReceived = false;
 
-  do_check_neq(ww.nsIPromptFactory.getPrompt(null, Ci.nsIAuthPrompt2), null);
+  Assert.notEqual(ww.nsIPromptFactory.getPrompt(null, Ci.nsIAuthPrompt2), null);
 
-  do_check_true(authPromptRequestReceived);
+  Assert.ok(authPromptRequestReceived);
 }

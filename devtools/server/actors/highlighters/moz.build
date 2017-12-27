@@ -14,10 +14,12 @@ DevToolsModules(
     'css-grid.js',
     'css-transform.js',
     'eye-dropper.js',
+    'flexbox.js',
     'geometry-editor.js',
     'measuring-tool.js',
     'paused-debugger.js',
     'rulers.js',
     'selector.js',
+    'shapes.js',
     'simple-outline.js'
 )

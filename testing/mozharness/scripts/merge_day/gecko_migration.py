@@ -7,8 +7,8 @@
 # ***** END LICENSE BLOCK *****
 """ gecko_migration.py
 
-Merge day script for gecko (mozilla-central -> mozilla-aurora,
-mozilla-aurora -> mozilla-beta, mozilla-beta -> mozilla-release).
+Merge day script for gecko (mozilla-central -> mozilla-beta,
+mozilla-beta -> mozilla-release).
 
 Ported largely from
 http://hg.mozilla.org/build/tools/file/084bc4e2fc76/release/beta2release.py
@@ -20,28 +20,24 @@ import os
 import pprint
 import subprocess
 import sys
-from getpass import getpass
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(sys.path[0])))
 
 from mozharness.base.errors import HgErrorList
 from mozharness.base.python import VirtualenvMixin, virtualenv_config_options
 from mozharness.base.vcs.vcsbase import MercurialScript
-from mozharness.mozilla.selfserve import SelfServeMixin
 from mozharness.mozilla.updates.balrog import BalrogMixin
 from mozharness.mozilla.buildbot import BuildbotMixin
 from mozharness.mozilla.repo_manipulation import MercurialRepoManipulationMixin
 
 VALID_MIGRATION_BEHAVIORS = (
-    "beta_to_release", "aurora_to_beta", "central_to_aurora", "release_to_esr",
-    "bump_second_digit",
+    "beta_to_release", "central_to_beta", "release_to_esr", "bump_second_digit",
 )
 
 
 # GeckoMigration {{{1
 class GeckoMigration(MercurialScript, BalrogMixin, VirtualenvMixin,
-                     SelfServeMixin, BuildbotMixin,
-                     MercurialRepoManipulationMixin):
+                     BuildbotMixin, MercurialRepoManipulationMixin):
     config_options = [
         [['--hg-user', ], {
             "action": "store",
@@ -86,15 +82,16 @@ class GeckoMigration(MercurialScript, BalrogMixin, VirtualenvMixin,
                 'clean-repos',
                 'pull',
                 'lock-update-paths',
+                'set_push_to_ssh',
                 'migrate',
                 'bump_second_digit',
                 'commit-changes',
                 'push',
-                'trigger-builders',
             ],
             default_actions=[
                 'clean-repos',
                 'pull',
+                'set_push_to_ssh',
                 'migrate',
             ],
             require_config_file=require_config_file
@@ -107,13 +104,16 @@ class GeckoMigration(MercurialScript, BalrogMixin, VirtualenvMixin,
             """
         message = ""
         if self.config['migration_behavior'] not in VALID_MIGRATION_BEHAVIORS:
-            message += "%s must be one of %s!\n" % (self.config['migration_behavior'], VALID_MIGRATION_BEHAVIORS)
+            message += "%s must be one of %s!\n" % (self.config['migration_behavior'],
+                                                    VALID_MIGRATION_BEHAVIORS)
         if self.config['migration_behavior'] == 'beta_to_release':
-            if self.config.get("require_remove_locales") and not self.config.get("remove_locales") and 'migrate' in self.actions:
+            if self.config.get("require_remove_locales") \
+                    and not self.config.get("remove_locales") and 'migrate' in self.actions:
                 message += "You must specify --remove-locale!\n"
         else:
             if self.config.get("require_remove_locales") or self.config.get("remove_locales"):
-                self.warning("--remove-locale isn't valid unless you're using beta_to_release migration_behavior!\n")
+                self.warning("--remove-locale isn't valid unless you're using beta_to_release "
+                             "migration_behavior!\n")
         if message:
             self.fatal(message)
 
@@ -170,7 +170,7 @@ class GeckoMigration(MercurialScript, BalrogMixin, VirtualenvMixin,
     def query_commit_dirs(self):
         dirs = self.query_abs_dirs()
         commit_dirs = [dirs['abs_to_dir']]
-        if self.config['migration_behavior'] == 'central_to_aurora':
+        if self.config['migration_behavior'] == 'central_to_beta':
             commit_dirs.append(dirs['abs_from_dir'])
         return commit_dirs
 
@@ -187,6 +187,16 @@ class GeckoMigration(MercurialScript, BalrogMixin, VirtualenvMixin,
             return ['--new-branch', '-r', '.']
         else:
             return ['-r', '.']
+
+    def set_push_to_ssh(self):
+        for cwd in self.query_push_dirs():
+            repo_url = self.read_repo_hg_rc(cwd).get('paths', 'default')
+            push_dest = repo_url.replace('https://', 'ssh://')
+
+            if not push_dest.startswith('ssh://'):
+                raise Exception('Warning: path "{}" is not supported. Protocol must be ssh')
+
+            self.edit_repo_hg_rc(cwd, 'paths', 'default-push', push_dest)
 
     def query_from_revision(self):
         """ Shortcut to get the revision for the from repo
@@ -224,7 +234,8 @@ class GeckoMigration(MercurialScript, BalrogMixin, VirtualenvMixin,
             dirs = self.query_abs_dirs()
             patch_file = os.path.join(dirs['abs_work_dir'], 'patch_file')
             self.run_command(
-                subprocess.list2cmdline(hg + ['diff', '-r', old_head, '.hgtags', '-U9', '>', patch_file]),
+                subprocess.list2cmdline(hg + ['diff', '-r', old_head, '.hgtags',
+                                        '-U9', '>', patch_file]),
                 cwd=cwd,
             )
             self.run_command(
@@ -288,8 +299,8 @@ class GeckoMigration(MercurialScript, BalrogMixin, VirtualenvMixin,
         self.write_to_file(clobber_file, new_contents)
 
     def bump_version(self, cwd, curr_version, next_version, curr_suffix,
-                     next_suffix, bump_major=False):
-        """ Bump versions (m-c, m-a, m-b).
+                     next_suffix, bump_major=False, use_config_suffix=False):
+        """ Bump versions (m-c, m-b).
 
             At some point we may want to unhardcode these filenames into config
             """
@@ -297,7 +308,10 @@ class GeckoMigration(MercurialScript, BalrogMixin, VirtualenvMixin,
         next_weave_version = str(int(curr_weave_version) + 1)
         for f in self.config["version_files"]:
             from_ = "%s.0%s" % (curr_version, curr_suffix)
-            to = "%s.0%s%s" % (next_version, next_suffix, f["suffix"])
+            if use_config_suffix:
+                to = "%s.0%s%s" % (next_version, next_suffix, f["suffix"])
+            else:
+                to = "%s.0%s" % (next_version, next_suffix)
             self.replace(os.path.join(cwd, f["file"]), from_, to)
 
         # only applicable for m-c
@@ -308,14 +322,14 @@ class GeckoMigration(MercurialScript, BalrogMixin, VirtualenvMixin,
                 "static const unsigned int kVersion = %s;" % next_version
             )
             self.replace(
-                os.path.join(cwd, "services/sync/moz.build"),
-                "DEFINES['weave_version'] = '1.%s.0'" % curr_weave_version,
-                "DEFINES['weave_version'] = '1.%s.0'" % next_weave_version
+                os.path.join(cwd, "services/sync/modules/constants.js"),
+                'WEAVE_VERSION: "1.%s.0"' % curr_weave_version,
+                'WEAVE_VERSION: "1.%s.0"' % next_weave_version
             )
 
     # Branch-specific workflow helper methods {{{1
-    def central_to_aurora(self, end_tag):
-        """ mozilla-central -> mozilla-aurora behavior.
+    def central_to_beta(self, end_tag):
+        """ mozilla-central -> mozilla-beta behavior.
 
             We could have all of these individually toggled by flags, but
             by separating into workflow methods we can be more precise about
@@ -323,48 +337,21 @@ class GeckoMigration(MercurialScript, BalrogMixin, VirtualenvMixin,
             staging beta user repo migrations.
             """
         dirs = self.query_abs_dirs()
-        self.info("Reverting locales")
-        hg = self.query_exe("hg", return_type="list")
-        for f in self.config["locale_files"]:
-            self.run_command(
-                hg + ["revert", "-r", end_tag, f],
-                cwd=dirs['abs_to_dir'],
-                error_list=HgErrorList,
-                halt_on_failure=True,
-            )
-        next_ma_version = self.get_version(dirs['abs_to_dir'])[0]
-        self.bump_version(dirs['abs_to_dir'], next_ma_version, next_ma_version, "a1", "a2")
+        next_mb_version = self.get_version(dirs['abs_to_dir'])[0]
+        self.bump_version(dirs['abs_to_dir'], next_mb_version, next_mb_version, "a1", "",
+                          use_config_suffix=True)
         self.apply_replacements()
         # bump m-c version
         curr_mc_version = self.get_version(dirs['abs_from_dir'])[0]
         next_mc_version = str(int(curr_mc_version) + 1)
         self.bump_version(
             dirs['abs_from_dir'], curr_mc_version, next_mc_version, "a1", "a1",
-            bump_major=True
+            bump_major=True,
+            use_config_suffix=False
         )
         # touch clobber files
         self.touch_clobber_file(dirs['abs_from_dir'])
         self.touch_clobber_file(dirs['abs_to_dir'])
-
-    def aurora_to_beta(self, *args, **kwargs):
-        """ mozilla-aurora -> mozilla-beta behavior.
-
-            We could have all of these individually toggled by flags, but
-            by separating into workflow methods we can be more precise about
-            what happens in each workflow, while allowing for things like
-            staging beta user repo migrations.
-            """
-        dirs = self.query_abs_dirs()
-        mb_version = self.get_version(dirs['abs_to_dir'])[0]
-        self.bump_version(dirs['abs_to_dir'], mb_version, mb_version, "a2", "")
-        self.apply_replacements()
-        self.touch_clobber_file(dirs['abs_to_dir'])
-        # TODO mozconfig diffing
-        # The build/tools version only checks the mozconfigs from hgweb, so
-        # can't help pre-push.  The in-tree mozconfig diffing requires a mach
-        # virtualenv to be installed.  If we want this sooner we can put this
-        # in the push action; otherwise we may just wait until we have in-tree
-        # mozconfig checking.
 
     def beta_to_release(self, *args, **kwargs):
         """ mozilla-beta -> mozilla-release behavior.
@@ -519,35 +506,12 @@ class GeckoMigration(MercurialScript, BalrogMixin, VirtualenvMixin,
             )
         # Call beta_to_release etc.
         if not hasattr(self, self.config['migration_behavior']):
-            self.fatal("Don't know how to proceed with migration_behavior %s !" % self.config['migration_behavior'])
+            self.fatal("Don't know how to proceed with migration_behavior %s !" %
+                       self.config['migration_behavior'])
         getattr(self, self.config['migration_behavior'])(end_tag=end_tag)
-        self.info("Verify the diff, and apply any manual changes, such as disabling features, and --commit-changes")
+        self.info("Verify the diff, and apply any manual changes, such as disabling features, "
+                  "and --commit-changes")
 
-    def trigger_builders(self):
-        """Triggers builders that should be run directly after a merge.
-        There are two different types of things we trigger:
-        1) Nightly builds ("post_merge_nightly_branches" in the config).
-           These are triggered with buildapi's nightly build endpoint to avoid
-           duplicating all of the nightly builder names into the gecko
-           migration mozharness configs. (Which would surely get out of date
-           very quickly).
-        2) Arbitrary builders ("post_merge_builders"). These are additional
-           builders to trigger that aren't part of the nightly builder set.
-           Previous example: hg bundle generation builders.
-        """
-        dirs = self.query_abs_dirs()
-        branch = self.config["to_repo_url"].rstrip("/").split("/")[-1]
-        revision = self.query_to_revision()
-        # Horrible hack because our internal buildapi interface doesn't let us
-        # actually do anything. Need to use the public one w/ auth.
-        username = raw_input("LDAP Username: ")
-        password = getpass(prompt="LDAP Password: ")
-        auth = (username, password)
-        for builder in self.config["post_merge_builders"]:
-            self.trigger_arbitrary_job(builder, branch, revision, auth)
-        for nightly_branch in self.config["post_merge_nightly_branches"]:
-            nightly_revision = self.query_hg_revision(os.path.join(dirs["abs_work_dir"], nightly_branch))
-            self.trigger_nightly_builds(nightly_branch, nightly_revision, auth)
 
 # __main__ {{{1
 if __name__ == '__main__':

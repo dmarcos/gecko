@@ -14,6 +14,8 @@
 #include "nsMemory.h"
 #include "nsString.h"
 #include "nsCRTGlue.h"
+#include "mozilla/IntegerPrintfMacros.h"
+#include "mozilla/Printf.h"
 
 /***************************************************************************/
 // Helpers for static convert functions...
@@ -249,8 +251,6 @@ CloneArray(uint16_t aInType, const nsIID* aInIID,
   NS_ASSERTION(aOutCount, "bad param");
   NS_ASSERTION(aOutValue, "bad param");
 
-  uint32_t allocatedValueCount = 0;
-  nsresult rv = NS_OK;
   uint32_t i;
 
   // First we figure out the size of the elements for the new u.array.
@@ -376,13 +376,10 @@ CloneArray(uint16_t aInType, const nsIID* aInIID,
       for (i = aInCount; i > 0; --i) {
         nsID* idp = *(inp++);
         if (idp) {
-          if (!(*(outp++) = (nsID*)nsMemory::Clone((char*)idp, sizeof(nsID)))) {
-            goto bad;
-          }
+          *(outp++) = idp->Clone();
         } else {
           *(outp++) = nullptr;
         }
-        allocatedValueCount++;
       }
       break;
     }
@@ -393,14 +390,10 @@ CloneArray(uint16_t aInType, const nsIID* aInIID,
       for (i = aInCount; i > 0; i--) {
         char* str = *(inp++);
         if (str) {
-          if (!(*(outp++) = (char*)nsMemory::Clone(
-                              str, (strlen(str) + 1) * sizeof(char)))) {
-            goto bad;
-          }
+          *(outp++) = moz_xstrdup(str);
         } else {
           *(outp++) = nullptr;
         }
-        allocatedValueCount++;
       }
       break;
     }
@@ -411,14 +404,10 @@ CloneArray(uint16_t aInType, const nsIID* aInIID,
       for (i = aInCount; i > 0; i--) {
         char16_t* str = *(inp++);
         if (str) {
-          if (!(*(outp++) = (char16_t*)nsMemory::Clone(
-                              str, (NS_strlen(str) + 1) * sizeof(char16_t)))) {
-            goto bad;
-          }
+          *(outp++) = NS_strdup(str);
         } else {
           *(outp++) = nullptr;
         }
-        allocatedValueCount++;
       }
       break;
     }
@@ -442,18 +431,6 @@ CloneArray(uint16_t aInType, const nsIID* aInIID,
   *aOutType = aInType;
   *aOutCount = aInCount;
   return NS_OK;
-
-bad:
-  if (*aOutValue) {
-    char** p = (char**)*aOutValue;
-    for (i = allocatedValueCount; i > 0; ++p, --i)
-      if (*p) {
-        free(*p);
-      }
-    free((char*)*aOutValue);
-    *aOutValue = nullptr;
-  }
-  return rv;
 }
 
 /***************************************************************************/
@@ -746,7 +723,7 @@ nsDiscriminatedUnion::ConvertToID(nsID* aResult) const
 nsresult
 nsDiscriminatedUnion::ToString(nsACString& aOutString) const
 {
-  char* ptr;
+  mozilla::SmprintfPointer pptr;
 
   switch (mType) {
     // all the stuff we don't handle...
@@ -778,16 +755,17 @@ nsDiscriminatedUnion::ToString(nsACString& aOutString) const
 
     // nsID has its own text formatter.
 
-    case nsIDataType::VTYPE_ID:
-      ptr = u.mIDValue.ToString();
+    case nsIDataType::VTYPE_ID: {
+      char* ptr = u.mIDValue.ToString();
       if (!ptr) {
         return NS_ERROR_OUT_OF_MEMORY;
       }
       aOutString.Assign(ptr);
       free(ptr);
       return NS_OK;
+    }
 
-    // Can't use PR_smprintf for floats, since it's locale-dependent
+    // Can't use Smprintf for floats, since it's locale-dependent
 #define CASE__APPENDFLOAT_NUMBER(type_, member_)                        \
     case nsIDataType::type_ :                                           \
     {                                                                   \
@@ -802,22 +780,24 @@ nsDiscriminatedUnion::ToString(nsACString& aOutString) const
 
 #undef CASE__APPENDFLOAT_NUMBER
 
-    // the rest can be PR_smprintf'd and use common code.
+    // the rest can be Smprintf'd and use common code.
 
 #define CASE__SMPRINTF_NUMBER(type_, format_, cast_, member_)          \
     case nsIDataType::type_:                                           \
-        ptr = PR_smprintf( format_ , (cast_) u.member_);               \
+        static_assert(sizeof(cast_) >= sizeof(u.member_),              \
+                      "size of type should be at least as big as member"); \
+        pptr = mozilla::Smprintf( format_ , (cast_) u.member_);        \
         break;
 
     CASE__SMPRINTF_NUMBER(VTYPE_INT8,   "%d",   int,      mInt8Value)
     CASE__SMPRINTF_NUMBER(VTYPE_INT16,  "%d",   int,      mInt16Value)
     CASE__SMPRINTF_NUMBER(VTYPE_INT32,  "%d",   int,      mInt32Value)
-    CASE__SMPRINTF_NUMBER(VTYPE_INT64,  "%lld", int64_t,  mInt64Value)
+    CASE__SMPRINTF_NUMBER(VTYPE_INT64,  "%" PRId64, int64_t,  mInt64Value)
 
     CASE__SMPRINTF_NUMBER(VTYPE_UINT8,  "%u",   unsigned, mUint8Value)
     CASE__SMPRINTF_NUMBER(VTYPE_UINT16, "%u",   unsigned, mUint16Value)
     CASE__SMPRINTF_NUMBER(VTYPE_UINT32, "%u",   unsigned, mUint32Value)
-    CASE__SMPRINTF_NUMBER(VTYPE_UINT64, "%llu", int64_t,  mUint64Value)
+    CASE__SMPRINTF_NUMBER(VTYPE_UINT64, "%" PRIu64, int64_t,  mUint64Value)
 
     // XXX Would we rather print "true" / "false" ?
     CASE__SMPRINTF_NUMBER(VTYPE_BOOL,   "%d",   int,      mBoolValue)
@@ -827,11 +807,10 @@ nsDiscriminatedUnion::ToString(nsACString& aOutString) const
 #undef CASE__SMPRINTF_NUMBER
   }
 
-  if (!ptr) {
+  if (!pptr) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
-  aOutString.Assign(ptr);
-  PR_smprintf_free(ptr);
+  aOutString.Assign(pptr.get());
   return NS_OK;
 }
 
@@ -1164,10 +1143,7 @@ nsDiscriminatedUnion::ConvertToInterface(nsIID** aIID,
       return NS_ERROR_CANNOT_CONVERT_DATA;
   }
 
-  *aIID = (nsIID*)nsMemory::Clone(piid, sizeof(nsIID));
-  if (!*aIID) {
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
+  *aIID = piid->Clone();
 
   if (u.iface.mInterfaceValue) {
     return u.iface.mInterfaceValue->QueryInterface(*piid, aInterface);

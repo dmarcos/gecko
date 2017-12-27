@@ -14,14 +14,11 @@ config = {
         'upload-files',
         'sendchange',
         'multi-l10n',
-        'generate-build-stats',
         'update',  # decided by query_is_nightly()
     ],
     "buildbot_json_path": "buildprops.json",
-    'exes': {
-        "buildbot": "/tools/buildbot/bin/buildbot",
-    },
     'app_ini_path': '%(obj_dir)s/dist/bin/application.ini',
+    'max_build_output_timeout': 0,
     # decides whether we want to use moz_sign_cmd in env
     'enable_signing': True,
     # mock shtuff
@@ -31,6 +28,7 @@ config = {
         ('/home/cltbld/.ssh', '/home/mock_mozilla/.ssh'),
         ('/home/cltbld/.hgrc', '/builds/.hgrc'),
         ('/home/cltbld/.boto', '/builds/.boto'),
+        ('/builds/gapi.data', '/builds/gapi.data'),
         ('/builds/relengapi.tok', '/builds/relengapi.tok'),
         ('/tools/tooltool.py', '/builds/tooltool.py'),
         ('/builds/mozilla-api.key', '/builds/mozilla-api.key'),
@@ -39,6 +37,9 @@ config = {
         ('/usr/local/lib/hgext', '/usr/local/lib/hgext'),
     ],
     'secret_files': [
+        {'filename': '/builds/gapi.data',
+         'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/gapi.data',
+         'min_scm_level': 1},
         {'filename': '/builds/mozilla-fennec-geoloc-api.key',
          'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/mozilla-fennec-geoloc-api.key',
          'min_scm_level': 2, 'default': 'try-build-has-no-secrets'},
@@ -48,14 +49,32 @@ config = {
         {'filename': '/builds/adjust-sdk-beta.token',
          'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/adjust-sdk-beta.token',
          'min_scm_level': 2, 'default': 'try-build-has-no-secrets'},
+        {'filename': '/builds/leanplum-sdk-release.token',
+         'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/leanplum-sdk-release.token',
+         'min_scm_level': 2, 'default': 'try-build-has-no-secrets'},
+        {'filename': '/builds/leanplum-sdk-beta.token',
+         'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/leanplum-sdk-beta.token',
+         'min_scm_level': 2, 'default': 'try-build-has-no-secrets'},
+        {'filename': '/builds/leanplum-sdk-nightly.token',
+         'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/leanplum-sdk-nightly.token',
+         'min_scm_level': 2, 'default': 'try-build-has-no-secrets'},
+        {'filename': '/builds/pocket-api-release.token',
+         'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/pocket-api-release.token',
+         'min_scm_level': 2, 'default': 'try-build-has-no-secrets'},
+        {'filename': '/builds/pocket-api-beta.token',
+         'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/pocket-api-beta.token',
+         'min_scm_level': 2, 'default': 'try-build-has-no-secrets'},
+        {'filename': '/builds/pocket-api-nightly.token',
+         'secret_name': 'project/releng/gecko/build/level-%(scm-level)s/pocket-api-nightly.token',
+         'min_scm_level': 2, 'default': 'try-build-has-no-secrets'},
+
     ],
-    'enable_ccache': True,
     'vcs_share_base': '/builds/hg-shared',
     'objdir': 'obj-firefox',
     'tooltool_script': ["/builds/tooltool.py"],
     'tooltool_bootstrap': "setup.sh",
     'enable_count_ctors': False,
-    'enable_talos_sendchange': True,
+    'enable_talos_sendchange': False,
     'enable_unittest_sendchange': True,
     'multi_locale': True,
     #########################################################################
@@ -72,18 +91,17 @@ config = {
     'use_package_as_marfile': True,
     'env': {
         'MOZBUILD_STATE_PATH': os.path.join(os.getcwd(), '.mozbuild'),
-        'MOZ_AUTOMATION': '1',
         'DISPLAY': ':2',
         'HG_SHARE_BASE_DIR': '/builds/hg-shared',
-        'MOZ_OBJDIR': 'obj-firefox',
+        'MOZ_OBJDIR': '%(abs_obj_dir)s',
         'TINDERBOX_OUTPUT': '1',
-        'TOOLTOOL_CACHE': '/home/worker/tooltool-cache',
+        'TOOLTOOL_CACHE': '/builds/worker/tooltool-cache',
         'TOOLTOOL_HOME': '/builds',
         'CCACHE_DIR': '/builds/ccache',
         'CCACHE_COMPRESS': '1',
         'CCACHE_UMASK': '002',
         'LC_ALL': 'C',
-        'PATH': '/tools/buildbot/bin:/usr/local/bin:/bin:/usr/bin',
+        'PATH': '/usr/local/bin:/bin:/usr/bin',
         'SHIP_LICENSED_FONTS': '1',
     },
     'upload_env': {
@@ -106,6 +124,14 @@ config = {
                       'ant', 'ant-apache-regexp'
                       ],
     'src_mozconfig': 'mobile/android/config/mozconfigs/android/nightly',
-    'tooltool_manifest_src': "mobile/android/config/tooltool-manifests/android/releng.manifest",
     #########################################################################
+
+    # It's not obvious, but postflight_build is after packaging, so the Gecko
+    # binaries are in the object directory, ready to be packaged into the
+    # GeckoView AAR.
+    'postflight_build_mach_commands': [
+        ['android',
+         'archive-geckoview',
+        ],
+    ],
 }

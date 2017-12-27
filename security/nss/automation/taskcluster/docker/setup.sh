@@ -17,6 +17,7 @@ apt_packages+=('npm')
 apt_packages+=('git')
 apt_packages+=('golang-1.6')
 apt_packages+=('libxml2-utils')
+apt_packages+=('locales')
 apt_packages+=('ninja-build')
 apt_packages+=('pkg-config')
 apt_packages+=('zlib1g-dev')
@@ -45,9 +46,6 @@ echo "deb http://ppa.launchpad.net/ubuntu-toolchain-r/test/ubuntu xenial main" >
 # Install packages.
 apt-get -y update
 apt-get install -y --no-install-recommends ${apt_packages[@]}
-
-# 32-bit builds
-ln -s /usr/include/x86_64-linux-gnu/zconf.h /usr/include
 
 # Download clang.
 curl -LO http://releases.llvm.org/4.0.0/clang+llvm-4.0.0-x86_64-linux-gnu-ubuntu-16.04.tar.xz

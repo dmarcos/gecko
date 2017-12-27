@@ -21,6 +21,7 @@
 #include "nsIMutationObserver.h"
 #include "nsTArray.h"
 #include "nsCycleCollectionParticipant.h"
+#include "nsILoginReputation.h"
 
 // X.h defines KeyPress
 #ifdef KeyPress
@@ -87,10 +88,15 @@ protected:
   void RemoveForDocument(nsIDocument* aDoc);
   bool IsEventTrusted(nsIDOMEvent *aEvent);
 
+  bool IsTextControl(nsINode* aNode);
+
+  nsresult StartQueryLoginReputation(nsIDOMHTMLInputElement *aInput);
+
   // members //////////////////////////////////////////
 
   nsCOMPtr<nsIAutoCompleteController> mController;
   nsCOMPtr<nsILoginManager> mLoginManager;
+  nsCOMPtr<nsILoginReputationService> mLoginReputationService;
   nsIDOMHTMLInputElement* mFocusedInput;
   nsINode* mFocusedInputNode;
 

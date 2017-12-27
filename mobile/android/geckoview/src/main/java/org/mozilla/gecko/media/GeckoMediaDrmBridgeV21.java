@@ -9,7 +9,8 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
-import java.net.URL;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URLEncoder;
 import java.nio.ByteBuffer;
 import java.util.HashMap;
@@ -30,6 +31,7 @@ import android.media.NotProvisionedException;
 import android.util.Log;
 
 import org.mozilla.gecko.util.StringUtils;
+import org.mozilla.gecko.util.ProxySelector;
 
 public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
     protected final String LOGTAG;
@@ -94,6 +96,9 @@ public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
     @SuppressLint("WrongConstant")
     private void configureVendorSpecificProperty() {
         assertTrue(mDrm != null);
+        if (mDrm == null) {
+            return;
+        }
         // Support L3 for now
         mDrm.setPropertyString("securityLevel", "L3");
         // Refer to chromium, set multi-session mode for Widevine.
@@ -260,7 +265,9 @@ public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
         }
         while (!mPendingCreateSessionDataQueue.isEmpty()) {
             PendingCreateSessionData pendingData = mPendingCreateSessionDataQueue.poll();
-            onRejectPromise(pendingData.mPromiseId, "Releasing ... reject all pending sessions.");
+            if (pendingData != null) {
+                onRejectPromise(pendingData.mPromiseId, "Releasing ... reject all pending sessions.");
+            }
         }
         mPendingCreateSessionDataQueue = null;
 
@@ -308,40 +315,54 @@ public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
                                     byte[] sessionId,
                                     byte[] request) {
         assertTrue(mCallbacks != null);
-        mCallbacks.onSessionCreated(createSessionToken, promiseId, sessionId, request);
+        if (mCallbacks != null) {
+            mCallbacks.onSessionCreated(createSessionToken, promiseId, sessionId, request);
+        }
     }
 
     protected void onSessionUpdated(int promiseId, byte[] sessionId) {
         assertTrue(mCallbacks != null);
-        mCallbacks.onSessionUpdated(promiseId, sessionId);
+        if (mCallbacks != null) {
+            mCallbacks.onSessionUpdated(promiseId, sessionId);
+        }
     }
 
     protected void onSessionClosed(int promiseId, byte[] sessionId) {
         assertTrue(mCallbacks != null);
-        mCallbacks.onSessionClosed(promiseId, sessionId);
+        if (mCallbacks != null) {
+            mCallbacks.onSessionClosed(promiseId, sessionId);
+        }
     }
 
     protected void onSessionMessage(byte[] sessionId,
                                     int sessionMessageType,
                                     byte[] request) {
         assertTrue(mCallbacks != null);
-        mCallbacks.onSessionMessage(sessionId, sessionMessageType, request);
+        if (mCallbacks != null) {
+            mCallbacks.onSessionMessage(sessionId, sessionMessageType, request);
+        }
     }
 
     protected void onSessionError(byte[] sessionId, String message) {
         assertTrue(mCallbacks != null);
-        mCallbacks.onSessionError(sessionId, message);
+        if (mCallbacks != null) {
+            mCallbacks.onSessionError(sessionId, message);
+        }
     }
 
     protected void  onSessionBatchedKeyChanged(byte[] sessionId,
                                                SessionKeyInfo[] keyInfos) {
         assertTrue(mCallbacks != null);
-        mCallbacks.onSessionBatchedKeyChanged(sessionId, keyInfos);
+        if (mCallbacks != null) {
+            mCallbacks.onSessionBatchedKeyChanged(sessionId, keyInfos);
+        }
     }
 
     protected void onRejectPromise(int promiseId, String message) {
         assertTrue(mCallbacks != null);
-        mCallbacks.onRejectPromise(promiseId, message);
+        if (mCallbacks != null) {
+            mCallbacks.onRejectPromise(promiseId, message);
+        }
     }
 
     private MediaDrm.KeyRequest getKeyRequest(ByteBuffer aSession,
@@ -453,10 +474,10 @@ public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
         @Override
         protected Void doInBackground(Void... params) {
             try {
-                URL finalURL = new URL(mURL + "&signedRequest=" + URLEncoder.encode(new String(mDrmRequest), "UTF-8"));
-                HttpURLConnection urlConnection = (HttpURLConnection) finalURL.openConnection();
+                URI finalURI = new URI(mURL + "&signedRequest=" + URLEncoder.encode(new String(mDrmRequest), "UTF-8"));
+                HttpURLConnection urlConnection = (HttpURLConnection) ProxySelector.openConnectionWithProxy(finalURI);
                 urlConnection.setRequestMethod("POST");
-                if (DEBUG) Log.d(LOGTAG, "Provisioning, posting url =" + finalURL.toString());
+                if (DEBUG) Log.d(LOGTAG, "Provisioning, posting url =" + finalURI.toString());
 
                 // Add data
                 urlConnection.setRequestProperty("Accept", "*/*");
@@ -485,6 +506,8 @@ public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
                 }
             } catch (IOException e) {
                 Log.e(LOGTAG, "Got exception during posting provisioning request ...", e);
+            } catch (URISyntaxException e) {
+                Log.e(LOGTAG, "Got exception during creating uri ...", e);
             }
             return null;
         }
@@ -527,6 +550,9 @@ public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
         try {
             while (!mPendingCreateSessionDataQueue.isEmpty()) {
                 PendingCreateSessionData pendingData = mPendingCreateSessionDataQueue.poll();
+                if (pendingData == null) {
+                    return;
+                }
                 if (DEBUG) Log.d(LOGTAG, "processPendingCreateSessionData, promiseId : " + pendingData.mPromiseId);
 
                 createSession(pendingData.mToken,
@@ -625,7 +651,7 @@ public class GeckoMediaDrmBridgeV21 implements GeckoMediaDrm {
           return WIDEVINE_SCHEME_UUID;
       }
       if (DEBUG) Log.d(LOGTAG, "Cannot convert unsupported key system : " + keySystem);
-      return null;
+      return new UUID(0L, 0L);
     }
 
     private String getCDMUserAgent() {

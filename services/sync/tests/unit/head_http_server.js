@@ -6,6 +6,8 @@ var Cm = Components.manager;
 
 // Shared logging for all HTTP server functions.
 Cu.import("resource://gre/modules/Log.jsm");
+Cu.import("resource://services-common/utils.js");
+Cu.import("resource://testing-common/TestUtils.jsm");
 const SYNC_HTTP_LOGGER = "Sync.Test.Server";
 
 // While the sync code itself uses 1.5, the tests hard-code 1.1,
@@ -36,7 +38,7 @@ function has_hawk_header(req) {
 }
 
 function basic_auth_header(user, password) {
-  return "Basic " + btoa(user + ":" + Utils.encodeUTF8(password));
+  return "Basic " + btoa(user + ":" + CommonUtils.encodeUTF8(password));
 }
 
 function basic_auth_matches(req, user, password) {
@@ -44,7 +46,7 @@ function basic_auth_matches(req, user, password) {
     return false;
   }
 
-  let expected = basic_auth_header(user, Utils.encodeUTF8(password));
+  let expected = basic_auth_header(user, CommonUtils.encodeUTF8(password));
   return req.getHeader("Authorization") == expected;
 }
 
@@ -65,7 +67,7 @@ function httpd_basic_auth_handler(body, metadata, response) {
  */
 function ServerWBO(id, initialPayload, modified) {
   if (!id) {
-    throw "No ID for ServerWBO!";
+    throw new Error("No ID for ServerWBO!");
   }
   this.id = id;
   if (!initialPayload) {
@@ -77,6 +79,7 @@ function ServerWBO(id, initialPayload, modified) {
   }
   this.payload = initialPayload;
   this.modified = modified || new_timestamp();
+  this.sortindex = 0;
 }
 ServerWBO.prototype = {
 
@@ -92,11 +95,13 @@ ServerWBO.prototype = {
     input = JSON.parse(input);
     this.payload = input.payload;
     this.modified = new_timestamp();
+    this.sortindex = input.sortindex || 0;
   },
 
   delete() {
     delete this.payload;
     delete this.modified;
+    delete this.sortindex;
   },
 
   // This handler sets `newModified` on the response body if the collection
@@ -249,6 +254,7 @@ ServerCollection.prototype = {
    * @return the provided WBO.
    */
   insertWBO: function insertWBO(wbo) {
+    this.timestamp = Math.max(this.timestamp, wbo.modified);
     return this._wbos[wbo.id] = wbo;
   },
 
@@ -282,7 +288,8 @@ ServerCollection.prototype = {
   _inResultSet(wbo, options) {
     return wbo.payload
            && (!options.ids || (options.ids.indexOf(wbo.id) != -1))
-           && (!options.newer || (wbo.modified > options.newer));
+           && (!options.newer || (wbo.modified > options.newer))
+           && (!options.older || (wbo.modified < options.older));
   },
 
   count(options) {
@@ -296,16 +303,38 @@ ServerCollection.prototype = {
     return c;
   },
 
-  get(options) {
-    let result;
-    if (options.full) {
-      let data = [];
-      for (let wbo of Object.values(this._wbos)) {
-        // Drop deleted.
-        if (wbo.modified && this._inResultSet(wbo, options)) {
-          data.push(wbo.get());
-        }
+  get(options, request) {
+    let data = [];
+    for (let wbo of Object.values(this._wbos)) {
+      if (wbo.modified && this._inResultSet(wbo, options)) {
+        data.push(wbo);
       }
+    }
+    switch (options.sort) {
+      case "newest":
+        data.sort((a, b) => b.modified - a.modified);
+        break;
+
+      case "oldest":
+        data.sort((a, b) => a.modified - b.modified);
+        break;
+
+      case "index":
+        data.sort((a, b) => b.sortindex - a.sortindex);
+        break;
+
+      default:
+        if (options.sort) {
+          this._log.error("Error: client requesting unknown sort order",
+                          options.sort);
+          throw new Error("Unknown sort order");
+        }
+        // If the client didn't request a sort order, shuffle the records
+        // to ensure that we don't accidentally depend on the default order.
+        TestUtils.shuffle(data);
+    }
+    if (options.full) {
+      data = data.map(wbo => wbo.get());
       let start = options.offset || 0;
       if (options.limit) {
         let numItemsPastOffset = data.length - start;
@@ -317,18 +346,16 @@ ServerCollection.prototype = {
       } else if (start) {
         data = data.slice(start);
       }
-      // Our implementation of application/newlines.
-      result = data.join("\n") + "\n";
+
+      if (request && request.getHeader("accept") == "application/newlines") {
+        this._log.error("Error: client requesting application/newlines content");
+        throw new Error("This server should not serve application/newlines content");
+      }
 
       // Use options as a backchannel to report count.
       options.recordCount = data.length;
     } else {
-      let data = [];
-      for (let [id, wbo] of Object.entries(this._wbos)) {
-        if (this._inResultSet(wbo, options)) {
-          data.push(id);
-        }
-      }
+      data = data.map(wbo => wbo.id);
       let start = options.offset || 0;
       if (options.limit) {
         data = data.slice(start, start + options.limit);
@@ -336,10 +363,9 @@ ServerCollection.prototype = {
       } else if (start) {
         data = data.slice(start);
       }
-      result = JSON.stringify(data);
       options.recordCount = data.length;
     }
-    return result;
+    return JSON.stringify(data);
   },
 
   post(input) {
@@ -361,6 +387,7 @@ ServerCollection.prototype = {
       if (wbo) {
         wbo.payload = record.payload;
         wbo.modified = new_timestamp();
+        wbo.sortindex = record.sortindex || 0;
         success.push(record.id);
       } else {
         failed[record.id] = "no wbo configured";
@@ -419,6 +446,9 @@ ServerCollection.prototype = {
       if (options.newer) {
         options.newer = parseFloat(options.newer);
       }
+      if (options.older) {
+        options.older = parseFloat(options.older);
+      }
       if (options.limit) {
         options.limit = parseInt(options.limit, 10);
       }
@@ -440,7 +470,7 @@ ServerCollection.prototype = {
           if (nextOffset) {
             response.setHeader("X-Weave-Next-Offset", "" + nextOffset);
           }
-          response.setHeader("X-Last-Modified", "" + this.timestamp);
+          response.setHeader("X-Last-Modified", "" + self.timestamp);
           break;
 
         case "POST":
@@ -461,16 +491,18 @@ ServerCollection.prototype = {
       response.setHeader("X-Weave-Timestamp",
                          "" + new_timestamp(),
                          false);
-      response.setStatusLine(request.httpVersion, statusCode, status);
-      response.bodyOutputStream.write(body, body.length);
 
       // Update the collection timestamp to the appropriate modified time.
       // This is either a value set by the handler, or the current time.
       if (request.method != "GET") {
-        this.timestamp = (response.newModified >= 0) ?
+        self.timestamp = (response.newModified >= 0) ?
                          response.newModified :
                          new_timestamp();
       }
+      response.setHeader("X-Last-Modified", "" + self.timestamp, false);
+
+      response.setStatusLine(request.httpVersion, statusCode, status);
+      response.bodyOutputStream.write(body, body.length);
     };
   }
 
@@ -487,6 +519,12 @@ function sync_httpd_setup(handlers) {
 
 /*
  * Track collection modified times. Return closures.
+ *
+ * XXX - DO NOT USE IN NEW TESTS
+ *
+ * This code has very limited and very hacky timestamp support - the test
+ * server now has more complete and correct support - using this helper
+ * may cause strangeness wrt timestamp headers and 412 responses.
  */
 function track_collections_helper() {
 
@@ -515,7 +553,7 @@ function track_collections_helper() {
       // Update the collection timestamp to the appropriate modified time.
       // This is either a value set by the handler, or the current time.
       if (request.method != "GET") {
-        update_collection(coll, response.newModified)
+        update_collection(coll, response.newModified);
       }
     };
   }
@@ -530,7 +568,7 @@ function track_collections_helper() {
         body = JSON.stringify(collections);
         break;
       default:
-        throw "Non-GET on info_collections.";
+        throw new Error("Non-GET on info_collections.");
     }
 
     response.setHeader("Content-Type", "application/json");
@@ -784,7 +822,7 @@ SyncServer.prototype = {
     let createContents   = this.createContents.bind(this, username);
     let modified         = function(collectionName) {
       return collection(collectionName).timestamp;
-    }
+    };
     let deleteCollections = this.deleteCollections.bind(this, username);
     return {
       collection,
@@ -937,6 +975,25 @@ SyncServer.prototype = {
       }
       let [, collection, wboID] = match;
       let coll = this.getCollection(username, collection);
+
+      let checkXIUSFailure = () => {
+        if (req.hasHeader("x-if-unmodified-since")) {
+          let xius = parseFloat(req.getHeader("x-if-unmodified-since"));
+          // Sadly the way our tests are setup, we often end up with xius of
+          // zero (typically when syncing just one engine, so the date from
+          // info/collections isn't used) - so we allow that to work.
+          // Further, the Python server treats non-existing collections as
+          // having a timestamp of 0.
+          let collTimestamp = coll ? coll.timestamp : 0;
+          if (xius && xius < collTimestamp) {
+            this._log.info(`x-if-unmodified-since mismatch - request wants ${xius} but our collection has ${collTimestamp}`);
+            respond(412, "precondition failed", "precondition failed");
+            return true;
+          }
+        }
+        return false;
+      };
+
       switch (req.method) {
         case "GET": {
           if (!coll) {
@@ -944,9 +1001,9 @@ SyncServer.prototype = {
               respond(404, "Not found", "Not found");
               return undefined;
             }
-            // *cries inside*: Bug 687299 - now fixed, so apparently the real
-            // sync server *will* 404 in this case - bug 1347807 is to change
-            // this to a 404 and fix a handful of test failures it causes.
+            // *cries inside*: - apparently the real sync server returned 200
+            // here for some time, then returned 404 for some time (bug 687299),
+            // and now is back to 200 (bug 963332).
             respond(200, "OK", "[]");
             return undefined;
           }
@@ -960,10 +1017,12 @@ SyncServer.prototype = {
           }
           return wbo.handler()(req, resp);
         }
-        // TODO: implement handling of X-If-Unmodified-Since for write verbs.
         case "DELETE": {
           if (!coll) {
             respond(200, "OK", "{}");
+            return undefined;
+          }
+          if (checkXIUSFailure()) {
             return undefined;
           }
           if (wboID) {
@@ -1006,11 +1065,35 @@ SyncServer.prototype = {
           }
           return undefined;
         }
-        case "POST":
         case "PUT":
+          // PUT and POST have slightly different XIUS semantics - for PUT,
+          // the check is against the item, whereas for POST it is against
+          // the collection. So first, a special-case for PUT.
+          if (req.hasHeader("x-if-unmodified-since")) {
+            let xius = parseFloat(req.getHeader("x-if-unmodified-since"));
+            // treat and xius of zero as if it wasn't specified - this happens
+            // in some of our tests for a new collection.
+            if (xius > 0) {
+              let wbo = coll.wbo(wboID);
+              if (xius < wbo.modified) {
+                this._log.info(`x-if-unmodified-since mismatch - request wants ${xius} but wbo has ${wbo.modified}`);
+                respond(412, "precondition failed", "precondition failed");
+                return undefined;
+              }
+              wbo.handler()(req, resp);
+              coll.timestamp = resp.newModified;
+              return resp;
+            }
+          }
+          // fall through to post.
+        case "POST":
+          if (checkXIUSFailure()) {
+            return undefined;
+          }
           if (!coll) {
             coll = this.createCollection(username, collection);
           }
+
           if (wboID) {
             let wbo = coll.wbo(wboID);
             if (!wbo) {
@@ -1025,7 +1108,7 @@ SyncServer.prototype = {
           }
           return coll.collectionHandler(req, resp);
         default:
-          throw "Request method " + req.method + " not implemented.";
+          throw new Error("Request method " + req.method + " not implemented.");
       }
     },
 

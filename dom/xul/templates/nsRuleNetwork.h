@@ -29,9 +29,10 @@
 #define nsRuleNetwork_h__
 
 #include "mozilla/Attributes.h"
+#include "mozilla/HashFunctions.h"
 #include "nsCOMPtr.h"
 #include "nsCOMArray.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsIDOMNode.h"
 #include "plhash.h"
 #include "PLDHashTable.h"
@@ -118,7 +119,7 @@ public:
         mElements = aSet.mElements;
         NS_IF_ADDREF(mElements);
         return *this; }
-        
+
     ~MemoryElementSet() {
         MOZ_COUNT_DTOR(MemoryElementSet);
         NS_IF_RELEASE(mElements); }
@@ -186,10 +187,10 @@ public:
  */
 class nsAssignment {
 public:
-    const nsCOMPtr<nsIAtom> mVariable;
+    const RefPtr<nsAtom> mVariable;
     nsCOMPtr<nsIRDFNode> mValue;
 
-    nsAssignment(nsIAtom* aVariable, nsIRDFNode* aValue)
+    nsAssignment(nsAtom* aVariable, nsIRDFNode* aValue)
         : mVariable(aVariable),
           mValue(aValue)
         { MOZ_COUNT_CTOR(nsAssignment); }
@@ -208,9 +209,8 @@ public:
         return mVariable != aAssignment.mVariable || mValue != aAssignment.mValue; }
 
     PLHashNumber Hash() const {
-        // XXX I have no idea if this hashing function is good or not // XXX change this
-        PLHashNumber temp = PLHashNumber(NS_PTR_TO_INT32(mValue.get())) >> 2; // strip alignment bits
-        return (temp & 0xffff) | NS_PTR_TO_INT32(mVariable.get()); }
+        using mozilla::HashGeneric;
+        return HashGeneric(mVariable.get()) ^ HashGeneric(mValue.get()); }
 };
 
 
@@ -340,7 +340,7 @@ public:
      * @param aValue the value to query
      * @return true if aVariable is bound to aValue; false otherwise.
      */
-    bool HasAssignment(nsIAtom* aVariable, nsIRDFNode* aValue) const;
+    bool HasAssignment(nsAtom* aVariable, nsIRDFNode* aValue) const;
 
     /**
      * Determine if the assignment set contains the specified assignment
@@ -357,7 +357,7 @@ public:
      * @return true if the assignment set has an assignment for the variable,
      *   false otherwise.
      */
-    bool HasAssignmentFor(nsIAtom* aVariable) const;
+    bool HasAssignmentFor(nsAtom* aVariable) const;
 
     /**
      * Retrieve the assignment for the specified variable
@@ -367,7 +367,7 @@ public:
      * @return true if the variable has an assignment, false
      *   if there was no assignment for the variable.
      */
-    bool GetAssignmentFor(nsIAtom* aVariable, nsIRDFNode** aValue) const;
+    bool GetAssignmentFor(nsAtom* aVariable, nsIRDFNode** aValue) const;
 
     /**
      * Count the number of assignments in the set
@@ -438,7 +438,7 @@ public:
      * @return NS_OK if no errors, NS_ERROR_OUT_OF_MEMORY if there
      *   is not enough memory to perform the operation
      */
-    nsresult AddAssignment(nsIAtom* aVariable, nsIRDFNode* aValue) {
+    nsresult AddAssignment(nsAtom* aVariable, nsIRDFNode* aValue) {
         mAssignments.Add(nsAssignment(aVariable, aValue));
         return NS_OK; }
 
@@ -606,7 +606,7 @@ public:
 
     void Clear();
 
-    bool HasAssignmentFor(nsIAtom* aVariable) const;
+    bool HasAssignmentFor(nsAtom* aVariable) const;
 };
 
 //----------------------------------------------------------------------
@@ -816,7 +816,7 @@ public:
      * The node must then pass the resulting set of instantiations up
      * to its parent (by recursive call; we should make this iterative
      * & interruptable at some point.)
-     * 
+     *
      * @param aInstantiations the set of instantiations that must
      *   be constrained
      * @return NS_OK if no errors occurred

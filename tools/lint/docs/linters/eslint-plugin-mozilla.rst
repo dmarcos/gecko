@@ -36,19 +36,33 @@ frame-script
 
 Defines the environment for frame scripts.
 
+jsm
+---
+
+Defines the environment for jsm files (javascript modules).
+
 Rules
 =====
+
+avoid-Date-timing
+-----------------
+
+Rejects grabbing the current time via Date.now() or new Date() for timing
+purposes when the less problematic performance.now() can be used instead.
+
+The performance.now() function returns milliseconds since page load. To
+convert that to milliseconds since the epoch, use:
+
+    performance.timing.navigationStart + performance.now()
+
+Often timing relative to the page load is adequate and that conversion may not
+be necessary.
 
 avoid-removeChild
 -----------------
 
 Rejects using element.parentNode.removeChild(element) when element.remove()
 can be used instead.
-
-avoid-nsISupportsString-preferences
------------------------------------
-
-Rejects using getComplexValue and setComplexValue with nsISupportsString.
 
 balanced-listeners
 ------------------
@@ -192,10 +206,19 @@ Reject common XPCOM methods called with useless optional parameters (eg.
 ``Services.io.newURI(url, null, null)``, or non-existent parameters (eg.
 ``Services.obs.removeObserver(name, observer, false)``).
 
+This option can be autofixed (``--fix``).
+
 no-useless-removeEventListener
 ------------------------------
 
 Reject calls to removeEventListener where {once: true} could be used instead.
+
+no-useless-run-test
+-------------------
+
+Designed for xpcshell-tests. Rejects definitions of ``run_test()`` where the
+function only contains a single call to ``run_next_test()``. xpcshell's head.js
+already defines a utility function so there is no need for duplication.
 
 reject-importGlobalProperties
 -----------------------------
@@ -234,6 +257,11 @@ use-ownerGlobal
 
 Require .ownerGlobal instead of .ownerDocument.defaultView.
 
+use-services
+------------
+
+Requires the use of Services.jsm rather than Cc[].getService() where a service
+is already defined in Services.jsm.
 
 var-only-at-top-level
 ---------------------
@@ -265,14 +293,31 @@ Example configuration::
      "mozilla/no-cpows-in-tests": 1,
    }
 
+Tests
+=====
+
+The tests for eslint-plugin-mozilla are run via `mochajs`_ on top of node. Most
+of the tests use the `ESLint Rule Unit Test framework`_.
+
 Running Tests
-=============
+-------------
 
-The rules have some self tests (see bug 1219152), these can be run via:
+The rules have some self tests, these can be run via:
 
-```
-cd tools/lint/eslint/eslint-plugin-mozilla
-npm run test
-```
+   cd tools/lint/eslint/eslint-plugin-mozilla
+   npm install
+   npm run test
 
-(assuming `./mach eslint --setup` has already been run).
+.. _mochajs: https://mochajs.org/
+.. _ESLint Rule Unit Test Framework: http://eslint.org/docs/developer-guide/working-with-rules#rule-unit-tests
+
+Disabling tests
+---------------
+
+In the unlikely event of needing to disable a test, currently the only way is
+by commenting-out. Please file a bug if you have to do this.
+
+Filing Bugs
+===========
+
+Bugs should be filed in the Testing product under Lint.

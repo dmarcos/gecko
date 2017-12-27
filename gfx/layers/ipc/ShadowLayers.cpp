@@ -1,6 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: sw=2 ts=8 et :
- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,7 +8,7 @@
 #include "ShadowLayers.h"
 #include <set>                          // for _Rb_tree_const_iterator, etc
 #include <vector>                       // for vector
-#include "GeckoProfiler.h"              // for PROFILER_LABEL
+#include "GeckoProfiler.h"              // for AUTO_PROFILER_LABEL
 #include "ISurfaceAllocator.h"          // for IsSurfaceDescriptorValid
 #include "Layers.h"                     // for Layer
 #include "RenderTrace.h"                // for RenderTraceScope
@@ -32,6 +31,7 @@
 #include "mozilla/layers/LayersTypes.h"  // for MOZ_LAYERS_LOG
 #include "mozilla/layers/LayerTransactionChild.h"
 #include "mozilla/layers/PTextureChild.h"
+#include "mozilla/layers/SyncObject.h"
 #include "ShadowLayerUtils.h"
 #include "mozilla/layers/TextureClient.h"  // for TextureClient
 #include "mozilla/mozalloc.h"           // for operator new, etc
@@ -175,7 +175,7 @@ KnowsCompositor::IdentifyTextureHost(const TextureFactoryIdentifier& aIdentifier
 {
   mTextureFactoryIdentifier = aIdentifier;
 
-  mSyncObject = SyncObject::CreateSyncObject(aIdentifier.mSyncHandle);
+  mSyncObject = SyncObjectClient::CreateSyncObjectClient(aIdentifier.mSyncHandle);
 }
 
 KnowsCompositor::KnowsCompositor()
@@ -185,13 +185,54 @@ KnowsCompositor::KnowsCompositor()
 KnowsCompositor::~KnowsCompositor()
 {}
 
+KnowsCompositorMediaProxy::KnowsCompositorMediaProxy(const TextureFactoryIdentifier& aIdentifier)
+{
+  mTextureFactoryIdentifier = aIdentifier;
+  // overwrite mSerial's value set by the parent class because we use the same serial
+  // as the KnowsCompositor we are proxying.
+  mThreadSafeAllocator = ImageBridgeChild::GetSingleton();
+  mSyncObject = mThreadSafeAllocator->GetSyncObject();
+}
+
+KnowsCompositorMediaProxy::~KnowsCompositorMediaProxy()
+{}
+
+TextureForwarder*
+KnowsCompositorMediaProxy::GetTextureForwarder()
+{
+  return mThreadSafeAllocator->GetTextureForwarder();
+}
+
+LayersIPCActor*
+KnowsCompositorMediaProxy::GetLayersIPCActor()
+{
+  return mThreadSafeAllocator->GetLayersIPCActor();
+}
+
+ActiveResourceTracker*
+KnowsCompositorMediaProxy::GetActiveResourceTracker()
+{
+  return mThreadSafeAllocator->GetActiveResourceTracker();
+}
+
+void
+KnowsCompositorMediaProxy::SyncWithCompositor()
+{
+  mThreadSafeAllocator->SyncWithCompositor();
+}
+
+RefPtr<KnowsCompositor>
+ShadowLayerForwarder::GetForMedia()
+{
+  return MakeAndAddRef<KnowsCompositorMediaProxy>(GetTextureFactoryIdentifier());
+}
+
 ShadowLayerForwarder::ShadowLayerForwarder(ClientLayerManager* aClientLayerManager)
  : mClientLayerManager(aClientLayerManager)
  , mMessageLoop(MessageLoop::current())
  , mDiagnosticTypes(DiagnosticTypes::NO_DIAGNOSTIC)
  , mIsFirstPaint(false)
  , mWindowOverlayChanged(false)
- , mPaintSyncId(0)
  , mNextLayerHandle(1)
 {
   mTxn = new Transaction();
@@ -209,7 +250,8 @@ struct ReleaseOnMainThreadTask : public Runnable
   UniquePtr<T> mObj;
 
   explicit ReleaseOnMainThreadTask(UniquePtr<T>& aObj)
-    : mObj(Move(aObj))
+    : Runnable("layers::ReleaseOnMainThreadTask")
+    , mObj(Move(aObj))
   {}
 
   NS_IMETHOD Run() override {
@@ -234,7 +276,9 @@ ShadowLayerForwarder::~ShadowLayerForwarder()
           nsIEventTarget::DISPATCH_NORMAL);
       } else {
         NS_DispatchToMainThread(
-          NewRunnableMethod(mShadowManager, &LayerTransactionChild::Destroy));
+          NewRunnableMethod("layers::LayerTransactionChild::Destroy",
+                            mShadowManager,
+                            &LayerTransactionChild::Destroy));
       }
     }
   }
@@ -243,7 +287,6 @@ ShadowLayerForwarder::~ShadowLayerForwarder()
     RefPtr<ReleaseOnMainThreadTask<ActiveResourceTracker>> event =
       new ReleaseOnMainThreadTask<ActiveResourceTracker>(mActiveResourceTracker);
     if (mEventTarget) {
-      event->SetName("ActiveResourceTracker::~ActiveResourceTracker");
       mEventTarget->Dispatch(event.forget(), nsIEventTarget::DISPATCH_NORMAL);
     } else {
       NS_DispatchToMainThread(event);
@@ -615,8 +658,7 @@ ShadowLayerForwarder::EndTransaction(const nsIntRegion& aRegionToClear,
 
   MOZ_ASSERT(aId);
 
-  PROFILER_LABEL("ShadowLayerForwarder", "EndTransaction",
-    js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("ShadowLayerForwarder::EndTransaction", GRAPHICS);
 
   RenderTraceScope rendertrace("Foward Transaction", "000091");
   MOZ_ASSERT(!mTxn->Finished(), "forgot BeginTransaction?");
@@ -732,11 +774,14 @@ ShadowLayerForwarder::EndTransaction(const nsIntRegion& aRegionToClear,
   info.id() = aId;
   info.plugins() = mPluginWindowData;
   info.isFirstPaint() = mIsFirstPaint;
+  info.focusTarget() = mFocusTarget;
   info.scheduleComposite() = aScheduleComposite;
   info.paintSequenceNumber() = aPaintSequenceNumber;
   info.isRepeatTransaction() = aIsRepeatTransaction;
   info.transactionStart() = aTransactionStart;
-  info.paintSyncId() = mPaintSyncId;
+#if defined(ENABLE_FRAME_LATENCY_LOG)
+  info.fwdTime() = TimeStamp::Now();
+#endif
 
   TargetConfig targetConfig(mTxn->mTargetBounds,
                             mTxn->mTargetRotation,
@@ -763,6 +808,10 @@ ShadowLayerForwarder::EndTransaction(const nsIntRegion& aRegionToClear,
     }
   }
 
+  // We delay at the last possible minute, to give the paint thread a chance to
+  // finish. If it does we don't have to delay messages at all.
+  GetCompositorBridgeChild()->PostponeMessagesIfAsyncPainting();
+
   MOZ_LAYERS_LOG(("[LayersForwarder] sending transaction..."));
   RenderTraceScope rendertrace3("Forward Transaction", "000093");
   if (!mShadowManager->SendUpdate(info)) {
@@ -777,7 +826,7 @@ ShadowLayerForwarder::EndTransaction(const nsIntRegion& aRegionToClear,
 
   *aSent = true;
   mIsFirstPaint = false;
-  mPaintSyncId = 0;
+  mFocusTarget = FocusTarget();
   MOZ_LAYERS_LOG(("[LayersForwarder] ... done"));
   return true;
 }
@@ -968,7 +1017,7 @@ DestroySurfaceDescriptor(IShmemAllocator* aAllocator, SurfaceDescriptor* aSurfac
       break;
     }
     default:
-      NS_RUNTIMEABORT("surface type not implemented!");
+      MOZ_CRASH("surface type not implemented!");
   }
   *aSurface = SurfaceDescriptor();
 }
@@ -1097,6 +1146,15 @@ ShadowLayerForwarder::ReleaseCompositable(const CompositableHandle& aHandle)
     mShadowManager->SendReleaseCompositable(aHandle);
   }
   mCompositables.Remove(aHandle.Value());
+}
+
+void
+ShadowLayerForwarder::SynchronouslyShutdown()
+{
+  if (IPCOpen()) {
+    mShadowManager->SendShutdownSync();
+    mShadowManager->MarkDestroyed();
+  }
 }
 
 ShadowableLayer::~ShadowableLayer()

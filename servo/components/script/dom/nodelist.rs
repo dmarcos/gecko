@@ -5,17 +5,17 @@
 use dom::bindings::codegen::Bindings::NodeBinding::NodeMethods;
 use dom::bindings::codegen::Bindings::NodeListBinding;
 use dom::bindings::codegen::Bindings::NodeListBinding::NodeListMethods;
-use dom::bindings::js::{JS, MutNullableJS, Root, RootedReference};
 use dom::bindings::reflector::{Reflector, reflect_dom_object};
+use dom::bindings::root::{Dom, DomRoot, MutNullableDom, RootedReference};
 use dom::node::{ChildrenMutation, Node};
 use dom::window::Window;
 use dom_struct::dom_struct;
 use std::cell::Cell;
 
-#[derive(JSTraceable, HeapSizeOf)]
+#[derive(JSTraceable, MallocSizeOf)]
 #[must_root]
 pub enum NodeListType {
-    Simple(Vec<JS<Node>>),
+    Simple(Vec<Dom<Node>>),
     Children(ChildrenList),
 }
 
@@ -36,22 +36,26 @@ impl NodeList {
     }
 
     #[allow(unrooted_must_root)]
-    pub fn new(window: &Window, list_type: NodeListType) -> Root<NodeList> {
-        reflect_dom_object(box NodeList::new_inherited(list_type),
+    pub fn new(window: &Window, list_type: NodeListType) -> DomRoot<NodeList> {
+        reflect_dom_object(Box::new(NodeList::new_inherited(list_type)),
                            window,
                            NodeListBinding::Wrap)
     }
 
-    pub fn new_simple_list<T>(window: &Window, iter: T) -> Root<NodeList>
-                              where T: Iterator<Item=Root<Node>> {
-        NodeList::new(window, NodeListType::Simple(iter.map(|r| JS::from_ref(&*r)).collect()))
+    pub fn new_simple_list<T>(window: &Window, iter: T) -> DomRoot<NodeList>
+                              where T: Iterator<Item=DomRoot<Node>> {
+        NodeList::new(window, NodeListType::Simple(iter.map(|r| Dom::from_ref(&*r)).collect()))
     }
 
-    pub fn new_child_list(window: &Window, node: &Node) -> Root<NodeList> {
+    pub fn new_simple_list_slice(window: &Window, slice: &[&Node]) -> DomRoot<NodeList> {
+        NodeList::new(window, NodeListType::Simple(slice.iter().map(|r| Dom::from_ref(*r)).collect()))
+    }
+
+    pub fn new_child_list(window: &Window, node: &Node) -> DomRoot<NodeList> {
         NodeList::new(window, NodeListType::Children(ChildrenList::new(node)))
     }
 
-    pub fn empty(window: &Window) -> Root<NodeList> {
+    pub fn empty(window: &Window) -> DomRoot<NodeList> {
         NodeList::new(window, NodeListType::Simple(vec![]))
     }
 }
@@ -66,17 +70,17 @@ impl NodeListMethods for NodeList {
     }
 
     // https://dom.spec.whatwg.org/#dom-nodelist-item
-    fn Item(&self, index: u32) -> Option<Root<Node>> {
+    fn Item(&self, index: u32) -> Option<DomRoot<Node>> {
         match self.list_type {
             NodeListType::Simple(ref elems) => {
-                elems.get(index as usize).map(|node| Root::from_ref(&**node))
+                elems.get(index as usize).map(|node| DomRoot::from_ref(&**node))
             },
             NodeListType::Children(ref list) => list.item(index),
         }
     }
 
     // https://dom.spec.whatwg.org/#dom-nodelist-item
-    fn IndexedGetter(&self, index: u32) -> Option<Root<Node>> {
+    fn IndexedGetter(&self, index: u32) -> Option<DomRoot<Node>> {
         self.Item(index)
     }
 }
@@ -91,7 +95,7 @@ impl NodeList {
         }
     }
 
-    pub fn as_simple_list(&self) -> &Vec<JS<Node>> {
+    pub fn as_simple_list(&self) -> &Vec<Dom<Node>> {
         if let NodeListType::Simple(ref list) = self.list_type {
             list
         } else {
@@ -99,20 +103,18 @@ impl NodeList {
         }
     }
 
-    pub fn iter(&self) -> NodeListIterator {
-        NodeListIterator {
-            nodes: self,
-            offset: 0,
-        }
+    pub fn iter<'a>(&'a self) -> impl Iterator<Item=DomRoot<Node>> + 'a {
+        let len = self.Length();
+        (0..len).flat_map(move |i| self.Item(i))
     }
 }
 
-#[derive(JSTraceable, HeapSizeOf)]
+#[derive(JSTraceable, MallocSizeOf)]
 #[must_root]
 pub struct ChildrenList {
-    node: JS<Node>,
-    #[ignore_heap_size_of = "Defined in rust-mozjs"]
-    last_visited: MutNullableJS<Node>,
+    node: Dom<Node>,
+    #[ignore_malloc_size_of = "Defined in rust-mozjs"]
+    last_visited: MutNullableDom<Node>,
     last_index: Cell<u32>,
 }
 
@@ -120,8 +122,8 @@ impl ChildrenList {
     pub fn new(node: &Node) -> ChildrenList {
         let last_visited = node.GetFirstChild();
         ChildrenList {
-            node: JS::from_ref(node),
-            last_visited: MutNullableJS::new(last_visited.r()),
+            node: Dom::from_ref(node),
+            last_visited: MutNullableDom::new(last_visited.r()),
             last_index: Cell::new(0u32),
         }
     }
@@ -130,7 +132,7 @@ impl ChildrenList {
         self.node.children_count()
     }
 
-    pub fn item(&self, index: u32) -> Option<Root<Node>> {
+    pub fn item(&self, index: u32) -> Option<DomRoot<Node>> {
         // This always start traversing the children from the closest element
         // among parent's first and last children and the last visited one.
         let len = self.len() as u32;
@@ -223,9 +225,9 @@ impl ChildrenList {
                         // by ChildrenMutation::replace().
                         unreachable!()
                     },
-                    (_, &[node, ..], _) => node,
-                    (_, &[], Some(next)) => next,
-                    (Some(prev), &[], None) => {
+                    (_, added, _) if !added.is_empty() => added[0],
+                    (_, _, Some(next)) => next,
+                    (Some(prev), _, None) => {
                         list.last_index.set(index - 1u32);
                         prev
                     },
@@ -277,26 +279,12 @@ impl ChildrenList {
                     self.last_index.set(middle as u32);
                 }
             },
+            ChildrenMutation::ChangeText => {},
         }
     }
 
     fn reset(&self) {
         self.last_visited.set(self.node.GetFirstChild().r());
         self.last_index.set(0u32);
-    }
-}
-
-pub struct NodeListIterator<'a> {
-    nodes: &'a NodeList,
-    offset: u32,
-}
-
-impl<'a> Iterator for NodeListIterator<'a> {
-    type Item = Root<Node>;
-
-    fn next(&mut self) -> Option<Root<Node>> {
-        let result = self.nodes.Item(self.offset);
-        self.offset = self.offset + 1;
-        result
     }
 }

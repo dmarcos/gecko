@@ -13,10 +13,16 @@
 #include "SandboxFilter.h"
 #include "SandboxInternal.h"
 #include "SandboxLogging.h"
+#ifdef MOZ_GMP_SANDBOX
+#include "SandboxOpenedFiles.h"
+#endif
 #include "SandboxReporterClient.h"
 #include "SandboxUtil.h"
 
 #include <dirent.h>
+#ifdef NIGHTLY_BUILD
+#include "dlfcn.h"
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/futex.h>
@@ -31,9 +37,11 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include "mozilla/Array.h"
 #include "mozilla/Atomics.h"
-#include "mozilla/Maybe.h"
+#include "mozilla/Range.h"
 #include "mozilla/SandboxInfo.h"
+#include "mozilla/Span.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Unused.h"
 #include "sandbox/linux/bpf_dsl/codegen.h"
@@ -70,7 +78,7 @@ __sanitizer_sandbox_on_notify(__sanitizer_sandbox_arguments *args);
 #endif // MOZ_ASAN
 
 // Signal number used to enable seccomp on each thread.
-int gSeccompTsyncBroadcastSignum = 0;
+mozilla::Atomic<int> gSeccompTsyncBroadcastSignum(0);
 
 namespace mozilla {
 
@@ -79,14 +87,7 @@ static bool gSandboxCrashOnError = false;
 // This is initialized by SandboxSetCrashFunc().
 SandboxCrashFunc gSandboxCrashFunc;
 
-#ifdef MOZ_GMP_SANDBOX
-// For media plugins, we can start the sandbox before we dlopen the
-// module, so we have to pre-open the file and simulate the sandboxed
-// open().
-static SandboxOpenedFile gMediaPluginFile;
-#endif
-
-static Maybe<SandboxReporterClient> gSandboxReporterClient;
+static SandboxReporterClient* gSandboxReporterClient;
 static UniquePtr<SandboxChroot> gChrootHelper;
 static void (*gChromiumSigSysHandler)(int, siginfo_t*, void*);
 
@@ -335,6 +336,7 @@ BroadcastSetThreadSandbox(const sock_fprog* aFilter)
   // itself, repeat iterating over all threads until we find none
   // that are still privileged.
   bool sandboxProgress;
+  const int tsyncSignum = gSeccompTsyncBroadcastSignum;
   do {
     sandboxProgress = false;
     // For each thread...
@@ -351,11 +353,11 @@ BroadcastSetThreadSandbox(const sock_fprog* aFilter)
         continue;
       }
 
-      MOZ_RELEASE_ASSERT(gSeccompTsyncBroadcastSignum != 0);
+      MOZ_RELEASE_ASSERT(tsyncSignum != 0);
 
       // Reset the futex cell and signal.
       gSetSandboxDone = 0;
-      if (syscall(__NR_tgkill, pid, tid, gSeccompTsyncBroadcastSignum) != 0) {
+      if (syscall(__NR_tgkill, pid, tid, tsyncSignum) != 0) {
         if (errno == ESRCH) {
           SANDBOX_LOG_ERROR("Thread %d unexpectedly exited.", tid);
           // Rescan threads, in case it forked before exiting.
@@ -427,14 +429,14 @@ BroadcastSetThreadSandbox(const sock_fprog* aFilter)
   } while (sandboxProgress);
 
   void (*oldHandler)(int);
-  oldHandler = signal(gSeccompTsyncBroadcastSignum, SIG_DFL);
-  gSeccompTsyncBroadcastSignum = 0;
+  oldHandler = signal(tsyncSignum, SIG_DFL);
   if (oldHandler != SetThreadSandboxHandler) {
     // See the comment on FindFreeSignalNumber about race conditions.
     SANDBOX_LOG_ERROR("handler for signal %d was changed to %p!",
-                      gSeccompTsyncBroadcastSignum, oldHandler);
+                      tsyncSignum, oldHandler);
     MOZ_CRASH();
   }
+  gSeccompTsyncBroadcastSignum = 0;
   Unused << closedir(taskdp);
   // And now, deprivilege the main thread:
   SetThreadSandbox();
@@ -459,7 +461,7 @@ static void
 SetCurrentProcessSandbox(UniquePtr<sandbox::bpf_dsl::Policy> aPolicy)
 {
   MOZ_ASSERT(gSandboxCrashFunc);
-  MOZ_RELEASE_ASSERT(gSandboxReporterClient.isSome());
+  MOZ_RELEASE_ASSERT(gSandboxReporterClient != nullptr);
 
   // Note: PolicyCompiler borrows the policy and registry for its
   // lifetime, but does not take ownership of them.
@@ -507,6 +509,22 @@ SetCurrentProcessSandbox(UniquePtr<sandbox::bpf_dsl::Policy> aPolicy)
   MOZ_RELEASE_ASSERT(!gChrootHelper, "forgot to chroot");
 }
 
+#ifdef NIGHTLY_BUILD
+static bool
+IsLibPresent(const char* aName)
+{
+  if (const auto handle = dlopen(aName, RTLD_LAZY | RTLD_NOLOAD)) {
+    dlclose(handle);
+    return true;
+  }
+  return false;
+}
+
+static const Array<const char*, 1> kLibsThatWillCrash {
+  "libesets_pac.so",
+};
+#endif // NIGHTLY_BUILD
+
 void
 SandboxEarlyInit(GeckoProcessType aType)
 {
@@ -524,6 +542,12 @@ SandboxEarlyInit(GeckoProcessType aType)
   // crash even on nightly.
 #ifdef NIGHTLY_BUILD
   gSandboxCrashOnError = true;
+  for (const char* name : kLibsThatWillCrash) {
+    if (IsLibPresent(name)) {
+      gSandboxCrashOnError = false;
+      break;
+    }
+  }
 #endif
   if (const char* envVar = getenv("MOZ_SANDBOX_CRASH_ON_ERROR")) {
     if (envVar[0]) {
@@ -562,18 +586,19 @@ SandboxEarlyInit(GeckoProcessType aType)
   // If TSYNC is not supported, set up signal handler
   // used to enable seccomp on each thread.
   if (!info.Test(SandboxInfo::kHasSeccompTSync)) {
-    gSeccompTsyncBroadcastSignum = FindFreeSignalNumber();
-    if (gSeccompTsyncBroadcastSignum == 0) {
+    const int tsyncSignum = FindFreeSignalNumber();
+    if (tsyncSignum == 0) {
       SANDBOX_LOG_ERROR("No available signal numbers!");
       MOZ_CRASH();
     }
+    gSeccompTsyncBroadcastSignum = tsyncSignum;
 
     void (*oldHandler)(int);
-    oldHandler = signal(gSeccompTsyncBroadcastSignum, SetThreadSandboxHandler);
+    oldHandler = signal(tsyncSignum, SetThreadSandboxHandler);
     if (oldHandler != SIG_DFL) {
       // See the comment on FindFreeSignalNumber about race conditions.
       SANDBOX_LOG_ERROR("signal %d in use by handler %p!\n",
-        gSeccompTsyncBroadcastSignum, oldHandler);
+                        tsyncSignum, oldHandler);
       MOZ_CRASH();
     }
   }
@@ -650,7 +675,8 @@ SandboxEarlyInit(GeckoProcessType aType)
  * Will normally make the process exit on failure.
 */
 bool
-SetContentProcessSandbox(int aBrokerFd, std::vector<int>& aSyscallWhitelist)
+SetContentProcessSandbox(int aBrokerFd, bool aFileProcess,
+                         std::vector<int>& aSyscallWhitelist)
 {
   if (!SandboxInfo::Get().Test(SandboxInfo::kEnabledForContent)) {
     if (aBrokerFd >= 0) {
@@ -659,15 +685,18 @@ SetContentProcessSandbox(int aBrokerFd, std::vector<int>& aSyscallWhitelist)
     return false;
   }
 
-  gSandboxReporterClient.emplace(SandboxReport::ProcType::CONTENT);
+  auto procType = aFileProcess
+    ? SandboxReport::ProcType::FILE
+    : SandboxReport::ProcType::CONTENT;
+  gSandboxReporterClient = new SandboxReporterClient(procType);
 
   // This needs to live until the process exits.
-  static Maybe<SandboxBrokerClient> sBroker;
+  static SandboxBrokerClient* sBroker;
   if (aBrokerFd >= 0) {
-    sBroker.emplace(aBrokerFd);
+    sBroker = new SandboxBrokerClient(aBrokerFd);
   }
 
-  SetCurrentProcessSandbox(GetContentSandboxPolicy(sBroker.ptrOr(nullptr),
+  SetCurrentProcessSandbox(GetContentSandboxPolicy(sBroker,
                                                    aSyscallWhitelist));
   return true;
 }
@@ -688,26 +717,33 @@ SetContentProcessSandbox(int aBrokerFd, std::vector<int>& aSyscallWhitelist)
 void
 SetMediaPluginSandbox(const char *aFilePath)
 {
+  MOZ_RELEASE_ASSERT(aFilePath != nullptr);
   if (!SandboxInfo::Get().Test(SandboxInfo::kEnabledForMedia)) {
     return;
   }
 
-  gSandboxReporterClient.emplace(SandboxReport::ProcType::MEDIA_PLUGIN);
+  gSandboxReporterClient =
+    new SandboxReporterClient(SandboxReport::ProcType::MEDIA_PLUGIN);
 
-  MOZ_ASSERT(!gMediaPluginFile.mPath);
-  if (aFilePath) {
-    gMediaPluginFile.mPath = strdup(aFilePath);
-    gMediaPluginFile.mFd = open(aFilePath, O_RDONLY | O_CLOEXEC);
-    if (gMediaPluginFile.mFd == -1) {
-      SANDBOX_LOG_ERROR("failed to open plugin file %s: %s",
-                        aFilePath, strerror(errno));
-      MOZ_CRASH();
-    }
-  } else {
-    gMediaPluginFile.mFd = -1;
+  SandboxOpenedFile plugin(aFilePath);
+  if (!plugin.IsOpen()) {
+    SANDBOX_LOG_ERROR("failed to open plugin file %s: %s",
+                      aFilePath, strerror(errno));
+    MOZ_CRASH();
   }
+
+  auto files = new SandboxOpenedFiles();
+  files->Add(Move(plugin));
+  files->Add("/dev/urandom", true);
+  files->Add("/sys/devices/system/cpu/cpu0/tsc_freq_khz");
+  files->Add("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq");
+  files->Add("/proc/cpuinfo"); // Info also available via CPUID instruction.
+#ifdef __i386__
+  files->Add("/proc/self/auxv"); // Info also in process's address space.
+#endif
+
   // Finally, start the sandbox.
-  SetCurrentProcessSandbox(GetMediaSandboxPolicy(&gMediaPluginFile));
+  SetCurrentProcessSandbox(GetMediaSandboxPolicy(files));
 }
 #endif // MOZ_GMP_SANDBOX
 

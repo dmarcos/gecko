@@ -3,13 +3,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use dom::bindings::codegen::Bindings::HTMLFrameElementBinding;
-use dom::bindings::js::Root;
-use dom::bindings::str::DOMString;
+use dom::bindings::root::DomRoot;
 use dom::document::Document;
 use dom::htmlelement::HTMLElement;
 use dom::node::Node;
 use dom_struct::dom_struct;
-use html5ever_atoms::LocalName;
+use html5ever::{LocalName, Prefix};
 
 #[dom_struct]
 pub struct HTMLFrameElement {
@@ -17,7 +16,7 @@ pub struct HTMLFrameElement {
 }
 
 impl HTMLFrameElement {
-    fn new_inherited(local_name: LocalName, prefix: Option<DOMString>, document: &Document) -> HTMLFrameElement {
+    fn new_inherited(local_name: LocalName, prefix: Option<Prefix>, document: &Document) -> HTMLFrameElement {
         HTMLFrameElement {
             htmlelement: HTMLElement::new_inherited(local_name, prefix, document)
         }
@@ -25,9 +24,9 @@ impl HTMLFrameElement {
 
     #[allow(unrooted_must_root)]
     pub fn new(local_name: LocalName,
-               prefix: Option<DOMString>,
-               document: &Document) -> Root<HTMLFrameElement> {
-        Node::reflect_node(box HTMLFrameElement::new_inherited(local_name, prefix, document),
+               prefix: Option<Prefix>,
+               document: &Document) -> DomRoot<HTMLFrameElement> {
+        Node::reflect_node(Box::new(HTMLFrameElement::new_inherited(local_name, prefix, document)),
                            document,
                            HTMLFrameElementBinding::Wrap)
     }

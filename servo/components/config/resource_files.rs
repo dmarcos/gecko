@@ -2,8 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#[cfg(target_os = "android")]
+use android_injected_glue;
 #[cfg(not(target_os = "android"))]
 use std::env;
+#[cfg(target_os = "android")]
+use std::ffi::CStr;
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -21,8 +25,20 @@ pub fn set_resources_path(path: Option<String>) {
 }
 
 #[cfg(target_os = "android")]
+#[allow(unsafe_code)]
 pub fn resources_dir_path() -> io::Result<PathBuf> {
-    Ok(PathBuf::from("/sdcard/servo/"))
+    let mut dir = CMD_RESOURCE_DIR.lock().unwrap();
+
+    if let Some(ref path) = *dir {
+        return Ok(PathBuf::from(path));
+    }
+
+    let data_path = unsafe {
+        CStr::from_ptr((*android_injected_glue::get_app().activity).externalDataPath)
+    };
+    let path = PathBuf::from(data_path.to_str().unwrap());
+    *dir = Some(path.to_str().unwrap().to_owned());
+    Ok(path)
 }
 
 #[cfg(not(target_os = "android"))]
@@ -36,9 +52,9 @@ pub fn resources_dir_path() -> io::Result<PathBuf> {
     // FIXME: Find a way to not rely on the executable being
     // under `<servo source>[/$target_triple]/target/debug`
     // or `<servo source>[/$target_triple]/target/release`.
-    let mut path = try!(env::current_exe());
+    let mut path = env::current_exe()?;
     // Follow symlink
-    path = try!(path.canonicalize());
+    path = path.canonicalize()?;
 
     while path.pop() {
         path.push("resources");
@@ -58,10 +74,10 @@ pub fn resources_dir_path() -> io::Result<PathBuf> {
 }
 
 pub fn read_resource_file<P: AsRef<Path>>(relative_path: P) -> io::Result<Vec<u8>> {
-    let mut path = try!(resources_dir_path());
+    let mut path = resources_dir_path()?;
     path.push(relative_path);
-    let mut file = try!(File::open(&path));
+    let mut file = File::open(&path)?;
     let mut data = Vec::new();
-    try!(file.read_to_end(&mut data));
+    file.read_to_end(&mut data)?;
     Ok(data)
 }

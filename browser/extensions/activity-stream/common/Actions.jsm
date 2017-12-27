@@ -5,20 +5,89 @@
 
 this.MAIN_MESSAGE_TYPE = "ActivityStream:Main";
 this.CONTENT_MESSAGE_TYPE = "ActivityStream:Content";
+this.UI_CODE = 1;
+this.BACKGROUND_PROCESS = 2;
 
-this.actionTypes = [
-  "INIT",
-  "UNINIT",
-  "NEW_TAB_INITIAL_STATE",
-  "NEW_TAB_LOAD",
-  "NEW_TAB_UNLOAD"
-// The line below creates an object like this:
+/**
+ * globalImportContext - Are we in UI code (i.e. react, a dom) or some kind of background process?
+ *                       Use this in action creators if you need different logic
+ *                       for ui/background processes.
+ */
+const globalImportContext = typeof Window === "undefined" ? BACKGROUND_PROCESS : UI_CODE;
+// Export for tests
+this.globalImportContext = globalImportContext;
+
+// Create an object that avoids accidental differing key/value pairs:
 // {
 //   INIT: "INIT",
 //   UNINIT: "UNINIT"
 // }
-// It prevents accidentally adding a different key/value name.
-].reduce((obj, type) => { obj[type] = type; return obj; }, {});
+const actionTypes = {};
+for (const type of [
+  "BLOCK_URL",
+  "BOOKMARK_URL",
+  "DELETE_BOOKMARK_BY_ID",
+  "DELETE_HISTORY_URL",
+  "DELETE_HISTORY_URL_CONFIRM",
+  "DIALOG_CANCEL",
+  "DIALOG_OPEN",
+  "DISABLE_ONBOARDING",
+  "INIT",
+  "MIGRATION_CANCEL",
+  "MIGRATION_COMPLETED",
+  "MIGRATION_START",
+  "NEW_TAB_INIT",
+  "NEW_TAB_INITIAL_STATE",
+  "NEW_TAB_LOAD",
+  "NEW_TAB_REHYDRATED",
+  "NEW_TAB_STATE_REQUEST",
+  "NEW_TAB_UNLOAD",
+  "OPEN_LINK",
+  "OPEN_NEW_WINDOW",
+  "OPEN_PRIVATE_WINDOW",
+  "PAGE_PRERENDERED",
+  "PLACES_BOOKMARK_ADDED",
+  "PLACES_BOOKMARK_CHANGED",
+  "PLACES_BOOKMARK_REMOVED",
+  "PLACES_HISTORY_CLEARED",
+  "PLACES_LINKS_DELETED",
+  "PLACES_LINK_BLOCKED",
+  "PREFS_INITIAL_VALUES",
+  "PREF_CHANGED",
+  "RICH_ICON_MISSING",
+  "SAVE_SESSION_PERF_DATA",
+  "SAVE_TO_POCKET",
+  "SCREENSHOT_UPDATED",
+  "SECTION_DEREGISTER",
+  "SECTION_DISABLE",
+  "SECTION_ENABLE",
+  "SECTION_OPTIONS_CHANGED",
+  "SECTION_REGISTER",
+  "SECTION_UPDATE",
+  "SECTION_UPDATE_CARD",
+  "SETTINGS_CLOSE",
+  "SETTINGS_OPEN",
+  "SET_PREF",
+  "SHOW_FIREFOX_ACCOUNTS",
+  "SNIPPETS_BLOCKLIST_UPDATED",
+  "SNIPPETS_DATA",
+  "SNIPPETS_RESET",
+  "SNIPPET_BLOCKED",
+  "SYSTEM_TICK",
+  "TELEMETRY_IMPRESSION_STATS",
+  "TELEMETRY_PERFORMANCE_EVENT",
+  "TELEMETRY_UNDESIRED_EVENT",
+  "TELEMETRY_USER_EVENT",
+  "TOP_SITES_ADD",
+  "TOP_SITES_CANCEL_EDIT",
+  "TOP_SITES_EDIT",
+  "TOP_SITES_PIN",
+  "TOP_SITES_UNPIN",
+  "TOP_SITES_UPDATED",
+  "UNINIT"
+]) {
+  actionTypes[type] = type;
+}
 
 // Helper function for creating routed actions between content and main
 // Not intended to be used by consumers
@@ -44,14 +113,14 @@ function _RouteMessage(action, options) {
  *
  * @param  {object} action Any redux action (required)
  * @param  {object} options
- * @param  {string} options.fromTarget The id of the content port from which the action originated. (optional)
+ * @param  {string} fromTarget The id of the content port from which the action originated. (optional)
  * @return {object} An action with added .meta properties
  */
-function SendToMain(action, options = {}) {
+function SendToMain(action, fromTarget) {
   return _RouteMessage(action, {
     from: CONTENT_MESSAGE_TYPE,
     to: MAIN_MESSAGE_TYPE,
-    fromTarget: options.fromTarget
+    fromTarget
   });
 }
 
@@ -86,10 +155,81 @@ function SendToContent(action, target) {
   });
 }
 
+/**
+ * UserEvent - A telemetry ping indicating a user action. This should only
+ *                   be sent from the UI during a user session.
+ *
+ * @param  {object} data Fields to include in the ping (source, etc.)
+ * @return {object} An SendToMain action
+ */
+function UserEvent(data) {
+  return SendToMain({
+    type: actionTypes.TELEMETRY_USER_EVENT,
+    data
+  });
+}
+
+/**
+ * UndesiredEvent - A telemetry ping indicating an undesired state.
+ *
+ * @param  {object} data Fields to include in the ping (value, etc.)
+ * @param  {int} importContext (For testing) Override the import context for testing.
+ * @return {object} An action. For UI code, a SendToMain action.
+ */
+function UndesiredEvent(data, importContext = globalImportContext) {
+  const action = {
+    type: actionTypes.TELEMETRY_UNDESIRED_EVENT,
+    data
+  };
+  return importContext === UI_CODE ? SendToMain(action) : action;
+}
+
+/**
+ * PerfEvent - A telemetry ping indicating a performance-related event.
+ *
+ * @param  {object} data Fields to include in the ping (value, etc.)
+ * @param  {int} importContext (For testing) Override the import context for testing.
+ * @return {object} An action. For UI code, a SendToMain action.
+ */
+function PerfEvent(data, importContext = globalImportContext) {
+  const action = {
+    type: actionTypes.TELEMETRY_PERFORMANCE_EVENT,
+    data
+  };
+  return importContext === UI_CODE ? SendToMain(action) : action;
+}
+
+/**
+ * ImpressionStats - A telemetry ping indicating an impression stats.
+ *
+ * @param  {object} data Fields to include in the ping
+ * @param  {int} importContext (For testing) Override the import context for testing.
+ * #return {object} An action. For UI code, a SendToMain action.
+ */
+function ImpressionStats(data, importContext = globalImportContext) {
+  const action = {
+    type: actionTypes.TELEMETRY_IMPRESSION_STATS,
+    data
+  };
+  return importContext === UI_CODE ? SendToMain(action) : action;
+}
+
+function SetPref(name, value, importContext = globalImportContext) {
+  const action = {type: actionTypes.SET_PREF, data: {name, value}};
+  return importContext === UI_CODE ? SendToMain(action) : action;
+}
+
+this.actionTypes = actionTypes;
+
 this.actionCreators = {
-  SendToMain,
+  BroadcastToContent,
+  UserEvent,
+  UndesiredEvent,
+  PerfEvent,
+  ImpressionStats,
   SendToContent,
-  BroadcastToContent
+  SendToMain,
+  SetPref
 };
 
 // These are helpers to test for certain kinds of actions
@@ -118,6 +258,16 @@ this.actionUtils = {
     }
     return false;
   },
+  isFromMain(action) {
+    if (!action.meta) {
+      return false;
+    }
+    return action.meta.from === MAIN_MESSAGE_TYPE &&
+      action.meta.to === CONTENT_MESSAGE_TYPE;
+  },
+  getPortIdOfSender(action) {
+    return (action.meta && action.meta.fromTarget) || null;
+  },
   _RouteMessage
 };
 
@@ -125,6 +275,9 @@ this.EXPORTED_SYMBOLS = [
   "actionTypes",
   "actionCreators",
   "actionUtils",
+  "globalImportContext",
+  "UI_CODE",
+  "BACKGROUND_PROCESS",
   "MAIN_MESSAGE_TYPE",
   "CONTENT_MESSAGE_TYPE"
 ];

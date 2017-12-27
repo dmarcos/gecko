@@ -5,9 +5,12 @@
 "use strict";
 
 const { Ci } = require("chrome");
-const promise = require("promise");
 const { Task } = require("devtools/shared/task");
 const { tunnelToInnerBrowser } = require("./tunnel");
+
+function debug(msg) {
+  // console.log(`RDM swap: ${msg}`);
+}
 
 /**
  * Swap page content from an existing tab into a new browser within a container
@@ -19,9 +22,6 @@ const { tunnelToInnerBrowser } = require("./tunnel");
  * this is used in RDM.  The steps described there are copied into the code
  * below.
  *
- * For additional low level details about swapping browser content,
- * see /devtools/client/responsive.html/docs/browser-swap.md.
- *
  * @param tab
  *        A browser tab with content to be swapped.
  * @param containerURL
@@ -32,7 +32,8 @@ const { tunnelToInnerBrowser } = require("./tunnel");
  *        container page.
  */
 function swapToInnerBrowser({ tab, containerURL, getInnerBrowser }) {
-  let gBrowser = tab.ownerDocument.defaultView.gBrowser;
+  let browserWindow = tab.ownerGlobal;
+  let gBrowser = browserWindow.gBrowser;
   let innerBrowser;
   let tunnel;
 
@@ -42,12 +43,51 @@ function swapToInnerBrowser({ tab, containerURL, getInnerBrowser }) {
   // event, this one is easier for DevTools to follow because it's only emitted once per
   // transition, instead of twice like SwapDocShells.
   let dispatchDevToolsBrowserSwap = (from, to) => {
-    let CustomEvent = tab.ownerDocument.defaultView.CustomEvent;
+    let CustomEvent = browserWindow.CustomEvent;
     let event = new CustomEvent("DevTools:BrowserSwap", {
       detail: to,
       bubbles: true,
     });
     from.dispatchEvent(event);
+  };
+
+  // A version of `gBrowser.addTab` that absorbs the `TabOpen` event.
+  // The swap process uses a temporary tab, and there's no real need for others to hear
+  // about it.  This hides the temporary tab from things like WebExtensions.
+  let addTabSilently = (uri, options) => {
+    browserWindow.addEventListener("TabOpen", event => {
+      event.stopImmediatePropagation();
+    }, { capture: true, once: true });
+    return gBrowser.addTab(uri, options);
+  };
+
+  // A version of `gBrowser.swapBrowsersAndCloseOther` that absorbs the `TabClose` event.
+  // The swap process uses a temporary tab, and there's no real need for others to hear
+  // about it.  This hides the temporary tab from things like WebExtensions.
+  let swapBrowsersAndCloseOtherSilently = (ourTab, otherTab) => {
+    browserWindow.addEventListener("TabClose", event => {
+      event.stopImmediatePropagation();
+    }, { capture: true, once: true });
+    gBrowser.swapBrowsersAndCloseOther(ourTab, otherTab);
+  };
+
+  // It is possible for the frame loader swap within `gBrowser._swapBrowserDocShells` to
+  // fail when various frame state is either not ready yet or doesn't match between the
+  // two browsers you're trying to swap.  However, such errors are currently caught and
+  // silenced in the browser, because they are apparently expected in certain cases.
+  // So, here we do our own check to verify that the swap actually did in fact take place,
+  // making it much easier to track such errors when they happen.
+  let swapBrowserDocShells = (ourTab, otherBrowser) => {
+    // The verification step here assumes both browsers are remote.
+    if (!ourTab.linkedBrowser.isRemoteBrowser || !otherBrowser.isRemoteBrowser) {
+      throw new Error("Both browsers should be remote before swapping.");
+    }
+    let contentTabId = ourTab.linkedBrowser.frameLoader.tabParent.tabId;
+    gBrowser._swapBrowserDocShells(ourTab, otherBrowser);
+    if (otherBrowser.frameLoader.tabParent.tabId != contentTabId) {
+      // Bug 1408602: Try to unwind to save tab content from being lost.
+      throw new Error("Swapping tab content between browsers failed.");
+    }
   };
 
   return {
@@ -63,13 +103,28 @@ function swapToInnerBrowser({ tab, containerURL, getInnerBrowser }) {
       freezeNavigationState(tab);
 
       // 1. Create a temporary, hidden tab to load the tool UI.
-      let containerTab = gBrowser.addTab("about:blank", {
+      debug("Add blank tool tab");
+      let containerTab = addTabSilently("about:blank", {
         skipAnimation: true,
         forceNotRemote: true,
       });
       gBrowser.hideTab(containerTab);
       let containerBrowser = containerTab.linkedBrowser;
+      // Even though we load the `containerURL` with `LOAD_FLAGS_BYPASS_HISTORY` below,
+      // `SessionHistory.jsm` has a fallback path for tabs with no history which
+      // fabricates a history entry by reading the current URL, and this can cause the
+      // container URL to be recorded in the session store.  To avoid this, we send a
+      // bogus `epoch` value to our container tab, which causes all future history
+      // messages to be ignored.  (Actual navigations are still correctly recorded because
+      // this only affects the container frame, not the content.)  A better fix would be
+      // to just not load the `content-sessionStore.js` frame script at all in the
+      // container tab, but it's loaded for all tab browsers, so this seems a bit harder
+      // to achieve in a nice way.
+      containerBrowser.messageManager.sendAsyncMessage("SessionStore:flush", {
+        epoch: -1,
+      });
       // Prevent the `containerURL` from ending up in the tab's history.
+      debug("Load container URL");
       containerBrowser.loadURIWithFlags(containerURL, {
         flags: Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_HISTORY,
       });
@@ -89,12 +144,15 @@ function swapToInnerBrowser({ tab, containerURL, getInnerBrowser }) {
       // Even worse than the delay, there appears to be no obvious event fired
       // after the frame is set lazily, so it's unclear how to know that work
       // has finished.
+      debug("Set container docShell active");
       containerBrowser.docShellIsActive = true;
 
       // 3. Create the initial viewport inside the tool UI.
       // The calling application will use container page loaded into the tab to
       // do whatever it needs to create the inner browser.
+      debug("Yield to container tab loaded");
       yield tabLoaded(containerTab);
+      debug("Yield to get inner browser");
       innerBrowser = yield getInnerBrowser(containerBrowser);
       addXULBrowserDecorations(innerBrowser);
       if (innerBrowser.isRemoteBrowser != tab.linkedBrowser.isRemoteBrowser) {
@@ -106,22 +164,26 @@ function swapToInnerBrowser({ tab, containerURL, getInnerBrowser }) {
       //    the viewport in the tool UI, preserving all state via
       //    `gBrowser._swapBrowserDocShells`.
       dispatchDevToolsBrowserSwap(tab.linkedBrowser, innerBrowser);
-      gBrowser._swapBrowserDocShells(tab, innerBrowser);
+      debug("Swap content to inner browser");
+      swapBrowserDocShells(tab, innerBrowser);
 
       // 5. Force the original browser tab to be non-remote since the tool UI
       //    must be loaded in the parent process, and we're about to swap the
       //    tool UI into this tab.
+      debug("Flip original tab to remote false");
       gBrowser.updateBrowserRemoteness(tab.linkedBrowser, false);
 
       // 6. Swap the tool UI (with viewport showing the content) into the
       //    original browser tab and close the temporary tab used to load the
       //    tool via `swapBrowsersAndCloseOther`.
-      gBrowser.swapBrowsersAndCloseOther(tab, containerTab);
+      debug("Swap tool UI to original tab");
+      swapBrowsersAndCloseOtherSilently(tab, containerTab);
 
       // 7. Start a tunnel from the tool tab's browser to the viewport browser
       //    so that some browser UI functions, like navigation, are connected to
       //    the content in the viewport, instead of the tool page.
       tunnel = tunnelToInnerBrowser(tab.linkedBrowser, innerBrowser);
+      debug("Yield to tunnel start");
       yield tunnel.start();
 
       // Swapping browsers disconnects the find bar UI from the browser.
@@ -154,7 +216,7 @@ function swapToInnerBrowser({ tab, containerURL, getInnerBrowser }) {
       tunnel = null;
 
       // 2. Create a temporary, hidden tab to hold the content.
-      let contentTab = gBrowser.addTab("about:blank", {
+      let contentTab = addTabSilently("about:blank", {
         skipAnimation: true,
       });
       gBrowser.hideTab(contentTab);
@@ -168,7 +230,7 @@ function swapToInnerBrowser({ tab, containerURL, getInnerBrowser }) {
       //    to the regular browser tab, preserving all state via
       //    `gBrowser._swapBrowserDocShells`.
       dispatchDevToolsBrowserSwap(innerBrowser, contentBrowser);
-      gBrowser._swapBrowserDocShells(contentTab, innerBrowser);
+      swapBrowserDocShells(contentTab, innerBrowser);
       innerBrowser = null;
 
       // Copy tab listener state flags to content tab.  See similar comment in `start`
@@ -187,7 +249,7 @@ function swapToInnerBrowser({ tab, containerURL, getInnerBrowser }) {
       //    temporary tab used to hold the content via
       //    `swapBrowsersAndCloseOther`.
       dispatchDevToolsBrowserSwap(contentBrowser, tab.linkedBrowser);
-      gBrowser.swapBrowsersAndCloseOther(tab, contentTab);
+      swapBrowsersAndCloseOtherSilently(tab, contentTab);
 
       // Swapping browsers disconnects the find bar UI from the browser.
       // If the find bar has been initialized, reconnect it.
@@ -201,6 +263,7 @@ function swapToInnerBrowser({ tab, containerURL, getInnerBrowser }) {
       }
 
       gBrowser = null;
+      browserWindow = null;
 
       // The focus manager seems to get a little dizzy after all this swapping.  If a
       // content element had been focused inside the viewport before stopping, it will
@@ -316,19 +379,18 @@ function addXULBrowserDecorations(browser) {
 }
 
 function tabLoaded(tab) {
-  let deferred = promise.defer();
-
-  function handle(event) {
-    if (event.originalTarget != tab.linkedBrowser.contentDocument ||
-        event.target.location.href == "about:blank") {
-      return;
+  return new Promise(resolve => {
+    function handle(event) {
+      if (event.originalTarget != tab.linkedBrowser.contentDocument ||
+          event.target.location.href == "about:blank") {
+        return;
+      }
+      tab.linkedBrowser.removeEventListener("load", handle, true);
+      resolve(event);
     }
-    tab.linkedBrowser.removeEventListener("load", handle, true);
-    deferred.resolve(event);
-  }
 
-  tab.linkedBrowser.addEventListener("load", handle, true);
-  return deferred.promise;
+    tab.linkedBrowser.addEventListener("load", handle, true);
+  });
 }
 
 exports.swapToInnerBrowser = swapToInnerBrowser;

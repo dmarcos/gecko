@@ -1,6 +1,6 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -43,7 +43,7 @@ nsPrintPreviewListener::~nsPrintPreviewListener()
 //
 // AddListeners
 //
-// Subscribe to the events that will allow us to track various events. 
+// Subscribe to the events that will allow us to track various events.
 //
 nsresult
 nsPrintPreviewListener::AddListeners()
@@ -72,9 +72,9 @@ nsPrintPreviewListener::AddListeners()
 //
 // RemoveListeners
 //
-// Unsubscribe from all the various events that we were listening to. 
+// Unsubscribe from all the various events that we were listening to.
 //
-nsresult 
+nsresult
 nsPrintPreviewListener::RemoveListeners()
 {
   if (mEventTarget) {
@@ -132,8 +132,8 @@ GetActionForEvent(nsIDOMEvent* aEvent)
 
   static const uint32_t kOKKeyCodes[] = {
     NS_VK_PAGE_UP, NS_VK_PAGE_DOWN,
-    NS_VK_UP,      NS_VK_DOWN, 
-    NS_VK_HOME,    NS_VK_END 
+    NS_VK_UP,      NS_VK_DOWN,
+    NS_VK_HOME,    NS_VK_END
   };
 
   if (keyEvent->mKeyCode == NS_VK_TAB) {

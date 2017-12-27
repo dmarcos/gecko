@@ -40,7 +40,7 @@
  */
 #define BBP 8
 
-static PRBool
+PRBool
 sftkdb_isULONGAttribute(CK_ATTRIBUTE_TYPE type)
 {
     switch (type) {
@@ -1370,7 +1370,8 @@ sftkdb_SetAttributeValue(SFTKDBHandle *handle, SFTKObject *object,
     }
 
     /* make sure we don't have attributes that conflict with the existing DB */
-    crv = sftkdb_checkConflicts(db, object->objclass, template, count, objectID);
+    crv = sftkdb_checkConflicts(db, object->objclass, ntemplate, count,
+                                objectID);
     if (crv != CKR_OK) {
         goto loser;
     }
@@ -1386,8 +1387,8 @@ sftkdb_SetAttributeValue(SFTKDBHandle *handle, SFTKObject *object,
         goto loser;
     }
     inTransaction = PR_TRUE;
-    crv = sftkdb_setAttributeValue(arena, handle, db,
-                                   objectID, template, count);
+    crv = sftkdb_setAttributeValue(arena, handle, db, objectID, ntemplate,
+                                   count);
     if (crv != CKR_OK) {
         goto loser;
     }
@@ -2311,6 +2312,13 @@ loser:
         crv = (*handle->update->sdb_GetMetaData)(handle->update, "password",
                                                  &item1, &item2);
         if (crv != CKR_OK) {
+            /* if we get here, neither the source, nor the target has been initialized
+             * with a password entry. Create a metadata table now so that we don't
+             * mistake this for a partially updated database */
+            item1.data[0] = 0;
+            item2.data[0] = 0;
+            item1.len = item2.len = 1;
+            crv = (*handle->db->sdb_PutMetaData)(handle->db, "empty", &item1, &item2);
             goto done;
         }
         crv = (*handle->db->sdb_PutMetaData)(handle->db, "password", &item1,

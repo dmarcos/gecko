@@ -7,23 +7,30 @@
  * Basic tests for exporting Network panel content into HAR format.
  */
 add_task(function* () {
+  // Disable tcp fast open, because it is setting a response header indicator
+  // (bug 1352274). TCP Fast Open is not present on all platforms therefore the
+  // number of response headers will vary depending on the platform.
+  Services.prefs.setBoolPref("network.tcp.tcp_fastopen_enable", false);
   let { tab, monitor } = yield initNetMonitor(SIMPLE_URL);
 
   info("Starting test... ");
 
-  let { gStore, windowRequire } = monitor.panelWin;
+  let { connector, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let RequestListContextMenu = windowRequire(
-    "devtools/client/netmonitor/src/request-list-context-menu");
+    "devtools/client/netmonitor/src/widgets/RequestListContextMenu");
+  let { getSortedRequests } = windowRequire(
+    "devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   let wait = waitForNetworkEvents(monitor, 1);
   tab.linkedBrowser.reload();
   yield wait;
 
-  let contextMenu = new RequestListContextMenu({});
-  yield contextMenu.copyAllAsHar();
+  let contextMenu = new RequestListContextMenu({ connector });
+
+  yield contextMenu.copyAllAsHar(getSortedRequests(store.getState()));
 
   let jsonString = SpecialPowers.getClipboardData("text/unicode");
   let har = JSON.parse(jsonString);

@@ -18,6 +18,7 @@
 #include "SkDWriteFontFileStream.h"
 #include "SkFontDescriptor.h"
 #include "SkFontStream.h"
+#include "SkOTTable_fvar.h"
 #include "SkOTTable_head.h"
 #include "SkOTTable_hhea.h"
 #include "SkOTTable_OS_2.h"
@@ -193,8 +194,8 @@ int DWriteFontTypeface::onGetTableTags(SkFontTableTag tags[]) const {
     }
 
     int ttcIndex;
-    SkAutoTDelete<SkStream> stream(this->openStream(&ttcIndex));
-    return stream.get() ? SkFontStream::GetTableTags(stream, ttcIndex, tags) : 0;
+    std::unique_ptr<SkStream> stream(this->openStream(&ttcIndex));
+    return stream.get() ? SkFontStream::GetTableTags(stream.get(), ttcIndex, tags) : 0;
 }
 
 size_t DWriteFontTypeface::onGetTableData(SkFontTableTag tag, size_t offset,
@@ -247,16 +248,13 @@ SkStreamAsset* DWriteFontTypeface::onOpenStream(int* ttcIndex) const {
 
 SkScalerContext* DWriteFontTypeface::onCreateScalerContext(const SkScalerContextEffects& effects,
                                                            const SkDescriptor* desc) const {
-    return new SkScalerContext_DW(const_cast<DWriteFontTypeface*>(this), effects, desc);
+    return new SkScalerContext_DW(sk_ref_sp(const_cast<DWriteFontTypeface*>(this)), effects, desc);
 }
-
-#ifdef MOZ_SKIA
-IDWriteRenderingParams* GetDwriteRenderingParams(bool aGDI);
-#endif
 
 void DWriteFontTypeface::onFilterRec(SkScalerContext::Rec* rec) const {
     if (rec->fFlags & SkScalerContext::kLCD_Vertical_Flag) {
         rec->fMaskFormat = SkMask::kA8_Format;
+        rec->fFlags |= SkScalerContext::kGenA8FromLCD_Flag;
     }
 
     unsigned flagsWeDontSupport = SkScalerContext::kVertical_Flag |
@@ -267,8 +265,10 @@ void DWriteFontTypeface::onFilterRec(SkScalerContext::Rec* rec) const {
     rec->fFlags &= ~flagsWeDontSupport;
 
     SkPaint::Hinting h = rec->getHinting();
-    // DirectWrite does not provide for hinting hints.
-    h = SkPaint::kSlight_Hinting;
+    // DirectWrite2 allows for hinting to be turned off. Force everything else to normal.
+    if (h != SkPaint::kNo_Hinting || !fFactory2 || !fDWriteFontFace2) {
+        h = SkPaint::kNormal_Hinting;
+    }
     rec->setHinting(h);
 
 #if defined(SK_FONT_HOST_USE_SYSTEM_SETTINGS)
@@ -284,13 +284,11 @@ void DWriteFontTypeface::onFilterRec(SkScalerContext::Rec* rec) const {
         }
     }
 #elif defined(MOZ_SKIA)
-    IDWriteRenderingParams* params = GetDwriteRenderingParams(ForceGDI());
-    SkASSERT(params);
-    rec->setContrast(params->GetEnhancedContrast());
+    rec->setContrast(fContrast);
 
     // GDI gamma should be 2.3
     // See the LUT gamma values comment for GDI fonts.
-    float gamma = ForceGDI() ? 2.3f : params->GetGamma();
+    float gamma = ForceGDI() ? 2.3f : fGamma;
     rec->setDeviceGamma(gamma);
     rec->setPaintGamma(gamma);
 #endif
@@ -308,9 +306,11 @@ static void populate_glyph_to_unicode(IDWriteFontFace* fontFace,
                                       const unsigned glyphCount,
                                       SkTDArray<SkUnichar>* glyphToUnicode) {
     //Do this like free type instead
-    SkAutoTMalloc<SkUnichar> glyphToUni(glyphCount);
+    SkAutoTMalloc<SkUnichar> glyphToUni(
+            (SkUnichar*)sk_calloc_throw(sizeof(SkUnichar) * glyphCount));
     int maxGlyph = -1;
-    for (UINT32 c = 0; c < 0x10FFFF; ++c) {
+    unsigned remainingGlyphCount = glyphCount;
+    for (UINT32 c = 0; c < 0x10FFFF && remainingGlyphCount != 0; ++c) {
         UINT16 glyph = 0;
         HRVM(fontFace->GetGlyphIndices(&c, 1, &glyph),
              "Failed to get glyph index.");
@@ -318,12 +318,12 @@ static void populate_glyph_to_unicode(IDWriteFontFace* fontFace,
         if (glyph >= glyphCount) {
           return;
         }
-        if (0 < glyph) {
+        if (0 < glyph && glyphToUni[glyph] == 0) {
             maxGlyph = SkTMax(static_cast<int>(glyph), maxGlyph);
-            glyphToUni[glyph] = c;
+            glyphToUni[glyph] = c;  // Always use lowest-index unichar.
+            --remainingGlyphCount;
         }
     }
-
     SkTDArray<SkUnichar>(glyphToUni, maxGlyph + 1).swap(*glyphToUnicode);
 }
 
@@ -342,8 +342,6 @@ SkAdvancedTypefaceMetrics* DWriteFontTypeface::onGetAdvancedTypefaceMetrics(
     fDWriteFontFace->GetMetrics(&dwfm);
 
     info = new SkAdvancedTypefaceMetrics;
-    info->fEmSize = dwfm.designUnitsPerEm;
-    info->fLastGlyphID = SkToU16(glyphCount - 1);
 
     info->fAscent = SkToS16(dwfm.ascent);
     info->fDescent = SkToS16(dwfm.descent);
@@ -352,16 +350,28 @@ SkAdvancedTypefaceMetrics* DWriteFontTypeface::onGetAdvancedTypefaceMetrics(
     // SkAdvancedTypefaceMetrics::fFontName is in theory supposed to be
     // the PostScript name of the font. However, due to the way it is currently
     // used, it must actually be a family name.
-    SkTScopedComPtr<IDWriteLocalizedStrings> familyNames;
-    hr = fDWriteFontFamily->GetFamilyNames(&familyNames);
+    if (fDWriteFontFamily) {
+      SkTScopedComPtr<IDWriteLocalizedStrings> familyNames;
+      hr = fDWriteFontFamily->GetFamilyNames(&familyNames);
 
-    UINT32 familyNameLen;
-    hr = familyNames->GetStringLength(0, &familyNameLen);
+      UINT32 familyNameLen;
+      hr = familyNames->GetStringLength(0, &familyNameLen);
 
-    SkSMallocWCHAR familyName(familyNameLen+1);
-    hr = familyNames->GetString(0, familyName.get(), familyNameLen+1);
+      SkSMallocWCHAR familyName(familyNameLen+1);
+      hr = familyNames->GetString(0, familyName.get(), familyNameLen+1);
 
-    hr = sk_wchar_to_skstring(familyName.get(), familyNameLen, &info->fFontName);
+      hr = sk_wchar_to_skstring(familyName.get(), familyNameLen, &info->fFontName);
+    } else {
+      // The name length would be passed to WideCharToMultiByte. It allows
+      // setting -1 in WideCharToMultiByte. The document says "If this
+      // parameter is -1, the function processes the entire input string,
+      // including the terminating null character. Therefore, the resulting
+      // character string has a terminating null character, and the length
+      // returned by the function includes this character."
+      // https://msdn.microsoft.com/library/windows/desktop/dd374130(v=vs.85).aspx
+      hr = sk_wchar_to_skstring(L"Unknown", -1 /* == strlen("Unknown") + 1 */,
+                                &info->fFontName);
+    }
 
     if (perGlyphInfo & kToUnicode_PerGlyphInfo) {
         populate_glyph_to_unicode(fDWriteFontFace.get(), glyphCount, &(info->fGlyphToUnicode));
@@ -385,6 +395,13 @@ SkAdvancedTypefaceMetrics* DWriteFontTypeface::onGetAdvancedTypefaceMetrics(
     AutoTDWriteTable<SkOTTableOS2> os2Table(fDWriteFontFace.get());
     if (!headTable.fExists || !postTable.fExists || !hheaTable.fExists || !os2Table.fExists) {
         return info;
+    }
+
+    // There are versions of DirectWrite which support named instances for system variation fonts,
+    // but no means to indicate that such a typeface is a variation.
+    AutoTDWriteTable<SkOTTableFontVariations> fvarTable(fDWriteFontFace.get());
+    if (fvarTable.fExists) {
+        info->fFlags |= SkAdvancedTypefaceMetrics::kMultiMaster_FontFlag;
     }
 
     //There exist CJK fonts which set the IsFixedPitch and Monospace bits,

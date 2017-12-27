@@ -12,12 +12,12 @@
 <script type="text/javascript">
 "use strict";
 
-add_task(function* test_permissions() {
+add_task(async function test_permissions() {
   function background() {
     browser.webRequest.onBeforeRequest.addListener(details => {
       if (details.url.includes("_original")) {
         let redirectUrl = details.url
-                                 .replace("mochi.test:8888", "example.com")
+                                 .replace("example.org", "example.com")
                                  .replace("_original", "_redirected");
         return {redirectUrl};
       }
@@ -33,9 +33,9 @@ add_task(function* test_permissions() {
   };
 
   let extension = ExtensionTestUtils.loadExtension(extensionData);
-  yield extension.startup();
+  await extension.startup();
 
-  function* check() {
+  async function check() {
     let iframe = document.createElement("iframe");
     document.body.appendChild(iframe);
 
@@ -47,25 +47,25 @@ add_task(function* test_permissions() {
       window.addEventListener("message", listener);
     });
 
-    iframe.setAttribute("src", "http://example.com/tests/toolkit/components/extensions/test/mochitest/file_WebRequest_permission_original.html");
-    let result = yield promise;
+    iframe.setAttribute("src", "https://example.com/tests/toolkit/components/extensions/test/mochitest/file_WebRequest_permission_original.html");
+    let result = await promise;
     document.body.removeChild(iframe);
     return result;
   }
 
-  let results = yield check();
+  let results = await check();
   is(results.page, "redirected", "Regular webRequest redirect works on an unprivileged page");
   is(results.script, "redirected", "Regular webRequest redirect works from an unprivileged page");
 
-  yield SpecialPowers.pushPrefEnv({
+  await SpecialPowers.pushPrefEnv({
     set: [["extensions.webapi.testing", true]],
   });
 
-  results = yield check();
+  results = await check();
   is(results.page, "original", "webRequest redirect fails on a privileged page");
   is(results.script, "original", "webRequest redirect fails from a privileged page");
 
-  yield extension.unload();
+  await extension.unload();
 });
 </script>
 

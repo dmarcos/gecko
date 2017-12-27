@@ -4,6 +4,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 import os
 import tempfile
 import unittest
@@ -69,6 +71,7 @@ class SourcesTest(unittest.TestCase):
         v = get_version(self.binary)
         self.assertIsNone(v.get('gaia_changeset'))
         self.assertIsNone(v.get('gaia_date'))
+
 
 if __name__ == '__main__':
     mozunit.main()

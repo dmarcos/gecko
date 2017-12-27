@@ -16,6 +16,7 @@
 #include "jsobj.h"
 #include "jstypes.h"
 
+#include "jit/InlinableNatives.h"
 #include "vm/GlobalObject.h"
 #include "vm/ProxyObject.h"
 #include "vm/StringBuffer.h"
@@ -116,10 +117,8 @@ Boolean(JSContext* cx, unsigned argc, Value* vp)
     bool b = args.length() != 0 ? JS::ToBoolean(args[0]) : false;
 
     if (args.isConstructing()) {
-        RootedObject newTarget (cx, &args.newTarget().toObject());
         RootedObject proto(cx);
-
-        if (!GetPrototypeFromConstructor(cx, newTarget, &proto))
+        if (!GetPrototypeFromBuiltinConstructor(cx, args, &proto))
             return false;
 
         JSObject* obj = BooleanObject::create(cx, b, proto);
@@ -144,7 +143,9 @@ js::InitBooleanClass(JSContext* cx, HandleObject obj)
         return nullptr;
     booleanProto->setFixedSlot(BooleanObject::PRIMITIVE_VALUE_SLOT, BooleanValue(false));
 
-    RootedFunction ctor(cx, GlobalObject::createConstructor(cx, Boolean, cx->names().Boolean, 1));
+    RootedFunction ctor(cx, GlobalObject::createConstructor(cx, Boolean, cx->names().Boolean, 1,
+                                                            gc::AllocKind::FUNCTION,
+                                                            &jit::JitInfo_Boolean));
     if (!ctor)
         return nullptr;
 

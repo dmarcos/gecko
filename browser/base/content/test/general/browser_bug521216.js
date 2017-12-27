@@ -8,7 +8,7 @@ function test() {
   tabIndex = gBrowser.tabs.length;
   gBrowser.addTabsProgressListener(progressListener);
   gBrowser.tabContainer.addEventListener("TabOpen", TabOpen);
-  gBrowser.addTab("data:text/html,<html><head><link href='about:logo' rel='shortcut icon'>");
+  BrowserTestUtils.addTab(gBrowser, "data:text/html,<html><head><link href='about:logo' rel='shortcut icon'>");
 }
 
 function record(aName) {
@@ -30,21 +30,21 @@ function record(aName) {
 
 function TabOpen(aEvent) {
   if (aEvent.target == tab)
-    record(arguments.callee.name);
+    record("TabOpen");
 }
 
 var progressListener = {
   onLocationChange: function onLocationChange(aBrowser) {
     if (aBrowser == tab.linkedBrowser)
-      record(arguments.callee.name);
+      record("onLocationChange");
   },
   onStateChange: function onStateChange(aBrowser) {
     if (aBrowser == tab.linkedBrowser)
-      record(arguments.callee.name);
+      record("onStateChange");
   },
   onLinkIconAvailable: function onLinkIconAvailable(aBrowser, aIconURL) {
     if (aBrowser == tab.linkedBrowser &&
         aIconURL == "about:logo")
-      record(arguments.callee.name);
+      record("onLinkIconAvailable");
   }
 };

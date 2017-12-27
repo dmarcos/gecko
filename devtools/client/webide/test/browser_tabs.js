@@ -13,7 +13,7 @@ function test() {
     // was left open.
     DebuggerServer.destroy();
     DebuggerServer.init();
-    DebuggerServer.addBrowserActors();
+    DebuggerServer.registerAllActors();
 
     let tab = yield addTab(TEST_URI);
 
@@ -64,12 +64,12 @@ function test() {
 }
 
 function connectToLocal(win, docRuntime) {
-  let deferred = promise.defer();
-  win.AppManager.connection.once(
+  return new Promise(resolve => {
+    win.AppManager.connection.once(
       win.Connection.Events.CONNECTED,
-      () => deferred.resolve());
-  docRuntime.querySelectorAll(".runtime-panel-item-other")[1].click();
-  return deferred.promise;
+      resolve);
+    docRuntime.querySelectorAll(".runtime-panel-item-other")[1].click();
+  });
 }
 
 function selectTabProject(win, docProject) {

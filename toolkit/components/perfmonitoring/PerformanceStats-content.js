@@ -18,8 +18,6 @@ const { XPCOMUtils } = Cu.import("resource://gre/modules/XPCOMUtils.jsm", {});
 
 XPCOMUtils.defineLazyModuleGetter(this, "PerformanceStats",
   "resource://gre/modules/PerformanceStats.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Task",
-  "resource://gre/modules/Task.jsm");
 
 /**
  * A global performance monitor used by this process.
@@ -99,7 +97,7 @@ function ensureAcquired(probeNames) {
   let shouldAcquire = [];
   for (let probeName of probeNames) {
     if (alreadyAcquired.indexOf(probeName) == -1) {
-      shouldAcquire.push(probeName)
+      shouldAcquire.push(probeName);
     }
   }
 
@@ -119,7 +117,7 @@ function ensureAcquired(probeNames) {
  * @param {{data: {payload: Array<string>}}} msg The message received. `payload`
  * must be an array of probe names.
  */
-Services.cpmm.addMessageListener("performance-stats-service-collect", Task.async(function*(msg) {
+Services.cpmm.addMessageListener("performance-stats-service-collect", async function(msg) {
   let {id, payload: {probeNames}} = msg.data;
   if (!isContent) {
     // This message was sent by the parent process to itself.
@@ -136,9 +134,9 @@ Services.cpmm.addMessageListener("performance-stats-service-collect", Task.async
   ensureAcquired(probeNames);
 
   // Collect and return data.
-  let data = yield gMonitor.promiseSnapshot({probeNames});
+  let data = await gMonitor.promiseSnapshot({probeNames});
   Services.cpmm.sendAsyncMessage("performance-stats-service-collect", {
     id,
     data
   });
-}));
+});

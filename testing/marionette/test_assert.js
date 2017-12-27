@@ -9,11 +9,57 @@ const {utils: Cu} = Components;
 Cu.import("chrome://marionette/content/assert.js");
 Cu.import("chrome://marionette/content/error.js");
 
+add_test(function test_acyclic() {
+  assert.acyclic({});
+  assert.acyclic(new Object());
+  assert.acyclic([]);
+  assert.acyclic(new Array());
+
+  // object
+  Assert.throws(() => {
+    let obj = {};
+    obj.reference = obj;
+    assert.acyclic(obj);
+  }, JavaScriptError);
+
+  // array
+  Assert.throws(() => {
+    let arr = [];
+    arr.push(arr);
+    assert.acyclic(arr);
+  }, JavaScriptError);
+
+  // array in object
+  Assert.throws(() => {
+    let arr = [];
+    arr.push(arr);
+    assert.acyclic({arr});
+  }, JavaScriptError);
+
+  // object in array
+  Assert.throws(() => {
+    let obj = {};
+    obj.reference = obj;
+    assert.acyclic([obj]);
+  }, JavaScriptError);
+
+  // custom message
+  let cyclic = {};
+  cyclic.reference = cyclic;
+  Assert.throws(() => assert.acyclic(cyclic, "", RangeError), RangeError);
+  Assert.throws(() => assert.acyclic(cyclic, "foo"), /JavaScriptError: foo/);
+  Assert.throws(() => assert.acyclic(cyclic, "bar", RangeError), /RangeError: bar/);
+
+  run_next_test();
+});
+
 add_test(function test_session() {
-  assert.session({sessionId: "foo"});
+  assert.session({sessionID: "foo"});
   for (let typ of [null, undefined, ""]) {
     Assert.throws(() => assert.session({sessionId: typ}), InvalidSessionIDError);
   }
+
+  Assert.throws(() => assert.session({sessionId: null}, "custom"), /custom/);
 
   run_next_test();
 });
@@ -21,7 +67,7 @@ add_test(function test_session() {
 add_test(function test_platforms() {
   // at least one will fail
   let raised;
-  for (let fn of [assert.firefox, assert.fennec, assert.b2g, assert.mobile]) {
+  for (let fn of [assert.firefox, assert.fennec]) {
     try {
       fn();
     } catch (e) {
@@ -33,9 +79,21 @@ add_test(function test_platforms() {
   run_next_test();
 });
 
+add_test(function test_noUserPrompt() {
+  assert.noUserPrompt(null);
+  assert.noUserPrompt(undefined);
+  Assert.throws(() => assert.noUserPrompt({}), UnexpectedAlertOpenError);
+
+  Assert.throws(() => assert.noUserPrompt({}, "custom"), /custom/);
+
+  run_next_test();
+});
+
 add_test(function test_defined() {
   assert.defined({});
   Assert.throws(() => assert.defined(undefined), InvalidArgumentError);
+
+  Assert.throws(() => assert.noUserPrompt({}, "custom"), /custom/);
 
   run_next_test();
 });
@@ -48,6 +106,9 @@ add_test(function test_number() {
   for (let i of ["foo", "1", {}, [], NaN, Infinity, undefined]) {
     Assert.throws(() => assert.number(i), InvalidArgumentError);
   }
+
+  Assert.throws(() => assert.number("foo", "custom"), /custom/);
+
   run_next_test();
 });
 
@@ -59,6 +120,8 @@ add_test(function test_callable() {
     Assert.throws(() => assert.callable(typ), InvalidArgumentError);
   }
 
+  Assert.throws(() => assert.callable("foo", "custom"), /custom/);
+
   run_next_test();
 });
 
@@ -69,6 +132,8 @@ add_test(function test_integer() {
   Assert.throws(() => assert.integer("foo"), InvalidArgumentError);
   Assert.throws(() => assert.integer(1.2), InvalidArgumentError);
 
+  Assert.throws(() => assert.integer("foo", "custom"), /custom/);
+
   run_next_test();
 });
 
@@ -77,6 +142,8 @@ add_test(function test_positiveInteger() {
   assert.positiveInteger(0);
   Assert.throws(() => assert.positiveInteger(-1), InvalidArgumentError);
   Assert.throws(() => assert.positiveInteger("foo"), InvalidArgumentError);
+
+  Assert.throws(() => assert.positiveInteger("foo", "custom"), /custom/);
 
   run_next_test();
 });
@@ -87,6 +154,8 @@ add_test(function test_boolean() {
   Assert.throws(() => assert.boolean("false"), InvalidArgumentError);
   Assert.throws(() => assert.boolean(undefined), InvalidArgumentError);
 
+  Assert.throws(() => assert.boolean(undefined, "custom"), /custom/);
+
   run_next_test();
 });
 
@@ -95,16 +164,31 @@ add_test(function test_string() {
   assert.string(`bar`);
   Assert.throws(() => assert.string(42), InvalidArgumentError);
 
+  Assert.throws(() => assert.string(42, "custom"), /custom/);
+
   run_next_test();
 });
 
 add_test(function test_window() {
-  assert.window({ document: { defaultView: true }});
+  assert.window({closed: false});
 
-  let deadWindow = { get document() { throw new TypeError("can't access dead object"); }};
-
-  for (let typ of [null, undefined, deadWindow]) {
+  for (let typ of [null, undefined, {closed: true}]) {
     Assert.throws(() => assert.window(typ), NoSuchWindowError);
+  }
+
+  Assert.throws(() => assert.window(null, "custom"), /custom/);
+
+  run_next_test();
+});
+
+add_test(function test_contentBrowser() {
+  assert.contentBrowser({contentBrowser: 42, window: {closed: false}});
+
+  let closedWindow = {contentBrowser: 42, window: {closed: true}};
+  let noContentBrowser = {contentBrowser: null, window: {closed: false}};
+
+  for (let typ of [null, undefined, closedWindow, noContentBrowser]) {
+    Assert.throws(() => assert.contentBrowser(typ), NoSuchWindowError);
   }
 
   run_next_test();
@@ -117,6 +201,8 @@ add_test(function test_object() {
     Assert.throws(() => assert.object(typ), InvalidArgumentError);
   }
 
+  Assert.throws(() => assert.object(null, "custom"), /custom/);
+
   run_next_test();
 });
 
@@ -125,6 +211,8 @@ add_test(function test_in() {
   for (let typ of [{}, 42, true, null, undefined]) {
     Assert.throws(() => assert.in("foo", typ), InvalidArgumentError);
   }
+
+  Assert.throws(() => assert.in("foo", {bar: 42}, "custom"), /custom/);
 
   run_next_test();
 });
@@ -135,6 +223,8 @@ add_test(function test_array() {
   Assert.throws(() => assert.array(42), InvalidArgumentError);
   Assert.throws(() => assert.array({}), InvalidArgumentError);
 
+  Assert.throws(() => assert.array(42, "custom"), /custom/);
+
   run_next_test();
 });
 
@@ -144,6 +234,8 @@ add_test(function test_that() {
   Assert.throws(() => assert.that(val => val)(false));
   Assert.throws(() => assert.that(val => val, "foo", SessionNotCreatedError)(false),
       SessionNotCreatedError);
+
+  Assert.throws(() => assert.that(() => false, "custom")(), /custom/);
 
   run_next_test();
 });

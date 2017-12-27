@@ -17,14 +17,14 @@ add_task(function* () {
   // is going to be requested and displayed in the source editor.
   requestLongerTimeout(2);
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   let wait = waitForNetworkEvents(monitor, 1);
   yield ContentTask.spawn(tab.linkedBrowser, HTML_LONG_URL, function* (url) {
@@ -32,10 +32,16 @@ add_task(function* () {
   });
   yield wait;
 
+  let requestItem = document.querySelector(".request-list-item");
+  requestItem.scrollIntoView();
+  let requestsListStatus = requestItem.querySelector(".requests-list-status");
+  EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+  yield waitUntil(() => requestsListStatus.title);
+
   verifyRequestItemTarget(
     document,
-    getDisplayedRequests(gStore.getState()),
-    getSortedRequests(gStore.getState()).get(0),
+    getDisplayedRequests(store.getState()),
+    getSortedRequests(store.getState()).get(0),
     "GET",
     CONTENT_TYPE_SJS + "?fmt=html-long",
     {

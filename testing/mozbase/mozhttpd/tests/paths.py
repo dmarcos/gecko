@@ -3,6 +3,8 @@
 # Any copyright is dedicated to the Public Domain.
 # http://creativecommons.org/publicdomain/zero/1.0/
 
+from __future__ import absolute_import
+
 from mozfile import TemporaryDirectory
 import mozhttpd
 import os
@@ -74,6 +76,7 @@ class PathTest(unittest.TestCase):
             httpd.start(block=False)
             self.try_get_expect_404(httpd.get_url())
             httpd.stop()
+
 
 if __name__ == '__main__':
     mozunit.main()

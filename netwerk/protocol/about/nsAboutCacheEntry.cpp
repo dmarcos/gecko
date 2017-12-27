@@ -87,6 +87,7 @@ NS_IMPL_ISUPPORTS(nsAboutCacheEntry::Channel,
                   nsICacheEntryOpenCallback,
                   nsICacheEntryMetaDataVisitor,
                   nsIStreamListener,
+                  nsIRequest,
                   nsIChannel)
 
 //-----------------------------------------------------------------------------
@@ -131,7 +132,7 @@ nsAboutCacheEntry::Channel::Init(nsIURI* uri, nsILoadInfo* aLoadInfo)
 
     rv =  NS_NewInputStreamChannelInternal(getter_AddRefs(mChannel),
                                            uri,
-                                           stream,
+                                           stream.forget(),
                                            NS_LITERAL_CSTRING("text/html"),
                                            NS_LITERAL_CSTRING("utf-8"),
                                            aLoadInfo);
@@ -187,14 +188,6 @@ nsAboutCacheEntry::Channel::OpenCacheEntry(nsIURI *uri)
                        mEnhanceId, getter_AddRefs(mCacheURI));
     if (NS_FAILED(rv)) return rv;
 
-    if (!CacheObserver::UseNewCache() &&
-        mLoadInfo->IsPrivate() &&
-        mStorageName.EqualsLiteral("disk")) {
-        // The cache v1 is storing all private entries in the memory-only
-        // cache, so it would not be found in the v1 disk cache.
-        mStorageName = NS_LITERAL_CSTRING("memory");
-    }
-
     return OpenCacheEntry();
 }
 
@@ -230,7 +223,7 @@ nsAboutCacheEntry::Channel::ParseURI(nsIURI *uri,
     nsresult rv;
 
     nsAutoCString path;
-    rv = uri->GetPath(path);
+    rv = uri->GetPathQueryRef(path);
     if (NS_FAILED(rv))
         return rv;
 
@@ -306,20 +299,6 @@ nsAboutCacheEntry::Channel::OnCacheEntryAvailable(nsICacheEntry *entry,
     mWaitingForData = false;
     if (entry) {
         rv = WriteCacheEntryDescription(entry);
-    } else if (!CacheObserver::UseNewCache() &&
-               !mLoadInfo->IsPrivate() &&
-               mStorageName.EqualsLiteral("memory")) {
-        // If we were not able to find the entry in the memory storage
-        // try again in the disk storage.
-        // This is a workaround for cache v1: when an originally disk
-        // cache entry is recreated as memory-only, it's clientID doesn't
-        // change and we cannot find it in "HTTP-memory-only" session.
-        // "Disk" cache storage looks at "HTTP".
-        mStorageName = NS_LITERAL_CSTRING("disk");
-        rv = OpenCacheEntry();
-        if (NS_SUCCEEDED(rv)) {
-            return NS_OK;
-        }
     } else {
         rv = WriteCacheEntryUnavailable();
     }
@@ -380,7 +359,8 @@ nsAboutCacheEntry::Channel::WriteCacheEntryDescription(nsICacheEntry *entry)
         uri->SchemeIs("javascript", &isJS);
         uri->SchemeIs("data", &isData);
     }
-    char* escapedStr = nsEscapeHTML(str.get());
+    nsAutoCString escapedStr;
+    nsAppendEscapedHTML(str, escapedStr);
     if (NS_SUCCEEDED(rv) && !(isJS || isData)) {
         buffer.AppendLiteral("<a href=\"");
         buffer.Append(escapedStr);
@@ -391,7 +371,6 @@ nsAboutCacheEntry::Channel::WriteCacheEntryDescription(nsICacheEntry *entry)
     } else {
         buffer.Append(escapedStr);
     }
-    free(escapedStr);
     buffer.AppendLiteral("</td>\n"
                          "  </tr>\n");
 
@@ -427,7 +406,13 @@ nsAboutCacheEntry::Channel::WriteCacheEntryDescription(nsICacheEntry *entry)
 
     // Expiration Time
     entry->GetExpirationTime(&u);
-    if (u < 0xFFFFFFFF) {
+
+    // Bug - 633747.
+    // When expiration time is 0, we show 1970-01-01 01:00:00 which is confusing.
+    // So we check if time is 0, then we show a message, "Expired Immediately"
+    if (u == 0) {
+        APPEND_ROW("expires", "Expired Immediately");
+    } else if (u < 0xFFFFFFFF) {
         PrintTimeString(timeBuf, sizeof(timeBuf), u);
         APPEND_ROW("expires", timeBuf);
     } else {
@@ -522,9 +507,7 @@ nsAboutCacheEntry::Channel::OnMetaDataElement(char const * key, char const * val
     mBuffer->Append(key);
     mBuffer->AppendLiteral(":</th>\n"
                            "    <td>");
-    char* escapedValue = nsEscapeHTML(value);
-    mBuffer->Append(escapedValue);
-    free(escapedValue);
+    nsAppendEscapedHTML(nsDependentCString(value), *mBuffer);
     mBuffer->AppendLiteral("</td>\n"
                            "  </tr>\n");
 

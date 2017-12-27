@@ -7,7 +7,7 @@ use image::base::{Image, ImageMetadata};
 use ipc_channel::ipc::IpcSender;
 use servo_url::ServoUrl;
 use std::sync::Arc;
-use webrender_traits;
+use webrender_api;
 
 // ======================================================================
 // Aux structs and enums.
@@ -16,16 +16,16 @@ use webrender_traits;
 /// Whether a consumer is in a position to request images or not. This can occur
 /// when animations are being processed by the layout thread while the script
 /// thread is executing in parallel.
-#[derive(Copy, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, PartialEq, Serialize)]
 pub enum CanRequestImages {
     No,
     Yes,
 }
 
 /// Indicating either entire image or just metadata availability
-#[derive(Clone, Deserialize, Serialize, HeapSizeOf)]
+#[derive(Clone, Deserialize, MallocSizeOf, Serialize)]
 pub enum ImageOrMetadataAvailable {
-    ImageAvailable(Arc<Image>),
+    ImageAvailable(#[ignore_malloc_size_of = "Arc"] Arc<Image>, ServoUrl),
     MetadataAvailable(ImageMetadata),
 }
 
@@ -60,20 +60,20 @@ impl ImageResponder {
 }
 
 /// The returned image.
-#[derive(Clone, Deserialize, Serialize, HeapSizeOf)]
+#[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
 pub enum ImageResponse {
     /// The requested image was loaded.
-    Loaded(Arc<Image>),
+    Loaded(#[ignore_malloc_size_of = "Arc"] Arc<Image>, ServoUrl),
     /// The request image metadata was loaded.
     MetadataLoaded(ImageMetadata),
     /// The requested image failed to load, so a placeholder was loaded instead.
-    PlaceholderLoaded(Arc<Image>),
+    PlaceholderLoaded(#[ignore_malloc_size_of = "Arc"] Arc<Image>, ServoUrl),
     /// Neither the requested image nor the placeholder could be loaded.
     None,
 }
 
 /// The current state of an image in the cache.
-#[derive(PartialEq, Copy, Clone, Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, PartialEq, Serialize)]
 pub enum ImageState {
     Pending(PendingImageId),
     LoadError,
@@ -81,16 +81,16 @@ pub enum ImageState {
 }
 
 /// The unique id for an image that has previously been requested.
-#[derive(Copy, Clone, PartialEq, Eq, Deserialize, Serialize, HeapSizeOf, Hash, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize)]
 pub struct PendingImageId(pub u64);
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct PendingImageResponse {
     pub response: ImageResponse,
     pub id: PendingImageId,
 }
 
-#[derive(Copy, Clone, PartialEq, Hash, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum UsePlaceholder {
     No,
     Yes,
@@ -101,7 +101,7 @@ pub enum UsePlaceholder {
 // ======================================================================
 
 pub trait ImageCache: Sync + Send {
-    fn new(webrender_api: webrender_traits::RenderApi) -> Self where Self: Sized;
+    fn new(webrender_api: webrender_api::RenderApi) -> Self where Self: Sized;
 
     /// Return any available metadata or image for the given URL,
     /// or an indication that the image is not yet available if it is in progress,
@@ -118,4 +118,7 @@ pub trait ImageCache: Sync + Send {
 
     /// Inform the image cache about a response for a pending request.
     fn notify_pending_response(&self, id: PendingImageId, action: FetchResponseMsg);
+
+    /// Ensure an image has a webrender key.
+    fn set_webrender_image_key(&self, image: &mut Image);
 }

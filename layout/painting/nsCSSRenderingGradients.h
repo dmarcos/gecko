@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,7 +16,7 @@
 namespace mozilla {
 
 namespace layers {
-class WebRenderDisplayItemLayer;
+class StackingContextHelper;
 } // namespace layers
 
 namespace wr {
@@ -64,8 +65,8 @@ public:
    * Collect the gradient parameters
    */
   void BuildWebRenderParameters(float aOpacity,
-                                WrGradientExtendMode& aMode,
-                                nsTArray<WrGradientStop>& aStops,
+                                wr::ExtendMode& aMode,
+                                nsTArray<wr::GradientStop>& aStops,
                                 LayoutDevicePoint& aLineStart,
                                 LayoutDevicePoint& aLineEnd,
                                 LayoutDeviceSize& aGradientRadius);
@@ -80,11 +81,12 @@ public:
    * aSrc - the area of the gradient that will fill aDest
    */
   void BuildWebRenderDisplayItems(wr::DisplayListBuilder& aBuilder,
-                                  layers::WebRenderDisplayItemLayer* aLayer,
+                                  const layers::StackingContextHelper& aSc,
                                   const nsRect& aDest,
                                   const nsRect& aFill,
                                   const nsSize& aRepeatSize,
                                   const mozilla::CSSIntRect& aSrc,
+                                  bool aIsBackfaceVisible,
                                   float aOpacity = 1.0);
 
 private:

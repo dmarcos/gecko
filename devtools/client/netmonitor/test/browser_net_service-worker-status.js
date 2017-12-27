@@ -16,14 +16,14 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(TEST_URL, true);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire, connector } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   const REQUEST_DATA = [
     {
@@ -52,21 +52,35 @@ add_task(function* () {
   });
   yield wait;
 
+  // Fetch stack-trace data from the backend and wait till
+  // all packets are received.
+  let requests = getSortedRequests(store.getState());
+  yield Promise.all(requests.map(requestItem =>
+    connector.requestData(requestItem.id, "stackTrace")));
+
+  let requestItems = document.querySelectorAll(".request-list-item");
+  for (let requestItem of requestItems) {
+    requestItem.scrollIntoView();
+    let requestsListStatus = requestItem.querySelector(".requests-list-status");
+    EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+    yield waitUntil(() => requestsListStatus.title);
+  }
+
   let index = 0;
   for (let request of REQUEST_DATA) {
-    let item = getSortedRequests(gStore.getState()).get(index);
+    let item = getSortedRequests(store.getState()).get(index);
 
     info(`Verifying request #${index}`);
     yield verifyRequestItemTarget(
       document,
-      getDisplayedRequests(gStore.getState()),
+      getDisplayedRequests(store.getState()),
       item,
       request.method,
       request.uri,
       request.details
     );
 
-    let { stacktrace } = item.cause;
+    let { stacktrace } = item;
     let stackLen = stacktrace ? stacktrace.length : 0;
 
     ok(stacktrace, `Request #${index} has a stacktrace`);

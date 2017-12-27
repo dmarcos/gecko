@@ -8,7 +8,9 @@ include protocol PFileDescriptorSet;
 include protocol PBrowser;
 
 using mozilla::a11y::IAccessibleHolder from "mozilla/a11y/IPCTypes.h";
+using mozilla::a11y::IDispatchHolder from "mozilla/a11y/IPCTypes.h";
 using mozilla::WindowsHandle from "ipc/IPCMessageUtils.h";
+using mozilla::LayoutDeviceIntRect from "Units.h";
 
 namespace mozilla {
 namespace a11y {
@@ -27,6 +29,7 @@ struct ShowEventData
   uint64_t ID;
   uint32_t Idx;
   AccessibleData[] NewTree;
+  bool EventSuppressed;
 };
 
 struct Attribute
@@ -50,13 +53,15 @@ parent:
   async ShowEvent(ShowEventData data, bool aFromUser);
   async HideEvent(uint64_t aRootID, bool aFromUser);
   async StateChangeEvent(uint64_t aID, uint64_t aState, bool aEnabled);
-  async CaretMoveEvent(uint64_t aID, int32_t aOffset);
+  async CaretMoveEvent(uint64_t aID, LayoutDeviceIntRect aCaretRect,
+                       int32_t aOffset);
   async TextChangeEvent(uint64_t aID, nsString aStr, int32_t aStart, uint32_t aLen,
                         bool aIsInsert, bool aFromUser);
   sync SyncTextChangeEvent(uint64_t aID, nsString aStr, int32_t aStart,
                            uint32_t aLen, bool aIsInsert, bool aFromUser);
   async SelectionEvent(uint64_t aID, uint64_t aWidgetID, uint32_t aType);
   async RoleChangedEvent(uint32_t aRole);
+  async FocusEvent(uint64_t aID, LayoutDeviceIntRect aCaretRect);
 
   /*
    * Tell the parent document to bind the existing document as a new child
@@ -68,9 +73,23 @@ parent:
     returns (IAccessibleHolder aPluginCOMProxy);
 
 child:
-  async ParentCOMProxy(IAccessibleHolder aParentCOMProxy);
+  /**
+   * We use IDispatchHolder instead of IAccessibleHolder for the following two
+   * methods because of sandboxing. IAccessible::get_accParent returns the parent
+   * as an IDispatch. COM is not smart enough to understand that IAccessible is
+   * derived from IDispatch, so during marshaling it attempts to QueryInterface
+   * on the parent's proxy for IDispatch. This will fail with E_ACCESSDENIED
+   * thanks to the sandbox. We can avoid this entirely by just giving content
+   * the correct interface to begin with: IDispatch.
+   */
+  async ParentCOMProxy(IDispatchHolder aParentCOMProxy);
   async EmulatedWindow(WindowsHandle aEmulatedWindowHandle,
-                       IAccessibleHolder aEmulatedWindowCOMProxy);
+                       IDispatchHolder aEmulatedWindowCOMProxy);
+  /*
+   * Called as a result of focus shifting from chrome to content
+   * elements through keyboard navigation.
+   */
+  async RestoreFocus();
 
   async __delete__();
 };

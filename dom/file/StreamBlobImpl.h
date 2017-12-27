@@ -34,7 +34,7 @@ public:
          int64_t aLastModifiedDate,
          uint64_t aLength);
 
-  virtual void GetInternalStream(nsIInputStream** aStream,
+  virtual void CreateInputStream(nsIInputStream** aStream,
                                  ErrorResult& aRv) override;
 
   virtual already_AddRefed<BlobImpl>
@@ -45,6 +45,39 @@ public:
   {
     return true;
   }
+
+  int64_t GetFileId() override
+  {
+    return mFileId;
+  }
+
+  void SetFileId(int64_t aFileId)
+  {
+    mFileId = aFileId;
+  }
+
+  void SetFullPath(const nsAString& aFullPath)
+  {
+    mFullPath = aFullPath;
+  }
+
+  void GetMozFullPathInternal(nsAString& aFullPath,
+                              ErrorResult& aRv) const override
+  {
+    aFullPath = mFullPath;
+  }
+
+  void SetIsDirectory(bool aIsDirectory)
+  {
+    mIsDirectory = aIsDirectory;
+  }
+
+  bool IsDirectory() const override
+  {
+    return mIsDirectory;
+  }
+
+  size_t GetAllocationSize() const override;
 
 private:
   StreamBlobImpl(nsIInputStream* aInputStream,
@@ -57,16 +90,15 @@ private:
                  int64_t aLastModifiedDate,
                  uint64_t aLength);
 
-  StreamBlobImpl(StreamBlobImpl* aOther,
-                 const nsAString& aContentType,
-                 uint64_t aStart,
-                 uint64_t aLength);
-
   ~StreamBlobImpl();
 
   void MaybeRegisterMemoryReporter();
 
   nsCOMPtr<nsIInputStream> mInputStream;
+
+  nsString mFullPath;
+  bool mIsDirectory;
+  int64_t mFileId;
 };
 
 } // namespace dom

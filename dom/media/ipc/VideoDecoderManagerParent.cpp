@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "VideoDecoderManagerParent.h"
 #include "VideoDecoderParent.h"
+#include "VideoUtils.h"
 #include "base/thread.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Services.h"
@@ -15,7 +16,6 @@
 #include "nsThreadUtils.h"
 #include "ImageContainer.h"
 #include "mozilla/layers/VideoBridgeChild.h"
-#include "mozilla/SharedThreadPool.h"
 #include "mozilla/layers/ImageDataSerializer.h"
 #include "mozilla/SyncRunnable.h"
 
@@ -24,9 +24,14 @@
 #endif
 
 namespace mozilla {
+
+#ifdef XP_WIN
+extern const nsCString GetFoundD3D11BlacklistedDLL();
+extern const nsCString GetFoundD3D9BlacklistedDLL();
+#endif // XP_WIN
+
 namespace dom {
 
-using base::Thread;
 using namespace ipc;
 using namespace layers;
 using namespace gfx;
@@ -34,19 +39,42 @@ using namespace gfx;
 SurfaceDescriptorGPUVideo
 VideoDecoderManagerParent::StoreImage(Image* aImage, TextureClient* aTexture)
 {
-  mImageMap[aTexture->GetSerial()] = aImage;
-  mTextureMap[aTexture->GetSerial()] = aTexture;
-  return SurfaceDescriptorGPUVideo(aTexture->GetSerial());
+  SurfaceDescriptorGPUVideo ret;
+  aTexture->GPUVideoDesc(&ret);
+
+  mImageMap[ret.handle()] = aImage;
+  mTextureMap[ret.handle()] = aTexture;
+  return Move(ret);
 }
 
 StaticRefPtr<nsIThread> sVideoDecoderManagerThread;
 StaticRefPtr<TaskQueue> sManagerTaskQueue;
 
+class VideoDecoderManagerThreadHolder
+{
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(VideoDecoderManagerThreadHolder)
+
+public:
+  VideoDecoderManagerThreadHolder() { }
+
+private:
+  ~VideoDecoderManagerThreadHolder()
+  {
+    NS_DispatchToMainThread(NS_NewRunnableFunction(
+      "dom::VideoDecoderManagerThreadHolder::~VideoDecoderManagerThreadHolder",
+      []() -> void {
+        sVideoDecoderManagerThread->Shutdown();
+        sVideoDecoderManagerThread = nullptr;
+      }));
+  }
+};
+StaticRefPtr<VideoDecoderManagerThreadHolder> sVideoDecoderManagerThreadHolder;
+
 class ManagerThreadShutdownObserver : public nsIObserver
 {
   virtual ~ManagerThreadShutdownObserver() = default;
 public:
-  ManagerThreadShutdownObserver() {}
+  ManagerThreadShutdownObserver() { }
 
   NS_DECL_ISUPPORTS
 
@@ -81,17 +109,21 @@ VideoDecoderManagerParent::StartupThreads()
     return;
   }
   sVideoDecoderManagerThread = managerThread;
+  sVideoDecoderManagerThreadHolder = new VideoDecoderManagerThreadHolder();
 #if XP_WIN
-  sVideoDecoderManagerThread->Dispatch(NS_NewRunnableFunction([]() {
-    HRESULT hr = CoInitializeEx(0, COINIT_MULTITHREADED);
+  sVideoDecoderManagerThread->Dispatch(NS_NewRunnableFunction("VideoDecoderManagerParent::StartupThreads",
+  []() {
+    DebugOnly<HRESULT> hr = CoInitializeEx(0, COINIT_MULTITHREADED);
     MOZ_ASSERT(hr == S_OK);
   }), NS_DISPATCH_NORMAL);
 #endif
-  sVideoDecoderManagerThread->Dispatch(NS_NewRunnableFunction([]() {
-    layers::VideoBridgeChild::Startup();
-  }), NS_DISPATCH_NORMAL);
+  sVideoDecoderManagerThread->Dispatch(
+    NS_NewRunnableFunction("dom::VideoDecoderManagerParent::StartupThreads",
+                           []() { layers::VideoBridgeChild::Startup(); }),
+    NS_DISPATCH_NORMAL);
 
-  sManagerTaskQueue = new TaskQueue(managerThread.forget());
+  sManagerTaskQueue = new TaskQueue(
+    managerThread.forget(), "VideoDecoderManagerParent::sManagerTaskQueue");
 
   auto* obs = new ManagerThreadShutdownObserver();
   observerService->AddObserver(obs, NS_XPCOM_SHUTDOWN_OBSERVER_ID, false);
@@ -104,17 +136,19 @@ VideoDecoderManagerParent::ShutdownThreads()
   sManagerTaskQueue->AwaitShutdownAndIdle();
   sManagerTaskQueue = nullptr;
 
-  sVideoDecoderManagerThread->Shutdown();
-  sVideoDecoderManagerThread = nullptr;
+  sVideoDecoderManagerThreadHolder = nullptr;
+  while (sVideoDecoderManagerThread) {
+    NS_ProcessNextEvent(nullptr, true);
+  }
 }
 
 void
 VideoDecoderManagerParent::ShutdownVideoBridge()
 {
   if (sVideoDecoderManagerThread) {
-    RefPtr<Runnable> task = NS_NewRunnableFunction([]() {
-      VideoBridgeChild::Shutdown();
-    });
+    RefPtr<Runnable> task = NS_NewRunnableFunction(
+      "dom::VideoDecoderManagerParent::ShutdownVideoBridge",
+      []() { VideoBridgeChild::Shutdown(); });
     SyncRunnable::DispatchToThread(sVideoDecoderManagerThread, task);
   }
 }
@@ -136,15 +170,21 @@ VideoDecoderManagerParent::CreateForContent(Endpoint<PVideoDecoderManagerParent>
     return false;
   }
 
-  RefPtr<VideoDecoderManagerParent> parent = new VideoDecoderManagerParent();
+  RefPtr<VideoDecoderManagerParent> parent =
+    new VideoDecoderManagerParent(sVideoDecoderManagerThreadHolder);
 
-  RefPtr<Runnable> task = NewRunnableMethod<Endpoint<PVideoDecoderManagerParent>&&>(
-    parent, &VideoDecoderManagerParent::Open, Move(aEndpoint));
+  RefPtr<Runnable> task =
+    NewRunnableMethod<Endpoint<PVideoDecoderManagerParent>&&>(
+      "dom::VideoDecoderManagerParent::Open",
+      parent,
+      &VideoDecoderManagerParent::Open,
+      Move(aEndpoint));
   sVideoDecoderManagerThread->Dispatch(task.forget(), NS_DISPATCH_NORMAL);
   return true;
 }
 
-VideoDecoderManagerParent::VideoDecoderManagerParent()
+VideoDecoderManagerParent::VideoDecoderManagerParent(VideoDecoderManagerThreadHolder* aHolder)
+ : mThreadHolder(aHolder)
 {
   MOZ_COUNT_CTOR(VideoDecoderManagerParent);
 }
@@ -154,14 +194,35 @@ VideoDecoderManagerParent::~VideoDecoderManagerParent()
   MOZ_COUNT_DTOR(VideoDecoderManagerParent);
 }
 
+void
+VideoDecoderManagerParent::ActorDestroy(mozilla::ipc::IProtocol::ActorDestroyReason)
+{
+  mThreadHolder = nullptr;
+}
+
 PVideoDecoderParent*
 VideoDecoderManagerParent::AllocPVideoDecoderParent(const VideoInfo& aVideoInfo,
+                                                    const float& aFramerate,
                                                     const layers::TextureFactoryIdentifier& aIdentifier,
-                                                    bool* aSuccess)
+                                                    bool* aSuccess,
+                                                    nsCString* aBlacklistedD3D11Driver,
+                                                    nsCString* aBlacklistedD3D9Driver,
+                                                    nsCString* aErrorDescription)
 {
-  return new VideoDecoderParent(this, aVideoInfo, aIdentifier, sManagerTaskQueue,
-                                new TaskQueue(SharedThreadPool::Get(NS_LITERAL_CSTRING("VideoDecoderParent"), 4)),
-                                aSuccess);
+  RefPtr<TaskQueue> decodeTaskQueue = new TaskQueue(
+    GetMediaThreadPool(MediaThreadType::PLATFORM_DECODER),
+    "VideoDecoderParent::mDecodeTaskQueue");
+
+  auto* parent = new VideoDecoderParent(
+    this, aVideoInfo, aFramerate, aIdentifier,
+    sManagerTaskQueue, decodeTaskQueue, aSuccess, aErrorDescription);
+
+#ifdef XP_WIN
+  *aBlacklistedD3D11Driver = GetFoundD3D11BlacklistedDLL();
+  *aBlacklistedD3D9Driver = GetFoundD3D9BlacklistedDLL();
+#endif // XP_WIN
+
+  return parent;
 }
 
 bool

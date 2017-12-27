@@ -5,10 +5,10 @@
 
 const {utils: Cu} = Components;
 
-const {redux} = Cu.import("resource://activity-stream/vendor/Redux.jsm", {});
-const {actionTypes: at} = Cu.import("resource://activity-stream/common/Actions.jsm", {});
-const {reducers} = Cu.import("resource://activity-stream/common/Reducers.jsm", {});
 const {ActivityStreamMessageChannel} = Cu.import("resource://activity-stream/lib/ActivityStreamMessageChannel.jsm", {});
+const {Prefs} = Cu.import("resource://activity-stream/lib/ActivityStreamPrefs.jsm", {});
+const {reducers} = Cu.import("resource://activity-stream/common/Reducers.jsm", {});
+const {redux} = Cu.import("resource://activity-stream/vendor/Redux.jsm", {});
 
 /**
  * Store - This has a similar structure to a redux store, but includes some extra
@@ -18,7 +18,6 @@ const {ActivityStreamMessageChannel} = Cu.import("resource://activity-stream/lib
  *         can listen for any action that is dispatched through the store.
  */
 this.Store = class Store {
-
   /**
    * constructor - The redux store and message manager are created here,
    *               but no listeners are added until "init" is called.
@@ -27,12 +26,11 @@ this.Store = class Store {
     this._middleware = this._middleware.bind(this);
     // Bind each redux method so we can call it directly from the Store. E.g.,
     // store.dispatch() will call store._store.dispatch();
-    ["dispatch", "getState", "subscribe"].forEach(method => {
-      this[method] = function(...args) {
-        return this._store[method](...args);
-      }.bind(this);
-    });
-    this.feeds = new Set();
+    for (const method of ["dispatch", "getState", "subscribe"]) {
+      this[method] = (...args) => this._store[method](...args);
+    }
+    this.feeds = new Map();
+    this._prefs = new Prefs();
     this._messageChannel = new ActivityStreamMessageChannel({dispatch: this.dispatch});
     this._store = redux.createStore(
       redux.combineReducers(reducers),
@@ -45,39 +43,118 @@ this.Store = class Store {
    *               it calls each feed's .onAction method, if one
    *               is defined.
    */
-  _middleware(store) {
+  _middleware() {
     return next => action => {
       next(action);
-      this.feeds.forEach(s => s.onAction && s.onAction(action));
+      for (const store of this.feeds.values()) {
+        if (store.onAction) {
+          store.onAction(action);
+        }
+      }
     };
   }
 
   /**
-   * init - Initializes the ActivityStreamMessageChannel channel, and adds feeds.
-   *        After initialization has finished, an INIT action is dispatched.
+   * initFeed - Initializes a feed by calling its constructor function
    *
-   * @param  {array} feeds An array of objects with an optional .onAction method
+   * @param  {string} feedName The name of a feed, as defined in the object
+   *                           passed to Store.init
+   * @param {Action} initAction An optional action to initialize the feed
    */
-  init(feeds) {
-    if (feeds) {
-      feeds.forEach(subscriber => {
-        subscriber.store = this;
-        this.feeds.add(subscriber);
-      });
+  initFeed(feedName, initAction) {
+    const feed = this._feedFactories.get(feedName)();
+    feed.store = this;
+    this.feeds.set(feedName, feed);
+    if (initAction && feed.onAction) {
+      feed.onAction(initAction);
     }
-    this._messageChannel.createChannel();
-    this.dispatch({type: at.INIT});
   }
 
   /**
-   * uninit - Clears all feeds, dispatches an UNINIT action, and
-   *          destroys the message manager channel.
+   * uninitFeed - Removes a feed and calls its uninit function if defined
+   *
+   * @param  {string} feedName The name of a feed, as defined in the object
+   *                           passed to Store.init
+   * @param {Action} uninitAction An optional action to uninitialize the feed
+   */
+  uninitFeed(feedName, uninitAction) {
+    const feed = this.feeds.get(feedName);
+    if (!feed) {
+      return;
+    }
+    if (uninitAction && feed.onAction) {
+      feed.onAction(uninitAction);
+    }
+    this.feeds.delete(feedName);
+  }
+
+  /**
+   * onPrefChanged - Listener for handling feed changes.
+   */
+  onPrefChanged(name, value) {
+    if (this._feedFactories.has(name)) {
+      if (value) {
+        this.initFeed(name, this._initAction);
+      } else {
+        this.uninitFeed(name, this._uninitAction);
+      }
+    }
+  }
+
+  /**
+   * init - Initializes the ActivityStreamMessageChannel channel, and adds feeds.
+   *
+   * Note that it intentionally initializes the TelemetryFeed first so that the
+   * addon is able to report the init errors from other feeds.
+   *
+   * @param  {Map} feedFactories A Map of feeds with the name of the pref for
+   *                                the feed as the key and a function that
+   *                                constructs an instance of the feed.
+   * @param {Action} initAction An optional action that will be dispatched
+   *                            to feeds when they're created.
+   * @param {Action} uninitAction An optional action for when feeds uninit.
+   */
+  init(feedFactories, initAction, uninitAction) {
+    this._feedFactories = feedFactories;
+    this._initAction = initAction;
+    this._uninitAction = uninitAction;
+
+    const telemetryKey = "feeds.telemetry";
+    if (feedFactories.has(telemetryKey) && this._prefs.get(telemetryKey)) {
+      this.initFeed(telemetryKey);
+    }
+
+    for (const pref of feedFactories.keys()) {
+      if (pref !== telemetryKey && this._prefs.get(pref)) {
+        this.initFeed(pref);
+      }
+    }
+
+    this._prefs.observeBranch(this);
+    this._messageChannel.createChannel();
+
+    // Dispatch an initial action after all enabled feeds are ready
+    if (initAction) {
+      this.dispatch(initAction);
+    }
+
+    // Dispatch NEW_TAB_INIT/NEW_TAB_LOAD events after INIT event.
+    this._messageChannel.simulateMessagesForExistingTabs();
+  }
+
+  /**
+   * uninit -  Uninitalizes each feed, clears them, and destroys the message
+   *           manager channel.
    *
    * @return {type}  description
    */
   uninit() {
+    if (this._uninitAction) {
+      this.dispatch(this._uninitAction);
+    }
+    this._prefs.ignoreBranch(this);
     this.feeds.clear();
-    this.dispatch({type: at.UNINIT});
+    this._feedFactories = null;
     this._messageChannel.destroyChannel();
   }
 };

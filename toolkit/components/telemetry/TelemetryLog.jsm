@@ -6,16 +6,23 @@ this.EXPORTED_SYMBOLS = ["TelemetryLog"];
 
 const Cc = Components.classes;
 const Ci = Components.interfaces;
+const Cu = Components.utils;
 
-const Telemetry = Cc["@mozilla.org/base/telemetry;1"].getService(Ci.nsITelemetry);
+Cu.import("resource://gre/modules/Services.jsm");
+
+const LOG_ENTRY_MAX_COUNT = 1000;
+
 var gLogEntries = [];
 
 this.TelemetryLog = Object.freeze({
   log(id, data) {
+    if (gLogEntries.length >= LOG_ENTRY_MAX_COUNT) {
+      return;
+    }
     id = String(id);
     var ts;
     try {
-      ts = Math.floor(Telemetry.msSinceProcessStart());
+      ts = Math.floor(Services.telemetry.msSinceProcessStart());
     } catch (e) {
       // If timestamp is screwed up, we just give up instead of making up
       // data.

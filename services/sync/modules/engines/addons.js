@@ -38,6 +38,9 @@
 
 var {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://services-sync/addonutils.js");
 Cu.import("resource://services-sync/addonsreconciler.js");
 Cu.import("resource://services-sync/engines.js");
@@ -47,8 +50,6 @@ Cu.import("resource://services-sync/constants.js");
 Cu.import("resource://services-sync/collection_validator.js");
 Cu.import("resource://services-common/async.js");
 
-Cu.import("resource://gre/modules/Preferences.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
                                   "resource://gre/modules/AddonManager.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "AddonRepository",
@@ -115,7 +116,7 @@ this.AddonsEngine = function AddonsEngine(service) {
   SyncEngine.call(this, "Addons", service);
 
   this._reconciler = new AddonsReconciler();
-}
+};
 AddonsEngine.prototype = {
   __proto__:              SyncEngine.prototype,
   _storeObj:              AddonsStore,
@@ -127,10 +128,15 @@ AddonsEngine.prototype = {
 
   _reconciler:            null,
 
+  async initialize() {
+    await SyncEngine.prototype.initialize.call(this);
+    await this._reconciler.ensureStateLoaded();
+  },
+
   /**
    * Override parent method to find add-ons by their public ID, not Sync GUID.
    */
-  _findDupe: function _findDupe(item) {
+  async _findDupe(item) {
     let id = item.addonID;
 
     // The reconciler should have been updated at the top of the sync, so we
@@ -152,7 +158,7 @@ AddonsEngine.prototype = {
    * Override getChangedIDs to pull in tracker changes plus changes from the
    * reconciler log.
    */
-  getChangedIDs: function getChangedIDs() {
+  async getChangedIDs() {
     let changes = {};
     for (let [id, modified] of Object.entries(this._tracker.changedIDs)) {
       changes[id] = modified;
@@ -200,13 +206,12 @@ AddonsEngine.prototype = {
    * are complicated and we force a full refresh, just in case the listeners
    * missed something.
    */
-  _syncStartup: function _syncStartup() {
+  async _syncStartup() {
     // We refresh state before calling parent because syncStartup in the parent
     // looks for changed IDs, which is dependent on add-on state being up to
     // date.
-    this._refreshReconcilerState();
-
-    SyncEngine.prototype._syncStartup.call(this);
+    await this._refreshReconcilerState();
+    return SyncEngine.prototype._syncStartup.call(this);
   },
 
   /**
@@ -217,24 +222,21 @@ AddonsEngine.prototype = {
    * changes (thousands) for it to slow things down significantly. This is
    * highly unlikely to occur. Still, we exercise defense just in case.
    */
-  _syncCleanup: function _syncCleanup() {
+  async _syncCleanup() {
     let ms = 1000 * this.lastSync - PRUNE_ADDON_CHANGES_THRESHOLD;
     this._reconciler.pruneChangesBeforeDate(new Date(ms));
-
-    SyncEngine.prototype._syncCleanup.call(this);
+    return SyncEngine.prototype._syncCleanup.call(this);
   },
 
   /**
    * Helper function to ensure reconciler is up to date.
    *
-   * This will synchronously load the reconciler's state from the file
+   * This will load the reconciler's state from the file
    * system (if needed) and refresh the state of the reconciler.
    */
-  _refreshReconcilerState: function _refreshReconcilerState() {
+  async _refreshReconcilerState() {
     this._log.debug("Refreshing reconciler state");
-    let cb = Async.makeSpinningCallback();
-    this._reconciler.refreshGlobalState(cb);
-    cb.wait();
+    return this._reconciler.refreshGlobalState();
   },
 
   isAddonSyncable(addon, ignoreRepoCheck) {
@@ -266,7 +268,7 @@ AddonsStore.prototype = {
   /**
    * Override applyIncoming to filter out records we can't handle.
    */
-  applyIncoming: function applyIncoming(record) {
+  async applyIncoming(record) {
     // The fields we look at aren't present when the record is deleted.
     if (!record.deleted) {
       // Ignore records not belonging to our application ID because that is the
@@ -294,14 +296,14 @@ AddonsStore.prototype = {
       return;
     }
 
-    Store.prototype.applyIncoming.call(this, record);
+    await Store.prototype.applyIncoming.call(this, record);
   },
 
 
   /**
    * Provides core Store API to create/install an add-on from a record.
    */
-  create: function create(record) {
+  async create(record) {
     let cb = Async.makeSpinningCallback();
     AddonUtils.installAddons([{
       id:               record.addonID,
@@ -341,9 +343,9 @@ AddonsStore.prototype = {
   /**
    * Provides core Store API to remove/uninstall an add-on from a record.
    */
-  remove: function remove(record) {
+  async remove(record) {
     // If this is called, the payload is empty, so we have to find by GUID.
-    let addon = this.getAddonByGUID(record.id);
+    let addon = await this.getAddonByGUID(record.id);
     if (!addon) {
       // We don't throw because if the add-on could not be found then we assume
       // it has already been uninstalled and there is nothing for this function
@@ -352,16 +354,14 @@ AddonsStore.prototype = {
     }
 
     this._log.info("Uninstalling add-on: " + addon.id);
-    let cb = Async.makeSpinningCallback();
-    AddonUtils.uninstallAddon(addon, cb);
-    cb.wait();
+    await AddonUtils.uninstallAddon(addon);
   },
 
   /**
    * Provides core Store API to update an add-on from a record.
    */
-  update: function update(record) {
-    let addon = this.getAddonByID(record.addonID);
+  async update(record) {
+    let addon = await this.getAddonByID(record.addonID);
 
     // update() is called if !this.itemExists. And, since itemExists consults
     // the reconciler only, we need to take care of some corner cases.
@@ -384,15 +384,13 @@ AddonsStore.prototype = {
       // We continue with processing because there could be state or ID change.
     }
 
-    let cb = Async.makeSpinningCallback();
-    this.updateUserDisabled(addon, !record.enabled, cb);
-    cb.wait();
+    this.updateUserDisabled(addon, !record.enabled);
   },
 
   /**
    * Provide core Store API to determine if a record exists.
    */
-  itemExists: function itemExists(guid) {
+  async itemExists(guid) {
     let addon = this.reconciler.getAddonStateFromSyncGUID(guid);
 
     return !!addon;
@@ -408,7 +406,7 @@ AddonsStore.prototype = {
    *
    * @return AddonRecord instance
    */
-  createRecord: function createRecord(guid, collection) {
+  async createRecord(guid, collection) {
     let record = new AddonRecord(collection, guid);
     record.applicationID = Services.appinfo.ID;
 
@@ -437,18 +435,16 @@ AddonsStore.prototype = {
    *
    * This implements a core API of the store.
    */
-  changeItemID: function changeItemID(oldID, newID) {
+  async changeItemID(oldID, newID) {
     // We always update the GUID in the reconciler because it will be
     // referenced later in the sync process.
     let state = this.reconciler.getAddonStateFromSyncGUID(oldID);
     if (state) {
       state.guid = newID;
-      let cb = Async.makeSpinningCallback();
-      this.reconciler.saveState(null, cb);
-      cb.wait();
+      await this.reconciler.saveState();
     }
 
-    let addon = this.getAddonByGUID(oldID);
+    let addon = await this.getAddonByGUID(oldID);
     if (!addon) {
       this._log.debug("Cannot change item ID (" + oldID + ") in Add-on " +
                       "Manager because old add-on not present: " + oldID);
@@ -463,7 +459,7 @@ AddonsStore.prototype = {
    *
    * This implements a core Store API.
    */
-  getAllIDs: function getAllIDs() {
+  async getAllIDs() {
     let ids = {};
 
     let addons = this.reconciler.addons;
@@ -483,15 +479,16 @@ AddonsStore.prototype = {
    * This uninstalls all syncable addons from the application. In case of
    * error, it logs the error and keeps trying with other add-ons.
    */
-  wipe: function wipe() {
+  async wipe() {
     this._log.info("Processing wipe.");
 
-    this.engine._refreshReconcilerState();
+    await this.engine._refreshReconcilerState();
 
     // We only wipe syncable add-ons. Wipe is a Sync feature not a security
     // feature.
-    for (let guid in this.getAllIDs()) {
-      let addon = this.getAddonByGUID(guid);
+    let ids = await this.getAllIDs();
+    for (let guid in ids) {
+      let addon = await this.getAddonByGUID(guid);
       if (!addon) {
         this._log.debug("Ignoring add-on because it couldn't be obtained: " +
                         guid);
@@ -499,7 +496,7 @@ AddonsStore.prototype = {
       }
 
       this._log.info("Uninstalling add-on as part of wipe: " + addon.id);
-      Utils.catch.call(this, () => addon.uninstall())();
+      await Utils.catch.call(this, () => addon.uninstall())();
     }
   },
 
@@ -508,29 +505,25 @@ AddonsStore.prototype = {
    ***************************************************************************/
 
   /**
-   * Synchronously obtain an add-on from its public ID.
+   * Obtain an add-on from its public ID.
    *
    * @param id
    *        Add-on ID
    * @return Addon or undefined if not found
    */
-  getAddonByID: function getAddonByID(id) {
-    let cb = Async.makeSyncCallback();
-    AddonManager.getAddonByID(id, cb);
-    return Async.waitForSyncCallback(cb);
+  async getAddonByID(id) {
+    return AddonManager.getAddonByID(id);
   },
 
   /**
-   * Synchronously obtain an add-on from its Sync GUID.
+   * Obtain an add-on from its Sync GUID.
    *
    * @param  guid
    *         Add-on Sync GUID
    * @return DBAddonInternal or null
    */
-  getAddonByGUID: function getAddonByGUID(guid) {
-    let cb = Async.makeSyncCallback();
-    AddonManager.getAddonBySyncGUID(guid, cb);
-    return Async.waitForSyncCallback(cb);
+  async getAddonByGUID(guid) {
+    return AddonManager.getAddonBySyncGUID(guid);
   },
 
   /**
@@ -661,22 +654,17 @@ AddonsStore.prototype = {
   /**
    * Update the userDisabled flag on an add-on.
    *
-   * This will enable or disable an add-on and call the supplied callback when
-   * the action is complete. If no action is needed, the callback gets called
-   * immediately.
+   * This will enable or disable an add-on. It has no return value and does
+   * not catch or handle exceptions thrown by the addon manager. If no action
+   * is needed it will return immediately.
    *
    * @param addon
    *        Addon instance to manipulate.
    * @param value
    *        Boolean to which to set userDisabled on the passed Addon.
-   * @param callback
-   *        Function to be called when action is complete. Will receive 2
-   *        arguments, a truthy value that signifies error, and the Addon
-   *        instance passed to this function.
    */
-  updateUserDisabled: function updateUserDisabled(addon, value, callback) {
+  updateUserDisabled(addon, value) {
     if (addon.userDisabled == value) {
-      callback(null, addon);
       return;
     }
 
@@ -684,11 +672,16 @@ AddonsStore.prototype = {
     if (Svc.Prefs.get("addons.ignoreUserEnabledChanges", false)) {
       this._log.info("Ignoring enabled state change due to preference: " +
                      addon.id);
-      callback(null, addon);
       return;
     }
 
-    AddonUtils.updateUserDisabled(addon, value, callback);
+    AddonUtils.updateUserDisabled(addon, value);
+    // updating this flag doesn't send a notification for appDisabled addons,
+    // meaning the reconciler will not update its state and may resync the
+    // addon - so explicitly rectify the state (bug 1366994)
+    if (addon.appDisabled) {
+      this.reconciler.rectifyStateFromAddon(addon);
+    }
   },
 };
 
@@ -728,8 +721,9 @@ AddonsTracker.prototype = {
       return;
     }
 
-    this.addChangedID(addon.guid, date.getTime() / 1000);
-    this.score += SCORE_INCREMENT_XLARGE;
+    if (this.addChangedID(addon.guid, date.getTime() / 1000)) {
+      this.score += SCORE_INCREMENT_XLARGE;
+    }
   },
 
   startTracking() {
@@ -757,20 +751,17 @@ class AddonValidator extends CollectionValidator {
     this.engine = engine;
   }
 
-  getClientItems() {
-    return Promise.all([
-      AddonManager.getAllAddons(),
-      AddonManager.getAddonsWithOperationsByTypes(["extension", "theme"]),
-    ]).then(([installed, addonsWithPendingOperation]) => {
-      // Addons pending install won't be in the first list, but addons pending
-      // uninstall/enable/disable will be in both lists.
-      let all = new Map(installed.map(addon => [addon.id, addon]));
-      for (let addon of addonsWithPendingOperation) {
-        all.set(addon.id, addon);
-      }
-      // Convert to an array since Map.prototype.values returns an iterable
-      return [...all.values()];
-    });
+  async getClientItems() {
+    const installed = await AddonManager.getAllAddons();
+    const addonsWithPendingOperation = await AddonManager.getAddonsWithOperationsByTypes(["extension", "theme"]);
+    // Addons pending install won't be in the first list, but addons pending
+    // uninstall/enable/disable will be in both lists.
+    let all = new Map(installed.map(addon => [addon.id, addon]));
+    for (let addon of addonsWithPendingOperation) {
+      all.set(addon.id, addon);
+    }
+    // Convert to an array since Map.prototype.values returns an iterable
+    return [...all.values()];
   }
 
   normalizeClientItem(item) {
@@ -790,8 +781,8 @@ class AddonValidator extends CollectionValidator {
     };
   }
 
-  normalizeServerItem(item) {
-    let guid = this.engine._findDupe(item);
+  async normalizeServerItem(item) {
+    let guid = await this.engine._findDupe(item);
     if (guid) {
       item.id = guid;
     }

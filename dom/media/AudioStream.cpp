@@ -13,22 +13,28 @@
 #include "mozilla/Monitor.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/Sprintf.h"
+#include "mozilla/Unused.h"
 #include <algorithm>
 #include "mozilla/Telemetry.h"
 #include "CubebUtils.h"
 #include "nsPrintfCString.h"
 #include "gfxPrefs.h"
 #include "AudioConverter.h"
+#if defined(XP_WIN)
+#include "nsXULAppAPI.h"
+#endif
 
 namespace mozilla {
 
 #undef LOG
 #undef LOGW
+#undef LOGE
 
 LazyLogModule gAudioStreamLog("AudioStream");
 // For simple logs
 #define LOG(x, ...) MOZ_LOG(gAudioStreamLog, mozilla::LogLevel::Debug, ("%p " x, this, ##__VA_ARGS__))
 #define LOGW(x, ...) MOZ_LOG(gAudioStreamLog, mozilla::LogLevel::Warning, ("%p " x, this, ##__VA_ARGS__))
+#define LOGE(x, ...) NS_DebugBreak(NS_DEBUG_WARNING, nsPrintfCString("%p " x, this, ##__VA_ARGS__).get(), nullptr, __FILE__, __LINE__)
 
 /**
  * Keep a list of frames sent to the audio engine in each DataCallback along
@@ -119,7 +125,13 @@ AudioStream::AudioStream(DataSource& aSource)
   , mDumpFile(nullptr)
   , mState(INITIALIZED)
   , mDataSource(aSource)
+  , mPrefillQuirk(false)
 {
+#if defined(XP_WIN)
+  if (XRE_IsContentProcess()) {
+    audio::AudioNotificationReceiver::Register(this);
+  }
+#endif
 }
 
 AudioStream::~AudioStream()
@@ -133,6 +145,11 @@ AudioStream::~AudioStream()
   if (mTimeStretcher) {
     soundtouch::destroySoundTouchObj(mTimeStretcher);
   }
+#if defined(XP_WIN)
+  if (XRE_IsContentProcess()) {
+    audio::AudioNotificationReceiver::Unregister(this);
+  }
+#endif
 }
 
 size_t
@@ -263,7 +280,7 @@ OpenDumpFile(uint32_t aChannels, uint32_t aRate)
   SetUint16LE(header + CHANNEL_OFFSET, aChannels);
   SetUint32LE(header + SAMPLE_RATE_OFFSET, aRate);
   SetUint16LE(header + BLOCK_ALIGN_OFFSET, aChannels * 2);
-  fwrite(header, sizeof(header), 1, f);
+  Unused << fwrite(header, sizeof(header), 1, f);
 
   return f;
 }
@@ -271,7 +288,7 @@ OpenDumpFile(uint32_t aChannels, uint32_t aRate)
 template <typename T>
 typename EnableIf<IsSame<T, int16_t>::value, void>::Type
 WriteDumpFileHelper(T* aInput, size_t aSamples, FILE* aFile) {
-  fwrite(aInput, sizeof(T), aSamples, aFile);
+  Unused << fwrite(aInput, sizeof(T), aSamples, aFile);
 }
 
 template <typename T>
@@ -283,7 +300,7 @@ WriteDumpFileHelper(T* aInput, size_t aSamples, FILE* aFile) {
   for (uint32_t i = 0; i < aSamples; ++i) {
     SetUint16LE(output + i*2, int16_t(aInput[i]*32767.0f));
   }
-  fwrite(output, 2, aSamples, aFile);
+  Unused << fwrite(output, 2, aSamples, aFile);
   fflush(aFile);
 }
 
@@ -318,8 +335,7 @@ int AudioStream::InvokeCubeb(Function aFunction, Args&&... aArgs)
 }
 
 nsresult
-AudioStream::Init(uint32_t aNumChannels, uint32_t aChannelMap, uint32_t aRate,
-                  const dom::AudioChannel aAudioChannel)
+AudioStream::Init(uint32_t aNumChannels, uint32_t aChannelMap, uint32_t aRate)
 {
   auto startTime = TimeStamp::Now();
 
@@ -333,27 +349,20 @@ AudioStream::Init(uint32_t aNumChannels, uint32_t aChannelMap, uint32_t aRate,
   params.rate = aRate;
   params.channels = mOutChannels;
   params.layout = CubebUtils::ConvertChannelMapToCubebLayout(aChannelMap);
-#if defined(__ANDROID__)
-#if defined(MOZ_B2G)
-  params.stream_type = CubebUtils::ConvertChannelToCubebType(aAudioChannel);
-#else
-  params.stream_type = CUBEB_STREAM_TYPE_MUSIC;
-#endif
-
-  if (params.stream_type == CUBEB_STREAM_TYPE_MAX) {
-    return NS_ERROR_INVALID_ARG;
-  }
-#endif
-
   params.format = ToCubebFormat<AUDIO_OUTPUT_FORMAT>::value;
+
   mAudioClock.Init(aRate);
 
   cubeb* cubebContext = CubebUtils::GetCubebContext();
   if (!cubebContext) {
-    NS_WARNING("Can't get cubeb context!");
+    LOGE("Can't get cubeb context!");
     CubebUtils::ReportCubebStreamInitFailure(true);
     return NS_ERROR_DOM_MEDIA_CUBEB_INITIALIZATION_ERR;
   }
+
+  // cubeb's winmm backend prefills buffers on init rather than stream start.
+  // See https://github.com/kinetiknz/cubeb/issues/150
+  mPrefillQuirk = !strcmp(cubeb_get_backend_id(cubebContext), "winmm");
 
   return OpenCubeb(cubebContext, params, startTime, CubebUtils::GetFirstStream());
 }
@@ -375,7 +384,7 @@ AudioStream::OpenCubeb(cubeb* aContext, cubeb_stream_params& aParams,
     mCubebStream.reset(stream);
     CubebUtils::ReportCubebBackendUsed();
   } else {
-    NS_WARNING(nsPrintfCString("AudioStream::OpenCubeb() %p failed to init cubeb", this).get());
+    LOGE("OpenCubeb() failed to init cubeb");
     CubebUtils::ReportCubebStreamInitFailure(aIsFirst);
     return NS_ERROR_FAILURE;
   }
@@ -395,7 +404,7 @@ AudioStream::SetVolume(double aVolume)
   MOZ_ASSERT(aVolume >= 0.0 && aVolume <= 1.0, "Invalid volume");
 
   if (cubeb_stream_set_volume(mCubebStream.get(), aVolume * CubebUtils::GetVolumeScale()) != CUBEB_OK) {
-    NS_WARNING("Could not change volume on cubeb stream.");
+    LOGE("Could not change volume on cubeb stream.");
   }
 }
 
@@ -473,6 +482,23 @@ AudioStream::Shutdown()
 
   mState = SHUTDOWN;
 }
+
+#if defined(XP_WIN)
+void
+AudioStream::ResetDefaultDevice()
+{
+  MonitorAutoLock mon(mMonitor);
+  if (mState != STARTED && mState != STOPPED) {
+    return;
+  }
+
+  MOZ_ASSERT(mCubebStream);
+  auto r = InvokeCubeb(cubeb_stream_reset_default_device);
+  if (!(r == CUBEB_OK || r == CUBEB_ERROR_NOT_SUPPORTED)) {
+    mState = ERRORED;
+  }
+}
+#endif
 
 int64_t
 AudioStream::GetPosition()
@@ -580,8 +606,19 @@ AudioStream::GetTimeStretched(AudioBufferWriter& aWriter)
     } else {
       // Write silence if invalid format.
       AutoTArray<AudioDataValue, 1000> buf;
-      buf.SetLength(mOutChannels * c->Frames());
-      memset(buf.Elements(), 0, buf.Length() * sizeof(AudioDataValue));
+      auto size = CheckedUint32(mOutChannels) * c->Frames();
+      if (!size.isValid()) {
+        // The overflow should not happen in normal case.
+        LOGW("Invalid member data: %d channels, %d frames", mOutChannels, c->Frames());
+        return;
+      }
+      buf.SetLength(size.value());
+      size = size * sizeof(AudioDataValue);
+      if (!size.isValid()) {
+        LOGW("The required memory size is too large.");
+        return;
+      }
+      memset(buf.Elements(), 0, size.value());
       mTimeStretcher->putSamples(buf.Elements(), c->Frames());
     }
   }
@@ -601,7 +638,7 @@ AudioStream::DataCallback(void* aBuffer, long aFrames)
   auto writer = AudioBufferWriter(
     reinterpret_cast<AudioDataValue*>(aBuffer), mOutChannels, aFrames);
 
-  if (!strcmp(cubeb_get_backend_id(CubebUtils::GetCubebContext()), "winmm")) {
+  if (mPrefillQuirk) {
     // Don't consume audio data until Start() is called.
     // Expected only with cubeb winmm backend.
     if (mState == INITIALIZED) {
@@ -651,7 +688,7 @@ AudioStream::StateCallback(cubeb_state aState)
     mState = DRAINED;
     mDataSource.Drained();
   } else if (aState == CUBEB_STATE_ERROR) {
-    LOG("StateCallback() state %d cubeb error", mState);
+    LOGE("StateCallback() state %d cubeb error", mState);
     mState = ERRORED;
   }
 }

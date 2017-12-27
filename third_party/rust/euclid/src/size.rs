@@ -9,17 +9,17 @@
 
 use super::UnknownUnit;
 use length::Length;
-use scale_factor::ScaleFactor;
+use scale::TypedScale;
+use vector::{TypedVector2D, vec2};
 use num::*;
 
-use num_traits::NumCast;
+use num_traits::{NumCast, Signed};
 use std::fmt;
 use std::ops::{Add, Div, Mul, Sub};
 use std::marker::PhantomData;
 
 /// A 2d size tagged with a unit.
 define_matrix! {
-    #[derive(RustcDecodable, RustcEncodable)]
     pub struct TypedSize2D<T, U> {
         pub width: T,
         pub height: T,
@@ -45,7 +45,7 @@ impl<T: fmt::Display, U> fmt::Display for TypedSize2D<T, U> {
 
 impl<T, U> TypedSize2D<T, U> {
     /// Constructor taking scalar values.
-    pub fn new(width: T, height: T) -> TypedSize2D<T, U> {
+    pub fn new(width: T, height: T) -> Self {
         TypedSize2D {
             width: width,
             height: height,
@@ -55,8 +55,8 @@ impl<T, U> TypedSize2D<T, U> {
 }
 
 impl<T: Clone, U> TypedSize2D<T, U> {
-    /// Constructor taking scalar stronlgy typed lengths.
-    pub fn from_lengths(width: Length<T, U>, height: Length<T, U>) -> TypedSize2D<T, U> {
+    /// Constructor taking scalar strongly typed lengths.
+    pub fn from_lengths(width: Length<T, U>, height: Length<T, U>) -> Self {
         TypedSize2D::new(width.get(), height.get())
     }
 }
@@ -71,7 +71,7 @@ impl<T: Round, U> TypedSize2D<T, U> {
 }
 
 impl<T: Ceil, U> TypedSize2D<T, U> {
-    /// Rounds each component to the smallest integer equal or greater than the orginal value.
+    /// Rounds each component to the smallest integer equal or greater than the original value.
     ///
     /// This behavior is preserved for negative values (unlike the basic cast).
     pub fn ceil(&self) -> Self {
@@ -80,7 +80,7 @@ impl<T: Ceil, U> TypedSize2D<T, U> {
 }
 
 impl<T: Floor, U> TypedSize2D<T, U> {
-    /// Rounds each component to the biggest integer equal or lower than the orginal value.
+    /// Rounds each component to the biggest integer equal or lower than the original value.
     ///
     /// This behavior is preserved for negative values (unlike the basic cast).
     pub fn floor(&self) -> Self {
@@ -89,25 +89,40 @@ impl<T: Floor, U> TypedSize2D<T, U> {
 }
 
 impl<T: Copy + Add<T, Output=T>, U> Add for TypedSize2D<T, U> {
-    type Output = TypedSize2D<T, U>;
-    fn add(self, other: TypedSize2D<T, U>) -> TypedSize2D<T, U> {
+    type Output = Self;
+    fn add(self, other: Self) -> Self {
         TypedSize2D::new(self.width + other.width, self.height + other.height)
     }
 }
 
 impl<T: Copy + Sub<T, Output=T>, U> Sub for TypedSize2D<T, U> {
-    type Output = TypedSize2D<T, U>;
-    fn sub(self, other: TypedSize2D<T, U>) -> TypedSize2D<T, U> {
+    type Output = Self;
+    fn sub(self, other: Self) -> Self {
         TypedSize2D::new(self.width - other.width, self.height - other.height)
     }
 }
 
-impl<T: Copy + Clone + Mul<T, Output=U>, U> TypedSize2D<T, U> {
-    pub fn area(&self) -> U { self.width * self.height }
+impl<T: Copy + Clone + Mul<T>, U> TypedSize2D<T, U> {
+    pub fn area(&self) -> T::Output { self.width * self.height }
+}
+
+impl<T, U> TypedSize2D<T, U>
+where T: Copy + One + Add<Output=T> + Sub<Output=T> + Mul<Output=T> {
+    /// Linearly interpolate between this size and another size.
+    ///
+    /// `t` is expected to be between zero and one.
+    #[inline]
+    pub fn lerp(&self, other: Self, t: T) -> Self {
+        let one_t = T::one() - t;
+        size2(
+            one_t * self.width + t * other.width,
+            one_t * self.height + t * other.height,
+        )
+    }
 }
 
 impl<T: Zero, U> TypedSize2D<T, U> {
-    pub fn zero() -> TypedSize2D<T, U> {
+    pub fn zero() -> Self {
         TypedSize2D::new(
             Zero::zero(),
             Zero::zero(),
@@ -116,7 +131,7 @@ impl<T: Zero, U> TypedSize2D<T, U> {
 }
 
 impl<T: Zero, U> Zero for TypedSize2D<T, U> {
-    fn zero() -> TypedSize2D<T, U> {
+    fn zero() -> Self {
         TypedSize2D::new(
             Zero::zero(),
             Zero::zero(),
@@ -125,33 +140,33 @@ impl<T: Zero, U> Zero for TypedSize2D<T, U> {
 }
 
 impl<T: Copy + Mul<T, Output=T>, U> Mul<T> for TypedSize2D<T, U> {
-    type Output = TypedSize2D<T, U>;
+    type Output = Self;
     #[inline]
-    fn mul(self, scale: T) -> TypedSize2D<T, U> {
+    fn mul(self, scale: T) -> Self {
         TypedSize2D::new(self.width * scale, self.height * scale)
     }
 }
 
 impl<T: Copy + Div<T, Output=T>, U> Div<T> for TypedSize2D<T, U> {
-    type Output = TypedSize2D<T, U>;
+    type Output = Self;
     #[inline]
-    fn div(self, scale: T) -> TypedSize2D<T, U> {
+    fn div(self, scale: T) -> Self {
         TypedSize2D::new(self.width / scale, self.height / scale)
     }
 }
 
-impl<T: Copy + Mul<T, Output=T>, U1, U2> Mul<ScaleFactor<T, U1, U2>> for TypedSize2D<T, U1> {
+impl<T: Copy + Mul<T, Output=T>, U1, U2> Mul<TypedScale<T, U1, U2>> for TypedSize2D<T, U1> {
     type Output = TypedSize2D<T, U2>;
     #[inline]
-    fn mul(self, scale: ScaleFactor<T, U1, U2>) -> TypedSize2D<T, U2> {
+    fn mul(self, scale: TypedScale<T, U1, U2>) -> TypedSize2D<T, U2> {
         TypedSize2D::new(self.width * scale.get(), self.height * scale.get())
     }
 }
 
-impl<T: Copy + Div<T, Output=T>, U1, U2> Div<ScaleFactor<T, U1, U2>> for TypedSize2D<T, U2> {
+impl<T: Copy + Div<T, Output=T>, U1, U2> Div<TypedScale<T, U1, U2>> for TypedSize2D<T, U2> {
     type Output = TypedSize2D<T, U1>;
     #[inline]
-    fn div(self, scale: ScaleFactor<T, U1, U2>) -> TypedSize2D<T, U1> {
+    fn div(self, scale: TypedScale<T, U1, U2>) -> TypedSize2D<T, U1> {
         TypedSize2D::new(self.width / scale.get(), self.height / scale.get())
     }
 }
@@ -168,13 +183,16 @@ impl<T: Copy, U> TypedSize2D<T, U> {
     #[inline]
     pub fn to_array(&self) -> [T; 2] { [self.width, self.height] }
 
+    #[inline]
+    pub fn to_vector(&self) -> TypedVector2D<T, U> { vec2(self.width, self.height) }
+
     /// Drop the units, preserving only the numeric value.
     pub fn to_untyped(&self) -> Size2D<T> {
         TypedSize2D::new(self.width, self.height)
     }
 
     /// Tag a unitless value with units.
-    pub fn from_untyped(p: &Size2D<T>) -> TypedSize2D<T, U> {
+    pub fn from_untyped(p: &Size2D<T>) -> Self {
         TypedSize2D::new(p.width, p.height)
     }
 }
@@ -183,8 +201,8 @@ impl<T: NumCast + Copy, Unit> TypedSize2D<T, Unit> {
     /// Cast from one numeric representation to another, preserving the units.
     ///
     /// When casting from floating point to integer coordinates, the decimals are truncated
-    /// as one would expect from a simple cast, but this behavior does not always marke sense
-    /// geometrically. Consider using round(), ceil or floor() before casting.
+    /// as one would expect from a simple cast, but this behavior does not always make sense
+    /// geometrically. Consider using `round()`, `ceil()` or `floor()` before casting.
     pub fn cast<NewT: NumCast + Copy>(&self) -> Option<TypedSize2D<NewT, Unit>> {
         match (NumCast::from(self.width), NumCast::from(self.height)) {
             (Some(w), Some(h)) => Some(TypedSize2D::new(w, h)),
@@ -194,40 +212,56 @@ impl<T: NumCast + Copy, Unit> TypedSize2D<T, Unit> {
 
     // Convenience functions for common casts
 
-    /// Cast into an f32 size.
+    /// Cast into an `f32` size.
     pub fn to_f32(&self) -> TypedSize2D<f32, Unit> {
         self.cast().unwrap()
     }
 
-    /// Cast into an usize size, truncating decimals if any.
-    ///
-    /// When casting from floating point sizes, it is worth considering whether
-    /// to round(), ceil() or floor() before the cast in order to obtain the desired
-    /// conversion behavior.
-    pub fn to_uint(&self) -> TypedSize2D<usize, Unit> {
+    /// Cast into an `f64` size.
+    pub fn to_f64(&self) -> TypedSize2D<f64, Unit> {
         self.cast().unwrap()
     }
 
-    /// Cast into an i32 size, truncating decimals if any.
+    /// Cast into an `uint` size, truncating decimals if any.
     ///
     /// When casting from floating point sizes, it is worth considering whether
-    /// to round(), ceil() or floor() before the cast in order to obtain the desired
-    /// conversion behavior.
+    /// to `round()`, `ceil()` or `floor()` before the cast in order to obtain
+    /// the desired conversion behavior.
+    pub fn to_usize(&self) -> TypedSize2D<usize, Unit> {
+        self.cast().unwrap()
+    }
+
+    /// Cast into an `i32` size, truncating decimals if any.
+    ///
+    /// When casting from floating point sizes, it is worth considering whether
+    /// to `round()`, `ceil()` or `floor()` before the cast in order to obtain
+    /// the desired conversion behavior.
     pub fn to_i32(&self) -> TypedSize2D<i32, Unit> {
         self.cast().unwrap()
     }
 
-    /// Cast into an i64 size, truncating decimals if any.
+    /// Cast into an `i64` size, truncating decimals if any.
     ///
     /// When casting from floating point sizes, it is worth considering whether
-    /// to round(), ceil() or floor() before the cast in order to obtain the desired
-    /// conversion behavior.
+    /// to `round()`, `ceil()` or `floor()` before the cast in order to obtain
+    /// the desired conversion behavior.
     pub fn to_i64(&self) -> TypedSize2D<i64, Unit> {
         self.cast().unwrap()
     }
 }
 
-/// Shorthand for TypedSize2D::new(w, h).
+impl<T, U> TypedSize2D<T, U>
+where T: Signed {
+    pub fn abs(&self) -> Self {
+        size2(self.width.abs(), self.height.abs())
+    }
+
+    pub fn is_positive(&self) -> bool {
+        self.width.is_positive() && self.height.is_positive()
+    }
+}
+
+/// Shorthand for `TypedSize2D::new(w, h)`.
 pub fn size2<T, U>(w: T, h: T) -> TypedSize2D<T, U> {
     TypedSize2D::new(w, h)
 }
@@ -272,5 +306,11 @@ mod size2d {
         let p1 = Size2D::new(0.0, 0.0);
         let p2 = Size2D::new(0.0, 0.0);
         assert_eq!(p1 - p2, Size2D::new(0.0, 0.0));
+    }
+
+    #[test]
+    pub fn test_area() {
+        let p = Size2D::new(1.5, 2.0);
+        assert_eq!(p.area(), 3.0);
     }
 }

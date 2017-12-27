@@ -14,10 +14,6 @@
 #include "mozilla/Telemetry.h"
 #include "nsThreadUtils.h"
 
-#if defined(XP_WIN) && defined(MOZ_SANDBOX)
-#include "nsDirectoryServiceDefs.h"
-#endif
-
 using std::vector;
 using std::string;
 
@@ -25,7 +21,6 @@ using mozilla::ipc::BrowserProcessSubThread;
 using mozilla::ipc::GeckoChildProcessHost;
 using mozilla::plugins::LaunchCompleteTask;
 using mozilla::plugins::PluginProcessParent;
-using base::ProcessArchitecture;
 
 #ifdef XP_WIN
 PluginProcessParent::PidSet* PluginProcessParent::sPidSet = nullptr;
@@ -36,7 +31,6 @@ PluginProcessParent::PluginProcessParent(const std::string& aPluginFilePath) :
     , mPluginFilePath(aPluginFilePath)
     , mTaskFactory(this)
     , mMainMsgLoop(MessageLoop::current())
-    , mRunCompleteTaskImmediately(false)
 #ifdef XP_WIN
     , mChildPid(0)
 #endif
@@ -56,82 +50,12 @@ PluginProcessParent::~PluginProcessParent()
 #endif
 }
 
-#if defined(XP_WIN) && defined(MOZ_SANDBOX)
-static void
-AddSandboxAllowedFile(vector<std::wstring>& aAllowedFiles, nsIProperties* aDirSvc,
-                      const char* aDir, const nsAString& aSuffix = EmptyString())
-{
-    nsCOMPtr<nsIFile> userDir;
-    nsresult rv = aDirSvc->Get(aDir, NS_GET_IID(nsIFile), getter_AddRefs(userDir));
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-        return;
-    }
-
-    nsAutoString userDirPath;
-    rv = userDir->GetPath(userDirPath);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-        return;
-    }
-
-    if (!aSuffix.IsEmpty()) {
-        userDirPath.Append(aSuffix);
-    }
-    aAllowedFiles.push_back(std::wstring(userDirPath.get()));
-    return;
-}
-
-static void
-AddSandboxAllowedFiles(int32_t aSandboxLevel,
-                       vector<std::wstring>& aAllowedFilesRead,
-                       vector<std::wstring>& aAllowedFilesReadWrite,
-                       vector<std::wstring>& aAllowedDirectories)
-{
-    if (aSandboxLevel < 2) {
-        return;
-    }
-
-    nsresult rv;
-    nsCOMPtr<nsIProperties> dirSvc =
-        do_GetService(NS_DIRECTORY_SERVICE_CONTRACTID, &rv);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-        return;
-    }
-
-    // Level 2 and above is now using low integrity, so we need to give write
-    // access to the Flash directories.
-    // This should be made Flash specific (Bug 1171396).
-    AddSandboxAllowedFile(aAllowedFilesReadWrite, dirSvc, NS_WIN_APPDATA_DIR,
-                          NS_LITERAL_STRING("\\Macromedia\\Flash Player\\*"));
-    AddSandboxAllowedFile(aAllowedFilesReadWrite, dirSvc, NS_WIN_LOCAL_APPDATA_DIR,
-                          NS_LITERAL_STRING("\\Macromedia\\Flash Player\\*"));
-    AddSandboxAllowedFile(aAllowedFilesReadWrite, dirSvc, NS_WIN_APPDATA_DIR,
-                          NS_LITERAL_STRING("\\Adobe\\Flash Player\\*"));
-
-    // Access also has to be given to create the parent directories as they may
-    // not exist.
-    AddSandboxAllowedFile(aAllowedDirectories, dirSvc, NS_WIN_APPDATA_DIR,
-                          NS_LITERAL_STRING("\\Macromedia"));
-    AddSandboxAllowedFile(aAllowedDirectories, dirSvc, NS_WIN_APPDATA_DIR,
-                          NS_LITERAL_STRING("\\Macromedia\\Flash Player"));
-    AddSandboxAllowedFile(aAllowedDirectories, dirSvc, NS_WIN_LOCAL_APPDATA_DIR,
-                          NS_LITERAL_STRING("\\Macromedia"));
-    AddSandboxAllowedFile(aAllowedDirectories, dirSvc, NS_WIN_LOCAL_APPDATA_DIR,
-                          NS_LITERAL_STRING("\\Macromedia\\Flash Player"));
-    AddSandboxAllowedFile(aAllowedDirectories, dirSvc, NS_WIN_APPDATA_DIR,
-                          NS_LITERAL_STRING("\\Adobe"));
-    AddSandboxAllowedFile(aAllowedDirectories, dirSvc, NS_WIN_APPDATA_DIR,
-                          NS_LITERAL_STRING("\\Adobe\\Flash Player"));
-}
-#endif
-
 bool
 PluginProcessParent::Launch(mozilla::UniquePtr<LaunchCompleteTask> aLaunchCompleteTask,
                             int32_t aSandboxLevel)
 {
 #if defined(XP_WIN) && defined(MOZ_SANDBOX)
     mSandboxLevel = aSandboxLevel;
-    AddSandboxAllowedFiles(mSandboxLevel, mAllowedFilesRead,
-                           mAllowedFilesReadWrite, mAllowedDirectories);
 #else
     if (aSandboxLevel != 0) {
         MOZ_ASSERT(false,
@@ -139,48 +63,12 @@ PluginProcessParent::Launch(mozilla::UniquePtr<LaunchCompleteTask> aLaunchComple
     }
 #endif
 
-    ProcessArchitecture currentArchitecture = base::GetCurrentProcessArchitecture();
-    uint32_t containerArchitectures = GetSupportedArchitecturesForProcessType(GeckoProcessType_Plugin);
-
-    uint32_t pluginLibArchitectures = currentArchitecture;
-#ifdef XP_MACOSX
-    nsresult rv = GetArchitecturesForBinary(mPluginFilePath.c_str(), &pluginLibArchitectures);
-    if (NS_FAILED(rv)) {
-        // If the call failed just assume that we want the current architecture.
-        pluginLibArchitectures = currentArchitecture;
-    }
-#endif
-
-    ProcessArchitecture selectedArchitecture = currentArchitecture;
-    if (!(pluginLibArchitectures & containerArchitectures & currentArchitecture)) {
-        // Prefererence in order: x86_64, i386, PPC. The only particularly important thing
-        // about this order is that we'll prefer 64-bit architectures first.
-        if (base::PROCESS_ARCH_X86_64 & pluginLibArchitectures & containerArchitectures) {
-            selectedArchitecture = base::PROCESS_ARCH_X86_64;
-        }
-        else if (base::PROCESS_ARCH_I386 & pluginLibArchitectures & containerArchitectures) {
-            selectedArchitecture = base::PROCESS_ARCH_I386;
-        }
-        else if (base::PROCESS_ARCH_PPC & pluginLibArchitectures & containerArchitectures) {
-            selectedArchitecture = base::PROCESS_ARCH_PPC;
-        }
-        else if (base::PROCESS_ARCH_ARM & pluginLibArchitectures & containerArchitectures) {
-          selectedArchitecture = base::PROCESS_ARCH_ARM;
-        }
-        else if (base::PROCESS_ARCH_MIPS & pluginLibArchitectures & containerArchitectures) {
-          selectedArchitecture = base::PROCESS_ARCH_MIPS;
-        }
-        else {
-            return false;
-        }
-    }
-
     mLaunchCompleteTask = mozilla::Move(aLaunchCompleteTask);
 
     vector<string> args;
     args.push_back(MungePluginDsoPath(mPluginFilePath));
 
-    bool result = AsyncLaunch(args, selectedArchitecture);
+    bool result = AsyncLaunch(args);
     if (!result) {
         mLaunchCompleteTask = nullptr;
     }
@@ -198,13 +86,10 @@ PluginProcessParent::Delete()
       return;
   }
 
-  ioLoop->PostTask(NewNonOwningRunnableMethod(this, &PluginProcessParent::Delete));
-}
-
-void
-PluginProcessParent::SetCallRunnableImmediately(bool aCallImmediately)
-{
-    mRunCompleteTaskImmediately = aCallImmediately;
+  ioLoop->PostTask(
+    NewNonOwningRunnableMethod("plugins::PluginProcessParent::Delete",
+                               this,
+                               &PluginProcessParent::Delete));
 }
 
 /**
@@ -227,7 +112,7 @@ bool
 PluginProcessParent::WaitUntilConnected(int32_t aTimeoutMs)
 {
     bool result = GeckoChildProcessHost::WaitUntilConnected(aTimeoutMs);
-    if (mRunCompleteTaskImmediately && mLaunchCompleteTask) {
+    if (mLaunchCompleteTask) {
         if (result) {
             mLaunchCompleteTask->SetLaunchSucceeded();
         }
@@ -248,21 +133,12 @@ PluginProcessParent::OnChannelConnected(int32_t peer_pid)
 #endif
 
     GeckoChildProcessHost::OnChannelConnected(peer_pid);
-    if (mLaunchCompleteTask && !mRunCompleteTaskImmediately) {
-        mLaunchCompleteTask->SetLaunchSucceeded();
-        mMainMsgLoop->PostTask(mTaskFactory.NewRunnableMethod(
-                                   &PluginProcessParent::RunLaunchCompleteTask));
-    }
 }
 
 void
 PluginProcessParent::OnChannelError()
 {
     GeckoChildProcessHost::OnChannelError();
-    if (mLaunchCompleteTask && !mRunCompleteTaskImmediately) {
-        mMainMsgLoop->PostTask(mTaskFactory.NewRunnableMethod(
-                                   &PluginProcessParent::RunLaunchCompleteTask));
-    }
 }
 
 bool

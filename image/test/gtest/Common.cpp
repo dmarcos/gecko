@@ -26,6 +26,41 @@ using namespace gfx;
 using std::abs;
 using std::vector;
 
+static bool sImageLibInitialized = false;
+
+AutoInitializeImageLib::AutoInitializeImageLib()
+{
+  if (MOZ_LIKELY(sImageLibInitialized)) {
+    return;
+  }
+
+  EXPECT_TRUE(NS_IsMainThread());
+  sImageLibInitialized = true;
+
+  // Force sRGB to be consistent with reftests.
+  Preferences::SetBool("gfx.color_management.force_srgb", true);
+
+  // Ensure that ImageLib services are initialized.
+  nsCOMPtr<imgITools> imgTools = do_CreateInstance("@mozilla.org/image/tools;1");
+  EXPECT_TRUE(imgTools != nullptr);
+
+  // Ensure gfxPlatform is initialized.
+  gfxPlatform::GetPlatform();
+
+  // Depending on initialization order, it is possible that our pref changes
+  // have not taken effect yet because there are pending gfx-related events on
+  // the main thread.
+  nsCOMPtr<nsIThread> mainThread = do_GetMainThread();
+  EXPECT_TRUE(mainThread != nullptr);
+
+  bool processed;
+  do {
+    processed = false;
+    nsresult rv = mainThread->ProcessNextEvent(false, &processed);
+    EXPECT_TRUE(NS_SUCCEEDED(rv));
+  } while (processed);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // General Helpers
 ///////////////////////////////////////////////////////////////////////////////
@@ -90,7 +125,7 @@ LoadFile(const char* aRelativePath)
   if (!NS_InputStreamIsBuffered(inputStream)) {
     nsCOMPtr<nsIInputStream> bufStream;
     rv = NS_NewBufferedInputStream(getter_AddRefs(bufStream),
-                                   inputStream, 1024);
+                                   inputStream.forget(), 1024);
     ASSERT_TRUE_OR_RETURN(NS_SUCCEEDED(rv), nullptr);
     inputStream = bufStream;
   }
@@ -135,7 +170,7 @@ PalettedRowsAreSolidColor(Decoder* aDecoder,
 {
   RawAccessFrameRef currentFrame = aDecoder->GetCurrentFrameRef();
   IntRect frameRect = currentFrame->GetRect();
-  IntRect solidColorRect(frameRect.x, aStartRow, frameRect.width, aRowCount);
+  IntRect solidColorRect(frameRect.x, aStartRow, frameRect.Width(), aRowCount);
   return PalettedRectIsSolidColor(aDecoder, solidColorRect, aColor);
 }
 
@@ -152,16 +187,15 @@ RectIsSolidColor(SourceSurface* aSurface,
   RefPtr<DataSourceSurface> dataSurface = aSurface->GetDataSurface();
   ASSERT_TRUE_OR_RETURN(dataSurface != nullptr, false);
 
-  ASSERT_EQ_OR_RETURN(dataSurface->Stride(), surfaceSize.width * 4, false);
-
   DataSourceSurface::ScopedMap mapping(dataSurface,
                                        DataSourceSurface::MapType::READ);
   ASSERT_TRUE_OR_RETURN(mapping.IsMapped(), false);
+  ASSERT_EQ_OR_RETURN(mapping.GetStride(), surfaceSize.width * 4, false);
 
-  uint8_t* data = dataSurface->GetData();
+  uint8_t* data = mapping.GetData();
   ASSERT_TRUE_OR_RETURN(data != nullptr, false);
 
-  int32_t rowLength = dataSurface->Stride();
+  int32_t rowLength = mapping.GetStride();
   for (int32_t row = rect.y; row < rect.YMost(); ++row) {
     for (int32_t col = rect.x; col < rect.XMost(); ++col) {
       int32_t i = row * rowLength + col * 4;
@@ -208,7 +242,7 @@ PalettedRectIsSolidColor(Decoder* aDecoder, const IntRect& aRect, uint8_t aColor
 
   // Walk through the image data and make sure that the entire rect has the
   // palette index |aColor|.
-  int32_t rowLength = frameRect.width;
+  int32_t rowLength = frameRect.Width();
   for (int32_t row = rect.y; row < rect.YMost(); ++row) {
     for (int32_t col = rect.x; col < rect.XMost(); ++col) {
       int32_t i = row * rowLength + col;
@@ -233,16 +267,15 @@ RowHasPixels(SourceSurface* aSurface,
   RefPtr<DataSourceSurface> dataSurface = aSurface->GetDataSurface();
   ASSERT_TRUE_OR_RETURN(dataSurface, false);
 
-  ASSERT_EQ_OR_RETURN(dataSurface->Stride(), surfaceSize.width * 4, false);
-
   DataSourceSurface::ScopedMap mapping(dataSurface,
                                        DataSourceSurface::MapType::READ);
   ASSERT_TRUE_OR_RETURN(mapping.IsMapped(), false);
+  ASSERT_EQ_OR_RETURN(mapping.GetStride(), surfaceSize.width * 4, false);
 
-  uint8_t* data = dataSurface->GetData();
+  uint8_t* data = mapping.GetData();
   ASSERT_TRUE_OR_RETURN(data != nullptr, false);
 
-  int32_t rowLength = dataSurface->Stride();
+  int32_t rowLength = mapping.GetStride();
   for (int32_t col = 0; col < surfaceSize.width; ++col) {
     int32_t i = aRow * rowLength + col * 4;
     ASSERT_EQ_OR_RETURN(aPixels[col].mBlue,  data[i + 0], false);
@@ -264,7 +297,7 @@ CreateTrivialDecoder()
 {
   gfxPrefs::GetSingleton();
   DecoderType decoderType = DecoderFactory::GetDecoderType("image/gif");
-  NotNull<RefPtr<SourceBuffer>> sourceBuffer = WrapNotNull(new SourceBuffer());
+  auto sourceBuffer = MakeNotNull<RefPtr<SourceBuffer>>();
   RefPtr<Decoder> decoder =
     DecoderFactory::CreateAnonymousDecoder(decoderType, sourceBuffer, Nothing(),
                                            DefaultSurfaceFlags());
@@ -395,7 +428,7 @@ CheckWritePixels(Decoder* aDecoder,
     return AsVariant(BGRAColor::Green().AsPixel());
   });
   EXPECT_EQ(WriteState::FINISHED, result);
-  EXPECT_EQ(inputWriteRect.width * inputWriteRect.height, count);
+  EXPECT_EQ(inputWriteRect.Width() * inputWriteRect.Height(), count);
 
   AssertCorrectPipelineFinalState(aFilter, inputRect, outputRect);
 
@@ -442,7 +475,7 @@ CheckPalettedWritePixels(Decoder* aDecoder,
     return AsVariant(uint8_t(255));
   });
   EXPECT_EQ(WriteState::FINISHED, result);
-  EXPECT_EQ(inputWriteRect.width * inputWriteRect.height, count);
+  EXPECT_EQ(inputWriteRect.Width() * inputWriteRect.Height(), count);
 
   AssertCorrectPipelineFinalState(aFilter, inputRect, outputRect);
 
@@ -470,7 +503,7 @@ CheckPalettedWritePixels(Decoder* aDecoder,
   uint32_t imageLength;
   currentFrame->GetImageData(&imageData, &imageLength);
   ASSERT_TRUE(imageData != nullptr);
-  ASSERT_EQ(outputWriteRect.width * outputWriteRect.height, int32_t(imageLength));
+  ASSERT_EQ(outputWriteRect.Width() * outputWriteRect.Height(), int32_t(imageLength));
   for (uint32_t i = 0; i < imageLength; ++i) {
     ASSERT_EQ(uint8_t(255), imageData[i]);
   }
@@ -677,6 +710,18 @@ ImageTestCase DownscaledTransparentICOWithANDMaskTestCase()
 ImageTestCase TruncatedSmallGIFTestCase()
 {
   return ImageTestCase("green-1x1-truncated.gif", "image/gif", IntSize(1, 1));
+}
+
+ImageTestCase LargeICOWithBMPTestCase()
+{
+  return ImageTestCase("green-large-bmp.ico", "image/x-icon", IntSize(256, 256),
+                       TEST_CASE_IS_TRANSPARENT);
+}
+
+ImageTestCase LargeICOWithPNGTestCase()
+{
+  return ImageTestCase("green-large-png.ico", "image/x-icon", IntSize(512, 512),
+                       TEST_CASE_IS_TRANSPARENT);
 }
 
 ImageTestCase GreenMultipleSizesICOTestCase()

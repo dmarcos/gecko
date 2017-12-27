@@ -49,6 +49,7 @@ var snapshotFormatters = {
     $("buildid-box").textContent = data.buildID;
     if (data.updateChannel)
       $("updatechannel-box").textContent = data.updateChannel;
+    $("profile-dir-box").textContent = Services.dirsvc.get("ProfD", Ci.nsIFile).path;
 
     let statusText = strings.GetStringFromName("multiProcessStatus.unknown");
 
@@ -71,6 +72,36 @@ var snapshotFormatters = {
 
     $("multiprocess-box").textContent = strings.formatStringFromName("multiProcessWindows",
       [data.numRemoteWindows, data.numTotalWindows, statusText], 3);
+
+    if (data.remoteAutoStart) {
+      $("contentprocesses-box").textContent = data.currentContentProcesses +
+                                              "/" +
+                                              data.maxContentProcesses;
+    } else {
+      $("contentprocesses-row").hidden = true;
+    }
+
+    function getReasonStringName(resultValue, defaultValue) {
+      if (resultValue != defaultValue) {
+        return resultValue ? "enabledByUser" : "disabledByUser";
+      }
+      return resultValue ? "enabledByDefault" : "disabledByDefault";
+    }
+    let styloReason;
+    let styloChromeReason;
+    if (!data.styloBuild) {
+      styloReason = "disabledByBuild";
+      styloChromeReason = "disabledByBuild";
+    } else {
+      styloReason = getReasonStringName(data.styloResult, data.styloDefault);
+      styloChromeReason = getReasonStringName(data.styloChromeResult,
+                                              data.styloChromeDefault);
+    }
+    styloReason = strings.GetStringFromName(styloReason);
+    styloChromeReason = strings.GetStringFromName(styloChromeReason);
+    $("stylo-box").textContent =
+      `content = ${data.styloResult} (${styloReason}), ` +
+      `chrome = ${data.styloChromeResult} (${styloChromeReason})`;
 
     let keyGoogleFound = data.keyGoogleFound ? "found" : "missing";
     $("key-google-box").textContent = strings.GetStringFromName(keyGoogleFound);
@@ -234,7 +265,7 @@ var snapshotFormatters = {
     let apzInfo = [];
     let formatApzInfo = function(info) {
       let out = [];
-      for (let type of ["Wheel", "Touch", "Drag"]) {
+      for (let type of ["Wheel", "Touch", "Drag", "Keyboard", "Autoscroll"]) {
         let key = "Apz" + type + "Input";
 
         if (!(key in info))
@@ -302,22 +333,37 @@ var snapshotFormatters = {
       delete data.info;
     }
 
-    if (AppConstants.NIGHTLY_BUILD || AppConstants.MOZ_DEV_EDITION) {
-      let windowUtils = window.QueryInterface(Ci.nsIInterfaceRequestor)
-                              .getInterface(Ci.nsIDOMWindowUtils);
-      let gpuProcessPid = windowUtils.gpuProcessPid;
+    let windowUtils = window.QueryInterface(Ci.nsIInterfaceRequestor)
+                            .getInterface(Ci.nsIDOMWindowUtils);
+    let gpuProcessPid = windowUtils.gpuProcessPid;
 
-      if (gpuProcessPid != -1) {
-        let gpuProcessKillButton = $.new("button");
+    if (gpuProcessPid != -1) {
+      let gpuProcessKillButton = null;
+      if (AppConstants.NIGHTLY_BUILD || AppConstants.MOZ_DEV_EDITION) {
+        gpuProcessKillButton = $.new("button");
 
         gpuProcessKillButton.addEventListener("click", function() {
           windowUtils.terminateGPUProcess();
         });
 
         gpuProcessKillButton.textContent = strings.GetStringFromName("gpuProcessKillButton");
-        addRow("diagnostics", "GPUProcessPid", gpuProcessPid);
+      }
+
+      addRow("diagnostics", "GPUProcessPid", gpuProcessPid);
+      if (gpuProcessKillButton) {
         addRow("diagnostics", "GPUProcess", [gpuProcessKillButton]);
       }
+    }
+
+    if ((AppConstants.NIGHTLY_BUILD || AppConstants.MOZ_DEV_EDITION) && AppConstants.platform != "macosx") {
+      let gpuDeviceResetButton = $.new("button");
+
+      gpuDeviceResetButton.addEventListener("click", function() {
+        windowUtils.triggerDeviceReset();
+      });
+
+      gpuDeviceResetButton.textContent = strings.GetStringFromName("gpuDeviceResetButton");
+      addRow("diagnostics", "Device Reset", [gpuDeviceResetButton]);
     }
 
     // graphics-failures-tbody tbody
@@ -378,16 +424,22 @@ var snapshotFormatters = {
     }
 
     // graphics-features-tbody
-
-    let compositor = data.windowLayerManagerRemote
-                     ? data.windowLayerManagerType
-                     : "BasicLayers (" + strings.GetStringFromName("mainThreadNoOMTC") + ")";
+    let compositor = "";
+    if (data.windowLayerManagerRemote) {
+      compositor = data.windowLayerManagerType;
+      if (data.windowUsingAdvancedLayers) {
+        compositor += " (Advanced Layers)";
+      }
+    } else {
+      compositor = "BasicLayers (" + strings.GetStringFromName("mainThreadNoOMTC") + ")";
+    }
     addRow("features", "compositing", compositor);
     delete data.windowLayerManagerRemote;
     delete data.windowLayerManagerType;
     delete data.numTotalWindows;
     delete data.numAcceleratedWindows;
     delete data.numAcceleratedWindowsMessage;
+    delete data.windowUsingAdvancedLayers;
 
     addRow("features", "asyncPanZoom",
            apzInfo.length
@@ -404,8 +456,8 @@ var snapshotFormatters = {
     addRowFromKey("features", "webgl2DriverExtensions");
     addRowFromKey("features", "webgl2Extensions");
     addRowFromKey("features", "supportsHardwareH264", "hardwareH264");
-    addRowFromKey("features", "currentAudioBackend", "audioBackend");
     addRowFromKey("features", "direct2DEnabled", "#Direct2D");
+    addRowFromKey("features", "offMainThreadPaintEnabled");
 
     if ("directWriteEnabled" in data) {
       let message = data.directWriteEnabled;
@@ -553,6 +605,112 @@ var snapshotFormatters = {
     }
   },
 
+  media: function media(data) {
+    let strings = stringBundle();
+
+    function insertBasicInfo(key, value) {
+      function createRow(key, value) {
+        let th = $.new("th", strings.GetStringFromName(key), "column");
+        let td = $.new("td", value);
+        td.style["white-space"] = "pre-wrap";
+        td.colSpan = 8;
+        return $.new("tr", [th, td]);
+      }
+      $.append($("media-info-tbody"), [createRow(key, value)]);
+    }
+
+    function createDeviceInfoRow(device) {
+      let deviceInfo = Ci.nsIAudioDeviceInfo;
+
+      let states = {};
+      states[deviceInfo.STATE_DISABLED] = "Disabled";
+      states[deviceInfo.STATE_UNPLUGGED] = "Unplugged";
+      states[deviceInfo.STATE_ENABLED] = "Enabled";
+
+      let preferreds = {};
+      preferreds[deviceInfo.PREF_NONE] = "None";
+      preferreds[deviceInfo.PREF_MULTIMEDIA] = "Multimedia";
+      preferreds[deviceInfo.PREF_VOICE] = "Voice";
+      preferreds[deviceInfo.PREF_NOTIFICATION] = "Notification";
+      preferreds[deviceInfo.PREF_ALL] = "All";
+
+      let formats = {};
+      formats[deviceInfo.FMT_S16LE] = "S16LE";
+      formats[deviceInfo.FMT_S16BE] = "S16BE";
+      formats[deviceInfo.FMT_F32LE] = "F32LE";
+      formats[deviceInfo.FMT_F32BE] = "F32BE";
+
+      function toPreferredString(preferred) {
+        if (preferred == deviceInfo.PREF_NONE) {
+          return preferreds[deviceInfo.PREF_NONE];
+        } else if (preferred & deviceInfo.PREF_ALL) {
+          return preferreds[deviceInfo.PREF_ALL];
+        }
+        let str = "";
+        for (let pref of [deviceInfo.PREF_MULTIMEDIA,
+                          deviceInfo.PREF_VOICE,
+                          deviceInfo.PREF_NOTIFICATION]) {
+          if (preferred & pref) {
+            str += " " + preferreds[pref];
+          }
+        }
+        return str;
+      }
+
+      function toFromatString(dev) {
+        let str = "default: " + formats[dev.defaultFormat] + ", support:";
+        for (let fmt of [deviceInfo.FMT_S16LE,
+                         deviceInfo.FMT_S16BE,
+                         deviceInfo.FMT_F32LE,
+                         deviceInfo.FMT_F32BE]) {
+          if (dev.supportedFormat & fmt) {
+            str += " " + formats[fmt];
+          }
+        }
+        return str;
+      }
+
+      function toRateString(dev) {
+        return "default: " + dev.defaultRate +
+               ", support: " + dev.minRate + " - " + dev.maxRate;
+      }
+
+      function toLatencyString(dev) {
+        return dev.minLatency + " - " + dev.maxLatency;
+      }
+
+      return $.new("tr", [$.new("td", device.name),
+                          $.new("td", device.groupId),
+                          $.new("td", device.vendor),
+                          $.new("td", states[device.state]),
+                          $.new("td", toPreferredString(device.preferred)),
+                          $.new("td", toFromatString(device)),
+                          $.new("td", device.maxChannels),
+                          $.new("td", toRateString(device)),
+                          $.new("td", toLatencyString(device))]);
+    }
+
+    function insertDeviceInfo(side, devices) {
+      let rows = [];
+      for (let dev of devices) {
+        rows.push(createDeviceInfoRow(dev));
+      }
+      $.append($("media-" + side + "-devices-tbody"), rows);
+    }
+
+    // Basic information
+    insertBasicInfo("audioBackend", data.currentAudioBackend);
+    insertBasicInfo("maxAudioChannels", data.currentMaxAudioChannels);
+    insertBasicInfo("channelLayout", data.currentPreferredChannelLayout);
+    insertBasicInfo("sampleRate", data.currentPreferredSampleRate);
+
+    // Output devices information
+    insertDeviceInfo("output", data.audioOutputDevices);
+
+    // Input devices information
+    insertDeviceInfo("input", data.audioInputDevices);
+  },
+
   javaScript: function javaScript(data) {
     $("javascript-incremental-gc").textContent = data.incrementalGCEnabled;
   },
@@ -560,6 +718,16 @@ var snapshotFormatters = {
   accessibility: function accessibility(data) {
     $("a11y-activated").textContent = data.isActive;
     $("a11y-force-disabled").textContent = data.forceDisabled || 0;
+
+    let a11yHandlerUsed = $("a11y-handler-used");
+    if (a11yHandlerUsed) {
+      a11yHandlerUsed.textContent = data.handlerUsed;
+    }
+
+    let a11yInstantiator = $("a11y-instantiator");
+    if (a11yInstantiator) {
+      a11yInstantiator.textContent = data.instantiator;
+    }
   },
 
   libraryVersions: function libraryVersions(data) {
@@ -603,12 +771,12 @@ var snapshotFormatters = {
     for (let key in data) {
       // Simplify the display a little in the common case.
       if (key === "hasPrivilegedUserNamespaces" &&
-          data[key] === data["hasUserNamespaces"]) {
+          data[key] === data.hasUserNamespaces) {
         continue;
       }
       if (key === "syscallLog") {
-	// Not in this table.
-	continue;
+        // Not in this table.
+        continue;
       }
       tbody.appendChild($.new("tr", [
         $.new("th", strings.GetStringFromName(key), "column"),
@@ -616,27 +784,47 @@ var snapshotFormatters = {
       ]));
     }
 
-    let syscallBody = $("sandbox-syscalls-tbody");
-    let argsHead = $("sandbox-syscalls-argshead");
-    for (let syscall of data.syscallLog) {
-      if (argsHead.colSpan < syscall.args.length) {
-	argsHead.colSpan = syscall.args.length;
+    if ("syscallLog" in data) {
+      let syscallBody = $("sandbox-syscalls-tbody");
+      let argsHead = $("sandbox-syscalls-argshead");
+      for (let syscall of data.syscallLog) {
+        if (argsHead.colSpan < syscall.args.length) {
+          argsHead.colSpan = syscall.args.length;
+        }
+        let cells = [
+          $.new("td", syscall.index, "integer"),
+          $.new("td", syscall.msecAgo / 1000),
+          $.new("td", syscall.pid, "integer"),
+          $.new("td", syscall.tid, "integer"),
+          $.new("td", strings.GetStringFromName("sandboxProcType." +
+                                                syscall.procType)),
+          $.new("td", syscall.syscall, "integer"),
+        ];
+        for (let arg of syscall.args) {
+          cells.push($.new("td", arg, "integer"));
+        }
+        syscallBody.appendChild($.new("tr", cells));
       }
-      let cells = [
-	$.new("td", syscall.index, "integer"),
-	$.new("td", syscall.msecAgo / 1000),
-	$.new("td", syscall.pid, "integer"),
-	$.new("td", syscall.tid, "integer"),
-	$.new("td", strings.GetStringFromName("sandboxProcType." +
-					      syscall.procType)),
-	$.new("td", syscall.syscall, "integer"),
-      ];
-      for (let arg of syscall.args) {
-	cells.push($.new("td", arg, "integer"));
-      }
-      syscallBody.appendChild($.new("tr", cells));
     }
   },
+
+  intl: function intl(data) {
+    $("intl-locale-requested").textContent =
+      JSON.stringify(data.localeService.requested);
+    $("intl-locale-available").textContent =
+      JSON.stringify(data.localeService.available);
+    $("intl-locale-supported").textContent =
+      JSON.stringify(data.localeService.supported);
+    $("intl-locale-regionalprefs").textContent =
+      JSON.stringify(data.localeService.regionalPrefs);
+    $("intl-locale-default").textContent =
+      JSON.stringify(data.localeService.defaultLocale);
+
+    $("intl-osprefs-systemlocales").textContent =
+      JSON.stringify(data.osPrefs.systemLocales);
+    $("intl-osprefs-regionalprefs").textContent =
+      JSON.stringify(data.osPrefs.regionalPrefsLocales);
+  }
 };
 
 var $ = document.getElementById.bind(document);
@@ -713,9 +901,7 @@ function copyRawDataToClipboard(button) {
       transferable.init(getLoadContext());
       transferable.addDataFlavor("text/unicode");
       transferable.setTransferData("text/unicode", str, str.data.length * 2);
-      Cc["@mozilla.org/widget/clipboard;1"].
-        getService(Ci.nsIClipboard).
-        setData(transferable, null, Ci.nsIClipboard.kGlobalClipboard);
+      Services.clipboard.setData(transferable, null, Ci.nsIClipboard.kGlobalClipboard);
       if (AppConstants.platform == "android") {
         // Present a toast notification.
         let message = {
@@ -765,9 +951,7 @@ function copyContentsToClipboard() {
   transferable.setTransferData("text/unicode", ssText, dataText.length * 2);
 
   // Store the data into the clipboard.
-  let clipboard = Cc["@mozilla.org/widget/clipboard;1"]
-                    .getService(Ci.nsIClipboard);
-  clipboard.setData(transferable, null, clipboard.kGlobalClipboard);
+  Services.clipboard.setData(transferable, null, Services.clipboard.kGlobalClipboard);
 
   if (AppConstants.platform == "android") {
     // Present a toast notification.
@@ -975,7 +1159,7 @@ function openProfileDirectory() {
 
   // Show the profile directory.
   let nsLocalFile = Components.Constructor("@mozilla.org/file/local;1",
-                                           "nsILocalFile", "initWithPath");
+                                           "nsIFile", "initWithPath");
   new nsLocalFile(profileDir).reveal();
 }
 
@@ -987,7 +1171,7 @@ function populateActionBox() {
     $("reset-box").style.display = "block";
     $("action-box").style.display = "block";
   }
-  if (!Services.appinfo.inSafeMode) {
+  if (!Services.appinfo.inSafeMode && AppConstants.platform !== "android") {
     $("safe-mode-box").style.display = "block";
     $("action-box").style.display = "block";
   }
@@ -1007,13 +1191,36 @@ function safeModeRestart() {
  * Set up event listeners for buttons.
  */
 function setupEventListeners() {
-  $("show-update-history-button").addEventListener("click", function(event) {
-    var prompter = Cc["@mozilla.org/updates/update-prompt;1"].createInstance(Ci.nsIUpdatePrompt);
+  if (AppConstants.platform !== "android") {
+    $("show-update-history-button").addEventListener("click", function(event) {
+      var prompter = Cc["@mozilla.org/updates/update-prompt;1"].createInstance(Ci.nsIUpdatePrompt);
       prompter.showUpdateHistory(window);
-  });
-  $("reset-box-button").addEventListener("click", function(event) {
-    ResetProfile.openConfirmationDialog(window);
-  });
+    });
+    $("reset-box-button").addEventListener("click", function(event) {
+      ResetProfile.openConfirmationDialog(window);
+    });
+    $("restart-in-safe-mode-button").addEventListener("click", function(event) {
+      if (Services.obs.enumerateObservers("restart-in-safe-mode").hasMoreElements()) {
+        Services.obs.notifyObservers(null, "restart-in-safe-mode");
+      } else {
+        safeModeRestart();
+      }
+    });
+    $("verify-place-integrity-button").addEventListener("click", function(event) {
+      PlacesDBUtils.checkAndFixDatabase().then((tasksStatusMap) => {
+        let logs = [];
+        for (let [key, value] of tasksStatusMap) {
+          logs.push(`> Task: ${key}`);
+          let prefix = value.succeeded ? "+ " : "- ";
+          logs = logs.concat(value.logs.map(m => `${prefix}${m}`));
+        }
+        $("verify-place-result").style.display = "block";
+        $("verify-place-result").classList.remove("no-copy");
+        $("verify-place-result").textContent = logs.join("\n");
+      });
+    });
+  }
+
   $("copy-raw-data-to-clipboard").addEventListener("click", function(event) {
     copyRawDataToClipboard(this);
   });
@@ -1022,20 +1229,5 @@ function setupEventListeners() {
   });
   $("profile-dir-button").addEventListener("click", function(event) {
     openProfileDirectory();
-  });
-  $("restart-in-safe-mode-button").addEventListener("click", function(event) {
-    if (Services.obs.enumerateObservers("restart-in-safe-mode").hasMoreElements()) {
-      Services.obs.notifyObservers(null, "restart-in-safe-mode");
-    } else {
-      safeModeRestart();
-    }
-  });
-  $("verify-place-integrity-button").addEventListener("click", function(event) {
-    PlacesDBUtils.checkAndFixDatabase(function(aLog) {
-      let msg = aLog.join("\n");
-      $("verify-place-result").style.display = "block";
-      $("verify-place-result").classList.remove("no-copy");
-      $("verify-place-result").textContent = msg;
-    });
   });
 }

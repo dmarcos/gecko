@@ -30,11 +30,11 @@ function is_element_hidden(aElement, aMsg) {
 }
 
 function open_preferences(aCallback) {
-  gBrowser.selectedTab = gBrowser.addTab("about:preferences");
+  gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser, "about:preferences");
   let newTabBrowser = gBrowser.getBrowserForTab(gBrowser.selectedTab);
   newTabBrowser.addEventListener("Initialized", function() {
     aCallback(gBrowser.contentWindow);
-  }, {capture: true, once: true});
+  }, { capture: true, once: true });
 }
 
 function openAndLoadSubDialog(aURL, aFeatures = null, aParams = null, aClosingCallback = null) {
@@ -45,20 +45,20 @@ function openAndLoadSubDialog(aURL, aFeatures = null, aParams = null, aClosingCa
 
 function promiseLoadSubDialog(aURL) {
   return new Promise((resolve, reject) => {
-    content.gSubDialog._frame.addEventListener("load", function load(aEvent) {
-      if (aEvent.target.contentWindow.location == "about:blank")
+    content.gSubDialog._dialogStack.addEventListener("dialogopen", function dialogopen(aEvent) {
+      if (aEvent.detail.dialog._frame.contentWindow.location == "about:blank")
         return;
-      content.gSubDialog._frame.removeEventListener("load", load);
+      content.gSubDialog._dialogStack.removeEventListener("dialogopen", dialogopen);
 
-      is(content.gSubDialog._frame.contentWindow.location.toString(), aURL,
-         "Check the proper URL is loaded");
+      is(aEvent.detail.dialog._frame.contentWindow.location.toString(), aURL,
+        "Check the proper URL is loaded");
 
       // Check visibility
-      is_element_visible(content.gSubDialog._overlay, "Overlay is visible");
+      is_element_visible(aEvent.detail.dialog._overlay, "Overlay is visible");
 
       // Check that stylesheets were injected
-      let expectedStyleSheetURLs = content.gSubDialog._injectedStyleSheets.slice(0);
-      for (let styleSheet of content.gSubDialog._frame.contentDocument.styleSheets) {
+      let expectedStyleSheetURLs = aEvent.detail.dialog._injectedStyleSheets.slice(0);
+      for (let styleSheet of aEvent.detail.dialog._frame.contentDocument.styleSheets) {
         let i = expectedStyleSheetURLs.indexOf(styleSheet.href);
         if (i >= 0) {
           info("found " + styleSheet.href);
@@ -67,7 +67,9 @@ function promiseLoadSubDialog(aURL) {
       }
       is(expectedStyleSheetURLs.length, 0, "All expectedStyleSheetURLs should have been found");
 
-      resolve(content.gSubDialog._frame.contentWindow);
+      // Wait for the next event tick to make sure the remaining part of the
+      // testcase runs after the dialog gets ready for input.
+      executeSoon(() => resolve(aEvent.detail.dialog._frame.contentWindow));
     });
   });
 }
@@ -103,7 +105,7 @@ function waitForEvent(aSubject, aEventName, aTimeoutMs, aTarget) {
 
   var listener = function(aEvent) {
     if (aTarget && aTarget !== aEvent.target)
-        return;
+      return;
 
     // stop the timeout clock and resume
     clearTimeout(timerID);
@@ -120,22 +122,24 @@ function waitForEvent(aSubject, aEventName, aTimeoutMs, aTarget) {
 }
 
 function openPreferencesViaOpenPreferencesAPI(aPane, aOptions) {
-  let deferred = Promise.defer();
-  gBrowser.selectedTab = gBrowser.addTab("about:blank");
-  openPreferences(aPane);
-  let newTabBrowser = gBrowser.selectedBrowser;
+  return new Promise(resolve => {
+    let finalPrefPaneLoaded = TestUtils.topicObserved("sync-pane-loaded", () => true);
+    gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser, "about:blank");
+    openPreferences(aPane);
+    let newTabBrowser = gBrowser.selectedBrowser;
 
-  newTabBrowser.addEventListener("Initialized", function() {
-    newTabBrowser.contentWindow.addEventListener("load", function() {
-      let win = gBrowser.contentWindow;
-      let selectedPane = win.history.state;
-      if (!aOptions || !aOptions.leaveOpen)
-        gBrowser.removeCurrentTab();
-      deferred.resolve({selectedPane});
-    }, {once: true});
-  }, {capture: true, once: true});
+    newTabBrowser.addEventListener("Initialized", function() {
+      newTabBrowser.contentWindow.addEventListener("load", async function() {
+        let win = gBrowser.contentWindow;
+        let selectedPane = win.history.state;
+        await finalPrefPaneLoaded;
+        if (!aOptions || !aOptions.leaveOpen)
+          gBrowser.removeCurrentTab();
+        resolve({ selectedPane });
+      }, { once: true });
+    }, { capture: true, once: true });
 
-  return deferred.promise;
+  });
 }
 
 function waitForCondition(aConditionFn, aMaxTries = 50, aCheckInterval = 100) {
@@ -170,7 +174,7 @@ function promiseWindowDialogOpen(buttonAction, url) {
             doc.getButton(buttonAction).click();
             resolve();
           }
-        }, {once: true});
+        }, { once: true });
       }
     });
   });
@@ -193,28 +197,86 @@ function promiseSiteDataManagerSitesUpdated() {
 function openSiteDataSettingsDialog() {
   let doc = gBrowser.selectedBrowser.contentDocument;
   let settingsBtn = doc.getElementById("siteDataSettings");
-  let dialogOverlay = doc.getElementById("dialogOverlay");
+  let dialogOverlay = content.gSubDialog._preloadDialog._overlay;
   let dialogLoadPromise = promiseLoadSubDialog("chrome://browser/content/preferences/siteDataSettings.xul");
   let dialogInitPromise = TestUtils.topicObserved("sitedata-settings-init", () => true);
-  let fullyLoadPromise = Promise.all([ dialogLoadPromise, dialogInitPromise ]).then(() => {
+  let fullyLoadPromise = Promise.all([dialogLoadPromise, dialogInitPromise]).then(() => {
     is(dialogOverlay.style.visibility, "visible", "The Settings dialog should be visible");
   });
   settingsBtn.doCommand();
   return fullyLoadPromise;
 }
 
-function assertSitesListed(doc, origins) {
-  let frameDoc = doc.getElementById("dialogFrame").contentDocument;
+function assertSitesListed(doc, hosts) {
+  let frameDoc = content.gSubDialog._topDialog._frame.contentDocument;
   let removeBtn = frameDoc.getElementById("removeSelected");
   let removeAllBtn = frameDoc.getElementById("removeAll");
   let sitesList = frameDoc.getElementById("sitesList");
   let totalSitesNumber = sitesList.getElementsByTagName("richlistitem").length;
-  is(totalSitesNumber, origins.length, "Should list the right sites number");
-  origins.forEach(origin => {
-    let site = sitesList.querySelector(`richlistitem[data-origin="${origin}"]`);
-    let host = site.getAttribute("host");
-    ok(origin.includes(host), `Should list the site of ${origin}`);
+  is(totalSitesNumber, hosts.length, "Should list the right sites number");
+  hosts.forEach(host => {
+    let site = sitesList.querySelector(`richlistitem[host="${host}"]`);
+    ok(site, `Should list the site of ${host}`);
   });
   is(removeBtn.disabled, false, "Should enable the removeSelected button");
   is(removeAllBtn.disabled, false, "Should enable the removeAllBtn button");
 }
+
+async function evaluateSearchResults(keyword, searchReults) {
+  searchReults = Array.isArray(searchReults) ? searchReults : [searchReults];
+  searchReults.push("header-searchResults");
+
+  let searchInput = gBrowser.contentDocument.getElementById("searchInput");
+  searchInput.focus();
+  let searchCompletedPromise = BrowserTestUtils.waitForEvent(
+    gBrowser.contentWindow, "PreferencesSearchCompleted", evt => evt.detail == keyword);
+  EventUtils.sendString(keyword);
+  await searchCompletedPromise;
+
+  let mainPrefTag = gBrowser.contentDocument.getElementById("mainPrefPane");
+  for (let i = 0; i < mainPrefTag.childElementCount; i++) {
+    let child = mainPrefTag.children[i];
+    if (searchReults.includes(child.id)) {
+      is_element_visible(child, "Should be in search results");
+    } else if (child.id) {
+      is_element_hidden(child, "Should not be in search results");
+    }
+  }
+}
+
+const mockSiteDataManager = {
+
+  _SiteDataManager: null,
+  _originalQMS: null,
+  _originalRemoveQuotaUsage: null,
+
+  getUsage(onUsageResult) {
+    let result = this.fakeSites.map(site => ({
+      origin: site.principal.origin,
+      usage: site.usage,
+      persisted: site.persisted
+    }));
+    onUsageResult({ result, resultCode: Components.results.NS_OK });
+  },
+
+  _removeQuotaUsage(site) {
+    var target = site.principals[0].URI.host;
+    this.fakeSites = this.fakeSites.filter(fakeSite => {
+      return fakeSite.principal.URI.host != target;
+    });
+  },
+
+  register(SiteDataManager) {
+    this._SiteDataManager = SiteDataManager;
+    this._originalQMS = this._SiteDataManager._qms;
+    this._SiteDataManager._qms = this;
+    this._originalRemoveQuotaUsage = this._SiteDataManager._removeQuotaUsage;
+    this._SiteDataManager._removeQuotaUsage = this._removeQuotaUsage.bind(this);
+    this.fakeSites = null;
+  },
+
+  unregister() {
+    this._SiteDataManager._qms = this._originalQMS;
+    this._SiteDataManager._removeQuotaUsage = this._originalRemoveQuotaUsage;
+  }
+};

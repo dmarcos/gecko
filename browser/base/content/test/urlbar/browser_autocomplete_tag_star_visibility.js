@@ -1,16 +1,17 @@
-add_task(function*() {
-  registerCleanupFunction(() => {
-    PlacesUtils.bookmarks.removeFolderChildren(PlacesUtils.unfiledBookmarksFolderId);
+add_task(async function() {
+  registerCleanupFunction(async function() {
+    await PlacesUtils.bookmarks.eraseEverything();
   });
 
-  function* addTagItem(tagName) {
-    let uri = NetUtil.newURI(`http://example.com/this/is/tagged/${tagName}`);
-    PlacesUtils.bookmarks.insertBookmark(PlacesUtils.unfiledBookmarksFolderId,
-                                         uri,
-                                         PlacesUtils.bookmarks.DEFAULT_INDEX,
-                                         `test ${tagName}`);
-    PlacesUtils.tagging.tagURI(uri, [tagName]);
-    yield PlacesTestUtils.addVisits([{uri, title: `Test page with tag ${tagName}`}]);
+  async function addTagItem(tagName) {
+    let url = `http://example.com/this/is/tagged/${tagName}`;
+    await PlacesUtils.bookmarks.insert({
+      parentGuid: PlacesUtils.bookmarks.unfiledGuid,
+      url,
+      title: `test ${tagName}`
+    });
+    PlacesUtils.tagging.tagURI(Services.io.newURI(url), [tagName]);
+    await PlacesTestUtils.addVisits({uri: url, title: `Test page with tag ${tagName}`});
   }
 
   // We use different tags for each part of the test, as otherwise the
@@ -77,13 +78,13 @@ add_task(function*() {
   for (let testcase of testcases) {
     info(`Test case: ${testcase.description}`);
 
-    yield addTagItem(testcase.tagName);
+    await addTagItem(testcase.tagName);
     for (let prefName of Object.keys(testcase.prefs)) {
       Services.prefs.setBoolPref(`browser.urlbar.${prefName}`, testcase.prefs[prefName]);
     }
 
-    yield promiseAutocompleteResultPopup(testcase.input);
-    let result = gURLBar.popup.richlistbox.children[1];
+    await promiseAutocompleteResultPopup(testcase.input);
+    let result = await waitForAutocompleteResultAt(1);
     ok(result && !result.collasped, "Should have result");
 
     is(result.getAttribute("type"), testcase.expected.type, "Result should have expected type");
@@ -97,6 +98,6 @@ add_task(function*() {
     }
 
     gURLBar.popup.hidePopup();
-    yield promisePopupHidden(gURLBar.popup);
+    await promisePopupHidden(gURLBar.popup);
   }
 });

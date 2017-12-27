@@ -8,7 +8,6 @@
 #define mozilla_dom_HTMLTextAreaElement_h
 
 #include "mozilla/Attributes.h"
-#include "nsIDOMHTMLTextAreaElement.h"
 #include "nsITextControlElement.h"
 #include "nsIControllers.h"
 #include "nsIDOMNSEditableElement.h"
@@ -20,6 +19,7 @@
 #include "mozilla/dom/HTMLInputElementBinding.h"
 #include "nsGkAtoms.h"
 
+#include "mozilla/TextEditor.h"
 #include "nsTextEditorState.h"
 
 class nsIControllers;
@@ -38,7 +38,6 @@ namespace dom {
 class HTMLFormSubmission;
 
 class HTMLTextAreaElement final : public nsGenericHTMLFormElementWithState,
-                                  public nsIDOMHTMLTextAreaElement,
                                   public nsITextControlElement,
                                   public nsIDOMNSEditableElement,
                                   public nsStubMutationObserver,
@@ -53,6 +52,8 @@ public:
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
 
+  NS_IMPL_FROMCONTENT_HTML_WITH_TAG(HTMLTextAreaElement, textarea)
+
   virtual int32_t TabIndexDefault() override;
 
   // Element
@@ -61,13 +62,12 @@ public:
     return true;
   }
 
-  // nsIDOMHTMLTextAreaElement
-  NS_DECL_NSIDOMHTMLTEXTAREAELEMENT
-
   // nsIDOMNSEditableElement
   NS_IMETHOD GetEditor(nsIEditor** aEditor) override
   {
-    return nsGenericHTMLElement::GetEditor(aEditor);
+    nsCOMPtr<nsIEditor> editor = GetEditor();
+    editor.forget(aEditor);
+    return NS_OK;
   }
   NS_IMETHOD SetUserInput(const nsAString& aInput) override;
 
@@ -86,7 +86,6 @@ public:
   NS_IMETHOD SetValueChanged(bool aValueChanged) override;
   NS_IMETHOD_(bool) IsSingleLineTextControl() const override;
   NS_IMETHOD_(bool) IsTextArea() const override;
-  NS_IMETHOD_(bool) IsPlainTextControl() const override;
   NS_IMETHOD_(bool) IsPasswordTextControl() const override;
   NS_IMETHOD_(int32_t) GetCols() override;
   NS_IMETHOD_(int32_t) GetWrapCols() override;
@@ -94,16 +93,14 @@ public:
   NS_IMETHOD_(void) GetDefaultValueFromContent(nsAString& aValue) override;
   NS_IMETHOD_(bool) ValueChanged() const override;
   NS_IMETHOD_(void) GetTextEditorValue(nsAString& aValue, bool aIgnoreWrap) const override;
-  NS_IMETHOD_(nsIEditor*) GetTextEditor() override;
+  NS_IMETHOD_(mozilla::TextEditor*) GetTextEditor() override;
   NS_IMETHOD_(nsISelectionController*) GetSelectionController() override;
   NS_IMETHOD_(nsFrameSelection*) GetConstFrameSelection() override;
   NS_IMETHOD BindToFrame(nsTextControlFrame* aFrame) override;
   NS_IMETHOD_(void) UnbindFromFrame(nsTextControlFrame* aFrame) override;
   NS_IMETHOD CreateEditor() override;
   NS_IMETHOD_(Element*) GetRootEditorNode() override;
-  NS_IMETHOD_(Element*) CreatePlaceholderNode() override;
   NS_IMETHOD_(Element*) GetPlaceholderNode() override;
-  NS_IMETHOD_(Element*) CreatePreviewNode() override;
   NS_IMETHOD_(Element*) GetPreviewNode() override;
   NS_IMETHOD_(void) UpdateOverlayTextVisibility(bool aNotify) override;
   NS_IMETHOD_(bool) GetPlaceholderVisibility() override;
@@ -126,13 +123,14 @@ public:
   virtual void UnbindFromTree(bool aDeep = true,
                               bool aNullParent = true) override;
   virtual bool ParseAttribute(int32_t aNamespaceID,
-                                nsIAtom* aAttribute,
+                                nsAtom* aAttribute,
                                 const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 nsAttrValue& aResult) override;
   virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const override;
-  virtual nsChangeHint GetAttributeChangeHint(const nsIAtom* aAttribute,
+  virtual nsChangeHint GetAttributeChangeHint(const nsAtom* aAttribute,
                                               int32_t aModType) const override;
-  NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const override;
+  NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* aAttribute) const override;
 
   virtual nsresult GetEventTargetParent(
                      EventChainPreVisitor& aVisitor) override;
@@ -145,14 +143,15 @@ public:
   virtual void DoneAddingChildren(bool aHaveNotified) override;
   virtual bool IsDoneAddingChildren() override;
 
-  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+                         bool aPreallocateChildren) const override;
 
-  nsresult CopyInnerTo(Element* aDest);
+  nsresult CopyInnerTo(Element* aDest, bool aPreallocateChildren);
 
   /**
    * Called when an attribute is about to be changed
    */
-  virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
+  virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                                  const nsAttrValueOrString* aValue,
                                  bool aNotify) override;
 
@@ -164,6 +163,12 @@ public:
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLTextAreaElement,
                                            nsGenericHTMLFormElementWithState)
+
+  virtual already_AddRefed<nsITextControlElement> GetAsTextControlElement() override
+  {
+    nsCOMPtr<nsITextControlElement> txt = this;
+    return txt.forget();
+  }
 
   // nsIConstraintValidation
   bool     IsTooLong();
@@ -177,6 +182,11 @@ public:
                                 ValidityStateType aType) override;
 
   // Web IDL binding methods
+  void GetAutocomplete(DOMString& aValue);
+  void SetAutocomplete(const nsAString& aValue, ErrorResult& aRv)
+  {
+    SetHTMLAttr(nsGkAtoms::autocomplete, aValue, aRv);
+  }
   bool Autofocus()
   {
     return GetBoolAttr(nsGkAtoms::autofocus);
@@ -230,12 +240,18 @@ public:
       SetHTMLIntAttr(nsGkAtoms::minlength, aMinLength, aError);
     }
   }
-  // XPCOM GetName is fine
+  void GetName(nsAString& aName)
+  {
+    GetHTMLAttr(nsGkAtoms::name, aName);
+  }
   void SetName(const nsAString& aName, ErrorResult& aError)
   {
     SetHTMLAttr(nsGkAtoms::name, aName, aError);
   }
-  // XPCOM GetPlaceholder is fine
+  void GetPlaceholder(nsAString& aPlaceholder)
+  {
+    GetHTMLAttr(nsGkAtoms::placeholder, aPlaceholder);
+  }
   void SetPlaceholder(const nsAString& aPlaceholder, ErrorResult& aError)
   {
     SetHTMLAttr(nsGkAtoms::placeholder, aPlaceholder, aError);
@@ -248,9 +264,9 @@ public:
   {
     SetHTMLBoolAttr(nsGkAtoms::readonly, aReadOnly, aError);
   }
-  bool Required()
+  bool Required() const
   {
-    return GetBoolAttr(nsGkAtoms::required);
+    return State().HasState(NS_EVENT_STATE_REQUIRED);
   }
 
   void SetRangeText(const nsAString& aReplacement, ErrorResult& aRv);
@@ -272,24 +288,27 @@ public:
     uint32_t rows = aRows ? aRows : DEFAULT_ROWS_TEXTAREA;
     SetUnsignedIntAttr(nsGkAtoms::rows, rows, DEFAULT_ROWS_TEXTAREA, aError);
   }
-  // XPCOM GetWrap is fine
+  void GetWrap(nsAString& aWrap)
+  {
+    GetHTMLAttr(nsGkAtoms::wrap, aWrap);
+  }
   void SetWrap(const nsAString& aWrap, ErrorResult& aError)
   {
     SetHTMLAttr(nsGkAtoms::wrap, aWrap, aError);
   }
-  // XPCOM GetType is fine
-  // XPCOM GetDefaultValue is fine
+  void GetType(nsAString& aType);
+  void GetDefaultValue(nsAString& aDefaultValue, ErrorResult& aError);
   void SetDefaultValue(const nsAString& aDefaultValue, ErrorResult& aError);
-  // XPCOM GetValue/SetValue are fine
+  void GetValue(nsAString& aValue);
+  void SetValue(const nsAString& aValue, ErrorResult& aError);
+
   uint32_t GetTextLength();
-  // nsIConstraintValidation::WillValidate is fine.
-  // nsIConstraintValidation::Validity() is fine.
-  // nsIConstraintValidation::GetValidationMessage() is fine.
-  // nsIConstraintValidation::CheckValidity() is fine.
-  using nsIConstraintValidation::CheckValidity;
-  using nsIConstraintValidation::ReportValidity;
-  // nsIConstraintValidation::SetCustomValidity() is fine.
-  // XPCOM Select is fine
+
+  // Override SetCustomValidity so we update our state properly when it's called
+  // via bindings.
+  void SetCustomValidity(const nsAString& aError);
+
+  void Select();
   Nullable<uint32_t> GetSelectionStart(ErrorResult& aError);
   void SetSelectionStart(const Nullable<uint32_t>& aSelectionStart, ErrorResult& aError);
   Nullable<uint32_t> GetSelectionEnd(ErrorResult& aError);
@@ -298,9 +317,12 @@ public:
   void SetSelectionDirection(const nsAString& aDirection, ErrorResult& aError);
   void SetSelectionRange(uint32_t aSelectionStart, uint32_t aSelectionEnd, const Optional<nsAString>& aDirecton, ErrorResult& aError);
   nsIControllers* GetControllers(ErrorResult& aError);
+  // XPCOM adapter function widely used throughout code, leaving it as is.
+  nsresult GetControllers(nsIControllers** aResult);
+
   nsIEditor* GetEditor()
   {
-    return mState.GetEditor();
+    return mState.GetTextEditor();
   }
 
 protected:
@@ -330,6 +352,8 @@ protected:
   /** Whether we should make :-moz-ui-valid apply on the element. **/
   bool                     mCanShowValidUI;
   bool                     mIsPreviewEnabled;
+
+  nsContentUtils::AutocompleteAttrState mAutocompleteAttrState;
 
   void FireChangeEventIfNeeded();
 
@@ -363,8 +387,11 @@ protected:
    */
   void ContentChanged(nsIContent* aContent);
 
-  virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsIAtom *aName,
-                                const nsAttrValue* aValue, bool aNotify) override;
+  virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsAtom *aName,
+                                const nsAttrValue* aValue,
+                                const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
+                                bool aNotify) override;
 
   /**
    * Return if an element should have a specific validity UI
@@ -406,6 +433,7 @@ protected:
   void GetSelectionRange(uint32_t* aSelectionStart,
                          uint32_t* aSelectionEnd,
                          ErrorResult& aRv);
+
 private:
   static void MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
                                     GenericSpecifiedValues* aGenericData);

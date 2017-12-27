@@ -4,9 +4,9 @@
 
 "use strict";
 
-const { debounce } = require("sdk/lang/functional");
+const { debounce } = require("devtools/shared/debounce");
 const { lerp } = require("devtools/client/memory/utils");
-const EventEmitter = require("devtools/shared/event-emitter");
+const EventEmitter = require("devtools/shared/old-event-emitter");
 
 const LERP_SPEED = 0.5;
 const ZOOM_SPEED = 0.01;
@@ -45,7 +45,7 @@ function DragZoom(container, debounceRate, requestAnimationFrame) {
 
   // The size of the offset between the top/left of the container, and the
   // top/left of the containing element. This value takes into account
-  // the devicePixelRatio for canvas draws.
+  // the device pixel ratio for canvas draws.
   this.offsetX = 0;
   this.offsetY = 0;
 

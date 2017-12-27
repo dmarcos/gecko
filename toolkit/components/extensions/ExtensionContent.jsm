@@ -1,7 +1,8 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 "use strict";
 
 this.EXPORTED_SYMBOLS = ["ExtensionContent"];
@@ -13,18 +14,21 @@ const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "LanguageDetector",
-                                  "resource:///modules/translation/LanguageDetector.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "MessageChannel",
-                                  "resource://gre/modules/MessageChannel.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Schemas",
-                                  "resource://gre/modules/Schemas.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "WebNavigationFrames",
-                                  "resource://gre/modules/WebNavigationFrames.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  LanguageDetector: "resource:///modules/translation/LanguageDetector.jsm",
+  MessageChannel: "resource://gre/modules/MessageChannel.jsm",
+  Schemas: "resource://gre/modules/Schemas.jsm",
+  TelemetryStopwatch: "resource://gre/modules/TelemetryStopwatch.jsm",
+  WebNavigationFrames: "resource://gre/modules/WebNavigationFrames.jsm",
+});
 
 XPCOMUtils.defineLazyServiceGetter(this, "styleSheetService",
                                    "@mozilla.org/content/style-sheet-service;1",
                                    "nsIStyleSheetService");
+
+// xpcshell doesn't handle idle callbacks well.
+XPCOMUtils.defineLazyGetter(this, "idleTimeout",
+                            () => Services.appinfo.name === "XPCShell" ? 500 : undefined);
 
 const DocumentEncoder = Components.Constructor(
   "@mozilla.org/layout/documentEncoder;1?type=text/plain",
@@ -65,6 +69,7 @@ XPCOMUtils.defineLazyGetter(this, "console", ExtensionUtils.getConsole);
 var DocumentManager;
 
 const CATEGORY_EXTENSION_SCRIPTS_CONTENT = "webextension-scripts-content";
+const CONTENT_SCRIPT_INJECTION_HISTOGRAM = "WEBEXT_CONTENT_SCRIPT_INJECTION_MS";
 
 var apiManager = new class extends SchemaAPIManager {
   constructor() {
@@ -133,8 +138,16 @@ class CacheMap extends DefaultMap {
 
 class ScriptCache extends CacheMap {
   constructor(options) {
-    super(SCRIPT_EXPIRY_TIMEOUT_MS,
-          url => ChromeUtils.compileScript(url, options));
+    super(SCRIPT_EXPIRY_TIMEOUT_MS);
+    this.options = options;
+  }
+
+  defaultConstructor(url) {
+    let promise = ChromeUtils.compileScript(url, this.options);
+    promise.then(script => {
+      promise.script = script;
+    });
+    return promise;
   }
 }
 
@@ -192,27 +205,27 @@ defineLazyGetter(BrowserExtensionContent.prototype, "authorCSS", () => {
 
 // Represents a content script.
 class Script {
-  constructor(extension, options) {
+  constructor(extension, matcher) {
     this.extension = extension;
-    this.options = options;
+    this.matcher = matcher;
 
-    this.runAt = this.options.run_at;
-    this.js = this.options.js || [];
-    this.css = this.options.css || [];
-    this.remove_css = this.options.remove_css;
-    this.css_origin = this.options.css_origin;
+    this.runAt = this.matcher.runAt;
+    this.js = this.matcher.jsPaths;
+    this.css = this.matcher.cssPaths;
+    this.removeCSS = this.matcher.removeCSS;
+    this.cssOrigin = this.matcher.cssOrigin;
 
-    this.cssCache = extension[this.css_origin === "user" ? "userCSS"
-                                                         : "authorCSS"];
-    this.scriptCache = extension[options.wantReturnValue ? "dynamicScripts"
+    this.cssCache = extension[this.cssOrigin === "user" ? "userCSS"
+                                                        : "authorCSS"];
+    this.scriptCache = extension[matcher.wantReturnValue ? "dynamicScripts"
                                                          : "staticScripts"];
 
-    if (options.wantReturnValue) {
+    if (matcher.wantReturnValue) {
       this.compileScripts();
       this.loadCSS();
     }
 
-    this.requiresCleanup = !this.remove_css && (this.css.length > 0 || options.cssCode);
+    this.requiresCleanup = !this.removeCss && (this.css.length > 0 || matcher.cssCode);
   }
 
   compileScripts() {
@@ -223,11 +236,16 @@ class Script {
     return this.cssURLs.map(url => this.cssCache.get(url));
   }
 
+  preload() {
+    this.loadCSS();
+    this.compileScripts();
+  }
+
   cleanup(window) {
-    if (!this.remove_css && this.cssURLs.length) {
+    if (!this.removeCss && this.cssURLs.length) {
       let winUtils = getWinUtils(window);
 
-      let type = this.css_origin === "user" ? winUtils.USER_SHEET : winUtils.AUTHOR_SHEET;
+      let type = this.cssOrigin === "user" ? winUtils.USER_SHEET : winUtils.AUTHOR_SHEET;
       for (let url of this.cssURLs) {
         this.cssCache.deleteDocument(url, window.document);
         runSafeSyncWithoutClone(winUtils.removeSheetUsingURIString, url, type);
@@ -239,16 +257,31 @@ class Script {
     }
   }
 
+  matchesWindow(window) {
+    return this.matcher.matchesWindow(window);
+  }
+
   async injectInto(window) {
     let context = this.extension.getContext(window);
+    try {
+      if (this.runAt === "document_end") {
+        await promiseDocumentReady(window.document);
+      } else if (this.runAt === "document_idle") {
+        let readyThenIdle = promiseDocumentReady(window.document).then(() => {
+          return new Promise(resolve =>
+            window.requestIdleCallback(resolve, {timeout: idleTimeout}));
+        });
 
-    if (this.runAt === "document_end") {
-      await promiseDocumentReady(window.document);
-    } else if (this.runAt === "document_idle") {
-      await promiseDocumentLoaded(window.document);
+        await Promise.race([
+          readyThenIdle,
+          promiseDocumentLoaded(window.document),
+        ]);
+      }
+
+      return this.inject(context);
+    } catch (e) {
+      return Promise.reject(context.normalizeError(e));
     }
-
-    return this.inject(context);
   }
 
   /**
@@ -272,9 +305,9 @@ class Script {
       let window = context.contentWindow;
       let winUtils = getWinUtils(window);
 
-      let type = this.css_origin === "user" ? winUtils.USER_SHEET : winUtils.AUTHOR_SHEET;
+      let type = this.cssOrigin === "user" ? winUtils.USER_SHEET : winUtils.AUTHOR_SHEET;
 
-      if (this.remove_css) {
+      if (this.removeCSS) {
         for (let url of this.cssURLs) {
           this.cssCache.deleteDocument(url, window.document);
 
@@ -296,27 +329,40 @@ class Script {
       }
     }
 
-    let scriptsPromise = Promise.all(this.compileScripts());
+    let scriptPromises = this.compileScripts();
 
-    // If we're supposed to inject at the start of the document load,
-    // and we haven't already missed that point, block further parsing
-    // until the scripts have been loaded.
-    let {document} = context.contentWindow;
-    if (this.runAt === "document_start" && document.readyState !== "complete") {
-      document.blockParsing(scriptsPromise);
+    let scripts = scriptPromises.map(promise => promise.script);
+    // If not all scripts are already available in the cache, block
+    // parsing and wait all promises to resolve.
+    if (!scripts.every(script => script)) {
+      let promise = Promise.all(scriptPromises);
+
+      // If we're supposed to inject at the start of the document load,
+      // and we haven't already missed that point, block further parsing
+      // until the scripts have been loaded.
+      let {document} = context.contentWindow;
+      if (this.runAt === "document_start" && document.readyState !== "complete") {
+        document.blockParsing(promise, {blockScriptCreated: false});
+      }
+
+      scripts = await promise;
     }
 
-    let scripts = await scriptsPromise;
     let result;
 
     // The evaluations below may throw, in which case the promise will be
     // automatically rejected.
-    for (let script of scripts) {
-      result = script.executeInGlobal(context.cloneScope);
-    }
+    TelemetryStopwatch.start(CONTENT_SCRIPT_INJECTION_HISTOGRAM, context);
+    try {
+      for (let script of scripts) {
+        result = script.executeInGlobal(context.cloneScope);
+      }
 
-    if (this.options.jsCode) {
-      result = Cu.evalInSandbox(this.options.jsCode, context.cloneScope, "latest");
+      if (this.matcher.jsCode) {
+        result = Cu.evalInSandbox(this.matcher.jsCode, context.cloneScope, "latest");
+      }
+    } finally {
+      TelemetryStopwatch.finish(CONTENT_SCRIPT_INJECTION_HISTOGRAM, context);
     }
 
     await cssPromise;
@@ -328,8 +374,8 @@ defineLazyGetter(Script.prototype, "cssURLs", function() {
   // We can handle CSS urls (css) and CSS code (cssCode).
   let urls = this.css.slice();
 
-  if (this.options.cssCode) {
-    urls.push("data:text/css;charset=utf-8," + encodeURIComponent(this.options.cssCode));
+  if (this.matcher.cssCode) {
+    urls.push("data:text/css;charset=utf-8," + encodeURIComponent(this.matcher.cssCode));
   }
 
   return urls;
@@ -380,6 +426,7 @@ class ContentScriptContextChild extends BaseContext {
       // enables us to create the APIs object in this sandbox object and then
       // copying it into the iframe's window.  See bug 1214658.
       this.sandbox = Cu.Sandbox(contentWindow, {
+        sandboxName: `Content Script ExtensionPage ${this.extension.id}`,
         sandboxPrototype: contentWindow,
         sameZoneAs: contentWindow,
         wantXrays: false,
@@ -396,6 +443,7 @@ class ContentScriptContextChild extends BaseContext {
 
       this.sandbox = Cu.Sandbox(principal, {
         metadata,
+        sandboxName: `Content Script ${this.extension.id}`,
         sandboxPrototype: contentWindow,
         sameZoneAs: contentWindow,
         wantXrays: true,
@@ -405,7 +453,16 @@ class ContentScriptContextChild extends BaseContext {
         originAttributes: attrs,
       });
 
+      // Preserve a copy of the original window's XMLHttpRequest and fetch
+      // in a content object (fetch is manually binded to the window
+      // to prevent it from raising a TypeError because content object is not
+      // a real window).
       Cu.evalInSandbox(`
+        this.content = {
+          XMLHttpRequest: window.XMLHttpRequest,
+          fetch: window.fetch.bind(window),
+        };
+
         window.JSON = JSON;
         window.XMLHttpRequest = XMLHttpRequest;
         window.fetch = fetch;
@@ -436,7 +493,7 @@ class ContentScriptContextChild extends BaseContext {
       throw new Error("Cannot inject extension API into non-extension window");
     }
 
-    // This is an iframe with content script API enabled (bug 1214658)
+    // This is an iframe with content script API enabled (See Bug 1214658)
     Schemas.exportLazyGetter(this.contentWindow,
                              "browser", () => this.chromeObj);
     Schemas.exportLazyGetter(this.contentWindow,
@@ -462,7 +519,7 @@ class ContentScriptContextChild extends BaseContext {
       }
 
       // Overwrite the content script APIs with an empty object if the APIs objects are still
-      // defined in the content window (bug 1214658).
+      // defined in the content window (See Bug 1214658).
       if (this.isExtensionPage) {
         Cu.createObjectIn(this.contentWindow, {defineAs: "browser"});
         Cu.createObjectIn(this.contentWindow, {defineAs: "chrome"});
@@ -507,7 +564,7 @@ DocumentManager = {
   initialized: false,
 
   lazyInit() {
-    if (this.initalized) {
+    if (this.initialized) {
       return;
     }
     this.initialized = true;
@@ -686,8 +743,14 @@ this.ExtensionContent = {
       return null;
     };
 
-    let promises = Array.from(this.enumerateWindows(global.docShell), executeInWin)
-                        .filter(promise => promise);
+    let promises;
+    try {
+      promises = Array.from(this.enumerateWindows(global.docShell), executeInWin)
+                      .filter(promise => promise);
+    } catch (e) {
+      Cu.reportError(e);
+      return Promise.reject({message: "An unexpected error occurred"});
+    }
 
     if (!promises.length) {
       if (options.frame_id) {
@@ -732,7 +795,12 @@ this.ExtensionContent = {
                                                docShell.ENUMERATE_FORWARDS);
 
     for (let docShell of XPCOMUtils.IterSimpleEnumerator(enum_, Ci.nsIInterfaceRequestor)) {
-      yield docShell.getInterface(Ci.nsIDOMWindow);
+      try {
+        yield docShell.getInterface(Ci.nsIDOMWindow);
+      } catch (e) {
+        // This can fail if the docShell is being destroyed, so just
+        // ignore the error.
+      }
     }
   },
 };

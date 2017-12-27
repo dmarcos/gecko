@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -43,21 +44,19 @@ class nsNumberControlFrame final : public nsContainerFrame
   explicit nsNumberControlFrame(nsStyleContext* aContext);
 
 public:
-  NS_DECL_QUERYFRAME_TARGET(nsNumberControlFrame)
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsNumberControlFrame)
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
   virtual void ContentStatesChanged(mozilla::EventStates aStates) override;
-  virtual bool IsLeaf() const override { return true; }
 
 #ifdef ACCESSIBILITY
   virtual mozilla::a11y::AccType AccessibleType() override;
 #endif
 
-  virtual nscoord GetMinISize(nsRenderingContext* aRenderingContext) override;
+  virtual nscoord GetMinISize(gfxContext* aRenderingContext) override;
 
-  virtual nscoord GetPrefISize(nsRenderingContext* aRenderingContext) override;
+  virtual nscoord GetPrefISize(gfxContext* aRenderingContext) override;
 
   virtual void Reflow(nsPresContext*           aPresContext,
                       ReflowOutput&     aDesiredSize,
@@ -65,7 +64,7 @@ public:
                       nsReflowStatus&          aStatus) override;
 
   virtual nsresult AttributeChanged(int32_t  aNameSpaceID,
-                                    nsIAtom* aAttribute,
+                                    nsAtom* aAttribute,
                                     int32_t  aModType) override;
 
   // nsIAnonymousContentCreator
@@ -79,8 +78,6 @@ public:
   }
 #endif
 
-  virtual nsIAtom* GetType() const override;
-
   virtual bool IsFrameOfType(uint32_t aFlags) const override
   {
     return nsContainerFrame::IsFrameOfType(aFlags &
@@ -89,7 +86,7 @@ public:
 
   // nsIFormControlFrame
   virtual void SetFocus(bool aOn, bool aRepaint) override;
-  virtual nsresult SetFormProperty(nsIAtom* aName, const nsAString& aValue) override;
+  virtual nsresult SetFormProperty(nsAtom* aName, const nsAString& aValue) override;
 
   /**
    * This method attempts to localizes aValue and then sets the result as the
@@ -158,7 +155,7 @@ public:
   /**
    * Our element had HTMLInputElement::Select() called on it.
    */
-  nsresult HandleSelectCall();
+  void HandleSelectCall();
 
   virtual Element* GetPseudoElement(CSSPseudoElementType aType) override;
 
@@ -169,7 +166,7 @@ private:
   nsITextControlFrame* GetTextFieldFrame();
   nsresult MakeAnonymousElement(Element** aResult,
                                 nsTArray<ContentInfo>& aElements,
-                                nsIAtom* aTagName,
+                                nsAtom* aTagName,
                                 CSSPseudoElementType aPseudoType);
 
   class SyncDisabledStateEvent;
@@ -178,7 +175,8 @@ private:
   {
   public:
     explicit SyncDisabledStateEvent(nsNumberControlFrame* aFrame)
-    : mFrame(aFrame)
+      : mozilla::Runnable("nsNumberControlFrame::SyncDisabledStateEvent")
+      , mFrame(aFrame)
     {}
 
     NS_IMETHOD Run() override

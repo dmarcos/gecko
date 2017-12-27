@@ -12,9 +12,9 @@ use dom::bindings::guard::Guard;
 use dom::bindings::utils::{DOM_PROTOTYPE_SLOT, ProtoOrIfaceArray, get_proto_or_iface_array};
 use js::error::throw_type_error;
 use js::glue::{RUST_SYMBOL_TO_JSID, UncheckedUnwrapObject};
-use js::jsapi::{Class, ClassOps, CompartmentOptions, GetGlobalForObjectCrossCompartment};
-use js::jsapi::{GetWellKnownSymbol, HandleObject, HandleValue, JSAutoCompartment};
-use js::jsapi::{JSClass, JSContext, JSFUN_CONSTRUCTOR, JSFunctionSpec, JSObject};
+use js::jsapi::{Class, ClassOps, CompartmentOptions};
+use js::jsapi::{GetGlobalForObjectCrossCompartment, GetWellKnownSymbol, HandleObject, HandleValue};
+use js::jsapi::{JSAutoCompartment, JSClass, JSContext, JSFUN_CONSTRUCTOR, JSFunctionSpec, JSObject};
 use js::jsapi::{JSPROP_PERMANENT, JSPROP_READONLY, JSPROP_RESOLVING};
 use js::jsapi::{JSPropertySpec, JSString, JSTracer, JSVersion, JS_AtomizeAndPinString};
 use js::jsapi::{JS_DefineProperty, JS_DefineProperty1, JS_DefineProperty2};
@@ -31,7 +31,7 @@ use libc;
 use std::ptr;
 
 /// The class of a non-callback interface object.
-#[derive(Copy, Clone)]
+#[derive(Clone, Copy)]
 pub struct NonCallbackInterfaceObjectClass {
     /// The SpiderMonkey Class structure.
     pub class: Class,
@@ -57,8 +57,8 @@ impl NonCallbackInterfaceObjectClass {
                 name: b"Function\0" as *const _ as *const libc::c_char,
                 flags: 0,
                 cOps: &constructor_behavior.0,
-                spec: ptr::null(),
-                ext: ptr::null(),
+                spec: 0 as *const _,
+                ext: 0 as *const _,
                 oOps: &OBJECT_OPS,
             },
             proto_id: proto_id,
@@ -149,7 +149,7 @@ pub unsafe fn create_global_object(
     // avoid getting trace hooks called on a partially initialized object.
     JS_SetReservedSlot(rval.get(), DOM_OBJECT_SLOT, PrivateValue(private));
     let proto_array: Box<ProtoOrIfaceArray> =
-        box [0 as *mut JSObject; PrototypeList::PROTO_OR_IFACE_LENGTH];
+        Box::new([0 as *mut JSObject; PrototypeList::PROTO_OR_IFACE_LENGTH]);
     JS_SetReservedSlot(rval.get(),
                        DOM_PROTOTYPE_SLOT,
                        PrivateValue(Box::into_raw(proto_array) as *const libc::c_void));
@@ -376,7 +376,7 @@ unsafe extern "C" fn has_instance_hook(cx: *mut JSContext,
 }
 
 /// Return whether a value is an instance of a given prototype.
-/// http://heycam.github.io/webidl/#es-interface-hasinstance
+/// <http://heycam.github.io/webidl/#es-interface-hasinstance>
 unsafe fn has_instance(
         cx: *mut JSContext,
         interface_object: HandleObject,

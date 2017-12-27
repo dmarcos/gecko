@@ -18,7 +18,7 @@
 #include "nsIGlobalObject.h"
 #include "nsPIDOMWindow.h"
 #include "nsWrapperCache.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 #include "nsTArray.h"
 #include "mozilla/dom/JSSlots.h"
 #include "mozilla/fallible.h"
@@ -27,10 +27,10 @@
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/Preferences.h"
 
-class nsGlobalWindow;
+class nsGlobalWindowInner;
 class nsIPrincipal;
 class nsScriptNameSpaceManager;
-class nsIMemoryReporterCallback;
+class nsIHandleReportCallback;
 
 namespace mozilla {
 namespace dom {
@@ -77,7 +77,11 @@ private:
 JSObject*
 TransplantObject(JSContext* cx, JS::HandleObject origobj, JS::HandleObject target);
 
-bool IsContentXBLScope(JSCompartment* compartment);
+JSObject*
+TransplantObjectRetainingXrayExpandos(JSContext* cx, JS::HandleObject origobj, JS::HandleObject target);
+
+bool IsContentXBLCompartment(JSCompartment* compartment);
+bool IsContentXBLScope(JS::Realm* realm);
 bool IsInContentXBLScope(JSObject* obj);
 
 // Return a raw XBL scope object corresponding to contentScope, which must
@@ -114,19 +118,22 @@ GetScopeForXBLExecution(JSContext* cx, JS::HandleObject obj, JSAddonId* addonId)
 // Returns whether XBL scopes have been explicitly disabled for code running
 // in this compartment. See the comment around mAllowContentXBLScope.
 bool
-AllowContentXBLScope(JSCompartment* c);
+AllowContentXBLScope(JS::Realm* realm);
 
-// Returns whether we will use an XBL scope for this compartment. This is
+// Returns whether we will use an XBL scope for this realm. This is
 // semantically equivalent to comparing global != GetXBLScope(global), but it
 // does not have the side-effect of eagerly creating the XBL scope if it does
 // not already exist.
 bool
-UseContentXBLScope(JSCompartment* c);
+UseContentXBLScope(JS::Realm* realm);
 
 // Clear out the content XBL scope (if any) on the given global.  This will
 // force creation of a new one if one is needed again.
 void
 ClearContentXBLScope(JSObject* global);
+
+bool
+IsAddonCompartment(JSCompartment* c);
 
 bool
 IsInAddonScope(JSObject* obj);
@@ -170,6 +177,35 @@ XrayAwareCalleeGlobalForSpecializedGetters(JSContext* cx,
 
 void
 TraceXPCGlobal(JSTracer* trc, JSObject* obj);
+
+/**
+ * Creates a new global object using the given aCOMObj as the global
+ * object. The object will be set up according to the flags (defined
+ * below). If you do not pass INIT_JS_STANDARD_CLASSES, then aCOMObj
+ * must implement nsIXPCScriptable so it can resolve the standard
+ * classes when asked by the JS engine.
+ *
+ * @param aJSContext the context to use while creating the global object.
+ * @param aCOMObj the native object that represents the global object.
+ * @param aPrincipal the principal of the code that will run in this
+ *                   compartment. Can be null if not on the main thread.
+ * @param aFlags one of the flags below specifying what options this
+ *               global object wants.
+ * @param aOptions JSAPI-specific options for the new compartment.
+ */
+nsresult
+InitClassesWithNewWrappedGlobal(JSContext* aJSContext,
+                                nsISupports* aCOMObj,
+                                nsIPrincipal* aPrincipal,
+                                uint32_t aFlags,
+                                JS::CompartmentOptions& aOptions,
+                                JS::MutableHandleObject aNewGlobal);
+
+enum InitClassesFlag {
+    INIT_JS_STANDARD_CLASSES  = 1 << 0,
+    DONT_FIRE_ONNEWGLOBALHOOK = 1 << 1,
+    OMIT_COMPONENTS_OBJECT    = 1 << 2,
+};
 
 } /* namespace xpc */
 
@@ -260,9 +296,9 @@ public:
 private:
     static const JSStringFinalizer sLiteralFinalizer, sDOMStringFinalizer;
 
-    static void FinalizeLiteral(JS::Zone* zone, const JSStringFinalizer* fin, char16_t* chars);
+    static void FinalizeLiteral(const JSStringFinalizer* fin, char16_t* chars);
 
-    static void FinalizeDOMString(JS::Zone* zone, const JSStringFinalizer* fin, char16_t* chars);
+    static void FinalizeDOMString(const JSStringFinalizer* fin, char16_t* chars);
 
     XPCStringConvert() = delete;
 };
@@ -398,7 +434,7 @@ private:
 void
 ReportJSRuntimeExplicitTreeStats(const JS::RuntimeStats& rtStats,
                                  const nsACString& rtPath,
-                                 nsIMemoryReporterCallback* handleReport,
+                                 nsIHandleReportCallback* handleReport,
                                  nsISupports* data,
                                  bool anonymize,
                                  size_t* rtTotal = nullptr);
@@ -413,7 +449,7 @@ Throw(JSContext* cx, nsresult rv);
  * Returns the nsISupports native behind a given reflector (either DOM or
  * XPCWN).
  */
-nsISupports*
+already_AddRefed<nsISupports>
 UnwrapReflectorToISupports(JSObject* reflector);
 
 /**
@@ -447,14 +483,14 @@ NativeGlobal(JSObject* aObj);
  * If |aObj| is a window, returns the associated nsGlobalWindow.
  * Otherwise, returns null.
  */
-nsGlobalWindow*
+nsGlobalWindowInner*
 WindowOrNull(JSObject* aObj);
 
 /**
  * If |aObj| has a window for a global, returns the associated nsGlobalWindow.
  * Otherwise, returns null.
  */
-nsGlobalWindow*
+nsGlobalWindowInner*
 WindowGlobalOrNull(JSObject* aObj);
 
 /**
@@ -462,14 +498,14 @@ WindowGlobalOrNull(JSObject* aObj);
  * live DOM Window, returns the associated nsGlobalWindow. Otherwise, returns
  * null.
  */
-nsGlobalWindow*
+nsGlobalWindowInner*
 AddonWindowOrNull(JSObject* aObj);
 
 /**
  * If |cx| is in a compartment whose global is a window, returns the associated
  * nsGlobalWindow. Otherwise, returns null.
  */
-nsGlobalWindow*
+nsGlobalWindowInner*
 CurrentWindowOrNull(JSContext* cx);
 
 void
@@ -617,6 +653,20 @@ IsInAutomation()
     return mozilla::Preferences::GetBool(prefName) &&
         AreNonLocalConnectionsDisabled();
 }
+
+void
+CreateCooperativeContext();
+
+void
+DestroyCooperativeContext();
+
+// Please see JS_YieldCooperativeContext in jsapi.h.
+void
+YieldCooperativeContext();
+
+// Please see JS_ResumeCooperativeContext in jsapi.h.
+void
+ResumeCooperativeContext();
 
 } // namespace xpc
 

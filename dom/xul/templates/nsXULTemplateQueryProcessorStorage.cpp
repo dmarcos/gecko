@@ -27,6 +27,7 @@
 #include "nsIChannel.h"
 #include "nsIDocument.h"
 #include "nsNetUtil.h"
+#include "nsTemplateMatch.h"
 
 //----------------------------------------------------------------------
 //
@@ -49,8 +50,8 @@ nsXULTemplateResultSetStorage::nsXULTemplateResultSetStorage(mozIStorageStatemen
         nsAutoCString name;
         rv = aStatement->GetColumnName(c, name);
         if (NS_SUCCEEDED(rv)) {
-            nsCOMPtr<nsIAtom> columnName = NS_Atomize(NS_LITERAL_CSTRING("?") + name);
-            mColumnNames.AppendObject(columnName);
+            RefPtr<nsAtom> columnName = NS_Atomize(NS_LITERAL_CSTRING("?") + name);
+            mColumnNames.AppendElement(columnName);
         }
     }
 }
@@ -86,9 +87,9 @@ nsXULTemplateResultSetStorage::GetNext(nsISupports **aResult)
 
 
 int32_t
-nsXULTemplateResultSetStorage::GetColumnIndex(nsIAtom* aColumnName)
+nsXULTemplateResultSetStorage::GetColumnIndex(nsAtom* aColumnName)
 {
-    int32_t count = mColumnNames.Count();
+    int32_t count = mColumnNames.Length();
     for (int32_t c = 0; c < count; c++) {
         if (mColumnNames[c] == aColumnName)
             return c;
@@ -103,7 +104,7 @@ nsXULTemplateResultSetStorage::FillColumnValues(nsCOMArray<nsIVariant>& aArray)
     if (!mStatement)
         return;
 
-    int32_t count = mColumnNames.Count();
+    int32_t count = mColumnNames.Length();
 
     for (int32_t c = 0; c < count; c++) {
         RefPtr<nsVariant> value = new nsVariant();
@@ -142,7 +143,7 @@ NS_IMPL_ISUPPORTS(nsXULTemplateQueryProcessorStorage,
                   nsIXULTemplateQueryProcessor)
 
 
-nsXULTemplateQueryProcessorStorage::nsXULTemplateQueryProcessorStorage() 
+nsXULTemplateQueryProcessorStorage::nsXULTemplateQueryProcessorStorage()
     : mGenerationStarted(false)
 {
 }
@@ -192,7 +193,7 @@ nsXULTemplateQueryProcessorStorage::GetDatasource(nsIArray* aDataSources,
     if (scheme.EqualsLiteral("profile")) {
 
         nsAutoCString path;
-        rv = uri->GetPath(path);
+        rv = uri->GetPathQueryRef(path);
         NS_ENSURE_SUCCESS(rv, rv);
 
         if (path.IsEmpty()) {
@@ -272,8 +273,8 @@ nsXULTemplateQueryProcessorStorage::Done()
 NS_IMETHODIMP
 nsXULTemplateQueryProcessorStorage::CompileQuery(nsIXULTemplateBuilder* aBuilder,
                                                  nsIDOMNode* aQueryNode,
-                                                 nsIAtom* aRefVariable,
-                                                 nsIAtom* aMemberVariable,
+                                                 nsAtom* aRefVariable,
+                                                 nsAtom* aMemberVariable,
                                                  nsISupports** aReturn)
 {
     nsCOMPtr<nsIDOMNodeList> childNodes;
@@ -286,7 +287,7 @@ nsXULTemplateQueryProcessorStorage::CompileQuery(nsIXULTemplateBuilder* aBuilder
     nsCOMPtr<nsIContent> queryContent = do_QueryInterface(aQueryNode);
     nsAutoString sqlQuery;
 
-    // Let's get all text nodes (which should be the query) 
+    // Let's get all text nodes (which should be the query)
     if (!nsContentUtils::GetNodeTextContent(queryContent, false, sqlQuery, fallible)) {
       return NS_ERROR_OUT_OF_MEMORY;
     }
@@ -410,8 +411,8 @@ nsXULTemplateQueryProcessorStorage::GenerateResults(nsISupports* aDatasource,
 
 NS_IMETHODIMP
 nsXULTemplateQueryProcessorStorage::AddBinding(nsIDOMNode* aRuleNode,
-                                               nsIAtom* aVar,
-                                               nsIAtom* aRef,
+                                               nsAtom* aVar,
+                                               nsAtom* aRef,
                                                const nsAString& aExpr)
 {
     return NS_OK;
@@ -433,7 +434,7 @@ nsXULTemplateQueryProcessorStorage::TranslateRef(nsISupports* aDatasource,
 NS_IMETHODIMP
 nsXULTemplateQueryProcessorStorage::CompareResults(nsIXULTemplateResult* aLeft,
                                                    nsIXULTemplateResult* aRight,
-                                                   nsIAtom* aVar,
+                                                   nsAtom* aVar,
                                                    uint32_t aSortHints,
                                                    int32_t* aResult)
 {

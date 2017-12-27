@@ -4,9 +4,14 @@
 
 "use strict";
 
-add_task(function*() {
+add_task(async function() {
   info("Check new window button existence and functionality");
-  yield PanelUI.show();
+  CustomizableUI.addWidgetToArea("new-window-button", CustomizableUI.AREA_FIXED_OVERFLOW_PANEL);
+  registerCleanupFunction(() => CustomizableUI.reset());
+
+  await waitForOverflowButtonShown();
+
+  await document.getElementById("nav-bar").overflowable.show();
   info("Menu panel was opened");
 
   let windowWasHandled = false;
@@ -24,7 +29,7 @@ add_task(function*() {
         }, {once: true});
       }
     }
-  }
+  };
 
   Services.ww.registerNotification(observerWindowOpened);
 
@@ -33,8 +38,8 @@ add_task(function*() {
   newWindowButton.click();
 
   try {
-    yield waitForCondition(() => windowWasHandled);
-    yield promiseWindowClosed(newWindow);
+    await waitForCondition(() => windowWasHandled);
+    await promiseWindowClosed(newWindow);
     info("The new window was closed");
   } catch (e) {
     ok(false, "The new browser window was not properly handled");

@@ -7,6 +7,8 @@
 #![deny(missing_docs)]
 
 use num_traits::ToPrimitive;
+#[allow(unused_imports)] use std::ascii::AsciiExt;
+use std::borrow::Cow;
 use std::convert::AsRef;
 use std::iter::{Filter, Peekable};
 use std::str::Split;
@@ -19,7 +21,7 @@ pub type StaticStringVec = &'static [&'static str];
 
 /// A "space character" according to:
 ///
-/// https://html.spec.whatwg.org/multipage/#space-character
+/// <https://html.spec.whatwg.org/multipage/#space-character>
 pub static HTML_SPACE_CHARACTERS: StaticCharVec = &[
     '\u{0020}',
     '\u{0009}',
@@ -56,7 +58,8 @@ pub fn split_commas<'a>(s: &'a str) -> Filter<Split<'a, char>, fn(&&str) -> bool
     s.split(',').filter(not_empty as fn(&&str) -> bool)
 }
 
-fn is_ascii_digit(c: &char) -> bool {
+/// Character is ascii digit
+pub fn is_ascii_digit(c: &char) -> bool {
     match *c {
         '0'...'9' => true,
         _ => false,
@@ -143,4 +146,20 @@ pub fn str_join<I, T>(strs: I, join: &str) -> String
         acc.push_str(s.as_ref());
         acc
     })
+}
+
+/// Returns true if a given string has a given prefix with case-insensitive match.
+pub fn starts_with_ignore_ascii_case(string: &str, prefix: &str) -> bool {
+    string.len() >= prefix.len() &&
+      string.as_bytes()[0..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+}
+
+/// Returns an ascii lowercase version of a string, only allocating if needed.
+pub fn string_as_ascii_lowercase<'a>(input: &'a str) -> Cow<'a, str> {
+    if input.bytes().any(|c| matches!(c, b'A'...b'Z')) {
+        input.to_ascii_lowercase().into()
+    } else {
+        // Already ascii lowercase.
+        Cow::Borrowed(input)
+    }
 }

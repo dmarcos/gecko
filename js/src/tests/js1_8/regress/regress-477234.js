@@ -17,13 +17,12 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
 
  
   for (iters = 0; iters < 11500; ++iters) {
-    for each (let x in ['', '', '']){}
+    for (let x of ['', '', '']){}
     eval("Object.defineProperty(__proto__, 'x', " +
          "{" +
          "  enumerable: true, configurable: true," +
@@ -44,6 +43,4 @@ function test()
   delete __proto__.x;
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

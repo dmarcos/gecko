@@ -51,9 +51,10 @@ TestInterruptShutdownRaceParent::RecvStartDeath()
 {
     // this will be ordered before the OnMaybeDequeueOne event of
     // Orphan in the queue
-    MessageLoop::current()->PostTask(
-        NewNonOwningRunnableMethod(this,
-				   &TestInterruptShutdownRaceParent::StartShuttingDown));
+    MessageLoop::current()->PostTask(NewNonOwningRunnableMethod(
+      "_ipdltest::TestInterruptShutdownRaceParent::StartShuttingDown",
+      this,
+      &TestInterruptShutdownRaceParent::StartShuttingDown));
     return IPC_OK();
 }
 
@@ -125,10 +126,8 @@ mozilla::ipc::IPCResult
 TestInterruptShutdownRaceChild::AnswerExit()
 {
     _exit(0);
-    NS_RUNTIMEABORT("unreached");
-    return IPC_FAIL_NO_REASON(this);
+    MOZ_CRASH("unreached");
 }
-
 
 } // namespace _ipdltest
 } // namespace mozilla

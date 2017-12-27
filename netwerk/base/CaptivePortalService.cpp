@@ -26,7 +26,7 @@ static LazyLogModule gCaptivePortalLog("CaptivePortalService");
 
 NS_IMPL_ISUPPORTS(CaptivePortalService, nsICaptivePortalService, nsIObserver,
                   nsISupportsWeakReference, nsITimerCallback,
-                  nsICaptivePortalCallback)
+                  nsICaptivePortalCallback, nsINamed)
 
 CaptivePortalService::CaptivePortalService()
   : mState(UNKNOWN)
@@ -85,8 +85,15 @@ CaptivePortalService::RearmTimer()
     mTimer->Cancel();
   }
 
+  // If we have successfully determined the state, and we have never detected
+  // a captive portal, we don't need to keep polling, but will rely on events
+  // to trigger detection.
+  if (mState == NOT_CAPTIVE) {
+    return NS_OK;
+  }
+
   if (!mTimer) {
-    mTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
+    mTimer = NS_NewTimer();
   }
 
   if (mTimer && mDelay > 0) {
@@ -272,6 +279,17 @@ CaptivePortalService::Notify(nsITimer *aTimer)
 }
 
 //-----------------------------------------------------------------------------
+// CaptivePortalService::nsINamed
+//-----------------------------------------------------------------------------
+
+NS_IMETHODIMP
+CaptivePortalService::GetName(nsACString& aName)
+{
+  aName.AssignLiteral("CaptivePortalService");
+  return NS_OK;
+}
+
+//-----------------------------------------------------------------------------
 // CaptivePortalService::nsIObserver
 //-----------------------------------------------------------------------------
 NS_IMETHODIMP
@@ -317,6 +335,17 @@ CaptivePortalService::Observe(nsISupports *aSubject,
   return NS_OK;
 }
 
+void
+CaptivePortalService::NotifyConnectivityAvailable(bool aCaptive)
+{
+  nsCOMPtr<nsIObserverService> observerService = services::GetObserverService();
+  if (observerService) {
+    nsCOMPtr<nsICaptivePortalService> cps(this);
+    observerService->NotifyObservers(cps, NS_CAPTIVE_PORTAL_CONNECTIVITY,
+                                     aCaptive ? u"captive" : u"clear");
+  }
+}
+
 //-----------------------------------------------------------------------------
 // CaptivePortalService::nsICaptivePortalCallback
 //-----------------------------------------------------------------------------
@@ -346,8 +375,10 @@ CaptivePortalService::Complete(bool success)
   if (success) {
     if (mEverBeenCaptive) {
       mState = UNLOCKED_PORTAL;
+      NotifyConnectivityAvailable(true);
     } else {
       mState = NOT_CAPTIVE;
+      NotifyConnectivityAvailable(false);
     }
   }
 

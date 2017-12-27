@@ -21,7 +21,7 @@ window.onload = Task.async(function* () {
   try {
     let ReactDOM = browserRequire("devtools/client/shared/vendor/react-dom");
     let React = browserRequire("devtools/client/shared/vendor/react");
-    let Frame = React.createFactory(browserRequire("devtools/client/shared/components/frame"));
+    let Frame = React.createFactory(browserRequire("devtools/client/shared/components/Frame"));
     ok(Frame, "Should get Frame");
 
     // Check when there's a column
@@ -287,12 +287,40 @@ window.onload = Task.async(function* () {
       tooltip: "View source in Debugger → http://www.cnn.com/:1",
     });
 
+    const resolvedLocation = {
+      sourceId: "whatever",
+      line: 23,
+      sourceUrl: "https://bugzilla.mozilla.org/original.js",
+    };
+    let mockSourceMapService = {
+      subscribe: function (url, line, column, callback) {
+	// Resolve immediately.
+        callback(true, resolvedLocation.sourceUrl, resolvedLocation.line);
+      },
+      unsubscribe: function (url, line, column, callback) {
+      },
+    };
+    yield checkFrameComponent({
+      frame: {
+	line: 97,
+	source: "https://bugzilla.mozilla.org/bundle.js",
+      },
+      sourceMapService: mockSourceMapService,
+    }, {
+      file: "original.js",
+      line: resolvedLocation.line,
+      shouldLink: true,
+      tooltip: "View source in Debugger → https://bugzilla.mozilla.org/original.js:23",
+      source: "https://bugzilla.mozilla.org/original.js",
+    });
+
     function* checkFrameComponent(input, expected) {
       let props = Object.assign({ onClick: () => {} }, input);
       let frame = ReactDOM.render(Frame(props), window.document.body);
       let el = ReactDOM.findDOMNode(frame);
       let { source } = input.frame;
       checkFrameString(Object.assign({ el, source }, expected));
+      ReactDOM.unmountComponentAtNode(window.document.body);
     }
 
   } catch (e) {

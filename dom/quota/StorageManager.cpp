@@ -11,6 +11,8 @@
 #include "mozilla/dom/StorageManagerBinding.h"
 #include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/ErrorResult.h"
+#include "mozilla/EventStateManager.h"
+#include "mozilla/Telemetry.h"
 #include "nsContentPermissionHelper.h"
 #include "nsIQuotaCallbacks.h"
 #include "nsIQuotaRequests.h"
@@ -69,12 +71,6 @@ public:
   {
     MOZ_ASSERT(NS_IsMainThread());
     MOZ_ASSERT(aProxy);
-  }
-
-  Type
-  GetType() const
-  {
-    return mType;
   }
 
   void
@@ -172,15 +168,18 @@ class PersistentStoragePermissionRequest final
 {
   nsCOMPtr<nsIPrincipal> mPrincipal;
   nsCOMPtr<nsPIDOMWindowInner> mWindow;
+  bool mIsHandlingUserInput;
   RefPtr<Promise> mPromise;
   nsCOMPtr<nsIContentPermissionRequester> mRequester;
 
 public:
   PersistentStoragePermissionRequest(nsIPrincipal* aPrincipal,
                                      nsPIDOMWindowInner* aWindow,
+                                     bool aIsHandlingUserInput,
                                      Promise* aPromise)
     : mPrincipal(aPrincipal)
     , mWindow(aWindow)
+    , mIsHandlingUserInput(aIsHandlingUserInput)
     , mPromise(aPromise)
   {
     MOZ_ASSERT(aPrincipal);
@@ -193,8 +192,9 @@ public:
   nsresult
   Start();
 
-  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_NSICONTENTPERMISSIONREQUEST
+  NS_DECL_CYCLE_COLLECTION_CLASS(PersistentStoragePermissionRequest)
 
 private:
   ~PersistentStoragePermissionRequest()
@@ -307,7 +307,10 @@ ExecuteOpOnMainOrWorkerThread(nsIGlobalObject* aGlobal,
 
       case RequestResolver::Type::Persist: {
         RefPtr<PersistentStoragePermissionRequest> request =
-          new PersistentStoragePermissionRequest(principal, window, promise);
+          new PersistentStoragePermissionRequest(principal,
+                                                 window,
+                                                 EventStateManager::IsHandlingUserInput(),
+                                                 promise);
 
         // In private browsing mode, no permission prompt.
         if (nsContentUtils::IsInPrivateBrowsing(doc)) {
@@ -698,8 +701,15 @@ PersistentStoragePermissionRequest::Start()
   return nsContentPermissionUtils::AskPermission(this, mWindow);
 }
 
-NS_IMPL_ISUPPORTS(PersistentStoragePermissionRequest,
-                  nsIContentPermissionRequest)
+NS_IMPL_CYCLE_COLLECTING_ADDREF(PersistentStoragePermissionRequest)
+NS_IMPL_CYCLE_COLLECTING_RELEASE(PersistentStoragePermissionRequest)
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(PersistentStoragePermissionRequest)
+  NS_INTERFACE_MAP_ENTRY(nsIContentPermissionRequest)
+  NS_INTERFACE_MAP_ENTRY(nsISupports)
+NS_INTERFACE_MAP_END
+
+NS_IMPL_CYCLE_COLLECTION(PersistentStoragePermissionRequest, mWindow, mPromise)
 
 NS_IMETHODIMP
 PersistentStoragePermissionRequest::GetPrincipal(nsIPrincipal** aPrincipal)
@@ -710,6 +720,13 @@ PersistentStoragePermissionRequest::GetPrincipal(nsIPrincipal** aPrincipal)
 
   NS_ADDREF(*aPrincipal = mPrincipal);
 
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+PersistentStoragePermissionRequest::GetIsHandlingUserInput(bool* aIsHandlingUserInput)
+{
+  *aIsHandlingUserInput = mIsHandlingUserInput;
   return NS_OK;
 }
 
@@ -830,6 +847,7 @@ StorageManager::Persist(ErrorResult& aRv)
 {
   MOZ_ASSERT(mOwner);
 
+  Telemetry::ScalarAdd(Telemetry::ScalarID::NAVIGATOR_STORAGE_PERSIST_COUNT, 1);
   return ExecuteOpOnMainOrWorkerThread(mOwner,
                                        RequestResolver::Type::Persist,
                                        aRv);
@@ -840,6 +858,8 @@ StorageManager::Estimate(ErrorResult& aRv)
 {
   MOZ_ASSERT(mOwner);
 
+  Telemetry::ScalarAdd(Telemetry::ScalarID::NAVIGATOR_STORAGE_ESTIMATE_COUNT,
+                       1);
   return ExecuteOpOnMainOrWorkerThread(mOwner,
                                        RequestResolver::Type::Estimate,
                                        aRv);

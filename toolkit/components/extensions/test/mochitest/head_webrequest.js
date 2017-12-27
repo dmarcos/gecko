@@ -1,12 +1,5 @@
 "use strict";
 
-// SelfSupport has a tendency to fire when running a test alone (it would
-// fire in some earlier test otherwise), without a good way to turn it off
-// we just set the url to "".
-SpecialPowers.pushPrefEnv({
-  set: [["browser.selfsupport.url", ""]],
-});
-
 let commonEvents = {
   "onBeforeRequest":     [{urls: ["<all_urls>"]}, ["blocking"]],
   "onBeforeSendHeaders": [{urls: ["<all_urls>"]}, ["blocking", "requestHeaders"]],
@@ -184,7 +177,7 @@ function background(events) {
       // Tests we don't need to do every event.
       browser.test.assertTrue(details.type.toUpperCase() in browser.webRequest.ResourceType, `valid resource type ${details.type}`);
       if (details.type == "main_frame") {
-        browser.test.assertEq(0, details.frameId, "frameId is zero when type is main_frame bug 1329299");
+        browser.test.assertEq(0, details.frameId, "frameId is zero when type is main_frame, see bug 1329299");
       }
     },
     onBeforeSendHeaders(expected, details, result) {
@@ -239,7 +232,11 @@ function background(events) {
         checkHeaders("response", expected, details);
       }
     },
-    onErrorOccurred() {},
+    onErrorOccurred(expected, details, result) {
+      if (expected.error) {
+        browser.test.assertEq(expected.error, details.error, "expected error message received in onErrorOccurred");
+      }
+    },
   };
 
   function getListener(name) {

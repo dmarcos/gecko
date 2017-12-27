@@ -1,6 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -14,6 +14,7 @@
 
 #include "nsColor.h"
 #include "nsCOMPtr.h"
+#include "nsAtom.h"
 #include "nsIStyleRule.h"
 #include "nsIStyleRuleProcessor.h"
 #include "PLDHashTable.h"
@@ -23,6 +24,7 @@
 
 class nsIDocument;
 class nsMappedAttributes;
+struct RawServoDeclarationBlock;
 
 class nsHTMLStyleSheet final : public nsIStyleRuleProcessor
 {
@@ -58,6 +60,16 @@ public:
   nsresult SetActiveLinkColor(nscolor aColor);
   nsresult SetVisitedLinkColor(nscolor aColor);
 
+  const RefPtr<RawServoDeclarationBlock>& GetServoUnvisitedLinkDecl() const {
+    return mServoUnvisitedLinkDecl;
+  }
+  const RefPtr<RawServoDeclarationBlock>& GetServoVisitedLinkDecl() const {
+    return mServoVisitedLinkDecl;
+  }
+  const RefPtr<RawServoDeclarationBlock>& GetServoActiveLinkDecl() const {
+    return mServoActiveLinkDecl;
+  }
+
   // Mapped Attribute management methods
   already_AddRefed<nsMappedAttributes>
     UniqueMappedAttributes(nsMappedAttributes* aMapped);
@@ -67,9 +79,9 @@ public:
   // and converting the ruledata to Servo specified values.
   void CalculateMappedServoDeclarations(nsPresContext* aPresContext);
 
-  nsIStyleRule* LangRuleFor(const nsString& aLanguage);
+  nsIStyleRule* LangRuleFor(const nsAtom* aLanguage);
 
-private: 
+private:
   nsHTMLStyleSheet(const nsHTMLStyleSheet& aCopy) = delete;
   nsHTMLStyleSheet& operator=(const nsHTMLStyleSheet& aCopy) = delete;
 
@@ -81,7 +93,9 @@ private:
   private:
     ~HTMLColorRule() {}
   public:
-    HTMLColorRule() {}
+    explicit HTMLColorRule(nscolor aColor)
+      : mColor(aColor)
+    {}
 
     NS_DECL_ISUPPORTS
 
@@ -94,11 +108,13 @@ private:
     virtual void List(FILE* out = stdout, int32_t aIndent = 0) const override;
   #endif
 
-    nscolor             mColor;
+    nscolor mColor;
   };
 
   // Implementation of SetLink/VisitedLink/ActiveLinkColor
-  nsresult ImplLinkColorSetter(RefPtr<HTMLColorRule>& aRule, nscolor aColor);
+  nsresult ImplLinkColorSetter(RefPtr<HTMLColorRule>& aRule,
+                               RefPtr<RawServoDeclarationBlock>& aDecl,
+                               nscolor aColor);
 
   class GenericTableRule;
   friend class GenericTableRule;
@@ -154,7 +170,7 @@ public: // for mLangRuleTable structures only
   private:
     ~LangRule() {}
   public:
-    explicit LangRule(const nsSubstring& aLang) : mLang(aLang) {}
+    explicit LangRule(nsAtom* aLang) : mLang(aLang) {}
 
     NS_DECL_ISUPPORTS
 
@@ -167,7 +183,7 @@ public: // for mLangRuleTable structures only
     virtual void List(FILE* out = stdout, int32_t aIndent = 0) const override;
   #endif
 
-    nsString mLang;
+    RefPtr<nsAtom> mLang;
   };
 
 private:
@@ -175,6 +191,9 @@ private:
   RefPtr<HTMLColorRule> mLinkRule;
   RefPtr<HTMLColorRule> mVisitedRule;
   RefPtr<HTMLColorRule> mActiveRule;
+  RefPtr<RawServoDeclarationBlock> mServoUnvisitedLinkDecl;
+  RefPtr<RawServoDeclarationBlock> mServoVisitedLinkDecl;
+  RefPtr<RawServoDeclarationBlock> mServoActiveLinkDecl;
   RefPtr<TableQuirkColorRule> mTableQuirkColorRule;
   RefPtr<TableTHRule>   mTableTHRule;
 

@@ -190,29 +190,15 @@ class LUDivOrModI64 : public LCallInstructionHelper<INT64_PIECES, INT64_PIECES*2
 };
 
 // LSoftDivI is a software divide for ARM cores that don't support a hardware
-// divide instruction.
-//
-// It is implemented as a proper C function so it trashes r0, r1, r2 and r3.
-// The call also trashes lr, and has the ability to trash ip. The function also
-// takes two arguments (dividend in r0, divisor in r1). The LInstruction gets
-// encoded such that the divisor and dividend are passed in their apropriate
-// registers and end their life at the start of the instruction by the use of
-// useFixedAtStart. The result is returned in r0 and the other three registers
-// that can be trashed are marked as temps. For the time being, the link
-// register is not marked as trashed because we never allocate to the link
-// register. The FP registers are not trashed.
-class LSoftDivI : public LBinaryMath<3>
+// divide instruction, implemented as a C++ native call.
+class LSoftDivI : public LBinaryCallInstructionHelper<1, 0>
 {
   public:
     LIR_HEADER(SoftDivI);
 
-    LSoftDivI(const LAllocation& lhs, const LAllocation& rhs,
-              const LDefinition& temp1, const LDefinition& temp2, const LDefinition& temp3) {
+    LSoftDivI(const LAllocation& lhs, const LAllocation& rhs) {
         setOperand(0, lhs);
         setOperand(1, rhs);
-        setTemp(0, temp1);
-        setTemp(1, temp2);
-        setTemp(2, temp3);
     }
 
     MDiv* mir() const {
@@ -268,25 +254,21 @@ class LModI : public LBinaryMath<1>
     }
 };
 
-class LSoftModI : public LBinaryMath<4>
+class LSoftModI : public LBinaryCallInstructionHelper<1, 1>
 {
   public:
     LIR_HEADER(SoftModI);
 
     LSoftModI(const LAllocation& lhs, const LAllocation& rhs,
-              const LDefinition& temp1, const LDefinition& temp2, const LDefinition& temp3,
-              const LDefinition& callTemp)
+              const LDefinition& temp)
     {
         setOperand(0, lhs);
         setOperand(1, rhs);
-        setTemp(0, temp1);
-        setTemp(1, temp2);
-        setTemp(2, temp3);
-        setTemp(3, callTemp);
+        setTemp(0, temp);
     }
 
     const LDefinition* callTemp() {
-        return getTemp(3);
+        return getTemp(0);
     }
 
     MMod* mir() const {
@@ -465,114 +447,18 @@ class LUMod : public LBinaryMath<0>
     }
 };
 
-class LSoftUDivOrMod : public LBinaryMath<3>
+class LSoftUDivOrMod : public LBinaryCallInstructionHelper<1, 0>
 {
   public:
     LIR_HEADER(SoftUDivOrMod);
 
-    LSoftUDivOrMod(const LAllocation& lhs, const LAllocation& rhs, const LDefinition& temp1,
-                   const LDefinition& temp2, const LDefinition& temp3) {
+    LSoftUDivOrMod(const LAllocation& lhs, const LAllocation& rhs) {
         setOperand(0, lhs);
         setOperand(1, rhs);
-        setTemp(0, temp1);
-        setTemp(1, temp2);
-        setTemp(2, temp3);
     }
 
     MInstruction* mir() {
         return mir_->toInstruction();
-    }
-};
-
-class LAsmJSCompareExchangeCallout : public LCallInstructionHelper<1, 4, 2>
-{
-  public:
-    LIR_HEADER(AsmJSCompareExchangeCallout)
-    LAsmJSCompareExchangeCallout(const LAllocation& ptr, const LAllocation& oldval,
-                                 const LAllocation& newval, const LAllocation& tls,
-                                 const LDefinition& temp1, const LDefinition& temp2)
-    {
-        setOperand(0, ptr);
-        setOperand(1, oldval);
-        setOperand(2, newval);
-        setOperand(3, tls);
-        setTemp(0, temp1);
-        setTemp(1, temp2);
-    }
-    const LAllocation* ptr() {
-        return getOperand(0);
-    }
-    const LAllocation* oldval() {
-        return getOperand(1);
-    }
-    const LAllocation* newval() {
-        return getOperand(2);
-    }
-    const LAllocation* tls() {
-        return getOperand(3);
-    }
-
-    const MAsmJSCompareExchangeHeap* mir() const {
-        return mir_->toAsmJSCompareExchangeHeap();
-    }
-};
-
-class LAsmJSAtomicExchangeCallout : public LCallInstructionHelper<1, 3, 2>
-{
-  public:
-    LIR_HEADER(AsmJSAtomicExchangeCallout)
-
-    LAsmJSAtomicExchangeCallout(const LAllocation& ptr, const LAllocation& value,
-                                const LAllocation& tls, const LDefinition& temp1,
-                                const LDefinition& temp2)
-    {
-        setOperand(0, ptr);
-        setOperand(1, value);
-        setOperand(2, tls);
-        setTemp(0, temp1);
-        setTemp(1, temp2);
-    }
-    const LAllocation* ptr() {
-        return getOperand(0);
-    }
-    const LAllocation* value() {
-        return getOperand(1);
-    }
-    const LAllocation* tls() {
-        return getOperand(2);
-    }
-
-    const MAsmJSAtomicExchangeHeap* mir() const {
-        return mir_->toAsmJSAtomicExchangeHeap();
-    }
-};
-
-class LAsmJSAtomicBinopCallout : public LCallInstructionHelper<1, 3, 2>
-{
-  public:
-    LIR_HEADER(AsmJSAtomicBinopCallout)
-    LAsmJSAtomicBinopCallout(const LAllocation& ptr, const LAllocation& value,
-                             const LAllocation& tls, const LDefinition& temp1,
-                             const LDefinition& temp2)
-    {
-        setOperand(0, ptr);
-        setOperand(1, value);
-        setOperand(2, tls);
-        setTemp(0, temp1);
-        setTemp(1, temp2);
-    }
-    const LAllocation* ptr() {
-        return getOperand(0);
-    }
-    const LAllocation* value() {
-        return getOperand(1);
-    }
-    const LAllocation* tls() {
-        return getOperand(2);
-    }
-
-    const MAsmJSAtomicBinopHeap* mir() const {
-        return mir_->toAsmJSAtomicBinopHeap();
     }
 };
 
@@ -581,8 +467,7 @@ class LWasmTruncateToInt64 : public LCallInstructionHelper<INT64_PIECES, 1, 0>
   public:
     LIR_HEADER(WasmTruncateToInt64);
 
-    LWasmTruncateToInt64(const LAllocation& in)
-    {
+    LWasmTruncateToInt64(const LAllocation& in) {
         setOperand(0, in);
     }
 
@@ -701,6 +586,147 @@ class LWasmUnalignedStoreI64 : public details::LWasmUnalignedStoreBase<1 + INT64
       : LWasmUnalignedStoreBase(ptr, ptrCopy, valueHelper)
     {
         setInt64Operand(1, value);
+    }
+};
+
+class LWasmAtomicLoadI64 : public LInstructionHelper<INT64_PIECES, 1, 0>
+{
+  public:
+    LIR_HEADER(WasmAtomicLoadI64);
+
+    LWasmAtomicLoadI64(const LAllocation& ptr) {
+        setOperand(0, ptr);
+    }
+
+    MWasmLoad* mir() const {
+        return mir_->toWasmLoad();
+    }
+    const LAllocation* ptr() {
+        return getOperand(0);
+    }
+};
+
+class LWasmAtomicStoreI64 : public LInstructionHelper<0, 1 + INT64_PIECES, 2>
+{
+  public:
+    LIR_HEADER(WasmAtomicStoreI64);
+
+    LWasmAtomicStoreI64(const LAllocation& ptr, const LInt64Allocation& value,
+                        const LDefinition& tmpLow, const LDefinition& tmpHigh)
+    {
+        setOperand(0, ptr);
+        setInt64Operand(1, value);
+        setTemp(0, tmpLow);
+        setTemp(1, tmpHigh);
+    }
+
+    MWasmStore* mir() const {
+        return mir_->toWasmStore();
+    }
+    const LAllocation* ptr() {
+        return getOperand(0);
+    }
+    const LInt64Allocation value() {
+        return getInt64Operand(1);
+    }
+    const LDefinition* tmpLow() {
+        return getTemp(0);
+    }
+    const LDefinition* tmpHigh() {
+        return getTemp(1);
+    }
+};
+
+class LWasmCompareExchangeI64 : public LInstructionHelper<INT64_PIECES, 1 + 2*INT64_PIECES, 0>
+{
+  public:
+    LIR_HEADER(WasmCompareExchangeI64);
+
+    LWasmCompareExchangeI64(const LAllocation& ptr, const LInt64Allocation& expected,
+                            const LInt64Allocation& replacement)
+    {
+        setOperand(0, ptr);
+        setInt64Operand(1, expected);
+        setInt64Operand(1 + INT64_PIECES, replacement);
+    }
+
+    MWasmCompareExchangeHeap* mir() const {
+        return mir_->toWasmCompareExchangeHeap();
+    }
+    const LAllocation* ptr() {
+        return getOperand(0);
+    }
+    const LInt64Allocation expected() {
+        return getInt64Operand(1);
+    }
+    const LInt64Allocation replacement() {
+        return getInt64Operand(1 + INT64_PIECES);
+    }
+};
+
+class LWasmAtomicBinopI64 : public LInstructionHelper<INT64_PIECES, 1 + INT64_PIECES, 2>
+{
+    const wasm::MemoryAccessDesc& access_;
+    AtomicOp op_;
+
+  public:
+    LIR_HEADER(WasmAtomicBinopI64);
+
+    LWasmAtomicBinopI64(const LAllocation& ptr, const LInt64Allocation& value,
+                        const LDefinition& tmpLow, const LDefinition& tmpHigh,
+                        const wasm::MemoryAccessDesc& access, AtomicOp op)
+      : access_(access),
+        op_(op)
+    {
+        setOperand(0, ptr);
+        setInt64Operand(1, value);
+        setTemp(0, tmpLow);
+        setTemp(1, tmpHigh);
+    }
+
+    const LAllocation* ptr() {
+        return getOperand(0);
+    }
+    const LInt64Allocation value() {
+        return getInt64Operand(1);
+    }
+    const wasm::MemoryAccessDesc& access() {
+        return access_;
+    }
+    AtomicOp operation() const {
+        return op_;
+    }
+    const LDefinition* tmpLow() {
+        return getTemp(0);
+    }
+    const LDefinition* tmpHigh() {
+        return getTemp(1);
+    }
+};
+
+class LWasmAtomicExchangeI64 : public LInstructionHelper<INT64_PIECES, 1 + INT64_PIECES, 0>
+{
+    const wasm::MemoryAccessDesc& access_;
+
+  public:
+    LIR_HEADER(WasmAtomicExchangeI64);
+
+    LWasmAtomicExchangeI64(const LAllocation& ptr, const LInt64Allocation& value,
+                           const wasm::MemoryAccessDesc& access)
+      : access_(access)
+    {
+        setOperand(0, ptr);
+        setInt64Operand(1, value);
+    }
+
+    const LAllocation* ptr() {
+        return getOperand(0);
+    }
+    const LInt64Allocation value() {
+        return getInt64Operand(1);
+    }
+    const wasm::MemoryAccessDesc& access() {
+        return access_;
     }
 };
 

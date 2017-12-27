@@ -13,6 +13,7 @@ this.EXPORTED_SYMBOLS = ["Doctor"];
 
 const Cu = Components.utils;
 
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://services-common/async.js");
@@ -71,7 +72,7 @@ this.Doctor = {
       try {
         for (let [collection, requestor] of Object.entries(this._getAllRepairRequestors())) {
           try {
-            let advanced = requestor.continueRepairs();
+            let advanced = await requestor.continueRepairs();
             log.info(`${collection} reparier ${advanced ? "advanced" : "did not advance"}.`);
           } catch (ex) {
             if (Async.isShutdownException(ex)) {
@@ -81,7 +82,7 @@ this.Doctor = {
           }
         }
       } finally {
-        this.lastRepairAdvance = this._now();
+        this.lastRepairAdvance = Math.floor(this._now());
       }
     }
   },
@@ -136,7 +137,7 @@ this.Doctor = {
     if (Object.values(engineInfos).filter(i => i.maxRecords != -1).length != 0) {
       // at least some of the engines have maxRecord restrictions which require
       // us to ask the server for the counts.
-      let countInfo = this._fetchCollectionCounts();
+      let countInfo = await this._fetchCollectionCounts();
       for (let [engineName, recordCount] of Object.entries(countInfo)) {
         if (engineName in engineInfos) {
           engineInfos[engineName].recordCount = recordCount;
@@ -185,14 +186,14 @@ this.Doctor = {
           throw ex;
         }
         log.error(`Failed to run validation on ${engine.name}!`, ex);
-        Observers.notify("weave:engine:validate:error", ex, engine.name)
+        Observers.notify("weave:engine:validate:error", ex, engine.name);
         // Keep validating -- there's no reason to think that a failure for one
         // validator would mean the others will fail.
       }
     }
   },
 
-  _maybeCure(engine, validationResults, flowID) {
+  async _maybeCure(engine, validationResults, flowID) {
     if (!this._shouldRepair(engine)) {
       log.info(`Skipping repair of ${engine.name} - disabled via preferences`);
       return;
@@ -205,7 +206,7 @@ this.Doctor = {
         return; // TODO: It would be nice if we could request a validation to be
                 // done on next sync.
       }
-      didStart = requestor.startRepairs(validationResults, flowID);
+      didStart = await requestor.startRepairs(validationResults, flowID);
     }
     log.info(`${didStart ? "did" : "didn't"} start a repair of ${engine.name} with flowID ${flowID}`);
   },
@@ -215,10 +216,10 @@ this.Doctor = {
   },
 
   // mainly for mocking.
-  _fetchCollectionCounts() {
+  async _fetchCollectionCounts() {
     let collectionCountsURL = Service.userBaseURL + "info/collection_counts";
     try {
-      let infoResp = Service._fetchInfo(collectionCountsURL);
+      let infoResp = await Service._fetchInfo(collectionCountsURL);
       if (!infoResp.success) {
         log.error("Can't fetch collection counts: request to info/collection_counts responded with "
                         + infoResp.status);
@@ -246,7 +247,7 @@ this.Doctor = {
   // functions used so tests can mock them
   _now() {
     // We use the server time, which is SECONDS
-    return AsyncResource.serverTime;
+    return Resource.serverTime;
   },
 
   _getRepairRequestor(name) {
@@ -256,4 +257,4 @@ this.Doctor = {
   _getAllRepairRequestors() {
     return getAllRepairRequestors();
   }
-}
+};

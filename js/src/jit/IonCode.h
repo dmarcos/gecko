@@ -29,9 +29,29 @@ class MacroAssembler;
 class PatchableBackedge;
 class IonBuilder;
 class IonICEntry;
+class JitCode;
 
 typedef Vector<JSObject*, 4, JitAllocPolicy> ObjectVector;
 typedef Vector<TraceLoggerEvent, 0, SystemAllocPolicy> TraceLoggerEventVector;
+
+// Header at start of raw code buffer
+struct JitCodeHeader
+{
+    // Link back to corresponding gcthing
+    JitCode*    jitCode_;
+
+    // !!! NOTE !!!
+    // If we are running on AMD Bobcat, insert a NOP-slide at end of the JitCode
+    // header so we can try to recover when the CPU screws up the branch landing
+    // site. See Bug 1281759.
+    void*       nops_;
+
+    void init(JitCode* jitCode);
+
+    static JitCodeHeader* FromExecutable(uint8_t* buffer) {
+        return (JitCodeHeader*)(buffer - sizeof(JitCodeHeader));
+    }
+};
 
 class JitCode : public gc::TenuredCell
 {
@@ -43,18 +63,12 @@ class JitCode : public gc::TenuredCell
     uint32_t dataSize_;               // Size of the read-only data area.
     uint32_t jumpRelocTableBytes_;    // Size of the jump relocation table.
     uint32_t dataRelocTableBytes_;    // Size of the data relocation table.
-    uint32_t preBarrierTableBytes_;   // Size of the prebarrier table.
     uint8_t headerSize_ : 5;          // Number of bytes allocated before codeStart.
     uint8_t kind_ : 3;                // jit::CodeKind, for the memory reporters.
     bool invalidated_ : 1;            // Whether the code object has been invalidated.
                                       // This is necessary to prevent GC tracing.
     bool hasBytecodeMap_ : 1;         // Whether the code object has been registered with
                                       // native=>bytecode mapping tables.
-
-#if JS_BITS_PER_WORD == 32
-    // Ensure JitCode is gc::Cell aligned.
-    uint32_t padding_;
-#endif
 
     JitCode()
       : code_(nullptr),
@@ -69,7 +83,6 @@ class JitCode : public gc::TenuredCell
         dataSize_(0),
         jumpRelocTableBytes_(0),
         dataRelocTableBytes_(0),
-        preBarrierTableBytes_(0),
         headerSize_(headerSize),
         kind_(kind),
         invalidated_(false),
@@ -87,9 +100,6 @@ class JitCode : public gc::TenuredCell
     }
     uint32_t dataRelocTableOffset() const {
         return jumpRelocTableOffset() + jumpRelocTableBytes_;
-    }
-    uint32_t preBarrierTableOffset() const {
-        return dataRelocTableOffset() + dataRelocTableBytes_;
     }
 
   public:
@@ -139,7 +149,7 @@ class JitCode : public gc::TenuredCell
     void copyFrom(MacroAssembler& masm);
 
     static JitCode* FromExecutable(uint8_t* buffer) {
-        JitCode* code = *(JitCode**)(buffer - sizeof(JitCode*));
+        JitCode* code = JitCodeHeader::FromExecutable(buffer)->jitCode_;
         MOZ_ASSERT(code->raw() == buffer);
         return code;
     }
@@ -177,9 +187,6 @@ struct IonScript
   private:
     // Code pointer containing the actual method.
     PreBarrieredJitCode method_;
-
-    // Deoptimization table used by this method.
-    PreBarrieredJitCode deoptTable_;
 
     // Entrypoint for OSR, or nullptr.
     jsbytecode* osrPc_;
@@ -373,9 +380,6 @@ struct IonScript
         MOZ_ASSERT(!invalidated());
         method_ = code;
     }
-    void setDeoptTable(JitCode* code) {
-        deoptTable_ = code;
-    }
     void setOsrPc(jsbytecode* osrPc) {
         osrPc_ = osrPc;
     }
@@ -437,7 +441,7 @@ struct IonScript
     }
     MOZ_MUST_USE bool addTraceLoggerEvent(TraceLoggerEvent& event) {
         MOZ_ASSERT(event.hasTextId());
-        return traceLoggerEvents_.append(Move(event));
+        return traceLoggerEvents_.append(mozilla::Move(event));
     }
     const uint8_t* snapshots() const {
         return reinterpret_cast<const uint8_t*>(this) + snapshots_;
@@ -512,7 +516,6 @@ struct IonScript
     size_t runtimeSize() const {
         return runtimeSize_;
     }
-    void toggleBarriers(bool enabled, ReprotectCode reprotect = Reprotect);
     void purgeICs(Zone* zone);
     void unlinkFromRuntime(FreeOp* fop);
     void copySnapshots(const SnapshotWriter* writer);
@@ -750,7 +753,9 @@ struct AutoFlushICache
 #if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64) || defined(JS_CODEGEN_MIPS32) || defined(JS_CODEGEN_MIPS64)
     uintptr_t start_;
     uintptr_t stop_;
+#ifdef JS_JITSPEW
     const char* name_;
+#endif
     bool inhibit_;
     AutoFlushICache* prev_;
 #endif

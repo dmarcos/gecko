@@ -9,19 +9,18 @@
  */
 
 const URIS = [
-  "http://a.example1.com/"
-, "http://b.example1.com/"
-, "http://b.example2.com/"
-, "http://c.example3.com/"
+  "http://a.example1.com/",
+  "http://b.example1.com/",
+  "http://b.example2.com/",
+  "http://c.example3.com/"
 ];
 
 const TOPIC_CONNECTION_CLOSED = "places-connection-closed";
 
 var EXPECTED_NOTIFICATIONS = [
-  "places-shutdown"
-, "places-will-close-connection"
-, "places-expiration-finished"
-, "places-connection-closed"
+  "places-shutdown",
+  "places-expiration-finished",
+  "places-connection-closed"
 ];
 
 const UNEXPECTED_NOTIFICATIONS = [
@@ -40,12 +39,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "FormHistory",
 
 var timeInMicroseconds = Date.now() * 1000;
 
-function run_test() {
-  run_next_test();
-}
-
-add_task(function* test_execute() {
-  do_print("Initialize browserglue before Places");
+add_task(async function test_execute() {
+  info("Initialize browserglue before Places");
 
   // Avoid default bookmarks import.
   let glue = Cc["@mozilla.org/browser/browserglue;1"].
@@ -66,23 +61,23 @@ add_task(function* test_execute() {
 
   Services.prefs.setBoolPref("privacy.sanitize.sanitizeOnShutdown", true);
 
-  do_print("Add visits.");
+  info("Add visits.");
   for (let aUrl of URIS) {
-    yield PlacesTestUtils.addVisits({
+    await PlacesTestUtils.addVisits({
       uri: uri(aUrl), visitDate: timeInMicroseconds++,
       transition: PlacesUtils.history.TRANSITION_TYPED
     });
   }
-  do_print("Add cache.");
-  yield storeCache(FTP_URL, "testData");
-  do_print("Add form history.");
-  yield addFormHistory();
-  Assert.equal((yield getFormHistoryCount()), 1, "Added form history");
+  info("Add cache.");
+  await storeCache(FTP_URL, "testData");
+  info("Add form history.");
+  await addFormHistory();
+  Assert.equal((await getFormHistoryCount()), 1, "Added form history");
 
-  do_print("Simulate and wait shutdown.");
-  yield shutdownPlaces();
+  info("Simulate and wait shutdown.");
+  await shutdownPlaces();
 
-  Assert.equal((yield getFormHistoryCount()), 0, "Form history cleared");
+  Assert.equal((await getFormHistoryCount()), 0, "Form history cleared");
 
   let stmt = DBConn(true).createStatement(
     "SELECT id FROM moz_places WHERE url = :page_url "
@@ -91,16 +86,16 @@ add_task(function* test_execute() {
   try {
     URIS.forEach(function(aUrl) {
       stmt.params.page_url = aUrl;
-      do_check_false(stmt.executeStep());
+      Assert.ok(!stmt.executeStep());
       stmt.reset();
     });
   } finally {
     stmt.finalize();
   }
 
-  do_print("Check cache");
+  info("Check cache");
   // Check cache.
-  yield checkCache(FTP_URL);
+  await checkCache(FTP_URL);
 });
 
 function addFormHistory() {
@@ -138,7 +133,7 @@ function storeCache(aURL, aContent) {
       },
 
       onCacheEntryAvailable(entry, isnew, appcache, status) {
-        do_check_eq(status, Cr.NS_OK);
+        Assert.equal(status, Cr.NS_OK);
 
         entry.setMetaDataElement("servertype", "0");
         var os = entry.openOutputStream(0);
@@ -169,7 +164,7 @@ function checkCache(aURL) {
   return new Promise(resolve => {
     let checkCacheListener = {
       onCacheEntryAvailable(entry, isnew, appcache, status) {
-        do_check_eq(status, Cr.NS_ERROR_CACHE_KEY_NOT_FOUND);
+        Assert.equal(status, Cr.NS_ERROR_CACHE_KEY_NOT_FOUND);
         resolve();
       }
     };

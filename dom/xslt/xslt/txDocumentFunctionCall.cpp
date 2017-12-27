@@ -127,9 +127,9 @@ DocumentFunctionCall::evaluate(txIEvalContext* aContext,
             }
             retrieveNode(es, uriStr, baseURI, nodeSet);
         }
-        
+
         NS_ADDREF(*aResult = nodeSet);
-        
+
         return NS_OK;
     }
 
@@ -158,7 +158,7 @@ DocumentFunctionCall::isSensitiveTo(ContextSensitivity aContext)
 
 #ifdef TX_TO_STRING
 nsresult
-DocumentFunctionCall::getNameAtom(nsIAtom** aAtom)
+DocumentFunctionCall::getNameAtom(nsAtom** aAtom)
 {
     *aAtom = nsGkAtoms::document;
     NS_ADDREF(*aAtom);

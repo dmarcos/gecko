@@ -16,6 +16,10 @@
 
 namespace mozilla {
 
+namespace dom {
+class DocGroup;
+} // namespace dom
+
 class ServoDeclarationBlock;
 class ServoPageRule;
 
@@ -26,13 +30,16 @@ public:
 
   NS_IMETHOD GetParentRule(nsIDOMCSSRule** aParent) final;
   nsINode* GetParentObject() final;
+  DocGroup* GetDocGroup() const final;
 
 protected:
   DeclarationBlock* GetCSSDeclaration(Operation aOperation) final;
   nsresult SetCSSDeclaration(DeclarationBlock* aDecl) final;
   nsIDocument* DocToUpdate() final;
-  void GetCSSParsingEnvironment(CSSParsingEnvironment& aCSSParseEnv) final;
-  URLExtraData* GetURLData() const final;
+  void GetCSSParsingEnvironment(CSSParsingEnvironment& aCSSParseEnv,
+                                nsIPrincipal* aSubjectPrincipal) final;
+  nsDOMCSSDeclaration::ServoCSSParsingEnvironment
+  GetServoCSSParsingEnvironment(nsIPrincipal* aSubjectPrincipal) const final;
 
 private:
   // For accessing the constructor.
@@ -51,7 +58,8 @@ private:
 class ServoPageRule final : public dom::CSSPageRule
 {
 public:
-  explicit ServoPageRule(RefPtr<RawServoPageRule> aRawRule);
+  ServoPageRule(RefPtr<RawServoPageRule> aRawRule,
+                uint32_t aLine, uint32_t aColumn);
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(

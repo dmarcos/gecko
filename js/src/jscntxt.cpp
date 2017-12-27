@@ -14,6 +14,7 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Sprintf.h"
+#include "mozilla/Unused.h"
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -32,7 +33,6 @@
 #include "jsdtoa.h"
 #include "jsexn.h"
 #include "jsfun.h"
-#include "jsgc.h"
 #include "jsiter.h"
 #include "jsnativestack.h"
 #include "jsobj.h"
@@ -42,7 +42,6 @@
 #include "jsscript.h"
 #include "jsstr.h"
 #include "jstypes.h"
-#include "jswatchpoint.h"
 #include "jswin.h"
 
 #include "gc/Marking.h"
@@ -148,6 +147,11 @@ js::NewContext(uint32_t maxBytes, uint32_t maxNurseryBytes, JSRuntime* parentRun
 
     MOZ_RELEASE_ASSERT(!TlsContext.get());
 
+#if defined(DEBUG) || defined(JS_OOM_BREAKPOINT)
+    js::oom::SetThreadType(!parentRuntime ? js::THREAD_TYPE_COOPERATING
+                                          : js::THREAD_TYPE_WORKER);
+#endif
+
     JSRuntime* runtime = js_new<JSRuntime>(parentRuntime);
     if (!runtime)
         return nullptr;
@@ -208,6 +212,20 @@ js::ResumeCooperativeContext(JSContext* cx)
     cx->runtime()->setActiveContext(cx);
 }
 
+static void
+FreeJobQueueHandling(JSContext* cx)
+{
+    if (!cx->jobQueue)
+        return;
+
+    cx->jobQueue->reset();
+    FreeOp* fop = cx->defaultFreeOp();
+    fop->delete_(cx->jobQueue.ref());
+    cx->getIncumbentGlobalCallback = nullptr;
+    cx->enqueuePromiseJobCallback = nullptr;
+    cx->enqueuePromiseJobCallbackData = nullptr;
+}
+
 void
 js::DestroyContext(JSContext* cx)
 {
@@ -224,11 +242,16 @@ js::DestroyContext(JSContext* cx)
     // zone group. See HelperThread::handleIonWorkload.
     CancelOffThreadIonCompile(cx->runtime());
 
+    FreeJobQueueHandling(cx);
+
     if (cx->runtime()->cooperatingContexts().length() == 1) {
+        // Flush promise tasks executing in helper threads early, before any parts
+        // of the JSRuntime that might be visible to helper threads are torn down.
+        cx->runtime()->offThreadPromiseState.ref().shutdown(cx);
+
         // Destroy the runtime along with its last context.
         cx->runtime()->destroyRuntime();
         js_delete(cx->runtime());
-
         js_delete_poison(cx);
     } else {
         DebugOnly<bool> found = false;
@@ -329,7 +352,7 @@ PopulateReportBlame(JSContext* cx, JSErrorReport* report)
  * Furthermore, callers of ReportOutOfMemory (viz., malloc) assume a GC does
  * not occur, so GC must be avoided or suppressed.
  */
-void
+JS_FRIEND_API(void)
 js::ReportOutOfMemory(JSContext* cx)
 {
 #ifdef JS_MORE_DETERMINISTIC
@@ -467,14 +490,6 @@ js::ReportErrorVA(JSContext* cx, unsigned flags, const char* format,
 void
 js::ReportUsageErrorASCII(JSContext* cx, HandleObject callee, const char* msg)
 {
-    const char* usageStr = "usage";
-    PropertyName* usageAtom = Atomize(cx, usageStr, strlen(usageStr))->asPropertyName();
-    RootedId id(cx, NameToId(usageAtom));
-    DebugOnly<Shape*> shape = static_cast<Shape*>(callee->as<JSFunction>().lookup(cx, id));
-    MOZ_ASSERT(!shape->configurable());
-    MOZ_ASSERT(!shape->writable());
-    MOZ_ASSERT(shape->hasDefaultGetter());
-
     RootedValue usage(cx);
     if (!JS_GetProperty(cx, callee, "usage", &usage))
         return;
@@ -541,14 +556,13 @@ static bool
 PrintSingleError(JSContext* cx, FILE* file, JS::ConstUTF8CharsZ toStringResult,
                  T* report, PrintErrorKind kind)
 {
-    UniquePtr<char> prefix;
+    UniqueChars prefix;
     if (report->filename)
-        prefix.reset(JS_smprintf("%s:", report->filename));
+        prefix = JS_smprintf("%s:", report->filename);
 
     if (report->lineno) {
-        UniquePtr<char> tmp(JS_smprintf("%s%u:%u ", prefix ? prefix.get() : "", report->lineno,
-                                        report->column));
-        prefix = Move(tmp);
+        prefix = JS_smprintf("%s%u:%u ", prefix ? prefix.get() : "", report->lineno,
+                                        report->column);
     }
 
     if (kind != PrintErrorKind::Error) {
@@ -567,8 +581,7 @@ PrintSingleError(JSContext* cx, FILE* file, JS::ConstUTF8CharsZ toStringResult,
             break;
         }
 
-        UniquePtr<char> tmp(JS_smprintf("%s%s: ", prefix ? prefix.get() : "", kindPrefix));
-        prefix = Move(tmp);
+        prefix = JS_smprintf("%s%s: ", prefix ? prefix.get() : "", kindPrefix);
     }
 
     const char* message = toStringResult ? toStringResult.c_str() : report->message().c_str();
@@ -579,7 +592,7 @@ PrintSingleError(JSContext* cx, FILE* file, JS::ConstUTF8CharsZ toStringResult,
         ctmp++;
         if (prefix)
             fputs(prefix.get(), file);
-        fwrite(message, 1, ctmp - message, file);
+        mozilla::Unused << fwrite(message, 1, ctmp - message, file);
         message = ctmp;
     }
 
@@ -1039,7 +1052,7 @@ js::CreateErrorNotesArray(JSContext* cx, JSErrorReport* report)
         if (!messageStr)
             return nullptr;
         RootedValue messageVal(cx, StringValue(messageStr));
-        if (!DefineProperty(cx, noteObj, cx->names().message, messageVal))
+        if (!DefineDataProperty(cx, noteObj, cx->names().message, messageVal))
             return nullptr;
 
         RootedValue filenameVal(cx);
@@ -1049,14 +1062,14 @@ js::CreateErrorNotesArray(JSContext* cx, JSErrorReport* report)
                 return nullptr;
             filenameVal = StringValue(filenameStr);
         }
-        if (!DefineProperty(cx, noteObj, cx->names().fileName, filenameVal))
+        if (!DefineDataProperty(cx, noteObj, cx->names().fileName, filenameVal))
             return nullptr;
 
         RootedValue linenoVal(cx, Int32Value(note->lineno));
-        if (!DefineProperty(cx, noteObj, cx->names().lineNumber, linenoVal))
+        if (!DefineDataProperty(cx, noteObj, cx->names().lineNumber, linenoVal))
             return nullptr;
         RootedValue columnVal(cx, Int32Value(note->column));
-        if (!DefineProperty(cx, noteObj, cx->names().columnNumber, columnVal))
+        if (!DefineDataProperty(cx, noteObj, cx->names().columnNumber, columnVal))
             return nullptr;
 
         if (!NewbornArrayPush(cx, notesArray, ObjectValue(*noteObj)))
@@ -1093,6 +1106,141 @@ JSContext::recoverFromOutOfMemory()
             MOZ_ASSERT(isThrowingOutOfMemory());
             clearPendingException();
         }
+    }
+}
+
+static bool
+InternalEnqueuePromiseJobCallback(JSContext* cx, JS::HandleObject job,
+                                  JS::HandleObject allocationSite,
+                                  JS::HandleObject incumbentGlobal, void* data)
+{
+    MOZ_ASSERT(job);
+    return cx->jobQueue->append(job);
+}
+
+namespace {
+class MOZ_STACK_CLASS ReportExceptionClosure : public ScriptEnvironmentPreparer::Closure
+{
+  public:
+    explicit ReportExceptionClosure(HandleValue exn)
+        : exn_(exn)
+    {
+    }
+
+    bool operator()(JSContext* cx) override
+    {
+        cx->setPendingException(exn_);
+        return false;
+    }
+
+  private:
+    HandleValue exn_;
+};
+} // anonymous namespace
+
+JS_FRIEND_API(bool)
+js::UseInternalJobQueues(JSContext* cx, bool cooperative)
+{
+    // Internal job queue handling must be set up very early. Self-hosting
+    // initialization is as good a marker for that as any.
+    MOZ_RELEASE_ASSERT(cooperative || !cx->runtime()->hasInitializedSelfHosting(),
+                       "js::UseInternalJobQueues must be called early during runtime startup.");
+    MOZ_ASSERT(!cx->jobQueue);
+    auto* queue = js_new<PersistentRooted<JobQueue>>(cx, JobQueue(SystemAllocPolicy()));
+    if (!queue)
+        return false;
+
+    cx->jobQueue = queue;
+
+    if (!cooperative)
+        cx->runtime()->offThreadPromiseState.ref().initInternalDispatchQueue();
+    MOZ_ASSERT(cx->runtime()->offThreadPromiseState.ref().initialized());
+
+    JS::SetEnqueuePromiseJobCallback(cx, InternalEnqueuePromiseJobCallback);
+
+    return true;
+}
+
+JS_FRIEND_API(void)
+js::StopDrainingJobQueue(JSContext* cx)
+{
+    MOZ_ASSERT(cx->jobQueue);
+    cx->stopDrainingJobQueue = true;
+}
+
+JS_FRIEND_API(void)
+js::RunJobs(JSContext* cx)
+{
+    MOZ_ASSERT(cx->jobQueue);
+
+    if (cx->drainingJobQueue || cx->stopDrainingJobQueue)
+        return;
+
+    while (true) {
+        cx->runtime()->offThreadPromiseState.ref().internalDrain(cx);
+
+        // It doesn't make sense for job queue draining to be reentrant. At the
+        // same time we don't want to assert against it, because that'd make
+        // drainJobQueue unsafe for fuzzers. We do want fuzzers to test this,
+        // so we simply ignore nested calls of drainJobQueue.
+        cx->drainingJobQueue = true;
+
+        RootedObject job(cx);
+        JS::HandleValueArray args(JS::HandleValueArray::empty());
+        RootedValue rval(cx);
+
+        // Execute jobs in a loop until we've reached the end of the queue.
+        // Since executing a job can trigger enqueuing of additional jobs,
+        // it's crucial to re-check the queue length during each iteration.
+        for (size_t i = 0; i < cx->jobQueue->length(); i++) {
+            // A previous job might have set this flag. E.g., the js shell
+            // sets it if the `quit` builtin function is called.
+            if (cx->stopDrainingJobQueue)
+                break;
+
+            job = cx->jobQueue->get()[i];
+
+            // It's possible that queue draining was interrupted prematurely,
+            // leaving the queue partly processed. In that case, slots for
+            // already-executed entries will contain nullptrs, which we should
+            // just skip.
+            if (!job)
+                continue;
+
+            cx->jobQueue->get()[i] = nullptr;
+            AutoCompartment ac(cx, job);
+            {
+                if (!JS::Call(cx, UndefinedHandleValue, job, args, &rval)) {
+                    // Nothing we can do about uncatchable exceptions.
+                    if (!cx->isExceptionPending())
+                        continue;
+                    RootedValue exn(cx);
+                    if (cx->getPendingException(&exn)) {
+                        /*
+                         * Clear the exception, because
+                         * PrepareScriptEnvironmentAndInvoke will assert that we don't
+                         * have one.
+                         */
+                        cx->clearPendingException();
+                        ReportExceptionClosure reportExn(exn);
+                        PrepareScriptEnvironmentAndInvoke(cx, cx->global(), reportExn);
+                    }
+                }
+            }
+        }
+
+        cx->drainingJobQueue = false;
+
+        if (cx->stopDrainingJobQueue) {
+            cx->stopDrainingJobQueue = false;
+            break;
+        }
+
+        cx->jobQueue->clear();
+
+        // It's possible a job added a new off-thread promise task.
+        if (!cx->runtime()->offThreadPromiseState.ref().internalHasPending())
+            break;
     }
 }
 
@@ -1135,16 +1283,16 @@ JSContext::JSContext(JSRuntime* runtime, const JS::ContextOptions& options)
     jitActivation(nullptr),
     activation_(nullptr),
     profilingActivation_(nullptr),
-    wasmActivationStack_(nullptr),
     nativeStackBase(GetNativeStackBase()),
     entryMonitor(nullptr),
     noExecuteDebuggerTop(nullptr),
-    handlingSegFault(false),
     activityCallback(nullptr),
     activityCallbackArg(nullptr),
     requestDepth(0),
 #ifdef DEBUG
     checkRequestDepth(0),
+    inUnsafeCallWithABI(false),
+    hasAutoUnsafeCallWithABI(false),
 #endif
 #ifdef JS_SIMULATOR
     simulator_(nullptr),
@@ -1156,7 +1304,6 @@ JSContext::JSContext(JSRuntime* runtime, const JS::ContextOptions& options)
     dtoaState(nullptr),
     heapState(JS::HeapState::Idle),
     suppressGC(0),
-    allowGCBarriers(true),
 #ifdef DEBUG
     ionCompiling(false),
     ionCompilingSafeForMinorGC(false),
@@ -1178,12 +1325,11 @@ JSContext::JSContext(JSRuntime* runtime, const JS::ContextOptions& options)
     suppressProfilerSampling(false),
     tempLifoAlloc_((size_t)TEMP_LIFO_ALLOC_PRIMARY_CHUNK_SIZE),
     debuggerMutations(0),
-    propertyRemovals(0),
     ionPcScriptCache(nullptr),
     throwing(false),
     overRecursed_(false),
     propagatingForcedReturn_(false),
-    liveVolatileJitFrameIterators_(nullptr),
+    liveVolatileJitFrameIter_(nullptr),
     reportGranularity(JS_DEFAULT_JITREPORT_GRANULARITY),
     resolvingList(nullptr),
 #ifdef DEBUG
@@ -1198,12 +1344,20 @@ JSContext::JSContext(JSRuntime* runtime, const JS::ContextOptions& options)
     asyncCallIsExplicit(false),
     interruptCallbackDisabled(false),
     interrupt_(false),
+    interruptRegExpJit_(false),
     handlingJitInterrupt_(false),
     osrTempData_(nullptr),
     ionReturnOverride_(MagicValue(JS_ARG_POISON)),
-    jitTop(nullptr),
     jitStackLimit(UINTPTR_MAX),
-    jitStackLimitNoInterrupt(UINTPTR_MAX)
+    jitStackLimitNoInterrupt(UINTPTR_MAX),
+    getIncumbentGlobalCallback(nullptr),
+    enqueuePromiseJobCallback(nullptr),
+    enqueuePromiseJobCallbackData(nullptr),
+    jobQueue(nullptr),
+    drainingJobQueue(false),
+    stopDrainingJobQueue(false),
+    promiseRejectionTrackerCallback(nullptr),
+    promiseRejectionTrackerCallbackData(nullptr)
 {
     MOZ_ASSERT(static_cast<JS::RootingContext*>(this) ==
                JS::RootingContext::get(this));
@@ -1392,6 +1546,7 @@ void
 JSContext::trace(JSTracer* trc)
 {
     cycleDetectorVector().trace(trc);
+    geckoProfiler().trace(trc);
 
     if (trc->isMarkingTracer() && compartment_)
         compartment_->mark();
@@ -1437,16 +1592,15 @@ JSContext::initJitStackLimit()
     resetJitStackLimit();
 }
 
-JSVersion
-JSContext::findVersion()
+void
+JSContext::updateMallocCounter(size_t nbytes)
 {
-    if (JSScript* script = currentScript(nullptr, ALLOW_CROSS_COMPARTMENT))
-        return script->getVersion();
+    if (!zone()) {
+        runtime()->updateMallocCounter(nbytes);
+        return;
+    }
 
-    if (compartment() && compartment()->behaviors().version() != JSVERSION_UNKNOWN)
-        return compartment()->behaviors().version();
-
-    return runtime()->defaultVersion();
+    zone()->updateMallocCounter(nbytes);
 }
 
 #ifdef DEBUG
@@ -1491,6 +1645,7 @@ void
 AutoEnterOOMUnsafeRegion::crash(const char* reason)
 {
     char msgbuf[1024];
+    js::NoteIntentionalCrash();
     SprintfLiteral(msgbuf, "[unhandlable oom] %s", reason);
     MOZ_ReportAssertionFailure(msgbuf, __FILE__, __LINE__);
     MOZ_CRASH();
@@ -1509,3 +1664,22 @@ AutoEnterOOMUnsafeRegion::crash(size_t size, const char* reason)
     }
     crash(reason);
 }
+
+#ifdef DEBUG
+AutoUnsafeCallWithABI::AutoUnsafeCallWithABI()
+  : cx_(TlsContext.get()),
+    nested_(cx_->hasAutoUnsafeCallWithABI),
+    nogc(cx_)
+{
+    cx_->hasAutoUnsafeCallWithABI = true;
+}
+
+AutoUnsafeCallWithABI::~AutoUnsafeCallWithABI()
+{
+    MOZ_ASSERT(cx_->hasAutoUnsafeCallWithABI);
+    if (!nested_) {
+        cx_->hasAutoUnsafeCallWithABI = false;
+        cx_->inUnsafeCallWithABI = false;
+    }
+}
+#endif

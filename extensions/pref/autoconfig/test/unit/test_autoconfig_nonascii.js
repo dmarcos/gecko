@@ -3,14 +3,16 @@
 
 var {classes: Cc, interfaces: Ci, results: Cr} = Components;
 
+/* eslint no-unsafe-finally: "off"*/
+/* Turning off this rule to allow control flow operations in finally block
+ * http://eslint.org/docs/rules/no-unsafe-finally  */
 function run_test() {
   let dirSvc = Cc["@mozilla.org/file/directory_service;1"].
                getService(Ci.nsIProperties);
-  let obsvc = Cc['@mozilla.org/observer-service;1'].
+  let obsvc = Cc["@mozilla.org/observer-service;1"].
               getService(Ci.nsIObserverService);
   let ps = Cc["@mozilla.org/preferences-service;1"].
            getService(Ci.nsIPrefService);
-  let defaultPrefs = ps.getDefaultBranch(null);
   let prefs = ps.getBranch(null);
 
   let greD = dirSvc.get("GreD", Ci.nsIFile);
@@ -47,24 +49,24 @@ function run_test() {
     function testAutoConfig(test) {
       // Make sure pref values are unset.
       for (let prefName in test.prefs) {
-        do_check_eq(Ci.nsIPrefBranch.PREF_INVALID, prefs.getPrefType(prefName));
+        Assert.equal(Ci.nsIPrefBranch.PREF_INVALID, prefs.getPrefType(prefName));
       }
 
       let autoConfigCfg = testDir.clone();
       autoConfigCfg.append(test.filename);
       autoConfigCfg.copyTo(greD, "autoconfig.cfg");
-  
+
       obsvc.notifyObservers(ps, "prefservice:before-read-userprefs");
-  
+
       for (let prefName in test.prefs) {
-        do_check_eq(test.prefs[prefName],
-                    prefs.getStringPref(prefName));
+        Assert.equal(test.prefs[prefName],
+                     prefs.getStringPref(prefName));
       }
-  
+
       ps.resetPrefs();
       // Make sure pref values are reset.
       for (let prefName in test.prefs) {
-        do_check_eq(Ci.nsIPrefBranch.PREF_INVALID, prefs.getPrefType(prefName));
+        Assert.equal(Ci.nsIPrefBranch.PREF_INVALID, prefs.getPrefType(prefName));
       }
     }
 
@@ -94,4 +96,3 @@ function run_test() {
     ps.resetPrefs();
   }
 }
-

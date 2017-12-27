@@ -4,6 +4,7 @@
 var { classes: Cc, utils: Cu, interfaces: Ci, results: Cr } = Components;
 
 Cu.import("resource://gre/modules/TelemetryController.jsm", this);
+Cu.import("resource://gre/modules/TelemetryUtils.jsm", this);
 Cu.import("resource://gre/modules/Services.jsm", this);
 Cu.import("resource://gre/modules/PromiseUtils.jsm", this);
 Cu.import("resource://gre/modules/FileUtils.jsm", this);
@@ -17,19 +18,21 @@ XPCOMUtils.defineLazyModuleGetter(this, "OS",
                                   "resource://gre/modules/osfile.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "TelemetrySend",
                                   "resource://gre/modules/TelemetrySend.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Log",
+                                  "resource://gre/modules/Log.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
+                                  "resource://gre/modules/NetUtil.jsm");
 
 const gIsWindows = AppConstants.platform == "win";
 const gIsMac = AppConstants.platform == "macosx";
 const gIsAndroid = AppConstants.platform == "android";
 const gIsLinux = AppConstants.platform == "linux";
 
-const Telemetry = Cc["@mozilla.org/base/telemetry;1"].getService(Ci.nsITelemetry);
+const Telemetry = Services.telemetry;
 
 const MILLISECONDS_PER_MINUTE = 60 * 1000;
 const MILLISECONDS_PER_HOUR = 60 * MILLISECONDS_PER_MINUTE;
 const MILLISECONDS_PER_DAY = 24 * MILLISECONDS_PER_HOUR;
-
-const PREF_TELEMETRY_ENABLED = "toolkit.telemetry.enabled";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -40,6 +43,7 @@ const PingServer = {
   _started: false,
   _defers: [ PromiseUtils.defer() ],
   _currentDeferred: 0,
+  _logger: null,
 
   get port() {
     return this._httpServer.identity.primaryPort;
@@ -49,6 +53,14 @@ const PingServer = {
     return this._started;
   },
 
+  get _log() {
+    if (!this._logger) {
+      this._logger = Log.repository.getLoggerWithMessagePrefix("Toolkit.Telemetry", "PingServer::");
+    }
+
+    return this._logger;
+  },
+
   registerPingHandler(handler) {
     const wrapped = wrapWithExceptionHandler(handler);
     this._httpServer.registerPrefixHandler("/submit/telemetry/", wrapped);
@@ -56,6 +68,8 @@ const PingServer = {
 
   resetPingHandler() {
     this.registerPingHandler((request, response) => {
+      let r = request;
+      this._log.trace(`defaultPingHandler() - ${r.method} ${r.scheme}://${r.host}:${r.port}${r.path}`);
       let deferred = this._defers[this._defers.length - 1];
       this._defers.push(PromiseUtils.defer());
       deferred.resolve(request);
@@ -117,7 +131,6 @@ const PingServer = {
 function decodeRequestPayload(request) {
   let s = request.bodyInputStream;
   let payload = null;
-  let decoder = Cc["@mozilla.org/dom/json;1"].createInstance(Ci.nsIJSON)
 
   if (request.hasHeader("content-encoding") &&
       request.getHeader("content-encoding") == "gzip") {
@@ -145,7 +158,8 @@ function decodeRequestPayload(request) {
     utf8string += unicodeConverter.Finish();
     payload = JSON.parse(utf8string);
   } else {
-    payload = decoder.decodeFromStream(s, s.available());
+    let bytes = NetUtil.readInputStream(s, s.available());
+    payload = JSON.parse((new TextDecoder()).decode(bytes));
   }
 
   return payload;
@@ -176,7 +190,13 @@ function loadAddonManager(...args) {
   // used by system add-ons.
   const distroDir = FileUtils.getDir("ProfD", ["sysfeatures", "app0"], true);
   AddonTestUtils.registerDirectory("XREAppFeat", distroDir);
+  AddonTestUtils.awaitPromise(AddonTestUtils.overrideBuiltIns(
+          {"system": ["tel-system-xpi@tests.mozilla.org"]}));
   return AddonTestUtils.promiseStartupManager();
+}
+
+function finishAddonManagerStartup() {
+  Services.obs.notifyObservers(null, "test-load-xpi-database");
 }
 
 var gAppInfo = null;
@@ -298,20 +318,39 @@ function setEmptyPrefWatchlist() {
   });
 }
 
+function histogramValueCount(histogramSnapshot) {
+  return histogramSnapshot.counts.reduce((a, b) => a + b);
+}
+
 if (runningInParent) {
   // Set logging preferences for all the tests.
   Services.prefs.setCharPref("toolkit.telemetry.log.level", "Trace");
   // Telemetry archiving should be on.
-  Services.prefs.setBoolPref("toolkit.telemetry.archive.enabled", true);
+  Services.prefs.setBoolPref(TelemetryUtils.Preferences.ArchiveEnabled, true);
   // Telemetry xpcshell tests cannot show the infobar.
-  Services.prefs.setBoolPref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);
+  Services.prefs.setBoolPref(TelemetryUtils.Preferences.BypassNotification, true);
   // FHR uploads should be enabled.
-  Services.prefs.setBoolPref("datareporting.healthreport.uploadEnabled", true);
-  // Many tests expect the shutdown ping to not be sent on shutdown and will fail
-  // if receive an unexpected ping. Let's globally disable the shutdown ping sender:
-  // the relevant tests will enable this pref when needed.
-  Services.prefs.setBoolPref("toolkit.telemetry.shutdownPingSender.enabled", false);
+  Services.prefs.setBoolPref(TelemetryUtils.Preferences.FhrUploadEnabled, true);
+  // Many tests expect the shutdown and the new-profile to not be sent on shutdown
+  // and will fail if receive an unexpected ping. Let's globally disable these features:
+  // the relevant tests will enable these prefs when needed.
+  Services.prefs.setBoolPref(TelemetryUtils.Preferences.ShutdownPingSender, false);
+  Services.prefs.setBoolPref(TelemetryUtils.Preferences.ShutdownPingSenderFirstSession, false);
+  Services.prefs.setBoolPref("toolkit.telemetry.newProfilePing.enabled", false);
+  Services.prefs.setBoolPref(TelemetryUtils.Preferences.FirstShutdownPingEnabled, false);
+  // Ensure browser experiments are also disabled, to avoid network activity
+  // when toggling PREF_ENABLED.
+  Services.prefs.setBoolPref("experiments.enabled", false);
+  // Turn off Health Ping submission.
+  Services.prefs.setBoolPref(TelemetryUtils.Preferences.HealthPingEnabled, false);
 
+  // Non-unified Telemetry (e.g. Fennec on Android) needs the preference to be set
+  // in order to enable Telemetry.
+  if (Services.prefs.getBoolPref(TelemetryUtils.Preferences.Unified, false)) {
+    Services.prefs.setBoolPref(TelemetryUtils.Preferences.OverridePreRelease, true);
+  } else {
+    Services.prefs.setBoolPref(TelemetryUtils.Preferences.TelemetryEnabled, true);
+  }
 
   fakePingSendTimer((callback, timeout) => {
     Services.tm.dispatchToMainThread(() => callback());
@@ -320,7 +359,7 @@ if (runningInParent) {
 
   // This gets imported via fakeNow();
   /* global TelemetrySend */
-  do_register_cleanup(() => TelemetrySend.shutdown());
+  registerCleanupFunction(() => TelemetrySend.shutdown());
 }
 
 TelemetryController.testInitLogging();

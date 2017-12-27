@@ -104,7 +104,6 @@ Components.utils.import("resource://gre/modules/DownloadPaths.jsm");
 Components.utils.import("resource://gre/modules/DownloadUtils.jsm");
 Components.utils.import("resource://gre/modules/Downloads.jsm");
 Components.utils.import("resource://gre/modules/FileUtils.jsm");
-Components.utils.import("resource://gre/modules/Task.jsm");
 
 /* ctor
  */
@@ -208,7 +207,8 @@ nsUnknownContentTypeDialog.prototype = {
                    bundle.GetStringFromName("badPermissions"));
   },
 
-  promptForSaveToFileAsync: function(aLauncher, aContext, aDefaultFile, aSuggestedFileExtension, aForcePrompt) {
+  promptForSaveToFileAsync: function(aLauncher, aContext, aDefaultFileName,
+                                     aSuggestedFileExtension, aForcePrompt) {
     var result = null;
 
     this.mLauncher = aLauncher;
@@ -249,7 +249,7 @@ nsUnknownContentTypeDialog.prototype = {
       }
     }
 
-    Task.spawn(function*() {
+    (async () => {
       if (!aForcePrompt) {
         // Check to see if the user wishes to auto save to the default download
         // folder without prompting. Note that preference might not be set.
@@ -257,11 +257,12 @@ nsUnknownContentTypeDialog.prototype = {
 
         if (autodownload) {
           // Retrieve the user's default download directory
-          let preferredDir = yield Downloads.getPreferredDownloadsDirectory();
+          let preferredDir = await Downloads.getPreferredDownloadsDirectory();
           let defaultFolder = new FileUtils.File(preferredDir);
 
           try {
-            result = this.validateLeafName(defaultFolder, aDefaultFile, aSuggestedFileExtension);
+            result = this.validateLeafName(defaultFolder, aDefaultFileName,
+                                           aSuggestedFileExtension);
           }
           catch (ex) {
             // When the default download directory is write-protected,
@@ -270,6 +271,9 @@ nsUnknownContentTypeDialog.prototype = {
 
           // Check to make sure we have a valid directory, otherwise, prompt
           if (result) {
+            // Notifications for CloudStorage API consumers to show offer
+            // prompts while downloading. See Bug 1365129
+            Services.obs.notifyObservers(null, "cloudstorage-prompt-notification", result.path);
             // This path is taken when we have a writable default download directory.
             aLauncher.saveDestinationAvailable(result);
             return;
@@ -282,7 +286,9 @@ nsUnknownContentTypeDialog.prototype = {
       var picker = Components.classes["@mozilla.org/filepicker;1"].createInstance(nsIFilePicker);
       var windowTitle = bundle.GetStringFromName("saveDialogTitle");
       picker.init(parent, windowTitle, nsIFilePicker.modeSave);
-      picker.defaultString = aDefaultFile;
+      if (aDefaultFileName) {
+        picker.defaultString = this.getFinalLeafName(aDefaultFileName);
+      }
 
       if (aSuggestedFileExtension) {
         // aSuggestedFileExtension includes the period, so strip it
@@ -306,10 +312,10 @@ nsUnknownContentTypeDialog.prototype = {
       // Default to lastDir if it is valid, otherwise use the user's default
       // downloads directory.  getPreferredDownloadsDirectory should always
       // return a valid directory path, so we can safely default to it.
-      let preferredDir = yield Downloads.getPreferredDownloadsDirectory();
+      let preferredDir = await Downloads.getPreferredDownloadsDirectory();
       picker.displayDirectory = new FileUtils.File(preferredDir);
 
-      gDownloadLastDir.getFileAsync(aLauncher.source, function LastDirCallback(lastDir) {
+      gDownloadLastDir.getFileAsync(aLauncher.source, lastDir => {
         if (lastDir && isUsableDirectory(lastDir))
           picker.displayDirectory = lastDir;
 
@@ -339,7 +345,7 @@ nsUnknownContentTypeDialog.prototype = {
               // permission error, will be handled below eventually somehow.
             }
 
-            var newDir = result.parent.QueryInterface(Components.interfaces.nsILocalFile);
+            var newDir = result.parent.QueryInterface(Components.interfaces.nsIFile);
 
             // Do not store the last save directory as a pref inside the private browsing mode
             gDownloadLastDir.setFile(aLauncher.source, newDir);
@@ -362,20 +368,14 @@ nsUnknownContentTypeDialog.prototype = {
           }
           aLauncher.saveDestinationAvailable(result);
         });
-      }.bind(this));
-    }.bind(this)).then(null, Components.utils.reportError);
+      });
+    })().catch(Components.utils.reportError);
   },
 
   getFinalLeafName: function (aLeafName, aFileExt)
   {
-    // Remove any leading periods, since we don't want to save hidden files
-    // automatically.
-    aLeafName = aLeafName.replace(/^\.+/, "");
-
-    if (aLeafName == "")
-      aLeafName = "unnamed" + (aFileExt ? "." + aFileExt : "");
-
-    return aLeafName;
+    return DownloadPaths.sanitize(aLeafName) ||
+           "unnamed" + (aFileExt ? "." + aFileExt : "");
   },
 
   /**
@@ -391,7 +391,7 @@ nsUnknownContentTypeDialog.prototype = {
    * @param   aFileExt
    *          the extension of the file, if one is known; this will be ignored
    *          if aLeafName is non-empty
-   * @return  nsILocalFile
+   * @return  nsIFile
    *          the created file
    * @throw   an error such as permission doesn't allow creation of
    *          file, etc.
@@ -451,8 +451,8 @@ nsUnknownContentTypeDialog.prototype = {
       this.mSourcePath += url.directory;
     } else {
       // A generic uri, use path.
-      fname = url.path;
-      this.mSourcePath += url.path;
+      fname = url.pathQueryRef;
+      this.mSourcePath += url.pathQueryRef;
     }
 
     if (suggestedFileName)
@@ -920,7 +920,7 @@ nsUnknownContentTypeDialog.prototype = {
         var targetFile = null;
         try {
           targetFile = prefs.getComplexValue("browser.download.defaultFolder",
-                                             Components.interfaces.nsILocalFile);
+                                             Components.interfaces.nsIFile);
           var leafName = this.dialogElement("location").getAttribute("realname");
           // Ensure that we don't overwrite any existing files here.
           targetFile = this.validateLeafName(targetFile, leafName, null);
@@ -1069,9 +1069,7 @@ nsUnknownContentTypeDialog.prototype = {
         // Remember the file they chose to run.
         this.chosenApp = params.handlerApp;
       }
-    }
-    else {
-#if MOZ_WIDGET_GTK == 3
+    } else if ("@mozilla.org/applicationchooser;1" in Components.classes) {
       var nsIApplicationChooser = Components.interfaces.nsIApplicationChooser;
       var appChooser = Components.classes["@mozilla.org/applicationchooser;1"]
                                  .createInstance(nsIApplicationChooser);
@@ -1086,7 +1084,7 @@ nsUnknownContentTypeDialog.prototype = {
       appChooser.open(this.mLauncher.MIMEInfo.MIMEType, appChooserCallback);
       // The finishChooseApp is called from appChooserCallback
       return;
-#else
+    } else {
       var nsIFilePicker = Components.interfaces.nsIFilePicker;
       var fp = Components.classes["@mozilla.org/filepicker;1"]
                          .createInstance(nsIFilePicker);
@@ -1096,16 +1094,21 @@ nsUnknownContentTypeDialog.prototype = {
 
       fp.appendFilters(nsIFilePicker.filterApps);
 
-      if (fp.show() == nsIFilePicker.returnOK && fp.file) {
-        // Remember the file they chose to run.
-        var localHandlerApp =
-          Components.classes["@mozilla.org/uriloader/local-handler-app;1"].
-                     createInstance(Components.interfaces.nsILocalHandlerApp);
-        localHandlerApp.executable = fp.file;
-        this.chosenApp = localHandlerApp;
-      }
-#endif // MOZ_WIDGET_GTK == 3
+      fp.open(aResult => {
+        if (aResult == nsIFilePicker.returnOK && fp.file) {
+          // Remember the file they chose to run.
+          var localHandlerApp =
+            Components.classes["@mozilla.org/uriloader/local-handler-app;1"].
+                       createInstance(Components.interfaces.nsILocalHandlerApp);
+          localHandlerApp.executable = fp.file;
+          this.chosenApp = localHandlerApp;
+        }
+        this.finishChooseApp();
+      });
+      // The finishChooseApp is called from fp.open() callback
+      return;
     }
+
     this.finishChooseApp();
   },
 

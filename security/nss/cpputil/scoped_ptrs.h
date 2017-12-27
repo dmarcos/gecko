@@ -11,12 +11,14 @@
 #include "cert.h"
 #include "keyhi.h"
 #include "pk11pub.h"
+#include "pkcs11uri.h"
 
 struct ScopedDelete {
   void operator()(CERTCertificate* cert) { CERT_DestroyCertificate(cert); }
   void operator()(CERTCertificateList* list) {
     CERT_DestroyCertificateList(list);
   }
+  void operator()(CERTName* name) { CERT_DestroyName(name); }
   void operator()(CERTCertList* list) { CERT_DestroyCertList(list); }
   void operator()(CERTSubjectPublicKeyInfo* spki) {
     SECKEY_DestroySubjectPublicKeyInfo(spki);
@@ -31,6 +33,10 @@ struct ScopedDelete {
   void operator()(SECKEYPrivateKeyList* list) {
     SECKEY_DestroyPrivateKeyList(list);
   }
+  void operator()(PK11URI* uri) { PK11URI_DestroyURI(uri); }
+  void operator()(PLArenaPool* arena) { PORT_FreeArena(arena, PR_FALSE); }
+  void operator()(PK11Context* context) { PK11_DestroyContext(context, true); }
+  void operator()(PK11GenericObject* obj) { PK11_DestroyGenericObject(obj); }
 };
 
 template <class T>
@@ -48,6 +54,7 @@ struct ScopedMaybeDelete {
 SCOPED(CERTCertificate);
 SCOPED(CERTCertificateList);
 SCOPED(CERTCertList);
+SCOPED(CERTName);
 SCOPED(CERTSubjectPublicKeyInfo);
 SCOPED(PK11SlotInfo);
 SCOPED(PK11SymKey);
@@ -57,6 +64,10 @@ SCOPED(SECItem);
 SCOPED(SECKEYPublicKey);
 SCOPED(SECKEYPrivateKey);
 SCOPED(SECKEYPrivateKeyList);
+SCOPED(PK11URI);
+SCOPED(PLArenaPool);
+SCOPED(PK11Context);
+SCOPED(PK11GenericObject);
 
 #undef SCOPED
 

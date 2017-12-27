@@ -11,6 +11,7 @@
 #include "gfxImageSurface.h"
 #include "gfxPlatform.h"
 #include "gfxDrawable.h"
+#include "gfxQuad.h"
 #include "imgIEncoder.h"
 #include "mozilla/Base64.h"
 #include "mozilla/dom/ImageEncoder.h"
@@ -24,6 +25,7 @@
 #include "mozilla/Maybe.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/UniquePtrExtensions.h"
+#include "mozilla/Unused.h"
 #include "mozilla/Vector.h"
 #include "nsComponentManagerUtils.h"
 #include "nsIClipboardHelper.h"
@@ -299,8 +301,7 @@ CreateSamplingRestrictedDrawable(gfxDrawable* aDrawable,
                                  const ImageRegion& aRegion,
                                  const SurfaceFormat aFormat)
 {
-    PROFILER_LABEL("gfxUtils", "CreateSamplingRestricedDrawable",
-      js::ProfileEntry::Category::GRAPHICS);
+    AUTO_PROFILER_LABEL("CreateSamplingRestrictedDrawable", GRAPHICS);
 
     DrawTarget* destDrawTarget = aContext->GetDrawTarget();
     if (destDrawTarget->GetBackendType() == BackendType::DIRECT2D1_1) {
@@ -437,8 +438,8 @@ PrescaleAndTileDrawable(gfxDrawable* aDrawable,
                         gfxFloat aOpacity,
                         ExtendMode aExtendMode)
 {
-  gfxSize scaleFactor = aContext->CurrentMatrix().ScaleFactors(true);
-  gfxMatrix scaleMatrix = gfxMatrix::Scaling(scaleFactor.width, scaleFactor.height);
+  Size scaleFactor = aContext->CurrentMatrix().ScaleFactors(true);
+  Matrix scaleMatrix = Matrix::Scaling(scaleFactor.width, scaleFactor.height);
   const float fuzzFactor = 0.01;
 
   // If we aren't scaling or translating, don't go down this path
@@ -455,13 +456,13 @@ PrescaleAndTileDrawable(gfxDrawable* aDrawable,
   clipExtents.Inflate(1.0);
 
   gfxRect needed = aRegion.IntersectAndRestrict(clipExtents);
-  Rect scaledNeededRect = ToMatrix(scaleMatrix).TransformBounds(ToRect(needed));
+  Rect scaledNeededRect = scaleMatrix.TransformBounds(ToRect(needed));
   scaledNeededRect.RoundOut();
   if (scaledNeededRect.IsEmpty()) {
     return false;
   }
 
-  Rect scaledImageRect = ToMatrix(scaleMatrix).TransformBounds(aImageRect);
+  Rect scaledImageRect = scaleMatrix.TransformBounds(aImageRect);
   if (!ShouldUseTempSurface(scaledImageRect, scaledNeededRect)) {
     return false;
   }
@@ -484,7 +485,7 @@ PrescaleAndTileDrawable(gfxDrawable* aDrawable,
   RefPtr<gfxContext> tmpCtx = gfxContext::CreateOrNull(scaledDT);
   MOZ_ASSERT(tmpCtx); // already checked the target above
 
-  scaledDT->SetTransform(ToMatrix(scaleMatrix));
+  scaledDT->SetTransform(scaleMatrix);
   gfxRect gfxImageRect(aImageRect.x, aImageRect.y, aImageRect.width, aImageRect.height);
 
   // Since this is just the scaled image, we don't want to repeat anything yet.
@@ -494,12 +495,12 @@ PrescaleAndTileDrawable(gfxDrawable* aDrawable,
 
   {
     gfxContextMatrixAutoSaveRestore autoSR(aContext);
-    Matrix withoutScale = ToMatrix(aContext->CurrentMatrix());
+    Matrix withoutScale = aContext->CurrentMatrix();
     DrawTarget* destDrawTarget = aContext->GetDrawTarget();
 
     // The translation still is in scaled units
     withoutScale.PreScale(1.0 / scaleFactor.width, 1.0 / scaleFactor.height);
-    aContext->SetMatrix(ThebesMatrix(withoutScale));
+    aContext->SetMatrix(withoutScale);
 
     DrawOptions drawOptions(aOpacity, aContext->CurrentOp(),
                             aContext->CurrentAntialiasMode());
@@ -522,8 +523,7 @@ gfxUtils::DrawPixelSnapped(gfxContext*         aContext,
                            uint32_t            aImageFlags,
                            gfxFloat            aOpacity)
 {
-    PROFILER_LABEL("gfxUtils", "DrawPixelSnapped",
-      js::ProfileEntry::Category::GRAPHICS);
+    AUTO_PROFILER_LABEL("gfxUtils::DrawPixelSnapped", GRAPHICS);
 
     gfxRect imageRect(gfxPoint(0, 0), aImageSize);
     gfxRect region(aRegion.Rect());
@@ -607,7 +607,7 @@ gfxUtils::ClipToRegion(gfxContext* aContext, const nsIntRegion& aRegion)
   aContext->NewPath();
   for (auto iter = aRegion.RectIter(); !iter.Done(); iter.Next()) {
     const IntRect& r = iter.Get();
-    aContext->Rectangle(gfxRect(r.x, r.y, r.width, r.height));
+    aContext->Rectangle(gfxRect(r.X(), r.Y(), r.Width(), r.Height()));
   }
   aContext->Clip();
 }
@@ -652,13 +652,13 @@ gfxUtils::ClipToRegion(DrawTarget* aTarget, const nsIntRegion& aRegion)
   }
 }
 
-/*static*/ gfxFloat
-gfxUtils::ClampToScaleFactor(gfxFloat aVal)
+/*static*/ float
+gfxUtils::ClampToScaleFactor(float aVal, bool aRoundDown)
 {
   // Arbitary scale factor limitation. We can increase this
   // for better scaling performance at the cost of worse
   // quality.
-  static const gfxFloat kScaleResolution = 2;
+  static const float kScaleResolution = 2;
 
   // Negative scaling is just a flip and irrelevant to
   // our resolution calculation.
@@ -672,20 +672,24 @@ gfxUtils::ClampToScaleFactor(gfxFloat aVal)
     aVal = 1 / aVal;
   }
 
-  gfxFloat power = log(aVal)/log(kScaleResolution);
+  float power = logf(aVal)/logf(kScaleResolution);
 
   // If power is within 1e-5 of an integer, round to nearest to
   // prevent floating point errors, otherwise round up to the
   // next integer value.
   if (fabs(power - NS_round(power)) < 1e-5) {
     power = NS_round(power);
-  } else if (inverse) {
+  // Use floor when we are either inverted or rounding down, but
+  // not both.
+  } else if (inverse != aRoundDown) {
     power = floor(power);
+  // Otherwise, ceil when we are not inverted and not rounding
+  // down, or we are inverted and rounding down.
   } else {
     power = ceil(power);
   }
 
-  gfxFloat scale = pow(kScaleResolution, power);
+  float scale = powf(kScaleResolution, power);
 
   if (inverse) {
     scale = 1 / scale;
@@ -702,18 +706,18 @@ gfxUtils::TransformRectToRect(const gfxRect& aFrom, const gfxPoint& aToTopLeft,
   if (aToTopRight.y == aToTopLeft.y && aToTopRight.x == aToBottomRight.x) {
     // Not a rotation, so xy and yx are zero
     m._21 = m._12 = 0.0;
-    m._11 = (aToBottomRight.x - aToTopLeft.x)/aFrom.width;
-    m._22 = (aToBottomRight.y - aToTopLeft.y)/aFrom.height;
-    m._31 = aToTopLeft.x - m._11*aFrom.x;
-    m._32 = aToTopLeft.y - m._22*aFrom.y;
+    m._11 = (aToBottomRight.x - aToTopLeft.x)/aFrom.Width();
+    m._22 = (aToBottomRight.y - aToTopLeft.y)/aFrom.Height();
+    m._31 = aToTopLeft.x - m._11*aFrom.X();
+    m._32 = aToTopLeft.y - m._22*aFrom.Y();
   } else {
     NS_ASSERTION(aToTopRight.y == aToBottomRight.y && aToTopRight.x == aToTopLeft.x,
                  "Destination rectangle not axis-aligned");
     m._11 = m._22 = 0.0;
-    m._21 = (aToBottomRight.x - aToTopLeft.x)/aFrom.height;
-    m._12 = (aToBottomRight.y - aToTopLeft.y)/aFrom.width;
-    m._31 = aToTopLeft.x - m._21*aFrom.y;
-    m._32 = aToTopLeft.y - m._12*aFrom.x;
+    m._21 = (aToBottomRight.x - aToTopLeft.x)/aFrom.Height();
+    m._12 = (aToBottomRight.y - aToTopLeft.y)/aFrom.Width();
+    m._31 = aToTopLeft.x - m._21*aFrom.Y();
+    m._32 = aToTopLeft.y - m._12*aFrom.X();
   }
   return m;
 }
@@ -726,18 +730,18 @@ gfxUtils::TransformRectToRect(const gfxRect& aFrom, const IntPoint& aToTopLeft,
   if (aToTopRight.y == aToTopLeft.y && aToTopRight.x == aToBottomRight.x) {
     // Not a rotation, so xy and yx are zero
     m._12 = m._21 = 0.0;
-    m._11 = (aToBottomRight.x - aToTopLeft.x)/aFrom.width;
-    m._22 = (aToBottomRight.y - aToTopLeft.y)/aFrom.height;
-    m._31 = aToTopLeft.x - m._11*aFrom.x;
-    m._32 = aToTopLeft.y - m._22*aFrom.y;
+    m._11 = (aToBottomRight.x - aToTopLeft.x)/aFrom.Width();
+    m._22 = (aToBottomRight.y - aToTopLeft.y)/aFrom.Height();
+    m._31 = aToTopLeft.x - m._11*aFrom.X();
+    m._32 = aToTopLeft.y - m._22*aFrom.Y();
   } else {
     NS_ASSERTION(aToTopRight.y == aToBottomRight.y && aToTopRight.x == aToTopLeft.x,
                  "Destination rectangle not axis-aligned");
     m._11 = m._22 = 0.0;
-    m._21 = (aToBottomRight.x - aToTopLeft.x)/aFrom.height;
-    m._12 = (aToBottomRight.y - aToTopLeft.y)/aFrom.width;
-    m._31 = aToTopLeft.x - m._21*aFrom.y;
-    m._32 = aToTopLeft.y - m._12*aFrom.x;
+    m._21 = (aToBottomRight.x - aToTopLeft.x)/aFrom.Height();
+    m._12 = (aToBottomRight.y - aToTopLeft.y)/aFrom.Width();
+    m._31 = aToTopLeft.x - m._21*aFrom.Y();
+    m._32 = aToTopLeft.y - m._12*aFrom.X();
   }
   return m;
 }
@@ -750,7 +754,70 @@ gfxUtils::GfxRectToIntRect(const gfxRect& aIn, IntRect* aOut)
 {
   *aOut = IntRect(int32_t(aIn.X()), int32_t(aIn.Y()),
   int32_t(aIn.Width()), int32_t(aIn.Height()));
-  return gfxRect(aOut->x, aOut->y, aOut->width, aOut->height).IsEqualEdges(aIn);
+  return gfxRect(aOut->X(), aOut->Y(), aOut->Width(), aOut->Height()).IsEqualEdges(aIn);
+}
+
+/* Clamp r to CAIRO_COORD_MIN .. CAIRO_COORD_MAX
+ * these are to be device coordinates.
+ *
+ * Cairo is currently using 24.8 fixed point,
+ * so -2^24 .. 2^24-1 is our valid
+ */
+/*static*/ void
+gfxUtils::ConditionRect(gfxRect& aRect)
+{
+#define CAIRO_COORD_MAX (16777215.0)
+#define CAIRO_COORD_MIN (-16777216.0)
+  // if either x or y is way out of bounds;
+  // note that we don't handle negative w/h here
+  if (aRect.X() > CAIRO_COORD_MAX) {
+    aRect.SetRectX(CAIRO_COORD_MAX, 0.0);
+  }
+
+  if (aRect.Y() > CAIRO_COORD_MAX) {
+    aRect.SetRectY(CAIRO_COORD_MAX, 0.0);
+  }
+
+  if (aRect.X() < CAIRO_COORD_MIN) {
+    aRect.SetWidth(aRect.XMost() - CAIRO_COORD_MIN);
+    if (aRect.Width() < 0.0) {
+      aRect.SetWidth(0.0);
+    }
+    aRect.MoveToX(CAIRO_COORD_MIN);
+  }
+
+  if (aRect.Y() < CAIRO_COORD_MIN) {
+    aRect.SetHeight(aRect.YMost() - CAIRO_COORD_MIN);
+    if (aRect.Height() < 0.0) {
+      aRect.SetHeight(0.0);
+    }
+    aRect.MoveToY(CAIRO_COORD_MIN);
+  }
+
+  if (aRect.XMost() > CAIRO_COORD_MAX) {
+    aRect.SetRightEdge(CAIRO_COORD_MAX);
+  }
+
+  if (aRect.YMost() > CAIRO_COORD_MAX) {
+    aRect.SetBottomEdge(CAIRO_COORD_MAX);
+  }
+#undef CAIRO_COORD_MAX
+#undef CAIRO_COORD_MIN
+}
+
+/*static*/ gfxQuad
+gfxUtils::TransformToQuad(const gfxRect& aRect,
+                          const mozilla::gfx::Matrix4x4 &aMatrix)
+{
+  gfxPoint points[4];
+
+  points[0] = aMatrix.TransformPoint(aRect.TopLeft());
+  points[1] = aMatrix.TransformPoint(aRect.TopRight());
+  points[2] = aMatrix.TransformPoint(aRect.BottomRight());
+  points[3] = aMatrix.TransformPoint(aRect.BottomLeft());
+
+  // Could this ever result in lines that intersect? I don't think so.
+  return gfxQuad(points[0], points[1], points[2], points[3]);
 }
 
 /* static */ void gfxUtils::ClearThebesSurface(gfxASurface* aSurface)
@@ -766,7 +833,7 @@ gfxUtils::GfxRectToIntRect(const gfxRect& aIn, IntRect* aOut)
   cairo_set_source_rgba(ctx, 0.0, 0.0, 0.0, 0.0);
   cairo_set_operator(ctx, CAIRO_OPERATOR_SOURCE);
   IntRect bounds(nsIntPoint(0, 0), aSurface->GetSize());
-  cairo_rectangle(ctx, bounds.x, bounds.y, bounds.width, bounds.height);
+  cairo_rectangle(ctx, bounds.X(), bounds.Y(), bounds.Width(), bounds.Height());
   cairo_fill(ctx);
   cairo_destroy(ctx);
 }
@@ -980,7 +1047,7 @@ EncodeSourceSurfaceInternal(SourceSurface* aSurface,
 
   if (aBinaryOrData == gfxUtils::eBinaryEncode) {
     if (aFile) {
-      fwrite(imgData.begin(), 1, imgSize, aFile);
+      Unused << fwrite(imgData.begin(), 1, imgSize, aFile);
     }
     return NS_OK;
   }
@@ -992,7 +1059,7 @@ EncodeSourceSurfaceInternal(SourceSurface* aSurface,
 
   nsCString string("data:");
   string.Append(aMimeType);
-  string.Append(";base64,");
+  string.AppendLiteral(";base64,");
   string.Append(encodedImg);
 
   if (aFile) {
@@ -1043,47 +1110,29 @@ gfxUtils::EncodeSourceSurface(SourceSurface* aSurface,
                                      aBinaryOrData, aFile, nullptr);
 }
 
-/* From Rec601:
-[R]   [1.1643835616438356,  0.0,                 1.5960267857142858]      [ Y -  16]
-[G] = [1.1643835616438358, -0.3917622900949137, -0.8129676472377708]    x [Cb - 128]
-[B]   [1.1643835616438356,  2.017232142857143,   8.862867620416422e-17]   [Cr - 128]
-
-For [0,1] instead of [0,255], and to 5 places:
-[R]   [1.16438,  0.00000,  1.59603]   [ Y - 0.06275]
-[G] = [1.16438, -0.39176, -0.81297] x [Cb - 0.50196]
-[B]   [1.16438,  2.01723,  0.00000]   [Cr - 0.50196]
-
-From Rec709:
-[R]   [1.1643835616438356,  4.2781193979771426e-17, 1.7927410714285714]     [ Y -  16]
-[G] = [1.1643835616438358, -0.21324861427372963,   -0.532909328559444]    x [Cb - 128]
-[B]   [1.1643835616438356,  2.1124017857142854,     0.0]                    [Cr - 128]
-
-For [0,1] instead of [0,255], and to 5 places:
-[R]   [1.16438,  0.00000,  1.79274]   [ Y - 0.06275]
-[G] = [1.16438, -0.21325, -0.53291] x [Cb - 0.50196]
-[B]   [1.16438,  2.11240,  0.00000]   [Cr - 0.50196]
-*/
-
-static const float kRec601[9] = {
-  1.16438f, 0.00000f, 1.59603f,
-  1.16438f,-0.39176f,-0.81297f,
-  1.16438f, 2.01723f, 0.00000f,
+// https://jdashg.github.io/misc/colors/from-coeffs.html
+const float kBT601NarrowYCbCrToRGB_RowMajor[16] = {
+  1.16438f, 0.00000f, 1.59603f,-0.87420f,
+  1.16438f,-0.39176f,-0.81297f, 0.53167f,
+  1.16438f, 2.01723f, 0.00000f,-1.08563f,
+  0.00000f, 0.00000f, 0.00000f, 1.00000f
 };
-static const float kRec709[9] = {
-  1.16438f, 0.00000f, 1.79274f,
-  1.16438f,-0.21325f,-0.53291f,
-  1.16438f, 2.11240f, 0.00000f,
+const float kBT709NarrowYCbCrToRGB_RowMajor[16] = {
+  1.16438f, 0.00000f, 1.79274f,-0.97295f,
+  1.16438f,-0.21325f,-0.53291f, 0.30148f,
+  1.16438f, 2.11240f, 0.00000f,-1.13340f,
+  0.00000f, 0.00000f, 0.00000f, 1.00000f
 };
 
 /* static */ const float*
 gfxUtils::YuvToRgbMatrix4x3RowMajor(YUVColorSpace aYUVColorSpace)
 {
-  #define X(x) { x[0], x[1], x[2], 0.0f, \
-                 x[3], x[4], x[5], 0.0f, \
-                 x[6], x[7], x[8], 0.0f }
+  #define X(x) { x[0], x[1], x[ 2], 0.0f, \
+                 x[4], x[5], x[ 6], 0.0f, \
+                 x[8], x[9], x[10], 0.0f }
 
-  static const float rec601[12] = X(kRec601);
-  static const float rec709[12] = X(kRec709);
+  static const float rec601[12] = X(kBT601NarrowYCbCrToRGB_RowMajor);
+  static const float rec709[12] = X(kBT709NarrowYCbCrToRGB_RowMajor);
 
   #undef X
 
@@ -1101,12 +1150,36 @@ gfxUtils::YuvToRgbMatrix4x3RowMajor(YUVColorSpace aYUVColorSpace)
 /* static */ const float*
 gfxUtils::YuvToRgbMatrix3x3ColumnMajor(YUVColorSpace aYUVColorSpace)
 {
-  #define X(x) { x[0], x[3], x[6], \
-                 x[1], x[4], x[7], \
-                 x[2], x[5], x[8] }
+  #define X(x) { x[0], x[4], x[ 8], \
+                 x[1], x[5], x[ 9], \
+                 x[2], x[6], x[10] }
 
-  static const float rec601[9] = X(kRec601);
-  static const float rec709[9] = X(kRec709);
+  static const float rec601[9] = X(kBT601NarrowYCbCrToRGB_RowMajor);
+  static const float rec709[9] = X(kBT709NarrowYCbCrToRGB_RowMajor);
+
+  #undef X
+
+  switch (aYUVColorSpace) {
+  case YUVColorSpace::BT601:
+    return rec601;
+  case YUVColorSpace::BT709:
+    return rec709;
+  default: // YUVColorSpace::UNKNOWN
+    MOZ_ASSERT(false, "unknown aYUVColorSpace");
+    return rec601;
+  }
+}
+
+/* static */ const float*
+gfxUtils::YuvToRgbMatrix4x4ColumnMajor(YUVColorSpace aYUVColorSpace)
+{
+  #define X(x) { x[0], x[4], x[ 8], x[12], \
+                 x[1], x[5], x[ 9], x[13], \
+                 x[2], x[6], x[10], x[14], \
+                 x[3], x[7], x[11], x[15] }
+
+  static const float rec601[16] = X(kBT601NarrowYCbCrToRGB_RowMajor);
+  static const float rec709[16] = X(kBT709NarrowYCbCrToRGB_RowMajor);
 
   #undef X
 
@@ -1223,10 +1296,11 @@ gfxUtils::DumpAsDataURI(DrawTarget* aDT, FILE* aFile)
 /* static */ nsCString
 gfxUtils::GetAsLZ4Base64Str(DataSourceSurface* aSourceSurface)
 {
-  int32_t dataSize = aSourceSurface->GetSize().height * aSourceSurface->Stride();
+  DataSourceSurface::ScopedMap map(aSourceSurface, DataSourceSurface::READ);
+  int32_t dataSize = aSourceSurface->GetSize().height * map.GetStride();
   auto compressedData = MakeUnique<char[]>(LZ4::maxCompressedSize(dataSize));
   if (compressedData) {
-    int nDataSize = LZ4::compress((char*)aSourceSurface->GetData(),
+    int nDataSize = LZ4::compress((char*)map.GetData(),
                                   dataSize,
                                   compressedData.get());
     if (nDataSize > 0) {
@@ -1236,7 +1310,7 @@ gfxUtils::GetAsLZ4Base64Str(DataSourceSurface* aSourceSurface)
         nsCString string("");
         string.AppendPrintf("data:image/lz4bgra;base64,%i,%i,%i,",
                              aSourceSurface->GetSize().width,
-                             aSourceSurface->Stride(),
+                             map.GetStride(),
                              aSourceSurface->GetSize().height);
         string.Append(encodedImg);
         return string;
@@ -1409,6 +1483,7 @@ gfxUtils::ThreadSafeGetFeatureStatus(const nsCOMPtr<nsIGfxInfo>& gfxInfo,
 /* static */ bool
 gfxUtils::DumpDisplayList() {
   return gfxPrefs::LayoutDumpDisplayList() ||
+         (gfxPrefs::LayoutDumpDisplayListParent() && XRE_IsParentProcess()) ||
          (gfxPrefs::LayoutDumpDisplayListContent() && XRE_IsContentProcess());
 }
 

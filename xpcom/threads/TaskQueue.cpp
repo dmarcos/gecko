@@ -6,12 +6,12 @@
 
 #include "mozilla/TaskQueue.h"
 
-#include "nsIEventTarget.h"
+#include "nsISerialEventTarget.h"
 #include "nsThreadUtils.h"
 
 namespace mozilla {
 
-class TaskQueue::EventTargetWrapper final : public nsIEventTarget
+class TaskQueue::EventTargetWrapper final : public nsISerialEventTarget
 {
   RefPtr<TaskQueue> mTaskQueue;
 
@@ -39,7 +39,6 @@ public:
     nsCOMPtr<nsIRunnable> runnable = aEvent;
     MonitorAutoLock mon(mTaskQueue->mQueueMonitor);
     return mTaskQueue->DispatchLocked(/* passed by ref */runnable,
-                                      DontAssertDispatchSuccess,
                                       NormalDispatch);
   }
 
@@ -56,12 +55,21 @@ public:
     return NS_OK;
   }
 
+  NS_IMETHOD_(bool)
+  IsOnCurrentThreadInfallible() override
+  {
+    return mTaskQueue->mTarget->IsOnCurrentThread();
+  }
+
   NS_DECL_THREADSAFE_ISUPPORTS
 };
 
-NS_IMPL_ISUPPORTS(TaskQueue::EventTargetWrapper, nsIEventTarget)
+NS_IMPL_ISUPPORTS(TaskQueue::EventTargetWrapper,
+                  nsIEventTarget,
+                  nsISerialEventTarget)
 
 TaskQueue::TaskQueue(already_AddRefed<nsIEventTarget> aTarget,
+                     const char* aName,
                      bool aRequireTailDispatch)
   : AbstractThread(aRequireTailDispatch)
   , mTarget(aTarget)
@@ -69,15 +77,20 @@ TaskQueue::TaskQueue(already_AddRefed<nsIEventTarget> aTarget,
   , mTailDispatcher(nullptr)
   , mIsRunning(false)
   , mIsShutdown(false)
+  , mName(aName)
 {
-  MOZ_COUNT_CTOR(TaskQueue);
+}
+
+TaskQueue::TaskQueue(already_AddRefed<nsIEventTarget> aTarget,
+                     bool aSupportsTailDispatch)
+  : TaskQueue(Move(aTarget), "Unnamed", aSupportsTailDispatch)
+{
 }
 
 TaskQueue::~TaskQueue()
 {
   MonitorAutoLock mon(mQueueMonitor);
   MOZ_ASSERT(mIsShutdown);
-  MOZ_COUNT_DTOR(TaskQueue);
 }
 
 TaskDispatcher&
@@ -92,7 +105,6 @@ TaskQueue::TailDispatcher()
 // See Dispatch() in TaskQueue.h for more details.
 nsresult
 TaskQueue::DispatchLocked(nsCOMPtr<nsIRunnable>& aRunnable,
-                          DispatchFailureHandling aFailureHandling,
                           DispatchReason aReason)
 {
   mQueueMonitor.AssertCurrentThreadOwns();
@@ -102,8 +114,7 @@ TaskQueue::DispatchLocked(nsCOMPtr<nsIRunnable>& aRunnable,
 
   AbstractThread* currentThread;
   if (aReason != TailDispatch && (currentThread = GetCurrent()) && RequiresTailDispatch(currentThread)) {
-    currentThread->TailDispatcher().AddTask(this, aRunnable.forget(), aFailureHandling);
-    return NS_OK;
+    return currentThread->TailDispatcher().AddTask(this, aRunnable.forget());
   }
 
   mTasks.push(aRunnable.forget());
@@ -193,14 +204,14 @@ TaskQueue::ImpreciseLengthForHeuristics()
 bool
 TaskQueue::IsCurrentThreadIn()
 {
-  bool in = NS_GetCurrentThread() == mRunningThread;
+  bool in = mRunningThread == GetCurrentPhysicalThread();
   return in;
 }
 
-already_AddRefed<nsIEventTarget>
+already_AddRefed<nsISerialEventTarget>
 TaskQueue::WrapAsEventTarget()
 {
-  nsCOMPtr<nsIEventTarget> ref = new EventTargetWrapper(this);
+  nsCOMPtr<nsISerialEventTarget> ref = new EventTargetWrapper(this);
   return ref.forget();
 }
 
@@ -211,7 +222,7 @@ TaskQueue::Runner::Run()
   {
     MonitorAutoLock mon(mQueue->mQueueMonitor);
     MOZ_ASSERT(mQueue->mIsRunning);
-    if (mQueue->mTasks.size() == 0) {
+    if (mQueue->mTasks.empty()) {
       mQueue->mIsRunning = false;
       mQueue->MaybeResolveShutdown();
       mon.NotifyAll();
@@ -241,7 +252,7 @@ TaskQueue::Runner::Run()
 
   {
     MonitorAutoLock mon(mQueue->mQueueMonitor);
-    if (mQueue->mTasks.size() == 0) {
+    if (mQueue->mTasks.empty()) {
       // No more events to run. Exit the task runner.
       mQueue->mIsRunning = false;
       mQueue->MaybeResolveShutdown();

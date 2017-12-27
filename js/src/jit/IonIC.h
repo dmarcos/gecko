@@ -58,9 +58,12 @@ class IonICStub
 
 class IonGetPropertyIC;
 class IonSetPropertyIC;
+class IonGetPropSuperIC;
 class IonGetNameIC;
 class IonBindNameIC;
+class IonGetIteratorIC;
 class IonHasOwnIC;
+class IonInIC;
 
 class IonIC
 {
@@ -123,8 +126,6 @@ class IonIC
         return state_;
     }
 
-    void togglePreBarriers(bool enabled, ReprotectCode reprotect);
-
     CacheKind kind() const { return kind_; }
     uint8_t** codeRawPtr() { return &codeRaw_; }
 
@@ -142,6 +143,10 @@ class IonIC
         MOZ_ASSERT(kind_ == CacheKind::SetProp || kind_ == CacheKind::SetElem);
         return (IonSetPropertyIC*)this;
     }
+    IonGetPropSuperIC* asGetPropSuperIC() {
+        MOZ_ASSERT(kind_ == CacheKind::GetPropSuper || kind_ == CacheKind::GetElemSuper);
+        return (IonGetPropSuperIC*)this;
+    }
     IonGetNameIC* asGetNameIC() {
         MOZ_ASSERT(kind_ == CacheKind::GetName);
         return (IonGetNameIC*)this;
@@ -150,9 +155,17 @@ class IonIC
         MOZ_ASSERT(kind_ == CacheKind::BindName);
         return (IonBindNameIC*)this;
     }
+    IonGetIteratorIC* asGetIteratorIC() {
+        MOZ_ASSERT(kind_ == CacheKind::GetIterator);
+        return (IonGetIteratorIC*)this;
+    }
     IonHasOwnIC* asHasOwnIC() {
         MOZ_ASSERT(kind_ == CacheKind::HasOwn);
         return (IonHasOwnIC*)this;
+    }
+    IonInIC* asInIC() {
+        MOZ_ASSERT(kind_ == CacheKind::In);
+        return (IonInIC*)this;
     }
 
     void updateBaseAddress(JitCode* code, MacroAssembler& masm);
@@ -170,6 +183,7 @@ class IonIC
 
 class IonGetPropertyIC : public IonIC
 {
+  private:
     LiveRegisterSet liveRegs_;
 
     TypedOrValueRegister value_;
@@ -177,33 +191,63 @@ class IonGetPropertyIC : public IonIC
     TypedOrValueRegister output_;
     Register maybeTemp_; // Might be InvalidReg.
 
-    bool monitoredResult_ : 1;
-    bool allowDoubleResult_ : 1;
+    GetPropertyResultFlags resultFlags_;
 
   public:
     IonGetPropertyIC(CacheKind kind, LiveRegisterSet liveRegs, TypedOrValueRegister value,
                      const ConstantOrRegister& id, TypedOrValueRegister output, Register maybeTemp,
-                     bool monitoredResult, bool allowDoubleResult)
+                     GetPropertyResultFlags resultFlags)
       : IonIC(kind),
         liveRegs_(liveRegs),
         value_(value),
         id_(id),
         output_(output),
         maybeTemp_(maybeTemp),
-        monitoredResult_(monitoredResult),
-        allowDoubleResult_(allowDoubleResult)
+        resultFlags_(resultFlags)
     { }
 
-    bool monitoredResult() const { return monitoredResult_; }
     TypedOrValueRegister value() const { return value_; }
     ConstantOrRegister id() const { return id_; }
     TypedOrValueRegister output() const { return output_; }
     Register maybeTemp() const { return maybeTemp_; }
     LiveRegisterSet liveRegs() const { return liveRegs_; }
-    bool allowDoubleResult() const { return allowDoubleResult_; }
+    GetPropertyResultFlags resultFlags() const { return resultFlags_; }
+    bool monitoredResult() const { return resultFlags_ & GetPropertyResultFlags::Monitored; }
+    bool allowDoubleResult() const { return resultFlags_ & GetPropertyResultFlags::AllowDouble; }
 
     static MOZ_MUST_USE bool update(JSContext* cx, HandleScript outerScript, IonGetPropertyIC* ic,
                                     HandleValue val, HandleValue idVal, MutableHandleValue res);
+};
+
+class IonGetPropSuperIC : public IonIC
+{
+    LiveRegisterSet liveRegs_;
+
+    Register object_;
+    TypedOrValueRegister receiver_;
+    ConstantOrRegister id_;
+    TypedOrValueRegister output_;
+
+  public:
+    IonGetPropSuperIC(CacheKind kind, LiveRegisterSet liveRegs, Register object, TypedOrValueRegister receiver,
+                      const ConstantOrRegister& id, TypedOrValueRegister output)
+      : IonIC(kind),
+        liveRegs_(liveRegs),
+        object_(object),
+        receiver_(receiver),
+        id_(id),
+        output_(output)
+    { }
+
+    Register object() const { return object_; }
+    TypedOrValueRegister receiver() const { return receiver_; }
+    ConstantOrRegister id() const { return id_; }
+    TypedOrValueRegister output() const { return output_; }
+    LiveRegisterSet liveRegs() const { return liveRegs_; }
+
+    static MOZ_MUST_USE bool update(JSContext* cx, HandleScript outerScript, IonGetPropSuperIC* ic,
+                                    HandleObject obj, HandleValue receiver, HandleValue idVal,
+                                    MutableHandleValue res);
 };
 
 class IonSetPropertyIC : public IonIC
@@ -311,6 +355,35 @@ class IonBindNameIC : public IonIC
                             HandleObject envChain);
 };
 
+class IonGetIteratorIC : public IonIC
+{
+    LiveRegisterSet liveRegs_;
+    TypedOrValueRegister value_;
+    Register output_;
+    Register temp1_;
+    Register temp2_;
+
+  public:
+    IonGetIteratorIC(LiveRegisterSet liveRegs, TypedOrValueRegister value, Register output,
+                     Register temp1, Register temp2)
+      : IonIC(CacheKind::GetIterator),
+        liveRegs_(liveRegs),
+        value_(value),
+        output_(output),
+        temp1_(temp1),
+        temp2_(temp2)
+    { }
+
+    TypedOrValueRegister value() const { return value_; }
+    Register output() const { return output_; }
+    Register temp1() const { return temp1_; }
+    Register temp2() const { return temp2_; }
+    LiveRegisterSet liveRegs() const { return liveRegs_; }
+
+    static JSObject* update(JSContext* cx, HandleScript outerScript, IonGetIteratorIC* ic,
+                            HandleValue value);
+};
+
 class IonHasOwnIC : public IonIC
 {
     LiveRegisterSet liveRegs_;
@@ -336,6 +409,36 @@ class IonHasOwnIC : public IonIC
 
     static MOZ_MUST_USE bool update(JSContext* cx, HandleScript outerScript, IonHasOwnIC* ic,
                                     HandleValue val, HandleValue idVal, int32_t* res);
+};
+
+class IonInIC : public IonIC
+{
+    LiveRegisterSet liveRegs_;
+
+    ConstantOrRegister key_;
+    Register object_;
+    Register output_;
+    Register temp_;
+
+  public:
+    IonInIC(LiveRegisterSet liveRegs, const ConstantOrRegister& key,
+            Register object, Register output, Register temp)
+      : IonIC(CacheKind::In),
+        liveRegs_(liveRegs),
+        key_(key),
+        object_(object),
+        output_(output),
+        temp_(temp)
+    { }
+
+    ConstantOrRegister key() const { return key_; }
+    Register object() const { return object_; }
+    Register output() const { return output_; }
+    Register temp() const { return temp_; }
+    LiveRegisterSet liveRegs() const { return liveRegs_; }
+
+    static MOZ_MUST_USE bool update(JSContext* cx, HandleScript outerScript, IonInIC* ic,
+                                    HandleValue key, HandleObject obj, bool* res);
 };
 
 } // namespace jit

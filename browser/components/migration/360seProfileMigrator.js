@@ -10,14 +10,15 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/NetUtil.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
-Cu.import("resource://gre/modules/osfile.jsm"); /* globals OS */
-Cu.import("resource:///modules/MigrationUtils.jsm"); /* globals MigratorPrototype */
+Cu.import("resource://gre/modules/osfile.jsm");
+Cu.import("resource:///modules/MigrationUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
                                   "resource://gre/modules/PlacesUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Sqlite",
                                   "resource://gre/modules/Sqlite.jsm");
+
+Cu.importGlobalProperties(["URL"]);
 
 const kBookmarksFileName = "360sefav.db";
 
@@ -43,7 +44,7 @@ function copyToTempUTF8File(file, charset) {
     try {
       let converterOut = Cc["@mozilla.org/intl/converter-output-stream;1"]
                            .createInstance(Ci.nsIConverterOutputStream);
-      converterOut.init(bufferedOut, "utf-8", 0, 0x0000);
+      converterOut.init(bufferedOut, "utf-8");
       try {
         converterOut.writeString(inputStr || "");
         bufferedOut.QueryInterface(Ci.nsISafeOutputStream).finish();
@@ -110,21 +111,16 @@ Bookmarks.prototype = {
   },
 
   migrate(aCallback) {
-    return Task.spawn(function* () {
-      let idToGuid = new Map();
-      let folderGuid = PlacesUtils.bookmarks.toolbarGuid;
-      if (!MigrationUtils.isStartupMigration) {
-        folderGuid =
-          yield MigrationUtils.createImportedBookmarksFolder("360se", folderGuid);
-      }
-      idToGuid.set(0, folderGuid);
+    return (async () => {
+      let folderMap = new Map();
+      let toolbarBMs = [];
 
-      let connection = yield Sqlite.openConnection({
+      let connection = await Sqlite.openConnection({
         path: this._file.path
       });
 
       try {
-        let rows = yield connection.execute(
+        let rows = await connection.execute(
           `WITH RECURSIVE
            bookmark(id, parent_id, is_folder, title, url, pos) AS (
              VALUES(0, -1, 1, '', '', 0)
@@ -143,41 +139,49 @@ Bookmarks.prototype = {
           let title = row.getResultByName("title");
           let url = row.getResultByName("url");
 
-          let parentGuid = idToGuid.get(parent_id) || idToGuid.get("fallback");
-          if (!parentGuid) {
-            parentGuid = PlacesUtils.bookmarks.unfiledGuid;
-            if (!MigrationUtils.isStartupMigration) {
-              parentGuid =
-                yield MigrationUtils.createImportedBookmarksFolder("360se", parentGuid);
+          let bmToInsert;
+
+          if (is_folder) {
+            bmToInsert = {
+              children: [],
+              title,
+              type: PlacesUtils.bookmarks.TYPE_FOLDER
+            };
+            folderMap.set(id, bmToInsert);
+          } else {
+            try {
+              new URL(url);
+            } catch (ex) {
+              Cu.reportError(`Ignoring ${url} when importing from 360se because of exception: ${ex}`);
+              continue;
             }
-            idToGuid.set("fallback", parentGuid);
+
+            bmToInsert = {
+              title,
+              url
+            };
           }
 
-          try {
-            if (is_folder == 1) {
-              let newFolderGuid = (yield MigrationUtils.insertBookmarkWrapper({
-                parentGuid,
-                type: PlacesUtils.bookmarks.TYPE_FOLDER,
-                title
-              })).guid;
-
-              idToGuid.set(id, newFolderGuid);
-            } else {
-              yield MigrationUtils.insertBookmarkWrapper({
-                parentGuid,
-                url,
-                title
-              });
-            }
-          } catch (ex) {
-            Cu.reportError(ex);
+          if (folderMap.has(parent_id)) {
+            folderMap.get(parent_id).children.push(bmToInsert);
+          } else if (parent_id === 0) {
+            toolbarBMs.push(bmToInsert);
           }
         }
       } finally {
-        yield connection.close();
+        await connection.close();
       }
-    }.bind(this)).then(() => aCallback(true),
-                        e => { Cu.reportError(e); aCallback(false) });
+
+      if (toolbarBMs.length) {
+        let parentGuid = PlacesUtils.bookmarks.toolbarGuid;
+        if (!MigrationUtils.isStartupMigration) {
+          parentGuid =
+            await MigrationUtils.createImportedBookmarksFolder("360se", parentGuid);
+        }
+        await MigrationUtils.insertManyBookmarksWrapper(toolbarBMs, parentGuid);
+      }
+    })().then(() => aCallback(true),
+                        e => { Cu.reportError(e); aCallback(false); });
   }
 };
 
@@ -230,7 +234,7 @@ Object.defineProperty(Qihoo360seProfileMigrator.prototype, "sourceProfiles", {
         throw new Error("360 Secure Browser's 'login.ini' file could not be read.");
       }
 
-      let loginIniInUtf8 = copyToTempUTF8File(loginIni, "gbk");
+      let loginIniInUtf8 = copyToTempUTF8File(loginIni, "GBK");
       let loginIniObj = parseINIStrings(loginIniInUtf8);
       try {
         loginIniInUtf8.remove(false);

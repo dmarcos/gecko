@@ -5,7 +5,7 @@
 
 //-----------------------------------------------------------------------------
 var BUGNUMBER = 474769;
-var summary = 'TM: nested for each type-unstable loops';
+var summary = 'TM: nested type-unstable for loops';
 var actual = '';
 var expect = '';
 
@@ -16,20 +16,17 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
  
   expect = 1;
 
 
-  for each (b in [1, 1, 1, 1.5, 1, 1]) {
-      (function() { for each (let h in [0, 0, 1.4, ""]) {} })();
+  for (b of [1, 1, 1, 1.5, 1, 1]) {
+      (function() { for (let h of [0, 0, 1.4, ""]) {} })();
   }
   actual = b;
 
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

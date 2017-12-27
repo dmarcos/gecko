@@ -1,20 +1,7 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * This Original Code has been modified by IBM Corporation.
- * Modifications made by IBM described herein are
- * Copyright (c) International Business Machines
- * Corporation, 2000
- *
- * Modifications to Mozilla code or documentation
- * identified per MPL Section 3.3
- *
- * Date         Modified by     Description of modification
- * 03/27/2000   IBM Corp.       Added PR_CALLBACK for Optlink
- *                               use in OS2
- */
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
   This sort service is used to sort template built content or content by attribute.
@@ -37,7 +24,7 @@ enum nsSortState_direction {
   nsSortState_ascending,
   nsSortState_natural
 };
-  
+
 // the sort state holds info about the current sort
 struct nsSortState
 {
@@ -51,7 +38,7 @@ struct nsSortState
 
   MOZ_INIT_OUTSIDE_CTOR nsSortState_direction direction;
   nsAutoString sort;
-  nsCOMArray<nsIAtom> sortKeys;
+  nsTArray<RefPtr<nsAtom>> sortKeys;
 
   nsCOMPtr<nsIXULTemplateQueryProcessor> processor;
   nsCOMPtr<nsIContent> lastContainer;
@@ -109,7 +96,7 @@ public:
    * Set sort and sortDirection attributes when a sort is done.
    */
   void
-  SetSortHints(nsIContent *aNode, nsSortState* aSortState);
+  SetSortHints(mozilla::dom::Element* aElement, nsSortState* aSortState);
 
   /**
    * Set sortActive and sortDirection attributes on a tree column when a sort
@@ -169,8 +156,8 @@ public:
    * @param aSortState structure filled in with sort data
    */
   static nsresult
-  InitializeSortState(nsIContent* aRootElement,
-                      nsIContent* aContainer,
+  InitializeSortState(mozilla::dom::Element* aRootElement,
+                      mozilla::dom::Element* aContainer,
                       const nsAString& aSortKey,
                       const nsAString& aSortDirection,
                       nsSortState* aSortState);

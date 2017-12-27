@@ -15,14 +15,19 @@ EXPORTS.mozilla.layout += [
     'ipc/RemotePrintJobParent.h',
 ]
 
+EXPORTS.mozilla.layout.printing += [
+    'DrawEventRecorder.h'
+]
+
 XPIDL_MODULE = 'layout_printing'
 
 UNIFIED_SOURCES += [
+    'DrawEventRecorder.cpp',
     'ipc/RemotePrintJobChild.cpp',
     'ipc/RemotePrintJobParent.cpp',
     'nsPagePrintTimer.cpp',
     'nsPrintData.cpp',
-    'nsPrintEngine.cpp',
+    'nsPrintJob.cpp',
     'nsPrintObject.cpp',
     'nsPrintPreviewListener.cpp',
     'PrintTranslator.cpp',
@@ -34,4 +39,5 @@ FINAL_LIBRARY = 'xul'
 LOCAL_INCLUDES += [
     '../base',
     '/dom/base',
+    '/gfx/2d/'
 ]

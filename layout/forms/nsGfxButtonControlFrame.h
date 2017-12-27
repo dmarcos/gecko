@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -16,21 +17,20 @@
 // The label for button is specified through generated content
 // in the ua.css file.
 
-class nsGfxButtonControlFrame : public nsHTMLButtonControlFrame,
-                                public nsIAnonymousContentCreator
+class nsGfxButtonControlFrame final
+  : public nsHTMLButtonControlFrame
+  , public nsIAnonymousContentCreator
 {
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsGfxButtonControlFrame)
 
   explicit nsGfxButtonControlFrame(nsStyleContext* aContext);
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
-  virtual nsresult HandleEvent(nsPresContext* aPresContext, 
+  virtual nsresult HandleEvent(nsPresContext* aPresContext,
                                mozilla::WidgetGUIEvent* aEvent,
                                nsEventStatus* aEventStatus) override;
-
-  virtual nsIAtom* GetType() const override;
 
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override;
@@ -44,17 +44,15 @@ public:
                                         uint32_t aFilter) override;
 
   virtual nsresult AttributeChanged(int32_t         aNameSpaceID,
-                                    nsIAtom*        aAttribute,
+                                    nsAtom*        aAttribute,
                                     int32_t         aModType) override;
-
-  virtual bool IsLeaf() const override;
 
   virtual nsContainerFrame* GetContentInsertionFrame() override;
 
 protected:
-  nsresult GetDefaultLabel(nsXPIDLString& aLabel) const;
+  nsresult GetDefaultLabel(nsAString& aLabel) const;
 
-  nsresult GetLabel(nsXPIDLString& aLabel);
+  nsresult GetLabel(nsString& aLabel);
 
   virtual bool IsInput() override { return true; }
 private:

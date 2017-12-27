@@ -4,7 +4,7 @@
 
 //! The `servo` test application.
 //!
-//! Creates a `Browser` instance with a simple implementation of
+//! Creates a `Servo` instance with a simple implementation of
 //! the compositor's `WindowMethods` to create a working web browser.
 //!
 //! This browser's implementation of `WindowMethods` is built on top
@@ -15,7 +15,7 @@
 //!
 //! [glutin]: https://github.com/tomaka/glutin
 
-#![feature(start, core_intrinsics)]
+#![cfg_attr(feature = "unstable", feature(core_intrinsics))]
 
 #[cfg(target_os = "android")]
 extern crate android_injected_glue;
@@ -26,15 +26,20 @@ extern crate glutin_app as app;
 extern crate log;
 // The Servo engine
 extern crate servo;
-#[cfg(not(target_os = "android"))]
+#[cfg(all(feature = "unstable", not(target_os = "android")))]
 #[macro_use]
 extern crate sig;
 
 use backtrace::Backtrace;
-use servo::Browser;
+use servo::Servo;
 use servo::compositing::windowing::WindowEvent;
-use servo::config::opts::{self, ArgumentParsingResult};
+#[cfg(target_os = "android")]
+use servo::config;
+use servo::config::opts::{self, ArgumentParsingResult, parse_url_or_filename};
 use servo::config::servo_version;
+use servo::ipc_channel::ipc;
+use servo::servo_config::prefs::PREFS;
+use servo::servo_url::ServoUrl;
 use std::env;
 use std::panic;
 use std::process;
@@ -52,7 +57,7 @@ pub mod platform {
     pub fn deinit() {}
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(feature = "unstable", not(target_os = "android")))]
 fn install_crash_handler() {
     use backtrace::Backtrace;
     use sig::ffi::Sig;
@@ -66,6 +71,8 @@ fn install_crash_handler() {
             .unwrap_or("".to_owned());
         println!("Stack trace{}\n{:?}", name, Backtrace::new());
         unsafe {
+            // N.B. Using process::abort() here causes the crash handler to be
+            //      triggered recursively.
             abort();
         }
     }
@@ -76,7 +83,7 @@ fn install_crash_handler() {
     signal!(Sig::BUS, handler); // handle invalid memory access
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(not(feature = "unstable"), target_os = "android"))]
 fn install_crash_handler() {}
 
 fn main() {
@@ -139,22 +146,36 @@ fn main() {
 
     let window = app::create_window(None);
 
-    // Our wrapper around `Browser` that also implements some
+    // If the url is not provided, we fallback to the homepage in PREFS,
+    // or a blank page in case the homepage is not set either.
+    let cwd = env::current_dir().unwrap();
+    let cmdline_url = opts::get().url.clone();
+    let pref_url = PREFS.get("shell.homepage").as_string()
+        .and_then(|str| parse_url_or_filename(&cwd, str).ok());
+    let blank_url = ServoUrl::parse("about:blank").ok();
+
+    let target_url = cmdline_url.or(pref_url).or(blank_url).unwrap();
+
+    // Our wrapper around `ServoWrapper` that also implements some
     // callbacks required by the glutin window implementation.
-    let mut browser = BrowserWrapper {
-        browser: Browser::new(window.clone()),
+    let mut servo_wrapper = ServoWrapper {
+        servo: Servo::new(window.clone())
     };
 
-    browser.browser.setup_logging();
+    let (sender, receiver) = ipc::channel().unwrap();
+    servo_wrapper.servo.handle_events(vec![WindowEvent::NewBrowser(target_url, sender)]);
+    let browser_id = receiver.recv().unwrap();
+    window.set_browser_id(browser_id);
+    servo_wrapper.servo.handle_events(vec![WindowEvent::SelectBrowser(browser_id)]);
 
-    register_glutin_resize_handler(&window, &mut browser);
+    servo_wrapper.servo.setup_logging();
 
-    browser.browser.handle_events(vec![WindowEvent::InitializeCompositing]);
+    register_glutin_resize_handler(&window, &mut servo_wrapper);
 
     // Feed events from the window to the browser until the browser
     // says to stop.
     loop {
-        let should_continue = browser.browser.handle_events(window.wait_events());
+        let should_continue = servo_wrapper.servo.handle_events(window.wait_events());
         if !should_continue {
             break;
         }
@@ -162,10 +183,12 @@ fn main() {
 
     unregister_glutin_resize_handler(&window);
 
+    servo_wrapper.servo.deinit();
+
     platform::deinit()
 }
 
-fn register_glutin_resize_handler(window: &Rc<app::window::Window>, browser: &mut BrowserWrapper) {
+fn register_glutin_resize_handler(window: &Rc<app::window::Window>, browser: &mut ServoWrapper) {
     unsafe {
         window.set_nested_event_loop_listener(browser);
     }
@@ -177,21 +200,21 @@ fn unregister_glutin_resize_handler(window: &Rc<app::window::Window>) {
     }
 }
 
-struct BrowserWrapper {
-    browser: Browser<app::window::Window>,
+struct ServoWrapper {
+    servo: Servo<app::window::Window>,
 }
 
-impl app::NestedEventLoopListener for BrowserWrapper {
+impl app::NestedEventLoopListener for ServoWrapper {
     fn handle_event_from_nested_event_loop(&mut self, event: WindowEvent) -> bool {
         let is_resize = match event {
-            WindowEvent::Resize(..) => true,
+            WindowEvent::Resize => true,
             _ => false,
         };
-        if !self.browser.handle_events(vec![event]) {
+        if !self.servo.handle_events(vec![event]) {
             return false;
         }
         if is_resize {
-            self.browser.repaint_synchronously()
+            self.servo.repaint_synchronously()
         }
         true
     }
@@ -200,7 +223,7 @@ impl app::NestedEventLoopListener for BrowserWrapper {
 #[cfg(target_os = "android")]
 fn setup_logging() {
     // Piping logs from stdout/stderr to logcat happens in android_injected_glue.
-    ::std::env::set_var("RUST_LOG", "debug");
+    ::std::env::set_var("RUST_LOG", "error");
 
     unsafe { android_injected_glue::ffi::app_dummy() };
 }
@@ -219,8 +242,9 @@ fn args() -> Vec<String> {
     use std::fs::File;
     use std::io::{BufRead, BufReader};
 
-    const PARAMS_FILE: &'static str = "/sdcard/servo/android_params";
-    match File::open(PARAMS_FILE) {
+    let mut params_file = config::basedir::default_config_dir().unwrap();
+    params_file.push("android_params");
+    match File::open(params_file.to_str().unwrap()) {
         Ok(f) => {
             let mut vec = Vec::new();
             let file = BufReader::new(&f);
@@ -236,7 +260,7 @@ fn args() -> Vec<String> {
         },
         Err(e) => {
             debug!("Failed to open params file '{}': {}",
-                   PARAMS_FILE,
+                   params_file.to_str().unwrap(),
                    Error::description(&e));
             vec!["servo".to_owned(), "http://en.wikipedia.org/wiki/Rust".to_owned()]
         },

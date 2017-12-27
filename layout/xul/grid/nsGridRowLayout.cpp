@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -58,7 +59,7 @@ nsGridRowLayout::GetParentGridPart(nsIFrame* aBox, nsIFrame** aParentBox)
   // go up and find our parent gridRow. Skip and non gridRow
   // parents.
   *aParentBox = nullptr;
-  
+
   // walk up through any scrollboxes
   aBox = nsGrid::GetScrollBox(aBox);
 
@@ -102,14 +103,14 @@ nsGridRowLayout::GetGrid(nsIFrame* aBox, int32_t* aIndex, nsGridRowLayout* aRequ
 
      nsBoxLayout* layout = childBox->GetXULLayoutManager();
      nsIGridPart* gridRow = nsGrid::GetPartFromBox(childBox);
-     if (gridRow) 
+     if (gridRow)
      {
        if (layout == aRequestor) {
           index = count;
           break;
        }
        count += gridRow->GetRowCount();
-     } else 
+     } else
        count++;
 
      child = nsBox::GetNextXULBox(child);
@@ -163,7 +164,7 @@ nsGridRowLayout::GetTotalMargin(nsIFrame* aBox, bool aIsHorizontal)
        {
           if (aIsHorizontal)
               margin.top = 0;
-          else 
+          else
               margin.left = 0;
        }
 
@@ -173,13 +174,13 @@ nsGridRowLayout::GetTotalMargin(nsIFrame* aBox, bool aIsHorizontal)
        {
           if (aIsHorizontal)
               margin.bottom = 0;
-          else 
+          else
               margin.right = 0;
        }
 
     }
   }
-    
+
   // add ours to it.
   nsMargin ourMargin;
   aBox->GetXULMargin(ourMargin);

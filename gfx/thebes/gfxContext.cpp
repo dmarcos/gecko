@@ -23,6 +23,7 @@
 #include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/gfx/DrawTargetTiled.h"
 #include <algorithm>
+#include "TextDrawTarget.h"
 
 #if XP_WIN
 #include "gfxWindowsPlatform.h"
@@ -34,6 +35,12 @@ using namespace mozilla::gfx;
 
 UserDataKey gfxContext::sDontUseAsSourceKey;
 
+#ifdef DEBUG
+  #define CURRENTSTATE_CHANGED() \
+    CurrentState().mContentChanged = true;
+#else
+  #define CURRENTSTATE_CHANGED()
+#endif
 
 PatternFromState::operator mozilla::gfx::Pattern&()
 {
@@ -41,24 +48,6 @@ PatternFromState::operator mozilla::gfx::Pattern&()
 
   if (state.pattern) {
     return *state.pattern->GetPattern(mContext->mDT, state.patternTransformChanged ? &state.patternTransform : nullptr);
-  }
-
-  if (state.sourceSurface) {
-    Matrix transform = state.surfTransform;
-
-    if (state.patternTransformChanged) {
-      Matrix mat = mContext->GetDTTransform();
-      if (!mat.Invert()) {
-        mPattern = new (mColorPattern.addr())
-        ColorPattern(Color()); // transparent black to paint nothing
-        return *mPattern;
-      }
-      transform = transform * state.patternTransform * mat;
-    }
-
-    mPattern = new (mSurfacePattern.addr())
-    SurfacePattern(state.sourceSurface, ExtendMode::CLAMP, transform);
-    return *mPattern;
   }
 
   mPattern = new (mColorPattern.addr())
@@ -105,7 +94,7 @@ gfxContext::CreatePreservingTransformOrNull(DrawTarget* aTarget)
 
   Matrix transform = aTarget->GetTransform();
   RefPtr<gfxContext> result = new gfxContext(aTarget);
-  result->SetMatrix(ThebesMatrix(transform));
+  result->SetMatrix(transform);
   return result.forget();
 }
 
@@ -118,17 +107,65 @@ gfxContext::~gfxContext()
   }
 }
 
+mozilla::layout::TextDrawTarget*
+gfxContext::GetTextDrawer()
+{
+  if (mDT->GetBackendType() == BackendType::WEBRENDER_TEXT) {
+    return static_cast<mozilla::layout::TextDrawTarget*>(&*mDT);
+  }
+  return nullptr;
+}
+
 void
 gfxContext::Save()
 {
   CurrentState().transform = mTransform;
   mStateStack.AppendElement(AzureState(CurrentState()));
   CurrentState().pushedClips.Clear();
+#ifdef DEBUG
+  CurrentState().mContentChanged = false;
+#endif
 }
 
 void
 gfxContext::Restore()
 {
+#ifdef DEBUG
+  // gfxContext::Restore is used to restore AzureState. We need to restore it
+  // only if it was altered. The following APIs do change the content of
+  // AzureState, a user should save the state before using them and restore it
+  // after finishing painting:
+  // 1. APIs to setup how to paint, such as SetColor()/SetAntialiasMode(). All
+  //    gfxContext SetXXXX public functions belong to this category, except
+  //    gfxContext::SetPath & gfxContext::SetMatrix.
+  // 2. Clip functions, such as Clip() or PopClip(). You may call PopClip()
+  //    directly instead of using gfxContext::Save if the clip region is the
+  //    only thing that you altered in the target context.
+  // 3. Function of setup transform matrix, such as Multiply() and
+  //    SetMatrix(). Using gfxContextMatrixAutoSaveRestore is more recommended
+  //    if transform data is the only thing that you are going to alter.
+  //
+  // You will hit the assertion message below if there is no above functions
+  // been used between a pair of gfxContext::Save and gfxContext::Restore.
+  // Considerate to remove that pair of Save/Restore if hitting that assertion.
+  //
+  // In the other hand, the following APIs do not alter the content of the
+  // current AzureState, therefore, there is no need to save & restore
+  // AzureState:
+  // 1. constant member functions of gfxContext.
+  // 2. Paint calls, such as Line()/Rectangle()/Fill(). Those APIs change the
+  //    content of drawing buffer, which is not part of AzureState.
+  // 3. Path building APIs, such as SetPath()/MoveTo()/LineTo()/NewPath().
+  //    Surprisingly, path information is not stored in AzureState either.
+  // Save current AzureState before using these type of APIs does nothing but
+  // make performance worse.
+  NS_ASSERTION(CurrentState().mContentChanged ||
+               CurrentState().pushedClips.Length() > 0,
+               "The context of the current AzureState is not altered after "
+               "Save() been called. you may consider to remove this pair of "
+               "gfxContext::Save/Restore.");
+#endif
+
   for (unsigned int c = 0; c < CurrentState().pushedClips.Length(); c++) {
     mDT->PopClip();
   }
@@ -191,8 +228,7 @@ gfxContext::Fill()
 void
 gfxContext::Fill(const Pattern& aPattern)
 {
-  PROFILER_LABEL("gfxContext", "Fill",
-    js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("gfxContext::Fill", GRAPHICS);
   FillAzure(aPattern, 1.0f);
 }
 
@@ -259,19 +295,33 @@ gfxContext::Rectangle(const gfxRect& rect, bool snapToPixels)
 void
 gfxContext::Multiply(const gfxMatrix& matrix)
 {
+  CURRENTSTATE_CHANGED()
   ChangeTransform(ToMatrix(matrix) * mTransform);
 }
 
 void
-gfxContext::SetMatrix(const gfxMatrix& matrix)
+gfxContext::SetMatrix(const gfx::Matrix& matrix)
 {
-  ChangeTransform(ToMatrix(matrix));
+  CURRENTSTATE_CHANGED()
+  ChangeTransform(matrix);
+}
+
+void
+gfxContext::SetMatrixDouble(const gfxMatrix& matrix)
+{
+  SetMatrix(ToMatrix(matrix));
+}
+
+gfx::Matrix
+gfxContext::CurrentMatrix() const
+{
+  return mTransform;
 }
 
 gfxMatrix
-gfxContext::CurrentMatrix() const
+gfxContext::CurrentMatrixDouble() const
 {
-  return ThebesMatrix(mTransform);
+  return ThebesMatrix(CurrentMatrix());
 }
 
 gfxPoint
@@ -383,6 +433,7 @@ gfxContext::UserToDevicePixelSnapped(gfxPoint& pt, bool ignoreScale) const
 void
 gfxContext::SetAntialiasMode(AntialiasMode mode)
 {
+  CURRENTSTATE_CHANGED()
   CurrentState().aaMode = mode;
 }
 
@@ -395,6 +446,7 @@ gfxContext::CurrentAntialiasMode() const
 void
 gfxContext::SetDash(gfxFloat *dashes, int ndash, gfxFloat offset)
 {
+  CURRENTSTATE_CHANGED()
   AzureState &state = CurrentState();
 
   state.dashPattern.SetLength(ndash);
@@ -447,6 +499,7 @@ gfxContext::CurrentLineWidth() const
 void
 gfxContext::SetOp(CompositionOp aOp)
 {
+  CURRENTSTATE_CHANGED()
   CurrentState().op = aOp;
 }
 
@@ -459,6 +512,7 @@ gfxContext::CurrentOp() const
 void
 gfxContext::SetLineCap(CapStyle cap)
 {
+  CURRENTSTATE_CHANGED()
   CurrentState().strokeOptions.mLineCap = cap;
 }
 
@@ -471,6 +525,7 @@ gfxContext::CurrentLineCap() const
 void
 gfxContext::SetLineJoin(JoinStyle join)
 {
+  CURRENTSTATE_CHANGED()
   CurrentState().strokeOptions.mLineJoin = join;
 }
 
@@ -483,6 +538,7 @@ gfxContext::CurrentLineJoin() const
 void
 gfxContext::SetMiterLimit(gfxFloat limit)
 {
+  CURRENTSTATE_CHANGED()
   CurrentState().strokeOptions.mMiterLimit = Float(limit);
 }
 
@@ -543,33 +599,21 @@ gfxContext::PopClip()
 }
 
 gfxRect
-gfxContext::GetClipExtents()
+gfxContext::GetClipExtents(ClipExtentsSpace aSpace) const
 {
   Rect rect = GetAzureDeviceSpaceClipBounds();
 
-  if (rect.width == 0 || rect.height == 0) {
+  if (rect.IsZero()) {
     return gfxRect(0, 0, 0, 0);
   }
 
-  Matrix mat = mTransform;
-  mat.Invert();
-  rect = mat.TransformBounds(rect);
+  if (aSpace == eUserSpace) {
+    Matrix mat = mTransform;
+    mat.Invert();
+    rect = mat.TransformBounds(rect);
+  }
 
   return ThebesRect(rect);
-}
-
-bool
-gfxContext::HasComplexClip() const
-{
-  for (int i = mStateStack.Length() - 1; i >= 0; i--) {
-    for (unsigned int c = 0; c < mStateStack[i].pushedClips.Length(); c++) {
-      const AzureState::PushedClip &clip = mStateStack[i].pushedClips[c];
-      if (clip.path || !clip.transform.IsRectilinear()) {
-        return true;
-      }
-    }
-  }
-  return false;
 }
 
 bool
@@ -629,27 +673,22 @@ gfxContext::ClipContainsRect(const gfxRect& aRect)
 void
 gfxContext::SetColor(const Color& aColor)
 {
+  CURRENTSTATE_CHANGED()
   CurrentState().pattern = nullptr;
-  CurrentState().sourceSurfCairo = nullptr;
-  CurrentState().sourceSurface = nullptr;
   CurrentState().color = ToDeviceColor(aColor);
 }
 
 void
 gfxContext::SetDeviceColor(const Color& aColor)
 {
+  CURRENTSTATE_CHANGED()
   CurrentState().pattern = nullptr;
-  CurrentState().sourceSurfCairo = nullptr;
-  CurrentState().sourceSurface = nullptr;
   CurrentState().color = aColor;
 }
 
 bool
 gfxContext::GetDeviceColor(Color& aColorOut)
 {
-  if (CurrentState().sourceSurface) {
-    return false;
-  }
   if (CurrentState().pattern) {
     return CurrentState().pattern->GetSolidColor(aColorOut);
   }
@@ -659,24 +698,9 @@ gfxContext::GetDeviceColor(Color& aColorOut)
 }
 
 void
-gfxContext::SetSource(gfxASurface *surface, const gfxPoint& offset)
-{
-  CurrentState().surfTransform = Matrix(1.0f, 0, 0, 1.0f, Float(offset.x), Float(offset.y));
-  CurrentState().pattern = nullptr;
-  CurrentState().patternTransformChanged = false;
-  // Keep the underlying cairo surface around while we keep the
-  // sourceSurface.
-  CurrentState().sourceSurfCairo = surface;
-  CurrentState().sourceSurface =
-  gfxPlatform::GetPlatform()->GetSourceSurfaceForSurface(mDT, surface);
-  CurrentState().color = Color(0, 0, 0, 0);
-}
-
-void
 gfxContext::SetPattern(gfxPattern *pattern)
 {
-  CurrentState().sourceSurfCairo = nullptr;
-  CurrentState().sourceSurface = nullptr;
+  CURRENTSTATE_CHANGED()
   CurrentState().patternTransformChanged = false;
   CurrentState().pattern = pattern;
 }
@@ -689,24 +713,10 @@ gfxContext::GetPattern()
   AzureState &state = CurrentState();
   if (state.pattern) {
     pat = state.pattern;
-  } else if (state.sourceSurface) {
-    NS_ASSERTION(false, "Ugh, this isn't good.");
   } else {
     pat = new gfxPattern(state.color);
   }
   return pat.forget();
-}
-
-void
-gfxContext::SetFontSmoothingBackgroundColor(const Color& aColor)
-{
-  CurrentState().fontSmoothingBackgroundColor = aColor;
-}
-
-Color
-gfxContext::GetFontSmoothingBackgroundColor()
-{
-  return CurrentState().fontSmoothingBackgroundColor;
 }
 
 // masking
@@ -735,30 +745,7 @@ gfxContext::Mask(SourceSurface *surface, float alpha, const Point& offset)
 void
 gfxContext::Paint(gfxFloat alpha)
 {
-  PROFILER_LABEL("gfxContext", "Paint",
-    js::ProfileEntry::Category::GRAPHICS);
-
-  AzureState &state = CurrentState();
-
-  if (state.sourceSurface && !state.sourceSurfCairo &&
-      !state.patternTransformChanged)
-  {
-    // This is the case where a PopGroupToSource has been done and this
-    // paint is executed without changing the transform or the source.
-    Matrix oldMat = mDT->GetTransform();
-
-    IntSize surfSize = state.sourceSurface->GetSize();
-
-    mDT->SetTransform(Matrix::Translation(-state.deviceOffset.x,
-                                          -state.deviceOffset.y));
-
-    mDT->DrawSurface(state.sourceSurface,
-                     Rect(state.sourceSurfaceDeviceOffset, Size(surfSize.width, surfSize.height)),
-                     Rect(Point(), Size(surfSize.width, surfSize.height)),
-                     DrawSurfaceOptions(), DrawOptions(alpha, GetOp()));
-    mDT->SetTransform(oldMat);
-    return;
-  }
+  AUTO_PROFILER_LABEL("gfxContext::Paint", GRAPHICS);
 
   Matrix mat = mDT->GetTransform();
   mat.Invert();
@@ -771,18 +758,7 @@ gfxContext::Paint(gfxFloat alpha)
 void
 gfxContext::PushGroupForBlendBack(gfxContentType content, Float aOpacity, SourceSurface* aMask, const Matrix& aMaskTransform)
 {
-  Save();
   mDT->PushLayer(content == gfxContentType::COLOR, aOpacity, aMask, aMaskTransform);
-}
-
-static gfxRect
-GetRoundOutDeviceClipExtents(gfxContext* aCtx)
-{
-  gfxContextMatrixAutoSaveRestore save(aCtx);
-  aCtx->SetMatrix(gfxMatrix());
-  gfxRect r = aCtx->GetClipExtents();
-  r.RoundOut();
-  return r;
 }
 
 void
@@ -790,14 +766,13 @@ gfxContext::PushGroupAndCopyBackground(gfxContentType content, Float aOpacity, S
 {
   IntRect clipExtents;
   if (mDT->GetFormat() != SurfaceFormat::B8G8R8X8) {
-    gfxRect clipRect = GetRoundOutDeviceClipExtents(this);
-    clipExtents = IntRect::Truncate(clipRect.x, clipRect.y, clipRect.width, clipRect.height);
+    gfxRect clipRect = GetClipExtents(gfxContext::eDeviceSpace);
+    clipRect.RoundOut();
+    clipExtents = IntRect::Truncate(clipRect.X(), clipRect.Y(), clipRect.Width(), clipRect.Height());
   }
   bool pushOpaqueWithCopiedBG = (mDT->GetFormat() == SurfaceFormat::B8G8R8X8 ||
                                  mDT->GetOpaqueRect().Contains(clipExtents)) &&
                                 !mDT->GetUserData(&sDontUseAsSourceKey);
-
-  Save();
 
   if (pushOpaqueWithCopiedBG) {
     mDT->PushLayer(true, aOpacity, aMask, aMaskTransform, IntRect(), true);
@@ -810,7 +785,6 @@ void
 gfxContext::PopGroupAndBlend()
 {
   mDT->PopLayer();
-  Restore();
 }
 
 #ifdef MOZ_DUMP_PAINTING
@@ -952,12 +926,6 @@ gfxContext::GetOp()
     } else {
       return CompositionOp::OP_SOURCE;
     }
-  } else if (state.sourceSurface) {
-    if (state.sourceSurface->GetFormat() == SurfaceFormat::B8G8R8X8) {
-      return CompositionOp::OP_OVER;
-    } else {
-      return CompositionOp::OP_SOURCE;
-    }
   } else {
     if (state.color.a > 0.999) {
       return CompositionOp::OP_OVER;
@@ -983,7 +951,7 @@ gfxContext::ChangeTransform(const Matrix &aNewMatrix, bool aUpdatePatternTransfo
 {
   AzureState &state = CurrentState();
 
-  if (aUpdatePatternTransform && (state.pattern || state.sourceSurface)
+  if (aUpdatePatternTransform && (state.pattern)
       && !state.patternTransformChanged) {
     state.patternTransform = GetDTTransform();
     state.patternTransformChanged = true;
@@ -1024,13 +992,13 @@ gfxContext::ChangeTransform(const Matrix &aNewMatrix, bool aUpdatePatternTransfo
 }
 
 Rect
-gfxContext::GetAzureDeviceSpaceClipBounds()
+gfxContext::GetAzureDeviceSpaceClipBounds() const
 {
   Rect rect(CurrentState().deviceOffset.x, CurrentState().deviceOffset.y,
             Float(mDT->GetSize().width), Float(mDT->GetSize().height));
   for (unsigned int i = 0; i < mStateStack.Length(); i++) {
     for (unsigned int c = 0; c < mStateStack[i].pushedClips.Length(); c++) {
-      AzureState::PushedClip &clip = mStateStack[i].pushedClips[c];
+      const AzureState::PushedClip &clip = mStateStack[i].pushedClips[c];
       if (clip.path) {
         Rect bounds = clip.path->GetBounds(clip.transform);
         rect.IntersectRect(rect, bounds);

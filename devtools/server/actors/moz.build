@@ -5,11 +5,14 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 DIRS += [
+    'emulation',
     'highlighters',
     'utils',
+    'webconsole',
 ]
 
 DevToolsModules(
+    'accessibility.js',
     'actor-registry.js',
     'addon.js',
     'addons.js',
@@ -39,13 +42,12 @@ DevToolsModules(
     'memory.js',
     'monitor.js',
     'object.js',
-    'performance-entries.js',
+    'perf.js',
     'performance-recording.js',
     'performance.js',
     'preference.js',
     'pretty-print-worker.js',
     'process.js',
-    'profiler.js',
     'promises.js',
     'reflow.js',
     'root.js',
@@ -53,7 +55,6 @@ DevToolsModules(
     'source.js',
     'storage.js',
     'string.js',
-    'styleeditor.js',
     'styles.js',
     'stylesheets.js',
     'tab.js',
@@ -62,6 +63,7 @@ DevToolsModules(
     'webbrowser.js',
     'webconsole.js',
     'webextension-inspected-window.js',
+    'webextension-parent.js',
     'webextension.js',
     'webgl.js',
     'window.js',
@@ -79,7 +81,7 @@ with Files('css-properties.js'):
     BUG_COMPONENT = ('Firefox', 'Developer Tools: CSS Rules Inspector')
 
 with Files('csscoverage.js'):
-    BUG_COMPONENT = ('Firefox', 'Graphics Commandline and Toolbar')
+    BUG_COMPONENT = ('Firefox', 'Developer Tools: Graphics Commandline and Toolbar')
 
 with Files('inspector.js'):
     BUG_COMPONENT = ('Firefox', 'Developer Tools: Inspector')
@@ -93,16 +95,13 @@ with Files('monitor.js'):
 with Files('performance*'):
     BUG_COMPONENT = ('Firefox', 'Developer Tools: Performance Tools (Profiler/Timeline)')
 
-with Files('profiler.js'):
-    BUG_COMPONENT = ('Firefox', 'Developer Tools: Performance Tools (Profiler/Timeline)')
-
 with Files('source.js'):
     BUG_COMPONENT = ('Firefox', 'Developer Tools: Debugger')
 
 with Files('storage.js'):
     BUG_COMPONENT = ('Firefox', 'Developer Tools: Storage Inspector')
 
-with Files('styleeditor.js'):
+with Files('stylesheets.js'):
     BUG_COMPONENT = ('Firefox', 'Developer Tools: Style Editor')
 
 with Files('webaudio.js'):

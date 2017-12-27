@@ -12,6 +12,7 @@
 #include "jsprf.h"
 #include "MainThreadUtils.h"
 #include "mozilla/Assertions.h"
+#include "nsContentUtils.h"
 #include "nsGlobalWindow.h"
 #include "nsNetUtil.h"
 #include "nsPIDOMWindow.h"
@@ -60,8 +61,8 @@ nsScriptErrorBase::InitializeOnMainThread()
     MOZ_ASSERT(!mInitializedOnMainThread);
 
     if (mInnerWindowID) {
-        nsGlobalWindow* window =
-          nsGlobalWindow::GetInnerWindowWithId(mInnerWindowID);
+        nsGlobalWindowInner* window =
+          nsGlobalWindowInner::GetInnerWindowWithId(mInnerWindowID);
         if (window) {
             nsPIDOMWindowOuter* outer = window->GetOuterWindow();
             if (outer)
@@ -210,12 +211,39 @@ AssignSourceNameHelper(nsString& aSourceNameDest, const nsAString& aSourceNameSr
         NS_SUCCEEDED(uri->GetPassword(pass)) &&
         !pass.IsEmpty())
     {
-        nsCOMPtr<nsISensitiveInfoHiddenURI> safeUri = do_QueryInterface(uri);
-
-        nsAutoCString loc;
-        if (safeUri && NS_SUCCEEDED(safeUri->GetSensitiveInfoHiddenSpec(loc)))
-            aSourceNameDest.Assign(NS_ConvertUTF8toUTF16(loc));
+        NS_GetSanitizedURIStringFromURI(uri, aSourceNameDest);
     }
+}
+
+static void
+AssignSourceNameHelper(nsIURI* aSourceURI, nsString& aSourceNameDest)
+{
+    if (!aSourceURI)
+        return;
+
+    if (NS_FAILED(NS_GetSanitizedURIStringFromURI(aSourceURI,
+                                                  aSourceNameDest))) {
+        aSourceNameDest.AssignLiteral("[nsIURI::GetSpec failed]");
+    }
+}
+
+void
+nsScriptErrorBase::InitializationHelper(const nsAString& message,
+                                        const nsAString& sourceLine,
+                                        uint32_t lineNumber,
+                                        uint32_t columnNumber,
+                                        uint32_t flags,
+                                        const nsACString& category,
+                                        uint64_t aInnerWindowID)
+{
+    mMessage.Assign(message);
+    mLineNumber = lineNumber;
+    mSourceLine.Assign(sourceLine);
+    mColumnNumber = columnNumber;
+    mFlags = flags;
+    mCategory = category;
+    mTimeStamp = JS_Now() / 1000;
+    mInnerWindowID = aInnerWindowID;
 }
 
 NS_IMETHODIMP
@@ -228,15 +256,49 @@ nsScriptErrorBase::InitWithWindowID(const nsAString& message,
                                     const nsACString& category,
                                     uint64_t aInnerWindowID)
 {
-    mMessage.Assign(message);
+    InitializationHelper(message, sourceLine, lineNumber, columnNumber, flags,
+                         category, aInnerWindowID);
     AssignSourceNameHelper(mSourceName, sourceName);
-    mLineNumber = lineNumber;
-    mSourceLine.Assign(sourceLine);
-    mColumnNumber = columnNumber;
-    mFlags = flags;
-    mCategory = category;
-    mTimeStamp = JS_Now() / 1000;
-    mInnerWindowID = aInnerWindowID;
+
+    if (aInnerWindowID && NS_IsMainThread())
+        InitializeOnMainThread();
+
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+nsScriptErrorBase::InitWithSanitizedSource(const nsAString& message,
+                                           const nsAString& sourceName,
+                                           const nsAString& sourceLine,
+                                           uint32_t lineNumber,
+                                           uint32_t columnNumber,
+                                           uint32_t flags,
+                                           const nsACString& category,
+                                           uint64_t aInnerWindowID)
+{
+    InitializationHelper(message, sourceLine, lineNumber, columnNumber, flags,
+                         category, aInnerWindowID);
+    mSourceName = sourceName;
+
+    if (aInnerWindowID && NS_IsMainThread())
+        InitializeOnMainThread();
+
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+nsScriptErrorBase::InitWithSourceURI(const nsAString& message,
+                                     nsIURI *sourceURI,
+                                     const nsAString& sourceLine,
+                                     uint32_t lineNumber,
+                                     uint32_t columnNumber,
+                                     uint32_t flags,
+                                     const nsACString& category,
+                                     uint64_t aInnerWindowID)
+{
+    InitializationHelper(message, sourceLine, lineNumber, columnNumber, flags,
+                         category, aInnerWindowID);
+    AssignSourceNameHelper(sourceURI, mSourceName);
 
     if (aInnerWindowID && NS_IsMainThread())
         InitializeOnMainThread();
@@ -257,7 +319,7 @@ ToStringHelper(const char* aSeverity, const nsString& aMessage,
     static const char format2[] =
         "[%s: \"%s\"]";
 
-    char* temp;
+    JS::UniqueChars temp;
     char* tempMessage = nullptr;
     char* tempSourceName = nullptr;
     char* tempSourceLine = nullptr;
@@ -301,8 +363,7 @@ ToStringHelper(const char* aSeverity, const nsString& aMessage,
     if (!temp)
         return NS_ERROR_OUT_OF_MEMORY;
 
-    aResult.Assign(temp);
-    JS_smprintf_free(temp);
+    aResult.Assign(temp.get());
     return NS_OK;
 }
 
@@ -372,7 +433,7 @@ nsScriptErrorBase::GetNotes(nsIArray** aNotes)
 
     uint32_t len = mNotes.Length();
     for (uint32_t i = 0; i < len; i++)
-        array->AppendElement(mNotes[i], false);
+        array->AppendElement(mNotes[i]);
     array.forget(aNotes);
 
     return NS_OK;

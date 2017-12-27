@@ -10,36 +10,36 @@ var {
   ExtensionError,
 } = ExtensionUtils;
 
-function checkScope(scope) {
+const checkScope = scope => {
   if (scope && scope !== "regular") {
     throw new ExtensionError(
       `Firefox does not support the ${scope} settings scope.`);
   }
-}
+};
 
-function getAPI(extension, name, callback) {
+const getPrivacyAPI = (extension, name, callback) => {
   return {
     async get(details) {
       return {
         levelOfControl: details.incognito ?
           "not_controllable" :
           await ExtensionPreferencesManager.getLevelOfControl(
-            extension, name),
+            extension.id, name),
         value: await callback(),
       };
     },
-    async set(details) {
+    set(details) {
       checkScope(details.scope);
-      return await ExtensionPreferencesManager.setSetting(
-        extension, name, details.value);
+      return ExtensionPreferencesManager.setSetting(
+        extension.id, name, details.value);
     },
-    async clear(details) {
+    clear(details) {
       checkScope(details.scope);
-      return await ExtensionPreferencesManager.removeSetting(
-        extension, name);
+      return ExtensionPreferencesManager.removeSetting(
+        extension.id, name);
     },
   };
-}
+};
 
 // Add settings objects for supported APIs to the preferences manager.
 ExtensionPreferencesManager.addSetting("network.networkPredictionEnabled", {
@@ -57,6 +57,16 @@ ExtensionPreferencesManager.addSetting("network.networkPredictionEnabled", {
       "network.predictor.enabled": value,
       "network.prefetch-next": value,
     };
+  },
+});
+
+ExtensionPreferencesManager.addSetting("network.peerConnectionEnabled", {
+  prefNames: [
+    "media.peerconnection.enabled",
+  ],
+
+  setCallback(value) {
+    return {[this.prefNames[0]]: value};
   },
 });
 
@@ -95,6 +105,16 @@ ExtensionPreferencesManager.addSetting("network.webRTCIPHandlingPolicy", {
   },
 });
 
+ExtensionPreferencesManager.addSetting("services.passwordSavingEnabled", {
+  prefNames: [
+    "signon.rememberSignons",
+  ],
+
+  setCallback(value) {
+    return {[this.prefNames[0]]: value};
+  },
+});
+
 ExtensionPreferencesManager.addSetting("websites.hyperlinkAuditingEnabled", {
   prefNames: [
     "browser.send_pings",
@@ -105,22 +125,90 @@ ExtensionPreferencesManager.addSetting("websites.hyperlinkAuditingEnabled", {
   },
 });
 
+ExtensionPreferencesManager.addSetting("websites.referrersEnabled", {
+  prefNames: [
+    "network.http.sendRefererHeader",
+  ],
+
+  // Values for network.http.sendRefererHeader:
+  // 0=don't send any, 1=send only on clicks, 2=send on image requests as well
+  // http://searchfox.org/mozilla-central/rev/61054508641ee76f9c49bcf7303ef3cfb6b410d2/modules/libpref/init/all.js#1585
+  setCallback(value) {
+    return {[this.prefNames[0]]: value ? 2 : 0};
+  },
+});
+
+ExtensionPreferencesManager.addSetting("websites.resistFingerprinting", {
+  prefNames: [
+    "privacy.resistFingerprinting",
+  ],
+
+  setCallback(value) {
+    return {[this.prefNames[0]]: value};
+  },
+});
+
+ExtensionPreferencesManager.addSetting("websites.firstPartyIsolate", {
+  prefNames: [
+    "privacy.firstparty.isolate",
+  ],
+
+  setCallback(value) {
+    return {[this.prefNames[0]]: value};
+  },
+});
+
+ExtensionPreferencesManager.addSetting("websites.trackingProtectionMode", {
+  prefNames: [
+    "privacy.trackingprotection.enabled",
+    "privacy.trackingprotection.pbmode.enabled",
+  ],
+
+  setCallback(value) {
+    // Default to private browsing.
+    let prefs = {
+      "privacy.trackingprotection.enabled": false,
+      "privacy.trackingprotection.pbmode.enabled": true,
+    };
+
+    switch (value) {
+      case "private_browsing":
+        break;
+
+      case "always":
+        prefs["privacy.trackingprotection.enabled"] = true;
+        break;
+
+      case "never":
+        prefs["privacy.trackingprotection.pbmode.enabled"] = false;
+        break;
+    }
+
+    return prefs;
+  },
+});
+
 this.privacy = class extends ExtensionAPI {
   getAPI(context) {
     let {extension} = context;
     return {
       privacy: {
         network: {
-          networkPredictionEnabled: getAPI(extension,
-            "network.networkPredictionEnabled",
+          networkPredictionEnabled: getPrivacyAPI(
+            extension, "network.networkPredictionEnabled",
             () => {
               return Preferences.get("network.predictor.enabled") &&
                 Preferences.get("network.prefetch-next") &&
                 Preferences.get("network.http.speculative-parallel-limit") > 0 &&
                 !Preferences.get("network.dns.disablePrefetch");
             }),
-          webRTCIPHandlingPolicy: getAPI(extension,
-            "network.webRTCIPHandlingPolicy",
+          peerConnectionEnabled: getPrivacyAPI(
+            extension, "network.peerConnectionEnabled",
+            () => {
+              return Preferences.get("media.peerconnection.enabled");
+            }),
+          webRTCIPHandlingPolicy: getPrivacyAPI(
+            extension, "network.webRTCIPHandlingPolicy",
             () => {
               if (Preferences.get("media.peerconnection.ice.proxy_only")) {
                 return "disable_non_proxied_udp";
@@ -138,12 +226,47 @@ this.privacy = class extends ExtensionAPI {
               return "default";
             }),
         },
+
+        services: {
+          passwordSavingEnabled: getPrivacyAPI(
+            extension, "services.passwordSavingEnabled",
+            () => {
+              return Preferences.get("signon.rememberSignons");
+            }),
+        },
+
         websites: {
-          hyperlinkAuditingEnabled: getAPI(extension,
-            "websites.hyperlinkAuditingEnabled",
+          hyperlinkAuditingEnabled: getPrivacyAPI(
+            extension, "websites.hyperlinkAuditingEnabled",
             () => {
               return Preferences.get("browser.send_pings");
             }),
+          referrersEnabled: getPrivacyAPI(
+            extension, "websites.referrersEnabled",
+            () => {
+              return Preferences.get("network.http.sendRefererHeader") !== 0;
+            }),
+          resistFingerprinting: getPrivacyAPI(
+            extension, "websites.resistFingerprinting",
+            () => {
+              return Preferences.get("privacy.resistFingerprinting");
+            }),
+          firstPartyIsolate: getPrivacyAPI(
+            extension, "websites.firstPartyIsolate",
+            () => {
+              return Preferences.get("privacy.firstparty.isolate");
+            }),
+          trackingProtectionMode: getPrivacyAPI(
+            extension, "websites.trackingProtectionMode",
+            () => {
+              if (Preferences.get("privacy.trackingprotection.enabled")) {
+                return "always";
+              } else if (Preferences.get("privacy.trackingprotection.pbmode.enabled")) {
+                return "private_browsing";
+              }
+              return "never";
+            }),
+
         },
       },
     };

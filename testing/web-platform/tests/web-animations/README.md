@@ -1,7 +1,7 @@
 Web Animations Test Suite
 =========================
 
-Specification: https://w3c.github.io/web-animations/
+Specification: https://drafts.csswg.org/web-animations/
 
 
 Guidelines for writing tests
@@ -50,29 +50,29 @@ Guidelines for writing tests
 
     e.g.
 
-    ```javascript
-  test(function(t) {
-    var anim = createDiv(t).animate(null);
-    assert_class_string(anim, 'Animation', 'Returned object is an Animation');
-  }, 'Element.animate() creates an Animation object');
-    ```
+      ```javascript
+      test(t => {
+        const animation = createDiv(t).animate(null);
+        assert_class_string(animation, 'Animation', 'Returned object is an Animation');
+      }, 'Element.animate() creates an Animation object');
+      ```
 
-    ```javascript
-  test(function(t) {
-    assert_throws({ name: 'TypeError' }, function() {
-      createDiv(t).animate(null, -1);
-    });
-  }, 'Setting a negative duration throws a TypeError');
-    ```
+      ```javascript
+      test(t => {
+        assert_throws({ name: 'TypeError' }, () => {
+          createDiv(t).animate(null, -1);
+        });
+      }, 'Setting a negative duration throws a TypeError');
+      ```
 
-    ```javascript
-  promise_test(function(t) {
-    var animation = createDiv(t).animate(null, 100 * MS_PER_SEC);
-    return animation.ready.then(function() {
-      assert_greater_than(animation.startTime, 0, 'startTime when running');
-    });
-  }, 'startTime is resolved when running');
-    ```
+      ```javascript
+      promise_test(t => {
+        const animation = createDiv(t).animate(null, 100 * MS_PER_SEC);
+        return animation.ready.then(() => {
+          assert_greater_than(animation.startTime, 0, 'startTime when running');
+        });
+      }, 'startTime is resolved when running');
+      ```
 
     If you're generating complex test loops and factoring out utility functions
     that affect the logic of the test (other than, say, simple assertion utility

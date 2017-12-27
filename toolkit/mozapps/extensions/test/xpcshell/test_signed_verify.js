@@ -1,13 +1,22 @@
+
+Components.utils.import("resource://gre/modules/AppConstants.jsm");
+
 // Enable signature checks for these tests
 gUseRealCertChecks = true;
 // Disable update security
 Services.prefs.setBoolPref(PREF_EM_CHECK_UPDATE_SECURITY, false);
 
 const DATA = "data/signing_checks/";
-const GOOD = [
-  ["signed_bootstrap_2.xpi", AddonManager.SIGNEDSTATE_SIGNED],
-  ["signed_nonbootstrap_2.xpi", AddonManager.SIGNEDSTATE_SIGNED]
+let GOOD = [
+  ["privileged_bootstrap_2.xpi", AddonManager.SIGNEDSTATE_PRIVILEGED],
 ];
+if (AppConstants.MOZ_ALLOW_LEGACY_EXTENSIONS) {
+  GOOD.push(
+    ["signed_bootstrap_2.xpi", AddonManager.SIGNEDSTATE_SIGNED],
+    ["signed_nonbootstrap_2.xpi", AddonManager.SIGNEDSTATE_SIGNED],
+  );
+}
+
 const BAD = [
   ["unsigned_bootstrap_2.xpi", AddonManager.SIGNEDSTATE_MISSING],
   ["signed_bootstrap_badid_2.xpi", AddonManager.SIGNEDSTATE_BROKEN],
@@ -24,10 +33,10 @@ function verifySignatures() {
     let observer = (subject, topic, data) => {
       Services.obs.removeObserver(observer, "xpi-signature-changed");
       resolve(JSON.parse(data));
-    }
+    };
     Services.obs.addObserver(observer, "xpi-signature-changed");
 
-    do_print("Verifying signatures");
+    info("Verifying signatures");
     let XPIscope = Components.utils.import("resource://gre/modules/addons/XPIProvider.jsm", {});
     XPIscope.XPIProvider.verifySignatures();
   });
@@ -40,19 +49,19 @@ function run_test() {
 }
 
 function verify_no_change([startFile, startState], [endFile, endState]) {
-  add_task(function*() {
-    do_print("A switch from " + startFile + " to " + endFile + " should cause no change.");
+  add_task(async function() {
+    info("A switch from " + startFile + " to " + endFile + " should cause no change.");
 
     // Install the first add-on
     manuallyInstall(do_get_file(DATA + startFile), profileDir, ID);
     startupManager();
 
-    let addon = yield promiseAddonByID(ID);
-    do_check_neq(addon, null);
+    let addon = await promiseAddonByID(ID);
+    Assert.notEqual(addon, null);
     let wasAppDisabled = addon.appDisabled;
-    do_check_neq(addon.appDisabled, addon.isActive);
-    do_check_eq(addon.pendingOperations, AddonManager.PENDING_NONE);
-    do_check_eq(addon.signedState, startState);
+    Assert.notEqual(addon.appDisabled, addon.isActive);
+    Assert.equal(addon.pendingOperations, AddonManager.PENDING_NONE);
+    Assert.equal(addon.signedState, startState);
 
     // Swap in the files from the next add-on
     manuallyUninstall(profileDir, ID);
@@ -68,42 +77,42 @@ function verify_no_change([startFile, startState], [endFile, endState]) {
     prepare_test(events);
 
     // Trigger the check
-    let changes = yield verifySignatures();
-    do_check_eq(changes.enabled.length, 0);
-    do_check_eq(changes.disabled.length, 0);
+    let changes = await verifySignatures();
+    Assert.equal(changes.enabled.length, 0);
+    Assert.equal(changes.disabled.length, 0);
 
-    do_check_eq(addon.appDisabled, wasAppDisabled);
-    do_check_neq(addon.appDisabled, addon.isActive);
-    do_check_eq(addon.pendingOperations, AddonManager.PENDING_NONE);
-    do_check_eq(addon.signedState, endState);
+    Assert.equal(addon.appDisabled, wasAppDisabled);
+    Assert.notEqual(addon.appDisabled, addon.isActive);
+    Assert.equal(addon.pendingOperations, AddonManager.PENDING_NONE);
+    Assert.equal(addon.signedState, endState);
 
     // Remove the add-on and restart to let it go away
     manuallyUninstall(profileDir, ID);
-    yield promiseRestartManager();
-    yield promiseShutdownManager();
+    await promiseRestartManager();
+    await promiseShutdownManager();
   });
 }
 
 function verify_enables([startFile, startState], [endFile, endState]) {
-  add_task(function*() {
-    do_print("A switch from " + startFile + " to " + endFile + " should enable the add-on.");
+  add_task(async function() {
+    info("A switch from " + startFile + " to " + endFile + " should enable the add-on.");
 
     // Install the first add-on
     manuallyInstall(do_get_file(DATA + startFile), profileDir, ID);
     startupManager();
 
-    let addon = yield promiseAddonByID(ID);
-    do_check_neq(addon, null);
-    do_check_false(addon.isActive);
-    do_check_eq(addon.pendingOperations, AddonManager.PENDING_NONE);
-    do_check_eq(addon.signedState, startState);
+    let addon = await promiseAddonByID(ID);
+    Assert.notEqual(addon, null);
+    Assert.ok(!addon.isActive);
+    Assert.equal(addon.pendingOperations, AddonManager.PENDING_NONE);
+    Assert.equal(addon.signedState, startState);
 
     // Swap in the files from the next add-on
     manuallyUninstall(profileDir, ID);
     manuallyInstall(do_get_file(DATA + endFile), profileDir, ID);
 
     let needsRestart = hasFlag(addon.operationsRequiringRestart, AddonManager.OP_NEEDS_RESTART_ENABLE);
-    do_print(needsRestart);
+    info(needsRestart);
 
     let events = {};
     if (!needsRestart) {
@@ -125,40 +134,40 @@ function verify_enables([startFile, startState], [endFile, endState]) {
     prepare_test(events);
 
     // Trigger the check
-    let changes = yield verifySignatures();
-    do_check_eq(changes.enabled.length, 1);
-    do_check_eq(changes.enabled[0], ID);
-    do_check_eq(changes.disabled.length, 0);
+    let changes = await verifySignatures();
+    Assert.equal(changes.enabled.length, 1);
+    Assert.equal(changes.enabled[0], ID);
+    Assert.equal(changes.disabled.length, 0);
 
-    do_check_false(addon.appDisabled);
+    Assert.ok(!addon.appDisabled);
     if (needsRestart)
-      do_check_neq(addon.pendingOperations, AddonManager.PENDING_NONE);
+      Assert.notEqual(addon.pendingOperations, AddonManager.PENDING_NONE);
     else
-      do_check_true(addon.isActive);
-    do_check_eq(addon.signedState, endState);
+      Assert.ok(addon.isActive);
+    Assert.equal(addon.signedState, endState);
 
     ensure_test_completed();
 
     // Remove the add-on and restart to let it go away
     manuallyUninstall(profileDir, ID);
-    yield promiseRestartManager();
-    yield promiseShutdownManager();
+    await promiseRestartManager();
+    await promiseShutdownManager();
   });
 }
 
 function verify_disables([startFile, startState], [endFile, endState]) {
-  add_task(function*() {
-    do_print("A switch from " + startFile + " to " + endFile + " should disable the add-on.");
+  add_task(async function() {
+    info("A switch from " + startFile + " to " + endFile + " should disable the add-on.");
 
     // Install the first add-on
     manuallyInstall(do_get_file(DATA + startFile), profileDir, ID);
     startupManager();
 
-    let addon = yield promiseAddonByID(ID);
-    do_check_neq(addon, null);
-    do_check_true(addon.isActive);
-    do_check_eq(addon.pendingOperations, AddonManager.PENDING_NONE);
-    do_check_eq(addon.signedState, startState);
+    let addon = await promiseAddonByID(ID);
+    Assert.notEqual(addon, null);
+    Assert.ok(addon.isActive);
+    Assert.equal(addon.pendingOperations, AddonManager.PENDING_NONE);
+    Assert.equal(addon.signedState, startState);
 
     let needsRestart = hasFlag(addon.operationsRequiringRestart, AddonManager.OP_NEEDS_RESTART_DISABLE);
 
@@ -186,24 +195,24 @@ function verify_disables([startFile, startState], [endFile, endState]) {
     prepare_test(events);
 
     // Trigger the check
-    let changes = yield verifySignatures();
-    do_check_eq(changes.enabled.length, 0);
-    do_check_eq(changes.disabled.length, 1);
-    do_check_eq(changes.disabled[0], ID);
+    let changes = await verifySignatures();
+    Assert.equal(changes.enabled.length, 0);
+    Assert.equal(changes.disabled.length, 1);
+    Assert.equal(changes.disabled[0], ID);
 
-    do_check_true(addon.appDisabled);
+    Assert.ok(addon.appDisabled);
     if (needsRestart)
-      do_check_neq(addon.pendingOperations, AddonManager.PENDING_NONE);
+      Assert.notEqual(addon.pendingOperations, AddonManager.PENDING_NONE);
     else
-      do_check_false(addon.isActive);
-    do_check_eq(addon.signedState, endState);
+      Assert.ok(!addon.isActive);
+    Assert.equal(addon.signedState, endState);
 
     ensure_test_completed();
 
     // Remove the add-on and restart to let it go away
     manuallyUninstall(profileDir, ID);
-    yield promiseRestartManager();
-    yield promiseShutdownManager();
+    await promiseRestartManager();
+    await promiseShutdownManager();
   });
 }
 

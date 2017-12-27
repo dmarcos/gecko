@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -37,7 +37,7 @@ using namespace mozilla::dom;
 NS_IMPL_ADDREF_INHERITED(PresentationRequest, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(PresentationRequest, DOMEventTargetHelper)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(PresentationRequest)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(PresentationRequest)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 static nsresult
@@ -47,11 +47,13 @@ GetAbsoluteURL(const nsAString& aUrl,
                nsAString& aAbsoluteUrl)
 {
   nsCOMPtr<nsIURI> uri;
-  nsresult rv = NS_NewURI(getter_AddRefs(uri),
-                          aUrl,
-                          aDocument ? aDocument->GetDocumentCharacterSet().get()
-                                    : nullptr,
-                          aBaseUri);
+  nsresult rv;
+  if (aDocument) {
+    rv = NS_NewURI(getter_AddRefs(uri), aUrl,
+                   aDocument->GetDocumentCharacterSet(), aBaseUri);
+  } else {
+    rv = NS_NewURI(getter_AddRefs(uri), aUrl, nullptr, aBaseUri);
+  }
 
   if (NS_FAILED(rv)) {
     return rv;
@@ -138,7 +140,7 @@ PresentationRequest::WrapObject(JSContext* aCx,
 already_AddRefed<Promise>
 PresentationRequest::Start(ErrorResult& aRv)
 {
-  return StartWithDevice(NullString(), aRv);
+  return StartWithDevice(VoidString(), aRv);
 }
 
 already_AddRefed<Promise>
@@ -170,6 +172,11 @@ PresentationRequest::StartWithDevice(const nsAString& aDeviceId,
     return nullptr;
   }
 
+  if (nsContentUtils::ShouldResistFingerprinting()) {
+    promise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
+    return promise.forget();
+  }
+
   if (IsProhibitMixedSecurityContexts(doc) &&
       !IsAllURLAuthenticated()) {
     promise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
@@ -181,7 +188,7 @@ PresentationRequest::StartWithDevice(const nsAString& aDeviceId,
     return promise.forget();
   }
 
-  RefPtr<Navigator> navigator = nsGlobalWindow::Cast(GetOwner())->Navigator();
+  RefPtr<Navigator> navigator = nsGlobalWindowInner::Cast(GetOwner())->Navigator();
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
   }
@@ -269,6 +276,11 @@ PresentationRequest::Reconnect(const nsAString& aPresentationId,
     return nullptr;
   }
 
+  if (nsContentUtils::ShouldResistFingerprinting()) {
+    promise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
+    return promise.forget();
+  }
+
   if (IsProhibitMixedSecurityContexts(doc) &&
       !IsAllURLAuthenticated()) {
     promise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
@@ -281,12 +293,12 @@ PresentationRequest::Reconnect(const nsAString& aPresentationId,
   }
 
   nsString presentationId = nsString(aPresentationId);
-  nsCOMPtr<nsIRunnable> r =
-    NewRunnableMethod<nsString, RefPtr<Promise>>(
-      this,
-      &PresentationRequest::FindOrCreatePresentationConnection,
-      presentationId,
-      promise);
+  nsCOMPtr<nsIRunnable> r = NewRunnableMethod<nsString, RefPtr<Promise>>(
+    "dom::PresentationRequest::FindOrCreatePresentationConnection",
+    this,
+    &PresentationRequest::FindOrCreatePresentationConnection,
+    presentationId,
+    promise);
 
   if (NS_WARN_IF(NS_FAILED(NS_DispatchToMainThread(r)))) {
     promise->MaybeReject(NS_ERROR_DOM_OPERATION_ERR);
@@ -382,6 +394,11 @@ PresentationRequest::GetAvailability(ErrorResult& aRv)
     return nullptr;
   }
 
+  if (nsContentUtils::ShouldResistFingerprinting()) {
+    promise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
+    return promise.forget();
+  }
+
   if (IsProhibitMixedSecurityContexts(doc) &&
       !IsAllURLAuthenticated()) {
     promise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
@@ -441,6 +458,10 @@ PresentationRequest::FindOrCreatePresentationAvailability(RefPtr<Promise>& aProm
 nsresult
 PresentationRequest::DispatchConnectionAvailableEvent(PresentationConnection* aConnection)
 {
+  if (nsContentUtils::ShouldResistFingerprinting()) {
+    return NS_OK;
+  }
+
   PresentationConnectionAvailableEventInit init;
   init.mConnection = aConnection;
 
@@ -467,7 +488,7 @@ PresentationRequest::NotifyPromiseSettled()
     return;
   }
 
-  RefPtr<Navigator> navigator = nsGlobalWindow::Cast(GetOwner())->Navigator();
+  RefPtr<Navigator> navigator = nsGlobalWindowInner::Cast(GetOwner())->Navigator();
   if (!navigator) {
     return;
   }

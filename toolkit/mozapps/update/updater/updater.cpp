@@ -13,21 +13,17 @@
  *
  *  Available methods for the manifest file:
  *
- *  updatev2.manifest
- *  -----------------
- *  method   = "add" | "add-if" | "patch" | "patch-if" | "remove" |
- *             "rmdir" | "rmrfdir" | type
- *
- *  'type' is the update type (e.g. complete or partial) and when present MUST
- *  be the first entry in the update manifest. The type is used to support
- *  downgrades by causing the actions defined in precomplete to be performed.
- *
  *  updatev3.manifest
  *  -----------------
  *  method   = "add" | "add-if" | "add-if-not" | "patch" | "patch-if" |
  *             "remove" | "rmdir" | "rmrfdir" | type
  *
  *  'add-if-not' adds a file if it doesn't exist.
+ *
+ *  'type' is the update type (e.g. complete or partial) and when present MUST
+ *  be the first entry in the update manifest. The type is used to support
+ *  removing files that no longer exist when when applying a complete update by
+ *  causing the actions defined in the precomplete file to be performed.
  *
  *  precomplete
  *  -----------
@@ -52,7 +48,7 @@
 #include <errno.h>
 #include <algorithm>
 
-#include "updatelogging.h"
+#include "updatecommon.h"
 #ifdef XP_MACOSX
 #include "updaterfileutils_osx.h"
 #endif // XP_MACOSX
@@ -67,13 +63,10 @@
 #define PROGRESS_EXECUTE_SIZE 75.0f
 #define PROGRESS_FINISH_SIZE   5.0f
 
-// Amount of time in ms to wait for the parent process to close
-#ifdef DEBUG
-// Use a large value for debug builds since the xpcshell tests take a long time.
+// Maximum amount of time in ms to wait for the parent process to close. The 30
+// seconds is rather long but there have been bug reports where the parent
+// process has exited after 10 seconds and it is better to give it a chance.
 #define PARENT_WAIT 30000
-#else
-#define PARENT_WAIT 10000
-#endif
 
 #if defined(XP_MACOSX)
 // These functions are defined in launchchild_osx.mm
@@ -218,6 +211,34 @@ struct MARChannelStringTable {
 
 //-----------------------------------------------------------------------------
 
+#ifdef XP_MACOSX
+
+// Just a simple class that sets a umask value in its constructor and resets
+// it in its destructor.
+class UmaskContext
+{
+public:
+  explicit UmaskContext(mode_t umaskToSet);
+  ~UmaskContext();
+
+private:
+  mode_t mPreviousUmask;
+};
+
+UmaskContext::UmaskContext(mode_t umaskToSet)
+{
+  mPreviousUmask = umask(umaskToSet);
+}
+
+UmaskContext::~UmaskContext()
+{
+  umask(mPreviousUmask);
+}
+
+#endif
+
+//-----------------------------------------------------------------------------
+
 typedef void (* ThreadFunc)(void *param);
 
 #ifdef XP_WIN
@@ -281,7 +302,7 @@ private:
 
 //-----------------------------------------------------------------------------
 
-static NS_tchar* gPatchDirPath;
+static NS_tchar gPatchDirPath[MAXPATHLEN];
 static NS_tchar gInstallDirPath[MAXPATHLEN];
 static NS_tchar gWorkingDirPath[MAXPATHLEN];
 static ArchiveReader gArchiveReader;
@@ -440,7 +461,7 @@ get_valid_path(NS_tchar **line, bool isdir = false)
 {
   NS_tchar *path = mstrtok(kQuote, line);
   if (!path) {
-    LOG(("get_valid_path: unable to determine path: " LOG_S, line));
+    LOG(("get_valid_path: unable to determine path: " LOG_S, *line));
     return nullptr;
   }
 
@@ -1972,14 +1993,30 @@ LaunchWinPostProcess(const WCHAR *installationDir,
     return false;
   }
 
-  // Verify that exeFile doesn't contain relative paths
-  if (wcsstr(exefile, L"..") != nullptr) {
+  // The relative path must not contain directory traversals, current directory,
+  // or colons.
+  if (wcsstr(exefile, L"..") != nullptr ||
+      wcsstr(exefile, L"./") != nullptr ||
+      wcsstr(exefile, L".\\") != nullptr ||
+      wcsstr(exefile, L":") != nullptr) {
+    return false;
+  }
+
+  // The relative path must not start with a decimal point, backslash, or
+  // forward slash.
+  if (exefile[0] == L'.' ||
+      exefile[0] == L'\\' ||
+      exefile[0] == L'/') {
     return false;
   }
 
   WCHAR exefullpath[MAX_PATH + 1] = { L'\0' };
   wcsncpy(exefullpath, installationDir, MAX_PATH);
   if (!PathAppendSafe(exefullpath, exefile)) {
+    return false;
+  }
+
+  if (!IsValidFullPath(exefullpath)) {
     return false;
   }
 
@@ -2060,9 +2097,7 @@ LaunchCallbackApp(const NS_tchar *workingDir,
   putenv(const_cast<char*>("NO_EM_RESTART="));
   putenv(const_cast<char*>("MOZ_LAUNCHED_CHILD=1"));
 
-  // Run from the specified working directory (see bug 312360). This is not
-  // necessary on Windows CE since the application that launches the updater
-  // passes the working directory as an --environ: command line argument.
+  // Run from the specified working directory (see bug 312360).
   if (NS_tchdir(workingDir) != 0) {
     LOG(("Warning: chdir failed"));
   }
@@ -2089,7 +2124,9 @@ WriteStatusFile(const char* aStatus)
 #if defined(XP_WIN)
   // The temp file is not removed on failure since there is client code that
   // will remove it.
-  GetTempFileNameW(gPatchDirPath, L"sta", 0, filename);
+  if (GetTempFileNameW(gPatchDirPath, L"sta", 0, filename) == 0) {
+    return false;
+  }
 #else
   NS_tsnprintf(filename, sizeof(filename)/sizeof(filename[0]),
                NS_T("%s/update.status"), gPatchDirPath);
@@ -2450,42 +2487,7 @@ UpdateThreadFunc(void *param)
 
 #ifdef MOZ_VERIFY_MAR_SIGNATURE
     if (rv == OK) {
-#ifdef XP_WIN
-      HKEY baseKey = nullptr;
-      wchar_t valueName[] = L"Image Path";
-      wchar_t rasenh[] = L"rsaenh.dll";
-      bool reset = false;
-      if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-                        L"SOFTWARE\\Microsoft\\Cryptography\\Defaults\\Provider\\Microsoft Enhanced Cryptographic Provider v1.0",
-                        0, KEY_READ | KEY_WRITE,
-                        &baseKey) == ERROR_SUCCESS) {
-        wchar_t path[MAX_PATH + 1];
-        DWORD size = sizeof(path);
-        DWORD type;
-        if (RegQueryValueExW(baseKey, valueName, 0, &type,
-                             (LPBYTE)path, &size) == ERROR_SUCCESS) {
-          if (type == REG_SZ && wcscmp(path, rasenh) == 0) {
-            wchar_t rasenhFullPath[] = L"%SystemRoot%\\System32\\rsaenh.dll";
-            if (RegSetValueExW(baseKey, valueName, 0, REG_SZ,
-                               (const BYTE*)rasenhFullPath,
-                               sizeof(rasenhFullPath)) == ERROR_SUCCESS) {
-              reset = true;
-            }
-          }
-        }
-      }
-#endif
       rv = gArchiveReader.VerifySignature();
-#ifdef XP_WIN
-      if (baseKey) {
-        if (reset) {
-          RegSetValueExW(baseKey, valueName, 0, REG_SZ,
-                         (const BYTE*)rasenh,
-                         sizeof(rasenh));
-        }
-        RegCloseKey(baseKey);
-      }
-#endif
     }
 
     if (rv == OK) {
@@ -2538,16 +2540,6 @@ UpdateThreadFunc(void *param)
   }
 
   if (rv && (sReplaceRequest || sStagedUpdate)) {
-#ifdef XP_WIN
-    // On Windows, the current working directory of the process should be changed
-    // so that it's not locked.
-    if (sStagedUpdate) {
-      NS_tchar sysDir[MAX_PATH + 1] = { L'\0' };
-      if (GetSystemDirectoryW(sysDir, MAX_PATH + 1)) {
-        NS_tchdir(sysDir);
-      }
-    }
-#endif
     ensure_remove_recursive(gWorkingDirPath);
     // When attempting to replace the application, we should fall back
     // to non-staged updates in case of a failure.  We do this by
@@ -2663,6 +2655,11 @@ int NS_main(int argc, NS_tchar **argv)
   const int callbackIndex = 6;
 
 #ifdef XP_MACOSX
+  // We want to control file permissions explicitly, or else we could end up
+  // corrupting installs for other users on the system. Accordingly, set the
+  // umask to 0 for all file creations below and reset it on exit. See Bug 1337007
+  UmaskContext umaskContext(0);
+
   bool isElevated =
     strstr(argv[0], "/Library/PrivilegedHelperTools/org.mozilla.updater") != 0;
   if (isElevated) {
@@ -2720,9 +2717,49 @@ int NS_main(int argc, NS_tchar **argv)
     return 1;
   }
 
-  // The directory containing the update information.
-  gPatchDirPath = argv[1];
+#if defined(TEST_UPDATER) && defined(XP_WIN)
+  // The tests use nsIProcess to launch the updater and it is simpler for the
+  // tests to just set an environment variable and have the test updater set
+  // the current working directory than it is to set the current working
+  // directory in the test itself.
+  if (EnvHasValue("CURWORKDIRPATH")) {
+    const WCHAR *val = _wgetenv(L"CURWORKDIRPATH");
+    NS_tchdir(val);
+  }
+#endif
 
+  // This check is also performed in workmonitor.cpp since the maintenance
+  // service can be called directly.
+  if (!IsValidFullPath(argv[1])) {
+    // Since the status file is written to the patch directory and the patch
+    // directory is invalid don't write the status file.
+    fprintf(stderr, "The patch directory path is not valid for this "  \
+            "application (" LOG_S ")\n", argv[1]);
+#ifdef XP_MACOSX
+    if (isElevated) {
+      freeArguments(argc, argv);
+      CleanupElevatedMacUpdate(true);
+    }
+#endif
+    return 1;
+  }
+  // The directory containing the update information.
+  NS_tstrncpy(gPatchDirPath, argv[1], MAXPATHLEN);
+
+  // This check is also performed in workmonitor.cpp since the maintenance
+  // service can be called directly.
+  if (!IsValidFullPath(argv[2])) {
+    WriteStatusFile(INVALID_INSTALL_DIR_PATH_ERROR);
+    fprintf(stderr, "The install directory path is not valid for this "  \
+            "application (" LOG_S ")\n", argv[2]);
+#ifdef XP_MACOSX
+    if (isElevated) {
+      freeArguments(argc, argv);
+      CleanupElevatedMacUpdate(true);
+    }
+#endif
+    return 1;
+  }
   // The directory we're going to update to.
   // We copy this string because we need to remove trailing slashes.  The C++
   // standard says that it's always safe to write to strings pointed to by argv
@@ -2773,17 +2810,9 @@ int NS_main(int argc, NS_tchar **argv)
 #endif
 
   // If there is a PID specified and it is not '0' then wait for the process to exit.
-#ifdef XP_WIN
-  __int64 pid = 0;
-#else
-  int pid = 0;
-#endif
+  NS_tpid pid = 0;
   if (argc > 4) {
-#ifdef XP_WIN
-    pid = _wtoi64(argv[4]);
-#else
-    pid = atoi(argv[4]);
-#endif
+    pid = NS_tatoi(argv[4]);
     if (pid == -1) {
       // This is a signal from the parent process that the updater should stage
       // the update.
@@ -2795,6 +2824,20 @@ int NS_main(int argc, NS_tchar **argv)
     }
   }
 
+  // This check is also performed in workmonitor.cpp since the maintenance
+  // service can be called directly.
+  if (!IsValidFullPath(argv[3])) {
+    WriteStatusFile(INVALID_WORKING_DIR_PATH_ERROR);
+    fprintf(stderr, "The working directory path is not valid for this "  \
+            "application (" LOG_S ")\n", argv[3]);
+#ifdef XP_MACOSX
+    if (isElevated) {
+      freeArguments(argc, argv);
+      CleanupElevatedMacUpdate(true);
+    }
+#endif
+    return 1;
+  }
   // The directory we're going to update to.
   // We copy this string because we need to remove trailing slashes.  The C++
   // standard says that it's always safe to write to strings pointed to by argv
@@ -2804,6 +2847,37 @@ int NS_main(int argc, NS_tchar **argv)
   slash = NS_tstrrchr(gWorkingDirPath, NS_SLASH);
   if (slash && !slash[1]) {
     *slash = NS_T('\0');
+  }
+
+  if (argc > callbackIndex) {
+    if (!IsValidFullPath(argv[callbackIndex])) {
+      WriteStatusFile(INVALID_CALLBACK_PATH_ERROR);
+      fprintf(stderr, "The callback file path is not valid for this "  \
+              "application (" LOG_S ")\n", argv[callbackIndex]);
+#ifdef XP_MACOSX
+      if (isElevated) {
+        freeArguments(argc, argv);
+        CleanupElevatedMacUpdate(true);
+      }
+#endif
+      return 1;
+    }
+
+    size_t len = NS_tstrlen(gInstallDirPath);
+    NS_tchar callbackInstallDir[MAXPATHLEN] = { NS_T('\0') };
+    NS_tstrncpy(callbackInstallDir, argv[callbackIndex], len);
+    if (NS_tstrcmp(gInstallDirPath, callbackInstallDir) != 0) {
+      WriteStatusFile(INVALID_CALLBACK_DIR_ERROR);
+      fprintf(stderr, "The callback file must be located in the "  \
+              "installation directory (" LOG_S ")\n", argv[callbackIndex]);
+#ifdef XP_MACOSX
+      if (isElevated) {
+        freeArguments(argc, argv);
+        CleanupElevatedMacUpdate(true);
+      }
+#endif
+      return 1;
+    }
   }
 
 #ifdef XP_MACOSX
@@ -2851,6 +2925,8 @@ int NS_main(int argc, NS_tchar **argv)
   LOG(("WORKING DIRECTORY " LOG_S, gWorkingDirPath));
 
 #if defined(XP_WIN)
+  // These checks are also performed in workmonitor.cpp since the maintenance
+  // service can be called directly.
   if (_wcsnicmp(gWorkingDirPath, gInstallDirPath, MAX_PATH) != 0) {
     if (!sStagedUpdate && !sReplaceRequest) {
       WriteStatusFile(INVALID_APPLYTO_DIR_ERROR);
@@ -2889,10 +2965,19 @@ int NS_main(int argc, NS_tchar **argv)
     // update.
     if (parent) {
       DWORD waitTime = PARENT_WAIT;
+#ifdef TEST_UPDATER
+      if (EnvHasValue("MOZ_TEST_SHORTER_WAIT_PID")) {
+        // Use a shorter time to wait for the PID to exit for the test.
+        waitTime = 100;
+      }
+#endif
       DWORD result = WaitForSingleObject(parent, waitTime);
       CloseHandle(parent);
       if (result != WAIT_OBJECT_0) {
-        return 1;
+        // Continue to update since the parent application sometimes doesn't
+        // exit (see bug 1375242) so any fixes to the parent application will
+        // be applied instead of leaving the client in a broken state.
+        LOG(("The parent process didn't exit! Continuing with update."));
       }
     }
   }
@@ -2902,6 +2987,15 @@ int NS_main(int argc, NS_tchar **argv)
 #endif
 
 #ifdef XP_WIN
+  if (sReplaceRequest || sStagedUpdate) {
+    // On Windows, when performing a stage or replace request the current
+    // working directory for the process must be changed so it isn't locked.
+    NS_tchar sysDir[MAX_PATH + 1] = { L'\0' };
+    if (GetSystemDirectoryW(sysDir, MAX_PATH + 1)) {
+      NS_tchdir(sysDir);
+    }
+  }
+
 #ifdef MOZ_MAINTENANCE_SERVICE
   sUsingService = EnvHasValue("MOZ_USING_SERVICE");
   putenv(const_cast<char*>("MOZ_USING_SERVICE="));
@@ -3505,44 +3599,6 @@ int NS_main(int argc, NS_tchar **argv)
 #endif /* XP_WIN */
 
 #ifdef XP_MACOSX
-  // When the update is successful remove the precomplete file in the root of
-  // the application bundle and move the distribution directory from
-  // Contents/MacOS to Contents/Resources and if both exist delete the
-  // directory under Contents/MacOS (see Bug 1068439).
-  if (gSucceeded && !sStagedUpdate) {
-    NS_tchar oldPrecomplete[MAXPATHLEN];
-    NS_tsnprintf(oldPrecomplete, sizeof(oldPrecomplete)/sizeof(oldPrecomplete[0]),
-                 NS_T("%s/precomplete"), gInstallDirPath);
-    NS_tremove(oldPrecomplete);
-
-    NS_tchar oldDistDir[MAXPATHLEN];
-    NS_tsnprintf(oldDistDir, sizeof(oldDistDir)/sizeof(oldDistDir[0]),
-                 NS_T("%s/Contents/MacOS/distribution"), gInstallDirPath);
-    int rv = NS_taccess(oldDistDir, F_OK);
-    if (!rv) {
-      NS_tchar newDistDir[MAXPATHLEN];
-      NS_tsnprintf(newDistDir, sizeof(newDistDir)/sizeof(newDistDir[0]),
-                   NS_T("%s/Contents/Resources/distribution"), gInstallDirPath);
-      rv = NS_taccess(newDistDir, F_OK);
-      if (!rv) {
-        LOG(("New distribution directory already exists... removing old " \
-             "distribution directory: " LOG_S, oldDistDir));
-        rv = ensure_remove_recursive(oldDistDir);
-        if (rv) {
-          LOG(("Removing old distribution directory failed - err: %d", rv));
-        }
-      } else {
-        LOG(("Moving old distribution directory to new location. src: " LOG_S \
-             ", dst:" LOG_S, oldDistDir, newDistDir));
-        rv = rename_file(oldDistDir, newDistDir, true);
-        if (rv) {
-          LOG(("Moving old distribution directory to new location failed - " \
-               "err: %d", rv));
-        }
-      }
-    }
-  }
-
   if (isElevated) {
     SetGroupOwnershipAndPermissions(gInstallDirPath);
     freeArguments(argc, argv);
@@ -3565,7 +3621,7 @@ int NS_main(int argc, NS_tchar **argv)
 #elif XP_MACOSX
                                                 , isElevated
 #endif
-                                               );
+                                                );
 
   return retVal ? retVal : (gSucceeded ? 0 : 1);
 }
@@ -4083,11 +4139,8 @@ int DoUpdate()
   // extract the manifest
   int rv = gArchiveReader.ExtractFile("updatev3.manifest", manifest);
   if (rv) {
-    rv = gArchiveReader.ExtractFile("updatev2.manifest", manifest);
-    if (rv) {
-      LOG(("DoUpdate: error extracting manifest file"));
-      return rv;
-    }
+    LOG(("DoUpdate: error extracting manifest file"));
+    return rv;
   }
 
   NS_tchar *rb = GetManifestContents(manifest);

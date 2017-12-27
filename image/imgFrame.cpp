@@ -14,7 +14,6 @@
 #include "gfxPlatform.h"
 #include "gfxPrefs.h"
 #include "gfxUtils.h"
-#include "gfxAlphaRecovery.h"
 
 #include "GeckoProfiler.h"
 #include "MainThreadUtils.h"
@@ -27,6 +26,9 @@
 #include "nsMargin.h"
 #include "nsThreadUtils.h"
 
+#ifdef ANDROID
+#define ANIMATED_FRAMES_USE_HEAP
+#endif
 
 namespace mozilla {
 
@@ -84,6 +86,21 @@ AllocateBufferForImage(const IntSize& size,
                        bool aIsAnimated = false)
 {
   int32_t stride = VolatileSurfaceStride(size, format);
+
+#ifdef ANIMATED_FRAMES_USE_HEAP
+  if (aIsAnimated) {
+    // For as long as an animated image is retained, its frames will never be
+    // released to let the OS purge volatile buffers. On Android, a volatile
+    // buffer actually keeps a file handle active, which we would like to avoid
+    // since many images and frames could easily exhaust the pool. As such, we
+    // use the heap. On the other platforms we do not have the file handle
+    // problem, and additionally we may avoid a superfluous memset since the
+    // volatile memory starts out as zero-filled.
+    return Factory::CreateDataSourceSurfaceWithStride(size, format,
+                                                      stride, false);
+  }
+#endif
+
   if (!aIsAnimated && gfxPrefs::ImageMemShared()) {
     RefPtr<SourceSurfaceSharedData> newSurf = new SourceSurfaceSharedData();
     if (newSurf->Init(size, stride, format)) {
@@ -165,7 +182,7 @@ static bool AllowedImageAndFrameDimensions(const nsIntSize& aImageSize,
   if (!AllowedImageSize(aImageSize.width, aImageSize.height)) {
     return false;
   }
-  if (!AllowedImageSize(aFrameRect.width, aFrameRect.height)) {
+  if (!AllowedImageSize(aFrameRect.Width(), aFrameRect.Height())) {
     return false;
   }
   nsIntRect imageRect(0, 0, aImageSize.width, aImageSize.height);
@@ -307,9 +324,7 @@ imgFrame::InitWithDrawable(gfxDrawable* aDrawable,
 
   RefPtr<DrawTarget> target;
 
-  bool canUseDataSurface =
-    gfxPlatform::GetPlatform()->CanRenderContentToDataSurface();
-
+  bool canUseDataSurface = Factory::DoesBackendSupportDataDrawtarget(aBackend);
   if (canUseDataSurface) {
     // It's safe to use data surfaces for content on this platform, so we can
     // get away with using volatile buffers.
@@ -363,7 +378,7 @@ imgFrame::InitWithDrawable(gfxDrawable* aDrawable,
   // Draw using the drawable the caller provided.
   RefPtr<gfxContext> ctx = gfxContext::CreateOrNull(target);
   MOZ_ASSERT(ctx);  // Already checked the draw target above.
-  gfxUtils::DrawPixelSnapped(ctx, aDrawable, mFrameRect.Size(),
+  gfxUtils::DrawPixelSnapped(ctx, aDrawable, SizeDouble(mFrameRect.Size()),
                              ImageRegion::Create(ThebesRect(mFrameRect)),
                              mFormat, aSamplingFilter, aImageFlags);
 
@@ -398,7 +413,7 @@ imgFrame::Optimize(DrawTarget* aTarget)
 {
   MOZ_ASSERT(NS_IsMainThread());
   mMonitor.AssertCurrentThreadOwns();
-  
+
   if (mLockCount > 0 || !mOptimizable) {
     // Don't optimize right now.
     return NS_OK;
@@ -492,8 +507,8 @@ imgFrame::SurfaceForDrawing(bool               aDoPartialDecode,
                              mFormat);
   }
 
-  gfxRect available = gfxRect(mDecoded.x, mDecoded.y, mDecoded.width,
-                              mDecoded.height);
+  gfxRect available = gfxRect(mDecoded.x, mDecoded.y, mDecoded.Width(),
+                              mDecoded.Height());
 
   if (aDoTile) {
     // Create a temporary surface.
@@ -519,7 +534,7 @@ imgFrame::SurfaceForDrawing(bool               aDoPartialDecode,
   // Not tiling, and we have a surface, so we can account for
   // a partial decode just by twiddling parameters.
   aRegion = aRegion.Intersect(available);
-  IntSize availableSize(mDecoded.width, mDecoded.height);
+  IntSize availableSize(mDecoded.Width(), mDecoded.Height());
 
   return SurfaceWithFormat(new gfxSurfaceDrawable(aSurface, availableSize),
                            mFormat);
@@ -529,8 +544,7 @@ bool imgFrame::Draw(gfxContext* aContext, const ImageRegion& aRegion,
                     SamplingFilter aSamplingFilter, uint32_t aImageFlags,
                     float aOpacity)
 {
-  PROFILER_LABEL("imgFrame", "Draw",
-    js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("imgFrame::Draw", GRAPHICS);
 
   MOZ_ASSERT(NS_IsMainThread());
   NS_ASSERTION(!aRegion.Rect().IsEmpty(), "Drawing empty region!");
@@ -596,6 +610,14 @@ imgFrame::ImageUpdatedInternal(const nsIntRect& aUpdateRect)
   // decoded rect that extends outside the bounds of the frame rect.
   mDecoded.IntersectRect(mDecoded, mFrameRect);
 
+  // Update our invalidation counters for any consumers watching for changes
+  // in the surface.
+  if (mRawSurface) {
+    mRawSurface->Invalidate();
+  }
+  if (mLockedSurface && mRawSurface != mLockedSurface) {
+    mLockedSurface->Invalidate();
+  }
   return NS_OK;
 }
 
@@ -633,11 +655,11 @@ imgFrame::GetImageBytesPerRow() const
   mMonitor.AssertCurrentThreadOwns();
 
   if (mRawSurface) {
-    return mFrameRect.width * BytesPerPixel(mFormat);
+    return mFrameRect.Width() * BytesPerPixel(mFormat);
   }
 
   if (mPaletteDepth) {
-    return mFrameRect.width;
+    return mFrameRect.Width();
   }
 
   return 0;
@@ -646,7 +668,7 @@ imgFrame::GetImageBytesPerRow() const
 uint32_t
 imgFrame::GetImageDataLength() const
 {
-  return GetImageBytesPerRow() * mFrameRect.height;
+  return GetImageBytesPerRow() * mFrameRect.Height();
 }
 
 void

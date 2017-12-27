@@ -46,6 +46,9 @@ typedef NS_NPAPIPLUGIN_CALLBACK(NPError, NP_PLUGINUNIXINIT) (const NPNetscapeFun
 typedef NS_NPAPIPLUGIN_CALLBACK(NPError, NP_PLUGINSHUTDOWN) (void);
 
 namespace mozilla {
+
+class ChildProfilerController;
+
 namespace plugins {
 
 class PluginInstanceChild;
@@ -65,13 +68,12 @@ protected:
     virtual mozilla::ipc::IPCResult RecvSettingChanged(const PluginSettings& aSettings) override;
 
     // Implement the PPluginModuleChild interface
+    virtual mozilla::ipc::IPCResult RecvInitProfiler(Endpoint<mozilla::PProfilerChild>&& aEndpoint) override;
     virtual mozilla::ipc::IPCResult RecvDisableFlashProtectedMode() override;
     virtual mozilla::ipc::IPCResult AnswerNP_GetEntryPoints(NPError* rv) override;
     virtual mozilla::ipc::IPCResult AnswerNP_Initialize(const PluginSettings& aSettings, NPError* rv) override;
-    virtual mozilla::ipc::IPCResult RecvAsyncNP_Initialize(const PluginSettings& aSettings) override;
     virtual mozilla::ipc::IPCResult AnswerSyncNPP_New(PPluginInstanceChild* aActor, NPError* rv)
                                    override;
-    virtual mozilla::ipc::IPCResult RecvAsyncNPP_New(PPluginInstanceChild* aActor) override;
 
     virtual mozilla::ipc::IPCResult
     RecvInitPluginModuleChild(Endpoint<PPluginModuleChild>&& endpoint) override;
@@ -124,11 +126,6 @@ protected:
 
     virtual mozilla::ipc::IPCResult
     RecvProcessNativeEventsInInterruptCall() override;
-
-    virtual mozilla::ipc::IPCResult RecvStartProfiler(const ProfilerInitParams& params) override;
-    virtual mozilla::ipc::IPCResult RecvStopProfiler() override;
-    virtual mozilla::ipc::IPCResult RecvPauseProfiler(const bool& aPause) override;
-    virtual mozilla::ipc::IPCResult RecvGatherProfile() override;
 
     virtual mozilla::ipc::IPCResult
     AnswerModuleSupportsAsyncRender(bool* aResult) override;
@@ -186,7 +183,7 @@ public:
 
 #ifdef MOZ_WIDGET_COCOA
     void ProcessNativeEvents();
-    
+
     void PluginShowWindow(uint32_t window_id, bool modal, CGRect r) {
         SendPluginShowWindow(window_id, modal, r.origin.x, r.origin.y, r.size.width, r.size.height);
     }
@@ -255,9 +252,13 @@ private:
     bool mIsChrome;
     bool mHasShutdown; // true if NP_Shutdown has run
 
+#ifdef MOZ_GECKO_PROFILER
+    RefPtr<ChildProfilerController> mProfilerController;
+#endif
+
     // we get this from the plugin
     NP_PLUGINSHUTDOWN mShutdownFunc;
-#if defined(OS_LINUX) || defined(OS_BSD)
+#if defined(OS_LINUX) || defined(OS_BSD) || defined(OS_SOLARIS)
     NP_PLUGINUNIXINIT mInitializeFunc;
 #elif defined(OS_WIN) || defined(OS_MACOSX)
     NP_PLUGININIT mInitializeFunc;

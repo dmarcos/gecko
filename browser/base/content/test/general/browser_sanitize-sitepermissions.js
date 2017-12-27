@@ -1,8 +1,7 @@
 // Bug 380852 - Delete permission manager entries in Clear Recent History
 
 var tempScope = {};
-Cc["@mozilla.org/moz/jssubscript-loader;1"].getService(Ci.mozIJSSubScriptLoader)
-                                           .loadSubScript("chrome://browser/content/sanitize.js", tempScope);
+Services.scriptloader.loadSubScript("chrome://browser/content/sanitize.js", tempScope);
 var Sanitizer = tempScope.Sanitizer;
 
 function countPermissions() {
@@ -15,13 +14,13 @@ function countPermissions() {
   return result;
 }
 
-add_task(function* test() {
+add_task(async function test() {
   // sanitize before we start so we have a good baseline.
   // Set up the sanitizer to just clear siteSettings
   let s = new Sanitizer();
   s.ignoreTimespan = false;
   s.prefDomain = "privacy.cpd.";
-  var itemPrefs = gPrefService.getBranch(s.prefDomain);
+  var itemPrefs = Services.prefs.getBranch(s.prefDomain);
   itemPrefs.setBoolPref("history", false);
   itemPrefs.setBoolPref("downloads", false);
   itemPrefs.setBoolPref("cache", false);
@@ -45,7 +44,7 @@ add_task(function* test() {
   ok(pm.enumerator.hasMoreElements(), "Permission manager should have elements, since we just added one");
 
   // Clear it
-  yield s.sanitize();
+  await s.sanitize();
 
   // Make sure it's gone
   is(numAtStart, countPermissions(), "Permission manager should have the same count it started with");

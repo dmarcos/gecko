@@ -6,6 +6,8 @@
 #include "InputData.h"
 
 #include "mozilla/dom/Touch.h"
+#include "mozilla/TextEvents.h"
+#include "nsContentUtils.h"
 #include "nsDebug.h"
 #include "nsThreadUtils.h"
 #include "mozilla/MouseEvents.h"
@@ -23,6 +25,7 @@ InputData::~InputData()
 InputData::InputData(InputType aInputType)
   : mInputType(aInputType)
   , mTime(0)
+  , mFocusSequenceNumber(0)
   , modifiers(0)
 {
 }
@@ -32,6 +35,7 @@ InputData::InputData(InputType aInputType, uint32_t aTime, TimeStamp aTimeStamp,
   : mInputType(aInputType)
   , mTime(aTime)
   , mTimeStamp(aTimeStamp)
+  , mFocusSequenceNumber(0)
   , modifiers(aModifiers)
 {
 }
@@ -128,10 +132,10 @@ MultiTouchInput::MultiTouchInput(const WidgetTouchEvent& aTouchEvent)
 
     // Extract data from weird interfaces.
     int32_t identifier = domTouch->Identifier();
-    int32_t radiusX = domTouch->RadiusX();
-    int32_t radiusY = domTouch->RadiusY();
-    float rotationAngle = domTouch->RotationAngle();
-    float force = domTouch->Force();
+    int32_t radiusX = domTouch->RadiusX(CallerType::System);
+    int32_t radiusY = domTouch->RadiusY(CallerType::System);
+    float rotationAngle = domTouch->RotationAngle(CallerType::System);
+    float force = domTouch->Force(CallerType::System);
 
     SingleTouchData data(identifier,
                          ViewAs<ScreenPixel>(domTouch->mRefPoint,
@@ -181,6 +185,17 @@ MultiTouchInput::MultiTouchInput(const WidgetMouseEvent& aMouseEvent)
                                          1.0f));
 }
 
+void
+MultiTouchInput::Translate(const ScreenPoint& aTranslation)
+{
+  const int32_t xTranslation = (int32_t)(aTranslation.x + 0.5f);
+  const int32_t yTranslation = (int32_t)(aTranslation.y + 0.5f);
+
+  for (auto iter = mTouches.begin(); iter != mTouches.end(); iter++) {
+    iter->mScreenPoint.MoveBy(xTranslation, yTranslation);
+  }
+}
+
 WidgetTouchEvent
 MultiTouchInput::ToWidgetTouchEvent(nsIWidget* aWidget) const
 {
@@ -215,6 +230,7 @@ MultiTouchInput::ToWidgetTouchEvent(nsIWidget* aWidget) const
   event.mTime = this->mTime;
   event.mTimeStamp = this->mTimeStamp;
   event.mFlags.mHandledByAPZ = mHandledByAPZ;
+  event.mFocusSequenceNumber = mFocusSequenceNumber;
 
   for (size_t i = 0; i < mTouches.Length(); i++) {
     *event.mTouches.AppendElement() = mTouches[i].ToNewDOMTouch();
@@ -258,6 +274,7 @@ MultiTouchInput::ToWidgetMouseEvent(nsIWidget* aWidget) const
   event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
   event.mModifiers = modifiers;
   event.mFlags.mHandledByAPZ = mHandledByAPZ;
+  event.mFocusSequenceNumber = mFocusSequenceNumber;
 
   if (mouseEventMessage != eMouseMove) {
     event.mClickCount = 1;
@@ -362,6 +379,9 @@ MouseInput::MouseInput(const WidgetMouseEventBase& aMouseEvent)
     case eMouseExitFromWidget:
       mType = MOUSE_WIDGET_EXIT;
       break;
+    case eMouseHitTest:
+      mType = MOUSE_HITTEST;
+      break;
     default:
       MOZ_ASSERT_UNREACHABLE("Mouse event type not supported");
       break;
@@ -422,6 +442,9 @@ MouseInput::ToWidgetMouseEvent(nsIWidget* aWidget) const
     case MOUSE_WIDGET_EXIT:
       msg = eMouseExitFromWidget;
       break;
+    case MOUSE_HITTEST:
+      msg = eMouseHitTest;
+      break;
     default:
       MOZ_ASSERT_UNREACHABLE("Did not assign a type to WidgetMouseEvent in MouseInput");
       break;
@@ -459,6 +482,7 @@ MouseInput::ToWidgetMouseEvent(nsIWidget* aWidget) const
   event.mClickCount = clickCount;
   event.inputSource = mInputSource;
   event.mIgnoreRootScrollFrame = true;
+  event.mFocusSequenceNumber = mFocusSequenceNumber;
 
   return event;
 }
@@ -472,6 +496,7 @@ PanGestureInput::PanGestureInput()
   , mHandledByAPZ(false)
   , mFollowedByMomentum(false)
   , mRequiresContentResponseIfCannotScrollHorizontallyInStartDirection(false)
+  , mOverscrollBehaviorAllowsSwipe(false)
 {
 }
 
@@ -491,6 +516,7 @@ PanGestureInput::PanGestureInput(PanGestureType aType, uint32_t aTime,
   , mHandledByAPZ(false)
   , mFollowedByMomentum(false)
   , mRequiresContentResponseIfCannotScrollHorizontallyInStartDirection(false)
+  , mOverscrollBehaviorAllowsSwipe(false)
 {
 }
 
@@ -526,6 +552,7 @@ PanGestureInput::ToWidgetWheelEvent(nsIWidget* aWidget) const
   wheelEvent.mDeltaX = mPanDisplacement.x;
   wheelEvent.mDeltaY = mPanDisplacement.y;
   wheelEvent.mFlags.mHandledByAPZ = mHandledByAPZ;
+  wheelEvent.mFocusSequenceNumber = mFocusSequenceNumber;
   return wheelEvent;
 }
 
@@ -753,6 +780,7 @@ ScrollWheelInput::ToWidgetWheelEvent(nsIWidget* aWidget) const
   wheelEvent.mAllowToOverrideSystemScrollSpeed =
     mAllowToOverrideSystemScrollSpeed;
   wheelEvent.mFlags.mHandledByAPZ = mHandledByAPZ;
+  wheelEvent.mFocusSequenceNumber = mFocusSequenceNumber;
   return wheelEvent;
 }
 
@@ -772,6 +800,44 @@ ScrollWheelInput::IsCustomizedByUserPrefs() const
 {
   return mUserDeltaMultiplierX != 1.0 ||
          mUserDeltaMultiplierY != 1.0;
+}
+
+KeyboardInput::KeyboardInput(const WidgetKeyboardEvent& aEvent)
+  : InputData(KEYBOARD_INPUT,
+              aEvent.mTime,
+              aEvent.mTimeStamp,
+              aEvent.mModifiers)
+  , mKeyCode(aEvent.mKeyCode)
+  , mCharCode(aEvent.mCharCode)
+  , mHandledByAPZ(false)
+{
+  switch (aEvent.mMessage) {
+    case eKeyPress: {
+      mType = KeyboardInput::KEY_PRESS;
+      break;
+    }
+    case eKeyUp: {
+      mType = KeyboardInput::KEY_UP;
+      break;
+    }
+    case eKeyDown: {
+      mType = KeyboardInput::KEY_DOWN;
+      break;
+    }
+    default:
+      mType = KeyboardInput::KEY_OTHER;
+      break;
+  }
+
+  aEvent.GetShortcutKeyCandidates(mShortcutCandidates);
+}
+
+KeyboardInput::KeyboardInput()
+  : InputData(KEYBOARD_INPUT)
+  , mKeyCode(0)
+  , mCharCode(0)
+  , mHandledByAPZ(false)
+{
 }
 
 } // namespace mozilla

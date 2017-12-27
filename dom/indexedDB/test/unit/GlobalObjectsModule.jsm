@@ -10,10 +10,10 @@ this.EXPORTED_SYMBOLS = [
 ];
 
 this.GlobalObjectsModule = function GlobalObjectsModule() {
-}
+};
 
 GlobalObjectsModule.prototype = {
-  runTest: function() {
+  runTest() {
     const name = "Splendid Test";
 
     let ok = this.ok;
@@ -26,11 +26,11 @@ GlobalObjectsModule.prototype = {
     request.onerror = function(event) {
       ok(false, "indexedDB error, '" + event.target.error.name + "'");
       finishTest();
-    }
+    };
     request.onsuccess = function(event) {
       let db = event.target.result;
       ok(db, "Got database");
       finishTest();
-    }
+    };
   }
-}
+};

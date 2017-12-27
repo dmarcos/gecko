@@ -16,7 +16,6 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
 
@@ -26,12 +25,10 @@ function test()
   for (var w = 0; w < 5; ++w) {
 
     { let y; do break ; while (true); }
-    for each (let x in [{}, function(){}]) {y}
+    for (let x of [{}, function(){}]) {y}
 
   }
 
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

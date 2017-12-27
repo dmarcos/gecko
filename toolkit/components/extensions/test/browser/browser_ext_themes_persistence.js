@@ -3,13 +3,13 @@
 // This test checks whether applied WebExtension themes are persisted and applied
 // on newly opened windows.
 
-add_task(function* setup() {
-  yield SpecialPowers.pushPrefEnv({
+add_task(async function setup() {
+  await SpecialPowers.pushPrefEnv({
     set: [["extensions.webextensions.themes.enabled", true]],
   });
 });
 
-add_task(function* test_multiple_windows() {
+add_task(async function test_multiple_windows() {
   let extension = ExtensionTestUtils.loadExtension({
     manifest: {
       "theme": {
@@ -27,26 +27,26 @@ add_task(function* test_multiple_windows() {
     },
   });
 
-  yield extension.startup();
+  await extension.startup();
 
   let docEl = window.document.documentElement;
   let style = window.getComputedStyle(docEl);
 
   Assert.ok(docEl.hasAttribute("lwtheme"), "LWT attribute should be set");
   Assert.equal(docEl.getAttribute("lwthemetextcolor"), "bright",
-    "LWT text color attribute should be set");
+               "LWT text color attribute should be set");
   Assert.ok(style.backgroundImage.includes("image1.png"), "Expected background image");
 
   // Now we'll open a new window to see if the theme is also applied there.
-  let window2 = yield BrowserTestUtils.openNewBrowserWindow();
+  let window2 = await BrowserTestUtils.openNewBrowserWindow();
   docEl = window2.document.documentElement;
   style = window2.getComputedStyle(docEl);
 
   Assert.ok(docEl.hasAttribute("lwtheme"), "LWT attribute should be set");
   Assert.equal(docEl.getAttribute("lwthemetextcolor"), "bright",
-    "LWT text color attribute should be set");
+               "LWT text color attribute should be set");
   Assert.ok(style.backgroundImage.includes("image1.png"), "Expected background image");
 
-  yield BrowserTestUtils.closeWindow(window2);
-  yield extension.unload();
+  await BrowserTestUtils.closeWindow(window2);
+  await extension.unload();
 });

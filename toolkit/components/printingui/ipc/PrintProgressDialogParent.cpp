@@ -63,7 +63,7 @@ mozilla::ipc::IPCResult
 PrintProgressDialogParent::RecvDocTitleChange(const nsString& newTitle)
 {
   if (mPrintProgressParams) {
-    mPrintProgressParams->SetDocTitle(newTitle.get());
+    mPrintProgressParams->SetDocTitle(newTitle);
   }
   return IPC_OK();
 }
@@ -72,7 +72,7 @@ mozilla::ipc::IPCResult
 PrintProgressDialogParent::RecvDocURLChange(const nsString& newURL)
 {
   if (mPrintProgressParams) {
-    mPrintProgressParams->SetDocURL(newURL.get());
+    mPrintProgressParams->SetDocURL(newURL);
   }
   return IPC_OK();
 }
@@ -96,11 +96,15 @@ NS_IMETHODIMP
 PrintProgressDialogParent::Observe(nsISupports *aSubject, const char *aTopic,
                                    const char16_t *aData)
 {
-  if (mActive) {
-    Unused << SendDialogOpened();
+  if (aTopic && !strcmp(aTopic, "cancelled")) {
+    Unused << SendCancelledCurrentJob();
   } else {
-    NS_WARNING("The print progress dialog finished opening, but communications "
-               "with the child have been closed.");
+    if (mActive) {
+      Unused << SendDialogOpened();
+    } else {
+      NS_WARNING("The print progress dialog finished opening, but communications "
+                 "with the child have been closed.");
+    }
   }
 
   return NS_OK;

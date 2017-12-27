@@ -11,23 +11,28 @@
 #include "base/basictypes.h"
 #include "base/message_loop.h"
 
+#include "nsIMemoryReporter.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Monitor.h"
+#include "mozilla/MozPromise.h"
 #include "mozilla/Vector.h"
 #if defined(OS_WIN)
 #include "mozilla/ipc/Neutering.h"
 #endif // defined(OS_WIN)
 #include "mozilla/ipc/Transport.h"
-#if defined(MOZ_CRASHREPORTER) && defined(OS_WIN)
-#include "mozilla/mozalloc_oom.h"
-#include "nsExceptionHandler.h"
-#endif
 #include "MessageLink.h"
+#include "nsILabelableRunnable.h"
+#include "nsThreadUtils.h"
 
 #include <deque>
 #include <functional>
-#include <stack>
+#include <map>
 #include <math.h>
+#include <stack>
+#include <vector>
+
+class nsIEventTarget;
 
 namespace mozilla {
 namespace ipc {
@@ -61,6 +66,19 @@ enum class SyncSendError {
     ReplyError,
 };
 
+enum class ResponseRejectReason {
+    SendError,
+    ChannelClosed,
+    HandlerRejected,
+    ActorDestroyed,
+    EndGuard_,
+};
+
+template<typename T>
+using ResolveCallback = std::function<void (T&&)>;
+
+using RejectCallback = std::function<void (ResponseRejectReason)>;
+
 enum ChannelState {
     ChannelClosed,
     ChannelOpening,
@@ -81,6 +99,51 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     class InterruptFrame;
 
     typedef mozilla::Monitor Monitor;
+
+    // We could templatize the actor type but it would unnecessarily
+    // expand the code size. Using the actor address as the
+    // identifier is already good enough.
+    typedef void* ActorIdType;
+
+public:
+    struct UntypedCallbackHolder
+    {
+        UntypedCallbackHolder(ActorIdType aActorId,
+                              RejectCallback&& aReject)
+            : mActorId(aActorId)
+            , mReject(Move(aReject))
+        {}
+
+        virtual ~UntypedCallbackHolder() {}
+
+        void Reject(ResponseRejectReason aReason) {
+            mReject(aReason);
+        }
+
+        ActorIdType mActorId;
+        RejectCallback mReject;
+    };
+
+    template<typename Value>
+    struct CallbackHolder : public UntypedCallbackHolder
+    {
+        CallbackHolder(ActorIdType aActorId,
+                       ResolveCallback<Value>&& aResolve,
+                       RejectCallback&& aReject)
+            : UntypedCallbackHolder(aActorId, Move(aReject))
+            , mResolve(Move(aResolve))
+        {}
+
+        void Resolve(Value&& aReason) {
+            mResolve(Move(aReason));
+        }
+
+        ResolveCallback<Value> mResolve;
+    };
+
+private:
+    static Atomic<size_t> gUnresolvedResponses;
+    friend class PendingResponseReporter;
 
   public:
     static const int32_t kNoTimeout;
@@ -112,7 +175,7 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     // For more details on the process of opening a channel between
     // threads, see the extended comment on this function
     // in MessageChannel.cpp.
-    bool Open(MessageChannel *aTargetChan, MessageLoop *aTargetLoop, Side aSide);
+    bool Open(MessageChannel *aTargetChan, nsIEventTarget *aEventTarget, Side aSide);
 
     // Close the underlying transport channel.
     void Close();
@@ -131,7 +194,7 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     // Call aInvoke for each pending message until it returns false.
     // XXX: You must get permission from an IPC peer to use this function
     //      since it requires custom deserialization and re-orders events.
-    void PeekMessages(std::function<bool(const Message& aMsg)> aInvoke);
+    void PeekMessages(const std::function<bool(const Message& aMsg)>& aInvoke);
 
     // Misc. behavioral traits consumers can request for this channel
     enum ChannelFlags {
@@ -154,6 +217,27 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     // Asynchronously send a message to the other side of the channel
     bool Send(Message* aMsg);
 
+    // Asynchronously send a message to the other side of the channel
+    // and wait for asynchronous reply.
+    template<typename Value>
+    void Send(Message* aMsg,
+              ActorIdType aActorId,
+              ResolveCallback<Value>&& aResolve,
+              RejectCallback&& aReject) {
+        int32_t seqno = NextSeqno();
+        aMsg->set_seqno(seqno);
+        if (!Send(aMsg)) {
+            aReject(ResponseRejectReason::SendError);
+            return;
+        }
+
+        UniquePtr<UntypedCallbackHolder> callback =
+            MakeUnique<CallbackHolder<Value>>(
+                aActorId, Move(aResolve), Move(aReject));
+        mPendingResponses.insert(std::make_pair(seqno, Move(callback)));
+        gUnresolvedResponses++;
+    }
+
     void SendBuildID();
 
     // Asynchronously deliver a message back to this side of the
@@ -170,6 +254,13 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     bool WaitForIncomingMessage();
 
     bool CanSend() const;
+
+    // Remove and return a callback that needs reply
+    UniquePtr<UntypedCallbackHolder> PopCallback(const Message& aMsg);
+
+    // Used to reject and remove pending responses owned by the given
+    // actor when it's about to be destroyed.
+    void RejectPendingResponsesForActor(ActorIdType aActorId);
 
     // If sending a sync message returns an error, this function gives a more
     // descriptive error message.
@@ -191,6 +282,22 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
 
     bool IsInTransaction() const;
     void CancelCurrentTransaction();
+
+    // Force all calls to Send to defer actually sending messages. This will
+    // cause sync messages to block until another thread calls
+    // StopPostponingSends.
+    //
+    // This must be called from the worker thread.
+    void BeginPostponingSends();
+
+    // Stop postponing sent messages, and immediately flush all postponed
+    // messages to the link. This may be called from any thread.
+    //
+    // Note that there are no ordering guarantees between two different
+    // MessageChannels. If channel B sends a message, then stops postponing
+    // channel A, messages from A may arrive before B. The easiest way to order
+    // this, if needed, is to make B send a sync message.
+    void StopPostponingSends();
 
     /**
      * This function is used by hang annotation code to determine which IPDL
@@ -424,8 +531,18 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     // Tell the IO thread to close the channel and wait for it to ACK.
     void SynchronouslyClose();
 
+    // Returns true if ShouldDeferMessage(aMsg) is guaranteed to return true.
+    // Otherwise, the result of ShouldDeferMessage(aMsg) may be true or false,
+    // depending on context.
+    static bool IsAlwaysDeferred(const Message& aMsg);
+
+    // Helper for sending a message via the link. This should only be used for
+    // non-special messages that might have to be postponed.
+    void SendMessageToLink(Message* aMsg);
+
     bool WasTransactionCanceled(int transaction);
     bool ShouldDeferMessage(const Message& aMsg);
+    bool ShouldDeferInterruptMessage(const Message& aMsg, size_t aStackDepth);
     void OnMessageReceivedFromLink(Message&& aMsg);
     void OnChannelErrorFromLink();
 
@@ -438,8 +555,8 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     // Can be run on either thread
     void AssertWorkerThread() const
     {
-        MOZ_ASSERT(mWorkerLoopID != -1, "Channel hasn't been opened yet");
-        MOZ_RELEASE_ASSERT(mWorkerLoopID == MessageLoop::current()->id(),
+        MOZ_ASSERT(mWorkerThread, "Channel hasn't been opened yet");
+        MOZ_RELEASE_ASSERT(mWorkerThread == GetCurrentVirtualThread(),
                            "not on worker thread!");
     }
 
@@ -448,8 +565,8 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     // NOT our worker thread.
     void AssertLinkThread() const
     {
-        MOZ_ASSERT(mWorkerLoopID != -1, "Channel hasn't been opened yet");
-        MOZ_RELEASE_ASSERT(mWorkerLoopID != MessageLoop::current()->id(),
+        MOZ_ASSERT(mWorkerThread, "Channel hasn't been opened yet");
+        MOZ_RELEASE_ASSERT(mWorkerThread != GetCurrentVirtualThread(),
                            "on worker thread but should not be!");
     }
 
@@ -457,7 +574,8 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     class MessageTask :
         public CancelableRunnable,
         public LinkedListElement<RefPtr<MessageTask>>,
-        public nsIRunnablePriority
+        public nsIRunnablePriority,
+        public nsILabelableRunnable
     {
     public:
         explicit MessageTask(MessageChannel* aChannel, Message&& aMessage);
@@ -475,6 +593,8 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
         Message& Msg() { return mMessage; }
         const Message& Msg() const { return mMessage; }
 
+        bool GetAffectedSchedulerGroups(SchedulerGroupSet& aGroups) override;
+
     private:
         MessageTask() = delete;
         MessageTask(const MessageTask&) = delete;
@@ -490,6 +610,7 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
 
     typedef LinkedList<RefPtr<MessageTask>> MessageQueue;
     typedef std::map<size_t, Message> MessageMap;
+    typedef std::map<size_t, UniquePtr<UntypedCallbackHolder>> CallbackMap;
     typedef IPC::Message::msgid_t msgid_t;
 
     void WillDestroyCurrentMessageLoop() override;
@@ -508,9 +629,9 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     MessageLoop* mWorkerLoop;           // thread where work is done
     RefPtr<CancelableRunnable> mChannelErrorTask;  // NotifyMaybeChannelError runnable
 
-    // id() of mWorkerLoop.  This persists even after mWorkerLoop is cleared
-    // during channel shutdown.
-    int mWorkerLoopID;
+    // Thread we are allowed to send and receive on. This persists even after
+    // mWorkerLoop is cleared during channel shutdown.
+    PRThread* mWorkerThread;
 
     // Timeout periods are broken up in two to prevent system suspension from
     // triggering an abort. This method (called by WaitForEvent with a 'did
@@ -520,7 +641,7 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     bool mInTimeoutSecondHalf;
 
     // Worker-thread only; sequence numbers for messages that require
-    // synchronous replies.
+    // replies.
     int32_t mNextSeqno;
 
     static bool sIsPumpingMessages;
@@ -582,6 +703,12 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     bool DispatchingSyncMessage() const;
     int DispatchingSyncMessageNestedLevel() const;
 
+#ifdef DEBUG
+    void AssertMaybeDeferredCountCorrect();
+#else
+    void AssertMaybeDeferredCountCorrect() {}
+#endif
+
     // If a sync message times out, we store its sequence number here. Any
     // future sync messages will fail immediately. Once the reply for original
     // sync message is received, we allow sync messages again.
@@ -633,6 +760,11 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     // another blocking message, because it's blocked on a reply from us.
     //
     MessageQueue mPending;
+
+    // The number of messages in mPending for which IsAlwaysDeferred is false
+    // (i.e., the number of messages that might not be deferred, depending on
+    // context).
+    size_t mMaybeDeferredPendingCount;
 
     // Stack of all the out-calls on which this channel is awaiting responses.
     // Each stack refers to a different protocol and the stacks are mutually
@@ -689,6 +821,9 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     // https://bugzilla.mozilla.org/show_bug.cgi?id=521929.
     MessageMap mOutOfTurnReplies;
 
+    // Map of async Callbacks that are still waiting replies.
+    CallbackMap mPendingResponses;
+
     // Stack of Interrupt in-calls that were deferred because of race
     // conditions.
     std::stack<Message> mDeferred;
@@ -714,6 +849,11 @@ class MessageChannel : HasResultCodes, MessageLoop::DestructionObserver
     RefPtr<CancelableRunnable> mOnChannelConnectedTask;
     bool mPeerPidSet;
     int32_t mPeerPid;
+
+    // Channels can enter messages are not sent immediately; instead, they are
+    // held in a queue until another thread deems it is safe to send them.
+    bool mIsPostponingSends;
+    std::vector<UniquePtr<Message>> mPostponedSends;
 };
 
 void
@@ -721,5 +861,14 @@ CancelCPOWs();
 
 } // namespace ipc
 } // namespace mozilla
+
+namespace IPC {
+template <>
+struct ParamTraits<mozilla::ipc::ResponseRejectReason>
+    : public ContiguousEnumSerializer<mozilla::ipc::ResponseRejectReason,
+                                      mozilla::ipc::ResponseRejectReason::SendError,
+                                      mozilla::ipc::ResponseRejectReason::EndGuard_>
+{ };
+} // namespace IPC
 
 #endif  // ifndef ipc_glue_MessageChannel_h

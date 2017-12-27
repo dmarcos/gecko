@@ -15,11 +15,6 @@
 
 #downloadsPanel > .panel-arrowcontainer > .panel-arrowcontent {
   overflow: hidden;
-  display: block;
-}
-
-#downloadsPanel > .panel-arrowcontainer > .panel-arrowcontent,
-#downloadsPanel-multiView > .panel-viewcontainer > .panel-viewstack > .panel-subviews {
   padding: 0;
 }
 
@@ -31,11 +26,8 @@
 }
 
 #emptyDownloads {
-  padding: 16px 25px;
+  padding: 16px 16px;
   margin: 0;
-  /* The panel can be wider than this description after the blocked subview is
-     shown, so center the text. */
-  text-align: center;
 }
 
 .downloadsPanelFooter {
@@ -93,56 +85,16 @@
 }
 
 #downloadsHistory {
-  padding-inline-start: 10px;
-  padding-inline-end: 10px;
-}
-
-#downloadsPanel[hasdownloads] #downloadsFooterButtons:not(.downloadsHideDropmarker) > #downloadsHistory {
-  padding-inline-start: 68px;
-}
-
-toolbarseparator.downloadsDropmarkerSplitter {
-  margin: 7px 0;
+  padding-inline-start: 14px;
+  padding-inline-end: 14px;
 }
 
 @item@ > toolbarseparator {
   margin: 10px 0;
 }
 
-@item@:hover > toolbarseparator,
-#downloadsFooter:hover toolbarseparator.downloadsDropmarkerSplitter,
-#downloadsFooter[showingdropdown] toolbarseparator {
+@item@:hover > toolbarseparator {
   margin: 0;
-}
-
-.downloadsDropmarker {
-  padding: 0 21px;
-}
-
-.downloadsDropmarker > .button-box > hbox {
-  display: none;
-}
-
-.downloadsDropmarker > .button-box > .button-menu-dropmarker {
-  /* This is to override the linux !important */
-  -moz-appearance: none !important;
-  display: -moz-box;
-  padding: 0;
-  margin: 0;
-}
-
-.downloadsDropmarker > .button-box > .button-menu-dropmarker > .dropmarker-icon {
-  width: 16px;
-  height: 16px;
-  list-style-image: url("chrome://global/skin/icons/menubutton-dropmarker.svg");
-  filter: url("chrome://global/skin/filters.svg#fill");
-  fill: currentColor;
-}
-
-/* Override default icon size which is too small for this dropdown */
-.downloadsDropmarker > .button-box > .button-menu-dropmarker {
-  width: 16px;
-  height: 16px;
 }
 
 #downloadsSummary {
@@ -290,7 +242,7 @@ richlistitem[type="download"]:last-child {
   width: 16px;
   height: 16px;
   margin: 1px;
-  filter: url("chrome://global/skin/filters.svg#fill");
+  -moz-context-properties: fill;
   fill: currentColor;
 }
 
@@ -311,16 +263,8 @@ richlistitem[type="download"]:last-child {
   background-color: var(--arrowpanel-dimmed-further);
 }
 
-@item@[showingsubview] {
-  background-color: Highlight;
-  color: HighlightText;
-  transition: background-color var(--panelui-subview-transition-duration),
-              color var(--panelui-subview-transition-duration);
-}
-
 @item@[verdict="Malware"]:hover,
-@item@[verdict="Malware"]:hover:active,
-@item@[verdict="Malware"][showingsubview] {
+@item@[verdict="Malware"]:hover:active {
   background-color: #aa1b08;
   color: white;
 }
@@ -328,52 +272,32 @@ richlistitem[type="download"]:last-child {
 /*** Button icons ***/
 
 .downloadIconCancel > .button-box > .button-icon {
-  list-style-image: url("chrome://browser/skin/panel-icons.svg#cancel");
+  list-style-image: url("chrome://browser/skin/panel-icon-cancel.svg");
 }
 
 .downloadIconShow > .button-box > .button-icon {
 %ifdef XP_MACOSX
-  list-style-image: url("chrome://browser/skin/panel-icons.svg#magnifier");
+  list-style-image: url("chrome://browser/skin/panel-icon-magnifier.svg");
 %else
-  list-style-image: url("chrome://browser/skin/panel-icons.svg#folder");
+  list-style-image: url("chrome://browser/skin/panel-icon-folder.svg");
 %endif
 }
 
 .downloadIconRetry > .button-box > .button-icon {
-  list-style-image: url("chrome://browser/skin/panel-icons.svg#retry");
+  list-style-image: url("chrome://browser/skin/panel-icon-retry.svg");
 }
 
 .downloadShowBlockedInfo > .button-box > .button-icon {
-  list-style-image: url("chrome://browser/skin/panel-icons.svg#arrow-right");
+  list-style-image: url("chrome://browser/skin/panel-icon-arrow-right.svg");
 }
 
 .downloadShowBlockedInfo > .button-box > .button-icon:-moz-locale-dir(rtl) {
-  list-style-image: url("chrome://browser/skin/panel-icons.svg#arrow-left");
+  list-style-image: url("chrome://browser/skin/panel-icon-arrow-left.svg");
 }
 
 /*** Blocked subview ***/
 
-#downloadsPanel-multiView > .panel-viewcontainer > .panel-viewstack[viewtype=main] > .panel-subviews {
-  /* When the main view is showing, the shadow on the left edge of the subview is
-     barely visible on the right edge of the main view, so set it to none. */
-  box-shadow: none;
-}
-
-/* When the subview is showing, turn the download button into an arrow pointing
-   back to the main view. */
-#downloadsPanel-multiView > .panel-viewcontainer > .panel-viewstack[viewtype="subview"] .download-state[showingsubview] .downloadButton {
-  color: HighlightText;
-}
-
-#downloadsPanel-multiView > .panel-viewcontainer > .panel-viewstack[viewtype="subview"] .download-state[showingsubview] .downloadButton > .button-box > .button-icon {
-  list-style-image: url("chrome://browser/skin/panel-icons.svg#arrow-left");
-}
-
-#downloadsPanel-multiView > .panel-viewcontainer > .panel-viewstack[viewtype="subview"] .download-state[showingsubview] .downloadButton > .button-box > .button-icon:-moz-locale-dir(rtl) {
-  list-style-image: url("chrome://browser/skin/panel-icons.svg#arrow-right");
-}
-
-#downloadsPanel-blockedSubview {
+#downloadsPanel-blockedSubview > .panel-view-body-unscrollable {
   background-image: url("chrome://browser/skin/warning.svg");
   background-size: 32px 32px;
   background-position: 16px 16px;
@@ -384,7 +308,7 @@ richlistitem[type="download"]:last-child {
   background-position: calc(100% - 16px) 16px;
 }
 
-#downloadsPanel-blockedSubview[verdict=Malware] {
+#downloadsPanel-blockedSubview[verdict=Malware] > .panel-view-body-unscrollable {
   background-image: url("chrome://browser/skin/downloads/download-blocked.svg");
 }
 

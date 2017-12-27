@@ -5,9 +5,13 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 UNIFIED_SOURCES += [
+    'AutoMemMap.cpp',
     'ChromeScriptLoader.cpp',
     'mozJSLoaderUtils.cpp',
     'mozJSSubScriptLoader.cpp',
+    'ScriptCacheActors.cpp',
+    'ScriptPreloader.cpp',
+    'URLPreloader.cpp',
 ]
 
 # mozJSComponentLoader.cpp cannot be built in unified mode because it uses
@@ -16,12 +20,25 @@ SOURCES += [
     'mozJSComponentLoader.cpp'
 ]
 
+IPDL_SOURCES += [
+    'PScriptCache.ipdl',
+]
+
+EXPORTS.mozilla += [
+    'ScriptPreloader.h',
+    'URLPreloader.h',
+]
+
 EXPORTS.mozilla.dom += [
     'PrecompiledScript.h',
 ]
 
+EXPORTS.mozilla.loader += [
+    'AutoMemMap.h',
+    'ScriptCacheActors.h',
+]
+
 EXTRA_JS_MODULES += [
-    'ISO8601DateUtils.jsm',
     'XPCOMUtils.jsm',
 ]
 
@@ -33,5 +50,7 @@ LOCAL_INCLUDES += [
     '/dom/base',
 ]
 
-if CONFIG['GNU_CXX']:
+include('/ipc/chromium/chromium-config.mozbuild')
+
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-shadow']

@@ -11,7 +11,7 @@
 
 #include "nsITheme.h"
 #include "nsCOMPtr.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsNativeTheme.h"
 
 @class CellDrawView;
@@ -38,6 +38,8 @@ public:
     eThemeGeometryTypeHighlightedMenuItem,
     eThemeGeometryTypeVibrancyLight,
     eThemeGeometryTypeVibrancyDark,
+    eThemeGeometryTypeVibrantTitlebarLight,
+    eThemeGeometryTypeVibrantTitlebarDark,
     eThemeGeometryTypeTooltip,
     eThemeGeometryTypeSheet,
     eThemeGeometryTypeSourceList,
@@ -50,12 +52,19 @@ public:
   NS_DECL_ISUPPORTS_INHERITED
 
   // The nsITheme interface.
-  NS_IMETHOD DrawWidgetBackground(nsRenderingContext* aContext,
+  NS_IMETHOD DrawWidgetBackground(gfxContext* aContext,
                                   nsIFrame* aFrame,
                                   uint8_t aWidgetType,
                                   const nsRect& aRect,
                                   const nsRect& aDirtyRect) override;
-  NS_IMETHOD GetWidgetBorder(nsDeviceContext* aContext, 
+  bool CreateWebRenderCommandsForWidget(mozilla::wr::DisplayListBuilder& aBuilder,
+                                        mozilla::wr::IpcResourceUpdateQueue& aResources,
+                                        const mozilla::layers::StackingContextHelper& aSc,
+                                        mozilla::layers::WebRenderLayerManager* aManager,
+                                        nsIFrame* aFrame,
+                                        uint8_t aWidgetType,
+                                        const nsRect& aRect) override;
+  NS_IMETHOD GetWidgetBorder(nsDeviceContext* aContext,
                              nsIFrame* aFrame,
                              uint8_t aWidgetType,
                              nsIntMargin* aResult) override;
@@ -72,7 +81,7 @@ public:
                                   uint8_t aWidgetType,
                                   mozilla::LayoutDeviceIntSize* aResult, bool* aIsOverridable) override;
   NS_IMETHOD WidgetStateChanged(nsIFrame* aFrame, uint8_t aWidgetType, 
-                                nsIAtom* aAttribute, bool* aShouldRepaint,
+                                nsAtom* aAttribute, bool* aShouldRepaint,
                                 const nsAttrValue* aOldValue) override;
   NS_IMETHOD ThemeChanged() override;
   bool ThemeSupportsWidget(nsPresContext* aPresContext, nsIFrame* aFrame, uint8_t aWidgetType) override;
@@ -82,8 +91,6 @@ public:
   virtual bool WidgetAppearanceDependsOnWindowFocus(uint8_t aWidgetType) override;
   virtual bool NeedToClearBackgroundBehindWidget(nsIFrame* aFrame,
                                                  uint8_t aWidgetType) override;
-  virtual bool WidgetProvidesFontSmoothingBackgroundColor(nsIFrame* aFrame, uint8_t aWidgetType,
-                                                          nscolor* aColor) override;
   virtual ThemeGeometryType ThemeGeometryTypeForWidget(nsIFrame* aFrame,
                                                        uint8_t aWidgetType) override;
   virtual Transparency GetWidgetTransparency(nsIFrame* aFrame, uint8_t aWidgetType) override;

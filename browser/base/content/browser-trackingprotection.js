@@ -108,10 +108,10 @@ var TrackingProtection = {
 
       // Open the tracking protection introduction panel, if applicable.
       if (this.enabledGlobally) {
-        let introCount = gPrefService.getIntPref("privacy.trackingprotection.introCount");
+        let introCount = Services.prefs.getIntPref("privacy.trackingprotection.introCount");
         if (introCount < TrackingProtection.MAX_INTROS) {
-          gPrefService.setIntPref("privacy.trackingprotection.introCount", ++introCount);
-          gPrefService.savePrefFile(null);
+          Services.prefs.setIntPref("privacy.trackingprotection.introCount", ++introCount);
+          Services.prefs.savePrefFile(null);
           this.showIntroPanel();
         }
       }
@@ -188,13 +188,13 @@ var TrackingProtection = {
     // This function may be called in private windows, but it does not change
     // any preference unless Tracking Protection is enabled globally.
     if (this.enabledGlobally) {
-      gPrefService.setIntPref("privacy.trackingprotection.introCount",
-                              this.MAX_INTROS);
-      gPrefService.savePrefFile(null);
+      Services.prefs.setIntPref("privacy.trackingprotection.introCount",
+                                this.MAX_INTROS);
+      Services.prefs.savePrefFile(null);
     }
   },
 
-  showIntroPanel: Task.async(function*() {
+  async showIntroPanel() {
     let brandBundle = document.getElementById("bundle_brand");
     let brandShortName = brandBundle.getString("brandShortName");
 
@@ -210,6 +210,7 @@ var TrackingProtection = {
         // (e.g. if the user manually visited the tour or clicked the link from
         // about:privatebrowsing) so we can avoid a reload.
         ignoreFragment: "whenComparingAndReplace",
+        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
       });
     };
 
@@ -225,7 +226,7 @@ var TrackingProtection = {
       },
     ];
 
-    let panelTarget = yield UITour.getTarget(window, "trackingProtection");
+    let panelTarget = await UITour.getTarget(window, "trackingProtection");
     UITour.initForBrowser(gBrowser.selectedBrowser, window);
     UITour.showInfo(window, panelTarget,
                     gNavigatorBundle.getString("trackingProtection.intro.title"),
@@ -233,5 +234,5 @@ var TrackingProtection = {
                                                         [brandShortName]),
                     undefined, buttons,
                     { closeButtonCallback: () => this.dontShowIntroPanelAgain() });
-  }),
+  },
 };

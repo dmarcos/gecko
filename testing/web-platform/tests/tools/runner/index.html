@@ -4,8 +4,9 @@
 <title>Web tests</title>
 <link rel='stylesheet' href='css/bootstrap.min.css'>
 <link rel='stylesheet' href='css/bootstrap-theme.min.css'>
-<link rel=stylesheet href=runner.css>
-<script src=runner.js></script>
+<link rel='stylesheet' href='runner.css'>
+<script src='/common/get-host-info.sub.js'></script>
+<script src='runner.js'></script>
 
 
 <header class="navbar navbar-inverse navbar-fixed-top">
@@ -135,7 +136,9 @@
           0%
         </div>
       </div>
-      <div id='test_url'></div>
+      <div id="current_test">
+        <label>Current test:</label><a></a>
+      </div>
       <table class='table'>
         <thead>
           <tr>
@@ -193,6 +196,7 @@
           <div class="panel-footer">
             The test has:
             <button class="btn btn-success pass">Passed</button>
+            <button class="btn btn-info skip">Not Run</button>
             <button class="btn btn-danger fail">Failed</button>
           </div>
         </div>

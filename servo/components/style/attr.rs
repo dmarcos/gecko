@@ -12,11 +12,12 @@ use cssparser::{self, Color, RGBA};
 use euclid::num::Zero;
 use num_traits::ToPrimitive;
 use properties::PropertyDeclarationBlock;
+use selectors::attr::AttrSelectorOperation;
+use servo_arc::Arc;
 use servo_url::ServoUrl;
 use shared_lock::Locked;
-use std::ascii::AsciiExt;
+#[allow(unused_imports)] use std::ascii::AsciiExt;
 use std::str::FromStr;
-use std::sync::Arc;
 use str::{HTML_SPACE_CHARACTERS, read_exponent, read_fraction};
 use str::{read_numbers, split_commas, split_html_space_chars};
 use str::str_join;
@@ -26,7 +27,7 @@ use values::specified::Length;
 const UNSIGNED_LONG_MAX: u32 = 2147483647;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[cfg_attr(feature = "servo", derive(MallocSizeOf))]
 pub enum LengthOrPercentageOrAuto {
     Auto,
     Percentage(f32),
@@ -34,7 +35,7 @@ pub enum LengthOrPercentageOrAuto {
 }
 
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[cfg_attr(feature = "servo", derive(MallocSizeOf))]
 pub enum AttrValue {
     String(String),
     TokenList(String, Vec<Atom>),
@@ -45,7 +46,12 @@ pub enum AttrValue {
     Length(String, Option<Length>),
     Color(String, Option<RGBA>),
     Dimension(String, LengthOrPercentageOrAuto),
-    Url(String, Option<ServoUrl>),
+
+    /// Stores a URL, computed from the input string and a document's base URL.
+    ///
+    /// The URL is resolved at setting-time, so this kind of attribute value is
+    /// not actually suitable for most URL-reflecting IDL attributes.
+    ResolvedUrl(String, Option<ServoUrl>),
 
     /// Note that this variant is only used transitively as a fast path to set
     /// the property declaration block relevant to the style of an element when
@@ -60,7 +66,7 @@ pub enum AttrValue {
     /// declaration block), but that avoids keeping a refcounted
     /// declarationblock for longer than needed.
     Declaration(String,
-                #[cfg_attr(feature = "servo", ignore_heap_size_of = "Arc")]
+                #[ignore_malloc_size_of = "Arc"]
                 Arc<Locked<PropertyDeclarationBlock>>)
 }
 
@@ -160,8 +166,8 @@ impl AttrValue {
     pub fn from_comma_separated_tokenlist(tokens: String) -> AttrValue {
         let atoms = split_commas(&tokens).map(Atom::from)
                                          .fold(vec![], |mut acc, atom| {
-                                            if !acc.contains(&atom) { acc.push(atom) }
-                                            acc
+                                             if !acc.contains(&atom) { acc.push(atom) }
+                                             acc
                                          });
         AttrValue::TokenList(tokens, atoms)
     }
@@ -226,9 +232,9 @@ impl AttrValue {
         AttrValue::Atom(value)
     }
 
-    pub fn from_url(base: ServoUrl, url: String) -> AttrValue {
+    pub fn from_resolved_url(base: &ServoUrl, url: String) -> AttrValue {
         let joined = base.join(&url).ok();
-        AttrValue::Url(url, joined)
+        AttrValue::ResolvedUrl(url, joined)
     }
 
     pub fn from_legacy_color(string: String) -> AttrValue {
@@ -306,14 +312,14 @@ impl AttrValue {
         }
     }
 
-    /// Assumes the `AttrValue` is a `Url` and returns its value
+    /// Assumes the `AttrValue` is a `ResolvedUrl` and returns its value.
     ///
     /// ## Panics
     ///
-    /// Panics if the `AttrValue` is not a `Url`
-    pub fn as_url(&self) -> Option<&ServoUrl> {
+    /// Panics if the `AttrValue` is not a `ResolvedUrl`
+    pub fn as_resolved_url(&self) -> Option<&ServoUrl> {
         match *self {
-            AttrValue::Url(_, ref url) => url.as_ref(),
+            AttrValue::ResolvedUrl(_, ref url) => url.as_ref(),
             _ => panic!("Url not found"),
         }
     }
@@ -349,6 +355,13 @@ impl AttrValue {
             panic!("Uint not found");
         }
     }
+
+    pub fn eval_selector(&self, selector: &AttrSelectorOperation<&String>) -> bool {
+        // FIXME(SimonSapin) this can be more efficient by matching on `(self, selector)` variants
+        // and doing Atom comparisons instead of string comparisons where possible,
+        // with SelectorImpl::AttrValue changed to Atom.
+        selector.eval_str(self)
+    }
 }
 
 impl ::std::ops::Deref for AttrValue {
@@ -357,25 +370,34 @@ impl ::std::ops::Deref for AttrValue {
     fn deref(&self) -> &str {
         match *self {
             AttrValue::String(ref value) |
-                AttrValue::TokenList(ref value, _) |
-                AttrValue::UInt(ref value, _) |
-                AttrValue::Double(ref value, _) |
-                AttrValue::Length(ref value, _) |
-                AttrValue::Color(ref value, _) |
-                AttrValue::Int(ref value, _) |
-                AttrValue::Url(ref value, _) |
-                AttrValue::Declaration(ref value, _) |
-                AttrValue::Dimension(ref value, _) => &value,
+            AttrValue::TokenList(ref value, _) |
+            AttrValue::UInt(ref value, _) |
+            AttrValue::Double(ref value, _) |
+            AttrValue::Length(ref value, _) |
+            AttrValue::Color(ref value, _) |
+            AttrValue::Int(ref value, _) |
+            AttrValue::ResolvedUrl(ref value, _) |
+            AttrValue::Declaration(ref value, _) |
+            AttrValue::Dimension(ref value, _) => &value,
             AttrValue::Atom(ref value) => &value,
         }
     }
 }
 
-/// https://html.spec.whatwg.org/multipage/#rules-for-parsing-non-zero-dimension-values
+impl PartialEq<Atom> for AttrValue {
+    fn eq(&self, other: &Atom) -> bool {
+        match *self {
+            AttrValue::Atom(ref value) => value == other,
+            _ => other == &**self,
+        }
+    }
+}
+
+/// <https://html.spec.whatwg.org/multipage/#rules-for-parsing-non-zero-dimension-values>
 pub fn parse_nonzero_length(value: &str) -> LengthOrPercentageOrAuto {
     match parse_length(value) {
         LengthOrPercentageOrAuto::Length(x) if x == Au::zero() => LengthOrPercentageOrAuto::Auto,
-        LengthOrPercentageOrAuto::Percentage(0.) => LengthOrPercentageOrAuto::Auto,
+        LengthOrPercentageOrAuto::Percentage(x) if x == 0. => LengthOrPercentageOrAuto::Auto,
         x => x,
     }
 }
@@ -495,8 +517,8 @@ pub fn parse_legacy_color(mut input: &str) -> Result<RGBA, ()> {
             0 => Err(()),
             1 => hex(string[0] as char),
             _ => {
-                let upper = try!(hex(string[0] as char));
-                let lower = try!(hex(string[1] as char));
+                let upper = hex(string[0] as char)?;
+                let lower = hex(string[1] as char)?;
                 Ok((upper << 4) | lower)
             }
         }
@@ -574,7 +596,7 @@ pub fn parse_length(mut value: &str) -> LengthOrPercentageOrAuto {
 
 /// A struct that uniquely identifies an element's attribute.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[cfg_attr(feature = "servo", derive(MallocSizeOf))]
 pub struct AttrIdentifier {
     pub local_name: LocalName,
     pub name: LocalName,

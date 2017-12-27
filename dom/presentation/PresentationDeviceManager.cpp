@@ -157,7 +157,9 @@ PresentationDeviceManager::GetAvailableDevices(nsIArray* aPresentationUrls, nsIA
   // Bug 1194049: some providers may discontinue discovery after timeout.
   // Call |ForceDiscovery()| here to make sure device lists are updated.
   NS_DispatchToMainThread(
-      NewRunnableMethod(this, &PresentationDeviceManager::ForceDiscovery));
+    NewRunnableMethod("dom::PresentationDeviceManager::ForceDiscovery",
+                      this,
+                      &PresentationDeviceManager::ForceDiscovery));
 
   nsTArray<nsString> presentationUrls;
   if (aPresentationUrls) {
@@ -182,7 +184,7 @@ PresentationDeviceManager::GetAvailableDevices(nsIArray* aPresentationUrls, nsIA
   nsCOMPtr<nsIMutableArray> devices = do_CreateInstance(NS_ARRAY_CONTRACTID);
   for (uint32_t i = 0; i < mDevices.Length(); ++i) {
     if (presentationUrls.IsEmpty()) {
-      devices->AppendElement(mDevices[i], false);
+      devices->AppendElement(mDevices[i]);
       continue;
     }
 
@@ -191,7 +193,7 @@ PresentationDeviceManager::GetAvailableDevices(nsIArray* aPresentationUrls, nsIA
       if (NS_SUCCEEDED(mDevices[i]->IsRequestedUrlSupported(presentationUrls[j],
                                                             &isSupported)) &&
           isSupported) {
-        devices->AppendElement(mDevices[i], false);
+        devices->AppendElement(mDevices[i]);
         break;
       }
     }

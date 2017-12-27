@@ -24,12 +24,14 @@ XPCOMUtils.defineLazyModuleGetter(this, "RemotePages",
   "resource://gre/modules/RemotePageManager.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "SessionStore",
   "resource:///modules/sessionstore/SessionStore.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Task",
-  "resource://gre/modules/Task.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
   "resource:///modules/RecentWindow.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
   "resource://gre/modules/PluralForm.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "setTimeout",
+  "resource://gre/modules/Timer.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "clearTimeout",
+  "resource://gre/modules/Timer.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "gNavigatorBundle", function() {
   const url = "chrome://browser/locale/browser.properties";
@@ -43,10 +45,44 @@ const DAY = 24 * 60 * 60 * 1000; // milliseconds
 const DAYS_TO_SUPPRESS = 30;
 const MAX_UNSEEN_CRASHED_CHILD_IDS = 20;
 
+// Time after which we will begin scanning for unsubmitted crash reports
+const CHECK_FOR_UNSUBMITTED_CRASH_REPORTS_DELAY_MS = 60 * 10000; // 10 minutes
+
+/**
+ * BrowserWeakMap is exactly like a WeakMap, but expects <xul:browser>
+ * objects only.
+ *
+ * Under the hood, BrowserWeakMap keys the map off of the <xul:browser>
+ * permanentKey. If, however, the browser has never gotten a permanentKey,
+ * it falls back to keying on the <xul:browser> element itself.
+ */
+class BrowserWeakMap extends WeakMap {
+  get(browser) {
+    if (browser.permanentKey) {
+      return super.get(browser.permanentKey);
+    }
+    return super.get(browser);
+  }
+
+  set(browser, value) {
+    if (browser.permanentKey) {
+      return super.set(browser.permanentKey, value);
+    }
+    return super.set(browser, value);
+  }
+
+  delete(browser) {
+    if (browser.permanentKey) {
+      return super.delete(browser.permanentKey);
+    }
+    return super.delete(browser);
+  }
+}
+
 this.TabCrashHandler = {
   _crashedTabCount: 0,
   childMap: new Map(),
-  browserMap: new WeakMap(),
+  browserMap: new BrowserWeakMap(),
   unseenCrashedChildIDs: [],
   crashedBrowserQueues: new Map(),
 
@@ -121,6 +157,8 @@ this.TabCrashHandler = {
         let shutdown = env.exists("MOZ_CRASHREPORTER_SHUTDOWN");
 
         if (shutdown) {
+          dump("A content process crashed and MOZ_CRASHREPORTER_SHUTDOWN is " +
+               "set, shutting down\n");
           Services.startup.quit(Ci.nsIAppStartup.eForceQuit);
         }
 
@@ -134,7 +172,7 @@ this.TabCrashHandler = {
           return;
         }
 
-        this.browserMap.set(browser.permanentKey, aSubject.childID);
+        this.browserMap.set(browser, aSubject.childID);
         break;
       }
     }
@@ -218,7 +256,7 @@ this.TabCrashHandler = {
    */
   onSelectedBrowserCrash(browser) {
     if (!browser.isRemoteBrowser) {
-      Cu.reportError("Selected crashed browser is not remote.")
+      Cu.reportError("Selected crashed browser is not remote.");
       return;
     }
     if (!browser.frameLoader) {
@@ -257,7 +295,7 @@ this.TabCrashHandler = {
    *        page instead.
    */
   willShowCrashedTab(browser) {
-    let childID = this.browserMap.get(browser.permanentKey);
+    let childID = this.browserMap.get(browser);
     // We will only show the tab crash page if:
     // 1) We are aware that this browser crashed
     // 2) We know we've never shown the tab crash page for the
@@ -330,8 +368,14 @@ this.TabCrashHandler = {
    *        even if they are empty.
    */
   maybeSendCrashReport(message) {
-    if (!AppConstants.MOZ_CRASHREPORTER)
+    if (!AppConstants.MOZ_CRASHREPORTER) {
       return;
+    }
+
+    if (!message.data.hasReport) {
+      // There was no report, so nothing to do.
+      return;
+    }
 
     let browser = message.target.browser;
 
@@ -341,10 +385,11 @@ this.TabCrashHandler = {
       UnsubmittedCrashHandler.autoSubmit = true;
     }
 
-    let childID = this.browserMap.get(browser.permanentKey);
+    let childID = this.browserMap.get(browser);
     let dumpID = this.childMap.get(childID);
-    if (!dumpID)
-      return
+    if (!dumpID) {
+      return;
+    }
 
     if (!message.data.sendReport) {
       Services.telemetry.getHistogramById("FX_CONTENT_CRASH_NOT_SUBMITTED").add(1);
@@ -379,13 +424,13 @@ this.TabCrashHandler = {
     // default. In order to make sure we don't send it, we overwrite it
     // with the empty string.
     if (!includeURL) {
-      extraExtraKeyVals["URL"] = "";
+      extraExtraKeyVals.URL = "";
     }
 
     CrashSubmit.submit(dumpID, {
       recordSubmission: true,
       extraExtraKeyVals,
-    }).then(null, Cu.reportError);
+    }).catch(Cu.reportError);
 
     this.prefs.setBoolPref("sendReport", true);
     this.prefs.setBoolPref("includeURL", includeURL);
@@ -415,8 +460,8 @@ this.TabCrashHandler = {
         if (!doc.documentURI.startsWith("about:tabcrashed"))
           continue;
 
-        if (this.browserMap.get(browser.permanentKey) == childID) {
-          this.browserMap.delete(browser.permanentKey);
+        if (this.browserMap.get(browser) == childID) {
+          this.browserMap.delete(browser);
           let ports = this.pageListener.portsForBrowser(browser);
           if (ports.length) {
             // For about:tabcrashed, we don't expect subframes. We can
@@ -441,7 +486,7 @@ this.TabCrashHandler = {
 
     let browser = message.target.browser;
 
-    let childID = this.browserMap.get(browser.permanentKey);
+    let childID = this.browserMap.get(browser);
     let index = this.unseenCrashedChildIDs.indexOf(childID);
     if (index != -1) {
       this.unseenCrashedChildIDs.splice(index, 1);
@@ -499,7 +544,7 @@ this.TabCrashHandler = {
     });
 
     let browser = message.target.browser;
-    let childID = this.browserMap.get(browser.permanentKey);
+    let childID = this.browserMap.get(browser);
 
     // Make sure to only count once even if there are multiple windows
     // that will all show about:tabcrashed.
@@ -521,9 +566,9 @@ this.TabCrashHandler = {
       return null;
     }
 
-    return this.childMap.get(this.browserMap.get(browser.permanentKey));
+    return this.childMap.get(this.browserMap.get(browser));
   },
-}
+};
 
 /**
  * This component is responsible for scanning the pending
@@ -554,6 +599,8 @@ this.UnsubmittedCrashHandler = {
   // shouldShowPendingSubmissionsNotification().
   suppressed: false,
 
+  _checkTimeout: null,
+
   init() {
     if (this.initialized) {
       return;
@@ -579,7 +626,6 @@ this.UnsubmittedCrashHandler = {
         this.prefs.clearUserPref("suppressUntilDate");
       }
 
-      Services.obs.addObserver(this, "browser-delayed-startup-finished");
       Services.obs.addObserver(this, "profile-before-change");
     }
   },
@@ -590,6 +636,11 @@ this.UnsubmittedCrashHandler = {
     }
 
     this.initialized = false;
+
+    if (this._checkTimeout) {
+      clearTimeout(this._checkTimeout);
+      this._checkTimeout = null;
+    }
 
     if (!this.enabled) {
       return;
@@ -606,31 +657,24 @@ this.UnsubmittedCrashHandler = {
       this.showingNotification = false;
     }
 
-    try {
-      Services.obs.removeObserver(this, "browser-delayed-startup-finished");
-    } catch (e) {
-      // The browser-delayed-startup-finished observer might have already
-      // fired and removed itself, so if this fails, it's okay.
-      if (e.result != Cr.NS_ERROR_FAILURE) {
-        throw e;
-      }
-    }
-
     Services.obs.removeObserver(this, "profile-before-change");
   },
 
   observe(subject, topic, data) {
     switch (topic) {
-      case "browser-delayed-startup-finished": {
-        Services.obs.removeObserver(this, topic);
-        this.checkForUnsubmittedCrashReports();
-        break;
-      }
       case "profile-before-change": {
         this.uninit();
         break;
       }
     }
+  },
+
+  scheduleCheckForUnsubmittedCrashReports() {
+    this._checkTimeout = setTimeout(() => {
+      Services.tm.idleDispatchToMainThread(() => {
+        this.checkForUnsubmittedCrashReports();
+      });
+    }, CHECK_FOR_UNSUBMITTED_CRASH_REPORTS_DELAY_MS);
   },
 
   /**
@@ -644,13 +688,17 @@ this.UnsubmittedCrashHandler = {
    *          show a notification on the most recent browser window.
    *          If a notification cannot be shown, will resolve with null.
    */
-  checkForUnsubmittedCrashReports: Task.async(function*() {
+  async checkForUnsubmittedCrashReports() {
+    if (!this.enabled || this.suppressed) {
+      return null;
+    }
+
     let dateLimit = new Date();
     dateLimit.setDate(dateLimit.getDate() - PENDING_CRASH_REPORT_DAYS);
 
     let reportIDs = [];
     try {
-      reportIDs = yield CrashSubmit.pendingIDsAsync(dateLimit);
+      reportIDs = await CrashSubmit.pendingIDs(dateLimit);
     } catch (e) {
       Cu.reportError(e);
       return null;
@@ -664,7 +712,7 @@ this.UnsubmittedCrashHandler = {
       }
     }
     return null;
-  }),
+  },
 
   /**
    * Returns true if the notification should be shown.
@@ -883,7 +931,7 @@ this.UnsubmittedCrashHandler = {
         extraExtraKeyVals: {
           "SubmittedFromInfobar": true,
         },
-      });
+      }).catch(Cu.reportError);
     }
   },
 };
@@ -997,7 +1045,7 @@ this.PluginCrashReporter = {
     });
 
     if (browserDumpID)
-      CrashSubmit.submit(browserDumpID);
+      CrashSubmit.submit(browserDumpID).catch(Cu.reportError);
 
     this.broadcastState(runID, "submitting");
 

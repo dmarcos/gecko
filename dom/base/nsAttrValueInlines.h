@@ -19,7 +19,7 @@ struct MiscContainer final
   typedef nsAttrValue::ValueType ValueType;
 
   ValueType mType;
-  // mStringBits points to either nsIAtom* or nsStringBuffer* and is used when
+  // mStringBits points to either nsAtom* or nsStringBuffer* and is used when
   // mType isn't eCSSDeclaration.
   // Note eStringBase and eAtomBase is used also to handle the type of
   // mStringBits.
@@ -34,7 +34,7 @@ struct MiscContainer final
         mozilla::DeclarationBlock* mCSSDeclaration;
         mozilla::css::URLValue* mURL;
         mozilla::css::ImageValue* mImage;
-        nsAttrValue::AtomArray* mAtomArray;
+        mozilla::AtomArray* mAtomArray;
         nsIntMargin* mIntMargin;
         const nsSVGAngle* mSVGAngle;
         const nsSVGIntegerPair* mSVGIntegerPair;
@@ -139,7 +139,7 @@ nsAttrValue::GetPercentValue() const
             / 100.0f;
 }
 
-inline nsAttrValue::AtomArray*
+inline mozilla::AtomArray*
 nsAttrValue::GetAtomArrayValue() const
 {
   NS_PRECONDITION(Type() == eAtomArray, "wrong type");
@@ -234,6 +234,58 @@ nsAttrValue::GetIntInternal() const
   // bitshift right is implementaion dependant.
   return static_cast<int32_t>(mBits & ~NS_ATTRVALUE_INTEGERTYPE_MASK) /
          NS_ATTRVALUE_INTEGERTYPE_MULTIPLIER;
+}
+
+inline nsAttrValue::ValueType
+nsAttrValue::Type() const
+{
+  switch (BaseType()) {
+    case eIntegerBase:
+    {
+      return static_cast<ValueType>(mBits & NS_ATTRVALUE_INTEGERTYPE_MASK);
+    }
+    case eOtherBase:
+    {
+      return GetMiscContainer()->mType;
+    }
+    default:
+    {
+      return static_cast<ValueType>(static_cast<uint16_t>(BaseType()));
+    }
+  }
+}
+
+inline nsAtom*
+nsAttrValue::GetAtomValue() const
+{
+  NS_PRECONDITION(Type() == eAtom, "wrong type");
+  return reinterpret_cast<nsAtom*>(GetPtr());
+}
+
+inline void
+nsAttrValue::ToString(mozilla::dom::DOMString& aResult) const
+{
+  switch (Type()) {
+    case eString:
+    {
+      nsStringBuffer* str = static_cast<nsStringBuffer*>(GetPtr());
+      if (str) {
+        aResult.SetStringBuffer(str, str->StorageSize()/sizeof(char16_t) - 1);
+      }
+      // else aResult is already empty
+      return;
+    }
+    case eAtom:
+    {
+      nsAtom *atom = static_cast<nsAtom*>(GetPtr());
+      aResult.SetOwnedAtom(atom, mozilla::dom::DOMString::eNullNotExpected);
+      break;
+    }
+    default:
+    {
+      ToString(aResult.AsAString());
+    }
+  }
 }
 
 #endif

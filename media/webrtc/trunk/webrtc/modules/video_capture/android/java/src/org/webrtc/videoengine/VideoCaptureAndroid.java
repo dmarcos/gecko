@@ -85,7 +85,7 @@ public class VideoCaptureAndroid implements PreviewCallback, Callback {
   @WebRTCJNITarget
   private static native Context GetContext();
 
-  private class CameraThread extends Thread {
+  private static final class CameraThread extends Thread {
     private Exchanger<Handler> handlerExchanger;
     public CameraThread(Exchanger<Handler> handlerExchanger) {
       this.handlerExchanger = handlerExchanger;
@@ -190,6 +190,13 @@ public class VideoCaptureAndroid implements PreviewCallback, Callback {
       if (parameters.isVideoStabilizationSupported()) {
         parameters.setVideoStabilization(true);
       }
+
+      List<String> focusModes = parameters.getSupportedFocusModes();
+      if (focusModes.contains(android.hardware.Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO)) {
+        Log.d(TAG, "Enable continuous auto focus mode.");
+        parameters.setFocusMode(android.hardware.Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO);
+      }
+
       parameters.setPictureSize(width, height);
       parameters.setPreviewSize(width, height);
 
@@ -275,7 +282,8 @@ public class VideoCaptureAndroid implements PreviewCallback, Callback {
   private void stopCaptureOnCameraThread(
       Exchanger<Boolean> result) {
     if (camera == null) {
-      throw new RuntimeException("Camera is already stopped!");
+      Log.e(TAG, "Camera is already stopped!");
+      return;
     }
     Throwable error = null;
     try {

@@ -7,7 +7,9 @@
 #ifndef mozilla_EditorUtils_h
 #define mozilla_EditorUtils_h
 
+#include "mozilla/dom/Selection.h"
 #include "mozilla/EditorBase.h"
+#include "mozilla/EditorDOMPoint.h"
 #include "mozilla/GuardObjects.h"
 #include "nsCOMPtr.h"
 #include "nsDebug.h"
@@ -15,7 +17,7 @@
 #include "nsIEditor.h"
 #include "nscore.h"
 
-class nsIAtom;
+class nsAtom;
 class nsIContentIterator;
 class nsIDOMDocument;
 class nsIDOMEvent;
@@ -25,10 +27,6 @@ class nsRange;
 
 namespace mozilla {
 template <class T> class OwningNonNull;
-
-namespace dom {
-class Selection;
-} // namespace dom
 
 /***************************************************************************
  * EditActionResult is useful to return multiple results of an editor
@@ -144,52 +142,197 @@ EditActionCanceled(nsresult aRv = NS_OK)
 }
 
 /***************************************************************************
- * stack based helper class for batching a collection of txns inside a
- * placeholder txn.
+ * SplitNodeResult is a simple class for EditorBase::SplitNodeDeep().
+ * This makes the callers' code easier to read.
  */
-class MOZ_RAII AutoPlaceHolderBatch
+class MOZ_STACK_CLASS SplitNodeResult final
 {
-private:
-  nsCOMPtr<nsIEditor> mEditor;
-  MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
-
 public:
-  AutoPlaceHolderBatch(nsIEditor* aEditor,
-                       nsIAtom* aAtom
-                       MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-    : mEditor(aEditor)
+  bool Succeeded() const { return NS_SUCCEEDED(mRv); }
+  bool Failed() const { return NS_FAILED(mRv); }
+  nsresult Rv() const { return mRv; }
+
+  /**
+   * DidSplit() returns true if a node was actually split.
+   */
+  bool DidSplit() const
   {
-    MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-    if (mEditor) {
-      mEditor->BeginPlaceHolderTransaction(aAtom);
-    }
+    return mPreviousNode && mNextNode;
   }
-  ~AutoPlaceHolderBatch()
+
+  /**
+   * GetLeftNode() simply returns the left node which was created at splitting.
+   * This returns nullptr if the node wasn't split.
+   */
+  nsIContent* GetLeftNode() const
   {
-    if (mEditor) {
-      mEditor->EndPlaceHolderTransaction();
-    }
+    return mPreviousNode && mNextNode ? mPreviousNode.get() : nullptr;
   }
+
+  /**
+   * GetRightNode() simply returns the right node which was split.
+   * This won't return nullptr unless failed to split due to invalid arguments.
+   */
+  nsIContent* GetRightNode() const
+  {
+    if (mGivenSplitPoint.IsSet()) {
+      return mGivenSplitPoint.GetChild();
+    }
+    return mPreviousNode && !mNextNode ? mPreviousNode : mNextNode;
+  }
+
+  /**
+   * GetPreviousNode() returns previous node at the split point.
+   */
+  nsIContent* GetPreviousNode() const
+  {
+    if (mGivenSplitPoint.IsSet()) {
+      return mGivenSplitPoint.IsEndOfContainer() ?
+               mGivenSplitPoint.GetChild() : nullptr;
+    }
+    return mPreviousNode;
+  }
+
+  /**
+   * GetNextNode() returns next node at the split point.
+   */
+  nsIContent* GetNextNode() const
+  {
+    if (mGivenSplitPoint.IsSet()) {
+      return !mGivenSplitPoint.IsEndOfContainer() ?
+                mGivenSplitPoint.GetChild() : nullptr;
+    }
+    return mNextNode;
+  }
+
+  /**
+   * SplitPoint() returns the split point in the container.
+   * This is useful when callers insert an element at split point with
+   * EditorBase::CreateNode() or something similar methods.
+   *
+   * Note that the result is EditorRawDOMPoint but the nodes are grabbed
+   * by this instance.  Therefore, the life time of both container node
+   * and child node are guaranteed while using the result temporarily.
+   */
+  EditorRawDOMPoint SplitPoint() const
+  {
+    if (Failed()) {
+      return EditorRawDOMPoint();
+    }
+    if (mGivenSplitPoint.IsSet()) {
+      return mGivenSplitPoint.AsRaw();
+    }
+    if (!mPreviousNode) {
+      return EditorRawDOMPoint(mNextNode);
+    }
+    EditorRawDOMPoint point(mPreviousNode);
+    DebugOnly<bool> advanced = point.AdvanceOffset();
+    NS_WARNING_ASSERTION(advanced,
+      "Failed to advance offset to after previous node");
+    return point;
+  }
+
+  /**
+   * This constructor shouldn't be used by anybody except methods which
+   * use this as result when it succeeds.
+   *
+   * @param aPreviousNodeOfSplitPoint   Previous node immediately before
+   *                                    split point.
+   * @param aNextNodeOfSplitPoint       Next node immediately after split
+   *                                    point.
+   */
+  SplitNodeResult(nsIContent* aPreviousNodeOfSplitPoint,
+                  nsIContent* aNextNodeOfSplitPoint)
+    : mPreviousNode(aPreviousNodeOfSplitPoint)
+    , mNextNode(aNextNodeOfSplitPoint)
+    , mRv(NS_OK)
+  {
+    MOZ_DIAGNOSTIC_ASSERT(mPreviousNode || mNextNode);
+  }
+
+  /**
+   * This constructor should be used when the method didn't split any nodes
+   * but want to return given split point as right point.
+   */
+  explicit SplitNodeResult(const EditorRawDOMPoint& aGivenSplitPoint)
+    : mGivenSplitPoint(aGivenSplitPoint)
+    , mRv(NS_OK)
+  {
+    MOZ_DIAGNOSTIC_ASSERT(mGivenSplitPoint.IsSet());
+  }
+
+  /**
+   * This constructor shouldn't be used by anybody except methods which
+   * use this as error result when it fails.
+   */
+  explicit SplitNodeResult(nsresult aRv)
+    : mRv(aRv)
+  {
+    MOZ_DIAGNOSTIC_ASSERT(NS_FAILED(mRv));
+  }
+
+private:
+  // When methods which return this class split some nodes actually, they
+  // need to set a set of left node and right node to this class.  However,
+  // one or both of them may be moved or removed by mutation observer.
+  // In such case, we cannot represent the point with EditorDOMPoint since
+  // it requires current container node.  Therefore, we need to use
+  // nsCOMPtr<nsIContent> here instead.
+  nsCOMPtr<nsIContent> mPreviousNode;
+  nsCOMPtr<nsIContent> mNextNode;
+
+  // Methods which return this class may not split any nodes actually.  Then,
+  // they may want to return given split point as is since such behavior makes
+  // their callers simpler.  In this case, the point may be in a text node
+  // which cannot be represented as a node.  Therefore, we need EditorDOMPoint
+  // for representing the point.
+  EditorDOMPoint mGivenSplitPoint;
+
+  nsresult mRv;
+
+  SplitNodeResult() = delete;
 };
 
 /***************************************************************************
- * stack based helper class for batching a collection of txns.
- * Note: I changed this to use placeholder batching so that we get
- * proper selection save/restore across undo/redo.
+ * stack based helper class for batching a collection of transactions inside a
+ * placeholder transaction.
  */
-class MOZ_RAII AutoEditBatch final : public AutoPlaceHolderBatch
+class MOZ_RAII AutoPlaceholderBatch final
 {
 private:
+  RefPtr<EditorBase> mEditorBase;
   MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 
 public:
-  explicit AutoEditBatch(nsIEditor* aEditor
-                         MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-    : AutoPlaceHolderBatch(aEditor, nullptr)
+  explicit AutoPlaceholderBatch(EditorBase* aEditorBase
+                                MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+    : mEditorBase(aEditorBase)
   {
     MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+    BeginPlaceholderTransaction(nullptr);
   }
-  ~AutoEditBatch() {}
+  AutoPlaceholderBatch(EditorBase* aEditorBase,
+                       nsAtom* aTransactionName
+                       MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+    : mEditorBase(aEditorBase)
+  {
+    MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+    BeginPlaceholderTransaction(aTransactionName);
+  }
+  ~AutoPlaceholderBatch()
+  {
+    if (mEditorBase) {
+      mEditorBase->EndPlaceholderTransaction();
+    }
+  }
+
+private:
+  void BeginPlaceholderTransaction(nsAtom* aTransactionName)
+  {
+    if (mEditorBase) {
+      mEditorBase->BeginPlaceholderTransaction(aTransactionName);
+    }
+  }
 };
 
 /***************************************************************************
@@ -320,6 +463,23 @@ protected:
   MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
+class MOZ_STACK_CLASS AutoRangeArray final
+{
+public:
+  explicit AutoRangeArray(dom::Selection* aSelection)
+  {
+    if (!aSelection) {
+      return;
+    }
+    uint32_t rangeCount = aSelection->RangeCount();
+    for (uint32_t i = 0; i < rangeCount; i++) {
+      mRanges.AppendElement(*aSelection->GetRangeAt(i));
+    }
+  }
+
+  AutoTArray<mozilla::OwningNonNull<nsRange>, 8> mRanges;
+};
+
 /******************************************************************************
  * some helper classes for iterating the dom tree
  *****************************************************************************/
@@ -368,46 +528,22 @@ public:
   }
 };
 
-/******************************************************************************
- * general dom point utility struct
- *****************************************************************************/
-struct MOZ_STACK_CLASS EditorDOMPoint final
-{
-  nsCOMPtr<nsINode> node;
-  int32_t offset;
-
-  EditorDOMPoint()
-    : node(nullptr)
-    , offset(-1)
-  {}
-  EditorDOMPoint(nsINode* aNode, int32_t aOffset)
-    : node(aNode)
-    , offset(aOffset)
-  {}
-  EditorDOMPoint(nsIDOMNode* aNode, int32_t aOffset)
-    : node(do_QueryInterface(aNode))
-    , offset(aOffset)
-  {}
-
-  void SetPoint(nsINode* aNode, int32_t aOffset)
-  {
-    node = aNode;
-    offset = aOffset;
-  }
-  void SetPoint(nsIDOMNode* aNode, int32_t aOffset)
-  {
-    node = do_QueryInterface(aNode);
-    offset = aOffset;
-  }
-};
-
 class EditorUtils final
 {
 public:
-  static bool IsDescendantOf(nsINode* aNode, nsINode* aParent,
-                             int32_t* aOffset = 0);
-  static bool IsDescendantOf(nsIDOMNode* aNode, nsIDOMNode* aParent,
-                             int32_t* aOffset = 0);
+  /**
+   * IsDescendantOf() checks if aNode is a child or a descendant of aParent.
+   * aOutPoint is set to the child of aParent.
+   *
+   * @return            true if aNode is a child or a descendant of aParent.
+   */
+  static bool IsDescendantOf(const nsINode& aNode,
+                             const nsINode& aParent,
+                             EditorRawDOMPoint* aOutPoint = nullptr);
+  static bool IsDescendantOf(const nsINode& aNode,
+                             const nsINode& aParent,
+                             EditorDOMPoint* aOutPoint);
+
   static bool IsLeafNode(nsIDOMNode* aNode);
 };
 

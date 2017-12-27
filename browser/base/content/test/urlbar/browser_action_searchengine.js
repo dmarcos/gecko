@@ -1,26 +1,26 @@
-add_task(function* () {
+/* Any copyright is dedicated to the Public Domain.
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
+
+add_task(async function() {
   Services.search.addEngineWithDetails("MozSearch", "", "", "", "GET",
                                        "http://example.com/?q={searchTerms}");
   let engine = Services.search.getEngineByName("MozSearch");
   let originalEngine = Services.search.currentEngine;
   Services.search.currentEngine = engine;
 
-  let tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, "about:mozilla");
+  let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, "about:mozilla");
 
-  registerCleanupFunction(() => {
+  registerCleanupFunction(async function() {
     Services.search.currentEngine = originalEngine;
     Services.search.removeEngine(engine);
-
     try {
-      gBrowser.removeTab(tab);
+      await BrowserTestUtils.removeTab(tab);
     } catch (ex) { /* tab may have already been closed in case of failure */ }
-
-    return PlacesTestUtils.clearHistory();
+    await PlacesUtils.history.clear();
   });
 
-  yield promiseAutocompleteResultPopup("open a search");
-  let result = gURLBar.popup.richlistbox.firstChild;
-
+  await promiseAutocompleteResultPopup("open a search");
+  let result = await waitForAutocompleteResultAt(0);
   isnot(result, null, "Should have a result");
   is(result.getAttribute("url"),
      `moz-action:searchengine,{"engineName":"MozSearch","input":"open%20a%20search","searchQuery":"open%20a%20search"}`,
@@ -29,7 +29,10 @@ add_task(function* () {
 
   let tabPromise = BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
   result.click();
-  yield tabPromise;
+  await tabPromise;
 
   is(gBrowser.selectedBrowser.currentURI.spec, "http://example.com/?q=open+a+search", "Correct URL should be loaded");
+
+  gURLBar.popup.hidePopup();
+  await promisePopupHidden(gURLBar.popup);
 });

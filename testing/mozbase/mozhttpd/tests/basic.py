@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+from __future__ import absolute_import
+
 import mozhttpd
 import mozfile
 import os
@@ -43,6 +45,7 @@ class TestBasic(unittest.TestCase):
 
         # Cleanup tempdir and related files
         mozfile.rmtree(tempdir)
+
 
 if __name__ == '__main__':
     mozunit.main()

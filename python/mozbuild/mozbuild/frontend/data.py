@@ -23,6 +23,8 @@ from mozpack.chrome.manifest import ManifestEntry
 import mozpack.path as mozpath
 from .context import FinalTargetValue
 
+from collections import defaultdict, OrderedDict
+
 from ..util import (
     group_unified_files,
 )
@@ -52,7 +54,7 @@ class ContextDerived(TreeMetadata):
         'context_all_paths',
         'topsrcdir',
         'topobjdir',
-        'relativedir',
+        'relsrcdir',
         'srcdir',
         'objdir',
         'config',
@@ -70,7 +72,7 @@ class ContextDerived(TreeMetadata):
         self.topsrcdir = context.config.topsrcdir
         self.topobjdir = context.config.topobjdir
 
-        self.relativedir = context.relsrcdir
+        self.relsrcdir = context.relsrcdir
         self.srcdir = context.srcdir
         self.objdir = context.objdir
 
@@ -157,6 +159,30 @@ class VariablePassthru(ContextDerived):
         ContextDerived.__init__(self, context)
         self.variables = {}
 
+
+class ComputedFlags(ContextDerived):
+    """Aggregate flags for consumption by various backends.
+    """
+    __slots__ = ('flags',)
+
+    def __init__(self, context, reader_flags):
+        ContextDerived.__init__(self, context)
+        self.flags = reader_flags
+
+    def resolve_flags(self, key, value):
+        # Bypass checks done by CompileFlags that would keep us from
+        # setting a value here.
+        dict.__setitem__(self.flags, key, value)
+
+    def get_flags(self):
+        flags = defaultdict(list)
+        for key, _, dest_vars in self.flags.flag_variables:
+            value = self.flags.get(key)
+            if value:
+                for dest_var in dest_vars:
+                    flags[dest_var].extend(value)
+        return flags.items()
+
 class XPIDLFile(ContextDerived):
     """Describes an XPIDL file to be compiled."""
 
@@ -208,6 +234,18 @@ class HostDefines(BaseDefines):
 
 class IPDLFile(ContextDerived):
     """Describes an individual .ipdl source file."""
+
+    __slots__ = (
+        'basename',
+    )
+
+    def __init__(self, context, path):
+        ContextDerived.__init__(self, context)
+
+        self.basename = path
+
+class PreprocessedIPDLFile(ContextDerived):
+    """Describes an individual .ipdl source file that requires preprocessing."""
 
     __slots__ = (
         'basename',
@@ -332,9 +370,6 @@ class Linkable(ContextDerived):
 
     def link_library(self, obj):
         assert isinstance(obj, BaseLibrary)
-        if isinstance(obj, SharedLibrary) and obj.variant == obj.COMPONENT:
-            raise LinkageWrongKindError(
-                'Linkable.link_library() does not take components.')
         if obj.KIND != self.KIND:
             raise LinkageWrongKindError('%s != %s' % (obj.KIND, self.KIND))
         # Linking multiple Rust libraries into an object would result in
@@ -345,7 +380,7 @@ class Linkable(ContextDerived):
             raise LinkageMultipleRustLibrariesError("Cannot link multiple Rust libraries into %s",
                                                     self)
         self.linked_libraries.append(obj)
-        if obj.cxx_link:
+        if obj.cxx_link and not isinstance(obj, SharedLibrary):
             self.cxx_link = True
         obj.refs.append(self)
 
@@ -463,6 +498,18 @@ class HostRustProgram(BaseRustProgram):
     TARGET_SUBST_VAR = 'RUST_HOST_TARGET'
 
 
+class RustTest(ContextDerived):
+    __slots__ = (
+        'name',
+        'features',
+    )
+
+    def __init__(self, context, name, features):
+        ContextDerived.__init__(self, context)
+        self.name = name
+        self.features = features
+
+
 class BaseLibrary(Linkable):
     """Generic context derived container object for libraries."""
     __slots__ = (
@@ -539,16 +586,23 @@ class RustLibrary(StaticLibrary):
         # filenames. But we need to keep the basename consistent because
         # many other things in the build system depend on that.
         assert self.crate_type == 'staticlib'
-        self.lib_name = '%s%s%s' % (context.config.lib_prefix,
+        self.lib_name = '%s%s%s' % (context.config.rust_lib_prefix,
                                      basename.replace('-', '_'),
-                                     context.config.lib_suffix)
+                                     context.config.rust_lib_suffix)
         self.dependencies = dependencies
+        self.features = features
+        self.target_dir = target_dir
+        # Skip setting properties below which depend on cargo
+        # when we don't have a compile environment. The required
+        # config keys won't be available, but the instance variables
+        # that we don't set should never be accessed by the actual
+        # build in that case.
+        if not context.config.substs.get('COMPILE_ENVIRONMENT'):
+            return
         build_dir = mozpath.join(target_dir,
                                  cargo_output_directory(context, self.TARGET_SUBST_VAR))
         self.import_name = mozpath.join(build_dir, self.lib_name)
         self.deps_path = mozpath.join(build_dir, 'deps')
-        self.features = features
-        self.target_dir = target_dir
 
 
 class SharedLibrary(Library):
@@ -569,8 +623,7 @@ class SharedLibrary(Library):
     }
 
     FRAMEWORK = 1
-    COMPONENT = 2
-    MAX_VARIANT = 3
+    MAX_VARIANT = 2
 
     def __init__(self, context, basename, real_name=None,
                  soname=None, variant=None, symbols_file=False):
@@ -858,7 +911,7 @@ class UnifiedSources(BaseSources):
         'unified_source_mapping'
     )
 
-    def __init__(self, context, files, canonical_suffix, files_per_unified_file=16):
+    def __init__(self, context, files, canonical_suffix, files_per_unified_file):
         BaseSources.__init__(self, context, files, canonical_suffix)
 
         self.have_unified_mapping = files_per_unified_file > 1
@@ -939,6 +992,19 @@ class FinalTargetPreprocessedFiles(ContextDerived):
         ContextDerived.__init__(self, sandbox)
         self.files = files
 
+class LocalizedFiles(FinalTargetFiles):
+    """Sandbox container object for LOCALIZED_FILES, which is a
+    HierarchicalStringList.
+    """
+    pass
+
+
+class LocalizedPreprocessedFiles(FinalTargetPreprocessedFiles):
+    """Sandbox container object for LOCALIZED_PP_FILES, which is a
+    HierarchicalStringList.
+    """
+    pass
+
 
 class ObjdirFiles(FinalTargetFiles):
     """Sandbox container object for OBJDIR_FILES, which is a
@@ -1002,78 +1068,29 @@ class GeneratedFile(ContextDerived):
         'outputs',
         'inputs',
         'flags',
+        'required_for_compile',
+        'localized',
     )
 
-    def __init__(self, context, script, method, outputs, inputs, flags=()):
+    def __init__(self, context, script, method, outputs, inputs, flags=(), localized=False):
         ContextDerived.__init__(self, context)
         self.script = script
         self.method = method
         self.outputs = outputs if isinstance(outputs, tuple) else (outputs,)
         self.inputs = inputs
         self.flags = flags
+        self.localized = localized
 
-
-class ClassPathEntry(object):
-    """Represents a classpathentry in an Android Eclipse project."""
-
-    __slots__ = (
-        'dstdir',
-        'srcdir',
-        'path',
-        'exclude_patterns',
-        'ignore_warnings',
-    )
-
-    def __init__(self):
-        self.dstdir = None
-        self.srcdir = None
-        self.path = None
-        self.exclude_patterns = []
-        self.ignore_warnings = False
-
-
-class AndroidEclipseProjectData(object):
-    """Represents an Android Eclipse project."""
-
-    __slots__ = (
-        'name',
-        'package_name',
-        'is_library',
-        'res',
-        'assets',
-        'libs',
-        'manifest',
-        'recursive_make_targets',
-        'extra_jars',
-        'included_projects',
-        'referenced_projects',
-        '_classpathentries',
-        'filtered_resources',
-    )
-
-    def __init__(self, name):
-        self.name = name
-        self.is_library = False
-        self.manifest = None
-        self.res = None
-        self.assets = None
-        self.libs = []
-        self.recursive_make_targets = []
-        self.extra_jars = []
-        self.included_projects = []
-        self.referenced_projects = []
-        self._classpathentries = []
-        self.filtered_resources = []
-
-    def add_classpathentry(self, path, srcdir, dstdir, exclude_patterns=[], ignore_warnings=False):
-        cpe = ClassPathEntry()
-        cpe.srcdir = srcdir
-        cpe.dstdir = dstdir
-        cpe.path = path
-        cpe.exclude_patterns = list(exclude_patterns)
-        cpe.ignore_warnings = ignore_warnings
-        self._classpathentries.append(cpe)
-        return cpe
+        suffixes = (
+            '.c',
+            '.cpp',
+            '.h',
+            '.inc',
+            '.py',
+            '.rs',
+            'new', # 'new' is an output from make-stl-wrappers.py
+        )
+        self.required_for_compile = any(f.endswith(suffixes) for f in self.outputs)
 
 
 class AndroidResDirs(ContextDerived):
@@ -1087,6 +1104,7 @@ class AndroidResDirs(ContextDerived):
         ContextDerived.__init__(self, context)
         self.paths = paths
 
+
 class AndroidAssetsDirs(ContextDerived):
     """Represents Android assets directories."""
 
@@ -1097,6 +1115,7 @@ class AndroidAssetsDirs(ContextDerived):
     def __init__(self, context, paths):
         ContextDerived.__init__(self, context)
         self.paths = paths
+
 
 class AndroidExtraResDirs(ContextDerived):
     """Represents Android extra resource directories.
@@ -1114,6 +1133,7 @@ class AndroidExtraResDirs(ContextDerived):
         ContextDerived.__init__(self, context)
         self.paths = paths
 
+
 class AndroidExtraPackages(ContextDerived):
     """Represents Android extra packages."""
 
@@ -1124,6 +1144,7 @@ class AndroidExtraPackages(ContextDerived):
     def __init__(self, context, packages):
         ContextDerived.__init__(self, context)
         self.packages = packages
+
 
 class ChromeManifestEntry(ContextDerived):
     """Represents a chrome.manifest entry."""
@@ -1142,3 +1163,13 @@ class ChromeManifestEntry(ContextDerived):
         entry = entry.rebase(mozpath.dirname(manifest_path))
         # Then add the install_target to the entry base directory.
         self.entry = entry.move(mozpath.dirname(self.path))
+
+
+class GnProjectData(ContextDerived):
+    def __init__(self, context, target_dir, gn_dir_attrs, non_unified_sources):
+        ContextDerived.__init__(self, context)
+        self.target_dir = target_dir
+        self.non_unified_sources = non_unified_sources
+        self.gn_input_variables = gn_dir_attrs.variables
+        self.gn_sandbox_variables = gn_dir_attrs.sandbox_vars
+        self.mozilla_flags = gn_dir_attrs.mozilla_flags

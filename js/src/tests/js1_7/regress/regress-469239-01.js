@@ -16,14 +16,13 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
 
 
   for (let b=0;b<9;++b) {
-    for each (let h in ['', 3, /x/]) {
-	    for each (c in [[], [], [], /x/]) {
+    for (let h of ['', 3, /x/]) {
+	    for (c of [[], [], [], /x/]) {
         '' + c;
 	    }
     }
@@ -31,6 +30,4 @@ function test()
 
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

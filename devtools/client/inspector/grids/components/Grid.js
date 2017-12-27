@@ -4,8 +4,9 @@
 
 "use strict";
 
-const { addons, createClass, createFactory, DOM: dom, PropTypes } =
-  require("devtools/client/shared/vendor/react");
+const { createFactory, PureComponent } = require("devtools/client/shared/vendor/react");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
 
 const GridDisplaySettings = createFactory(require("./GridDisplaySettings"));
 const GridList = createFactory(require("./GridList"));
@@ -14,28 +15,25 @@ const GridOutline = createFactory(require("./GridOutline"));
 const Types = require("../types");
 const { getStr } = require("../utils/l10n");
 
-module.exports = createClass({
-
-  displayName: "Grid",
-
-  propTypes: {
-    getSwatchColorPickerTooltip: PropTypes.func.isRequired,
-    grids: PropTypes.arrayOf(PropTypes.shape(Types.grid)).isRequired,
-    highlighterSettings: PropTypes.shape(Types.highlighterSettings).isRequired,
-    setSelectedNode: PropTypes.func.isRequired,
-    showGridOutline: PropTypes.bool.isRequired,
-    onHideBoxModelHighlighter: PropTypes.func.isRequired,
-    onSetGridOverlayColor: PropTypes.func.isRequired,
-    onShowBoxModelHighlighterForNode: PropTypes.func.isRequired,
-    onShowGridAreaHighlight: PropTypes.func.isRequired,
-    onShowGridCellHighlight: PropTypes.func.isRequired,
-    onShowGridLineNamesHighlight: PropTypes.func.isRequired,
-    onToggleGridHighlighter: PropTypes.func.isRequired,
-    onToggleShowGridLineNumbers: PropTypes.func.isRequired,
-    onToggleShowInfiniteLines: PropTypes.func.isRequired,
-  },
-
-  mixins: [ addons.PureRenderMixin ],
+class Grid extends PureComponent {
+  static get propTypes() {
+    return {
+      getSwatchColorPickerTooltip: PropTypes.func.isRequired,
+      grids: PropTypes.arrayOf(PropTypes.shape(Types.grid)).isRequired,
+      highlighterSettings: PropTypes.shape(Types.highlighterSettings).isRequired,
+      setSelectedNode: PropTypes.func.isRequired,
+      onHideBoxModelHighlighter: PropTypes.func.isRequired,
+      onSetGridOverlayColor: PropTypes.func.isRequired,
+      onShowBoxModelHighlighterForNode: PropTypes.func.isRequired,
+      onShowGridAreaHighlight: PropTypes.func.isRequired,
+      onShowGridCellHighlight: PropTypes.func.isRequired,
+      onShowGridLineNamesHighlight: PropTypes.func.isRequired,
+      onToggleGridHighlighter: PropTypes.func.isRequired,
+      onToggleShowGridAreas: PropTypes.func.isRequired,
+      onToggleShowGridLineNumbers: PropTypes.func.isRequired,
+      onToggleShowInfiniteLines: PropTypes.func.isRequired,
+    };
+  }
 
   render() {
     let {
@@ -43,16 +41,15 @@ module.exports = createClass({
       grids,
       highlighterSettings,
       setSelectedNode,
-      showGridOutline,
       onHideBoxModelHighlighter,
       onSetGridOverlayColor,
       onShowBoxModelHighlighterForNode,
+      onShowGridAreaHighlight,
+      onShowGridCellHighlight,
+      onToggleShowGridAreas,
       onToggleGridHighlighter,
       onToggleShowGridLineNumbers,
       onToggleShowInfiniteLines,
-      onShowGridAreaHighlight,
-      onShowGridCellHighlight,
-      onShowGridLineNamesHighlight,
     } = this.props;
 
     return grids.length ?
@@ -60,15 +57,6 @@ module.exports = createClass({
         {
           id: "layout-grid-container",
         },
-        showGridOutline ?
-          GridOutline({
-            grids,
-            onShowGridAreaHighlight,
-            onShowGridCellHighlight,
-            onShowGridLineNamesHighlight,
-          })
-          :
-          null,
         dom.div(
           {
             className: "grid-content",
@@ -84,18 +72,25 @@ module.exports = createClass({
           }),
           GridDisplaySettings({
             highlighterSettings,
+            onToggleShowGridAreas,
             onToggleShowGridLineNumbers,
             onToggleShowInfiniteLines,
           })
-        )
+        ),
+        GridOutline({
+          grids,
+          onShowGridAreaHighlight,
+          onShowGridCellHighlight,
+        })
       )
       :
       dom.div(
         {
-          className: "layout-no-grids",
+          className: "devtools-sidepanel-no-result",
         },
-        getStr("layout.noGrids")
+        getStr("layout.noGridsOnThisPage")
       );
-  },
+  }
+}
 
-});
+module.exports = Grid;

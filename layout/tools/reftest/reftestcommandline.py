@@ -71,7 +71,7 @@ class ReftestArgumentsParser(argparse.ArgumentParser):
                           action="store",
                           dest="timeout",
                           type=int,
-                          default=5 * 60,  # 5 minutes per bug 479518
+                          default=300,  # 5 minutes per bug 479518
                           help="reftest will timeout in specified number of seconds. "
                                "[default %(default)s].")
 
@@ -136,11 +136,11 @@ class ReftestArgumentsParser(argparse.ArgumentParser):
                           default=None,
                           help="host:port to use when connecting to Marionette")
 
-        self.add_argument("--marionette-port-timeout",
+        self.add_argument("--marionette-socket-timeout",
                           default=None,
                           help=argparse.SUPPRESS)
 
-        self.add_argument("--marionette-socket-timeout",
+        self.add_argument("--marionette-startup-timeout",
                           default=None,
                           help=argparse.SUPPRESS)
 
@@ -225,10 +225,34 @@ class ReftestArgumentsParser(argparse.ArgumentParser):
                           default=False,
                           help="Delete pending crash reports before running tests.")
 
+        self.add_argument("--max-retries",
+                          type=int,
+                          dest="maxRetries",
+                          default=4,
+                          help="The maximum number of attempts to try and recover from a "
+                               "crash before aborting the test run [default 4].")
+
         self.add_argument("tests",
                           metavar="TEST_PATH",
                           nargs="*",
                           help="Path to test file, manifest file, or directory containing tests")
+
+        self.add_argument("--sandbox-read-whitelist",
+                          action="append",
+                          dest="sandboxReadWhitelist",
+                          default=[],
+                          help="Path to add to the sandbox whitelist.")
+
+        self.add_argument("--verify",
+                          action="store_true",
+                          default=False,
+                          help="Run tests in verification mode: Run many times in different "
+                               "ways, to see if there are intermittent failures.")
+
+        self.add_argument("--verify-max-time",
+                          type=int,
+                          default=3600,
+                          help="Maximum time, in seconds, to run in --verify mode..")
 
         mozlog.commandline.add_logging_group(self)
 
@@ -306,8 +330,16 @@ class ReftestArgumentsParser(argparse.ArgumentParser):
 
         options.leakThresholds = {
             "default": options.defaultLeakThreshold,
-            "tab": 5000,  # See dependencies of bug 1051230.
+            "tab": options.defaultLeakThreshold,
         }
+
+        if mozinfo.isWin:
+            if mozinfo.info['bits'] == 32:
+                # See bug 1408554.
+                options.leakThresholds["tab"] = 3000
+            else:
+                # See bug 1404482.
+                options.leakThresholds["tab"] = 100
 
 
 class DesktopArgumentsParser(ReftestArgumentsParser):
@@ -342,7 +374,7 @@ class DesktopArgumentsParser(ReftestArgumentsParser):
         if options.debugger:
             # valgrind and some debuggers may cause Gecko to start slowly. Make sure
             # marionette waits long enough to connect.
-            options.marionette_port_timeout = 900
+            options.marionette_startup_timeout = 900
             options.marionette_socket_timeout = 540
 
         if not options.tests:
@@ -386,7 +418,7 @@ class RemoteArgumentsParser(ReftestArgumentsParser):
                           action="store",
                           type=str,
                           dest="adb_path",
-                          default="adb",
+                          default=None,
                           help="path to adb")
 
         self.add_argument("--deviceIP",

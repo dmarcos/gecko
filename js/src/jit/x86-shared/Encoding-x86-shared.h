@@ -262,10 +262,12 @@ enum TwoByteOpcodeID {
     OP2_PINSRW          = 0xC4,
     OP2_PEXTRW_GdUdIb   = 0xC5,
     OP2_SHUFPS_VpsWpsIb = 0xC6,
+    OP2_CMPXCHGNB       = 0xC7, // CMPXCHG8B; CMPXCHG16B with REX
     OP2_PSRLW_VdqWdq    = 0xD1,
     OP2_PSRLD_VdqWdq    = 0xD2,
     OP2_PMULLW_VdqWdq   = 0xD5,
     OP2_MOVQ_WdVd       = 0xD6,
+    OP2_PMOVMSKB_EdVd   = 0xD7,
     OP2_PSUBUSB_VdqWdq  = 0xD8,
     OP2_PSUBUSW_VdqWdq  = 0xD9,
     OP2_PANDDQ_VdqWdq   = 0xDB,
@@ -314,7 +316,6 @@ inline bool IsXMMReversedOperands(TwoByteOpcodeID opcode)
       case OP2_MOVSD_WsdVsd: // also OP2_MOVPS_WpsVps
       case OP2_MOVAPS_WsdVsd:
       case OP2_MOVDQ_WdqVdq:
-      case OP3_PEXTRD_EdVdqIb:
         return true;
       default:
         break;

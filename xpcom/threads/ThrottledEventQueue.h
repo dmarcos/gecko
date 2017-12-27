@@ -9,7 +9,7 @@
 #ifndef mozilla_ThrottledEventQueue_h
 #define mozilla_ThrottledEventQueue_h
 
-#include "nsIEventTarget.h"
+#include "nsISerialEventTarget.h"
 
 #define NS_THROTTLEDEVENTQUEUE_IID \
 { 0x8f3cf7dc, 0xfc14, 0x4ad5, \
@@ -58,7 +58,7 @@ namespace mozilla {
 //
 // Once shutdown begins all events will bypass the queue and be dispatched
 // straight to the underlying base target.
-class ThrottledEventQueue final : public nsIEventTarget
+class ThrottledEventQueue final : public nsISerialEventTarget
 {
   class Inner;
   RefPtr<Inner> mInner;
@@ -77,7 +77,7 @@ public:
   // Attempt to create a ThrottledEventQueue for the given target.  This
   // may return nullptr if the browser is already shutting down.
   static already_AddRefed<ThrottledEventQueue>
-  Create(nsIEventTarget* aBaseTarget);
+  Create(nsISerialEventTarget* aBaseTarget);
 
   // Determine if there are any events pending in the queue.
   bool IsEmpty() const;
@@ -90,7 +90,7 @@ public:
   void AwaitIdle() const;
 
   NS_DECL_THREADSAFE_ISUPPORTS
-  NS_DECL_NSIEVENTTARGET
+  NS_DECL_NSIEVENTTARGET_FULL
 
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_THROTTLEDEVENTQUEUE_IID);
 };

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,23 +13,22 @@
 class nsButtonBoxFrame : public nsBoxFrame
 {
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsButtonBoxFrame)
 
   friend nsIFrame* NS_NewButtonBoxFrame(nsIPresShell* aPresShell);
 
-  explicit nsButtonBoxFrame(nsStyleContext* aContext);
+  explicit nsButtonBoxFrame(nsStyleContext* aContext, ClassID = kClassID);
 
   virtual void Init(nsIContent*       aContent,
                     nsContainerFrame* aParent,
                     nsIFrame*         aPrevInFlow) override;
 
   virtual void BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
-                                           const nsRect&           aDirtyRect,
                                            const nsDisplayListSet& aLists) override;
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
-  virtual nsresult HandleEvent(nsPresContext* aPresContext, 
+  virtual nsresult HandleEvent(nsPresContext* aPresContext,
                                mozilla::WidgetGUIEvent* aEvent,
                                nsEventStatus* aEventStatus) override;
 
@@ -44,7 +44,7 @@ public:
 #endif
 
   /**
-   * Our implementation of MouseClicked. 
+   * Our implementation of MouseClicked.
    * @param aTrustEvent if true and aEvent as null, then assume the event was trusted
    */
   void DoMouseClick(mozilla::WidgetGUIEvent* aEvent, bool aTrustEvent);

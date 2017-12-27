@@ -21,6 +21,8 @@ python_meta_re = re.compile(b"#\s*META:\s*(\w*)=(.*)$")
 
 reference_file_re = re.compile(r'(^|[\-_])(not)?ref[0-9]*([\-_]|$)')
 
+space_chars = u"".join(html5lib.constants.spaceCharacters)
+
 def replace_end(s, old, new):
     """
     Given a string `s` that ends with `old`, replace that occurrence of `old`
@@ -52,14 +54,15 @@ class SourceFile(object):
                "xhtml":lambda x:ElementTree.parse(x, XMLParser.XMLParser()),
                "svg":lambda x:ElementTree.parse(x, XMLParser.XMLParser())}
 
-    root_dir_non_test = set(["common",
-                             "work-in-progress"])
+    root_dir_non_test = set(["common"])
 
     dir_non_test = set(["resources",
                         "support",
                         "tools"])
 
-    dir_path_non_test = {("css21", "archive")}
+    dir_path_non_test = {("css21", "archive"),
+                         ("css", "CSS2", "archive"),
+                         ("css", "common")}
 
     def __init__(self, tests_root, rel_path, url_base, contents=None):
         """Object representing a file in a source tree.
@@ -150,14 +153,10 @@ class SourceFile(object):
 
         parts = self.dir_path.split(os.path.sep)
 
-        if parts[0] in self.root_dir_non_test:
+        if (parts[0] in self.root_dir_non_test or
+            any(item in self.dir_non_test for item in parts) or
+            any(parts[:len(path)] == list(path) for path in self.dir_path_non_test)):
             return True
-        elif any(item in self.dir_non_test for item in parts):
-            return True
-        else:
-            for path in self.dir_path_non_test:
-                if parts[:len(path)] == list(path):
-                    return True
         return False
 
     def in_conformance_checker_dir(self):
@@ -171,6 +170,7 @@ class SourceFile(object):
         return (self.is_dir() or
                 self.name_prefix("MANIFEST") or
                 self.filename.startswith(".") or
+                self.type_flag == "support" or
                 self.in_non_test_dir())
 
     @property
@@ -213,6 +213,12 @@ class SourceFile(object):
         return "worker" in self.meta_flags and self.ext == ".js"
 
     @property
+    def name_is_window(self):
+        """Check if the file name matches the conditions for the file to
+        be a window js test file"""
+        return "window" in self.meta_flags and self.ext == ".js"
+
+    @property
     def name_is_webdriver(self):
         """Check if the file name matches the conditions for the file to
         be a webdriver spec test file"""
@@ -221,7 +227,7 @@ class SourceFile(object):
         rel_dir_tree = self.rel_path.split(os.path.sep)
         return (rel_dir_tree[0] == "webdriver" and
                 len(rel_dir_tree) > 1 and
-                self.filename != "__init__.py" and
+                self.filename not in ("__init__.py", "conftest.py") and
                 fnmatch(self.filename, wd_pattern))
 
     @property
@@ -278,7 +284,7 @@ class SourceFile(object):
 
     @cached_property
     def script_metadata(self):
-        if self.name_is_worker or self.name_is_multi_global:
+        if self.name_is_worker or self.name_is_multi_global or self.name_is_window:
             regexp = js_meta_re
         elif self.name_is_webdriver:
             regexp = python_meta_re
@@ -375,6 +381,20 @@ class SourceFile(object):
         return rv
 
     @cached_property
+    def testdriver_nodes(self):
+        """List of ElementTree Elements corresponding to nodes representing a
+        testdriver.js script"""
+        return self.root.findall(".//{http://www.w3.org/1999/xhtml}script[@src='/resources/testdriver.js']")
+
+    @cached_property
+    def has_testdriver(self):
+        """Boolean indicating whether the file content represents a
+        testharness.js test"""
+        if self.root is None:
+            return None
+        return bool(self.testdriver_nodes)
+
+    @cached_property
     def reftest_nodes(self):
         """List of ElementTree Elements corresponding to nodes representing a
         to a reftest <link>"""
@@ -393,7 +413,7 @@ class SourceFile(object):
         rel_map = {"match": "==", "mismatch": "!="}
         for item in self.reftest_nodes:
             if "href" in item.attrib:
-                ref_url = urljoin(self.url, item.attrib["href"])
+                ref_url = urljoin(self.url, item.attrib["href"].strip(space_chars))
                 ref_type = rel_map[item.attrib["rel"]]
                 rv.append((ref_url, ref_type))
         return rv
@@ -445,7 +465,7 @@ class SourceFile(object):
         rv = set()
         for item in self.spec_link_nodes:
             if "href" in item.attrib:
-                rv.add(item.attrib["href"])
+                rv.add(item.attrib["href"].strip(space_chars))
         return rv
 
     @cached_property
@@ -501,6 +521,11 @@ class SourceFile(object):
                   [TestharnessTest(self, replace_end(self.url, ".worker.js", ".worker.html"),
                                    timeout=self.timeout)])
 
+        elif self.name_is_window:
+            rv = (TestharnessTest.item_type,
+                  [TestharnessTest(self, replace_end(self.url, ".window.js", ".window.html"),
+                                   timeout=self.timeout)])
+
         elif self.name_is_webdriver:
             rv = WebdriverSpecTest.item_type, [WebdriverSpecTest(self, self.url,
                                                                  timeout=self.timeout)]
@@ -510,9 +535,10 @@ class SourceFile(object):
 
         elif self.content_is_testharness:
             rv = TestharnessTest.item_type, []
+            testdriver = self.has_testdriver
             for variant in self.test_variants:
                 url = self.url + variant
-                rv[1].append(TestharnessTest(self, url, timeout=self.timeout))
+                rv[1].append(TestharnessTest(self, url, timeout=self.timeout, testdriver=testdriver))
 
         elif self.content_is_ref_node:
             rv = (RefTestNode.item_type,

@@ -5,7 +5,7 @@
  * This test ensures that closed tabs are merged when restoring
  * a window state without overwriting tabs.
  */
-add_task(function* () {
+add_task(async function() {
   const initialState = {
     windows: [{
       tabs: [
@@ -16,7 +16,7 @@ add_task(function* () {
         { state: { entries: [{ ID: 1001, url: "about:blank", triggeringPrincipal_base64 }]} }
       ]
     }]
-  }
+  };
 
   const restoreState = {
     windows: [{
@@ -29,13 +29,13 @@ add_task(function* () {
         { state: { entries: [{ ID: 1004, url: "about:robots", triggeringPrincipal_base64 }]} }
       ]
     }]
-  }
+  };
 
   const maxTabsUndo = 4;
-  gPrefService.setIntPref("browser.sessionstore.max_tabs_undo", maxTabsUndo);
+  Services.prefs.setIntPref("browser.sessionstore.max_tabs_undo", maxTabsUndo);
 
   // Open a new window and restore it to an initial state.
-  let win = yield promiseNewWindowLoaded({private: false});
+  let win = await promiseNewWindowLoaded({private: false});
   SessionStore.setWindowState(win, JSON.stringify(initialState), true);
   is(SessionStore.getClosedTabCount(win), 2, "2 closed tabs after restoring initial state");
 
@@ -64,8 +64,8 @@ add_task(function* () {
   }
 
   // Clean up.
-  gPrefService.clearUserPref("browser.sessionstore.max_tabs_undo");
-  yield BrowserTestUtils.closeWindow(win);
+  Services.prefs.clearUserPref("browser.sessionstore.max_tabs_undo");
+  await BrowserTestUtils.closeWindow(win);
 });
 
 

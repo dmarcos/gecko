@@ -6,31 +6,38 @@
 #ifndef nsXULTemplateBuilder_h__
 #define nsXULTemplateBuilder_h__
 
+#include "mozilla/dom/Element.h"
 #include "nsStubDocumentObserver.h"
-#include "nsIScriptSecurityManager.h"
 #include "nsIObserver.h"
-#include "nsIRDFCompositeDataSource.h"
-#include "nsIRDFContainer.h"
-#include "nsIRDFContainerUtils.h"
-#include "nsIRDFDataSource.h"
-#include "nsIRDFObserver.h"
-#include "nsIRDFService.h"
 #include "nsIXULTemplateBuilder.h"
-
 #include "nsCOMArray.h"
 #include "nsTArray.h"
 #include "nsDataHashtable.h"
-#include "nsTemplateRule.h"
-#include "nsTemplateMatch.h"
-#include "nsIXULTemplateQueryProcessor.h"
 #include "nsCycleCollectionParticipant.h"
 
 #include "mozilla/Logging.h"
 extern mozilla::LazyLogModule gXULTemplateLog;
 
-class nsIContent;
 class nsIObserverService;
 class nsIRDFCompositeDataSource;
+class nsIRDFContainerUtils;
+class nsIRDFDataSource;
+class nsIRDFService;
+class nsIScriptSecurityManager;
+class nsIXULTemplateQueryProcessor;
+class nsTemplateCondition;
+class nsTemplateRule;
+class nsTemplateMatch;
+class nsTemplateQuerySet;
+
+namespace mozilla {
+namespace dom {
+
+class XULBuilderListener;
+
+} // namespace dom
+} // namespace mozilla
+
 
 /**
  * An object that translates an RDF graph into a presentation using a
@@ -38,13 +45,14 @@ class nsIRDFCompositeDataSource;
  */
 class nsXULTemplateBuilder : public nsIXULTemplateBuilder,
                              public nsIObserver,
-                             public nsStubDocumentObserver
+                             public nsStubDocumentObserver,
+                             public nsWrapperCache
 {
     void CleanUp(bool aIsFinal);
     void DestroyMatchMap();
 
 public:
-    nsXULTemplateBuilder();
+    nsresult Init();
 
     nsresult InitGlobals();
 
@@ -56,8 +64,58 @@ public:
 
     // nsISupports interface
     NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-    NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(nsXULTemplateBuilder,
-                                             nsIXULTemplateBuilder)
+    NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_AMBIGUOUS(nsXULTemplateBuilder,
+                                                           nsIXULTemplateBuilder)
+
+    virtual JSObject* WrapObject(JSContext* aCx,
+                                 JS::Handle<JSObject*> aGivenProto) override;
+    Element* GetParentObject()
+    {
+      return mRoot;
+    }
+
+    Element* GetRoot()
+    {
+        return mRoot;
+    }
+    nsISupports* GetDatasource();
+    void SetDatasource(nsISupports* aDatasource, mozilla::ErrorResult& aError);
+    nsIRDFCompositeDataSource* GetDatabase()
+    {
+        return mCompDB;
+    }
+    nsIXULTemplateResult* GetRootResult()
+    {
+        return mRootResult;
+    }
+    void Rebuild(mozilla::ErrorResult& aError);
+    void Refresh(mozilla::ErrorResult& aError);
+    void AddResult(nsIXULTemplateResult* aResult, nsINode& aQueryNode,
+                   mozilla::ErrorResult& aError);
+    void RemoveResult(nsIXULTemplateResult* aResult,
+                      mozilla::ErrorResult& aError);
+    void ReplaceResult(nsIXULTemplateResult* aOldResult,
+                       nsIXULTemplateResult* aNewResult,
+                       nsINode& aQueryNode,
+                       mozilla::ErrorResult& aError);
+    void ResultBindingChanged(nsIXULTemplateResult* aResult,
+                              mozilla::ErrorResult& aError);
+    nsIXULTemplateResult* GetResultForId(const nsAString& aId,
+                                         mozilla::ErrorResult& aError);
+    virtual nsIXULTemplateResult* GetResultForContent(Element& aElement)
+    {
+        return nullptr;
+    }
+    virtual bool HasGeneratedContent(nsIRDFResource* aResource,
+                                     const nsAString& aTag,
+                                     mozilla::ErrorResult& aError)
+    {
+        return false;
+    }
+    void AddRuleFilter(nsINode& aRule, nsIXULTemplateRuleFilter* aFilter,
+                       mozilla::ErrorResult& aError);
+    void AddListener(mozilla::dom::XULBuilderListener& aListener);
+    void RemoveListener(mozilla::dom::XULBuilderListener& aListener);
 
     // nsIXULTemplateBuilder interface
     NS_DECL_NSIXULTEMPLATEBUILDER
@@ -83,7 +141,7 @@ public:
     nsresult
     UpdateResult(nsIXULTemplateResult* aOldResult,
                  nsIXULTemplateResult* aNewResult,
-                 nsIDOMNode* aQueryNode);
+                 nsINode* aQueryNode);
 
     /**
      * Remove an old result and/or add a new result from a specific container.
@@ -101,7 +159,7 @@ public:
                             nsTemplateQuerySet* aQuerySet,
                             nsIRDFResource* aOldId,
                             nsIRDFResource* aNewId,
-                            nsIContent* aInsertionPoint);
+                            Element* aInsertionPoint);
 
     nsresult
     ComputeContainmentProperties();
@@ -135,7 +193,7 @@ public:
      * Find the <template> tag that applies for this builder
      */
     nsresult
-    GetTemplateRoot(nsIContent** aResult);
+    GetTemplateRoot(Element** aResult);
 
     /**
      * Compile the template's queries
@@ -155,12 +213,12 @@ public:
      *
      * @param aTemplate <template> to compile
      * @param aQuerySet first queryset
-     * @param aIsQuerySet true if 
+     * @param aIsQuerySet true if
      * @param aPriority the queryset index, incremented when a new one is added
      * @param aCanUseTemplate true if template is valid
      */
     nsresult
-    CompileTemplate(nsIContent* aTemplate,
+    CompileTemplate(Element* aTemplate,
                     nsTemplateQuerySet* aQuerySet,
                     bool aIsQuerySet,
                     int32_t* aPriority,
@@ -175,22 +233,22 @@ public:
      * @param aMemberVariable member variable for the query
      * @param aQuerySet the queryset
      */
-    nsresult 
-    CompileExtendedQuery(nsIContent* aRuleElement,
+    nsresult
+    CompileExtendedQuery(Element* aRuleElement,
                          nsIContent* aActionElement,
-                         nsIAtom* aMemberVariable,
+                         nsAtom* aMemberVariable,
                          nsTemplateQuerySet* aQuerySet);
 
     /**
      * Determine the ref variable and tag from inside a RDF query.
      */
-    void DetermineRDFQueryRef(nsIContent* aQueryElement, nsIAtom** tag);
+    void DetermineRDFQueryRef(nsIContent* aQueryElement, nsAtom** tag);
 
     /**
      * Determine the member variable from inside an action body. It will be
      * the value of the uri attribute on a node.
      */
-    already_AddRefed<nsIAtom> DetermineMemberVariable(nsIContent* aElement);
+    already_AddRefed<nsAtom> DetermineMemberVariable(nsIContent* aElement);
 
     /**
      * Compile a simple query. A simple query is one that doesn't have a
@@ -201,8 +259,8 @@ public:
      * @param aQuerySet the query set
      * @param aCanUseTemplate true if the query is valid
      */
-    nsresult 
-    CompileSimpleQuery(nsIContent* aRuleElement,
+    nsresult
+    CompileSimpleQuery(Element* aRuleElement,
                        nsTemplateQuerySet* aQuerySet,
                        bool* aCanUseTemplate);
 
@@ -246,7 +304,7 @@ public:
      * Add automatic bindings for simple rules
      */
     nsresult
-    AddSimpleRuleBindings(nsTemplateRule* aRule, nsIContent* aElement);
+    AddSimpleRuleBindings(nsTemplateRule* aRule, Element* aElement);
 
     static void
     AddBindingsFor(nsXULTemplateBuilder* aSelf,
@@ -318,10 +376,7 @@ public:
     SubstituteTextAppendText(nsXULTemplateBuilder* aThis, const nsAString& aText, void* aClosure);
 
     static void
-    SubstituteTextReplaceVariable(nsXULTemplateBuilder* aThis, const nsAString& aVariable, void* aClosure);    
-
-    nsresult 
-    IsSystemPrincipal(nsIPrincipal *principal, bool *result);
+    SubstituteTextReplaceVariable(nsXULTemplateBuilder* aThis, const nsAString& aVariable, void* aClosure);
 
     /**
      * Convenience method which gets a resource for a result. If a result
@@ -331,6 +386,7 @@ public:
                                nsIRDFResource** aResource);
 
 protected:
+    explicit nsXULTemplateBuilder(Element* aElement);
     virtual ~nsXULTemplateBuilder();
 
     nsCOMPtr<nsISupports> mDataSource;
@@ -340,14 +396,14 @@ protected:
     /**
      * Circular reference, broken when the document is destroyed.
      */
-    nsCOMPtr<nsIContent> mRoot;
+    nsCOMPtr<Element> mRoot;
 
     /**
      * The root result, translated from the root element's ref
      */
     nsCOMPtr<nsIXULTemplateResult> mRootResult;
 
-    nsCOMArray<nsIXULBuilderListener> mListeners;
+    nsTArray<nsCOMPtr<nsIXULBuilderListener>> mListeners;
 
     /**
      * The query processor which generates results
@@ -367,8 +423,8 @@ protected:
     /**
      * The default reference and member variables.
      */
-    nsCOMPtr<nsIAtom> mRefVariable;
-    nsCOMPtr<nsIAtom> mMemberVariable;
+    RefPtr<nsAtom> mRefVariable;
+    RefPtr<nsAtom> mMemberVariable;
 
     /**
      * The match map contains nsTemplateMatch objects, one for each unique
@@ -431,14 +487,14 @@ protected:
      * Returns true if content may be generated for a result, or false if it
      * cannot, for example, if it would be created inside a closed container.
      * Those results will be generated when the container is opened.
-     * If false is returned, no content should be generated. Possible 
+     * If false is returned, no content should be generated. Possible
      * insertion locations may optionally be set for new content, depending on
      * the builder being used. Note that *aLocations or some items within
      * aLocations may be null.
      */
     virtual bool
     GetInsertionLocations(nsIXULTemplateResult* aResult,
-                          nsCOMArray<nsIContent>** aLocations) = 0;
+                          nsCOMArray<Element>** aLocations) = 0;
 
     /**
      * Must be implemented by subclasses. Handle removing the generated
@@ -450,7 +506,7 @@ protected:
     ReplaceMatch(nsIXULTemplateResult* aOldResult,
                  nsTemplateMatch* aNewMatch,
                  nsTemplateRule* aNewMatchRule,
-                 void *aContext) = 0;
+                 Element* aContext) = 0;
 
     /**
      * Must be implemented by subclasses. Handle change in bound
@@ -498,5 +554,8 @@ protected:
      */
     nsIDocument* mObservedDocument;
 };
+
+nsresult NS_NewXULContentBuilder(Element* aElement,
+                                 nsIXULTemplateBuilder** aBuilder);
 
 #endif // nsXULTemplateBuilder_h__

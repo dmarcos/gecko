@@ -9,7 +9,7 @@ var Services = require("Services");
 var { ActorPool } = require("devtools/server/actors/common");
 var { TabSources } = require("./utils/TabSources");
 var makeDebugger = require("./utils/make-debugger");
-var { ConsoleAPIListener } = require("devtools/server/actors/utils/webconsole-listeners");
+var { ConsoleAPIListener } = require("devtools/server/actors/webconsole/listeners");
 var DevToolsUtils = require("devtools/shared/DevToolsUtils");
 var { assert, update } = DevToolsUtils;
 
@@ -85,6 +85,9 @@ BrowserAddonActor.prototype = {
       iconURL: this._addon.iconURL,
       debuggable: this._addon.isDebuggable,
       temporarilyInstalled: this._addon.temporarilyInstalled,
+      type: this._addon.type,
+      isWebExtension: this._addon.isWebExtension,
+      isAPIExtension: this._addon.isAPIExtension,
       consoleActor: this._consoleActor.actorID,
 
       traits: {

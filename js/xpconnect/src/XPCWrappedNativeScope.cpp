@@ -15,6 +15,7 @@
 #include "mozilla/Preferences.h"
 #include "nsIAddonInterposition.h"
 #include "nsIXULRuntime.h"
+#include "mozJSComponentLoader.h"
 
 #include "mozilla/dom/BindingUtils.h"
 
@@ -95,10 +96,7 @@ XPCWrappedNativeScope::XPCWrappedNativeScope(JSContext* cx,
         mWrappedNativeProtoMap(ClassInfo2WrappedNativeProtoMap::newMap(XPC_NATIVE_PROTO_MAP_LENGTH)),
         mComponents(nullptr),
         mNext(nullptr),
-        mGlobalJSObject(aGlobal),
-        mHasCallInterpositions(false),
-        mIsContentXBLScope(false),
-        mIsAddonScope(false)
+        mGlobalJSObject(aGlobal)
 {
     // add ourselves to the scopes list
     {
@@ -124,8 +122,11 @@ XPCWrappedNativeScope::XPCWrappedNativeScope(JSContext* cx,
     CompartmentPrivate* priv = new CompartmentPrivate(c);
     JS_SetCompartmentPrivate(c, priv);
 
-    // Attach ourselves to the compartment private.
-    priv->scope = this;
+    // Attach ourselves to the realm private.
+    Realm* realm = JS::GetObjectRealmOrNull(aGlobal);
+    RealmPrivate* realmPriv = new RealmPrivate(realm);
+    realmPriv->scope = this;
+    JS::SetRealmPrivate(realm, realmPriv);
 
     // Determine whether we would allow an XBL scope in this situation.
     // In addition to being pref-controlled, we also disable XBL scopes for
@@ -136,11 +137,11 @@ XPCWrappedNativeScope::XPCWrappedNativeScope(JSContext* cx,
     // Determine whether to use an XBL scope.
     mUseContentXBLScope = mAllowContentXBLScope;
     if (mUseContentXBLScope) {
-      const js::Class* clasp = js::GetObjectClass(mGlobalJSObject);
-      mUseContentXBLScope = !strcmp(clasp->name, "Window");
+        const js::Class* clasp = js::GetObjectClass(mGlobalJSObject);
+        mUseContentXBLScope = !strcmp(clasp->name, "Window");
     }
     if (mUseContentXBLScope) {
-      mUseContentXBLScope = principal && !nsContentUtils::IsSystemPrincipal(principal);
+        mUseContentXBLScope = principal && !nsContentUtils::IsSystemPrincipal(principal);
     }
 
     JSAddonId* addonId = JS::AddonIdOfObject(aGlobal);
@@ -151,22 +152,27 @@ XPCWrappedNativeScope::XPCWrappedNativeScope(JSContext* cx,
         if (!waiveInterposition && interposition) {
             MOZ_RELEASE_ASSERT(isSystem);
             mInterposition = interposition->value();
+            priv->hasInterposition = HasInterposition();
         }
         // We also want multiprocessCompatible add-ons to have a default interposition.
         if (!mInterposition && addonId && isSystem) {
-          bool interpositionEnabled = mozilla::Preferences::GetBool(
-            "extensions.interposition.enabled", false);
-          if (interpositionEnabled) {
-            mInterposition = do_GetService("@mozilla.org/addons/default-addon-shims;1");
-            MOZ_ASSERT(mInterposition);
-            UpdateInterpositionWhitelist(cx, mInterposition);
-          }
+            bool interpositionEnabled = mozilla::Preferences::GetBool(
+                "extensions.interposition.enabled", false);
+            if (interpositionEnabled) {
+                mInterposition = do_GetService("@mozilla.org/addons/default-addon-shims;1");
+                MOZ_ASSERT(mInterposition);
+                priv->hasInterposition = true;
+                UpdateInterpositionWhitelist(cx, mInterposition);
+            }
         }
+        MOZ_ASSERT(HasInterposition() == priv->hasInterposition);
     }
 
     if (addonId) {
         // We forbid CPOWs unless they're specifically allowed.
         priv->allowCPOWs = gAllowCPOWAddonSet ? gAllowCPOWAddonSet->has(addonId) : false;
+        MOZ_ASSERT(!mozJSComponentLoader::Get()->IsLoaderGlobal(aGlobal),
+                   "Don't load addons into the shared JSM global");
     }
 }
 
@@ -194,9 +200,8 @@ XPCWrappedNativeScope::GetComponentsJSObject(JS::MutableHandleObject obj)
 
     RootedValue val(cx);
     xpcObjectHelper helper(mComponents);
-    bool ok = XPCConvert::NativeInterface2JSObject(&val, nullptr, helper,
-                                                   nullptr, false,
-                                                   nullptr);
+    bool ok = XPCConvert::NativeInterface2JSObject(&val, helper, nullptr,
+                                                   false, nullptr);
     if (NS_WARN_IF(!ok))
         return false;
 
@@ -261,7 +266,7 @@ XPCWrappedNativeScope::EnsureContentXBLScope(JSContext* cx)
 {
     JS::RootedObject global(cx, GetGlobalJSObject());
     MOZ_ASSERT(js::IsObjectInContextCompartment(global, cx));
-    MOZ_ASSERT(!mIsContentXBLScope);
+    MOZ_ASSERT(!IsContentXBLScope());
     MOZ_ASSERT(strcmp(js::GetObjectClass(global)->name,
                       "nsXBLPrototypeScript compilation scope"));
 
@@ -289,6 +294,7 @@ XPCWrappedNativeScope::EnsureContentXBLScope(JSContext* cx)
     options.wantComponents = true;
     options.proto = global;
     options.sameZoneAs = global;
+    options.isContentXBLScope = true;
 
     // Use an ExpandedPrincipal to create asymmetric security.
     nsIPrincipal* principal = GetPrincipal();
@@ -307,8 +313,7 @@ XPCWrappedNativeScope::EnsureContentXBLScope(JSContext* cx)
     NS_ENSURE_SUCCESS(rv, nullptr);
     mContentXBLScope = &v.toObject();
 
-    // Tag it.
-    CompartmentPrivate::Get(js::UncheckedUnwrap(mContentXBLScope))->scope->mIsContentXBLScope = true;
+    MOZ_ASSERT(xpc::IsInContentXBLScope(js::UncheckedUnwrap(mContentXBLScope)));
 
     // Good to go!
     return mContentXBLScope;
@@ -330,8 +335,10 @@ GetXBLScope(JSContext* cx, JSObject* contentScopeArg)
     MOZ_ASSERT(!IsInAddonScope(contentScopeArg));
 
     JS::RootedObject contentScope(cx, contentScopeArg);
+    JSCompartment* addonComp = js::GetObjectCompartment(contentScope);
+    JS::Rooted<JS::Realm*> addonRealm(cx, JS::GetRealmForCompartment(addonComp));
     JSAutoCompartment ac(cx, contentScope);
-    JSObject* scope = CompartmentPrivate::Get(contentScope)->scope->EnsureContentXBLScope(cx);
+    JSObject* scope = RealmPrivate::Get(addonRealm)->scope->EnsureContentXBLScope(cx);
     NS_ENSURE_TRUE(scope, nullptr); // See bug 858642.
     scope = js::UncheckedUnwrap(scope);
     JS::ExposeObjectToActiveJS(scope);
@@ -348,7 +355,7 @@ GetScopeForXBLExecution(JSContext* cx, HandleObject contentScope, JSAddonId* add
         return global;
 
     JSAutoCompartment ac(cx, contentScope);
-    XPCWrappedNativeScope* nativeScope = CompartmentPrivate::Get(contentScope)->scope;
+    XPCWrappedNativeScope* nativeScope = RealmPrivate::Get(contentScope)->scope;
     bool isSystem = nsContentUtils::IsSystemPrincipal(nativeScope->GetPrincipal());
 
     RootedObject scope(cx);
@@ -366,23 +373,23 @@ GetScopeForXBLExecution(JSContext* cx, HandleObject contentScope, JSAddonId* add
 }
 
 bool
-AllowContentXBLScope(JSCompartment* c)
+AllowContentXBLScope(JS::Realm* realm)
 {
-  XPCWrappedNativeScope* scope = CompartmentPrivate::Get(c)->scope;
-  return scope && scope->AllowContentXBLScope();
+    XPCWrappedNativeScope* scope = RealmPrivate::Get(realm)->scope;
+    return scope && scope->AllowContentXBLScope();
 }
 
 bool
-UseContentXBLScope(JSCompartment* c)
+UseContentXBLScope(JS::Realm* realm)
 {
-  XPCWrappedNativeScope* scope = CompartmentPrivate::Get(c)->scope;
-  return scope && scope->UseContentXBLScope();
+    XPCWrappedNativeScope* scope = RealmPrivate::Get(realm)->scope;
+    return scope && scope->UseContentXBLScope();
 }
 
 void
 ClearContentXBLScope(JSObject* global)
 {
-    CompartmentPrivate::Get(global)->scope->ClearContentXBLScope();
+    RealmPrivate::Get(global)->scope->ClearContentXBLScope();
 }
 
 } /* namespace xpc */
@@ -392,8 +399,8 @@ XPCWrappedNativeScope::EnsureAddonScope(JSContext* cx, JSAddonId* addonId)
 {
     JS::RootedObject global(cx, GetGlobalJSObject());
     MOZ_ASSERT(js::IsObjectInContextCompartment(global, cx));
-    MOZ_ASSERT(!mIsContentXBLScope);
-    MOZ_ASSERT(!mIsAddonScope);
+    MOZ_ASSERT(!IsContentXBLScope());
+    MOZ_ASSERT(!IsAddonScope());
     MOZ_ASSERT(addonId);
     MOZ_ASSERT(nsContentUtils::IsSystemPrincipal(GetPrincipal()));
 
@@ -425,7 +432,7 @@ XPCWrappedNativeScope::EnsureAddonScope(JSContext* cx, JSAddonId* addonId)
     NS_ENSURE_SUCCESS(rv, nullptr);
     mAddonScopes.AppendElement(&v.toObject());
 
-    CompartmentPrivate::Get(js::UncheckedUnwrap(&v.toObject()))->scope->mIsAddonScope = true;
+    CompartmentPrivate::Get(js::UncheckedUnwrap(&v.toObject()))->isAddonCompartment = true;
     return &v.toObject();
 }
 
@@ -439,7 +446,7 @@ xpc::GetAddonScope(JSContext* cx, JS::HandleObject contentScope, JSAddonId* addo
     }
 
     JSAutoCompartment ac(cx, contentScope);
-    XPCWrappedNativeScope* nativeScope = CompartmentPrivate::Get(contentScope)->scope;
+    XPCWrappedNativeScope* nativeScope = RealmPrivate::Get(contentScope)->scope;
     if (nativeScope->GetPrincipal() != nsXPConnect::SystemPrincipal()) {
         // This can happen if, for example, Jetpack loads an unprivileged HTML
         // page from the add-on. It's not clear what to do there, so we just use
@@ -479,15 +486,12 @@ XPCWrappedNativeScope::~XPCWrappedNativeScope()
         mXrayExpandos.destroy();
 
     JSContext* cx = dom::danger::GetJSContext();
-    mContentXBLScope.finalize(cx);
-    for (size_t i = 0; i < mAddonScopes.Length(); i++)
-        mAddonScopes[i].finalize(cx);
     mGlobalJSObject.finalize(cx);
 }
 
 // static
 void
-XPCWrappedNativeScope::TraceWrappedNativesInAllScopes(JSTracer* trc, XPCJSContext* cx)
+XPCWrappedNativeScope::TraceWrappedNativesInAllScopes(JSTracer* trc)
 {
     // Do JS::TraceEdge for all wrapped natives with external references, as
     // well as any DOM expando objects.
@@ -498,42 +502,23 @@ XPCWrappedNativeScope::TraceWrappedNativesInAllScopes(JSTracer* trc, XPCJSContex
             if (wrapper->HasExternalReference() && !wrapper->IsWrapperExpired())
                 wrapper->TraceSelf(trc);
         }
-
-        if (cur->mDOMExpandoSet) {
-            for (DOMExpandoSet::Enum e(*cur->mDOMExpandoSet); !e.empty(); e.popFront())
-                JS::TraceEdge(trc, &e.mutableFront(), "DOM expando object");
-        }
     }
-}
-
-static void
-SuspectDOMExpandos(JSObject* obj, nsCycleCollectionNoteRootCallback& cb)
-{
-    MOZ_ASSERT(dom::GetDOMClass(obj) && dom::GetDOMClass(obj)->mDOMObjectIsISupports);
-    nsISupports* native = dom::UnwrapDOMObject<nsISupports>(obj);
-    cb.NoteXPCOMRoot(native);
 }
 
 // static
 void
-XPCWrappedNativeScope::SuspectAllWrappers(XPCJSContext* cx,
-                                          nsCycleCollectionNoteRootCallback& cb)
+XPCWrappedNativeScope::SuspectAllWrappers(nsCycleCollectionNoteRootCallback& cb)
 {
     for (XPCWrappedNativeScope* cur = gScopes; cur; cur = cur->mNext) {
         for (auto i = cur->mWrappedNativeMap->Iter(); !i.Done(); i.Next()) {
             static_cast<Native2WrappedNativeMap::Entry*>(i.Get())->value->Suspect(cb);
         }
-
-        if (cur->mDOMExpandoSet) {
-            for (DOMExpandoSet::Range r = cur->mDOMExpandoSet->all(); !r.empty(); r.popFront())
-                SuspectDOMExpandos(r.front().unbarrieredGet(), cb);
-        }
     }
 }
 
 // static
 void
-XPCWrappedNativeScope::UpdateWeakPointersAfterGC(XPCJSContext* cx)
+XPCWrappedNativeScope::UpdateWeakPointersInAllScopesAfterGC()
 {
     // If this is called from the finalization callback in JSGC_MARK_END then
     // JSGC_FINALIZE_END must always follow it calling
@@ -541,40 +526,100 @@ XPCWrappedNativeScope::UpdateWeakPointersAfterGC(XPCJSContext* cx)
     // KillDyingScopes.
     MOZ_ASSERT(!gDyingScopes, "JSGC_MARK_END without JSGC_FINALIZE_END");
 
-    XPCWrappedNativeScope* prev = nullptr;
-    XPCWrappedNativeScope* cur = gScopes;
-
-    while (cur) {
-        // Sweep waivers.
-        if (cur->mWaiverWrapperMap)
-            cur->mWaiverWrapperMap->Sweep();
-
-        XPCWrappedNativeScope* next = cur->mNext;
-
-        if (cur->mContentXBLScope)
-            cur->mContentXBLScope.updateWeakPointerAfterGC();
-        for (size_t i = 0; i < cur->mAddonScopes.Length(); i++)
-            cur->mAddonScopes[i].updateWeakPointerAfterGC();
-
-        // Check for finalization of the global object or update our pointer if
-        // it was moved.
+    XPCWrappedNativeScope** scopep = &gScopes;
+    while (*scopep) {
+        XPCWrappedNativeScope* cur = *scopep;
+        cur->UpdateWeakPointersAfterGC();
         if (cur->mGlobalJSObject) {
-            cur->mGlobalJSObject.updateWeakPointerAfterGC();
-            if (!cur->mGlobalJSObject) {
-                // Move this scope from the live list to the dying list.
-                if (prev)
-                    prev->mNext = next;
-                else
-                    gScopes = next;
-                cur->mNext = gDyingScopes;
-                gDyingScopes = cur;
-                cur = nullptr;
-            }
+            scopep = &cur->mNext;
+        } else {
+            // The scope's global is dead so move it to the dying scopes list.
+            *scopep = cur->mNext;
+            cur->mNext = gDyingScopes;
+            gDyingScopes = cur;
         }
+    }
+}
 
-        if (cur)
-            prev = cur;
-        cur = next;
+static inline void
+AssertSameCompartment(DebugOnly<JSCompartment*>& comp, JSObject* obj)
+{
+    MOZ_ASSERT_IF(obj, js::GetObjectCompartment(obj) == comp);
+}
+
+static inline void
+AssertSameCompartment(DebugOnly<JSCompartment*>& comp, const JS::ObjectPtr& obj)
+{
+#ifdef DEBUG
+    AssertSameCompartment(comp, obj.unbarrieredGet());
+#endif
+}
+
+void
+XPCWrappedNativeScope::UpdateWeakPointersAfterGC()
+{
+    // Sweep waivers.
+    if (mWaiverWrapperMap)
+        mWaiverWrapperMap->Sweep();
+
+    if (!js::IsObjectZoneSweepingOrCompacting(mGlobalJSObject.unbarrieredGet()))
+        return;
+
+    // Update our pointer to the global object in case it was moved or
+    // finalized.
+    mGlobalJSObject.updateWeakPointerAfterGC();
+    if (!mGlobalJSObject) {
+        JSContext* cx = dom::danger::GetJSContext();
+        mContentXBLScope.finalize(cx);
+        for (size_t i = 0; i < mAddonScopes.Length(); i++)
+            mAddonScopes[i].finalize(cx);
+        GetWrappedNativeMap()->Clear();
+        mWrappedNativeProtoMap->Clear();
+        return;
+    }
+
+    DebugOnly<JSCompartment*> comp =
+        js::GetObjectCompartment(mGlobalJSObject.unbarrieredGet());
+
+#ifdef DEBUG
+    // These are traced, so no updates are necessary.
+    if (mContentXBLScope) {
+        JSObject* prev = mContentXBLScope.unbarrieredGet();
+        mContentXBLScope.updateWeakPointerAfterGC();
+        MOZ_ASSERT(prev == mContentXBLScope.unbarrieredGet());
+        AssertSameCompartment(comp, mContentXBLScope);
+    }
+    for (size_t i = 0; i < mAddonScopes.Length(); i++) {
+        JSObject* prev = mAddonScopes[i].unbarrieredGet();
+        mAddonScopes[i].updateWeakPointerAfterGC();
+        MOZ_ASSERT(prev == mAddonScopes[i].unbarrieredGet());
+        AssertSameCompartment(comp, mAddonScopes[i]);
+    }
+#endif
+
+    // Sweep mWrappedNativeMap for dying flat JS objects. Moving has already
+    // been handled by XPCWrappedNative::FlatJSObjectMoved.
+    for (auto iter = GetWrappedNativeMap()->Iter(); !iter.Done(); iter.Next()) {
+        auto entry = static_cast<Native2WrappedNativeMap::Entry*>(iter.Get());
+        XPCWrappedNative* wrapper = entry->value;
+        JSObject* obj = wrapper->GetFlatJSObjectPreserveColor();
+        JS_UpdateWeakPointerAfterGCUnbarriered(&obj);
+        MOZ_ASSERT(!obj || obj == wrapper->GetFlatJSObjectPreserveColor());
+        AssertSameCompartment(comp, obj);
+        if (!obj)
+            iter.Remove();
+    }
+
+    // Sweep mWrappedNativeProtoMap for dying prototype JSObjects. Moving has
+    // already been handled by XPCWrappedNativeProto::JSProtoObjectMoved.
+    for (auto i = mWrappedNativeProtoMap->Iter(); !i.Done(); i.Next()) {
+        auto entry = static_cast<ClassInfo2WrappedNativeProtoMap::Entry*>(i.Get());
+        JSObject* obj = entry->value->GetJSProtoObjectPreserveColor();
+        JS_UpdateWeakPointerAfterGCUnbarriered(&obj);
+        AssertSameCompartment(comp, obj);
+        MOZ_ASSERT(!obj || obj == entry->value->GetJSProtoObjectPreserveColor());
+        if (!obj)
+            i.Remove();
     }
 }
 
@@ -598,7 +643,7 @@ XPCWrappedNativeScope::KillDyingScopes()
     while (cur) {
         XPCWrappedNativeScope* next = cur->mNext;
         if (cur->mGlobalJSObject)
-            CompartmentPrivate::Get(cur->mGlobalJSObject)->scope = nullptr;
+            RealmPrivate::Get(cur->mGlobalJSObject)->scope = nullptr;
         delete cur;
         cur = next;
     }
@@ -665,6 +710,15 @@ XPCWrappedNativeScope::GetExpandoChain(HandleObject target)
     if (!mXrayExpandos.initialized())
         return nullptr;
     return mXrayExpandos.lookup(target);
+}
+
+JSObject*
+XPCWrappedNativeScope::DetachExpandoChain(HandleObject target)
+{
+    MOZ_ASSERT(ObjectScope(target) == this);
+    if (!mXrayExpandos.initialized())
+        return nullptr;
+    return mXrayExpandos.removeValue(target);
 }
 
 bool

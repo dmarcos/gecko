@@ -4,23 +4,29 @@
 
 "use strict";
 
-Components.utils.import("resource://gre/modules/Services.jsm");
-Components.utils.import("resource://gre/modules/NetUtil.jsm");
+Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 
-if (typeof(Ci) == 'undefined') {
+XPCOMUtils.defineLazyModuleGetters(this, {
+  ExtensionData: "resource://gre/modules/Extension.jsm",
+  ExtensionTestCommon: "resource://testing-common/ExtensionTestCommon.jsm",
+  NetUtil: "resource://gre/modules/NetUtil.jsm",
+  Services: "resource://gre/modules/Services.jsm",
+});
+
+if (typeof(Ci) == "undefined") {
   var Ci = Components.interfaces;
 }
 
-if (typeof(Cc) == 'undefined') {
+if (typeof(Cc) == "undefined") {
   var Cc = Components.classes;
 }
 
 this.SpecialPowersError = function(aMsg) {
   Error.call(this);
-  let {stack} = new Error();
+  // let {stack} = new Error();
   this.message = aMsg;
   this.name = "SpecialPowersError";
-}
+};
 SpecialPowersError.prototype = Object.create(Error.prototype);
 
 SpecialPowersError.prototype.toString = function() {
@@ -32,17 +38,17 @@ this.SpecialPowersObserverAPI = function SpecialPowersObserverAPI() {
   this._processCrashObserversRegistered = false;
   this._chromeScriptListeners = [];
   this._extensions = new Map();
-}
+};
 
 function parseKeyValuePairs(text) {
-  var lines = text.split('\n');
+  var lines = text.split("\n");
   var data = {};
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i] == '')
+    if (lines[i] == "")
       continue;
 
     // can't just .split() because the value might contain = characters
-    let eq = lines[i].indexOf('=');
+    let eq = lines[i].indexOf("=");
     if (eq != -1) {
       let [key, value] = [lines[i].substring(0, eq),
                           lines[i].substring(eq + 1)];
@@ -61,7 +67,7 @@ function parseKeyValuePairsFromFile(file) {
            createInstance(Ci.nsIConverterInputStream);
   is.init(fstream, "UTF-8", 1024, Ci.nsIConverterInputStream.DEFAULT_REPLACEMENT_CHARACTER);
   var str = {};
-  var contents = '';
+  var contents = "";
   while (is.readString(4096, str) != 0) {
     contents += str.value;
   }
@@ -86,20 +92,20 @@ function getTestPlugin(pluginName) {
 
 SpecialPowersObserverAPI.prototype = {
 
-  _observe: function(aSubject, aTopic, aData) {
+  _observe(aSubject, aTopic, aData) {
     function addDumpIDToMessage(propertyName) {
       try {
         var id = aSubject.getPropertyAsAString(propertyName);
-      } catch(ex) {
-        var id = null;
+      } catch (ex) {
+        id = null;
       }
       if (id) {
-        message.dumpIDs.push({id: id, extension: "dmp"});
-        message.dumpIDs.push({id: id, extension: "extra"});
+        message.dumpIDs.push({id, extension: "dmp"});
+        message.dumpIDs.push({id, extension: "extra"});
       }
     }
 
-    switch(aTopic) {
+    switch (aTopic) {
       case "plugin-crashed":
       case "ipc:content-shutdown":
         var message = { type: "crash-observed", dumpIDs: [] };
@@ -111,12 +117,16 @@ SpecialPowersObserverAPI.prototype = {
           let pluginID = aSubject.getPropertyAsAString("pluginDumpID");
           let extra = this._getExtraData(pluginID);
           if (extra && ("additional_minidumps" in extra)) {
-            let dumpNames = extra.additional_minidumps.split(',');
+            let dumpNames = extra.additional_minidumps.split(",");
             for (let name of dumpNames) {
               message.dumpIDs.push({id: pluginID + "-" + name, extension: "dmp"});
             }
           }
         } else { // ipc:content-shutdown
+          if (!aSubject.hasKey("abnormal")) {
+            return; // This is a normal shutdown, ignore it
+          }
+
           addDumpIDToMessage("dumpID");
         }
         this._sendAsyncMessage("SPProcessCrashService", message);
@@ -124,7 +134,7 @@ SpecialPowersObserverAPI.prototype = {
     }
   },
 
-  _getCrashDumpDir: function() {
+  _getCrashDumpDir() {
     if (!this._crashDumpDir) {
       this._crashDumpDir = Services.dirsvc.get("ProfD", Ci.nsIFile);
       this._crashDumpDir.append("minidumps");
@@ -132,7 +142,7 @@ SpecialPowersObserverAPI.prototype = {
     return this._crashDumpDir;
   },
 
-  _getPendingCrashDumpDir: function() {
+  _getPendingCrashDumpDir() {
     if (!this._pendingCrashDumpDir) {
       this._pendingCrashDumpDir = Services.dirsvc.get("UAppData", Ci.nsIFile);
       this._pendingCrashDumpDir.append("Crash Reports");
@@ -141,7 +151,7 @@ SpecialPowersObserverAPI.prototype = {
     return this._pendingCrashDumpDir;
   },
 
-  _getExtraData: function(dumpId) {
+  _getExtraData(dumpId) {
     let extraFile = this._getCrashDumpDir().clone();
     extraFile.append(dumpId + ".extra");
     if (!extraFile.exists()) {
@@ -150,7 +160,7 @@ SpecialPowersObserverAPI.prototype = {
     return parseKeyValuePairsFromFile(extraFile);
   },
 
-  _deleteCrashDumpFiles: function(aFilenames) {
+  _deleteCrashDumpFiles(aFilenames) {
     var crashDumpDir = this._getCrashDumpDir();
     if (!crashDumpDir.exists()) {
       return false;
@@ -169,7 +179,7 @@ SpecialPowersObserverAPI.prototype = {
     return success;
   },
 
-  _findCrashDumpFiles: function(aToIgnore) {
+  _findCrashDumpFiles(aToIgnore) {
     var crashDumpDir = this._getCrashDumpDir();
     var entries = crashDumpDir.exists() && crashDumpDir.directoryEntries;
     if (!entries) {
@@ -187,7 +197,7 @@ SpecialPowersObserverAPI.prototype = {
     return crashDumpFiles.concat();
   },
 
-  _deletePendingCrashDumpFiles: function() {
+  _deletePendingCrashDumpFiles() {
     var crashDumpDir = this._getPendingCrashDumpDir();
     var removed = false;
     if (crashDumpDir.exists()) {
@@ -203,11 +213,11 @@ SpecialPowersObserverAPI.prototype = {
     return removed;
   },
 
-  _getURI: function (url) {
+  _getURI(url) {
     return Services.io.newURI(url);
   },
 
-  _readUrlAsString: function(aUrl) {
+  _readUrlAsString(aUrl) {
     // Fetch script content as we can't use scriptloader's loadSubScript
     // to evaluate http:// urls...
     var scriptableStream = Cc["@mozilla.org/scriptableinputstream;1"]
@@ -247,15 +257,13 @@ SpecialPowersObserverAPI.prototype = {
     return output;
   },
 
-  _sendReply: function(aMessage, aReplyName, aReplyMsg) {
-    let mm = aMessage.target
-                     .QueryInterface(Ci.nsIFrameLoaderOwner)
-                     .frameLoader
+  _sendReply(aMessage, aReplyName, aReplyMsg) {
+    let mm = aMessage.target.frameLoader
                      .messageManager;
     mm.sendAsyncMessage(aReplyName, aReplyMsg);
   },
 
-  _notifyCategoryAndObservers: function(subject, topic, data) {
+  _notifyCategoryAndObservers(subject, topic, data) {
     const serviceMarker = "service,";
 
     // First create observers from the category manager.
@@ -274,8 +282,7 @@ SpecialPowersObserverAPI.prototype = {
       if (contractID.substring(0, serviceMarker.length) == serviceMarker) {
         contractID = contractID.substring(serviceMarker.length);
         factoryFunction = "getService";
-      }
-      else {
+      } else {
         factoryFunction = "createInstance";
       }
 
@@ -285,7 +292,7 @@ SpecialPowersObserverAPI.prototype = {
           let observer = handler.QueryInterface(Ci.nsIObserver);
           observers.push(observer);
         }
-      } catch(e) { }
+      } catch (e) { }
     }
 
     // Next enumerate the registered observers.
@@ -299,10 +306,10 @@ SpecialPowersObserverAPI.prototype = {
       } catch (e) { }
     }
 
-    observers.forEach(function (observer) {
+    observers.forEach(function(observer) {
       try {
         observer.observe(subject, topic, data);
-      } catch(e) { }
+      } catch (e) { }
     });
   },
 
@@ -310,26 +317,25 @@ SpecialPowersObserverAPI.prototype = {
    * messageManager callback function
    * This will get requests from our API in the window and process them in chrome for it
    **/
-  _receiveMessageAPI: function(aMessage) {
+  _receiveMessageAPI(aMessage) { // eslint-disable-line complexity
     // We explicitly return values in the below code so that this function
     // doesn't trigger a flurry of warnings about "does not always return
     // a value".
-    switch(aMessage.name) {
+    switch (aMessage.name) {
       case "SPPrefService": {
         let prefs = Services.prefs;
         let prefType = aMessage.json.prefType.toUpperCase();
-        let prefName = aMessage.json.prefName;
-        let prefValue = "prefValue" in aMessage.json ? aMessage.json.prefValue : null;
+        let { prefName, prefValue, iid, defaultValue } = aMessage.json;
 
         if (aMessage.json.op == "get") {
           if (!prefName || !prefType)
             throw new SpecialPowersError("Invalid parameters for get in SPPrefService");
 
           // return null if the pref doesn't exist
-          if (prefs.getPrefType(prefName) == prefs.PREF_INVALID)
+          if (defaultValue === undefined && prefs.getPrefType(prefName) == prefs.PREF_INVALID)
             return null;
         } else if (aMessage.json.op == "set") {
-          if (!prefName || !prefType  || prefValue === null)
+          if (!prefName || !prefType || prefValue === undefined)
             throw new SpecialPowersError("Invalid parameters for set in SPPrefService");
         } else if (aMessage.json.op == "clear") {
           if (!prefName)
@@ -339,34 +345,42 @@ SpecialPowersObserverAPI.prototype = {
         }
 
         // Now we make the call
-        switch(prefType) {
+        switch (prefType) {
           case "BOOL":
-            if (aMessage.json.op == "get")
-              return(prefs.getBoolPref(prefName));
-            else
-              return(prefs.setBoolPref(prefName, prefValue));
+            if (aMessage.json.op == "get") {
+              if (defaultValue !== undefined) {
+                return prefs.getBoolPref(prefName, defaultValue);
+              }
+              return prefs.getBoolPref(prefName);
+            }
+            return prefs.setBoolPref(prefName, prefValue);
           case "INT":
-            if (aMessage.json.op == "get")
-              return(prefs.getIntPref(prefName));
-            else
-              return(prefs.setIntPref(prefName, prefValue));
+            if (aMessage.json.op == "get") {
+              if (defaultValue !== undefined) {
+                return prefs.getIntPref(prefName, defaultValue);
+              }
+              return prefs.getIntPref(prefName);
+            }
+            return prefs.setIntPref(prefName, prefValue);
           case "CHAR":
-            if (aMessage.json.op == "get")
-              return(prefs.getCharPref(prefName));
-            else
-              return(prefs.setCharPref(prefName, prefValue));
+            if (aMessage.json.op == "get") {
+              if (defaultValue !== undefined) {
+                return prefs.getCharPref(prefName, defaultValue);
+              }
+              return prefs.getCharPref(prefName);
+            }
+            return prefs.setCharPref(prefName, prefValue);
           case "COMPLEX":
             if (aMessage.json.op == "get")
-              return(prefs.getComplexValue(prefName, prefValue[0]));
-            else
-              return(prefs.setComplexValue(prefName, prefValue[0], prefValue[1]));
+              return prefs.getComplexValue(prefName, iid);
+            return prefs.setComplexValue(prefName, iid, prefValue);
           case "":
             if (aMessage.json.op == "clear") {
               prefs.clearUserPref(prefName);
               return undefined;
             }
         }
-        return undefined;	// See comment at the beginning of this function.
+        return undefined; // See comment at the beginning of this function.
       }
 
       case "SPProcessCrashService": {
@@ -386,7 +400,18 @@ SpecialPowersObserverAPI.prototype = {
           default:
             throw new SpecialPowersError("Invalid operation for SPProcessCrashService");
         }
-        return undefined;	// See comment at the beginning of this function.
+        return undefined; // See comment at the beginning of this function.
+      }
+
+      case "SPProcessCrashManagerWait": {
+        let promises = aMessage.json.crashIds.map((crashId) => {
+          return Services.crashmanager.ensureCrashIsPresent(crashId);
+        });
+
+        Promise.all(promises).then(() => {
+          this._sendReply(aMessage, "SPProcessCrashManagerWait", {});
+        });
+        return undefined; // See comment at the beginning of this function.
       }
 
       case "SPPermissionManager": {
@@ -410,7 +435,7 @@ SpecialPowersObserverAPI.prototype = {
             throw new SpecialPowersError(
               "Invalid operation for SPPermissionManager");
         }
-        return undefined;	// See comment at the beginning of this function.
+        return undefined; // See comment at the beginning of this function.
       }
 
       case "SPSetTestPluginEnabledState": {
@@ -427,7 +452,7 @@ SpecialPowersObserverAPI.prototype = {
         let topic = aMessage.json.observerTopic;
         switch (aMessage.json.op) {
           case "notify":
-            let data = aMessage.json.observerData
+            let data = aMessage.json.observerData;
             Services.obs.notifyObservers(null, topic, data);
             break;
           case "add":
@@ -437,7 +462,7 @@ SpecialPowersObserverAPI.prototype = {
           default:
             throw new SpecialPowersError("Invalid operation for SPObserverervice");
         }
-        return undefined;	// See comment at the beginning of this function.
+        return undefined; // See comment at the beginning of this function.
       }
 
       case "SPLoadChromeScript": {
@@ -460,29 +485,31 @@ SpecialPowersObserverAPI.prototype = {
         // and addMessageListener in order to communicate with
         // the mochitest.
         let systemPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
-        let sb = Components.utils.Sandbox(systemPrincipal);
-        let mm = aMessage.target
-                         .QueryInterface(Ci.nsIFrameLoaderOwner)
-                         .frameLoader
+        let sandboxOptions = aMessage.json.sandboxOptions;
+        if (!sandboxOptions) {
+          sandboxOptions = {};
+        }
+        let sb = Components.utils.Sandbox(systemPrincipal, sandboxOptions);
+        let mm = aMessage.target.frameLoader
                          .messageManager;
         sb.sendAsyncMessage = (name, message) => {
           mm.sendAsyncMessage("SPChromeScriptMessage",
-                              { id: id, name: name, message: message });
+                              { id, name, message });
         };
         sb.addMessageListener = (name, listener) => {
-          this._chromeScriptListeners.push({ id: id, name: name, listener: listener });
+          this._chromeScriptListeners.push({ id, name, listener });
         };
         sb.browserElement = aMessage.target;
 
         // Also expose assertion functions
-        let reporter = function (err, message, stack) {
+        let reporter = function(err, message, stack) {
           // Pipe assertions back to parent process
           mm.sendAsyncMessage("SPChromeScriptAssert",
                               { id, name: scriptName, err, message,
                                 stack });
         };
         Object.defineProperty(sb, "assert", {
-          get: function () {
+          get() {
             let scope = Components.utils.createObjectIn(sb);
             Services.scriptloader.loadSubScript("chrome://specialpowers/content/Assert.jsm",
                                                 scope);
@@ -497,13 +524,13 @@ SpecialPowersObserverAPI.prototype = {
         // Evaluate the chrome script
         try {
           Components.utils.evalInSandbox(jsScript, sb, "1.8", scriptName, 1);
-        } catch(e) {
+        } catch (e) {
           throw new SpecialPowersError(
             "Error while executing chrome script '" + scriptName + "':\n" +
             e + "\n" +
             e.fileName + ":" + e.lineNumber);
         }
-        return undefined;	// See comment at the beginning of this function.
+        return undefined; // See comment at the beginning of this function.
       }
 
       case "SPChromeScriptMessage": {
@@ -536,12 +563,24 @@ SpecialPowersObserverAPI.prototype = {
         return undefined;
       }
 
-      case "SPLoadExtension": {
-        let {Extension} = Components.utils.import("resource://gre/modules/Extension.jsm", {});
+      case "SPRequestDumpCoverageCounters": {
+        let codeCoverage = Cc["@mozilla.org/tools/code-coverage;1"].
+                           getService(Ci.nsICodeCoverage);
+        codeCoverage.dumpCounters();
+        return undefined; // See comment at the beginning of this function.
+      }
 
+      case "SPRequestResetCoverageCounters": {
+        let codeCoverage = Cc["@mozilla.org/tools/code-coverage;1"].
+                           getService(Ci.nsICodeCoverage);
+        codeCoverage.resetCounters();
+        return undefined; // See comment at the beginning of this function.
+      }
+
+      case "SPLoadExtension": {
         let id = aMessage.data.id;
         let ext = aMessage.data.ext;
-        let extension = Extension.generate(ext);
+        let extension = ExtensionTestCommon.generate(ext);
 
         let resultListener = (...args) => {
           this._sendReply(aMessage, "SPExtensionMessage", {id, type: "testResult", args});
@@ -565,12 +604,10 @@ SpecialPowersObserverAPI.prototype = {
       }
 
       case "SPStartupExtension": {
-        let {ExtensionData} = Components.utils.import("resource://gre/modules/Extension.jsm", {});
-
         let id = aMessage.data.id;
         let extension = this._extensions.get(id);
         extension.on("startup", () => {
-          this._sendReply(aMessage, "SPExtensionMessage", {id, type: "extensionSetId", args: [extension.id]});
+          this._sendReply(aMessage, "SPExtensionMessage", {id, type: "extensionSetId", args: [extension.id, extension.uuid]});
         });
 
         // Make sure the extension passes the packaging checks when
@@ -583,6 +620,7 @@ SpecialPowersObserverAPI.prototype = {
               if (extensionData.errors.length) {
                 return Promise.reject("Extension contains packaging errors");
               }
+              return undefined;
             });
           },
           () => {
@@ -612,8 +650,8 @@ SpecialPowersObserverAPI.prototype = {
         let id = aMessage.data.id;
         let extension = this._extensions.get(id);
         this._extensions.delete(id);
-        extension.shutdown();
-        this._sendReply(aMessage, "SPExtensionMessage", {id, type: "extensionUnloaded", args: []});
+        let done = () => this._sendReply(aMessage, "SPExtensionMessage", {id, type: "extensionUnloaded", args: []});
+        extension.shutdown().then(done, done);
         return undefined;
       }
 
@@ -623,7 +661,7 @@ SpecialPowersObserverAPI.prototype = {
 
     // We throw an exception before reaching this explicit return because
     // we should never be arriving here anyway.
-    throw new SpecialPowersError("Unreached code");
+    throw new SpecialPowersError("Unreached code"); // eslint-disable-line no-unreachable
     return undefined;
   }
 };

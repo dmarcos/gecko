@@ -9,7 +9,6 @@
 #include "GLContext.h"
 #include "mozilla/dom/WebGLRenderingContextBinding.h"
 #include "mozilla/MemoryReporting.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "nsPrintfCString.h"
 #include "nsString.h"
 #include "prenv.h"
@@ -134,16 +133,9 @@ GetCompilationStatusAndLog(gl::GLContext* gl, GLuint shader, bool* const out_suc
 
 ////////////////////////////////////////////////////////////////////////////////
 
-static GLuint
-CreateShader(gl::GLContext* gl, GLenum type)
-{
-    gl->MakeCurrent();
-    return gl->fCreateShader(type);
-}
-
 WebGLShader::WebGLShader(WebGLContext* webgl, GLenum type)
     : WebGLRefCountedObject(webgl)
-    , mGLName(CreateShader(webgl->GL(), type))
+    , mGLName(webgl->gl->fCreateShader(type))
     , mType(type)
     , mTranslationSuccessful(false)
     , mCompilationSuccessful(false)
@@ -230,8 +222,6 @@ WebGLShader::CompileShader()
 
     mTranslationSuccessful = true;
 
-    gl->MakeCurrent();
-
     const char* const parts[] = {
         mTranslatedSource.BeginReading()
     };
@@ -279,12 +269,6 @@ WebGLShader::GetShaderSource(nsAString* out) const
 void
 WebGLShader::GetShaderTranslatedSource(nsAString* out) const
 {
-    if (!mCompilationSuccessful) {
-        mContext->ErrorInvalidOperation("getShaderTranslatedSource: Shader has"
-                                        " not been successfully compiled.");
-        return;
-    }
-
     out->SetIsVoid(false);
     CopyASCIItoUTF16(mTranslatedSource, *out);
 }
@@ -455,7 +439,6 @@ WebGLShader::Delete()
 {
     gl::GLContext* gl = mContext->GL();
 
-    gl->MakeCurrent();
     gl->fDeleteShader(mGLName);
 
     LinkedListElement<WebGLShader>::removeFrom(mContext->mShaders);

@@ -93,10 +93,29 @@ With that in mind, the steps for adding a new API are:
 We have two automated tests running on [Travis](https://travis-ci.org/rust-lang/libc):
 
 1. [`libc-test`](https://github.com/alexcrichton/ctest)
-  - `cd libc-test && cargo run`
+  - `cd libc-test && cargo test`
   - Use the `skip_*()` functions in `build.rs` if you really need a workaround.
 2. Style checker
   - `rustc ci/style.rs && ./style src`
+
+### Releasing your change to crates.io
+
+Now that you've done the amazing job of landing your new API or your new
+platform in this crate, the next step is to get that sweet, sweet usage from
+crates.io! The only next step is to bump the version of libc and then publish
+it. If you'd like to get a release out ASAP you can follow these steps:
+
+1. Update the version number in `Cargo.toml`, you'll just be bumping the patch
+   version number.
+2. Run `cargo update` to regenerate the lockfile to encode your version bump in
+   the lock file. You may pull in some other updated dependencies, that's ok.
+3. Send a PR to this repository. It should [look like this][example], but it'd
+   also be nice to fill out the description with a small rationale for the
+   release (any rationale is ok though!)
+4. Once merged the release will be tagged and published by one of the libc crate
+   maintainers.
+
+[example]: https://github.com/rust-lang/libc/pull/583
 
 ## Platforms and Documentation
 
@@ -111,7 +130,7 @@ Tested:
   * [`i686-apple-darwin`](https://doc.rust-lang.org/libc/i686-apple-darwin/libc/)
   * [`x86_64-apple-darwin`](https://doc.rust-lang.org/libc/x86_64-apple-darwin/libc/)
     (OSX)
-  * `i686-apple-ios`
+  * `i386-apple-ios`
   * `x86_64-apple-ios`
   * [`i686-unknown-linux-gnu`](https://doc.rust-lang.org/libc/i686-unknown-linux-gnu/libc/)
   * [`x86_64-unknown-linux-gnu`](https://doc.rust-lang.org/libc/x86_64-unknown-linux-gnu/libc/)
@@ -119,6 +138,9 @@ Tested:
   * [`x86_64-unknown-linux-musl`](https://doc.rust-lang.org/libc/x86_64-unknown-linux-musl/libc/)
     (Linux MUSL)
   * [`aarch64-unknown-linux-gnu`](https://doc.rust-lang.org/libc/aarch64-unknown-linux-gnu/libc/)
+    (Linux)
+  * [`aarch64-unknown-linux-musl`](https://doc.rust-lang.org/libc/aarch64-unknown-linux-musl/libc/)
+    (Linux MUSL)
   * [`mips-unknown-linux-gnu`](https://doc.rust-lang.org/libc/mips-unknown-linux-gnu/libc/)
   * [`arm-unknown-linux-gnueabihf`](https://doc.rust-lang.org/libc/arm-unknown-linux-gnueabihf/libc/)
   * [`arm-linux-androideabi`](https://doc.rust-lang.org/libc/arm-linux-androideabi/libc/)

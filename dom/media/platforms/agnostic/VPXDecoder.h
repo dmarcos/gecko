@@ -7,6 +7,7 @@
 #define VPXDecoder_h_
 
 #include "PlatformDecoderModule.h"
+#include "mozilla/Span.h"
 
 #include <stdint.h>
 #define VPX_DONT_DEFINE_STDINT_TYPES
@@ -16,7 +17,11 @@
 
 namespace mozilla {
 
-class VPXDecoder : public MediaDataDecoder
+DDLoggedTypeDeclNameAndBase(VPXDecoder, MediaDataDecoder);
+
+class VPXDecoder
+  : public MediaDataDecoder
+  , public DecoderDoctorLifeLogger<VPXDecoder>
 {
 public:
   explicit VPXDecoder(const CreateDecoderParams& aParams);
@@ -26,15 +31,16 @@ public:
   RefPtr<DecodePromise> Drain() override;
   RefPtr<FlushPromise> Flush() override;
   RefPtr<ShutdownPromise> Shutdown() override;
-  const char* GetDescriptionName() const override
+  nsCString GetDescriptionName() const override
   {
-    return "libvpx video decoder";
+    return NS_LITERAL_CSTRING("libvpx video decoder");
   }
 
   enum Codec: uint8_t
   {
     VP8 = 1 << 0,
-    VP9 = 1 << 1
+    VP9 = 1 << 1,
+    Unknown = 1 << 7,
   };
 
   // Return true if aMimeType is a one of the strings used by our demuxers to
@@ -44,12 +50,19 @@ public:
   static bool IsVP8(const nsACString& aMimeType);
   static bool IsVP9(const nsACString& aMimeType);
 
+  // Return true if a sample is a keyframe for the specified codec.
+  static bool IsKeyframe(Span<const uint8_t> aBuffer, Codec aCodec);
+
+  // Return the frame dimensions for a sample for the specified codec.
+  static gfx::IntSize GetFrameSize(Span<const uint8_t> aBuffer, Codec aCodec);
+
 private:
   ~VPXDecoder();
   RefPtr<DecodePromise> ProcessDecode(MediaRawData* aSample);
   MediaResult DecodeAlpha(vpx_image_t** aImgAlpha, const MediaRawData* aSample);
 
   const RefPtr<layers::ImageContainer> mImageContainer;
+  RefPtr<layers::KnowsCompositor> mImageAllocator;
   const RefPtr<TaskQueue> mTaskQueue;
 
   // VPx decoder state
@@ -60,7 +73,7 @@ private:
 
   const VideoInfo& mInfo;
 
-  const int mCodec;
+  const Codec mCodec;
 };
 
 } // namespace mozilla

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,14 +14,14 @@
 
 class nsFirstLetterFrame final : public nsContainerFrame {
 public:
-  NS_DECL_QUERYFRAME_TARGET(nsFirstLetterFrame)
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsFirstLetterFrame)
 
-  explicit nsFirstLetterFrame(nsStyleContext* aContext) : nsContainerFrame(aContext) {}
+  explicit nsFirstLetterFrame(nsStyleContext* aContext)
+    : nsContainerFrame(aContext, kClassID)
+  {}
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual void Init(nsIContent*       aContent,
@@ -31,7 +32,6 @@ public:
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override;
 #endif
-  virtual nsIAtom* GetType() const override;
 
   bool IsFloating() const { return GetStateBits() & NS_FRAME_OUT_OF_FLOW; }
 
@@ -43,15 +43,15 @@ public:
       ~(nsIFrame::eBidiInlineContainer));
   }
 
-  virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
-  virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
-  virtual void AddInlineMinISize(nsRenderingContext *aRenderingContext,
+  virtual nscoord GetMinISize(gfxContext *aRenderingContext) override;
+  virtual nscoord GetPrefISize(gfxContext *aRenderingContext) override;
+  virtual void AddInlineMinISize(gfxContext *aRenderingContext,
                                  InlineMinISizeData *aData) override;
-  virtual void AddInlinePrefISize(nsRenderingContext *aRenderingContext,
+  virtual void AddInlinePrefISize(gfxContext *aRenderingContext,
                                   InlinePrefISizeData *aData) override;
 
   virtual mozilla::LogicalSize
-  ComputeSize(nsRenderingContext *aRenderingContext,
+  ComputeSize(gfxContext *aRenderingContext,
               mozilla::WritingMode aWritingMode,
               const mozilla::LogicalSize& aCBSize,
               nscoord aAvailableISize,

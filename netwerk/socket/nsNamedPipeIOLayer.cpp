@@ -211,7 +211,7 @@ NamedPipeInfo::OnDataAvailable(uint32_t aBytesTransferred,
   mErrorCode = ERROR_SUCCESS;
 
   // dispatch an empty event to trigger STS thread
-  gSocketTransportService->Dispatch(NS_NewRunnableFunction([]{}),
+  gSocketTransportService->Dispatch(NS_NewRunnableFunction("NamedPipeInfo::OnDataAvailable", []{}),
                                     NS_DISPATCH_NORMAL);
 
   return NS_OK;
@@ -229,7 +229,7 @@ NamedPipeInfo::OnError(uint32_t aError,
   mErrorCode = aError;
 
   // dispatch an empty event to trigger STS thread
-  gSocketTransportService->Dispatch(NS_NewRunnableFunction([]{}),
+  gSocketTransportService->Dispatch(NS_NewRunnableFunction("NamedPipeInfo::OnError", []{}),
                                     NS_DISPATCH_NORMAL);
 
   return NS_OK;
@@ -240,7 +240,7 @@ NamedPipeInfo::OnError(uint32_t aError,
 nsresult
 NamedPipeInfo::Connect(const nsACString& aPath)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   HANDLE pipe;
   nsAutoCString path(aPath);
@@ -295,10 +295,11 @@ NamedPipeInfo::Connect(const nsACString& aPath)
 nsresult
 NamedPipeInfo::Disconnect()
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   nsresult rv = mNamedPipeService->RemoveDataObserver(mPipe, this);
-  NS_WARN_IF(NS_FAILED(rv));
+  Unused << NS_WARN_IF(NS_FAILED(rv));
+
   mPipe = nullptr;
 
   if (mReadOverlapped.hEvent &&
@@ -313,13 +314,13 @@ NamedPipeInfo::Disconnect()
     mWriteOverlapped.hEvent = nullptr;
   }
 
-  return NS_OK;
+  return rv;
 }
 
 int32_t
 NamedPipeInfo::Read(void* aBuffer, int32_t aSize)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   int32_t bytesRead = Peek(aBuffer, aSize);
 
@@ -333,7 +334,7 @@ NamedPipeInfo::Read(void* aBuffer, int32_t aSize)
 int32_t
 NamedPipeInfo::Write(const void* aBuffer, int32_t aSize)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(mWriteBegin <= mWriteEnd);
 
   if (!IsConnected()) {
@@ -374,7 +375,7 @@ NamedPipeInfo::Write(const void* aBuffer, int32_t aSize)
 uint32_t
 NamedPipeInfo::Peek(void* aBuffer, int32_t aSize)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(mReadBegin <= mReadEnd);
 
   if (!IsConnected()) {
@@ -412,7 +413,7 @@ NamedPipeInfo::Peek(void* aBuffer, int32_t aSize)
 int32_t
 NamedPipeInfo::Available() const
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(mReadBegin <= mReadEnd);
   MOZ_ASSERT(mReadEnd - mReadBegin <= 0x7FFFFFFF); // no more than int32_max
   return mReadEnd - mReadBegin;
@@ -421,7 +422,7 @@ NamedPipeInfo::Available() const
 bool
 NamedPipeInfo::Sync(uint32_t aTimeout)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   if (!mHasPendingWrite) {
     return true;
   }
@@ -431,28 +432,28 @@ NamedPipeInfo::Sync(uint32_t aTimeout)
 void
 NamedPipeInfo::SetNonblocking(bool nonblocking)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   mNonblocking = nonblocking;
 }
 
 bool
 NamedPipeInfo::IsConnected() const
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   return mPipe && mPipe != INVALID_HANDLE_VALUE;
 }
 
 bool
 NamedPipeInfo::IsNonblocking() const
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   return mNonblocking;
 }
 
 HANDLE
 NamedPipeInfo::GetHandle() const
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   return mPipe;
 }
 
@@ -460,7 +461,7 @@ NamedPipeInfo::GetHandle() const
 int16_t
 NamedPipeInfo::GetPollFlags(int16_t aInFlags, int16_t* aOutFlags)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   *aOutFlags = 0;
 
@@ -507,7 +508,7 @@ NamedPipeInfo::GetPollFlags(int16_t aInFlags, int16_t* aOutFlags)
 int32_t
 NamedPipeInfo::DoRead()
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(!mHasPendingRead);
   MOZ_ASSERT(mReadBegin == mReadEnd); // the buffer should be empty
 
@@ -547,7 +548,7 @@ NamedPipeInfo::DoRead()
 int32_t
 NamedPipeInfo::DoReadContinue()
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(mHasPendingRead);
   MOZ_ASSERT(mReadBegin == 0 && mReadEnd == 0);
 
@@ -590,7 +591,7 @@ NamedPipeInfo::DoReadContinue()
 int32_t
 NamedPipeInfo::DoWrite()
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(!mHasPendingWrite);
   MOZ_ASSERT(mWriteBegin < mWriteEnd);
 
@@ -622,7 +623,7 @@ NamedPipeInfo::DoWrite()
 int32_t
 NamedPipeInfo::DoWriteContinue()
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_ASSERT(mHasPendingWrite);
 
   DWORD bytesWritten = 0;
@@ -654,7 +655,7 @@ NamedPipeInfo::DoWriteContinue()
 static inline NamedPipeInfo*
 GetNamedPipeInfo(PRFileDesc* aFd)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   MOZ_DIAGNOSTIC_ASSERT(aFd);
   MOZ_DIAGNOSTIC_ASSERT(aFd->secret);
   MOZ_DIAGNOSTIC_ASSERT(PR_GetLayersIdentity(aFd) == nsNamedPipeLayerIdentity);
@@ -674,7 +675,7 @@ nsNamedPipeConnect(PRFileDesc* aFd,
                    const PRNetAddr* aAddr,
                    PRIntervalTime aTimeout)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   NamedPipeInfo* info = GetNamedPipeInfo(aFd);
   if (!info) {
@@ -693,7 +694,7 @@ nsNamedPipeConnect(PRFileDesc* aFd,
 static PRStatus
 nsNamedPipeConnectContinue(PRFileDesc* aFd, PRInt16 aOutFlags)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   return PR_SUCCESS;
 }
@@ -701,7 +702,7 @@ nsNamedPipeConnectContinue(PRFileDesc* aFd, PRInt16 aOutFlags)
 static PRStatus
 nsNamedPipeClose(PRFileDesc* aFd)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   if (aFd->secret && PR_GetLayersIdentity(aFd) == nsNamedPipeLayerIdentity) {
     RefPtr<NamedPipeInfo> info = dont_AddRef(GetNamedPipeInfo(aFd));
@@ -711,7 +712,7 @@ nsNamedPipeClose(PRFileDesc* aFd)
   }
 
   MOZ_ASSERT(!aFd->lower);
-  PR_DELETE(aFd);
+  PR_Free(aFd); // PRFileDescs are allocated with PR_Malloc().
 
   return PR_SUCCESS;
 }
@@ -723,7 +724,7 @@ nsNamedPipeSend(PRFileDesc* aFd,
                 PRIntn aFlags,
                 PRIntervalTime aTimeout)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   Unused << aFlags;
   Unused << aTimeout;
@@ -743,7 +744,7 @@ nsNamedPipeRecv(PRFileDesc* aFd,
                 PRIntn aFlags,
                 PRIntervalTime aTimeout)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   Unused << aTimeout;
 
@@ -767,7 +768,7 @@ nsNamedPipeRecv(PRFileDesc* aFd,
 static inline PRInt32
 nsNamedPipeRead(PRFileDesc* aFd, void* aBuffer, PRInt32 aAmount)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   NamedPipeInfo* info = GetNamedPipeInfo(aFd);
   if (!info) {
@@ -780,7 +781,7 @@ nsNamedPipeRead(PRFileDesc* aFd, void* aBuffer, PRInt32 aAmount)
 static inline PRInt32
 nsNamedPipeWrite(PRFileDesc* aFd, const void* aBuffer, PRInt32 aAmount)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   NamedPipeInfo* info = GetNamedPipeInfo(aFd);
   if (!info) {
@@ -793,7 +794,7 @@ nsNamedPipeWrite(PRFileDesc* aFd, const void* aBuffer, PRInt32 aAmount)
 static PRInt32
 nsNamedPipeAvailable(PRFileDesc* aFd)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   NamedPipeInfo* info = GetNamedPipeInfo(aFd);
   if (!info) {
@@ -806,7 +807,7 @@ nsNamedPipeAvailable(PRFileDesc* aFd)
 static PRInt64
 nsNamedPipeAvailable64(PRFileDesc* aFd)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   NamedPipeInfo* info = GetNamedPipeInfo(aFd);
   if (!info) {
@@ -819,7 +820,7 @@ nsNamedPipeAvailable64(PRFileDesc* aFd)
 static PRStatus
 nsNamedPipeSync(PRFileDesc* aFd)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   NamedPipeInfo* info = GetNamedPipeInfo(aFd);
   if (!info) {
@@ -832,7 +833,7 @@ nsNamedPipeSync(PRFileDesc* aFd)
 static PRInt16
 nsNamedPipePoll(PRFileDesc* aFd, PRInt16 aInFlags, PRInt16* aOutFlags)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   NamedPipeInfo* info = GetNamedPipeInfo(aFd);
   if (!info) {
@@ -846,7 +847,7 @@ nsNamedPipePoll(PRFileDesc* aFd, PRInt16 aInFlags, PRInt16* aOutFlags)
 static PRStatus
 nsNamedPipeGetSocketOption(PRFileDesc* aFd, PRSocketOptionData* aData)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   MOZ_ASSERT(aFd);
   MOZ_ASSERT(aData);
@@ -874,7 +875,7 @@ nsNamedPipeGetSocketOption(PRFileDesc* aFd, PRSocketOptionData* aData)
 static PRStatus
 nsNamedPipeSetSocketOption(PRFileDesc* aFd, const PRSocketOptionData* aData)
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   MOZ_ASSERT(aFd);
   MOZ_ASSERT(aData);
@@ -897,7 +898,7 @@ nsNamedPipeSetSocketOption(PRFileDesc* aFd, const PRSocketOptionData* aData)
 static void
 Initialize()
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
 
   static bool initialized = false;
   if (initialized) {
@@ -932,7 +933,7 @@ IsNamedPipePath(const nsACString& aPath)
 PRFileDesc*
 CreateNamedPipeLayer()
 {
-  MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
+  MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   Initialize();
 
   PRFileDesc* layer = PR_CreateIOLayerStub(nsNamedPipeLayerIdentity,

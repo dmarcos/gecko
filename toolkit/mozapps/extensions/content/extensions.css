@@ -60,64 +60,8 @@ xhtml|link {
   -moz-user-select: element;
 }
 
-setting, row[unsupported="true"] {
+row[unsupported="true"] {
   display: none;
-}
-
-setting[type="bool"] {
-  display: -moz-grid-line;
-  -moz-binding: url("chrome://mozapps/content/extensions/setting.xml#setting-bool");
-}
-
-setting[type="bool"][localized="true"] {
-  display: -moz-grid-line;
-  -moz-binding: url("chrome://mozapps/content/extensions/setting.xml#setting-localized-bool");
-}
-
-setting[type="bool"]:not([learnmore]) .preferences-learnmore,
-setting[type="boolint"]:not([learnmore]) .preferences-learnmore {
-  visibility: collapse;
-}
-
-setting[type="boolint"] {
-  display: -moz-grid-line;
-  -moz-binding: url("chrome://mozapps/content/extensions/setting.xml#setting-boolint");
-}
-
-setting[type="integer"] {
-  display: -moz-grid-line;
-  -moz-binding: url("chrome://mozapps/content/extensions/setting.xml#setting-integer");
-}
-
-setting[type="integer"]:not([size]) textbox {
-  -moz-box-flex: 1;
-}
-
-setting[type="control"] {
-  display: -moz-grid-line;
-  -moz-binding: url("chrome://mozapps/content/extensions/setting.xml#setting-control");
-}
-
-setting[type="string"] {
-  display: -moz-grid-line;
-  -moz-binding: url("chrome://mozapps/content/extensions/setting.xml#setting-string");
-}
-
-setting[type="color"] {
-  display: -moz-grid-line;
-  -moz-binding: url("chrome://mozapps/content/extensions/setting.xml#setting-color");
-}
-
-setting[type="file"],
-setting[type="directory"] {
-  display: -moz-grid-line;
-  -moz-binding: url("chrome://mozapps/content/extensions/setting.xml#setting-path");
-}
-
-setting[type="radio"],
-setting[type="menulist"] {
-  display: -moz-grid-line;
-  -moz-binding: url("chrome://mozapps/content/extensions/setting.xml#setting-multi");
 }
 
 #addonitem-popup > menuitem[disabled="true"] {
@@ -140,11 +84,6 @@ setting[type="menulist"] {
   visibility: hidden;
 }
 
-#search-list[local="false"]  > .addon[remote="false"],
-#search-list[remote="false"] > .addon[remote="true"] {
-  visibility: collapse;
-}
-
 #detail-view {
   overflow: auto;
 }
@@ -157,23 +96,26 @@ setting[type="menulist"] {
 .addon[active="true"] .disabled-postfix,
 .addon[pending="install"] .update-postfix,
 .addon[pending="install"] .disabled-postfix,
+.addon[legacy="false"] .legacy-warning,
 #detail-view:not([notification="warning"]) .warning,
 #detail-view:not([notification="error"]) .error,
 #detail-view:not([notification="info"]) .info,
 #detail-view:not([pending]) .pending,
 #detail-view:not([upgrade="true"]) .update-postfix,
 #detail-view[active="true"] .disabled-postfix,
+#detail-view[legacy="false"] .legacy-warning,
 #detail-view[loading] .detail-view-container,
 #detail-view:not([loading]) .alert-container,
 .detail-row:not([value]),
-#search-list[remote="false"] #search-allresults-link {
+#legacy-list .addon .disabled-postfix {
   display: none;
 }
 
 #addons-page:not([warning]) #list-view > .global-warning-container {
   display: none;
 }
-#addon-list .date-updated {
+#addon-list .date-updated,
+#legacy-list .date-updated {
   display: none;
 }
 
@@ -239,6 +181,10 @@ richlistitem:not([selected]) * {
 }
 
 #experiments-change-telemetry[disabled="true"] {
+  display: none;
+}
+
+.view-pane:not(#legacy-view) .addon-control.replacement {
   display: none;
 }
 

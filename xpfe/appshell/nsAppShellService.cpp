@@ -114,9 +114,10 @@ nsAppShellService::CreateHiddenWindowHelper(bool aIsPrivate)
 
 #ifdef XP_MACOSX
   uint32_t    chromeMask = 0;
-  nsAdoptingCString prefVal =
-      Preferences::GetCString("browser.hiddenWindowChromeURL");
-  const char* hiddenWindowURL = prefVal.get() ? prefVal.get() : DEFAULT_HIDDENWINDOW_URL;
+  nsAutoCString prefVal;
+  rv = Preferences::GetCString("browser.hiddenWindowChromeURL", prefVal);
+  const char* hiddenWindowURL =
+    NS_SUCCEEDED(rv) ? prefVal.get() : DEFAULT_HIDDENWINDOW_URL;
   if (aIsPrivate) {
     hiddenWindowURL = DEFAULT_HIDDENWINDOW_URL;
   } else {
@@ -131,33 +132,30 @@ nsAppShellService::CreateHiddenWindowHelper(bool aIsPrivate)
   rv = NS_NewURI(getter_AddRefs(url), hiddenWindowURL);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  RefPtr<nsWebShellWindow> newWindow;
-  if (!aIsPrivate) {
-    rv = JustCreateTopWindow(nullptr, url,
-                             chromeMask, initialWidth, initialHeight,
-                             true, nullptr, nullptr, getter_AddRefs(newWindow));
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    mHiddenWindow.swap(newWindow);
-  } else {
-    // Create the hidden private window
+  if (aIsPrivate) {
     chromeMask |= nsIWebBrowserChrome::CHROME_PRIVATE_WINDOW;
-
-    rv = JustCreateTopWindow(nullptr, url,
-                             chromeMask, initialWidth, initialHeight,
-                             true, nullptr, nullptr, getter_AddRefs(newWindow));
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    nsCOMPtr<nsIDocShell> docShell;
-    newWindow->GetDocShell(getter_AddRefs(docShell));
-    if (docShell) {
-      docShell->SetAffectPrivateSessionLifetime(false);
-    }
-
-    mHiddenPrivateWindow.swap(newWindow);
   }
 
-  // RegisterTopLevelWindow(newWindow); -- Mac only
+  RefPtr<nsWebShellWindow> newWindow;
+  rv = JustCreateTopWindow(nullptr, url,
+                           chromeMask, initialWidth, initialHeight,
+                           true, nullptr, nullptr, getter_AddRefs(newWindow));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<nsIDocShell> docShell;
+  newWindow->GetDocShell(getter_AddRefs(docShell));
+  if (docShell) {
+    docShell->SetIsActive(false);
+    if (aIsPrivate) {
+      docShell->SetAffectPrivateSessionLifetime(false);
+    }
+  }
+
+  if (aIsPrivate) {
+    mHiddenPrivateWindow.swap(newWindow);
+  } else {
+    mHiddenWindow.swap(newWindow);
+  }
 
   return NS_OK;
 }
@@ -382,12 +380,12 @@ WebBrowserChrome2Stub::SetVisibility(bool aVisibility)
 }
 
 NS_IMETHODIMP
-WebBrowserChrome2Stub::GetTitle(char16_t** aTitle)
+WebBrowserChrome2Stub::GetTitle(nsAString& aTitle)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 NS_IMETHODIMP
-WebBrowserChrome2Stub::SetTitle(const char16_t* aTitle)
+WebBrowserChrome2Stub::SetTitle(const nsAString& aTitle)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
@@ -407,9 +405,10 @@ WebBrowserChrome2Stub::Blur()
 class BrowserDestroyer final : public Runnable
 {
 public:
-  BrowserDestroyer(nsIWebBrowser *aBrowser, nsISupports *aContainer) :
-    mBrowser(aBrowser),
-    mContainer(aContainer)
+  BrowserDestroyer(nsIWebBrowser* aBrowser, nsISupports* aContainer)
+    : mozilla::Runnable("BrowserDestroyer")
+    , mBrowser(aBrowser)
+    , mContainer(aContainer)
   {
   }
 
@@ -733,13 +732,6 @@ nsAppShellService::JustCreateTopWindow(nsIXULWindow *aParent,
   bool center = aChromeMask & nsIWebBrowserChrome::CHROME_CENTER_SCREEN;
 
   widgetInitData.mRTL = LocaleService::GetInstance()->IsAppLocaleRTL();
-
-#ifdef MOZ_WIDGET_GONK
-  // B2G multi-screen support. Screen ID is for differentiating screens of
-  // windows, and due to the hardware limitation, it is platform-specific for
-  // now, which align with the value of display type defined in HWC.
-  widgetInitData.mScreenId = mScreenId;
-#endif
 
   nsresult rv = window->Initialize(parent, center ? aParent : nullptr,
                                    aUrl, aInitialWidth, aInitialHeight,

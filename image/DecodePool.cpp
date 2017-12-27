@@ -160,7 +160,8 @@ class DecodePoolWorker : public Runnable
 {
 public:
   explicit DecodePoolWorker(DecodePoolImpl* aImpl)
-    : mImpl(aImpl)
+    : Runnable("image::DecodePoolWorker")
+    , mImpl(aImpl)
   { }
 
   NS_IMETHOD Run() override
@@ -179,11 +180,7 @@ public:
 
         case Work::Type::SHUTDOWN:
           DecodePoolImpl::ShutdownThread(thisThread);
-
-#ifdef MOZ_GECKO_PROFILER
-          profiler_unregister_thread();
-#endif // MOZ_GECKO_PROFILER
-
+          PROFILER_UNREGISTER_THREAD();
           return NS_OK;
 
         default:
@@ -252,7 +249,7 @@ DecodePool::DecodePool()
   }
   // The parent process where there are content processes doesn't need as many
   // threads for decoding images.
-  if (limit > 4 && XRE_IsParentProcess() && BrowserTabsRemoteAutostart()) {
+  if (limit > 4 && XRE_IsE10sParentProcess()) {
     limit = 4;
   }
 
@@ -317,10 +314,13 @@ DecodePool::AsyncRun(IDecodingTask* aTask)
 }
 
 bool
-DecodePool::SyncRunIfPreferred(IDecodingTask* aTask)
+DecodePool::SyncRunIfPreferred(IDecodingTask* aTask, const nsCString& aURI)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aTask);
+
+  AUTO_PROFILER_LABEL_DYNAMIC_NSCSTRING(
+    "DecodePool::SyncRunIfPreferred", GRAPHICS, aURI);
 
   if (aTask->ShouldPreferSyncRun()) {
     aTask->Run();
@@ -332,10 +332,14 @@ DecodePool::SyncRunIfPreferred(IDecodingTask* aTask)
 }
 
 void
-DecodePool::SyncRunIfPossible(IDecodingTask* aTask)
+DecodePool::SyncRunIfPossible(IDecodingTask* aTask, const nsCString& aURI)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aTask);
+
+  AUTO_PROFILER_LABEL_DYNAMIC_NSCSTRING(
+    "DecodePool::SyncRunIfPossible", GRAPHICS, aURI);
+
   aTask->Run();
 }
 

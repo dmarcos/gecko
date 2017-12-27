@@ -18,6 +18,7 @@
 #include "nsCSSRuleProcessor.h"
 #include "nsDeviceContext.h"
 #include "nsIBaseWindow.h"
+#include "nsIDocShell.h"
 #include "nsIDocument.h"
 #include "nsIWidget.h"
 #include "nsContentUtils.h"
@@ -25,6 +26,13 @@
 #include "mozilla/StyleSheetInlines.h"
 
 using namespace mozilla;
+
+static nsTArray<RefPtr<nsAtom>>* sSystemMetrics = nullptr;
+
+#ifdef XP_WIN
+// Cached theme identifier for the moz-windows-theme media query.
+static uint8_t sWinThemeId = LookAndFeel::eWindowsTheme_Generic;
+#endif
 
 static const nsCSSProps::KTableEntry kOrientationKeywords[] = {
   { eCSSKeyword_portrait,                 NS_STYLE_ORIENTATION_PORTRAIT },
@@ -278,16 +286,24 @@ static void
 GetResolution(nsPresContext* aPresContext, const nsMediaFeature*,
               nsCSSValue& aResult)
 {
-  float dpi = 96; // Use 96 when resisting fingerprinting.
+  // We're returning resolution in terms of device pixels per css pixel, since
+  // that is the preferred unit for media queries of resolution. This avoids
+  // introducing precision error from conversion to and from less-used
+  // physical units like inches.
+
+  float dppx;
 
   if (!ShouldResistFingerprinting(aPresContext)) {
-    // Resolution measures device pixels per CSS (inch/cm/pixel).  We
-    // return it in device pixels per CSS inches.
-    dpi = float(nsPresContext::AppUnitsPerCSSInch()) /
-          float(aPresContext->AppUnitsPerDevPixel());
+    // Get the actual device pixel ratio, which also takes zoom into account.
+    dppx = float(nsPresContext::AppUnitsPerCSSPixel()) /
+             aPresContext->AppUnitsPerDevPixel();
+  } else {
+    // We are resisting fingerprinting, so pretend we have a device pixel ratio
+    // of 1. In that case, we simply report the zoom level.
+    dppx = aPresContext->GetDeviceFullZoom();
   }
 
-  aResult.SetFloatValue(dpi, eCSSUnit_Inch);
+  aResult.SetFloatValue(dppx, eCSSUnit_Pixel);
 }
 
 static void
@@ -304,33 +320,44 @@ GetDisplayMode(nsPresContext* aPresContext, const nsMediaFeature*,
                nsCSSValue& aResult)
 {
   nsCOMPtr<nsISupports> container;
+  RefPtr<nsIDocShell> docShell;
+
+  if (!aPresContext) {
+    aResult.SetIntValue(NS_STYLE_DISPLAY_MODE_BROWSER, eCSSUnit_Enumerated);
+    return;
+  }
+
   if (aPresContext) {
     // Calling GetRootPresContext() can be slow, so make sure to call it
     // just once.
     nsRootPresContext* root = aPresContext->GetRootPresContext();
     if (root && root->Document()) {
       container = root->Document()->GetContainer();
+      docShell = root->GetDocShell();
     }
   }
+
   nsCOMPtr<nsIBaseWindow> baseWindow = do_QueryInterface(container);
-  if (!baseWindow) {
-    aResult.SetIntValue(NS_STYLE_DISPLAY_MODE_BROWSER, eCSSUnit_Enumerated);
-    return;
+  if (baseWindow) {
+    nsCOMPtr<nsIWidget> mainWidget;
+    baseWindow->GetMainWidget(getter_AddRefs(mainWidget));
+    nsSizeMode mode = mainWidget ? mainWidget->SizeMode() : nsSizeMode_Normal;
+
+    if (mode == nsSizeMode_Fullscreen) {
+      aResult.SetIntValue(NS_STYLE_DISPLAY_MODE_FULLSCREEN, eCSSUnit_Enumerated);
+      return;
+    }
   }
-  nsCOMPtr<nsIWidget> mainWidget;
-  baseWindow->GetMainWidget(getter_AddRefs(mainWidget));
-  int32_t displayMode;
-  nsSizeMode mode = mainWidget ? mainWidget->SizeMode() : nsSizeMode_Normal;
-  // Background tabs are always in 'browser' mode for now.
-  // If new modes are supported, please ensure not cause the regression in
-  // Bug 1259641.
-  switch (mode) {
-    case nsSizeMode_Fullscreen:
-      displayMode = NS_STYLE_DISPLAY_MODE_FULLSCREEN;
-      break;
-    default:
-      displayMode = NS_STYLE_DISPLAY_MODE_BROWSER;
-      break;
+
+  static_assert(nsIDocShell::DISPLAY_MODE_BROWSER == NS_STYLE_DISPLAY_MODE_BROWSER &&
+                nsIDocShell::DISPLAY_MODE_MINIMAL_UI == NS_STYLE_DISPLAY_MODE_MINIMAL_UI &&
+                nsIDocShell::DISPLAY_MODE_STANDALONE == NS_STYLE_DISPLAY_MODE_STANDALONE &&
+                nsIDocShell::DISPLAY_MODE_FULLSCREEN == NS_STYLE_DISPLAY_MODE_FULLSCREEN,
+                "nsIDocShell display modes must mach nsStyleConsts.h");
+
+  uint32_t displayMode = NS_STYLE_DISPLAY_MODE_BROWSER;
+  if (docShell) {
+    docShell->GetDisplayMode(&displayMode);
   }
 
   aResult.SetIntValue(displayMode, eCSSUnit_Enumerated);
@@ -365,21 +392,47 @@ GetTransform3d(nsPresContext* aPresContext, const nsMediaFeature*,
   aResult.SetIntValue(1, eCSSUnit_Integer);
 }
 
+static bool
+HasSystemMetric(nsAtom* aMetric)
+{
+  nsMediaFeatures::InitSystemMetrics();
+  return sSystemMetrics->IndexOf(aMetric) != sSystemMetrics->NoIndex;
+}
+
+#ifdef XP_WIN
+static uint8_t
+GetWindowsThemeIdentifier()
+{
+  nsMediaFeatures::InitSystemMetrics();
+  return sWinThemeId;
+}
+#endif
+
 static void
 GetSystemMetric(nsPresContext* aPresContext, const nsMediaFeature* aFeature,
                 nsCSSValue& aResult)
 {
   aResult.Reset();
-  if (ShouldResistFingerprinting(aPresContext)) {
+
+  const bool isAccessibleFromContentPages =
+    !(aFeature->mReqFlags & nsMediaFeature::eUserAgentAndChromeOnly);
+
+  MOZ_ASSERT(!isAccessibleFromContentPages ||
+             *aFeature->mName == nsGkAtoms::_moz_touch_enabled);
+
+  if (isAccessibleFromContentPages &&
+      ShouldResistFingerprinting(aPresContext)) {
     // If "privacy.resistFingerprinting" is enabled, then we simply don't
-    // return any system-backed media feature values. (No spoofed values returned.)
+    // return any system-backed media feature values. (No spoofed values
+    // returned.)
     return;
   }
 
   MOZ_ASSERT(aFeature->mValueType == nsMediaFeature::eBoolInteger,
              "unexpected type");
-  nsIAtom *metricAtom = *aFeature->mData.mMetric;
-  bool hasMetric = nsCSSRuleProcessor::HasSystemMetric(metricAtom);
+
+  nsAtom* metricAtom = *aFeature->mData.mMetric;
+  bool hasMetric = HasSystemMetric(metricAtom);
   aResult.SetIntValue(hasMetric ? 1 : 0, eCSSUnit_Integer);
 }
 
@@ -388,13 +441,14 @@ GetWindowsTheme(nsPresContext* aPresContext, const nsMediaFeature* aFeature,
                 nsCSSValue& aResult)
 {
   aResult.Reset();
+
+  MOZ_ASSERT(aFeature->mReqFlags & nsMediaFeature::eUserAgentAndChromeOnly);
   if (ShouldResistFingerprinting(aPresContext)) {
     return;
   }
 
 #ifdef XP_WIN
-  uint8_t windowsThemeId =
-    nsCSSRuleProcessor::GetWindowsThemeIdentifier();
+  uint8_t windowsThemeId = GetWindowsThemeIdentifier();
 
   // Classic mode should fail to match.
   if (windowsThemeId == LookAndFeel::eWindowsTheme_Classic)
@@ -416,6 +470,8 @@ GetOperatingSystemVersion(nsPresContext* aPresContext, const nsMediaFeature* aFe
                          nsCSSValue& aResult)
 {
   aResult.Reset();
+
+  MOZ_ASSERT(aFeature->mReqFlags & nsMediaFeature::eUserAgentAndChromeOnly);
   if (ShouldResistFingerprinting(aPresContext)) {
     return;
   }
@@ -440,7 +496,174 @@ static void
 GetIsGlyph(nsPresContext* aPresContext, const nsMediaFeature* aFeature,
           nsCSSValue& aResult)
 {
+  MOZ_ASSERT(aFeature->mReqFlags & nsMediaFeature::eUserAgentAndChromeOnly);
   aResult.SetIntValue(aPresContext->IsGlyph() ? 1 : 0, eCSSUnit_Integer);
+}
+
+/* static */ void
+nsMediaFeatures::InitSystemMetrics()
+{
+  if (sSystemMetrics)
+    return;
+
+  MOZ_ASSERT(NS_IsMainThread());
+
+  sSystemMetrics = new nsTArray<RefPtr<nsAtom>>;
+
+  /***************************************************************************
+   * ANY METRICS ADDED HERE SHOULD ALSO BE ADDED AS MEDIA QUERIES BELOW      *
+   ***************************************************************************/
+
+  int32_t metricResult =
+    LookAndFeel::GetInt(LookAndFeel::eIntID_ScrollArrowStyle);
+  if (metricResult & LookAndFeel::eScrollArrow_StartBackward) {
+    sSystemMetrics->AppendElement(nsGkAtoms::scrollbar_start_backward);
+  }
+  if (metricResult & LookAndFeel::eScrollArrow_StartForward) {
+    sSystemMetrics->AppendElement(nsGkAtoms::scrollbar_start_forward);
+  }
+  if (metricResult & LookAndFeel::eScrollArrow_EndBackward) {
+    sSystemMetrics->AppendElement(nsGkAtoms::scrollbar_end_backward);
+  }
+  if (metricResult & LookAndFeel::eScrollArrow_EndForward) {
+    sSystemMetrics->AppendElement(nsGkAtoms::scrollbar_end_forward);
+  }
+
+  metricResult =
+    LookAndFeel::GetInt(LookAndFeel::eIntID_ScrollSliderStyle);
+  if (metricResult != LookAndFeel::eScrollThumbStyle_Normal) {
+    sSystemMetrics->AppendElement(nsGkAtoms::scrollbar_thumb_proportional);
+  }
+
+  metricResult =
+    LookAndFeel::GetInt(LookAndFeel::eIntID_UseOverlayScrollbars);
+  if (metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::overlay_scrollbars);
+  }
+
+  metricResult =
+    LookAndFeel::GetInt(LookAndFeel::eIntID_MenuBarDrag);
+  if (metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::menubar_drag);
+  }
+
+  nsresult rv =
+    LookAndFeel::GetInt(LookAndFeel::eIntID_WindowsDefaultTheme, &metricResult);
+  if (NS_SUCCEEDED(rv) && metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::windows_default_theme);
+  }
+
+  rv = LookAndFeel::GetInt(LookAndFeel::eIntID_MacGraphiteTheme, &metricResult);
+  if (NS_SUCCEEDED(rv) && metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::mac_graphite_theme);
+  }
+
+  rv = LookAndFeel::GetInt(LookAndFeel::eIntID_MacYosemiteTheme, &metricResult);
+  if (NS_SUCCEEDED(rv) && metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::mac_yosemite_theme);
+  }
+
+  rv = LookAndFeel::GetInt(LookAndFeel::eIntID_WindowsAccentColorInTitlebar, &metricResult);
+  if (NS_SUCCEEDED(rv) && metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::windows_accent_color_in_titlebar);
+  }
+
+  rv = LookAndFeel::GetInt(LookAndFeel::eIntID_DWMCompositor, &metricResult);
+  if (NS_SUCCEEDED(rv) && metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::windows_compositor);
+  }
+
+  rv = LookAndFeel::GetInt(LookAndFeel::eIntID_WindowsGlass, &metricResult);
+  if (NS_SUCCEEDED(rv) && metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::windows_glass);
+  }
+
+  rv = LookAndFeel::GetInt(LookAndFeel::eIntID_WindowsClassic, &metricResult);
+  if (NS_SUCCEEDED(rv) && metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::windows_classic);
+  }
+
+  rv = LookAndFeel::GetInt(LookAndFeel::eIntID_TouchEnabled, &metricResult);
+  if (NS_SUCCEEDED(rv) && metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::touch_enabled);
+  }
+
+  rv = LookAndFeel::GetInt(LookAndFeel::eIntID_SwipeAnimationEnabled,
+                           &metricResult);
+  if (NS_SUCCEEDED(rv) && metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::swipe_animation_enabled);
+  }
+
+  rv = LookAndFeel::GetInt(LookAndFeel::eIntID_GTKCSDAvailable,
+                           &metricResult);
+  if (NS_SUCCEEDED(rv) && metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::gtk_csd_available);
+  }
+
+  rv = LookAndFeel::GetInt(LookAndFeel::eIntID_GTKCSDMinimizeButton,
+                           &metricResult);
+  if (NS_SUCCEEDED(rv) && metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::gtk_csd_minimize_button);
+  }
+
+  rv = LookAndFeel::GetInt(LookAndFeel::eIntID_GTKCSDMaximizeButton,
+                           &metricResult);
+  if (NS_SUCCEEDED(rv) && metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::gtk_csd_maximize_button);
+  }
+
+  rv = LookAndFeel::GetInt(LookAndFeel::eIntID_GTKCSDCloseButton,
+                           &metricResult);
+  if (NS_SUCCEEDED(rv) && metricResult) {
+    sSystemMetrics->AppendElement(nsGkAtoms::gtk_csd_close_button);
+  }
+
+#ifdef XP_WIN
+  if (NS_SUCCEEDED(
+        LookAndFeel::GetInt(LookAndFeel::eIntID_WindowsThemeIdentifier,
+                            &metricResult))) {
+    sWinThemeId = metricResult;
+    switch (metricResult) {
+      case LookAndFeel::eWindowsTheme_Aero:
+        sSystemMetrics->AppendElement(nsGkAtoms::windows_theme_aero);
+        break;
+      case LookAndFeel::eWindowsTheme_AeroLite:
+        sSystemMetrics->AppendElement(nsGkAtoms::windows_theme_aero_lite);
+        break;
+      case LookAndFeel::eWindowsTheme_LunaBlue:
+        sSystemMetrics->AppendElement(nsGkAtoms::windows_theme_luna_blue);
+        break;
+      case LookAndFeel::eWindowsTheme_LunaOlive:
+        sSystemMetrics->AppendElement(nsGkAtoms::windows_theme_luna_olive);
+        break;
+      case LookAndFeel::eWindowsTheme_LunaSilver:
+        sSystemMetrics->AppendElement(nsGkAtoms::windows_theme_luna_silver);
+        break;
+      case LookAndFeel::eWindowsTheme_Royale:
+        sSystemMetrics->AppendElement(nsGkAtoms::windows_theme_royale);
+        break;
+      case LookAndFeel::eWindowsTheme_Zune:
+        sSystemMetrics->AppendElement(nsGkAtoms::windows_theme_zune);
+        break;
+      case LookAndFeel::eWindowsTheme_Generic:
+        sSystemMetrics->AppendElement(nsGkAtoms::windows_theme_generic);
+        break;
+    }
+  }
+#endif
+}
+
+/* static */ void
+nsMediaFeatures::FreeSystemMetrics()
+{
+  delete sSystemMetrics;
+  sSystemMetrics = nullptr;
+}
+
+/* static */ void
+nsMediaFeatures::Shutdown()
+{
+  FreeSystemMetrics();
 }
 
 /*
@@ -614,18 +837,10 @@ nsMediaFeatures::features[] = {
     GetIsResourceDocument
   },
   {
-    &nsGkAtoms::_moz_color_picker_available,
-    nsMediaFeature::eMinMaxNotAllowed,
-    nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
-    { &nsGkAtoms::color_picker_available },
-    GetSystemMetric
-  },
-  {
     &nsGkAtoms::_moz_scrollbar_start_backward,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { &nsGkAtoms::scrollbar_start_backward },
     GetSystemMetric
   },
@@ -633,7 +848,7 @@ nsMediaFeatures::features[] = {
     &nsGkAtoms::_moz_scrollbar_start_forward,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { &nsGkAtoms::scrollbar_start_forward },
     GetSystemMetric
   },
@@ -641,7 +856,7 @@ nsMediaFeatures::features[] = {
     &nsGkAtoms::_moz_scrollbar_end_backward,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { &nsGkAtoms::scrollbar_end_backward },
     GetSystemMetric
   },
@@ -649,7 +864,7 @@ nsMediaFeatures::features[] = {
     &nsGkAtoms::_moz_scrollbar_end_forward,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { &nsGkAtoms::scrollbar_end_forward },
     GetSystemMetric
   },
@@ -657,7 +872,7 @@ nsMediaFeatures::features[] = {
     &nsGkAtoms::_moz_scrollbar_thumb_proportional,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { &nsGkAtoms::scrollbar_thumb_proportional },
     GetSystemMetric
   },
@@ -665,7 +880,7 @@ nsMediaFeatures::features[] = {
     &nsGkAtoms::_moz_overlay_scrollbars,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { &nsGkAtoms::overlay_scrollbars },
     GetSystemMetric
   },
@@ -673,7 +888,7 @@ nsMediaFeatures::features[] = {
     &nsGkAtoms::_moz_windows_default_theme,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { &nsGkAtoms::windows_default_theme },
     GetSystemMetric
   },
@@ -681,7 +896,7 @@ nsMediaFeatures::features[] = {
     &nsGkAtoms::_moz_mac_graphite_theme,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { &nsGkAtoms::mac_graphite_theme },
     GetSystemMetric
   },
@@ -689,15 +904,23 @@ nsMediaFeatures::features[] = {
     &nsGkAtoms::_moz_mac_yosemite_theme,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { &nsGkAtoms::mac_yosemite_theme },
+    GetSystemMetric
+  },
+  {
+    &nsGkAtoms::_moz_windows_accent_color_in_titlebar,
+    nsMediaFeature::eMinMaxNotAllowed,
+    nsMediaFeature::eBoolInteger,
+    nsMediaFeature::eUserAgentAndChromeOnly,
+    { &nsGkAtoms::windows_accent_color_in_titlebar },
     GetSystemMetric
   },
   {
     &nsGkAtoms::_moz_windows_compositor,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { &nsGkAtoms::windows_compositor },
     GetSystemMetric
   },
@@ -705,7 +928,7 @@ nsMediaFeatures::features[] = {
     &nsGkAtoms::_moz_windows_classic,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { &nsGkAtoms::windows_classic },
     GetSystemMetric
   },
@@ -713,7 +936,7 @@ nsMediaFeatures::features[] = {
     &nsGkAtoms::_moz_windows_glass,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { &nsGkAtoms::windows_glass },
     GetSystemMetric
   },
@@ -721,6 +944,7 @@ nsMediaFeatures::features[] = {
     &nsGkAtoms::_moz_touch_enabled,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
+    // FIXME(emilio): Restrict (or remove?) when bug 1035774 lands.
     nsMediaFeature::eNoRequirements,
     { &nsGkAtoms::touch_enabled },
     GetSystemMetric
@@ -729,7 +953,7 @@ nsMediaFeatures::features[] = {
     &nsGkAtoms::_moz_menubar_drag,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { &nsGkAtoms::menubar_drag },
     GetSystemMetric
   },
@@ -737,7 +961,7 @@ nsMediaFeatures::features[] = {
     &nsGkAtoms::_moz_windows_theme,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eIdent,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { nullptr },
     GetWindowsTheme
   },
@@ -745,7 +969,7 @@ nsMediaFeatures::features[] = {
     &nsGkAtoms::_moz_os_version,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eIdent,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { nullptr },
     GetOperatingSystemVersion
   },
@@ -754,17 +978,44 @@ nsMediaFeatures::features[] = {
     &nsGkAtoms::_moz_swipe_animation_enabled,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { &nsGkAtoms::swipe_animation_enabled },
     GetSystemMetric
   },
 
   {
-    &nsGkAtoms::_moz_physical_home_button,
+    &nsGkAtoms::_moz_gtk_csd_available,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
-    { &nsGkAtoms::physical_home_button },
+    nsMediaFeature::eUserAgentAndChromeOnly,
+    { &nsGkAtoms::gtk_csd_available },
+    GetSystemMetric
+  },
+
+  {
+    &nsGkAtoms::_moz_gtk_csd_minimize_button,
+    nsMediaFeature::eMinMaxNotAllowed,
+    nsMediaFeature::eBoolInteger,
+    nsMediaFeature::eUserAgentAndChromeOnly,
+    { &nsGkAtoms::gtk_csd_minimize_button },
+    GetSystemMetric
+  },
+
+  {
+    &nsGkAtoms::_moz_gtk_csd_maximize_button,
+    nsMediaFeature::eMinMaxNotAllowed,
+    nsMediaFeature::eBoolInteger,
+    nsMediaFeature::eUserAgentAndChromeOnly,
+    { &nsGkAtoms::gtk_csd_maximize_button },
+    GetSystemMetric
+  },
+
+  {
+    &nsGkAtoms::_moz_gtk_csd_close_button,
+    nsMediaFeature::eMinMaxNotAllowed,
+    nsMediaFeature::eBoolInteger,
+    nsMediaFeature::eUserAgentAndChromeOnly,
+    { &nsGkAtoms::gtk_csd_close_button },
     GetSystemMetric
   },
 
@@ -775,7 +1026,7 @@ nsMediaFeatures::features[] = {
     &nsGkAtoms::_moz_is_glyph,
     nsMediaFeature::eMinMaxNotAllowed,
     nsMediaFeature::eBoolInteger,
-    nsMediaFeature::eNoRequirements,
+    nsMediaFeature::eUserAgentAndChromeOnly,
     { nullptr },
     GetIsGlyph
   },

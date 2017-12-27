@@ -35,7 +35,7 @@ class PrintTranslator final : public Translator
 public:
   explicit PrintTranslator(nsDeviceContext* aDeviceContext);
 
-  bool TranslateRecording(std::istream& aRecording);
+  bool TranslateRecording(PRFileDescStream& aRecording);
 
   DrawTarget* LookupDrawTarget(ReferencePtr aRefPtr) final
   {
@@ -174,8 +174,6 @@ public:
                                                 gfx::SurfaceFormat aFormat) final;
 
   mozilla::gfx::DrawTarget* GetReferenceDrawTarget() final { return mBaseDT; }
-
-  mozilla::gfx::FontType GetDesiredFontType() final;
 
 private:
   RefPtr<nsDeviceContext> mDeviceContext;

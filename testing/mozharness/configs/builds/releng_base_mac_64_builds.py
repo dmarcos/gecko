@@ -14,25 +14,18 @@ config = {
         'upload-files',
         'sendchange',
         'check-test',
-        'generate-build-stats',
         'update',  # decided by query_is_nightly()
     ],
     "buildbot_json_path": "buildprops.json",
-    'exes': {
-        'python2.7': sys.executable,
-        "buildbot": "/tools/buildbot/bin/buildbot",
-    },
     'app_ini_path': '%(obj_dir)s/dist/bin/application.ini',
     # decides whether we want to use moz_sign_cmd in env
     'enable_signing': True,
-    'enable_ccache': True,
     'vcs_share_base': '/builds/hg-shared',
-    'objdir': 'obj-firefox',
     'tooltool_script': ["/builds/tooltool.py"],
     'tooltool_bootstrap': "setup.sh",
     'enable_count_ctors': False,
-    'enable_talos_sendchange': True,
-    'enable_unittest_sendchange': True,
+    'enable_talos_sendchange': False,
+    'enable_unittest_sendchange': False,
     #########################################################################
 
 
@@ -44,9 +37,8 @@ config = {
     'publish_nightly_en_US_routes': True,
     'env': {
         'MOZBUILD_STATE_PATH': os.path.join(os.getcwd(), '.mozbuild'),
-        'MOZ_AUTOMATION': '1',
         'HG_SHARE_BASE_DIR': '/builds/hg-shared',
-        'MOZ_OBJDIR': 'obj-firefox',
+        'MOZ_OBJDIR': '%(abs_obj_dir)s',
         'CHOWN_ROOT': '~/bin/chown_root',
         'CHOWN_REVERT': '~/bin/chown_revert',
         'TINDERBOX_OUTPUT': '1',
@@ -58,7 +50,7 @@ config = {
         'CCACHE_UMASK': '002',
         'LC_ALL': 'C',
         ## 64 bit specific
-        'PATH': '/tools/python/bin:/tools/buildbot/bin:/opt/local/bin:/usr/bin:'
+        'PATH': '/tools/python/bin:/opt/local/bin:/usr/bin:'
                 '/bin:/usr/sbin:/sbin:/usr/local/bin:/usr/X11/bin',
         ##
     },
@@ -73,7 +65,8 @@ config = {
         'MINIDUMP_STACKWALK': '%(abs_tools_dir)s/breakpad/osx64/minidump_stackwalk',
         'MINIDUMP_SAVE_PATH': '%(base_work_dir)s/minidumps',
     },
-    'src_mozconfig': 'browser/config/mozconfigs/macosx64/nightly',
+    'mozconfig_platform': 'macosx64',
+    'mozconfig_variant': 'nightly',
     'tooltool_manifest_src': 'browser/config/tooltool-manifests/macosx64/releng.manifest',
     #########################################################################
 }

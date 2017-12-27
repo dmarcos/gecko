@@ -68,7 +68,6 @@ public:
     virtual void TransactionHasDataToWrite(nsAHttpTransaction *)
     {
         // by default do nothing - only multiplexed protocols need to overload
-        return;
     }
 
     // This is the companion to *HasDataToWrite() for the case
@@ -76,7 +75,6 @@ public:
     virtual void TransactionHasDataToRecv(nsAHttpTransaction *)
     {
         // by default do nothing - only multiplexed protocols need to overload
-        return;
     }
 
     // called by the connection manager to close a transaction being processed
@@ -147,13 +145,8 @@ public:
     // nsHttp.h version
     virtual uint32_t Version() = 0;
 
-    // Throttling control, can be called only on the socket thread. HTTP/1
-    // implementation effects whether we AsyncWait on the socket input stream
-    // after reading data.  This doesn't have a counter-like logic, hence
-    // calling it with aThrottle = false will re-enable read from the socket
-    // immediately.  Calling more than once with the same argument value has
-    // no effect.
-    virtual void ThrottleResponse(bool aThrottle) = 0;
+    // A notification of the current active tab id change.
+    virtual void TopLevelOuterContentWindowIdChanged(uint64_t windowId) = 0;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsAHttpConnection, NS_AHTTPCONNECTION_IID)
@@ -173,6 +166,7 @@ NS_DEFINE_STATIC_IID_ACCESSOR(nsAHttpConnection, NS_AHTTPCONNECTION_IID)
     MOZ_MUST_USE nsresult PushBack(const char *, uint32_t) override; \
     already_AddRefed<nsHttpConnection> TakeHttpConnection() override; \
     already_AddRefed<nsHttpConnection> HttpConnection() override; \
+    void TopLevelOuterContentWindowIdChanged(uint64_t windowId) override; \
     /*                                                                  \
        Thes methods below have automatic definitions that just forward the \
        function to a lower level connection object        \

@@ -286,7 +286,7 @@ interface nsIHttpChannel : nsIChannel
 
    /** Indicates whether channel should be treated as the main one for the
     *  current document.  If manually set to true, will always remain true.  Otherwise,
-    *  will be true iff LOAD_DOCUMENT_URI is set in the channel's loadflags.
+    *  will be true if LOAD_DOCUMENT_URI is set in the channel's loadflags.
     */
     [must_use] attribute boolean isMainDocumentChannel;
 
@@ -445,6 +445,18 @@ interface nsIHttpChannel : nsIChannel
     [must_use] void redirectTo(in nsIURI aTargetURI);
 
     /**
+     * Flags a channel to be upgraded to HTTPS.
+     *
+     * Upgrading to a secure channel must happen before or during
+     * "http-on-modify-request". If redirectTo is called early as well, it
+     * will win and upgradeToSecure will be a no-op.
+     *
+     * @throws NS_ERROR_NOT_AVAILABLE if called after the channel has already
+     *         started to deliver the content to its listener.
+     */
+    [must_use] void upgradeToSecure();
+
+    /**
      * Identifies the request context for this load.
      */
     [noscript, must_use] attribute uint64_t requestContextID;
@@ -478,4 +490,14 @@ interface nsIHttpChannel : nsIChannel
      *       Don't alter it otherwise.
      */
     [must_use] attribute uint64_t topLevelOuterContentWindowId;
+
+    /**
+     * In e10s, the information that the CORS response blocks the load is in the
+     * parent, which doesn't know the true window id of the request, so we may
+     * need to proxy the request to the child.
+     *
+     * @param aMessage
+     *        The message to print in the console.
+     */
+    void logBlockedCORSRequest(in AString aMessage);
 };

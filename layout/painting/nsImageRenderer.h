@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,12 +15,14 @@ class gfxDrawable;
 namespace mozilla {
 
 namespace layers {
+class StackingContextHelper;
 class WebRenderParentCommand;
-class WebRenderDisplayItemLayer;
+class WebRenderLayerManager;
 } // namespace layers
 
 namespace wr {
 class DisplayListBuilder;
+class IpcResourceUpdateQueue;
 } // namespace wr
 
 // A CSSSizeOrRatio represents a (possibly partially specified) size for use
@@ -98,7 +101,7 @@ struct CSSSizeOrRatio
  */
 class nsImageRenderer {
 public:
-  typedef mozilla::image::DrawResult DrawResult;
+  typedef mozilla::image::ImgDrawResult ImgDrawResult;
   typedef mozilla::layers::LayerManager LayerManager;
   typedef mozilla::layers::ImageContainer ImageContainer;
 
@@ -192,8 +195,8 @@ public:
    * {background|mask}-specific arguments.
    * @see nsLayoutUtils::DrawImage() for parameters.
    */
-  DrawResult DrawLayer(nsPresContext*       aPresContext,
-                       nsRenderingContext&  aRenderingContext,
+  ImgDrawResult DrawLayer(nsPresContext*       aPresContext,
+                       gfxContext&          aRenderingContext,
                        const nsRect&        aDest,
                        const nsRect&        aFill,
                        const nsPoint&       aAnchor,
@@ -206,16 +209,18 @@ public:
    * {background|mask}-specific arguments.
    * @see nsLayoutUtils::DrawImage() for parameters.
    */
-  void BuildWebRenderDisplayItemsForLayer(nsPresContext*       aPresContext,
-                                          mozilla::wr::DisplayListBuilder& aBuilder,
-                                          nsTArray<layers::WebRenderParentCommand>& aParentCommands,
-                                          mozilla::layers::WebRenderDisplayItemLayer* aLayer,
-                                          const nsRect&        aDest,
-                                          const nsRect&        aFill,
-                                          const nsPoint&       aAnchor,
-                                          const nsRect&        aDirty,
-                                          const nsSize&        aRepeatSize,
-                                          float                aOpacity);
+  ImgDrawResult BuildWebRenderDisplayItemsForLayer(nsPresContext*       aPresContext,
+                                                mozilla::wr::DisplayListBuilder& aBuilder,
+                                                mozilla::wr::IpcResourceUpdateQueue& aResource,
+                                                const mozilla::layers::StackingContextHelper& aSc,
+                                                mozilla::layers::WebRenderLayerManager* aManager,
+                                                nsDisplayItem*       aItem,
+                                                const nsRect&        aDest,
+                                                const nsRect&        aFill,
+                                                const nsPoint&       aAnchor,
+                                                const nsRect&        aDirty,
+                                                const nsSize&        aRepeatSize,
+                                                float                aOpacity);
 
   /**
    * Draw the image to a single component of a border-image style rendering.
@@ -236,9 +241,9 @@ public:
    * aHasIntrinsicRatio is used to record if the source image has fixed
    * intrinsic ratio.
    */
-  DrawResult
+  ImgDrawResult
   DrawBorderImageComponent(nsPresContext*       aPresContext,
-                           nsRenderingContext&  aRenderingContext,
+                           gfxContext&          aRenderingContext,
                            const nsRect&        aDirtyRect,
                            const nsRect&        aFill,
                            const mozilla::CSSIntRect& aSrc,
@@ -256,8 +261,8 @@ public:
   already_AddRefed<imgIContainer> GetImage();
 
   bool IsImageContainerAvailable(layers::LayerManager* aManager, uint32_t aFlags);
-  bool IsReady() const { return mPrepareResult == DrawResult::SUCCESS; }
-  DrawResult PrepareResult() const { return mPrepareResult; }
+  bool IsReady() const { return mPrepareResult == ImgDrawResult::SUCCESS; }
+  ImgDrawResult PrepareResult() const { return mPrepareResult; }
   void SetExtendMode(mozilla::gfx::ExtendMode aMode) { mExtendMode = aMode; }
   void SetMaskOp(uint8_t aMaskOp) { mMaskOp = aMaskOp; }
   void PurgeCacheForViewportChange(const mozilla::Maybe<nsSize>& aSVGViewportSize,
@@ -273,8 +278,8 @@ private:
    *
    * @see nsLayoutUtils::DrawImage() for other parameters.
    */
-  DrawResult Draw(nsPresContext*       aPresContext,
-                  nsRenderingContext&  aRenderingContext,
+  ImgDrawResult Draw(nsPresContext*       aPresContext,
+                  gfxContext&          aRenderingContext,
                   const nsRect&        aDirtyRect,
                   const nsRect&        aDest,
                   const nsRect&        aFill,
@@ -290,17 +295,19 @@ private:
    *
    * @see nsLayoutUtils::DrawImage() for other parameters.
    */
-  void BuildWebRenderDisplayItems(nsPresContext*       aPresContext,
-                                  mozilla::wr::DisplayListBuilder& aBuilder,
-                                  nsTArray<layers::WebRenderParentCommand>& aParentCommands,
-                                  mozilla::layers::WebRenderDisplayItemLayer* aLayer,
-                                  const nsRect&        aDirtyRect,
-                                  const nsRect&        aDest,
-                                  const nsRect&        aFill,
-                                  const nsPoint&       aAnchor,
-                                  const nsSize&        aRepeatSize,
-                                  const mozilla::CSSIntRect& aSrc,
-                                  float                aOpacity = 1.0);
+  ImgDrawResult BuildWebRenderDisplayItems(nsPresContext*       aPresContext,
+                                        mozilla::wr::DisplayListBuilder& aBuilder,
+                                        mozilla::wr::IpcResourceUpdateQueue& aResources,
+                                        const mozilla::layers::StackingContextHelper& aSc,
+                                        mozilla::layers::WebRenderLayerManager* aManager,
+                                        nsDisplayItem*       aItem,
+                                        const nsRect&        aDirtyRect,
+                                        const nsRect&        aDest,
+                                        const nsRect&        aFill,
+                                        const nsPoint&       aAnchor,
+                                        const nsSize&        aRepeatSize,
+                                        const mozilla::CSSIntRect& aSrc,
+                                        float                aOpacity = 1.0);
 
   /**
    * Helper method for creating a gfxDrawable from mPaintServerFrame or
@@ -318,7 +325,7 @@ private:
   RefPtr<nsStyleGradient> mGradientData;
   nsIFrame*                 mPaintServerFrame;
   nsLayoutUtils::SurfaceFromElementResult mImageElementSurface;
-  DrawResult                mPrepareResult;
+  ImgDrawResult                mPrepareResult;
   nsSize                    mSize; // unscaled size of the image, in app units
   uint32_t                  mFlags;
   mozilla::gfx::ExtendMode  mExtendMode;

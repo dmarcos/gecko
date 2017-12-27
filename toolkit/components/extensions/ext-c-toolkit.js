@@ -2,7 +2,17 @@
 
 Cu.import("resource://gre/modules/ExtensionCommon.jsm");
 
-global.SingletonEventManager = ExtensionCommon.SingletonEventManager;
+XPCOMUtils.defineLazyModuleGetter(this, "Services",
+                                  "resource://gre/modules/Services.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "DevToolsShim",
+                                  "chrome://devtools-shim/content/DevToolsShim.jsm");
+
+// These are defined on "global" which is used for the same scopes as the other
+// ext-c-*.js files.
+/* exported EventManager */
+/* global EventManager: false */
+
+global.EventManager = ExtensionCommon.EventManager;
 
 global.initializeBackgroundPage = (contentWindow) => {
   // Override the `alert()` method inside background windows;
@@ -11,11 +21,7 @@ global.initializeBackgroundPage = (contentWindow) => {
   let alertDisplayedWarning = false;
   let alertOverwrite = text => {
     if (!alertDisplayedWarning) {
-      require("devtools/client/framework/devtools-browser");
-
-      let hudservice = require("devtools/client/webconsole/hudservice");
-      hudservice.openBrowserConsoleOrFocus();
-
+      DevToolsShim.openBrowserConsole();
       contentWindow.console.warn("alert() is not supported in background windows; please use console.log instead.");
 
       alertDisplayedWarning = true;
@@ -36,6 +42,13 @@ extensions.registerModules({
       ["runtime", "getBackgroundPage"],
     ],
   },
+  contentScripts: {
+    url: "chrome://extensions/content/ext-c-contentScripts.js",
+    scopes: ["addon_child"],
+    paths: [
+      ["contentScripts"],
+    ],
+  },
   extension: {
     url: "chrome://extensions/content/ext-c-extension.js",
     scopes: ["addon_child", "content_child", "devtools_child", "proxy_script"],
@@ -48,13 +61,6 @@ extensions.registerModules({
     scopes: ["addon_child", "content_child", "devtools_child", "proxy_script"],
     paths: [
       ["i18n"],
-    ],
-  },
-  permissions: {
-    url: "chrome://extensions/content/ext-c-permissions.js",
-    scopes: ["addon_child", "content_child", "devtools_child", "proxy_script"],
-    paths: [
-      ["permissions"],
     ],
   },
   runtime: {
@@ -76,6 +82,13 @@ extensions.registerModules({
     scopes: ["addon_child", "content_child", "devtools_child", "proxy_script"],
     paths: [
       ["test"],
+    ],
+  },
+  webRequest: {
+    url: "chrome://extensions/content/ext-c-webRequest.js",
+    scopes: ["addon_child"],
+    paths: [
+      ["webRequest"],
     ],
   },
 });

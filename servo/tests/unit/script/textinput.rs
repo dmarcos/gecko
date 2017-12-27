@@ -7,7 +7,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use msg::constellation_msg::{ALT, CONTROL, SUPER};
 use msg::constellation_msg::{Key, KeyModifiers};
 use script::clipboard_provider::DummyClipboardContext;
 use script::test::DOMString;
@@ -429,29 +428,29 @@ fn test_navigation_keyboard_shortcuts() {
     let mut textinput = text_input(Lines::Multiple, "hello áéc");
 
     // Test that CMD + Right moves to the end of the current line.
-    textinput.handle_keydown_aux(None, Key::Right, SUPER);
+    textinput.handle_keydown_aux(None, Key::Right, KeyModifiers::SUPER);
     assert_eq!(textinput.edit_point.index, 11);
     // Test that CMD + Right moves to the beginning of the current line.
-    textinput.handle_keydown_aux(None, Key::Left, SUPER);
+    textinput.handle_keydown_aux(None, Key::Left, KeyModifiers::SUPER);
     assert_eq!(textinput.edit_point.index, 0);
     // Test that CTRL + ALT + E moves to the end of the current line also.
-    textinput.handle_keydown_aux(None, Key::E, CONTROL | ALT);
+    textinput.handle_keydown_aux(None, Key::E, KeyModifiers::CONTROL | KeyModifiers::ALT);
     assert_eq!(textinput.edit_point.index, 11);
     // Test that CTRL + ALT + A moves to the beginning of the current line also.
-    textinput.handle_keydown_aux(None, Key::A, CONTROL | ALT);
+    textinput.handle_keydown_aux(None, Key::A, KeyModifiers::CONTROL | KeyModifiers::ALT);
     assert_eq!(textinput.edit_point.index, 0);
 
     // Test that ALT + Right moves to the end of the word.
-    textinput.handle_keydown_aux(None, Key::Right, ALT);
+    textinput.handle_keydown_aux(None, Key::Right, KeyModifiers::ALT);
     assert_eq!(textinput.edit_point.index, 5);
     // Test that CTRL + ALT + F moves to the end of the word also.
-    textinput.handle_keydown_aux(None, Key::F, CONTROL | ALT);
+    textinput.handle_keydown_aux(None, Key::F, KeyModifiers::CONTROL | KeyModifiers::ALT);
     assert_eq!(textinput.edit_point.index, 11);
     // Test that ALT + Left moves to the end of the word.
-    textinput.handle_keydown_aux(None, Key::Left, ALT);
+    textinput.handle_keydown_aux(None, Key::Left, KeyModifiers::ALT);
     assert_eq!(textinput.edit_point.index, 6);
     // Test that CTRL + ALT + B moves to the end of the word also.
-    textinput.handle_keydown_aux(None, Key::B, CONTROL | ALT);
+    textinput.handle_keydown_aux(None, Key::B, KeyModifiers::CONTROL | KeyModifiers::ALT);
     assert_eq!(textinput.edit_point.index, 0);
 }
 
@@ -510,9 +509,9 @@ fn test_textinput_set_content() {
 #[test]
 fn test_clipboard_paste() {
     #[cfg(target_os = "macos")]
-    const MODIFIERS: KeyModifiers = SUPER;
+    const MODIFIERS: KeyModifiers = KeyModifiers::SUPER;
     #[cfg(not(target_os = "macos"))]
-    const MODIFIERS: KeyModifiers = CONTROL;
+    const MODIFIERS: KeyModifiers = KeyModifiers::CONTROL;
 
     let mut textinput = TextInput::new(Lines::Single,
                                        DOMString::from("defg"),
@@ -584,19 +583,19 @@ fn test_textinput_cursor_position_correct_after_clearing_selection() {
 #[test]
 fn test_textinput_set_selection_with_direction() {
     let mut textinput = text_input(Lines::Single, "abcdef");
-    textinput.selection_direction = SelectionDirection::Forward;
-    textinput.set_selection_range(2, 6);
+    textinput.set_selection_range(2, 6, SelectionDirection::Forward);
     assert_eq!(textinput.edit_point.line, 0);
     assert_eq!(textinput.edit_point.index, 6);
+    assert_eq!(textinput.selection_direction, SelectionDirection::Forward);
 
     assert!(textinput.selection_begin.is_some());
     assert_eq!(textinput.selection_begin.unwrap().line, 0);
     assert_eq!(textinput.selection_begin.unwrap().index, 2);
 
-    textinput.selection_direction = SelectionDirection::Backward;
-    textinput.set_selection_range(2, 6);
+    textinput.set_selection_range(2, 6, SelectionDirection::Backward);
     assert_eq!(textinput.edit_point.line, 0);
     assert_eq!(textinput.edit_point.index, 2);
+    assert_eq!(textinput.selection_direction, SelectionDirection::Backward);
 
     assert!(textinput.selection_begin.is_some());
     assert_eq!(textinput.selection_begin.unwrap().line, 0);

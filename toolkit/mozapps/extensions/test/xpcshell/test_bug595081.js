@@ -13,15 +13,15 @@ function run_test() {
   // Verify that properties cannot be changed
   let old = AddonManager.STATE_AVAILABLE;
   AddonManager.STATE_AVAILABLE = 28;
-  do_check_eq(AddonManager.STATE_AVAILABLE, old);
+  Assert.equal(AddonManager.STATE_AVAILABLE, old);
 
   // Verify that functions cannot be replaced
   AddonManager.isInstallEnabled = function() {
     do_throw("Should not be able to replace a function");
-  }
+  };
   AddonManager.isInstallEnabled("application/x-xpinstall");
 
   // Verify that properties cannot be added
   AddonManager.foo = "bar";
-  do_check_false("foo" in AddonManager);
+  Assert.equal(false, "foo" in AddonManager);
 }

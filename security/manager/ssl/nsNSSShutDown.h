@@ -14,7 +14,6 @@
 #include "nspr.h"
 
 class nsNSSShutDownObject;
-class nsOnPK11LogoutCancelObject;
 
 // Singleton, owned by nsNSSShutDownList
 class nsNSSActivityState
@@ -57,6 +56,12 @@ class nsNSSShutDownPreventionLock
 public:
   nsNSSShutDownPreventionLock();
   ~nsNSSShutDownPreventionLock();
+private:
+  // Keeps track of whether or not we actually managed to enter the NSS activity
+  // state. This is important because if we're attempting to shut down and we
+  // can't enter the NSS activity state, we need to not attempt to leave it when
+  // our destructor runs.
+  bool mEnteredActivityState;
 };
 
 // Singleton, used by nsNSSComponent to track the list of PSM objects,
@@ -68,21 +73,14 @@ public:
   static void remember(nsNSSShutDownObject *o);
   static void forget(nsNSSShutDownObject *o);
 
-  // track instances that would like notification when
-  // a PK11 logout operation is performed.
-  static void remember(nsOnPK11LogoutCancelObject *o);
-  static void forget(nsOnPK11LogoutCancelObject *o);
-
   // Release all tracked NSS resources and prevent nsNSSShutDownObjects from
   // using NSS functions.
   static nsresult evaporateAllNSSResourcesAndShutDown();
 
-  // PSM has been asked to log out of a token.
-  // Notify all registered instances that want to react to that event.
-  static nsresult doPK11Logout();
-
   // Signal entering/leaving a scope where shutting down NSS is prohibited.
-  static void enterActivityState();
+  // enteredActivityState will be set to true if we actually managed to enter
+  // the NSS activity state.
+  static void enterActivityState(/*out*/ bool& enteredActivityState);
   static void leaveActivityState();
 
 private:
@@ -93,7 +91,6 @@ private:
 
 protected:
   PLDHashTable mObjects;
-  PLDHashTable mPK11LogoutCancelObjects;
   nsNSSActivityState mActivityState;
 };
 
@@ -233,38 +230,6 @@ protected:
   virtual void virtualDestroyNSSReference() = 0;
 private:
   volatile bool mAlreadyShutDown;
-};
-
-class nsOnPK11LogoutCancelObject
-{
-public:
-  nsOnPK11LogoutCancelObject()
-    : mIsLoggedOut(false)
-  {
-    nsNSSShutDownList::remember(this);
-  }
-
-  virtual ~nsOnPK11LogoutCancelObject()
-  {
-    nsNSSShutDownList::forget(this);
-  }
-
-  void logout()
-  {
-    // We do not care for a race condition.
-    // Once the bool arrived at false,
-    // later calls to isPK11LoggedOut() will see it.
-    // This is a one-time change from 0 to 1.
-    mIsLoggedOut = true;
-  }
-
-  bool isPK11LoggedOut()
-  {
-    return mIsLoggedOut;
-  }
-
-private:
-  volatile bool mIsLoggedOut;
 };
 
 #endif // nsNSSShutDown_h

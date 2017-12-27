@@ -8,15 +8,16 @@
 
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/dom/ContentParent.h"
+#include "mozilla/dom/DOMTypes.h"
 #include "mozilla/Logging.h"
 #include "mozilla/StaticPtr.h"
 
-static LazyLogModule sScreenLog("WidgetScreen");
-
-NS_IMPL_ISUPPORTS(ScreenManager, nsIScreenManager)
+static mozilla::LazyLogModule sScreenLog("WidgetScreen");
 
 namespace mozilla {
 namespace widget {
+
+NS_IMPL_ISUPPORTS(ScreenManager, nsIScreenManager)
 
 ScreenManager::ScreenManager()
 {
@@ -78,7 +79,7 @@ template<class Range>
 void
 ScreenManager::CopyScreensToRemoteRange(Range aRemoteRange)
 {
-  AutoTArray<ScreenDetails, 4> screens;
+  AutoTArray<dom::ScreenDetails, 4> screens;
   for (auto& screen : mScreenList) {
     screens.AppendElement(screen->ToScreenDetails());
   }
@@ -92,7 +93,7 @@ ScreenManager::CopyScreensToRemoteRange(Range aRemoteRange)
 }
 
 void
-ScreenManager::CopyScreensToRemote(ContentParent* aContentParent)
+ScreenManager::CopyScreensToRemote(dom::ContentParent* aContentParent)
 {
   MOZ_ASSERT(aContentParent);
   MOZ_ASSERT(XRE_IsParentProcess());
@@ -110,7 +111,7 @@ ScreenManager::CopyScreensToAllRemotesIfIsParent()
 
   MOZ_LOG(sScreenLog, LogLevel::Debug, ("Refreshing all ContentParents"));
 
-  CopyScreensToRemoteRange(ContentParent::AllProcesses(ContentParent::eLive));
+  CopyScreensToRemoteRange(dom::ContentParent::AllProcesses(dom::ContentParent::eLive));
 }
 
 // Returns the screen that contains the rectangle. If the rect overlaps
@@ -129,7 +130,8 @@ ScreenManager::ScreenForRect(int32_t aX, int32_t aY,
     RefPtr<Screen> ret = new Screen(LayoutDeviceIntRect(), LayoutDeviceIntRect(),
                                     0, 0,
                                     DesktopToLayoutDeviceScale(),
-                                    CSSToLayoutDeviceScale());
+                                    CSSToLayoutDeviceScale(),
+                                    96 /* dpi */);
     ret.forget(aOutScreen);
     return NS_OK;
   }
@@ -155,9 +157,49 @@ ScreenManager::ScreenForRect(int32_t aX, int32_t aY,
     DesktopIntRect screenRect(x, y, width, height);
     screenRect.IntersectRect(screenRect, windowRect);
     uint32_t tempArea = screenRect.width * screenRect.height;
-    if (tempArea >= area) {
+    if (tempArea > area) {
       which = screen.get();
       area = tempArea;
+    }
+  }
+
+  // If the rect intersects one or more screen,
+  // return the screen that has the largest intersection.
+  if (area > 0) {
+    RefPtr<Screen> ret = which;
+    ret.forget(aOutScreen);
+    return NS_OK;
+  }
+
+  // If the rect does not intersect a screen, find
+  // a screen that is nearest to the rect.
+  uint32_t distance = UINT32_MAX;
+  for (auto& screen : mScreenList) {
+    int32_t  x, y, width, height;
+    x = y = width = height = 0;
+    screen->GetRectDisplayPix(&x, &y, &width, &height);
+
+    uint32_t distanceX = 0;
+    if (aX > (x + width)) {
+      distanceX = aX - (x + width);
+    } else if ((aX + aWidth) < x) {
+      distanceX = x - (aX + aWidth);
+    }
+
+    uint32_t distanceY = 0;
+    if (aY > (y + height)) {
+      distanceY = aY - (y + height);
+    } else if ((aY + aHeight) < y) {
+      distanceY = y - (aY + aHeight);
+    }
+
+    uint32_t tempDistance = distanceX * distanceX + distanceY * distanceY;
+    if (tempDistance < distance) {
+      which = screen.get();
+      distance = tempDistance;
+      if (distance == 0) {
+        break;
+      }
     }
   }
 
@@ -178,7 +220,8 @@ ScreenManager::GetPrimaryScreen(nsIScreen** aPrimaryScreen)
     RefPtr<Screen> ret = new Screen(LayoutDeviceIntRect(), LayoutDeviceIntRect(),
                                     0, 0,
                                     DesktopToLayoutDeviceScale(),
-                                    CSSToLayoutDeviceScale());
+                                    CSSToLayoutDeviceScale(),
+                                    96 /* dpi */);
     ret.forget(aPrimaryScreen);
     return NS_OK;
   }

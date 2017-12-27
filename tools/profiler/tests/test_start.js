@@ -1,7 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-  
+
 function run_test() {
   // If we can't get the profiler component then assume gecko was
   // built without it and pass all the tests
@@ -13,13 +13,13 @@ function run_test() {
   if (!profiler)
     return;
 
-  do_check_true(!profiler.IsActive());
+  Assert.ok(!profiler.IsActive());
 
   profiler.StartProfiler(10, 100, [], 0);
 
-  do_check_true(profiler.IsActive());
+  Assert.ok(profiler.IsActive());
 
   profiler.StopProfiler();
 
-  do_check_true(!profiler.IsActive());
+  Assert.ok(!profiler.IsActive());
 }

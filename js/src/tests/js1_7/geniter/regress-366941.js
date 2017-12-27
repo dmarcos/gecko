@@ -19,7 +19,6 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
 
@@ -29,7 +28,7 @@ function test()
   expect = '1,2;3,4;5,6;';
   actual = '';
 
-  for each (var [foo, bar] in list1) {
+  for (var [foo, bar] of list1) {
     actual += foo + "," + bar + ";";
   }
 
@@ -37,14 +36,14 @@ function test()
 
   expect = '1,2,3;4,5,6;7,8,9;';
   actual = '';
-  for each (var [foo, bar, baz] in list2) {
+  for (var [foo, bar, baz] of list2) {
     actual += foo + "," + bar + "," + baz + ";";
   }
 
   reportCompare(expect, actual, summary + ': 2');
 
-  function gen(list) {
-    for each (var test in list) {
+  function* gen(list) {
+    for (var test of list) {
       yield test;
     }
   }
@@ -54,7 +53,7 @@ function test()
   expect = '1,2;3,4;5,6;';
   actual = '';
 
-  for (var [foo, bar] in iter1) {
+  for (var [foo, bar] of iter1) {
     actual += foo + "," + bar + ";";
   }
 
@@ -68,7 +67,7 @@ function test()
 
   try
   {
-    eval('for (var [foo, bar, baz] in iter2) {' +
+    eval('for (var [foo, bar, baz] of iter2) {' +
          'actual += foo + "," + bar + "," + baz + ";";' +
          '}');
   }
@@ -78,6 +77,4 @@ function test()
   }
 
   reportCompare(expect, actual, summary + ': 4');
-
-  exitFunc ('test');
 }

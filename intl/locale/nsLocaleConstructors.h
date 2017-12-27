@@ -9,11 +9,7 @@
 #include "nsCollation.h"
 #include "nsCollationCID.h"
 #include "mozilla/ModuleUtils.h"
-#include "nsILocaleService.h"
-#include "nsIScriptableDateFormat.h"
 #include "nsIServiceManager.h"
-#include "nsLanguageAtomService.h"
-#include "nsPlatformCharset.h"
 #include "LocaleService.h"
 #include "OSPreferences.h"
 
@@ -34,12 +30,8 @@ ctor_(nsISupports* aOuter, REFNSIID aIID, void** aResult) \
 }
 
 
-NSLOCALE_MAKE_CTOR(CreateLocaleService, nsILocaleService, NS_NewLocaleService)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsCollation)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsCollationFactory)
-//NS_GENERIC_FACTORY_CONSTRUCTOR(nsScriptableDateTimeFormat)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsLanguageAtomService)
-NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsPlatformCharset, Init)
 
 namespace mozilla {
 namespace intl {

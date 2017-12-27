@@ -5,41 +5,43 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsSHistory.h"
+
 #include <algorithm>
 
-// Helper Classes
-#include "mozilla/Preferences.h"
-#include "mozilla/StaticPtr.h"
-
-// Interfaces Needed
-#include "nsILayoutHistoryState.h"
+#include "nsCOMArray.h"
+#include "nsComponentManagerUtils.h"
+#include "nsDocShell.h"
+#include "nsIContentViewer.h"
 #include "nsIDocShell.h"
 #include "nsIDocShellLoadInfo.h"
-#include "nsISHContainer.h"
 #include "nsIDocShellTreeItem.h"
-#include "nsIURI.h"
-#include "nsIContentViewer.h"
+#include "nsILayoutHistoryState.h"
 #include "nsIObserverService.h"
-#include "prclist.h"
-#include "mozilla/Services.h"
-#include "nsTArray.h"
-#include "nsCOMArray.h"
-#include "nsDocShell.h"
-#include "mozilla/Attributes.h"
+#include "nsISHContainer.h"
 #include "nsISHEntry.h"
-#include "nsISHTransaction.h"
 #include "nsISHistoryListener.h"
-#include "nsComponentManagerUtils.h"
+#include "nsISHTransaction.h"
+#include "nsIURI.h"
 #include "nsNetUtil.h"
-
-// For calculating max history entries and max cachable contentviewers
+#include "nsTArray.h"
 #include "prsystem.h"
+
+#include "mozilla/Attributes.h"
+#include "mozilla/LinkedList.h"
 #include "mozilla/MathAlgorithms.h"
+#include "mozilla/Preferences.h"
+#include "mozilla/Services.h"
+#include "mozilla/StaticPtr.h"
+#include "mozilla/dom/TabGroup.h"
 
 using namespace mozilla;
 
 #define PREF_SHISTORY_SIZE "browser.sessionhistory.max_entries"
 #define PREF_SHISTORY_MAX_TOTAL_VIEWERS "browser.sessionhistory.max_total_viewers"
+#define CONTENT_VIEWER_TIMEOUT_SECONDS "browser.sessionhistory.contentViewerTimeout"
+
+// Default this to time out unused content viewers after 30 minutes
+#define CONTENT_VIEWER_TIMEOUT_SECONDS_DEFAULT (30 * 60)
 
 static const char* kObservedPrefs[] = {
   PREF_SHISTORY_SIZE,
@@ -49,7 +51,7 @@ static const char* kObservedPrefs[] = {
 
 static int32_t gHistoryMaxSize = 50;
 // List of all SHistory objects, used for content viewer cache eviction
-static PRCList gSHistoryList;
+static LinkedList<nsSHistory> gSHistoryList;
 // Max viewers allowed total, across all SHistory objects - negative default
 // means we will calculate how many viewers to cache based on total memory
 int32_t nsSHistory::sHistoryMaxTotalViewers = -1;
@@ -211,7 +213,7 @@ nsSHistory::EvictContentViewerForTransaction(nsISHTransaction* aTrans)
     LOG_SHENTRY_SPEC(("Evicting content viewer 0x%p for "
                       "owning SHEntry 0x%p at %s.",
                       viewer.get(), ownerEntry.get(), _spec),
-                     ownerEntry);
+                      ownerEntry);
 
     // Drop the presentation state before destroying the viewer, so that
     // document teardown is able to correctly persist the state.
@@ -233,19 +235,17 @@ nsSHistory::nsSHistory()
   : mIndex(-1)
   , mLength(0)
   , mRequestedIndex(-1)
-  , mIsPartial(false)
   , mGlobalIndexOffset(0)
   , mEntriesInFollowingPartialHistories(0)
   , mRootDocShell(nullptr)
+  , mIsPartial(false)
 {
   // Add this new SHistory object to the list
-  PR_APPEND_LINK(this, &gSHistoryList);
+  gSHistoryList.insertBack(this);
 }
 
 nsSHistory::~nsSHistory()
 {
-  // Remove this SHistory object from the list
-  PR_REMOVE_LINK(this);
 }
 
 NS_IMPL_ADDREF(nsSHistory)
@@ -256,6 +256,7 @@ NS_INTERFACE_MAP_BEGIN(nsSHistory)
   NS_INTERFACE_MAP_ENTRY(nsISHistory)
   NS_INTERFACE_MAP_ENTRY(nsIWebNavigation)
   NS_INTERFACE_MAP_ENTRY(nsISHistoryInternal)
+  NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
 NS_INTERFACE_MAP_END
 
 // static
@@ -334,7 +335,7 @@ nsSHistory::Startup()
   // The goal of this is to unbreak users who have inadvertently set their
   // session history size to less than the default value.
   int32_t defaultHistoryMaxSize =
-    Preferences::GetDefaultInt(PREF_SHISTORY_SIZE, 50);
+    Preferences::GetInt(PREF_SHISTORY_SIZE, 50, PrefValueKind::Default);
   if (gHistoryMaxSize < defaultHistoryMaxSize) {
     gHistoryMaxSize = defaultHistoryMaxSize;
   }
@@ -357,8 +358,6 @@ nsSHistory::Startup()
     }
   }
 
-  // Initialize the global list of all SHistory objects
-  PR_INIT_CLIST(&gSHistoryList);
   return NS_OK;
 }
 
@@ -385,6 +384,17 @@ NS_IMETHODIMP
 nsSHistory::AddEntry(nsISHEntry* aSHEntry, bool aPersist)
 {
   NS_ENSURE_ARG(aSHEntry);
+
+  nsCOMPtr<nsISHistory> shistoryOfEntry;
+  aSHEntry->GetSHistory(getter_AddRefs(shistoryOfEntry));
+  if (shistoryOfEntry && shistoryOfEntry != this) {
+    NS_WARNING("The entry has been associated to another nsISHistory instance. "
+               "Try nsISHEntry.clone() and nsISHEntry.abandonBFCacheEntry() "
+               "first if you're copying an entry from another nsISHistory.");
+    return NS_ERROR_FAILURE;
+  }
+
+  aSHEntry->SetSHistory(this);
 
   // If we have a root docshell, update the docshell id of the root shentry to
   // match the id of that docshell
@@ -578,7 +588,7 @@ nsSHistory::GetEntryAtIndex(int32_t aIndex, bool aModifyIndex,
 }
 
 /* Get the transaction at a given index */
-NS_IMETHODIMP
+nsresult
 nsSHistory::GetTransactionAtIndex(int32_t aIndex, nsISHTransaction** aResult)
 {
   nsresult rv;
@@ -694,7 +704,7 @@ nsSHistory::PrintHistory()
 
     nsCOMPtr<nsILayoutHistoryState> layoutHistoryState;
     nsCOMPtr<nsIURI> uri;
-    nsXPIDLString title;
+    nsString title;
 
     entry->GetLayoutHistoryState(getter_AddRefs(layoutHistoryState));
     entry->GetURI(getter_AddRefs(uri));
@@ -866,6 +876,17 @@ nsSHistory::ReplaceEntry(int32_t aIndex, nsISHEntry* aReplaceEntry)
   rv = GetTransactionAtIndex(aIndex, getter_AddRefs(currentTxn));
 
   if (currentTxn) {
+    nsCOMPtr<nsISHistory> shistoryOfEntry;
+    aReplaceEntry->GetSHistory(getter_AddRefs(shistoryOfEntry));
+    if (shistoryOfEntry && shistoryOfEntry != this) {
+      NS_WARNING("The entry has been associated to another nsISHistory instance. "
+                 "Try nsISHEntry.clone() and nsISHEntry.abandonBFCacheEntry() "
+                 "first if you're copying an entry from another nsISHistory.");
+      return NS_ERROR_FAILURE;
+    }
+
+    aReplaceEntry->SetSHistory(this);
+
     NOTIFY_LISTENERS(OnHistoryReplaceEntry, (aIndex));
 
     // Set the replacement entry in the transaction
@@ -1186,9 +1207,7 @@ nsSHistory::GloballyEvictContentViewers()
 
   nsTArray<TransactionAndDistance> transactions;
 
-  PRCList* listEntry = PR_LIST_HEAD(&gSHistoryList);
-  while (listEntry != &gSHistoryList) {
-    nsSHistory* shist = static_cast<nsSHistory*>(listEntry);
+  for (auto shist : gSHistoryList) {
 
     // Maintain a list of the transactions which have viewers and belong to
     // this particular shist object.  We'll add this list to the global list,
@@ -1249,7 +1268,6 @@ nsSHistory::GloballyEvictContentViewers()
     // We've found all the transactions belonging to shist which have viewers.
     // Add those transactions to our global list and move on.
     transactions.AppendElements(shTransactions);
-    listEntry = PR_NEXT_LINK(shist);
   }
 
   // We now have collected all cached content viewers.  First check that we
@@ -1272,8 +1290,13 @@ nsSHistory::GloballyEvictContentViewers()
 }
 
 nsresult
-nsSHistory::EvictExpiredContentViewerForEntry(nsIBFCacheEntry* aEntry)
+nsSHistory::FindTransactionForBFCache(nsIBFCacheEntry* aEntry,
+                                      nsISHTransaction** aResult,
+                                      int32_t* aResultIndex)
 {
+  *aResult = nullptr;
+  *aResultIndex = -1;
+
   int32_t startIndex = std::max(0, mIndex - nsISHistory::VIEWER_WINDOW);
   int32_t endIndex = std::min(mLength - 1, mIndex + nsISHistory::VIEWER_WINDOW);
   nsCOMPtr<nsISHTransaction> trans;
@@ -1293,16 +1316,55 @@ nsSHistory::EvictExpiredContentViewerForEntry(nsIBFCacheEntry* aEntry)
     temp->GetNext(getter_AddRefs(trans));
   }
   if (i > endIndex) {
-    return NS_OK;
+    return NS_ERROR_FAILURE;
   }
 
-  if (i == mIndex) {
+  trans.forget(aResult);
+  *aResultIndex = i;
+  return NS_OK;
+}
+
+nsresult
+nsSHistory::EvictExpiredContentViewerForEntry(nsIBFCacheEntry* aEntry)
+{
+  int32_t index;
+  nsCOMPtr<nsISHTransaction> trans;
+  FindTransactionForBFCache(aEntry, getter_AddRefs(trans), &index);
+
+  if (index == mIndex) {
     NS_WARNING("How did the current SHEntry expire?");
     return NS_OK;
   }
 
-  EvictContentViewerForTransaction(trans);
+  if (trans) {
+    EvictContentViewerForTransaction(trans);
+  }
 
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsSHistory::AddToExpirationTracker(nsIBFCacheEntry* aEntry)
+{
+  RefPtr<nsSHEntryShared> entry = static_cast<nsSHEntryShared*>(aEntry);
+  if (!mHistoryTracker || !entry) {
+    return NS_ERROR_FAILURE;
+  }
+
+  mHistoryTracker->AddObject(entry);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsSHistory::RemoveFromExpirationTracker(nsIBFCacheEntry* aEntry)
+{
+  RefPtr<nsSHEntryShared> entry = static_cast<nsSHEntryShared*>(aEntry);
+  MOZ_ASSERT(mHistoryTracker && !mHistoryTracker->IsEmpty());
+  if (!mHistoryTracker || !entry) {
+    return NS_ERROR_FAILURE;
+  }
+
+  mHistoryTracker->RemoveObject(entry);
   return NS_OK;
 }
 
@@ -1543,6 +1605,20 @@ nsSHistory::RemoveDynEntries(int32_t aIndex, nsISHContainer* aContainer)
   }
 }
 
+void
+nsSHistory::RemoveDynEntriesForBFCacheEntry(nsIBFCacheEntry* aEntry)
+{
+  int32_t index;
+  nsCOMPtr<nsISHTransaction> trans;
+  FindTransactionForBFCache(aEntry, getter_AddRefs(trans), &index);
+  if (trans) {
+    nsCOMPtr<nsISHEntry> entry;
+    trans->GetSHEntry(getter_AddRefs(entry));
+    nsCOMPtr<nsISHContainer> container(do_QueryInterface(entry));
+    RemoveDynEntries(index, container);
+  }
+}
+
 NS_IMETHODIMP
 nsSHistory::UpdateIndex()
 {
@@ -1631,7 +1707,8 @@ nsSHistory::LoadURI(const char16_t* aURI,
                     uint32_t aLoadFlags,
                     nsIURI* aReferringURI,
                     nsIInputStream* aPostStream,
-                    nsIInputStream* aExtraHeaderStream)
+                    nsIInputStream* aExtraHeaderStream,
+                    nsIPrincipal* aTriggeringPrincipal)
 {
   return NS_OK;
 }
@@ -1659,7 +1736,7 @@ nsSHistory::LoadNextPossibleEntry(int32_t aNewIndex, long aLoadType,
   return NS_ERROR_FAILURE;
 }
 
-NS_IMETHODIMP
+nsresult
 nsSHistory::LoadEntry(int32_t aIndex, long aLoadType, uint32_t aHistCmd)
 {
   if (!mRootDocShell) {
@@ -1905,6 +1982,31 @@ NS_IMETHODIMP
 nsSHistory::SetRootDocShell(nsIDocShell* aDocShell)
 {
   mRootDocShell = aDocShell;
+
+  // Init mHistoryTracker on setting mRootDocShell so we can bind its event
+  // target to the tabGroup.
+  if (mRootDocShell) {
+    nsCOMPtr<nsPIDOMWindowOuter> win = mRootDocShell->GetWindow();
+    if (!win) {
+      return NS_ERROR_UNEXPECTED;
+    }
+
+    // Seamonkey moves shistory between <xul:browser>s when restoring a tab.
+    // Let's try not to break our friend too badly...
+    if (mHistoryTracker) {
+      NS_WARNING("Change the root docshell of a shistory is unsafe and "
+                 "potentially problematic.");
+      mHistoryTracker->AgeAllGenerations();
+    }
+
+    RefPtr<mozilla::dom::TabGroup> tabGroup = win->TabGroup();
+    mHistoryTracker = mozilla::MakeUnique<HistoryTracker>(
+      this,
+      mozilla::Preferences::GetUint(CONTENT_VIEWER_TIMEOUT_SECONDS,
+                                    CONTENT_VIEWER_TIMEOUT_SECONDS_DEFAULT),
+      tabGroup->EventTargetFor(mozilla::TaskCategory::Other));
+  }
+
   return NS_OK;
 }
 

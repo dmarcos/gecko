@@ -5,6 +5,8 @@
 
 var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
+Cu.import("resource://services-sync/UIState.jsm");
+
 XPCOMUtils.defineLazyModuleGetter(this, "fxAccounts",
                                   "resource://gre/modules/FxAccounts.jsm");
 
@@ -16,36 +18,37 @@ function test() {
   UITourTest();
 }
 
-registerCleanupFunction(function*() {
-  yield signOut();
-  gFxAccounts.updateUI();
+const oldState = UIState.get();
+registerCleanupFunction(async function() {
+  await signOut();
+  gSync.updateAllUI(oldState);
 });
 
 var tests = [
-  taskify(function* test_highlight_accountStatus_loggedOut() {
-    let userData = yield fxAccounts.getSignedInUser();
+  taskify(async function test_highlight_accountStatus_loggedOut() {
+    let userData = await fxAccounts.getSignedInUser();
     is(userData, null, "Not logged in initially");
-    yield showMenuPromise("appMenu");
-    yield showHighlightPromise("accountStatus");
+    await showMenuPromise("appMenu");
+    await showHighlightPromise("accountStatus");
     let highlight = document.getElementById("UITourHighlightContainer");
     is(highlight.getAttribute("targetName"), "accountStatus", "Correct highlight target");
   }),
 
-  taskify(function* test_highlight_accountStatus_loggedIn() {
-    yield setSignedInUser();
-    let userData = yield fxAccounts.getSignedInUser();
+  taskify(async function test_highlight_accountStatus_loggedIn() {
+    await setSignedInUser();
+    let userData = await fxAccounts.getSignedInUser();
     isnot(userData, null, "Logged in now");
-    gFxAccounts.updateUI(); // Causes a leak (see bug 1332985)
-    yield showMenuPromise("appMenu");
-    yield showHighlightPromise("accountStatus");
+    gSync.updateAllUI({ status: UIState.STATUS_SIGNED_IN, email: "foo@example.com" });
+    await showMenuPromise("appMenu");
+    await showHighlightPromise("accountStatus");
     let highlight = document.getElementById("UITourHighlightContainer");
-    is(highlight.popupBoxObject.anchorNode.id, "PanelUI-fxa-avatar", "Anchored on avatar");
+    let expectedTarget = "appMenu-fxa-avatar";
+    is(highlight.popupBoxObject.anchorNode.id, expectedTarget, "Anchored on avatar");
     is(highlight.getAttribute("targetName"), "accountStatus", "Correct highlight target");
   }),
 ];
 
-// Helpers copied from browser_aboutAccounts.js
-// watch out - these will fire observers which if you aren't careful, may
+// Watch out - these will fire observers which if you aren't careful, may
 // interfere with the tests.
 function setSignedInUser(data) {
   if (!data) {

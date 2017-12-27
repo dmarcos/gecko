@@ -8,56 +8,27 @@
 //===----------------------------------------------------------------------===//
 // IO functions.
 //===----------------------------------------------------------------------===//
-#include "FuzzerExtFunctions.h"
+
+#include "mozilla/Unused.h"
+#include "FuzzerIO.h"
 #include "FuzzerDefs.h"
-#include <iterator>
-#include <fstream>
-#include <dirent.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <unistd.h>
+#include "FuzzerExtFunctions.h"
+#include <algorithm>
 #include <cstdarg>
-#include <cstdio>
+#include <fstream>
+#include <iterator>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 namespace fuzzer {
 
 static FILE *OutputFile = stderr;
-
-bool IsFile(const std::string &Path) {
-  struct stat St;
-  if (stat(Path.c_str(), &St))
-    return false;
-  return S_ISREG(St.st_mode);
-}
 
 long GetEpoch(const std::string &Path) {
   struct stat St;
   if (stat(Path.c_str(), &St))
     return 0;  // Can't stat, be conservative.
   return St.st_mtime;
-}
-
-static void ListFilesInDirRecursive(const std::string &Dir, long *Epoch,
-                                    std::vector<std::string> *V, bool TopDir) {
-  auto E = GetEpoch(Dir);
-  if (Epoch)
-    if (E && *Epoch >= E) return;
-
-  DIR *D = opendir(Dir.c_str());
-  if (!D) {
-    Printf("No such directory: %s; exiting\n", Dir.c_str());
-    exit(1);
-  }
-  while (auto E = readdir(D)) {
-    std::string Path = DirPlusFile(Dir, E->d_name);
-    if (E->d_type == DT_REG || E->d_type == DT_LNK)
-      V->push_back(Path);
-    else if (E->d_type == DT_DIR && *E->d_name != '.')
-      ListFilesInDirRecursive(Path, Epoch, V, false);
-  }
-  closedir(D);
-  if (Epoch && TopDir)
-    *Epoch = E;
 }
 
 Unit FileToVector(const std::string &Path, size_t MaxSize, bool ExitOnError) {
@@ -78,10 +49,6 @@ Unit FileToVector(const std::string &Path, size_t MaxSize, bool ExitOnError) {
   return Res;
 }
 
-void DeleteFile(const std::string &Path) {
-  unlink(Path.c_str());
-}
-
 std::string FileToString(const std::string &Path) {
   std::ifstream T(Path);
   return std::string((std::istreambuf_iterator<char>(T)),
@@ -96,7 +63,7 @@ void WriteToFile(const Unit &U, const std::string &Path) {
   // Use raw C interface because this function may be called from a sig handler.
   FILE *Out = fopen(Path.c_str(), "w");
   if (!Out) return;
-  fwrite(U.data(), sizeof(U[0]), U.size(), Out);
+  mozilla::Unused << fwrite(U.data(), sizeof(U[0]), U.size(), Out);
   fclose(Out);
 }
 
@@ -120,23 +87,26 @@ void ReadDirToVectorOfUnits(const char *Path, std::vector<Unit> *V,
 
 std::string DirPlusFile(const std::string &DirPath,
                         const std::string &FileName) {
-  return DirPath + "/" + FileName;
+  return DirPath + GetSeparator() + FileName;
 }
 
 void DupAndCloseStderr() {
-  int OutputFd = dup(2);
+  int OutputFd = DuplicateFile(2);
   if (OutputFd > 0) {
-    FILE *NewOutputFile = fdopen(OutputFd, "w");
+    FILE *NewOutputFile = OpenFile(OutputFd, "w");
     if (NewOutputFile) {
       OutputFile = NewOutputFile;
       if (EF->__sanitizer_set_report_fd)
-        EF->__sanitizer_set_report_fd(reinterpret_cast<void *>(OutputFd));
-      close(2);
+        EF->__sanitizer_set_report_fd(
+            reinterpret_cast<void *>(GetHandleFromFd(OutputFd)));
+      DiscardOutput(2);
     }
   }
 }
 
-void CloseStdout() { close(1); }
+void CloseStdout() {
+  DiscardOutput(1);
+}
 
 void Printf(const char *Fmt, ...) {
   va_list ap;

@@ -105,7 +105,6 @@ struct cubeb_stream {
   /* Flag indicating draining. Synchronized
    * by stream::mutex lock. */
   int draining;
-  cubeb_stream_type stream_type;
   /* Flags to determine in/out.*/
   uint32_t input_enabled;
   uint32_t output_enabled;
@@ -187,6 +186,29 @@ opensl_set_draining(cubeb_stream * stm, int value)
   stm->draining = value;
 }
 
+static void
+opensl_notify_drained(cubeb_stream * stm)
+{
+  assert(stm);
+  int r = pthread_mutex_lock(&stm->mutex);
+  assert(r == 0);
+  int draining = opensl_get_draining(stm);
+  r = pthread_mutex_unlock(&stm->mutex);
+  assert(r == 0);
+  if (draining) {
+    stm->state_callback(stm, stm->user_ptr, CUBEB_STATE_DRAINED);
+    if (stm->play) {
+      LOG("stop player in play_callback");
+      r = opensl_stop_player(stm);
+      assert(r == CUBEB_OK);
+    }
+    if (stm->recorderItf) {
+      r = opensl_stop_recorder(stm);
+      assert(r == CUBEB_OK);
+    }
+  }
+}
+
 static uint32_t
 opensl_get_shutdown(cubeb_stream * stm)
 {
@@ -217,24 +239,7 @@ play_callback(SLPlayItf caller, void * user_ptr, SLuint32 event)
   assert(stm);
   switch (event) {
     case SL_PLAYEVENT_HEADATMARKER:
-    {
-      int r = pthread_mutex_lock(&stm->mutex);
-      assert(r == 0);
-      draining = opensl_get_draining(stm);
-      r = pthread_mutex_unlock(&stm->mutex);
-      assert(r == 0);
-      if (draining) {
-        stm->state_callback(stm, stm->user_ptr, CUBEB_STATE_DRAINED);
-        if (stm->play) {
-          r = opensl_stop_player(stm);
-          assert(r == CUBEB_OK);
-        }
-        if (stm->recorderItf) {
-          r = opensl_stop_recorder(stm);
-          assert(r == CUBEB_OK);
-        }
-      }
-    }
+      opensl_notify_drained(stm);
     break;
   default:
     break;
@@ -330,9 +335,16 @@ bufferqueue_callback(SLBufferQueueItf caller, void * user_ptr)
     opensl_set_draining(stm, 1);
     r = pthread_mutex_unlock(&stm->mutex);
     assert(r == 0);
-    // Use SL_PLAYEVENT_HEADATMARKER event from slPlayCallback of SLPlayItf
-    // to make sure all the data has been processed.
-    (*stm->play)->SetMarkerPosition(stm->play, (SLmillisecond)written_duration);
+
+    if (written_duration == 0) {
+      // since we didn't write any sample, it's not possible to reach the marker
+      // time and trigger the callback. We should initiative notify drained.
+      opensl_notify_drained(stm);
+    } else {
+      // Use SL_PLAYEVENT_HEADATMARKER event from slPlayCallback of SLPlayItf
+      // to make sure all the data has been processed.
+      (*stm->play)->SetMarkerPosition(stm->play, (SLmillisecond)written_duration);
+    }
     return;
   }
 }
@@ -586,44 +598,14 @@ player_fullduplex_callback(SLBufferQueueItf caller, void * user_ptr)
   TIMESTAMP("EXIT");
 }
 
-#if defined(__ANDROID__)
-static SLuint32
-convert_stream_type_to_sl_stream(cubeb_stream_type stream_type)
-{
-  switch(stream_type) {
-  case CUBEB_STREAM_TYPE_SYSTEM:
-    return SL_ANDROID_STREAM_SYSTEM;
-  case CUBEB_STREAM_TYPE_MUSIC:
-    return SL_ANDROID_STREAM_MEDIA;
-  case CUBEB_STREAM_TYPE_NOTIFICATION:
-    return SL_ANDROID_STREAM_NOTIFICATION;
-  case CUBEB_STREAM_TYPE_ALARM:
-    return SL_ANDROID_STREAM_ALARM;
-  case CUBEB_STREAM_TYPE_VOICE_CALL:
-    return SL_ANDROID_STREAM_VOICE;
-  case CUBEB_STREAM_TYPE_RING:
-    return SL_ANDROID_STREAM_RING;
-  case CUBEB_STREAM_TYPE_SYSTEM_ENFORCED:
-    return SL_ANDROID_STREAM_SYSTEM_ENFORCED;
-  default:
-    return 0xFFFFFFFF;
-  }
-}
-#endif
-
 static void opensl_destroy(cubeb * ctx);
 
 #if defined(__ANDROID__)
-
-// The bionic header file on B2G contains the required
-// declarations on all releases.
-#ifndef MOZ_WIDGET_GONK
-
 #if (__ANDROID_API__ >= ANDROID_VERSION_LOLLIPOP)
 typedef int (system_property_get)(const char*, char*);
 
 static int
-__system_property_get(const char* name, char* value)
+wrap_system_property_get(const char* name, char* value)
 {
   void* libc = dlopen("libc.so", RTLD_LAZY);
   if (!libc) {
@@ -640,7 +622,6 @@ __system_property_get(const char* name, char* value)
   return ret;
 }
 #endif
-#endif
 
 static int
 get_android_version(void)
@@ -649,7 +630,11 @@ get_android_version(void)
 
   memset(version_string, 0, PROP_VALUE_MAX);
 
+#if (__ANDROID_API__ >= ANDROID_VERSION_LOLLIPOP)
+  int len = wrap_system_property_get("ro.build.version.sdk", version_string);
+#else
   int len = __system_property_get("ro.build.version.sdk", version_string);
+#endif
   if (len <= 0) {
     LOG("Failed to get Android version!\n");
     return len;
@@ -901,7 +886,7 @@ opensl_get_min_latency(cubeb * ctx, cubeb_stream_params params, uint32_t * laten
   if (get_primary_output_frame_count) {
     primary_buffer_size = get_primary_output_frame_count();
   } else {
-    if (get_output_frame_count(&primary_buffer_size, params.stream_type) != 0) {
+    if (get_output_frame_count(&primary_buffer_size, AUDIO_STREAM_TYPE_MUSIC) != 0) {
       return CUBEB_ERROR;
     }
   }
@@ -1129,7 +1114,6 @@ opensl_configure_playback(cubeb_stream * stm, cubeb_stream_params * params) {
   assert(params);
 
   stm->inputrate = params->rate;
-  stm->stream_type = params->stream_type;
   stm->framesize = params->channels * sizeof(int16_t);
   stm->lastPosition = -1;
   stm->lastPositionTimeStamp = 0;
@@ -1229,29 +1213,6 @@ opensl_configure_playback(cubeb_stream * stm, cubeb_stream_params * params) {
     stm->queuebuf[i] = calloc(1, stm->queuebuf_len);
     assert(stm->queuebuf[i]);
   }
-
-#if defined(__ANDROID__)
-  SLuint32 stream_type = convert_stream_type_to_sl_stream(params->stream_type);
-  if (stream_type != 0xFFFFFFFF) {
-    SLAndroidConfigurationItf playerConfig;
-    res = (*stm->playerObj)->GetInterface(stm->playerObj,
-                                          stm->context->SL_IID_ANDROIDCONFIGURATION,
-                                          &playerConfig);
-    if (res != SL_RESULT_SUCCESS) {
-      LOG("Failed to get android configuration interface. Error code: %lu", res);
-      return CUBEB_ERROR;
-    }
-
-    res = (*playerConfig)->SetConfiguration(playerConfig,
-                                            SL_ANDROID_KEY_STREAM_TYPE,
-                                            &stream_type,
-                                            sizeof(SLint32));
-    if (res != SL_RESULT_SUCCESS) {
-      LOG("Failed to set android configuration interface. Error code: %lu", res);
-      return CUBEB_ERROR;
-    }
-  }
-#endif
 
   res = (*stm->playerObj)->Realize(stm->playerObj, SL_BOOLEAN_FALSE);
   if (res != SL_RESULT_SUCCESS) {
@@ -1656,7 +1617,7 @@ opensl_stream_get_position(cubeb_stream * stm, uint64_t * position)
 
   samplerate = stm->inputrate;
 
-  r = stm->context->get_output_latency(&mixer_latency, stm->stream_type);
+  r = stm->context->get_output_latency(&mixer_latency, AUDIO_STREAM_TYPE_MUSIC);
   if (r) {
     return CUBEB_ERROR;
   }
@@ -1692,7 +1653,7 @@ opensl_stream_get_latency(cubeb_stream * stm, uint32_t * latency)
   uint32_t mixer_latency; // The latency returned by AudioFlinger is in ms.
 
   /* audio_stream_type_t is an int, so this is okay. */
-  r = stm->context->get_output_latency(&mixer_latency, stm->stream_type);
+  r = stm->context->get_output_latency(&mixer_latency, AUDIO_STREAM_TYPE_MUSIC);
   if (r) {
     return CUBEB_ERROR;
   }
@@ -1742,11 +1703,13 @@ static struct cubeb_ops const opensl_ops = {
   .get_preferred_sample_rate = opensl_get_preferred_sample_rate,
   .get_preferred_channel_layout = NULL,
   .enumerate_devices = NULL,
+  .device_collection_destroy = NULL,
   .destroy = opensl_destroy,
   .stream_init = opensl_stream_init,
   .stream_destroy = opensl_stream_destroy,
   .stream_start = opensl_stream_start,
   .stream_stop = opensl_stream_stop,
+  .stream_reset_default_device = NULL,
   .stream_get_position = opensl_stream_get_position,
   .stream_get_latency = opensl_stream_get_latency,
   .stream_set_volume = opensl_stream_set_volume,

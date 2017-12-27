@@ -11,9 +11,9 @@
 #include "mozilla/dom/BorrowedAttrInfo.h"
 #include "mozilla/dom/FragmentOrElement.h"
 #include "nsIDOMDocumentFragment.h"
+#include "nsStringFwd.h"
 
-class nsIAtom;
-class nsAString;
+class nsAtom;
 class nsIDocument;
 class nsIContent;
 
@@ -43,6 +43,7 @@ public:
 
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(DocumentFragment, FragmentOrElement)
 
   // interface nsIDOMNode
   NS_FORWARD_NSIDOMNODE_TO_NSINODE
@@ -68,36 +69,6 @@ public:
 
   virtual JSObject* WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
 
-  // nsIContent
-  nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                   const nsAString& aValue, bool aNotify)
-  {
-    return SetAttr(aNameSpaceID, aName, nullptr, aValue, aNotify);
-  }
-  virtual nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                           nsIAtom* aPrefix, const nsAString& aValue,
-                           bool aNotify) override
-  {
-    return NS_OK;
-  }
-  virtual nsresult UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
-                             bool aNotify) override
-  {
-    return NS_OK;
-  }
-  virtual const nsAttrName* GetAttrNameAt(uint32_t aIndex) const override
-  {
-    return nullptr;
-  }
-  virtual BorrowedAttrInfo GetAttrInfoAt(uint32_t aIndex) const override
-  {
-    return BorrowedAttrInfo(nullptr, nullptr);
-  }
-  virtual uint32_t GetAttrCount() const override
-  {
-    return 0;
-  }
-
   virtual bool IsNodeOfType(uint32_t aFlags) const override;
 
   virtual nsIDOMNode* AsDOMNode() override { return this; }
@@ -113,7 +84,6 @@ public:
   virtual void UnbindFromTree(bool aDeep, bool aNullParent) override
   {
     NS_ASSERTION(false, "Trying to unbind a fragment from a tree");
-    return;
   }
 
   virtual Element* GetNameSpaceElement() override
@@ -121,15 +91,9 @@ public:
     return nullptr;
   }
 
-  nsIContent* GetHost() const
-  {
-    return mHost;
-  }
+  Element* GetHost() const { return mHost; }
 
-  void SetHost(nsIContent* aHost)
-  {
-    mHost = aHost;
-  }
+  void SetHost(Element* aHost) { mHost = aHost; }
 
   static already_AddRefed<DocumentFragment>
   Constructor(const GlobalObject& aGlobal, ErrorResult& aRv);
@@ -144,8 +108,9 @@ protected:
   {
   }
 
-  nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
-  nsIContent* mHost; // Weak
+  nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+                 bool aPreallocateChildren) const override;
+  nsCOMPtr<Element> mHost;
 };
 
 } // namespace dom

@@ -59,15 +59,6 @@
 }
 
 /**
- * Grid Outline
- */
-
-.grid-outline {
-  margin-top: 10px;
-  overflow: visible;
-}
-
-/**
  * Grid Content
  */
 
@@ -75,7 +66,7 @@
   display: flex;
   flex-wrap: wrap;
   flex: 1;
-  margin-top: 10px;
+  margin: 5px 0;
 }
 
 .grid-container:first-child {
@@ -86,24 +77,31 @@
  * Grid Outline
  */
 
-#grid-outline {
-  margin: 5px auto;
+.grid-outline-container {
+  margin: 5px 0;
+}
+
+.grid-outline-container svg {
+  overflow: visible;
 }
 
 .grid-outline-border {
   fill: none;
+  stroke: currentColor;
   stroke-width: 0.75;
   vector-effect: non-scaling-stroke;
 }
 
 .grid-outline-cell {
   pointer-events: all;
+  stroke: currentColor;
   stroke-dasharray: 0.5, 2;
   vector-effect: non-scaling-stroke;
 }
 
 .grid-outline-cell:hover {
   opacity: 0.45;
+  fill: currentColor;
 }
 
 .grid-outline-line {
@@ -111,14 +109,18 @@
   stroke-width: 10;
 }
 
-/**
- * Container when no grids are present
- */
+.grid-outline-text {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--theme-graphs-full-red);
+}
 
-.layout-no-grids {
-  font-style: italic;
-  text-align: center;
-  padding: 0.5em;
+.grid-outline-text-icon {
+  background: url("chrome://devtools/skin/images/sad-face.svg");
+  margin-inline-end: 5px;
+  width: 16px;
+  height: 16px;
 }
 
 /**

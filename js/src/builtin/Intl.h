@@ -15,13 +15,7 @@
 
 #include "builtin/SelfHostingDefines.h"
 #include "js/Class.h"
-#include "js/GCAPI.h"
 #include "js/GCHashTable.h"
-
-#if ENABLE_INTL_API
-#include "unicode/utypes.h"
-#endif
-
 #include "vm/NativeObject.h"
 
 class JSLinearString;
@@ -436,6 +430,16 @@ extern MOZ_MUST_USE bool
 intl_availableCalendars(JSContext* cx, unsigned argc, Value* vp);
 
 /**
+ * Returns the calendar type identifier per Unicode Technical Standard 35,
+ * Unicode Locale Data Markup Language, for the default calendar for the given
+ * locale.
+ *
+ * Usage: calendar = intl_defaultCalendar(locale)
+ */
+extern MOZ_MUST_USE bool
+intl_defaultCalendar(JSContext* cx, unsigned argc, Value* vp);
+
+/**
  * 6.4.1 IsValidTimeZoneName ( timeZone )
  *
  * Verifies that the given string is a valid time zone name. If it is a valid
@@ -472,6 +476,15 @@ intl_defaultTimeZone(JSContext* cx, unsigned argc, Value* vp);
  */
 extern MOZ_MUST_USE bool
 intl_defaultTimeZoneOffset(JSContext* cx, unsigned argc, Value* vp);
+
+/**
+ * Return true if the given string is the default time zone as returned by
+ * intl_defaultTimeZone(). Otherwise return false.
+ *
+ * Usage: isIcuDefaultTimeZone = intl_isDefaultTimeZone(icuDefaultTimeZone)
+ */
+extern MOZ_MUST_USE bool
+intl_isDefaultTimeZone(JSContext* cx, unsigned argc, Value* vp);
 
 /**
  * Return a pattern in the date-time format pattern language of Unicode
@@ -582,6 +595,48 @@ intl_SelectPluralRule(JSContext* cx, unsigned argc, Value* vp);
 extern MOZ_MUST_USE bool
 intl_GetPluralCategories(JSContext* cx, unsigned argc, Value* vp);
 
+/******************** RelativeTimeFormat ********************/
+
+class RelativeTimeFormatObject : public NativeObject
+{
+  public:
+    static const Class class_;
+
+    static constexpr uint32_t INTERNALS_SLOT = 0;
+    static constexpr uint32_t URELATIVE_TIME_FORMAT_SLOT = 1;
+    static constexpr uint32_t SLOT_COUNT = 2;
+
+    static_assert(INTERNALS_SLOT == INTL_INTERNALS_OBJECT_SLOT,
+                  "INTERNALS_SLOT must match self-hosting define for internals object slot");
+
+  private:
+    static const ClassOps classOps_;
+
+    static void finalize(FreeOp* fop, JSObject* obj);
+};
+
+/**
+ * Returns an object indicating the supported locales for relative time format
+ * by having a true-valued property for each such locale with the
+ * canonicalized language tag as the property name. The object has no
+ * prototype.
+ *
+ * Usage: availableLocales = intl_RelativeTimeFormat_availableLocales()
+ */
+extern MOZ_MUST_USE bool
+intl_RelativeTimeFormat_availableLocales(JSContext* cx, unsigned argc, Value* vp);
+
+/**
+ * Returns a relative time as a string formatted according to the effective
+ * locale and the formatting options of the given RelativeTimeFormat.
+ *
+ * t should be a number representing a number to be formatted.
+ * unit should be "second", "minute", "hour", "day", "week", "month", "quarter", or "year".
+ *
+ * Usage: formatted = intl_FormatRelativeTime(relativeTimeFormat, t, unit)
+ */
+extern MOZ_MUST_USE bool
+intl_FormatRelativeTime(JSContext* cx, unsigned argc, Value* vp);
 
 /******************** Intl ********************/
 
@@ -688,35 +743,6 @@ intl_toLocaleLowerCase(JSContext* cx, unsigned argc, Value* vp);
 extern MOZ_MUST_USE bool
 intl_toLocaleUpperCase(JSContext* cx, unsigned argc, Value* vp);
 
-#if ENABLE_INTL_API
-/**
- * Cast char16_t* strings to UChar* strings used by ICU.
- */
-inline const UChar*
-Char16ToUChar(const char16_t* chars)
-{
-  return reinterpret_cast<const UChar*>(chars);
-}
-
-inline UChar*
-Char16ToUChar(char16_t* chars)
-{
-  return reinterpret_cast<UChar*>(chars);
-}
-
-inline char16_t*
-UCharToChar16(UChar* chars)
-{
-  return reinterpret_cast<char16_t*>(chars);
-}
-
-inline const char16_t*
-UCharToChar16(const UChar* chars)
-{
-  return reinterpret_cast<const char16_t*>(chars);
-}
-
-#endif // ENABLE_INTL_API
 
 } // namespace js
 

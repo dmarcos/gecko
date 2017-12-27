@@ -1,20 +1,8 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=2 sw=2 et tw=78:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * This Original Code has been modified by IBM Corporation.
- * Modifications made by IBM described herein are
- * Copyright (c) International Business Machines
- * Corporation, 2000
- *
- * Modifications to Mozilla code or documentation
- * identified per MPL Section 3.3
- *
- * Date         Modified by     Description of modification
- * 05/03/2000   IBM Corp.       Observer events for reflow states
- */
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* a presentation of a document, part 2 */
 
@@ -24,6 +12,7 @@
 #include "MobileViewportManager.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/EventForwards.h"
+#include "mozilla/layers/FocusTarget.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/StyleSetHandle.h"
 #include "mozilla/UniquePtr.h"
@@ -53,8 +42,14 @@ class ReflowCountMgr;
 
 class nsPresShellEventCB;
 class nsAutoCauseReflowNotifier;
+class AutoPointerEventTargetUpdater;
 
 namespace mozilla {
+
+namespace dom {
+class Element;
+class Selection;
+}  // namespace dom
 
 class EventDispatchingCallback;
 
@@ -76,11 +71,13 @@ typedef nsClassHashtable<nsUint64HashKey, mozilla::CSSIntRegion> VisibleRegions;
 #endif
 
 class PresShell final : public nsIPresShell,
-                        public nsStubDocumentObserver,
                         public nsISelectionController,
                         public nsIObserver,
                         public nsSupportsWeakReference
 {
+protected:
+  typedef mozilla::layers::FocusTarget FocusTarget;
+
 public:
   PresShell();
 
@@ -97,6 +94,7 @@ public:
 
   NS_IMETHOD GetSelection(RawSelectionType aRawSelectionType,
                           nsISelection** aSelection) override;
+  dom::Selection* GetDOMSelection(RawSelectionType aRawSelectionType) override;
   virtual mozilla::dom::Selection*
     GetCurrentSelection(SelectionType aSelectionType) override;
   virtual already_AddRefed<nsISelectionController>
@@ -110,32 +108,27 @@ public:
                                      int16_t aFlags) override;
   NS_IMETHOD RepaintSelection(RawSelectionType aRawSelectionType) override;
 
-  virtual void BeginObservingDocument() override;
-  virtual void EndObservingDocument() override;
   virtual nsresult Initialize(nscoord aWidth, nscoord aHeight) override;
-  virtual nsresult ResizeReflow(nscoord aWidth, nscoord aHeight, nscoord aOldWidth = 0, nscoord aOldHeight = 0) override;
-  virtual nsresult ResizeReflowIgnoreOverride(nscoord aWidth, nscoord aHeight, nscoord aOldWidth, nscoord aOldHeight) override;
+  virtual nsresult ResizeReflow(nscoord aWidth, nscoord aHeight,
+                                nscoord aOldWidth = 0, nscoord aOldHeight = 0,
+                                ResizeReflowOptions aOptions =
+                                ResizeReflowOptions::eBSizeExact) override;
+  virtual nsresult ResizeReflowIgnoreOverride(nscoord aWidth, nscoord aHeight,
+                                              nscoord aOldWidth, nscoord aOldHeight,
+                                              ResizeReflowOptions aOptions =
+                                              ResizeReflowOptions::eBSizeExact) override;
   virtual nsIPageSequenceFrame* GetPageSequenceFrame() const override;
   virtual nsCanvasFrame* GetCanvasFrame() const override;
 
-  virtual nsIFrame* GetPlaceholderFrameFor(nsIFrame* aFrame) const override;
   virtual void FrameNeedsReflow(nsIFrame *aFrame, IntrinsicDirty aIntrinsicDirty,
                                 nsFrameState aBitToAdd,
                                 ReflowRootHandling aRootHandling =
                                   eInferFromBitToAdd) override;
   virtual void FrameNeedsToContinueReflow(nsIFrame *aFrame) override;
   virtual void CancelAllPendingReflows() override;
-  virtual bool IsSafeToFlush() const override;
   virtual void DoFlushPendingNotifications(mozilla::FlushType aType) override;
   virtual void DoFlushPendingNotifications(mozilla::ChangesToFlush aType) override;
-  virtual void DestroyFramesFor(nsIContent*  aContent,
-                                nsIContent** aDestroyedFramesFor) override;
-  virtual void CreateFramesFor(nsIContent* aContent) override;
-
-  /**
-   * Recreates the frames for a node
-   */
-  virtual nsresult RecreateFramesFor(nsIContent* aContent) override;
+  virtual void DestroyFramesForAndRestyle(mozilla::dom::Element* aElement) override;
 
   /**
    * Post a callback that should be handled after reflow has finished.
@@ -181,7 +174,9 @@ public:
                                  mozilla::WidgetEvent* aEvent,
                                  nsIFrame* aFrame,
                                  nsIContent* aContent,
-                                 nsEventStatus* aStatus) override;
+                                 nsEventStatus* aStatus,
+                                 bool aIsHandlingNativeEvent = false,
+                                 nsIContent** aTargetContent = nullptr) override;
   virtual nsIFrame* GetEventTargetFrame() override;
   virtual already_AddRefed<nsIContent> GetEventTargetContent(
                                                      mozilla::WidgetEvent* aEvent) override;
@@ -212,6 +207,8 @@ public:
 
   virtual already_AddRefed<nsPIDOMWindowOuter> GetRootWindow() override;
 
+  virtual already_AddRefed<nsPIDOMWindowOuter> GetFocusedDOMWindowInOurWindow() override;
+
   virtual LayerManager* GetLayerManager() override;
 
   virtual bool AsyncPanZoomEnabled() override;
@@ -238,7 +235,7 @@ public:
                                mozilla::WidgetGUIEvent* aEvent,
                                bool aDontRetargetEvents,
                                nsEventStatus* aEventStatus,
-                               nsIContent** aTargetContent) override;
+                               nsIContent** aTargetContent = nullptr) override;
   virtual nsresult HandleDOMEventWithTarget(
                                  nsIContent* aTargetContent,
                                  mozilla::WidgetEvent* aEvent,
@@ -302,9 +299,6 @@ public:
   NS_DECL_NSIDOCUMENTOBSERVER_STYLESHEETADDED
   NS_DECL_NSIDOCUMENTOBSERVER_STYLESHEETREMOVED
   NS_DECL_NSIDOCUMENTOBSERVER_STYLESHEETAPPLICABLESTATECHANGED
-  NS_DECL_NSIDOCUMENTOBSERVER_STYLERULECHANGED
-  NS_DECL_NSIDOCUMENTOBSERVER_STYLERULEADDED
-  NS_DECL_NSIDOCUMENTOBSERVER_STYLERULEREMOVED
 
   // nsIMutationObserver
   NS_DECL_NSIMUTATIONOBSERVER_CHARACTERDATACHANGED
@@ -320,7 +314,7 @@ public:
   virtual void DumpReflows() override;
   virtual void CountReflows(const char * aName, nsIFrame * aFrame) override;
   virtual void PaintCount(const char * aName,
-                                      nsRenderingContext* aRenderingContext,
+                                      gfxContext* aRenderingContext,
                                       nsPresContext* aPresContext,
                                       nsIFrame * aFrame,
                                       const nsPoint& aOffset,
@@ -370,12 +364,8 @@ public:
 
   virtual void LoadComplete() override;
 
-  void AddSizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf,
-                              nsArenaMemoryStats *aArenaObjectsSize,
-                              size_t *aPresShellSize,
-                              size_t *aStyleSetsSize,
-                              size_t *aTextRunsSize,
-                              size_t *aPresContextSize) override;
+  virtual void AddSizeOfIncludingThis(nsWindowSizes& aWindowSizes)
+    const override;
   size_t SizeOfTextRuns(mozilla::MallocSizeOf aMallocSizeOf) const;
 
   // This data is stored as a content property (nsGkAtoms::scrolling) on
@@ -416,6 +406,16 @@ public:
   void NotifyStyleSheetServiceSheetRemoved(mozilla::StyleSheet* aSheet,
                                            uint32_t aSheetType) override;
 
+  virtual bool HasHandledUserInput() const override {
+    return mHasHandledUserInput;
+  }
+
+  virtual void FireResizeEvent() override;
+
+  static PresShell* GetShellForEventTarget(nsIFrame* aFrame,
+                                           nsIContent* aContent);
+  static PresShell* GetShellForTouchEvent(WidgetGUIEvent* aEvent);
+
 protected:
   virtual ~PresShell();
 
@@ -431,6 +431,7 @@ protected:
   }
   nsresult DidCauseReflow();
   friend class ::nsAutoCauseReflowNotifier;
+  friend class ::AutoPointerEventTargetUpdater;
 
   nsresult DispatchEventToDOM(mozilla::WidgetEvent* aEvent,
                               nsEventStatus* aStatus,
@@ -519,12 +520,14 @@ protected:
 
 #ifdef DEBUG
   nsStyleSet* CloneStyleSet(nsStyleSet* aSet);
+  ServoStyleSet* CloneStyleSet(ServoStyleSet* aSet);
   bool VerifyIncrementalReflow();
   bool mInVerifyReflow;
   void ShowEventTargetDebug();
 #endif
 
-  void RecordStyleSheetChange(mozilla::StyleSheet* aStyleSheet);
+  void RecordStyleSheetChange(mozilla::StyleSheet* aStyleSheet,
+                              StyleSheet::ChangeType);
 
   void RemovePreferenceStyles();
 
@@ -685,12 +688,6 @@ protected:
   nsresult HandleEventInternal(mozilla::WidgetEvent* aEvent,
                                nsEventStatus* aStatus,
                                bool aIsHandlingNativeEvent);
-  nsresult HandlePositionedEvent(nsIFrame* aTargetFrame,
-                                 mozilla::WidgetGUIEvent* aEvent,
-                                 nsEventStatus* aEventStatus);
-  // This returns the focused DOM window under our top level window.
-  //  I.e., when we are deactive, this returns the *last* focused DOM window.
-  already_AddRefed<nsPIDOMWindowOuter> GetFocusedDOMWindowInOurWindow();
 
   /*
    * This and the next two helper methods are used to target and position the
@@ -720,9 +717,6 @@ protected:
                                            mozilla::LayoutDeviceIntPoint& aTargetPt,
                                            nsIWidget *aRootWidget);
 
-  void FireResizeEvent();
-  static void AsyncResizeEventCallback(nsITimer* aTimer, void* aPresShell);
-
   virtual void SynthesizeMouseMove(bool aFromScroll) override;
 
   PresShell* GetRootPresShell();
@@ -747,9 +741,6 @@ protected:
 
   virtual void PausePainting() override;
   virtual void ResumePainting() override;
-
-  void UpdateActivePointerState(mozilla::WidgetGUIEvent* aEvent);
-
 
   //////////////////////////////////////////////////////////////////////////////
   // Approximate frame visibility tracking implementation.
@@ -815,8 +806,6 @@ protected:
   nsTArray<nsIFrame*>       mDirtyRoots;
 
   nsTArray<nsAutoPtr<DelayedEvent> > mDelayedEvents;
-  nsRevocableEventPtr<nsRunnableMethod<PresShell> > mResizeEvent;
-  nsCOMPtr<nsITimer>        mAsyncResizeEventTimer;
 private:
   nsIFrame*                 mCurrentEventFrame;
   nsCOMPtr<nsIContent>      mCurrentEventContent;
@@ -863,10 +852,10 @@ protected:
   // when target of pointer event was deleted during executing user handlers.
   nsCOMPtr<nsIContent>      mPointerEventTarget;
 
-  // This is used to protect ourselves from triggering reflow while in the
-  // middle of frame construction and the like... it really shouldn't be
-  // needed, one hopes, but it is for now.
-  uint16_t                  mChangeNestCount;
+  // The focus sequence number of the last processed input event
+  uint64_t                  mAPZFocusSequenceNumber;
+  // The focus information needed for async keyboard scrolling
+  FocusTarget               mAPZFocusTarget;
 
   bool                      mDocumentLoading : 1;
   bool                      mIgnoreFrameDestruction : 1;
@@ -875,16 +864,11 @@ protected:
   bool                      mNoDelayedMouseEvents : 1;
   bool                      mNoDelayedKeyEvents : 1;
 
-  // We've been disconnected from the document.  We will refuse to paint the
-  // document until either our timer fires or all frames are constructed.
-  bool                      mIsDocumentGone : 1;
-
   // Indicates that it is safe to unlock painting once all pending reflows
   // have been processed.
   bool                      mShouldUnsuppressPainting : 1;
 
-  bool                      mAsyncResizeTimerIsActive : 1;
-  bool                      mInResize : 1;
+  bool                      mResizeEventPending : 1;
 
   bool                      mApproximateFrameVisibilityVisited : 1;
 
@@ -905,7 +889,17 @@ protected:
 
   bool                      mIsLastKeyDownCanceled : 1;
 
+  // Whether we have ever handled a user input event
+  bool                      mHasHandledUserInput : 1;
+
   static bool               sDisableNonTestMouseEvents;
+
+  mozilla::TimeStamp        mLastOSWake;
+
+  static mozilla::TimeStamp sLastInputCreated;
+  static mozilla::TimeStamp sLastInputProcessed;
+
+  static bool               sProcessInteractable;
 };
 
 } // namespace mozilla

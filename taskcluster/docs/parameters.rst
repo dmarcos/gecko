@@ -22,10 +22,6 @@ topic.
 Push Information
 ----------------
 
-``triggered_by``
-   The event that precipitated this decision task; one of ``"nightly"`` or
-   ``"push"``.
-
 ``base_repository``
    The repository from which to do an initial clone, utilizing any available
    caching.
@@ -83,6 +79,22 @@ Tree Information
    associated with this tree.  This dictates the names of resources used in the
    generated tasks, and those tasks will fail if it is incorrect.
 
+Try Configuration
+-----------------
+
+``try_mode``
+    The mode in which a try push is operating.  This can be one of
+    ``"try_task_config"``, ``"try_option_syntax"``, or ``None`` meaning no try
+    input was provided.
+
+``try_options``
+    The arguments given as try syntax (as a dictionary), or ``None`` if
+    ``try_mode`` is not ``try_option_syntax``.
+
+``try_task_config``
+    The contents of the ``try_task_config.json`` file, or ``None`` if
+    ``try_mode`` is not ``try_task_config``.
+
 Target Set
 ----------
 
@@ -101,8 +113,53 @@ syntax or reading a project-specific configuration file).
     The method to use to determine the target task set.  This is the suffix of
     one of the functions in ``taskcluster/taskgraph/target_tasks.py``.
 
-``optimize_target_tasks``
-   If true, then target tasks are eligible for optimization.
-
 ``include_nightly``
-   If true, then nightly tasks are eligible for optimization.
+    If true, then nightly tasks are eligible for optimization.
+
+``release_history``
+   History of recent releases by platform and locale, used when generating
+   partial updates for nightly releases.
+   Suitable contents can be generated with ``mach release-history``,
+   which will print to the console by default.
+
+Optimization
+------------
+
+``optimize_target_tasks``
+    If true, then target tasks are eligible for optimization.
+
+``do_not_optimize``
+   Specify tasks to not optimize out of the graph. This is a list of labels.
+   Any tasks in the graph matching one of the labels will not be optimized out
+   of the graph.
+
+``existing_tasks``
+   Specify tasks to optimize out of the graph. This is a dictionary of label to taskId.
+   Any tasks in the graph matching one of the labels will use the previously-run
+   taskId rather than submitting a new task.
+
+Release Promotion
+-----------------
+
+``build_number``
+   Specify the release promotion build number.
+
+``next_version``
+   Specify the next version for version bump tasks.
+
+``desktop_release_type``
+   The type of desktop release being promoted. One of "beta", "devedition", "esr", "rc",
+   or "release".
+
+Comm Push Information
+---------------------
+
+These parameters correspond to the repository and revision of the comm-central
+repository to checkout. Their meaning is the same as the corresponding
+parameters for the gecko repository above. They are optional, but if any of
+them are specified, they must all be specified.
+
+``comm_base_repository``
+``comm_head_repository``
+``comm_head_rev``
+``comm_head_ref``

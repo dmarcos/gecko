@@ -48,13 +48,13 @@ const test = Task.async(function* () {
   ok(!res.error);
 
   let location2 = {
-    line: gDebuggee.line0 + 5
+    line: gDebuggee.line0 + 7
   };
 
   yield source.setBreakpoint(location2).then(_ => {
     do_throw("no code shall not be found the specified line or below it");
   }, reason => {
-    do_check_eq(reason.error, "noCodeAtLineColumn");
+    Assert.equal(reason.error, "noCodeAtLineColumn");
     ok(reason.message);
   });
 
@@ -70,6 +70,6 @@ function some_function() {
   // breakpoint is valid here -- it slides one line below (line0 + 2)
 }
 debugger;
-// no breakpoint is allowed here (line0 + 5)
+// no breakpoint is allowed after the EOF (line0 + 6)
 `, gDebuggee);
 }

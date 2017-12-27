@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -22,16 +23,14 @@ class nsLineLayout;
 class nsInlineFrame : public nsContainerFrame
 {
 public:
-  NS_DECL_QUERYFRAME_TARGET(nsInlineFrame)
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsInlineFrame)
 
   friend nsInlineFrame* NS_NewInlineFrame(nsIPresShell* aPresShell,
                                           nsStyleContext* aContext);
 
   // nsIFrame overrides
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
 #ifdef ACCESSIBILITY
@@ -41,7 +40,6 @@ public:
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override;
 #endif
-  virtual nsIAtom* GetType() const override;
 
   virtual bool IsFrameOfType(uint32_t aFlags) const override
   {
@@ -58,19 +56,21 @@ public:
   virtual bool IsEmpty() override;
   virtual bool IsSelfEmpty() override;
 
-  virtual FrameSearchResult PeekOffsetCharacter(bool aForward, int32_t* aOffset,
-                                     bool aRespectClusters = true) override;
-  
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual FrameSearchResult
+  PeekOffsetCharacter(bool aForward, int32_t* aOffset,
+                      PeekOffsetCharacterOptions aOptions =
+                        PeekOffsetCharacterOptions()) override;
+
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
   virtual nsresult StealFrame(nsIFrame* aChild) override;
 
   // nsIHTMLReflow overrides
-  virtual void AddInlineMinISize(nsRenderingContext *aRenderingContext,
+  virtual void AddInlineMinISize(gfxContext *aRenderingContext,
                                  InlineMinISizeData *aData) override;
-  virtual void AddInlinePrefISize(nsRenderingContext *aRenderingContext,
+  virtual void AddInlinePrefISize(gfxContext *aRenderingContext,
                                   InlinePrefISizeData *aData) override;
   virtual mozilla::LogicalSize
-  ComputeSize(nsRenderingContext *aRenderingContext,
+  ComputeSize(gfxContext *aRenderingContext,
               mozilla::WritingMode aWritingMode,
               const mozilla::LogicalSize& aCBSize,
               nscoord aAvailableISize,
@@ -85,7 +85,7 @@ public:
                       nsReflowStatus& aStatus) override;
 
   virtual nsresult AttributeChanged(int32_t aNameSpaceID,
-                                    nsIAtom* aAttribute,
+                                    nsAtom* aAttribute,
                                     int32_t aModType) override;
 
   virtual bool CanContinueTextRun() const override;
@@ -116,12 +116,10 @@ public:
              : (!GetNextInFlow());
   }
 
-  // Update the style on the block wrappers around our non-inline-outside kids.
+  // Restyles the block wrappers around our non-inline-outside kids.
   // This will only be called when such wrappers in fact exist.
-  virtual void DoUpdateStyleOfOwnedAnonBoxes(
-    mozilla::ServoStyleSet& aStyleSet,
-    nsStyleChangeList& aChangeList,
-    nsChangeHint aHintForThisFrame) override;
+  void UpdateStyleOfOwnedAnonBoxesForIBSplit(
+    mozilla::ServoRestyleState& aRestyleState);
 
 protected:
   // Additional reflow state used during our reflow methods
@@ -142,7 +140,10 @@ protected:
     }
   };
 
-  explicit nsInlineFrame(nsStyleContext* aContext) : nsContainerFrame(aContext) {}
+  nsInlineFrame(nsStyleContext* aContext, ClassID aID)
+    : nsContainerFrame(aContext, aID)
+    , mBaseline(NS_INTRINSIC_WIDTH_UNKNOWN)
+  {}
 
   virtual LogicalSides GetLogicalSkipSides(const ReflowInput* aReflowInput = nullptr) const override;
 
@@ -158,15 +159,6 @@ protected:
                          nsIFrame* aFrame,
                          nsReflowStatus& aStatus);
 
-  /**
-   * Reparent floats whose placeholders are inline descendants of aFrame from
-   * whatever block they're currently parented by to aOurBlock.
-   * @param aReparentSiblings if this is true, we follow aFrame's
-   * GetNextSibling chain reparenting them all
-   */
-  void ReparentFloatsForInlineChild(nsIFrame* aOurBlock, nsIFrame* aFrame,
-                                    bool aReparentSiblings);
-
   virtual nsIFrame* PullOneFrame(nsPresContext* aPresContext,
                                  InlineReflowInput& rs,
                                  bool* aIsComplete);
@@ -177,23 +169,22 @@ protected:
                           InlineReflowInput& aState);
 
 private:
+  explicit nsInlineFrame(nsStyleContext* aContext)
+    : nsInlineFrame(aContext, kClassID)
+  {}
+
   // Helper method for DrainSelfOverflowList() to deal with lazy parenting
   // (which we only do for nsInlineFrame, not nsFirstLineFrame).
   enum DrainFlags {
     eDontReparentFrames = 1, // skip reparenting the overflow list frames
     eInFirstLine = 2, // the request is for an inline descendant of a nsFirstLineFrame
-    eForDestroy = 4, // the request is from DestroyFrom; in this case we do the
-                     // minimal work required since the frame is about to be
-                     // destroyed (just fixup parent pointers)
   };
   /**
    * Move any frames on our overflow list to the end of our principal list.
    * @param aFlags one or more of the above DrainFlags
-   * @param aLineContainer the nearest line container ancestor
    * @return true if there were any overflow frames
    */
-  bool DrainSelfOverflowListInternal(DrainFlags aFlags,
-                                     nsIFrame* aLineContainer);
+  bool DrainSelfOverflowListInternal(DrainFlags aFlags);
 protected:
   nscoord mBaseline;
 };
@@ -206,7 +197,7 @@ protected:
  */
 class nsFirstLineFrame final : public nsInlineFrame {
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsFirstLineFrame)
 
   friend nsFirstLineFrame* NS_NewFirstLineFrame(nsIPresShell* aPresShell,
                                                 nsStyleContext* aContext);
@@ -214,7 +205,6 @@ public:
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override;
 #endif
-  virtual nsIAtom* GetType() const override;
   virtual void Reflow(nsPresContext* aPresContext,
                       ReflowOutput& aDesiredSize,
                       const ReflowInput& aReflowInput,
@@ -227,7 +217,9 @@ public:
   virtual bool DrainSelfOverflowList() override;
 
 protected:
-  explicit nsFirstLineFrame(nsStyleContext* aContext) : nsInlineFrame(aContext) {}
+  explicit nsFirstLineFrame(nsStyleContext* aContext)
+    : nsInlineFrame(aContext, kClassID)
+  {}
 
   virtual nsIFrame* PullOneFrame(nsPresContext* aPresContext,
                                  InlineReflowInput& rs,

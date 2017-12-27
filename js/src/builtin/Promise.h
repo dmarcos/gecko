@@ -8,6 +8,8 @@
 #define builtin_Promise_h
 
 #include "builtin/SelfHostingDefines.h"
+#include "threading/ConditionVariable.h"
+#include "threading/Mutex.h"
 #include "vm/NativeObject.h"
 
 namespace js {
@@ -17,11 +19,7 @@ enum PromiseSlots {
     PromiseSlot_ReactionsOrResult,
     PromiseSlot_RejectFunction,
     PromiseSlot_AwaitGenerator = PromiseSlot_RejectFunction,
-    PromiseSlot_AllocationSite,
-    PromiseSlot_ResolutionSite,
-    PromiseSlot_AllocationTime,
-    PromiseSlot_ResolutionTime,
-    PromiseSlot_Id,
+    PromiseSlot_DebugInfo,
     PromiseSlots,
 };
 
@@ -75,14 +73,10 @@ class PromiseObject : public NativeObject
 
     static void onSettled(JSContext* cx, Handle<PromiseObject*> promise);
 
-    double allocationTime() { return getFixedSlot(PromiseSlot_AllocationTime).toNumber(); }
-    double resolutionTime() { return getFixedSlot(PromiseSlot_ResolutionTime).toNumber(); }
-    JSObject* allocationSite() {
-        return getFixedSlot(PromiseSlot_AllocationSite).toObjectOrNull();
-    }
-    JSObject* resolutionSite() {
-        return getFixedSlot(PromiseSlot_ResolutionSite).toObjectOrNull();
-    }
+    double allocationTime();
+    double resolutionTime();
+    JSObject* allocationSite();
+    JSObject* resolutionSite();
     double lifetime();
     double timeToResolution() {
         MOZ_ASSERT(state() != JS::PromiseState::Pending);
@@ -102,29 +96,49 @@ class PromiseObject : public NativeObject
 };
 
 /**
- * Enqueues resolve/reject reactions in the given Promise's reactions lists
- * in a content-invisible way.
+ * Unforgeable version of the JS builtin Promise.all.
  *
- * Used internally to implement DOM functionality.
+ * Takes an AutoObjectVector of Promise objects and returns a promise that's
+ * resolved with an array of resolution values when all those promises have
+ * been resolved, or rejected with the rejection value of the first rejected
+ * promise.
  *
- * Note: the reactions pushed using this function contain a `promise` field
- * that can contain null. That field is only ever used by devtools, which have
- * to treat these reactions specially.
+ * Asserts that all objects in the `promises` vector are, maybe wrapped,
+ * instances of `Promise` or a subclass of `Promise`.
  */
-MOZ_MUST_USE bool
-EnqueuePromiseReactions(JSContext* cx, Handle<PromiseObject*> promise,
-                        HandleObject dependentPromise,
-                        HandleValue onFulfilled, HandleValue onRejected);
-
 MOZ_MUST_USE JSObject*
 GetWaitForAllPromise(JSContext* cx, const JS::AutoObjectVector& promises);
 
+/**
+ * Enqueues resolve/reject reactions in the given Promise's reactions lists
+ * as though calling the original value of Promise.prototype.then.
+ *
+ * If the `createDependent` flag is not set, no dependent Promise will be
+ * created. This is used internally to implement DOM functionality.
+ * Note: In this case, the reactions pushed using this function contain a
+ * `promise` field that can contain null. That field is only ever used by
+ * devtools, which have to treat these reactions specially.
+ */
+MOZ_MUST_USE bool
+OriginalPromiseThen(JSContext* cx, Handle<PromiseObject*> promise,
+                    HandleValue onFulfilled, HandleValue onRejected,
+                    MutableHandleObject dependent, bool createDependent);
+
+/**
+ * PromiseResolve ( C, x )
+ *
+ * The abstract operation PromiseResolve, given a constructor and a value,
+ * returns a new promise resolved with that value.
+ */
 MOZ_MUST_USE JSObject*
-OriginalPromiseThen(JSContext* cx, Handle<PromiseObject*> promise, HandleValue onFulfilled,
-                    HandleValue onRejected);
+PromiseResolve(JSContext* cx, HandleObject constructor, HandleValue value);
+
 
 MOZ_MUST_USE PromiseObject*
 CreatePromiseObjectForAsync(JSContext* cx, HandleValue generatorVal);
+
+MOZ_MUST_USE bool
+IsPromiseForAsync(JSObject* promise);
 
 MOZ_MUST_USE bool
 AsyncFunctionReturned(JSContext* cx, Handle<PromiseObject*> resultPromise, HandleValue value);
@@ -155,44 +169,94 @@ AsyncGeneratorEnqueue(JSContext* cx, HandleValue asyncGenVal, CompletionKind com
 bool
 AsyncFromSyncIteratorMethod(JSContext* cx, CallArgs& args, CompletionKind completionKind);
 
-/**
- * A PromiseTask represents a task that can be dispatched to a helper thread
- * (via StartPromiseTask), executed (by implementing PromiseTask::execute()),
- * and then resolved back on the original JSContext owner thread.
- * Because it contains a PersistentRooted, a PromiseTask will only be destroyed
- * on the JSContext's owner thread.
- */
-class PromiseTask : public JS::AsyncTask
-{
-    JSRuntime* runtime_;
-    PersistentRooted<PromiseObject*> promise_;
+// An OffThreadPromiseTask holds a rooted Promise JSObject while executing an
+// off-thread task (defined by the subclass) that needs to resolve the Promise
+// on completion. Because OffThreadPromiseTask contains a PersistentRooted, it
+// must be destroyed on an active JSContext thread of the Promise's JSRuntime.
+// OffThreadPromiseTasks may be run off-thread in various ways (e.g., see
+// PromiseHelperTask). At any time, the task can be dispatched to an active
+// JSContext of the Promise's JSRuntime by calling dispatchResolve().
 
-    // PromiseTask implements JS::AsyncTask and prevents derived classes from
-    // overriding; derived classes should implement the new pure virtual
-    // functions introduced below. Both of these methods 'delete this'.
-    void finish(JSContext* cx) override final;
-    void cancel(JSContext* cx) override final;
+class OffThreadPromiseTask : public JS::Dispatchable
+{
+    friend class OffThreadPromiseRuntimeState;
+
+    JSRuntime*                       runtime_;
+    PersistentRooted<PromiseObject*> promise_;
+    bool                             registered_;
+
+    void operator=(const OffThreadPromiseTask&) = delete;
+    OffThreadPromiseTask(const OffThreadPromiseTask&) = delete;
 
   protected:
-    // Called by PromiseTask on the JSContext's owner thread after execute()
-    // completes on the helper thread, assuming JS::FinishAsyncTaskCallback
-    // succeeds. After this method returns, the task will be deleted.
-    virtual bool finishPromise(JSContext* cx, Handle<PromiseObject*> promise) = 0;
+    OffThreadPromiseTask(JSContext* cx, Handle<PromiseObject*> promise);
+
+    // To be called by OffThreadPromiseTask and implemented by the derived class.
+    virtual bool resolve(JSContext* cx, Handle<PromiseObject*> promise) = 0;
+
+    // JS::Dispatchable implementation. Ends with 'delete this'.
+    void run(JSContext* cx, MaybeShuttingDown maybeShuttingDown) override final;
 
   public:
-    PromiseTask(JSContext* cx, Handle<PromiseObject*> promise);
-    ~PromiseTask();
-    JSRuntime* runtime() const { return runtime_; }
+    ~OffThreadPromiseTask() override;
 
-    // Called on a helper thread after StartAsyncTask. After execute()
-    // completes, the JS::FinishAsyncTaskCallback will be called. If this fails
-    // the task will be enqueued for deletion at some future point without ever
-    // calling finishPromise().
-    virtual void execute() = 0;
+    // Initializing an OffThreadPromiseTask informs the runtime that it must
+    // wait on shutdown for this task to rejoin the active JSContext by calling
+    // dispatchResolveAndDestroy().
+    bool init(JSContext* cx);
 
-    // May be called in the absence of helper threads to synchronously execute
-    // and finish a PromiseTask.
-    bool executeAndFinish(JSContext* cx);
+    // An initialized OffThreadPromiseTask can be dispatched to an active
+    // JSContext of its Promise's JSRuntime from any thread. Normally, this will
+    // lead to resolve() being called on JSContext thread, given the Promise.
+    // However, if shutdown interrupts, resolve() may not be called, though the
+    // OffThreadPromiseTask will be destroyed on a JSContext thread.
+    void dispatchResolveAndDestroy();
+};
+
+using OffThreadPromiseTaskSet = HashSet<OffThreadPromiseTask*,
+                                        DefaultHasher<OffThreadPromiseTask*>,
+                                        SystemAllocPolicy>;
+
+using DispatchableVector = Vector<JS::Dispatchable*, 0, SystemAllocPolicy>;
+
+class OffThreadPromiseRuntimeState
+{
+    friend class OffThreadPromiseTask;
+
+    // These fields are initialized once before any off-thread usage and thus do
+    // not require a lock.
+    JS::DispatchToEventLoopCallback dispatchToEventLoopCallback_;
+    void*                           dispatchToEventLoopClosure_;
+
+    // These fields are mutated by any thread and are guarded by mutex_.
+    Mutex                           mutex_;
+    ConditionVariable               allCanceled_;
+    OffThreadPromiseTaskSet         live_;
+    size_t                          numCanceled_;
+    DispatchableVector              internalDispatchQueue_;
+    ConditionVariable               internalDispatchQueueAppended_;
+    bool                            internalDispatchQueueClosed_;
+
+    static bool internalDispatchToEventLoop(void*, JS::Dispatchable*);
+    bool usingInternalDispatchQueue() const;
+
+    void operator=(const OffThreadPromiseRuntimeState&) = delete;
+    OffThreadPromiseRuntimeState(const OffThreadPromiseRuntimeState&) = delete;
+
+  public:
+    OffThreadPromiseRuntimeState();
+    ~OffThreadPromiseRuntimeState();
+    void init(JS::DispatchToEventLoopCallback callback, void* closure);
+    void initInternalDispatchQueue();
+    bool initialized() const;
+
+    // If initInternalDispatchQueue() was called, internalDrain() can be
+    // called to periodically drain the dispatch queue before shutdown.
+    void internalDrain(JSContext* cx);
+    bool internalHasPending();
+
+    // shutdown() must be called by the JSRuntime while the JSRuntime is valid.
+    void shutdown(JSContext* cx);
 };
 
 bool

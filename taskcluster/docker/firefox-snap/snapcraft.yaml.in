@@ -7,16 +7,22 @@ confinement: strict
 apps:
   firefox:
     command: desktop-launch firefox
+    desktop: opt/firefox/distribution/firefox.desktop
+    environment:
+      DISABLE_WAYLAND: 1
     plugs:
-      - unity7
-      - network
+      - browser-sandbox
+      - camera
+      - desktop
+      - desktop-legacy
+      - gsettings
       - home
-      - x11
+      - network
       - opengl
       - pulseaudio
-      - gsettings
-      - camera
-      - browser-sandbox
+      - screen-inhibit-control
+      - unity7
+      - x11
 
 plugs:
   browser-sandbox:

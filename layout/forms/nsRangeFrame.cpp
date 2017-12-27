@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,12 +9,12 @@
 #include "mozilla/EventStates.h"
 #include "mozilla/TouchEvents.h"
 
+#include "gfxContext.h"
 #include "nsContentCreatorFunctions.h"
-#include "nsContentList.h"
 #include "nsContentUtils.h"
 #include "nsCSSPseudoElements.h"
 #include "nsCSSRendering.h"
-#include "nsFormControlFrame.h"
+#include "nsCheckboxRadioFrame.h"
 #include "nsIContent.h"
 #include "nsIDocument.h"
 #include "nsNameSpaceManager.h"
@@ -22,7 +23,6 @@
 #include "mozilla/dom/HTMLInputElement.h"
 #include "nsPresContext.h"
 #include "nsNodeInfoManager.h"
-#include "nsRenderingContext.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/StyleSetHandle.h"
 #include "mozilla/StyleSetHandleInlines.h"
@@ -47,7 +47,7 @@ NS_NewRangeFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 }
 
 nsRangeFrame::nsRangeFrame(nsStyleContext* aContext)
-  : nsContainerFrame(aContext)
+  : nsContainerFrame(aContext, kClassID)
 {
 }
 
@@ -95,7 +95,7 @@ nsRangeFrame::Init(nsIContent*       aContent,
 }
 
 void
-nsRangeFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsRangeFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   NS_ASSERTION(!GetPrevContinuation() && !GetNextContinuation(),
                "nsRangeFrame should not have continuations; if it does we "
@@ -103,11 +103,11 @@ nsRangeFrame::DestroyFrom(nsIFrame* aDestructRoot)
 
   mContent->RemoveEventListener(NS_LITERAL_STRING("touchstart"), mDummyTouchListener, false);
 
-  nsFormControlFrame::RegUnRegAccessKey(static_cast<nsIFrame*>(this), false);
-  nsContentUtils::DestroyAnonymousContent(&mTrackDiv);
-  nsContentUtils::DestroyAnonymousContent(&mProgressDiv);
-  nsContentUtils::DestroyAnonymousContent(&mThumbDiv);
-  nsContainerFrame::DestroyFrom(aDestructRoot);
+  nsCheckboxRadioFrame::RegUnRegAccessKey(static_cast<nsIFrame*>(this), false);
+  aPostDestroyData.AddAnonymousContent(mTrackDiv.forget());
+  aPostDestroyData.AddAnonymousContent(mProgressDiv.forget());
+  aPostDestroyData.AddAnonymousContent(mThumbDiv.forget());
+  nsContainerFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 nsresult
@@ -186,9 +186,10 @@ public:
   nsDisplayItemGeometry* AllocateGeometry(nsDisplayListBuilder* aBuilder) override;
   void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
                                  const nsDisplayItemGeometry* aGeometry,
-                                 nsRegion *aInvalidRegion) override;
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) override;
-  virtual void Paint(nsDisplayListBuilder* aBuilder, nsRenderingContext* aCtx) override;
+                                 nsRegion *aInvalidRegion) const override;
+  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
+                           bool* aSnap) const override;
+  virtual void Paint(nsDisplayListBuilder* aBuilder, gfxContext* aCtx) override;
   NS_DISPLAY_DECL_NAME("RangeFocusRing", TYPE_RANGE_FOCUS_RING)
 };
 
@@ -199,10 +200,9 @@ nsDisplayRangeFocusRing::AllocateGeometry(nsDisplayListBuilder* aBuilder)
 }
 
 void
-nsDisplayRangeFocusRing::ComputeInvalidationRegion(
-  nsDisplayListBuilder* aBuilder,
-  const nsDisplayItemGeometry* aGeometry,
-  nsRegion* aInvalidRegion)
+nsDisplayRangeFocusRing::ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
+                                                   const nsDisplayItemGeometry* aGeometry,
+                                                   nsRegion* aInvalidRegion) const
 {
   auto geometry =
     static_cast<const nsDisplayItemGenericImageGeometry*>(aGeometry);
@@ -217,7 +217,8 @@ nsDisplayRangeFocusRing::ComputeInvalidationRegion(
 }
 
 nsRect
-nsDisplayRangeFocusRing::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
+nsDisplayRangeFocusRing::GetBounds(nsDisplayListBuilder* aBuilder,
+                                   bool* aSnap) const
 {
   *aSnap = false;
   nsRect rect(ToReferenceFrame(), Frame()->GetSize());
@@ -234,7 +235,7 @@ nsDisplayRangeFocusRing::GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap)
 
 void
 nsDisplayRangeFocusRing::Paint(nsDisplayListBuilder* aBuilder,
-                               nsRenderingContext* aCtx)
+                               gfxContext* aCtx)
 {
   bool unused;
   nsStyleContext* styleContext =
@@ -245,7 +246,7 @@ nsDisplayRangeFocusRing::Paint(nsDisplayListBuilder* aBuilder,
                          ? PaintBorderFlags::SYNC_DECODE_IMAGES
                          : PaintBorderFlags();
 
-  DrawResult result =
+  ImgDrawResult result =
     nsCSSRendering::PaintBorder(mFrame->PresContext(), *aCtx, mFrame,
                                 mVisibleRect, GetBounds(aBuilder, &unused),
                                 styleContext, flags);
@@ -255,10 +256,10 @@ nsDisplayRangeFocusRing::Paint(nsDisplayListBuilder* aBuilder,
 
 void
 nsRangeFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                               const nsRect&           aDirtyRect,
                                const nsDisplayListSet& aLists)
 {
-  if (IsThemed()) {
+  const nsStyleDisplay* disp = StyleDisplay();
+  if (IsThemed(disp)) {
     DisplayBorderBackgroundOutline(aBuilder, aLists);
     // Only create items for the thumb. Specifically, we do not want
     // the track to paint, since *our* background is used to paint
@@ -270,10 +271,10 @@ nsRangeFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     nsIFrame* thumb = mThumbDiv->GetPrimaryFrame();
     if (thumb) {
       nsDisplayListSet set(aLists, aLists.Content());
-      BuildDisplayListForChild(aBuilder, thumb, aDirtyRect, set, DISPLAY_CHILD_INLINE);
+      BuildDisplayListForChild(aBuilder, thumb, set, DISPLAY_CHILD_INLINE);
     }
   } else {
-    BuildDisplayListForInline(aBuilder, aDirtyRect, aLists);
+    BuildDisplayListForInline(aBuilder, aLists);
   }
 
   // Draw a focus outline if appropriate:
@@ -298,13 +299,12 @@ nsRangeFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     return;
   }
 
-  const nsStyleDisplay *disp = StyleDisplay();
   if (IsThemed(disp) &&
-      PresContext()->GetTheme()->ThemeDrawsFocusForWidget(disp->UsedAppearance())) {
+      PresContext()->GetTheme()->ThemeDrawsFocusForWidget(disp->mAppearance)) {
     return; // the native theme displays its own visual indication of focus
   }
 
-  aLists.Content()->AppendNewToTop(
+  aLists.Content()->AppendToTop(
     new (aBuilder) nsDisplayRangeFocusRing(aBuilder, this));
 }
 
@@ -317,6 +317,7 @@ nsRangeFrame::Reflow(nsPresContext*           aPresContext,
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsRangeFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
+  MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
 
   NS_ASSERTION(mTrackDiv, "::-moz-range-track div must exist!");
   NS_ASSERTION(mProgressDiv, "::-moz-range-progress div must exist!");
@@ -326,7 +327,7 @@ nsRangeFrame::Reflow(nsPresContext*           aPresContext,
                "need to call RegUnregAccessKey only for the first.");
 
   if (mState & NS_FRAME_FIRST_REFLOW) {
-    nsFormControlFrame::RegUnRegAccessKey(this, true);
+    nsCheckboxRadioFrame::RegUnRegAccessKey(this, true);
   }
 
   WritingMode wm = aReflowInput.GetWritingMode();
@@ -363,7 +364,7 @@ nsRangeFrame::Reflow(nsPresContext*           aPresContext,
 
   FinishAndStoreOverflow(&aDesiredSize);
 
-  aStatus.Reset();
+  MOZ_ASSERT(aStatus.IsEmpty(), "This type of frame can't be split.");
 
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowInput, aDesiredSize);
 }
@@ -487,7 +488,7 @@ double
 nsRangeFrame::GetValueAsFractionOfRange()
 {
   MOZ_ASSERT(mContent->IsHTMLElement(nsGkAtoms::input), "bad cast");
-  dom::HTMLInputElement* input = static_cast<dom::HTMLInputElement*>(mContent);
+  dom::HTMLInputElement* input = static_cast<dom::HTMLInputElement*>(GetContent());
 
   MOZ_ASSERT(input->ControlType() == NS_FORM_INPUT_RANGE);
 
@@ -497,14 +498,14 @@ nsRangeFrame::GetValueAsFractionOfRange()
 
   MOZ_ASSERT(value.isFinite() && minimum.isFinite() && maximum.isFinite(),
              "type=range should have a default maximum/minimum");
-  
+
   if (maximum <= minimum) {
     MOZ_ASSERT(value == minimum, "Unsanitized value");
     return 0.0;
   }
-  
+
   MOZ_ASSERT(value >= minimum && value <= maximum, "Unsanitized value");
-  
+
   return ((value - minimum) / (maximum - minimum)).toDouble();
 }
 
@@ -516,7 +517,7 @@ nsRangeFrame::GetValueAtEventPoint(WidgetGUIEvent* aEvent)
              "Unexpected event type - aEvent->mRefPoint may be meaningless");
 
   MOZ_ASSERT(mContent->IsHTMLElement(nsGkAtoms::input), "bad cast");
-  dom::HTMLInputElement* input = static_cast<dom::HTMLInputElement*>(mContent);
+  dom::HTMLInputElement* input = static_cast<dom::HTMLInputElement*>(GetContent());
 
   MOZ_ASSERT(input->ControlType() == NS_FORM_INPUT_RANGE);
 
@@ -542,7 +543,7 @@ nsRangeFrame::GetValueAtEventPoint(WidgetGUIEvent* aEvent)
 
   if (point == nsPoint(NS_UNCONSTRAINEDSIZE, NS_UNCONSTRAINEDSIZE)) {
     // We don't want to change the current value for this error state.
-    return static_cast<dom::HTMLInputElement*>(mContent)->GetValueAsDecimal();
+    return static_cast<dom::HTMLInputElement*>(GetContent())->GetValueAsDecimal();
   }
 
   nsRect rangeContentRect = GetContentRectRelativeToSelf();
@@ -629,7 +630,7 @@ nsRangeFrame::UpdateForValueChange()
 #ifdef ACCESSIBILITY
   nsAccessibilityService* accService = nsIPresShell::AccService();
   if (accService) {
-    accService->RangeValueChanged(PresContext()->PresShell(), mContent);
+    accService->RangeValueChanged(PresShell(), mContent);
   }
 #endif
 
@@ -728,7 +729,7 @@ nsRangeFrame::DoUpdateRangeProgressFrame(nsIFrame* aRangeProgressFrame,
 
 nsresult
 nsRangeFrame::AttributeChanged(int32_t  aNameSpaceID,
-                               nsIAtom* aAttribute,
+                               nsAtom* aAttribute,
                                int32_t  aModType)
 {
   NS_ASSERTION(mTrackDiv, "The track div must exist!");
@@ -751,7 +752,7 @@ nsRangeFrame::AttributeChanged(int32_t  aNameSpaceID,
       // UpdateForValueChange() anyway.
       MOZ_ASSERT(mContent->IsHTMLElement(nsGkAtoms::input), "bad cast");
       bool typeIsRange =
-        static_cast<dom::HTMLInputElement*>(mContent)->ControlType() ==
+        static_cast<dom::HTMLInputElement*>(GetContent())->ControlType() ==
                            NS_FORM_INPUT_RANGE;
       // If script changed the <input>'s type before setting these attributes
       // then we don't need to do anything since we are going to be reframed.
@@ -759,8 +760,8 @@ nsRangeFrame::AttributeChanged(int32_t  aNameSpaceID,
         UpdateForValueChange();
       }
     } else if (aAttribute == nsGkAtoms::orient) {
-      PresContext()->PresShell()->FrameNeedsReflow(this, nsIPresShell::eResize,
-                                                   NS_FRAME_IS_DIRTY);
+      PresShell()->FrameNeedsReflow(this, nsIPresShell::eResize,
+                                    NS_FRAME_IS_DIRTY);
     }
   }
 
@@ -768,7 +769,7 @@ nsRangeFrame::AttributeChanged(int32_t  aNameSpaceID,
 }
 
 LogicalSize
-nsRangeFrame::ComputeAutoSize(nsRenderingContext* aRenderingContext,
+nsRangeFrame::ComputeAutoSize(gfxContext*         aRenderingContext,
                               WritingMode         aWM,
                               const LogicalSize&  aCBSize,
                               nscoord             aAvailableISize,
@@ -803,7 +804,7 @@ nsRangeFrame::ComputeAutoSize(nsRenderingContext* aRenderingContext,
 }
 
 nscoord
-nsRangeFrame::GetMinISize(nsRenderingContext *aRenderingContext)
+nsRangeFrame::GetMinISize(gfxContext *aRenderingContext)
 {
   // nsFrame::ComputeSize calls GetMinimumWidgetSize to prevent us from being
   // given too small a size when we're natively themed. If we aren't native
@@ -812,7 +813,7 @@ nsRangeFrame::GetMinISize(nsRenderingContext *aRenderingContext)
 }
 
 nscoord
-nsRangeFrame::GetPrefISize(nsRenderingContext *aRenderingContext)
+nsRangeFrame::GetPrefISize(gfxContext *aRenderingContext)
 {
   bool isInline = IsInlineOriented();
 
@@ -838,7 +839,7 @@ bool
 nsRangeFrame::IsHorizontal() const
 {
   dom::HTMLInputElement* element =
-    static_cast<dom::HTMLInputElement*>(mContent);
+    static_cast<dom::HTMLInputElement*>(GetContent());
   return element->AttrValueIs(kNameSpaceID_None, nsGkAtoms::orient,
                               nsGkAtoms::horizontal, eCaseMatters) ||
          (!element->AttrValueIs(kNameSpaceID_None, nsGkAtoms::orient,
@@ -851,25 +852,19 @@ nsRangeFrame::IsHorizontal() const
 double
 nsRangeFrame::GetMin() const
 {
-  return static_cast<dom::HTMLInputElement*>(mContent)->GetMinimum().toDouble();
+  return static_cast<dom::HTMLInputElement*>(GetContent())->GetMinimum().toDouble();
 }
 
 double
 nsRangeFrame::GetMax() const
 {
-  return static_cast<dom::HTMLInputElement*>(mContent)->GetMaximum().toDouble();
+  return static_cast<dom::HTMLInputElement*>(GetContent())->GetMaximum().toDouble();
 }
 
 double
 nsRangeFrame::GetValue() const
 {
-  return static_cast<dom::HTMLInputElement*>(mContent)->GetValueAsDecimal().toDouble();
-}
-
-nsIAtom*
-nsRangeFrame::GetType() const
-{
-  return nsGkAtoms::rangeFrame;
+  return static_cast<dom::HTMLInputElement*>(GetContent())->GetValueAsDecimal().toDouble();
 }
 
 #define STYLES_DISABLING_NATIVE_THEMING \
@@ -884,7 +879,7 @@ nsRangeFrame::ShouldUseNativeStyle() const
   nsIFrame* progressFrame = mProgressDiv->GetPrimaryFrame();
   nsIFrame* thumbFrame = mThumbDiv->GetPrimaryFrame();
 
-  return (StyleDisplay()->UsedAppearance() == NS_THEME_RANGE) &&
+  return (StyleDisplay()->mAppearance == NS_THEME_RANGE) &&
          !PresContext()->HasAuthorSpecifiedRules(this,
                                                  (NS_AUTHOR_SPECIFIED_BORDER |
                                                   NS_AUTHOR_SPECIFIED_BACKGROUND)) &&

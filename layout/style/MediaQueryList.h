@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set shiftwidth=2 tabstop=8 autoindent cindent expandtab: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,7 +13,7 @@
 #include "nsCycleCollectionParticipant.h"
 #include "nsCOMPtr.h"
 #include "nsTArray.h"
-#include "prclist.h"
+#include "mozilla/LinkedList.h"
 #include "mozilla/Attributes.h"
 #include "nsWrapperCache.h"
 #include "mozilla/DOMEventTargetHelper.h"
@@ -27,13 +27,14 @@ namespace dom {
 class MediaList;
 
 class MediaQueryList final : public DOMEventTargetHelper,
-                             public PRCList
+                             public mozilla::LinkedListElement<MediaQueryList>
 {
 public:
   // The caller who constructs is responsible for calling Evaluate
   // before calling any other methods.
-  MediaQueryList(nsIDocument *aDocument,
-                 const nsAString &aMediaQueryList);
+  MediaQueryList(nsIDocument* aDocument,
+                 const nsAString& aMediaQueryList,
+                 mozilla::dom::CallerType aCallerType);
 private:
   ~MediaQueryList();
 

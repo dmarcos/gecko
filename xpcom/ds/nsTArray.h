@@ -13,6 +13,7 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/BinarySearch.h"
+#include "mozilla/CheckedInt.h"
 #include "mozilla/fallible.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/MemoryReporting.h"
@@ -37,6 +38,7 @@
 namespace JS {
 template<class T>
 class Heap;
+class ObjectPtr;
 } /* namespace JS */
 
 class nsRegion;
@@ -201,9 +203,6 @@ struct nsTArrayFallibleAllocator : nsTArrayFallibleAllocatorBase
   static void SizeTooBig(size_t) {}
 };
 
-#if defined(MOZALLOC_HAVE_XMALLOC)
-#include "mozilla/mozalloc_abort.h"
-
 struct nsTArrayInfallibleAllocator : nsTArrayInfallibleAllocatorBase
 {
   static void* Malloc(size_t aSize) { return moz_xmalloc(aSize); }
@@ -215,35 +214,6 @@ struct nsTArrayInfallibleAllocator : nsTArrayInfallibleAllocatorBase
   static void Free(void* aPtr) { free(aPtr); }
   static void SizeTooBig(size_t aSize) { NS_ABORT_OOM(aSize); }
 };
-
-#else
-#include <stdlib.h>
-
-struct nsTArrayInfallibleAllocator : nsTArrayInfallibleAllocatorBase
-{
-  static void* Malloc(size_t aSize)
-  {
-    void* ptr = malloc(aSize);
-    if (MOZ_UNLIKELY(!ptr)) {
-      NS_ABORT_OOM(aSize);
-    }
-    return ptr;
-  }
-
-  static void* Realloc(void* aPtr, size_t aSize)
-  {
-    void* newptr = realloc(aPtr, aSize);
-    if (MOZ_UNLIKELY(!newptr && aSize)) {
-      NS_ABORT_OOM(aSize);
-    }
-    return newptr;
-  }
-
-  static void Free(void* aPtr) { free(aPtr); }
-  static void SizeTooBig(size_t aSize) { NS_ABORT_OOM(aSize); }
-};
-
-#endif
 
 // nsTArray_base stores elements into the space allocated beyond
 // sizeof(*this).  This is done to minimize the size of the nsTArray
@@ -708,7 +678,7 @@ struct nsTArray_CopyWithConstructors
 template<class E>
 struct MOZ_NEEDS_MEMMOVABLE_TYPE nsTArray_CopyChooser
 {
-  typedef nsTArray_CopyWithMemutils Type;
+  using Type = nsTArray_CopyWithMemutils;
 };
 
 //
@@ -719,14 +689,18 @@ struct MOZ_NEEDS_MEMMOVABLE_TYPE nsTArray_CopyChooser
   template<>                                            \
   struct nsTArray_CopyChooser<T>                        \
   {                                                     \
-    typedef nsTArray_CopyWithConstructors<T> Type;      \
+    using Type = nsTArray_CopyWithConstructors<T>;      \
   };
 
-template<class E>
-struct nsTArray_CopyChooser<JS::Heap<E>>
-{
-  typedef nsTArray_CopyWithConstructors<JS::Heap<E>> Type;
-};
+#define DECLARE_USE_COPY_CONSTRUCTORS_FOR_TEMPLATE(T)   \
+  template<typename S>                                  \
+  struct nsTArray_CopyChooser<T<S>>                     \
+  {                                                     \
+    using Type = nsTArray_CopyWithConstructors<T<S>>;   \
+  };
+
+DECLARE_USE_COPY_CONSTRUCTORS_FOR_TEMPLATE(JS::Heap)
+DECLARE_USE_COPY_CONSTRUCTORS_FOR_TEMPLATE(std::function)
 
 DECLARE_USE_COPY_CONSTRUCTORS(nsRegion)
 DECLARE_USE_COPY_CONSTRUCTORS(nsIntRegion)
@@ -740,13 +714,7 @@ DECLARE_USE_COPY_CONSTRUCTORS(mozilla::dom::indexedDB::SerializedStructuredClone
 DECLARE_USE_COPY_CONSTRUCTORS(JSStructuredCloneData)
 DECLARE_USE_COPY_CONSTRUCTORS(mozilla::dom::MessagePortMessage)
 DECLARE_USE_COPY_CONSTRUCTORS(mozilla::SourceBufferTask)
-
-template<typename T>
-struct nsTArray_CopyChooser<std::function<T>>
-{
-  typedef nsTArray_CopyWithConstructors<std::function<T>> Type;
-};
-
+DECLARE_USE_COPY_CONSTRUCTORS(JS::ObjectPtr)
 
 //
 // Base class for nsTArray_Impl that is templated on element type and derived
@@ -879,7 +847,12 @@ public:
   // Finalization method
   //
 
-  ~nsTArray_Impl() { Clear(); }
+  ~nsTArray_Impl()
+  {
+    if (!base_type::IsEmpty()) {
+      Clear();
+    }
+  }
 
   //
   // Initialization methods
@@ -1144,6 +1117,13 @@ public:
     return IndexOf(aItem, 0, aComp) != NoIndex;
   }
 
+  // Like Contains(), but assumes a sorted array.
+  template<class Item, class Comparator>
+  bool ContainsSorted(const Item& aItem, const Comparator& aComp) const
+  {
+    return BinaryIndexOf(aItem, aComp) != NoIndex;
+  }
+
   // This method searches for the first element in this array that is equal
   // to the given element.  This method assumes that 'operator==' is defined
   // for elem_type.
@@ -1153,6 +1133,13 @@ public:
   bool Contains(const Item& aItem) const
   {
     return IndexOf(aItem) != NoIndex;
+  }
+
+  // Like Contains(), but assumes a sorted array.
+  template<class Item>
+  bool ContainsSorted(const Item& aItem) const
+  {
+    return BinaryIndexOf(aItem) != NoIndex;
   }
 
   // This method searches for the offset of the first element in this
@@ -2049,9 +2036,14 @@ void
 nsTArray_Impl<E, Alloc>::RemoveElementsAt(index_type aStart, size_type aCount)
 {
   MOZ_ASSERT(aCount == 0 || aStart < Length(), "Invalid aStart index");
-  MOZ_ASSERT(aStart + aCount <= Length(), "Invalid length");
-  // Check that the previous assert didn't overflow
-  MOZ_ASSERT(aStart <= aStart + aCount, "Start index plus length overflows");
+
+  mozilla::CheckedInt<index_type> rangeEnd = aStart;
+  rangeEnd += aCount;
+
+  if (MOZ_UNLIKELY(!rangeEnd.isValid() || rangeEnd.value() > Length())) {
+    InvalidArrayIndex_CRASH(aStart, Length());
+  }
+
   DestructRange(aStart, aCount);
   this->template ShiftData<InfallibleAlloc>(aStart, aCount, 0,
                                             sizeof(elem_type),
@@ -2196,7 +2188,7 @@ nsTArray_Impl<E, Alloc>::AppendElement(Item&& aItem) -> elem_type*
   }
   elem_type* elem = Elements() + Length();
   elem_traits::Construct(elem, mozilla::Forward<Item>(aItem));
-  this->IncrementLength(1);
+  this->mHdr->mLength += 1;
   return elem;
 }
 

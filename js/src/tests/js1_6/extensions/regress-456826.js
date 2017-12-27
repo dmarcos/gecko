@@ -17,7 +17,6 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
 
@@ -97,7 +96,7 @@ function test()
     var start = new Date();
 
     // Set up our colors
-    for each (var color in colorStrings) {
+    for (var color of colorStrings) {
         var [r, g, b] = [0, 0, 0];
         colors.push([r, g, b, 0xff]);
       }
@@ -123,6 +122,4 @@ function test()
 
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

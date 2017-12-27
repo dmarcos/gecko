@@ -44,6 +44,7 @@ string       gEventsPath;
 string       gPingPath;
 int          gArgc;
 char**       gArgv;
+bool         gAutoSubmit;
 
 enum SubmissionResult {Succeeded, Failed};
 
@@ -57,6 +58,10 @@ static const char kMemoryReportExtension[] = ".memory.json.gz";
 
 void UIError(const string& message)
 {
+  if (gAutoSubmit) {
+    return;
+  }
+
   string errorMessage;
   if (!gStrings[ST_CRASHREPORTERERROR].empty()) {
     char buf[2048];
@@ -439,12 +444,6 @@ void SendCompleted(bool success, const string& serverResponse)
   }
 }
 
-bool ShouldEnableSending()
-{
-  srand(time(0));
-  return ((rand() % 100) < MOZ_CRASHREPORTER_ENABLE_PERCENT);
-}
-
 static string ComputeDumpHash() {
 #ifdef XP_LINUX
   // On Linux we rely on the system-provided libcurl which uses nss so we have
@@ -648,28 +647,46 @@ GetProgramPath(const string& exename)
 
 int main(int argc, char** argv)
 {
+  bool minidumpAllThreads = false;
+
   gArgc = argc;
   gArgv = argv;
+
+  string autoSubmitEnv = UIGetEnv("MOZ_CRASHREPORTER_AUTO_SUBMIT");
+  if (!autoSubmitEnv.empty()) {
+    gAutoSubmit = true;
+  }
 
   if (!ReadConfig()) {
     UIError("Couldn't read configuration.");
     return 0;
   }
 
-  if (!UIInit())
+  if (!UIInit()) {
     return 0;
+  }
 
-  if (argc > 1) {
+  if (argc == 3) {
+    if (!strcmp(argv[1], "--full")) {
+      minidumpAllThreads = true;
+    }
+    gReporterDumpFile = argv[2];
+  } else if (argc == 2) {
     gReporterDumpFile = argv[1];
   }
 
   if (gReporterDumpFile.empty()) {
     // no dump file specified, run the default UI
-    UIShowDefaultUI();
+    if (!gAutoSubmit) {
+      UIShowDefaultUI();
+    }
   } else {
     // Start by running minidump analyzer to gather stack traces.
     string reporterDumpFile = gReporterDumpFile;
     vector<string> args = { reporterDumpFile };
+    if (minidumpAllThreads) {
+      args.insert(args.begin(), "--full");
+    }
     UIRunProgram(GetProgramPath(UI_MINIDUMP_ANALYZER_FILENAME),
                  args, /* wait */ true);
 
@@ -763,8 +780,9 @@ int main(int argc, char** argv)
     }
 
     string sendURL = queryParameters["ServerURL"];
-    // we don't need to actually send this
+    // we don't need to actually send these
     queryParameters.erase("ServerURL");
+    queryParameters.erase("StackTraces");
 
     queryParameters["Throttleable"] = "1";
 
@@ -805,13 +823,13 @@ int main(int argc, char** argv)
       sendURL = urlEnv;
     }
 
-     // see if this version has been end-of-lifed
-     if (queryParameters.find("Version") != queryParameters.end() &&
-         CheckEndOfLifed(queryParameters["Version"])) {
-       UIError(gStrings[ST_ERROR_ENDOFLIFE]);
-       DeleteDump();
-       return 0;
-     }
+    // see if this version has been end-of-lifed
+    if (queryParameters.find("Version") != queryParameters.end() &&
+        CheckEndOfLifed(queryParameters["Version"])) {
+      UIError(gStrings[ST_ERROR_ENDOFLIFE]);
+      DeleteDump();
+      return 0;
+    }
 
     StringTable files;
     files["upload_file_minidump"] = gReporterDumpFile;

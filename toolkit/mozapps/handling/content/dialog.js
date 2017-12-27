@@ -34,6 +34,7 @@ var Cr = Components.results;
 var Cu = Components.utils;
 
 Cu.import("resource://gre/modules/SharedPromptUtils.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 
 
 var dialog = {
@@ -106,8 +107,6 @@ var dialog = {
     var items = document.getElementById("items");
     var possibleHandlers = this._handlerInfo.possibleApplicationHandlers;
     var preferredHandler = this._handlerInfo.preferredApplicationHandler;
-    var ios = Cc["@mozilla.org/network/io-service;1"].
-              getService(Ci.nsIIOService);
     for (let i = possibleHandlers.length - 1; i >= 0; --i) {
       let app = possibleHandlers.queryElementAt(i, Ci.nsIHandlerApp);
       let elm = document.createElement("richlistitem");
@@ -117,11 +116,11 @@ var dialog = {
 
       if (app instanceof Ci.nsILocalHandlerApp) {
         // See if we have an nsILocalHandlerApp and set the icon
-        let uri = ios.newFileURI(app.executable);
+        let uri = Services.io.newFileURI(app.executable);
         elm.setAttribute("image", "moz-icon://" + uri.spec + "?size=32");
       } else if (app instanceof Ci.nsIWebHandlerApp) {
-        let uri = ios.newURI(app.uriTemplate);
-        if (/^https?/.test(uri.scheme)) {
+        let uri = Services.io.newURI(app.uriTemplate);
+        if (/^https?$/.test(uri.scheme)) {
           // Unfortunately we can't use the favicon service to get the favicon,
           // because the service looks for a record with the exact URL we give
           // it, and users won't have such records for URLs they don't visit,
@@ -132,7 +131,7 @@ var dialog = {
         }
         elm.setAttribute("description", uri.prePath);
       } else if (app instanceof Ci.nsIDBusHandlerApp) {
-	  elm.setAttribute("description", app.method);
+        elm.setAttribute("description", app.method);
       } else
         throw "unknown handler type";
 
@@ -168,9 +167,7 @@ var dialog = {
 
     fp.open(rv => {
       if (rv == Ci.nsIFilePicker.returnOK && fp.file) {
-        let uri = Cc["@mozilla.org/network/util;1"].
-                  getService(Ci.nsIIOService).
-                  newFileURI(fp.file);
+        let uri = Services.io.newFileURI(fp.file);
 
         let handlerApp = Cc["@mozilla.org/uriloader/local-handler-app;1"].
                          createInstance(Ci.nsILocalHandlerApp);

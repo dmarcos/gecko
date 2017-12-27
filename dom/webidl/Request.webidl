@@ -27,6 +27,14 @@ interface Request {
   readonly attribute RequestRedirect redirect;
   readonly attribute DOMString integrity;
 
+  // If a main-thread fetch() promise rejects, the error passed will be a
+  // nsresult code.
+  [ChromeOnly]
+  readonly attribute boolean mozErrors;
+
+  [BinaryName="getOrCreateSignal"]
+  readonly attribute AbortSignal signal;
+
   [Throws,
    NewObject] Request clone();
 
@@ -48,8 +56,10 @@ dictionary RequestInit {
   RequestRedirect redirect;
   DOMString integrity;
 
-  [Func="FetchController::IsEnabled"]
-  FetchSignal signal;
+  [ChromeOnly]
+  boolean mozErrors;
+
+  AbortSignal? signal;
 
   [Func="FetchObserver::IsEnabled"]
   ObserverCallback observe;

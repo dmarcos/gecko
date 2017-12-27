@@ -35,17 +35,16 @@ protected:
   explicit SVGPathElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
 
 public:
-  // DOM memory reporter participant
-  NS_DECL_SIZEOF_EXCLUDING_THIS
+  NS_DECL_ADDSIZEOFEXCLUDINGTHIS
 
   // nsIContent interface
-  NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* name) const override;
+  NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* name) const override;
 
   // nsSVGSVGElement methods:
   virtual bool HasValidDimensions() const override;
 
   // SVGGeometryElement methods:
-  virtual bool AttributeDefinesGeometry(const nsIAtom *aName) override;
+  virtual bool AttributeDefinesGeometry(const nsAtom *aName) override;
   virtual bool IsMarkable() override;
   virtual void GetMarkPoints(nsTArray<nsSVGMark> *aMarks) override;
   virtual already_AddRefed<Path> BuildPath(PathBuilder* aBuilder) override;
@@ -58,13 +57,14 @@ public:
   virtual already_AddRefed<Path> GetOrBuildPathForMeasuring() override;
 
   // nsIContent interface
-  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+                         bool aPreallocateChildren) const override;
 
   virtual SVGAnimatedPathSegList* GetAnimPathSegList() override {
     return &mD;
   }
 
-  virtual nsIAtom* GetPathDataAttrName() const override {
+  virtual nsAtom* GetPathDataAttrName() const override {
     return nsGkAtoms::d;
   }
 

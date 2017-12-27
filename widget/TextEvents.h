@@ -12,17 +12,17 @@
 #include "mozilla/BasicEvents.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/EventForwards.h" // for KeyNameIndex, temporarily
-#include "mozilla/TextRange.h"
 #include "mozilla/FontRange.h"
+#include "mozilla/TextRange.h"
+#include "mozilla/WritingModes.h"
 #include "nsCOMPtr.h"
 #include "nsIDOMKeyEvent.h"
 #include "nsISelectionController.h"
 #include "nsISelectionListener.h"
 #include "nsITransferable.h"
 #include "nsRect.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 #include "nsTArray.h"
-#include "WritingModes.h"
 
 class nsStringHashKey;
 template<class, class> class nsDataHashtable;
@@ -59,6 +59,16 @@ namespace plugins {
   class PPluginInstanceChild;
 } // namespace plugins
 
+enum class AccessKeyType
+{
+  // Handle access key for chrome.
+  eChrome,
+  // Handle access key for content.
+  eContent,
+  // Don't handle access key.
+  eNone
+};
+
 /******************************************************************************
  * mozilla::AlternativeCharCode
  *
@@ -88,6 +98,11 @@ struct AlternativeCharCode
 
 struct ShortcutKeyCandidate
 {
+  ShortcutKeyCandidate()
+    : mCharCode(0)
+    , mIgnoreShift(0)
+  {
+  }
   ShortcutKeyCandidate(uint32_t aCharCode, bool aIgnoreShift)
     : mCharCode(aCharCode)
     , mIgnoreShift(aIgnoreShift)
@@ -101,6 +116,27 @@ struct ShortcutKeyCandidate
 };
 
 /******************************************************************************
+ * mozilla::IgnoreModifierState
+ *
+ * This stores flags for modifiers that should be ignored when matching
+ * XBL handlers.
+ ******************************************************************************/
+
+struct IgnoreModifierState
+{
+  // When mShift is true, Shift key state will be ignored.
+  bool mShift;
+  // When mOS is true, OS key state will be ignored.
+  bool mOS;
+
+  IgnoreModifierState()
+    : mShift(false)
+    , mOS(false)
+  {
+  }
+};
+
+/******************************************************************************
  * mozilla::WidgetKeyboardEvent
  ******************************************************************************/
 
@@ -109,6 +145,7 @@ class WidgetKeyboardEvent : public WidgetInputEvent
 private:
   friend class dom::PBrowserParent;
   friend class dom::PBrowserChild;
+  friend struct IPC::ParamTraits<WidgetKeyboardEvent>;
 
 protected:
   WidgetKeyboardEvent()
@@ -117,7 +154,6 @@ protected:
     , mCharCode(0)
     , mPseudoCharCode(0)
     , mLocation(eKeyLocationStandard)
-    , mAccessKeyForwardedToChild(false)
     , mUniqueId(0)
 #ifdef XP_MACOSX
     , mNativeModifierFlags(0)
@@ -125,11 +161,12 @@ protected:
 #endif // #ifdef XP_MACOSX
     , mKeyNameIndex(KEY_NAME_INDEX_Unidentified)
     , mCodeNameIndex(CODE_NAME_INDEX_UNKNOWN)
-    , mInputMethodAppState(eNotHandled)
     , mIsRepeat(false)
     , mIsComposing(false)
-    , mIsReserved(false)
     , mIsSynthesizedByTIP(false)
+    , mEditCommandsForSingleLineEditorInitialized(false)
+    , mEditCommandsForMultiLineEditorInitialized(false)
+    , mEditCommandsForRichTextEditorInitialized(false)
   {
   }
 
@@ -145,7 +182,6 @@ public:
     , mCharCode(0)
     , mPseudoCharCode(0)
     , mLocation(eKeyLocationStandard)
-    , mAccessKeyForwardedToChild(false)
     , mUniqueId(0)
 #ifdef XP_MACOSX
     , mNativeModifierFlags(0)
@@ -153,15 +189,18 @@ public:
 #endif // #ifdef XP_MACOSX
     , mKeyNameIndex(KEY_NAME_INDEX_Unidentified)
     , mCodeNameIndex(CODE_NAME_INDEX_UNKNOWN)
-    , mInputMethodAppState(eNotHandled)
     , mIsRepeat(false)
     , mIsComposing(false)
-    , mIsReserved(false)
     , mIsSynthesizedByTIP(false)
+    , mEditCommandsForSingleLineEditorInitialized(false)
+    , mEditCommandsForMultiLineEditorInitialized(false)
+    , mEditCommandsForRichTextEditorInitialized(false)
   {
     // If this is a keyboard event on a plugin, it shouldn't fired on content.
-    mFlags.mOnlySystemGroupDispatchInContent =
-      mFlags.mNoCrossProcessBoundaryForwarding = IsKeyEventOnPlugin();
+    if (IsKeyEventOnPlugin()) {
+      mFlags.mOnlySystemGroupDispatchInContent = true;
+      StopCrossProcessForwarding();
+    }
   }
 
   static bool IsKeyDownOrKeyDownOnPlugin(EventMessage aMessage)
@@ -197,6 +236,9 @@ public:
     WidgetKeyboardEvent* result =
       new WidgetKeyboardEvent(false, mMessage, nullptr);
     result->AssignKeyEventData(*this, true);
+    result->mEditCommandsForSingleLineEditor = mEditCommandsForSingleLineEditor;
+    result->mEditCommandsForMultiLineEditor = mEditCommandsForMultiLineEditor;
+    result->mEditCommandsForRichTextEditor = mEditCommandsForRichTextEditor;
     result->mFlags = mFlags;
     return result;
   }
@@ -235,14 +277,7 @@ public:
   uint32_t mPseudoCharCode;
   // One of eKeyLocation*
   uint32_t mLocation;
-  // True if accesskey handling was forwarded to the child via
-  // TabParent::HandleAccessKey. In this case, parent process menu access key
-  // handling should be delayed until it is determined that there exists no
-  // overriding access key in the content process.
-  bool mAccessKeyForwardedToChild;
-  // Unique id associated with a keydown / keypress event. Used in identifing
-  // keypress events for removal from async event dispatch queue in metrofx
-  // after preventDefault is called on keydown events. It's ok if this wraps
+  // Unique id associated with a keydown / keypress event. It's ok if this wraps
   // over long periods.
   uint32_t mUniqueId;
 
@@ -256,15 +291,6 @@ public:
   KeyNameIndex mKeyNameIndex;
   // DOM KeyboardEvent.code
   CodeNameIndex mCodeNameIndex;
-  // Indicates that the event is being handled by input method app
-  typedef uint8_t InputMethodAppStateType;
-  enum InputMethodAppState : InputMethodAppStateType
-  {
-    eNotHandled, // not yet handled by intput method app
-    eHandling,   // being handled by intput method app
-    eHandled     // handled by input method app
-  };
-  InputMethodAppState mInputMethodAppState;
 
   // Indicates whether the event is generated by auto repeat or not.
   // if this is keyup event, always false.
@@ -273,12 +299,80 @@ public:
   // composition.  This is initialized by EventStateManager.  So, key event
   // dispatchers don't need to initialize this.
   bool mIsComposing;
-  // Indicates if the key combination is reserved by chrome.  This is set by
-  // nsXBLWindowKeyHandler at capturing phase of the default event group.
-  bool mIsReserved;
   // Indicates whether the event is synthesized from Text Input Processor
   // or an actual event from nsAppShell.
   bool mIsSynthesizedByTIP;
+
+  /**
+   * Retrieves all edit commands from mWidget.  This shouldn't be called when
+   * the instance is an untrusted event, doesn't have widget or in non-chrome
+   * process.
+   */
+  void InitAllEditCommands();
+
+  /**
+   * Retrieves edit commands from mWidget only for aType.  This shouldn't be
+   * called when the instance is an untrusted event or doesn't have widget.
+   */
+  void InitEditCommandsFor(nsIWidget::NativeKeyBindingsType aType);
+
+  /**
+   * PreventNativeKeyBindings() makes the instance to not cause any edit
+   * actions even if it matches with a native key binding.
+   */
+  void PreventNativeKeyBindings()
+  {
+    mEditCommandsForSingleLineEditor.Clear();
+    mEditCommandsForMultiLineEditor.Clear();
+    mEditCommandsForRichTextEditor.Clear();
+    mEditCommandsForSingleLineEditorInitialized = true;
+    mEditCommandsForMultiLineEditorInitialized = true;
+    mEditCommandsForRichTextEditorInitialized = true;
+  }
+
+  /**
+   * EditCommandsConstRef() returns reference to edit commands for aType.
+   */
+  const nsTArray<CommandInt>&
+    EditCommandsConstRef(nsIWidget::NativeKeyBindingsType aType) const
+  {
+    return const_cast<WidgetKeyboardEvent*>(this)->EditCommandsRef(aType);
+  }
+
+  /**
+   * IsEditCommandsInitialized() returns true if edit commands for aType
+   * was already initialized.  Otherwise, false.
+   */
+  bool IsEditCommandsInitialized(
+         nsIWidget::NativeKeyBindingsType aType) const
+  {
+    return const_cast<WidgetKeyboardEvent*>(this)->
+             IsEditCommandsInitializedRef(aType);
+  }
+
+#ifdef DEBUG
+  /**
+   * AreAllEditCommandsInitialized() returns true if edit commands for all
+   * types were already initialized.  Otherwise, false.
+   */
+  bool AreAllEditCommandsInitialized() const
+  {
+    return mEditCommandsForSingleLineEditorInitialized &&
+           mEditCommandsForMultiLineEditorInitialized &&
+           mEditCommandsForRichTextEditorInitialized;
+  }
+#endif // #ifdef DEBUG
+
+  /**
+   * Execute edit commands for aType.
+   *
+   * @return        true if the caller should do nothing anymore.
+   *                false, otherwise.
+   */
+  typedef void (*DoCommandCallback)(Command, void*);
+  bool ExecuteEditCommands(nsIWidget::NativeKeyBindingsType aType,
+                           DoCommandCallback aCallback,
+                           void* aCallbackData);
 
   // If the key should cause keypress events, this returns true.
   // Otherwise, false.
@@ -330,7 +424,7 @@ public:
    * @param aCandidates [out] the candidate shortcut key combination list.
    *                          the first item is most preferred.
    */
-  void GetShortcutKeyCandidates(ShortcutKeyCandidateArray& aCandidates);
+  void GetShortcutKeyCandidates(ShortcutKeyCandidateArray& aCandidates) const;
 
   /**
    * Get the candidates for access key.
@@ -338,7 +432,25 @@ public:
    * @param aCandidates [out] the candidate access key list.
    *                          the first item is most preferred.
    */
-  void GetAccessKeyCandidates(nsTArray<uint32_t>& aCandidates);
+  void GetAccessKeyCandidates(nsTArray<uint32_t>& aCandidates) const;
+
+  /**
+   * Check whether the modifiers match with chrome access key or
+   * content access key.
+   */
+  bool ModifiersMatchWithAccessKey(AccessKeyType aType) const;
+
+  /**
+   * Return active modifiers which may match with access key.
+   * For example, even if Alt is access key modifier, then, when Control,
+   * CapseLock and NumLock are active, this returns only MODIFIER_CONTROL.
+   */
+  Modifiers ModifiersForAccessKeyMatching() const;
+
+  /**
+   * Return access key modifiers.
+   */
+  static Modifiers AccessKeyModifiers(AccessKeyType aType);
 
   static void Shutdown();
 
@@ -390,8 +502,6 @@ public:
     mAlternativeCharCodes = aEvent.mAlternativeCharCodes;
     mIsRepeat = aEvent.mIsRepeat;
     mIsComposing = aEvent.mIsComposing;
-    mIsReserved = aEvent.mIsReserved;
-    mAccessKeyForwardedToChild = aEvent.mAccessKeyForwardedToChild;
     mKeyNameIndex = aEvent.mKeyNameIndex;
     mCodeNameIndex = aEvent.mCodeNameIndex;
     mKeyValue = aEvent.mKeyValue;
@@ -408,8 +518,18 @@ public:
       Assign(aEvent.mNativeCharactersIgnoringModifiers);
     mPluginTextEventString.Assign(aEvent.mPluginTextEventString);
 #endif
-    mInputMethodAppState = aEvent.mInputMethodAppState;
     mIsSynthesizedByTIP = aEvent.mIsSynthesizedByTIP;
+
+    // Don't copy mEditCommandsFor*Editor because it may require a lot of
+    // memory space.  For example, if the event is dispatched but grabbed by
+    // a JS variable, they are not necessary anymore.
+
+    mEditCommandsForSingleLineEditorInitialized =
+      aEvent.mEditCommandsForSingleLineEditorInitialized;
+    mEditCommandsForMultiLineEditorInitialized =
+      aEvent.mEditCommandsForMultiLineEditorInitialized;
+    mEditCommandsForRichTextEditorInitialized =
+      aEvent.mEditCommandsForRichTextEditorInitialized;
   }
 
 private:
@@ -421,6 +541,54 @@ private:
                           CodeNameIndex> CodeNameIndexHashtable;
   static KeyNameIndexHashtable* sKeyNameIndexHashtable;
   static CodeNameIndexHashtable* sCodeNameIndexHashtable;
+
+  // mEditCommandsFor*Editor store edit commands.  This should be initialized
+  // with InitEditCommandsFor().
+  // XXX Ideally, this should be array of Command rather than CommandInt.
+  //     However, ParamTraits isn't aware of enum array.
+  nsTArray<CommandInt> mEditCommandsForSingleLineEditor;
+  nsTArray<CommandInt> mEditCommandsForMultiLineEditor;
+  nsTArray<CommandInt> mEditCommandsForRichTextEditor;
+
+  nsTArray<CommandInt>& EditCommandsRef(nsIWidget::NativeKeyBindingsType aType)
+  {
+    switch (aType) {
+      case nsIWidget::NativeKeyBindingsForSingleLineEditor:
+        return mEditCommandsForSingleLineEditor;
+      case nsIWidget::NativeKeyBindingsForMultiLineEditor:
+        return mEditCommandsForMultiLineEditor;
+      case nsIWidget::NativeKeyBindingsForRichTextEditor:
+        return mEditCommandsForRichTextEditor;
+      default:
+        MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE(
+          "Invalid native key binding type");
+    }
+  }
+
+  // mEditCommandsFor*EditorInitialized are set to true when
+  // InitEditCommandsFor() initializes edit commands for the type.
+  bool mEditCommandsForSingleLineEditorInitialized;
+  bool mEditCommandsForMultiLineEditorInitialized;
+  bool mEditCommandsForRichTextEditorInitialized;
+
+  bool& IsEditCommandsInitializedRef(nsIWidget::NativeKeyBindingsType aType)
+  {
+    switch (aType) {
+      case nsIWidget::NativeKeyBindingsForSingleLineEditor:
+        return mEditCommandsForSingleLineEditorInitialized;
+      case nsIWidget::NativeKeyBindingsForMultiLineEditor:
+        return mEditCommandsForMultiLineEditorInitialized;
+      case nsIWidget::NativeKeyBindingsForRichTextEditor:
+        return mEditCommandsForRichTextEditorInitialized;
+      default:
+        MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE(
+          "Invalid native key binding type");
+    }
+  }
+
+  static int32_t GenericAccessModifierKeyPref();
+  static int32_t ChromeAccessModifierMaskPref();
+  static int32_t ContentAccessModifierMaskPref();
 };
 
 /******************************************************************************
@@ -916,7 +1084,7 @@ public:
   }
 
   InternalEditorInputEvent(bool aIsTrusted, EventMessage aMessage,
-                           nsIWidget* aWidget)
+                           nsIWidget* aWidget = nullptr)
     : InternalUIEvent(aIsTrusted, aMessage, aWidget, eEditorInputEventClass)
     , mIsComposing(false)
   {

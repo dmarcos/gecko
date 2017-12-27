@@ -226,11 +226,13 @@ function xdbLibrary()
 
 function cLibrary()
 {
+    var libPossibilities = ['libc.so.6', 'libc.so', 'libc.dylib'];
     var lib;
-    try {
-        lib = ctypes.open("libc.so.6");
-    } catch(e) {
-        lib = ctypes.open("libc.so");
+    for (const name of libPossibilities) {
+        try {
+            lib = ctypes.open("libc.so.6");
+        } catch(e) {
+        }
     }
 
     return {
@@ -265,11 +267,5 @@ function addToKeyedList(collection, key, entry)
 
 function loadTypeInfo(filename)
 {
-    var info = {};
-    for (var line of readFileLines_gen(filename)) {
-        line = line.replace(/\n/, "");
-        let [property, name] = line.split("$$");
-        addToKeyedList(info, property, name);
-    }
-    return info;
+    return JSON.parse(os.file.readFile(filename));
 }

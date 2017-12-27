@@ -12,7 +12,7 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(CYRILLIC_URL);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire } = monitor.panelWin;
   let {
     getDisplayedRequests,
     getSortedRequests,
@@ -22,10 +22,16 @@ add_task(function* () {
   tab.linkedBrowser.reload();
   yield wait;
 
+  let requestItem = document.querySelectorAll(".request-list-item")[0];
+  let requestsListStatus = requestItem.querySelector(".requests-list-status");
+  requestItem.scrollIntoView();
+  EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+  yield waitUntil(() => requestsListStatus.title);
+
   verifyRequestItemTarget(
     document,
-    getDisplayedRequests(gStore.getState()),
-    getSortedRequests(gStore.getState()).get(0),
+    getDisplayedRequests(store.getState()),
+    getSortedRequests(store.getState()).get(0),
     "GET",
     CYRILLIC_URL,
     {
@@ -41,7 +47,10 @@ add_task(function* () {
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector("#response-tab"));
   yield wait;
-  let text = document.querySelector(".CodeMirror-lines").textContent;
+
+  // CodeMirror will only load lines currently in view to the DOM. getValue()
+  // retrieves all lines pending render after a user begins scrolling.
+  let text = document.querySelector(".CodeMirror").CodeMirror.getValue();
 
   ok(text.includes("\u0411\u0440\u0430\u0442\u0430\u043d"),
     "The text shown in the source editor is correct.");

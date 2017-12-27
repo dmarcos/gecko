@@ -9,6 +9,7 @@
 #include <nsISupportsUtils.h>
 
 #include "nsCOMPtr.h"
+#include "nsINamed.h"
 #include "nsIObserver.h"
 #include "nsIUrlClassifierStreamUpdater.h"
 #include "nsIStreamListener.h"
@@ -25,7 +26,8 @@ class nsUrlClassifierStreamUpdater final : public nsIUrlClassifierStreamUpdater,
                                            public nsIStreamListener,
                                            public nsIObserver,
                                            public nsIInterfaceRequestor,
-                                           public nsITimerCallback
+                                           public nsITimerCallback,
+                                           public nsINamed
 {
 public:
   nsUrlClassifierStreamUpdater();
@@ -38,6 +40,7 @@ public:
   NS_DECL_NSISTREAMLISTENER
   NS_DECL_NSIOBSERVER
   NS_DECL_NSITIMERCALLBACK
+  NS_DECL_NSINAMED
 
 private:
   // No subclassing
@@ -68,6 +71,25 @@ private:
   // Fetches the next request, from mPendingRequests
   nsresult FetchNextRequest();
 
+  struct UpdateRequest {
+    nsCString mTables;
+    nsCString mRequestPayload;
+    bool mIsPostRequest;
+    nsCString mUrl;
+    nsCOMPtr<nsIUrlClassifierCallback> mSuccessCallback;
+    nsCOMPtr<nsIUrlClassifierCallback> mUpdateErrorCallback;
+    nsCOMPtr<nsIUrlClassifierCallback> mDownloadErrorCallback;
+  };
+  // Utility function to create an update request.
+  void
+  BuildUpdateRequest(const nsACString &aRequestTables,
+                     const nsACString &aRequestPayload,
+                     bool aIsPostRequest,
+                     const nsACString &aUpdateUrl,
+                     nsIUrlClassifierCallback *aSuccessCallback,
+                     nsIUrlClassifierCallback *aUpdateErrorCallback,
+                     nsIUrlClassifierCallback *aDownloadErrorCallback,
+                     UpdateRequest* aRequest);
 
   bool mIsUpdating;
   bool mInitialized;
@@ -91,16 +113,14 @@ private:
   // retry on our own.
   nsCOMPtr<nsITimer> mFetchNextRequestTimer;
 
-  struct PendingRequest {
-    nsCString mTables;
-    nsCString mRequestPayload;
-    bool mIsPostRequest;
-    nsCString mUrl;
-    nsCOMPtr<nsIUrlClassifierCallback> mSuccessCallback;
-    nsCOMPtr<nsIUrlClassifierCallback> mUpdateErrorCallback;
-    nsCOMPtr<nsIUrlClassifierCallback> mDownloadErrorCallback;
-  };
-  nsTArray<PendingRequest> mPendingRequests;
+  // Timer to abort the download if the server takes too long to respond.
+  nsCOMPtr<nsITimer> mResponseTimeoutTimer;
+
+  // Timer to abort the download if it takes too long.
+  nsCOMPtr<nsITimer> mTimeoutTimer;
+
+  mozilla::UniquePtr<UpdateRequest> mCurrentRequest;
+  nsTArray<UpdateRequest> mPendingRequests;
 
   struct PendingUpdate {
     nsCString mUrl;
@@ -108,9 +128,6 @@ private:
   };
   nsTArray<PendingUpdate> mPendingUpdates;
 
-  nsCOMPtr<nsIUrlClassifierCallback> mSuccessCallback;
-  nsCOMPtr<nsIUrlClassifierCallback> mUpdateErrorCallback;
-  nsCOMPtr<nsIUrlClassifierCallback> mDownloadErrorCallback;
 
   // The provider for current update request and should be only used by telemetry
   // since it would show up as "other" for any other providers.

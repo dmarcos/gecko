@@ -1,6 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -15,13 +15,24 @@
 #include "Units.h"
 
 struct nsRect;
+class gfxContext;
 class nsAttrValue;
 class nsPresContext;
-class nsRenderingContext;
 class nsDeviceContext;
 class nsIFrame;
-class nsIAtom;
+class nsAtom;
 class nsIWidget;
+
+namespace mozilla {
+namespace layers {
+class StackingContextHelper;
+class WebRenderLayerManager;
+}
+namespace wr {
+class DisplayListBuilder;
+class IpcResourceUpdateQueue;
+}
+}
 
 // IID for the nsITheme interface
 // {7329f760-08cb-450f-8225-dae729096dec}
@@ -55,11 +66,25 @@ public:
    * @param aRect the rectangle defining the area occupied by the widget
    * @param aDirtyRect the rectangle that needs to be drawn
    */
-  NS_IMETHOD DrawWidgetBackground(nsRenderingContext* aContext,
+  NS_IMETHOD DrawWidgetBackground(gfxContext* aContext,
                                   nsIFrame* aFrame,
                                   uint8_t aWidgetType,
                                   const nsRect& aRect,
                                   const nsRect& aDirtyRect) = 0;
+
+  /**
+   * Create WebRender commands for the theme background.
+   * @return true if the theme knows how to create WebRender commands for the
+   *         given widget type, false if DrawWidgetBackground need sto be called
+   *         instead.
+   */
+  virtual bool CreateWebRenderCommandsForWidget(mozilla::wr::DisplayListBuilder& aBuilder,
+                                                mozilla::wr::IpcResourceUpdateQueue& aResources,
+                                                const mozilla::layers::StackingContextHelper& aSc,
+                                                mozilla::layers::WebRenderLayerManager* aManager,
+                                                nsIFrame* aFrame,
+                                                uint8_t aWidgetType,
+                                                const nsRect& aRect) { return false; }
 
   /**
    * Get the computed CSS border for the widget, in pixels.
@@ -134,7 +159,7 @@ public:
    * null |aOldValue|) for content state changes.
    */
   NS_IMETHOD WidgetStateChanged(nsIFrame* aFrame, uint8_t aWidgetType, 
-                                nsIAtom* aAttribute, bool* aShouldRepaint,
+                                nsAtom* aAttribute, bool* aShouldRepaint,
                                 const nsAttrValue* aOldValue)=0;
 
   NS_IMETHOD ThemeChanged()=0;
@@ -144,10 +169,6 @@ public:
 
   virtual bool NeedToClearBackgroundBehindWidget(nsIFrame* aFrame,
                                                  uint8_t aWidgetType)
-  { return false; }
-
-  virtual bool WidgetProvidesFontSmoothingBackgroundColor(nsIFrame* aFrame,
-                                      uint8_t aWidgetType, nscolor* aColor)
   { return false; }
 
   /**

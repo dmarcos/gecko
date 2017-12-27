@@ -38,10 +38,10 @@
 #include "prio.h"
 #include "mozilla/Logging.h"
 #include "mozilla/IntegerPrintfMacros.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "zlib.h"
 #include "Classifier.h"
 #include "nsUrlClassifierDBService.h"
+#include "mozilla/Telemetry.h"
 
 // Main store for SafeBrowsing protocol data. We store
 // known add/sub chunks, prefixes and completions in memory
@@ -149,14 +149,32 @@ TableUpdateV2::NewSubComplete(uint32_t aAddChunk, const Completion& aHash, uint3
   return NS_OK;
 }
 
+nsresult
+TableUpdateV2::NewMissPrefix(const Prefix& aPrefix)
+{
+  Prefix *prefix = mMissPrefixes.AppendElement(aPrefix, fallible);
+  if (!prefix) return NS_ERROR_OUT_OF_MEMORY;
+  return NS_OK;
+}
+
 void
 TableUpdateV4::NewPrefixes(int32_t aSize, std::string& aPrefixes)
 {
+  NS_ENSURE_TRUE_VOID(aSize >= 4 && aSize <= COMPLETE_SIZE);
   NS_ENSURE_TRUE_VOID(aPrefixes.size() % aSize == 0);
   NS_ENSURE_TRUE_VOID(!mPrefixesMap.Get(aSize));
 
-  if (LOG_ENABLED() && 4 == aSize) {
-    int numOfPrefixes = aPrefixes.size() / 4;
+  int numOfPrefixes = aPrefixes.size() / aSize;
+
+  if (aSize > 4) {
+    // TODO Bug 1364043 we may have a better API to record multiple samples into
+    // histograms with one call
+#ifdef NIGHTLY_BUILD
+    for (int i = 0; i < std::min(20, numOfPrefixes); i++) {
+      Telemetry::Accumulate(Telemetry::URLCLASSIFIER_VLPS_LONG_PREFIXES, aSize);
+    }
+#endif
+  } else if (LOG_ENABLED()) {
     uint32_t* p = (uint32_t*)aPrefixes.c_str();
 
     // Dump the first/last 10 fixed-length prefixes for debugging.
@@ -172,19 +190,26 @@ TableUpdateV4::NewPrefixes(int32_t aSize, std::string& aPrefixes)
       LOG(("%.2X%.2X%.2X%.2X", c[0], c[1], c[2], c[3]));
     }
 
-    LOG(("---- %" PRIuSIZE " fixed-length prefixes in total.", aPrefixes.size() / aSize));
+    LOG(("---- %zu fixed-length prefixes in total.", aPrefixes.size() / aSize));
   }
 
   PrefixStdString* prefix = new PrefixStdString(aPrefixes);
   mPrefixesMap.Put(aSize, prefix);
 }
 
-void
+nsresult
 TableUpdateV4::NewRemovalIndices(const uint32_t* aIndices, size_t aNumOfIndices)
 {
+  MOZ_ASSERT(mRemovalIndiceArray.IsEmpty(), "mRemovalIndiceArray must be empty");
+
+  if (!mRemovalIndiceArray.SetCapacity(aNumOfIndices, fallible)) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
   for (size_t i = 0; i < aNumOfIndices; i++) {
     mRemovalIndiceArray.AppendElement(aIndices[i]);
   }
+  return NS_OK;
 }
 
 void
@@ -314,7 +339,9 @@ HashStore::Open()
   }
 
   mFileSize = static_cast<uint32_t>(fileSize);
-  mInputStream = NS_BufferInputStream(origStream, mFileSize);
+  rv = NS_NewBufferedInputStream(getter_AddRefs(mInputStream),
+                                 origStream.forget(), mFileSize);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   rv = ReadHeader();
   NS_ENSURE_SUCCESS(rv, rv);
@@ -573,8 +600,9 @@ Merge(ChunkSet* aStoreChunks,
     // no match, add
     if (storeIter == storeEnd
         || storeIter->Compare(updatePrefix) != 0) {
-      if (!adds.AppendElement(updatePrefix))
+      if (!adds.AppendElement(updatePrefix, fallible)) {
         return NS_ERROR_OUT_OF_MEMORY;
+      }
     }
   }
 
@@ -920,9 +948,11 @@ HashStore::WriteSubPrefixes(nsIOutputStream* aOut)
   nsTArray<uint32_t> subchunks;
   nsTArray<uint32_t> prefixes;
   uint32_t count = mSubPrefixes.Length();
-  addchunks.SetCapacity(count);
-  subchunks.SetCapacity(count);
-  prefixes.SetCapacity(count);
+  if (!addchunks.SetCapacity(count, fallible) ||
+      !subchunks.SetCapacity(count, fallible) ||
+      !prefixes.SetCapacity(count, fallible)) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
 
   for (uint32_t i = 0; i < count; i++) {
     addchunks.AppendElement(mSubPrefixes[i].AddChunk());
@@ -957,8 +987,7 @@ HashStore::WriteFile()
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsIOutputStream> out;
-  rv = NS_NewCheckSummedOutputStream(getter_AddRefs(out), storeFile,
-                                     PR_WRONLY | PR_TRUNCATE | PR_CREATE_FILE);
+  rv = NS_NewCheckSummedOutputStream(getter_AddRefs(out), storeFile);
   NS_ENSURE_SUCCESS(rv, rv);
 
   uint32_t written;
@@ -1173,7 +1202,7 @@ HashStore::AugmentAdds(const nsTArray<uint32_t>& aPrefixes)
 {
   uint32_t cnt = aPrefixes.Length();
   if (cnt != mAddPrefixes.Length()) {
-    LOG(("Amount of prefixes in cache not consistent with store (%" PRIuSIZE " vs %" PRIuSIZE ")",
+    LOG(("Amount of prefixes in cache not consistent with store (%zu vs %zu)",
          aPrefixes.Length(), mAddPrefixes.Length()));
     return NS_ERROR_FAILURE;
   }

@@ -10,7 +10,7 @@ const { Cc, Ci } = require("chrome");
 const Services = require("Services");
 const { BreakpointActor, setBreakpointAtEntryPoints } = require("devtools/server/actors/breakpoint");
 const { OriginalLocation, GeneratedLocation } = require("devtools/server/actors/common");
-const { createValueGrip } = require("devtools/server/actors/object");
+const { createValueGrip, arrayBufferGrip } = require("devtools/server/actors/object");
 const { ActorClassWithSpec } = require("devtools/shared/protocol");
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
 const { assert, fetch } = DevToolsUtils;
@@ -27,6 +27,7 @@ function isEvalSource(source) {
   // These are all the sources that are essentially eval-ed (either
   // by calling eval or passing a string to one of these functions).
   return (introType === "eval" ||
+          introType === "debugger eval" ||
           introType === "Function" ||
           introType === "eventHandler" ||
           introType === "setTimeout" ||
@@ -41,8 +42,7 @@ function getSourceURL(source, window) {
     // created with the sourceURL pragma. If the introduction script
     // is a non-eval script, generate an full absolute URL relative to it.
 
-    if (source.displayURL && source.introductionScript &&
-       !isEvalSource(source.introductionScript.source)) {
+    if (source.displayURL && source.introductionScript) {
       if (source.introductionScript.source.url === "debugger eval code") {
         if (window) {
           // If this is a named eval script created from the console, make it
@@ -50,7 +50,7 @@ function getSourceURL(source, window) {
           // when we care about this.
           return joinURI(window.location.href, source.displayURL);
         }
-      } else {
+      } else if (!isEvalSource(source.introductionScript.source)) {
         return joinURI(source.introductionScript.source.url, source.displayURL);
       }
     }
@@ -159,7 +159,7 @@ let SourceActor = ActorClassWithSpec(sourceSpec, {
     if (this.threadActor.sources.isPrettyPrinted(this.url)) {
       this._init = this.prettyPrint(
         this.threadActor.sources.prettyPrintIndent(this.url)
-      ).then(null, error => {
+      ).catch(error => {
         DevToolsUtils.reportException("SourceActor", error);
       });
     } else {
@@ -331,6 +331,7 @@ let SourceActor = ActorClassWithSpec(sourceSpec, {
       content: t,
       contentType: this._contentType
     });
+    let isWasm = this.source && this.source.introductionType === "wasm";
 
     let genSource = this.generatedSource || this.source;
     return this.threadActor.sources.fetchSourceMap(genSource).then(map => {
@@ -344,6 +345,16 @@ let SourceActor = ActorClassWithSpec(sourceSpec, {
           this._reportLoadSourceError(error, map);
           throw error;
         }
+      }
+
+      if (isWasm && this.dbg.allowWasmBinarySource) {
+        let wasm = this.source.binary;
+        let buffer = wasm.buffer;
+        assert(
+          wasm.byteOffset === 0 && wasm.byteLength === buffer.byteLength,
+          "Typed array from wasm source binary must cover entire buffer"
+        );
+        return toResolvedContent(buffer);
       }
 
       // Use `source.text` if it exists, is not the "no source" string, and
@@ -471,13 +482,20 @@ let SourceActor = ActorClassWithSpec(sourceSpec, {
     return promise.resolve(this._init)
       .then(this._getSourceText)
       .then(({ content, contentType }) => {
+        if (typeof content === "object" && content && content.constructor &&
+            content.constructor.name === "ArrayBuffer") {
+          return {
+            source: arrayBufferGrip(content, this.threadActor.threadLifetimePool),
+            contentType,
+          };
+        }
         return {
           source: createValueGrip(content, this.threadActor.threadLifetimePool,
             this.threadActor.objectGrip),
           contentType: contentType
         };
       })
-      .then(null, error => {
+      .catch(error => {
         reportError(error, "Got an exception during SA_onSource: ");
         throw new Error("Could not load the source for " + this.url + ".\n" +
                         DevToolsUtils.safeErrorString(error));
@@ -500,7 +518,7 @@ let SourceActor = ActorClassWithSpec(sourceSpec, {
         this._init = null;
       })
       .then(this.onSource)
-      .then(null, error => {
+      .catch(error => {
         this.disablePrettyPrint();
         throw new Error(DevToolsUtils.safeErrorString(error));
       });

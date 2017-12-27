@@ -7,9 +7,10 @@
 "use strict";
 
 const promise = require("promise");
+const defer = require("devtools/shared/defer");
 
-loader.lazyGetter(this, "HUDService", () => require("devtools/client/webconsole/hudservice"));
-loader.lazyGetter(this, "EventEmitter", () => require("devtools/shared/event-emitter"));
+loader.lazyRequireGetter(this, "HUDService", "devtools/client/webconsole/hudservice", true);
+loader.lazyGetter(this, "EventEmitter", () => require("devtools/shared/old-event-emitter"));
 
 /**
  * A DevToolPanel that controls the Web Console.
@@ -45,7 +46,7 @@ WebConsolePanel.prototype = {
     let iframe = parentDoc.getElementById("toolbox-panel-iframe-webconsole");
 
     // Make sure the iframe content window is ready.
-    let deferredIframe = promise.defer();
+    let deferredIframe = defer();
     let win, doc;
     if ((win = iframe.contentWindow) &&
         (doc = win.document) &&
@@ -80,6 +81,11 @@ WebConsolePanel.prototype = {
       })
       .then((webConsole) => {
         this.hud = webConsole;
+        // Pipe 'reloaded' event from NewWebConsoleFrame to WebConsolePanel.
+        // These events are listened by the Toolbox.
+        this.hud.ui.on("reloaded", () => {
+          this.emit("reloaded");
+        });
         this._isReady = true;
         this.emit("ready");
         return this;
@@ -87,7 +93,7 @@ WebConsolePanel.prototype = {
         let msg = "WebConsolePanel open failed. " +
                   reason.error + ": " + reason.message;
         dump(msg + "\n");
-        console.error(msg);
+        console.error(msg, reason);
       });
   },
 

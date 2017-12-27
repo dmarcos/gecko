@@ -93,7 +93,7 @@ static NS_DEFINE_CID(kPlacesInitCompleteCID,
 static NS_DEFINE_CID(kSessionStoreWindowRestoredCID,
   NS_SESSION_STORE_WINDOW_RESTORED_EVENT_CID);
 static NS_DEFINE_CID(kXPCOMShutdownCID,
-  NS_XPCOM_SHUTDOWN_EVENT_CID);  
+  NS_XPCOM_SHUTDOWN_EVENT_CID);
 #endif //defined(XP_WIN)
 
 using namespace mozilla;
@@ -103,7 +103,11 @@ private:
   RefPtr<nsAppStartup> mService;
 
 public:
-  explicit nsAppExitEvent(nsAppStartup *service) : mService(service) {}
+  explicit nsAppExitEvent(nsAppStartup* service)
+    : mozilla::Runnable("nsAppExitEvent")
+    , mService(service)
+  {
+  }
 
   NS_IMETHOD Run() override {
     // Tell the appshell to exit
@@ -123,7 +127,8 @@ public:
  * @param stamp The timestamp to be converted
  * @returns The converted timestamp
  */
-uint64_t ComputeAbsoluteTimestamp(PRTime prnow, TimeStamp now, TimeStamp stamp)
+static uint64_t
+ComputeAbsoluteTimestamp(TimeStamp stamp)
 {
   static PRTime sAbsoluteNow = PR_Now();
   static TimeStamp sMonotonicNow = TimeStamp::Now();
@@ -237,7 +242,7 @@ NS_IMPL_ISUPPORTS(nsAppStartup,
 NS_IMETHODIMP
 nsAppStartup::CreateHiddenWindow()
 {
-#if defined(MOZ_WIDGET_GONK) || defined(MOZ_WIDGET_UIKIT)
+#if defined(MOZ_WIDGET_UIKIT)
   return NS_OK;
 #else
   nsCOMPtr<nsIAppShellService> appShellService
@@ -252,7 +257,7 @@ nsAppStartup::CreateHiddenWindow()
 NS_IMETHODIMP
 nsAppStartup::DestroyHiddenWindow()
 {
-#if defined(MOZ_WIDGET_GONK) || defined(MOZ_WIDGET_UIKIT)
+#if defined(MOZ_WIDGET_UIKIT)
   return NS_OK;
 #else
   nsCOMPtr<nsIAppShellService> appShellService
@@ -373,7 +378,6 @@ nsAppStartup::Quit(uint32_t aMode)
           windowEnumerator->GetNext(getter_AddRefs(window));
           nsCOMPtr<nsPIDOMWindowOuter> domWindow(do_QueryInterface(window));
           if (domWindow) {
-            MOZ_ASSERT(domWindow->IsOuterWindow());
             if (!domWindow->CanClose())
               return NS_OK;
           }
@@ -382,7 +386,7 @@ nsAppStartup::Quit(uint32_t aMode)
       }
     }
 
-    PROFILER_MARKER("Shutdown start");
+    PROFILER_ADD_MARKER("Shutdown start");
     mozilla::RecordShutdownStartTimeStamp();
     mShuttingDown = true;
     if (!mRestart) {
@@ -433,7 +437,8 @@ nsAppStartup::Quit(uint32_t aMode)
         mediator->GetEnumerator(nullptr, getter_AddRefs(windowEnumerator));
         if (windowEnumerator) {
           bool more;
-          while (windowEnumerator->HasMoreElements(&more), more) {
+          while (NS_SUCCEEDED(windowEnumerator->HasMoreElements(&more)) &&
+                 more) {
             /* we can't quit immediately. we'll try again as the last window
                finally closes. */
             ferocity = eAttemptQuit;
@@ -510,7 +515,6 @@ nsAppStartup::CloseAllWindows()
     nsCOMPtr<nsPIDOMWindowOuter> window = do_QueryInterface(isupports);
     NS_ASSERTION(window, "not an nsPIDOMWindow");
     if (window) {
-      MOZ_ASSERT(window->IsOuterWindow());
       window->ForceClose();
     }
   }
@@ -608,7 +612,7 @@ nsAppStartup::CreateChromeWindow(nsIWebBrowserChrome *aParent,
                                  nsIWebBrowserChrome **_retval)
 {
   bool cancel;
-  return CreateChromeWindow2(aParent, aChromeFlags, nullptr, nullptr, &cancel, _retval);
+  return CreateChromeWindow2(aParent, aChromeFlags, nullptr, nullptr, 0, &cancel, _retval);
 }
 
 
@@ -632,6 +636,7 @@ nsAppStartup::CreateChromeWindow2(nsIWebBrowserChrome *aParent,
                                   uint32_t aChromeFlags,
                                   nsITabParent *aOpeningTab,
                                   mozIDOMWindowProxy* aOpener,
+                                  uint64_t aNextTabParentId,
                                   bool *aCancel,
                                   nsIWebBrowserChrome **_retval)
 {
@@ -651,10 +656,15 @@ nsAppStartup::CreateChromeWindow2(nsIWebBrowserChrome *aParent,
     NS_ASSERTION(xulParent, "window created using non-XUL parent. that's unexpected, but may work.");
 
     if (xulParent)
-      xulParent->CreateNewWindow(aChromeFlags, aOpeningTab, aOpener, getter_AddRefs(newWindow));
+      xulParent->CreateNewWindow(aChromeFlags, aOpeningTab, aOpener,
+                                 aNextTabParentId,
+                                 getter_AddRefs(newWindow));
     // And if it fails, don't try again without a parent. It could fail
     // intentionally (bug 115969).
   } else { // try using basic methods:
+    MOZ_RELEASE_ASSERT(aNextTabParentId == 0,
+                       "Unexpected aNextTabParentId, we shouldn't ever have a next actor ID without a parent");
+
     /* You really shouldn't be making dependent windows without a parent.
       But unparented modal (and therefore dependent) windows happen
       in our codebase, so we allow it after some bellyaching: */
@@ -745,13 +755,11 @@ nsAppStartup::GetStartupInfo(JSContext* aCx, JS::MutableHandle<JS::Value> aRetva
   aRetval.setObject(*obj);
 
   TimeStamp procTime = StartupTimeline::Get(StartupTimeline::PROCESS_CREATION);
-  TimeStamp now = TimeStamp::Now();
-  PRTime absNow = PR_Now();
 
   if (procTime.IsNull()) {
     bool error = false;
 
-    procTime = TimeStamp::ProcessCreation(error);
+    procTime = TimeStamp::ProcessCreation(&error);
 
     if (error) {
       Telemetry::Accumulate(Telemetry::STARTUP_MEASUREMENT_ERRORS,
@@ -778,7 +786,7 @@ nsAppStartup::GetStartupInfo(JSContext* aCx, JS::MutableHandle<JS::Value> aRetva
 
     if (!stamp.IsNull()) {
       if (stamp >= procTime) {
-        PRTime prStamp = ComputeAbsoluteTimestamp(absNow, now, stamp)
+        PRTime prStamp = ComputeAbsoluteTimestamp(stamp)
           / PR_USEC_PER_MSEC;
         JS::Rooted<JSObject*> date(aCx, JS::NewDateObject(aCx, JS::TimeClip(prStamp)));
         JS_DefineProperty(aCx, obj, StartupTimeline::Describe(ev), date, JSPROP_ENUMERATE);
@@ -907,7 +915,7 @@ nsAppStartup::TrackStartupCrashBegin(bool *aIsSafeModeNecessary)
   mIsSafeModeNecessary = (recentCrashes > maxResumedCrashes && maxResumedCrashes != -1);
 
   nsCOMPtr<nsIPrefService> prefs = Preferences::GetService();
-  rv = prefs->SavePrefFile(nullptr); // flush prefs to disk since we are tracking crashes
+  rv = static_cast<Preferences *>(prefs.get())->SavePrefFileBlocking(); // flush prefs to disk since we are tracking crashes
   NS_ENSURE_SUCCESS(rv, rv);
 
   GetAutomaticSafeModeNecessary(aIsSafeModeNecessary);
@@ -932,14 +940,12 @@ nsAppStartup::TrackStartupCrashEnd()
   // Use the timestamp of XRE_main as an approximation for the lock file timestamp.
   // See MAX_STARTUP_BUFFER for the buffer time period.
   TimeStamp mainTime = StartupTimeline::Get(StartupTimeline::MAIN);
-  TimeStamp now = TimeStamp::Now();
-  PRTime prNow = PR_Now();
   nsresult rv;
 
   if (mainTime.IsNull()) {
     NS_WARNING("Could not get StartupTimeline::MAIN time.");
   } else {
-    uint64_t lockFileTime = ComputeAbsoluteTimestamp(prNow, now, mainTime);
+    uint64_t lockFileTime = ComputeAbsoluteTimestamp(mainTime);
 
     rv = Preferences::SetInt(kPrefLastSuccess,
       (int32_t)(lockFileTime / PR_USEC_PER_SEC));
@@ -953,7 +959,8 @@ nsAppStartup::TrackStartupCrashEnd()
     // in regular mode before returning to safe mode.
     int32_t maxResumedCrashes = 0;
     int32_t prefType;
-    rv = Preferences::GetDefaultRootBranch()->GetPrefType(kPrefMaxResumedCrashes, &prefType);
+    rv = Preferences::GetRootBranch(
+      PrefValueKind::Default)->GetPrefType(kPrefMaxResumedCrashes, &prefType);
     NS_ENSURE_SUCCESS(rv, rv);
     if (prefType == nsIPrefBranch::PREF_INT) {
       rv = Preferences::GetInt(kPrefMaxResumedCrashes, &maxResumedCrashes);
@@ -967,7 +974,10 @@ nsAppStartup::TrackStartupCrashEnd()
     if (NS_FAILED(rv)) NS_WARNING("Could not clear startup crash count.");
   }
   nsCOMPtr<nsIPrefService> prefs = Preferences::GetService();
-  rv = prefs->SavePrefFile(nullptr); // flush prefs to disk since we are tracking crashes
+  // save prefs to disk since we are tracking crashes.  This may be
+  // asynchronous, so a crash could sneak in that we would mistake for
+  // a start up crash. See bug 789945 and bug 1361262.
+  rv = prefs->SavePrefFile(nullptr);
 
   return rv;
 }

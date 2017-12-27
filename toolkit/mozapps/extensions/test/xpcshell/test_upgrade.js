@@ -92,12 +92,12 @@ function end_test() {
     globalDir.append(do_get_expected_addon_name("addon4@tests.mozilla.org"));
     globalDir.remove(true);
   }
-  do_execute_soon(do_test_finished);
+  executeSoon(do_test_finished);
 }
 
 // Test that the test extensions are all installed
-function run_test_1() {
-  startupManager();
+async function run_test_1() {
+  await promiseStartupManager();
 
   AddonManager.getAddonsByIDs(["addon1@tests.mozilla.org",
                                "addon2@tests.mozilla.org",
@@ -105,25 +105,25 @@ function run_test_1() {
                                "addon4@tests.mozilla.org"],
                                function([a1, a2, a3, a4]) {
 
-    do_check_neq(a1, null);
-    do_check_true(isExtensionInAddonsList(profileDir, a1.id));
+    Assert.notEqual(a1, null);
+    Assert.ok(isExtensionInAddonsList(profileDir, a1.id));
 
-    do_check_neq(a2, null);
-    do_check_true(isExtensionInAddonsList(profileDir, a2.id));
+    Assert.notEqual(a2, null);
+    Assert.ok(isExtensionInAddonsList(profileDir, a2.id));
 
-    do_check_neq(a3, null);
-    do_check_false(isExtensionInAddonsList(profileDir, a3.id));
+    Assert.notEqual(a3, null);
+    Assert.ok(!isExtensionInAddonsList(profileDir, a3.id));
 
-    do_check_neq(a4, null);
-    do_check_true(isExtensionInAddonsList(globalDir, a4.id));
-    do_check_eq(a4.version, "1.0");
+    Assert.notEqual(a4, null);
+    Assert.ok(isExtensionInAddonsList(globalDir, a4.id));
+    Assert.equal(a4.version, "1.0");
 
-    do_execute_soon(run_test_2);
+    executeSoon(run_test_2);
   });
 }
 
 // Test that upgrading the application doesn't disable now incompatible add-ons
-function run_test_2() {
+async function run_test_2() {
   // Upgrade the extension
   var dest = writeInstallRDFForExtension({
     id: "addon4@tests.mozilla.org",
@@ -137,27 +137,27 @@ function run_test_2() {
   }, globalDir);
   setExtensionModifiedTime(dest, gInstallTime);
 
-  restartManager("2");
+  await promiseRestartManager("2");
   AddonManager.getAddonsByIDs(["addon1@tests.mozilla.org",
                                "addon2@tests.mozilla.org",
                                "addon3@tests.mozilla.org",
                                "addon4@tests.mozilla.org"],
                                function([a1, a2, a3, a4]) {
 
-    do_check_neq(a1, null);
-    do_check_true(isExtensionInAddonsList(profileDir, a1.id));
+    Assert.notEqual(a1, null);
+    Assert.ok(isExtensionInAddonsList(profileDir, a1.id));
 
-    do_check_neq(a2, null);
-    do_check_true(isExtensionInAddonsList(profileDir, a2.id));
+    Assert.notEqual(a2, null);
+    Assert.ok(isExtensionInAddonsList(profileDir, a2.id));
 
-    do_check_neq(a3, null);
-    do_check_true(isExtensionInAddonsList(profileDir, a3.id));
+    Assert.notEqual(a3, null);
+    Assert.ok(isExtensionInAddonsList(profileDir, a3.id));
 
-    do_check_neq(a4, null);
-    do_check_true(isExtensionInAddonsList(globalDir, a4.id));
-    do_check_eq(a4.version, "2.0");
+    Assert.notEqual(a4, null);
+    Assert.ok(isExtensionInAddonsList(globalDir, a4.id));
+    Assert.equal(a4.version, "2.0");
 
-    do_execute_soon(run_test_3);
+    executeSoon(run_test_3);
   });
 }
 
@@ -178,7 +178,7 @@ function run_test_3() {
 
   // Simulates a simple Build ID change, the platform deletes extensions.ini
   // whenever the application is changed.
-  gExtensionsINI.remove(true);
+  gAddonStartup.remove(true);
   restartManager();
 
   AddonManager.getAddonsByIDs(["addon1@tests.mozilla.org",
@@ -187,18 +187,18 @@ function run_test_3() {
                                "addon4@tests.mozilla.org"],
                                function([a1, a2, a3, a4]) {
 
-    do_check_neq(a1, null);
-    do_check_true(isExtensionInAddonsList(profileDir, a1.id));
+    Assert.notEqual(a1, null);
+    Assert.ok(isExtensionInAddonsList(profileDir, a1.id));
 
-    do_check_neq(a2, null);
-    do_check_true(isExtensionInAddonsList(profileDir, a2.id));
+    Assert.notEqual(a2, null);
+    Assert.ok(isExtensionInAddonsList(profileDir, a2.id));
 
-    do_check_neq(a3, null);
-    do_check_true(isExtensionInAddonsList(profileDir, a3.id));
+    Assert.notEqual(a3, null);
+    Assert.ok(isExtensionInAddonsList(profileDir, a3.id));
 
-    do_check_neq(a4, null);
-    do_check_true(isExtensionInAddonsList(globalDir, a4.id));
-    do_check_eq(a4.version, "2.0");
+    Assert.notEqual(a4, null);
+    Assert.ok(isExtensionInAddonsList(globalDir, a4.id));
+    Assert.equal(a4.version, "2.0");
 
     end_test();
   });

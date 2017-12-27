@@ -13,23 +13,17 @@ add_task(function* test() {
   let { tab, monitor } = yield initNetMonitor(IMAGE_TOOLTIP_URL);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire, connector } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
-  let { NetMonitorController } =
-    windowRequire("devtools/client/netmonitor/src/netmonitor-controller");
-  let {
-    ACTIVITY_TYPE,
-    EVENTS,
-  } = windowRequire("devtools/client/netmonitor/src/constants");
+  let { triggerActivity } = connector;
+  let { ACTIVITY_TYPE } = windowRequire("devtools/client/netmonitor/src/constants");
   let toolboxDoc = monitor.panelWin.parent.document;
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   let onEvents = waitForNetworkEvents(monitor, IMAGE_TOOLTIP_REQUESTS);
-  let onThumbnail = monitor.panelWin.once(EVENTS.RESPONSE_IMAGE_THUMBNAIL_DISPLAYED);
   yield performRequests();
   yield onEvents;
-  yield onThumbnail;
 
   info("Checking the image thumbnail after a few requests were made...");
   yield showTooltipAndVerify(document.querySelectorAll(".request-list-item")[0]);
@@ -41,20 +35,18 @@ add_task(function* test() {
 
   // +1 extra document reload
   onEvents = waitForNetworkEvents(monitor, IMAGE_TOOLTIP_REQUESTS + 1);
-  onThumbnail = monitor.panelWin.once(EVENTS.RESPONSE_IMAGE_THUMBNAIL_DISPLAYED);
 
   info("Reloading the debuggee and performing all requests again...");
-  yield NetMonitorController.triggerActivity(ACTIVITY_TYPE.RELOAD.WITH_CACHE_ENABLED);
+  yield triggerActivity(ACTIVITY_TYPE.RELOAD.WITH_CACHE_ENABLED);
   yield performRequests();
   yield onEvents;
-  yield onThumbnail;
 
   info("Checking the image thumbnail after a reload.");
   yield showTooltipAndVerify(document.querySelectorAll(".request-list-item")[1]);
 
   info("Checking if the image thumbnail is hidden when mouse leaves the menu widget");
   let requestsListContents = document.querySelector(".requests-list-contents");
-  EventUtils.synthesizeMouse(requestsListContents, 0, 0, { type: "mouseout" },
+  EventUtils.synthesizeMouse(requestsListContents, 0, 0, { type: "mousemove" },
                              monitor.panelWin);
   yield waitUntil(() => !toolboxDoc.querySelector(".tooltip-container.tooltip-visible"));
 

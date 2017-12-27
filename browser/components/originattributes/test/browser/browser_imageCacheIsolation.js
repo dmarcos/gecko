@@ -17,7 +17,13 @@ server.registerPathHandler("/image.png", imageHandler);
 server.registerPathHandler("/file.html", fileHandler);
 server.start(-1);
 
+// Disable rcwn to make cache behavior deterministic.
+let rcwnEnabled = Services.prefs.getBoolPref("network.http.rcwn.enabled");
+Services.prefs.setBoolPref("network.http.rcwn.enabled", false);
+
 registerCleanupFunction(() => {
+  Services.prefs.setBoolPref("network.http.rcwn.enabled", rcwnEnabled);
+
   server.stop(() => {
     server = null;
   });
@@ -55,9 +61,7 @@ function doBefore() {
   imageCache.clearCache(true);
   imageCache.clearCache(false);
   info("XXX clearning network cache");
-  let networkCache = Cc["@mozilla.org/netwerk/cache-storage-service;1"]
-                        .getService(Ci.nsICacheStorageService);
-  networkCache.clear();
+  Services.cache2.clear();
 }
 
 // the test function does nothing on purpose.

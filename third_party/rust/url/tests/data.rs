@@ -26,7 +26,7 @@ fn check_invariants(url: &Url) {
 }
 
 
-fn run_parsing(input: String, base: String, expected: Result<ExpectedAttributes, ()>) {
+fn run_parsing(input: &str, base: &str, expected: Result<ExpectedAttributes, ()>) {
     let base = match Url::parse(&base) {
         Ok(base) => base,
         Err(message) => panic!("Error parsing base {:?}: {}", base, message)
@@ -135,7 +135,7 @@ fn collect_parsing<F: FnMut(String, test::TestFn)>(add_test: &mut F) {
             })
         };
         add_test(format!("{:?} @ base {:?}", input, base),
-                 test::TestFn::dyn_test_fn(move || run_parsing(input, base, expected)));
+                 test::TestFn::dyn_test_fn(move || run_parsing(&input, &base, expected)));
     }
 }
 
@@ -188,11 +188,7 @@ fn main() {
     {
         let mut add_one = |name: String, run: test::TestFn| {
             tests.push(test::TestDescAndFn {
-                desc: test::TestDesc {
-                    name: test::DynTestName(name),
-                    ignore: false,
-                    should_panic: test::ShouldPanic::No,
-                },
+                desc: test::TestDesc::new(test::DynTestName(name)),
                 testfn: run,
             })
         };

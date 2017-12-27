@@ -34,9 +34,10 @@ XPIDL_MODULE = 'layout_base'
 
 EXPORTS += [
     'CaretAssociationHint.h',
-    'FramePropertyTable.h',
+    'FrameProperties.h',
     'LayoutLogging.h',
-    'nsArenaMemoryStats.h',
+    'MobileViewportManager.h',
+    'nsAutoLayoutPhase.h',
     'nsBidi.h',
     'nsBidiPresUtils.h',
     'nsCaret.h',
@@ -62,9 +63,11 @@ EXPORTS += [
     'nsStyleSheetService.h',
     'ScrollbarStyles.h',
     'StackArena.h',
+    'TouchManager.h',
     'Units.h',
     'UnitTransforms.h',
     'WordMovementType.h',
+    'ZoomConstraintsClient.h',
 ]
 
 EXPORTS.mozilla += [
@@ -87,11 +90,11 @@ UNIFIED_SOURCES += [
     'AccessibleCaret.cpp',
     'AccessibleCaretEventHub.cpp',
     'AccessibleCaretManager.cpp',
-    'FramePropertyTable.cpp',
     'GeckoRestyleManager.cpp',
     'GeometryUtils.cpp',
     'LayoutLogging.cpp',
     'MobileViewportManager.cpp',
+    'nsBidi.cpp',
     'nsBidiPresUtils.cpp',
     'nsCaret.cpp',
     'nsCounterManager.cpp',
@@ -121,21 +124,6 @@ UNIFIED_SOURCES += [
     'TouchManager.cpp',
     'ZoomConstraintsClient.cpp',
 ]
-
-if CONFIG['ENABLE_INTL_API']:
-    EXPORTS += [
-        'nsBidi_ICU.h',
-    ]
-    UNIFIED_SOURCES += [
-        'nsBidi_ICU.cpp',
-    ]
-else:
-    EXPORTS += [
-        'nsBidi_noICU.h',
-    ]
-    UNIFIED_SOURCES += [
-        'nsBidi_noICU.cpp',
-    ]
 
 # nsRefreshDriver.cpp needs to be built separately because of name clashes in the OS X headers
 SOURCES += [
@@ -179,10 +167,10 @@ MARIONETTE_LAYOUT_MANIFESTS += ['tests/marionette/manifest.ini']
 MOCHITEST_MANIFESTS += ['tests/mochitest.ini']
 MOCHITEST_CHROME_MANIFESTS += ['tests/chrome/chrome.ini']
 
-if CONFIG['_MSC_VER']:
+if CONFIG['CC_TYPE'] in ('msvc', 'clang-cl'):
     # This is intended as a temporary hack to support building with VS2015.
     # 'type cast': conversion from 'unsigned int' to 'void *' of greater size
     CXXFLAGS += ['-wd4312']
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

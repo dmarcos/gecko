@@ -7,7 +7,7 @@
 #ifndef AudioContext_h_
 #define AudioContext_h_
 
-#include "mozilla/dom/AudioChannelBinding.h"
+#include "mozilla/dom/OfflineAudioContextBinding.h"
 #include "MediaBufferDecoder.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/DOMEventTargetHelper.h"
@@ -121,7 +121,6 @@ class AudioContext final : public DOMEventTargetHelper,
 {
   AudioContext(nsPIDOMWindowInner* aParentWindow,
                bool aIsOffline,
-               AudioChannel aChannel,
                uint32_t aNumberOfChannels = 0,
                uint32_t aLength = 0,
                float aSampleRate = 0.0f);
@@ -154,10 +153,10 @@ public:
   static already_AddRefed<AudioContext>
   Constructor(const GlobalObject& aGlobal, ErrorResult& aRv);
 
-  // Constructor for regular AudioContext. A default audio channel is needed.
+  // Constructor for offline AudioContext with options object
   static already_AddRefed<AudioContext>
   Constructor(const GlobalObject& aGlobal,
-              AudioChannel aChannel,
+              const OfflineAudioContextOptions& aOptions,
               ErrorResult& aRv);
 
   // Constructor for offline AudioContext
@@ -187,6 +186,7 @@ public:
   AudioListener* Listener();
 
   AudioContextState State() const { return mAudioContextState; }
+  bool IsRunning() const;
 
   // Those three methods return a promise to content, that is resolved when an
   // (possibly long) operation is completed on the MSG (and possibly other)
@@ -312,19 +312,12 @@ public:
 
   JSObject* GetGlobalJSObject() const;
 
-  AudioChannel MozAudioChannelType() const;
-
-  AudioChannel TestAudioChannelInAudioNodeStream();
-
   void RegisterNode(AudioNode* aNode);
   void UnregisterNode(AudioNode* aNode);
 
   void OnStateChanged(void* aPromise, AudioContextState aNewState);
 
   BasicWaveFormCache* GetBasicWaveFormCache();
-
-  IMPL_EVENT_HANDLER(mozinterruptbegin)
-  IMPL_EVENT_HANDLER(mozinterruptend)
 
   bool CheckClosed(ErrorResult& aRv);
 

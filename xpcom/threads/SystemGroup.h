@@ -21,12 +21,11 @@ class SystemGroup
 {
  public:
   // This method is safe to use from any thread.
-  static nsresult Dispatch(const char* aName,
-                           TaskCategory aCategory,
+  static nsresult Dispatch(TaskCategory aCategory,
                            already_AddRefed<nsIRunnable>&& aRunnable);
 
   // This method is safe to use from any thread.
-  static nsIEventTarget* EventTargetFor(TaskCategory aCategory);
+  static nsISerialEventTarget* EventTargetFor(TaskCategory aCategory);
 
   // Must be called on the main thread. The AbstractThread can always be used
   // off the main thread.
@@ -34,6 +33,9 @@ class SystemGroup
 
   static void InitStatic();
   static void Shutdown();
+
+  // Returns true if SystemGroup has been initialized.
+  static bool Initialized();
 };
 
 } // namespace mozilla

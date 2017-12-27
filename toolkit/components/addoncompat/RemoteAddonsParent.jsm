@@ -13,8 +13,6 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/RemoteWebProgress.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
-                                  "resource://gre/modules/BrowserUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
                                   "resource://gre/modules/NetUtil.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Prefetcher",
@@ -140,8 +138,8 @@ var ContentPolicyParent = {
         continue;
       }
       try {
-        let contentLocation = BrowserUtils.makeURI(aData.contentLocation);
-        let requestOrigin = aData.requestOrigin ? BrowserUtils.makeURI(aData.requestOrigin) : null;
+        let contentLocation = Services.io.newURI(aData.contentLocation);
+        let requestOrigin = aData.requestOrigin ? Services.io.newURI(aData.requestOrigin) : null;
 
         let result = Prefetcher.withPrefetching(aData.prefetched, aObjects, () => {
           return policy.shouldLoad(aData.contentType,
@@ -228,7 +226,7 @@ var AboutProtocolParent = {
   },
 
   getURIFlags(msg) {
-    let uri = BrowserUtils.makeURI(msg.data.uri);
+    let uri = Services.io.newURI(msg.data.uri);
     let contractID = msg.data.contractID;
     let module = Cc[contractID].getService(Ci.nsIAboutModule);
     try {
@@ -248,7 +246,7 @@ var AboutProtocolParent = {
       };
     }
 
-    let uri = BrowserUtils.makeURI(msg.data.uri);
+    let uri = Services.io.newURI(msg.data.uri);
     let channelParams;
     if (msg.data.contentPolicyType === Ci.nsIContentPolicy.TYPE_DOCUMENT) {
       // For TYPE_DOCUMENT loads, we cannot recreate the loadinfo here in the
@@ -440,10 +438,15 @@ var EventTargetParent = {
         return target.linkedBrowser;
       }
 
-      // Check if |target| is somewhere on the patch from the
+      // Check if |target| is somewhere on the path from the
       // <tabbrowser> up to the root element.
       let window = target.ownerGlobal;
-      if (window && target.contains(window.gBrowser)) {
+
+      // Some non-browser windows define gBrowser globals which are not elements
+      // and can't be passed to target.contains().
+      if (window &&
+          window.gBrowser instanceof Ci.nsIDOMXULElement &&
+          target.contains(window.gBrowser)) {
         return window;
       }
     }
@@ -557,7 +560,7 @@ var EventTargetParent = {
               return knownProps[name];
             return event[name];
           }
-        }
+        };
         let proxyEvent = new Proxy({
           currentTarget: target,
           target: eventTarget,
@@ -737,7 +740,7 @@ var SandboxParent = {
     if (rest.length) {
       // Do a shallow copy of the options object into the child
       // process. This way we don't have to access it through a Chrome
-      // object wrapper, which would require __exposedProps__.
+      // object wrapper, which would not let us access any properties.
       //
       // The only object property here is sandboxPrototype. We assume
       // it's a child process object (since that's what Greasemonkey
@@ -855,7 +858,7 @@ RemoteBrowserElementInterposition.getters.sessionHistory = function(addon, targe
                      addon, CompatWarning.warnings.content);
 
   return getSessionHistory(target);
-}
+};
 
 // We use this in place of the real browser.contentWindow if we
 // haven't yet received a CPOW for the child process's window. This
@@ -1019,10 +1022,7 @@ TabBrowserElementInterposition.methods.removeTabsProgressListener = function(add
 var ChromeWindowInterposition = new Interposition("ChromeWindowInterposition",
                                                   EventTargetInterposition);
 
-// _content is for older add-ons like pinboard and all-in-one gestures
-// that should be using content instead.
-ChromeWindowInterposition.getters.content =
-ChromeWindowInterposition.getters._content = function(addon, target) {
+ChromeWindowInterposition.getters.content = function(addon, target) {
   CompatWarning.warn("Direct access to chromeWindow.content will no longer work in the chrome process.",
                      addon, CompatWarning.warnings.content);
 
@@ -1054,7 +1054,7 @@ RemoteWebNavigationInterposition.getters.sessionHistory = function(addon, target
   let browser = impl._browser;
 
   return getSessionHistory(browser);
-}
+};
 
 var RemoteAddonsParent = {
   init() {
@@ -1062,6 +1062,10 @@ var RemoteAddonsParent = {
     mm.addMessageListener("Addons:RegisterGlobal", this);
 
     Services.ppmm.initialProcessData.remoteAddonsParentInitted = true;
+
+    Services.ppmm.loadProcessScript("data:,new " + function() {
+      Components.utils.import("resource://gre/modules/RemoteAddonsChild.jsm");
+    }, true);
 
     this.globalToBrowser = new WeakMap();
     this.browserToGlobal = new WeakMap();

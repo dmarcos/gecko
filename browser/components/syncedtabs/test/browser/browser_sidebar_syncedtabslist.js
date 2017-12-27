@@ -12,7 +12,7 @@ const FIXTURE = [
         "type": "tab",
         "title": "Firefox for Android — Mobile Web browser — More ways to customize and protect your privacy — Mozilla",
         "url": "https://www.mozilla.org/en-US/firefox/android/?utm_source=firefox-browser&utm_medium=firefox-browser&utm_campaign=synced-tabs-sidebar",
-        "icon": "chrome://mozapps/skin/places/defaultFavicon.png",
+        "icon": "chrome://mozapps/skin/places/defaultFavicon.svg",
         "client": "7cqCr77ptzX3",
         "lastUsed": 1452124677
       }
@@ -64,14 +64,14 @@ const FIXTURE = [
 
 let originalSyncedTabsInternal = null;
 
-function* testClean() {
+async function testClean() {
   let syncedTabsDeckComponent = window.SidebarUI.browser.contentWindow.syncedTabsDeckComponent;
   let SyncedTabs = window.SidebarUI.browser.contentWindow.SyncedTabs;
-  syncedTabsDeckComponent._accountStatus.restore();
+  syncedTabsDeckComponent._getSignedInUser.restore();
   SyncedTabs._internal.getTabClients.restore();
   SyncedTabs._internal = originalSyncedTabsInternal;
 
-  yield new Promise(resolve => {
+  await new Promise(resolve => {
     window.SidebarUI.browser.contentWindow.addEventListener("unload", function() {
       resolve();
     }, {once: true});
@@ -79,8 +79,8 @@ function* testClean() {
   });
 }
 
-add_task(function* testSyncedTabsSidebarList() {
-  yield SidebarUI.show("viewTabsSidebar");
+add_task(async function testSyncedTabsSidebarList() {
+  await SidebarUI.show("viewTabsSidebar");
 
   Assert.equal(SidebarUI.currentID, "viewTabsSidebar", "Sidebar should have SyncedTabs loaded");
 
@@ -93,18 +93,18 @@ add_task(function* testSyncedTabsSidebarList() {
   SyncedTabs._internal = {
     isConfiguredToSyncTabs: true,
     hasSyncedThisSession: true,
-    getTabClients() { return Promise.resolve([]) },
+    getTabClients() { return Promise.resolve([]); },
     syncTabs() { return Promise.resolve(); },
   };
 
-  sinon.stub(syncedTabsDeckComponent, "_accountStatus", () => Promise.resolve(true));
+  sinon.stub(syncedTabsDeckComponent, "_getSignedInUser", () => Promise.resolve({verified: true}));
   sinon.stub(SyncedTabs._internal, "getTabClients", () => Promise.resolve(Cu.cloneInto(FIXTURE, {})));
 
-  yield syncedTabsDeckComponent.updatePanel();
+  await syncedTabsDeckComponent.updatePanel();
   // This is a hacky way of waiting for the view to render. The view renders
   // after the following promise (a different instance of which is triggered
   // in updatePanel) resolves, so we wait for it here as well
-  yield syncedTabsDeckComponent.tabListComponent._store.getData();
+  await syncedTabsDeckComponent.tabListComponent._store.getData();
 
   Assert.ok(SyncedTabs._internal.getTabClients.called, "get clients called");
 
@@ -135,8 +135,8 @@ add_task(function* testSyncedTabsSidebarList() {
 
 add_task(testClean);
 
-add_task(function* testSyncedTabsSidebarFilteredList() {
-  yield SidebarUI.show("viewTabsSidebar");
+add_task(async function testSyncedTabsSidebarFilteredList() {
+  await SidebarUI.show("viewTabsSidebar");
   let syncedTabsDeckComponent = window.SidebarUI.browser.contentWindow.syncedTabsDeckComponent;
   let SyncedTabs = window.SidebarUI.browser.contentWindow.SyncedTabs;
 
@@ -146,24 +146,24 @@ add_task(function* testSyncedTabsSidebarFilteredList() {
   SyncedTabs._internal = {
     isConfiguredToSyncTabs: true,
     hasSyncedThisSession: true,
-    getTabClients() { return Promise.resolve([]) },
+    getTabClients() { return Promise.resolve([]); },
     syncTabs() { return Promise.resolve(); },
   };
 
-  sinon.stub(syncedTabsDeckComponent, "_accountStatus", () => Promise.resolve(true));
+  sinon.stub(syncedTabsDeckComponent, "_getSignedInUser", () => Promise.resolve({verified: true}));
   sinon.stub(SyncedTabs._internal, "getTabClients", () => Promise.resolve(Cu.cloneInto(FIXTURE, {})));
 
-  yield syncedTabsDeckComponent.updatePanel();
+  await syncedTabsDeckComponent.updatePanel();
   // This is a hacky way of waiting for the view to render. The view renders
   // after the following promise (a different instance of which is triggered
   // in updatePanel) resolves, so we wait for it here as well
-  yield syncedTabsDeckComponent.tabListComponent._store.getData();
+  await syncedTabsDeckComponent.tabListComponent._store.getData();
 
   let filterInput = syncedTabsDeckComponent._window.document.querySelector(".tabsFilter");
   filterInput.value = "filter text";
   filterInput.blur();
 
-  yield syncedTabsDeckComponent.tabListComponent._store.getData("filter text");
+  await syncedTabsDeckComponent.tabListComponent._store.getData("filter text");
 
   let selectedPanel = syncedTabsDeckComponent.container.querySelector(".sync-state.selected");
   Assert.ok(selectedPanel.classList.contains("tabs-container"),
@@ -186,7 +186,7 @@ add_task(function* testSyncedTabsSidebarFilteredList() {
 
   // Removing the filter should resort tabs.
   FIXTURE_TABS.sort((a, b) => b.lastUsed - a.lastUsed);
-  yield syncedTabsDeckComponent.tabListComponent._store.getData();
+  await syncedTabsDeckComponent.tabListComponent._store.getData();
   Array.prototype.forEach.call(selectedPanel.querySelectorAll(".tab"), (tabNode, i) => {
     checkItem(tabNode, FIXTURE_TABS[i]);
   });
@@ -194,10 +194,10 @@ add_task(function* testSyncedTabsSidebarFilteredList() {
 
 add_task(testClean);
 
-add_task(function* testSyncedTabsSidebarStatus() {
-  let accountExists = false;
+add_task(async function testSyncedTabsSidebarStatus() {
+  let account = null;
 
-  yield SidebarUI.show("viewTabsSidebar");
+  await SidebarUI.show("viewTabsSidebar");
   let syncedTabsDeckComponent = window.SidebarUI.browser.contentWindow.syncedTabsDeckComponent;
   let SyncedTabs = window.SidebarUI.browser.contentWindow.SyncedTabs;
 
@@ -214,42 +214,48 @@ add_task(function* testSyncedTabsSidebarStatus() {
   sinon.spy(syncedTabsDeckComponent, "updatePanel");
   sinon.spy(syncedTabsDeckComponent, "observe");
 
-  sinon.stub(syncedTabsDeckComponent, "_accountStatus", () => Promise.reject("Test error"));
-  yield syncedTabsDeckComponent.updatePanel();
+  sinon.stub(syncedTabsDeckComponent, "_getSignedInUser", () => Promise.reject("Test error"));
+  await syncedTabsDeckComponent.updatePanel();
 
   let selectedPanel = syncedTabsDeckComponent.container.querySelector(".sync-state.selected");
   Assert.ok(selectedPanel.classList.contains("notAuthedInfo"),
     "not-authed panel is selected on auth error");
 
-  syncedTabsDeckComponent._accountStatus.restore();
-  sinon.stub(syncedTabsDeckComponent, "_accountStatus", () => Promise.resolve(accountExists));
-  yield syncedTabsDeckComponent.updatePanel();
+  syncedTabsDeckComponent._getSignedInUser.restore();
+  sinon.stub(syncedTabsDeckComponent, "_getSignedInUser", () => Promise.resolve(account));
+  await syncedTabsDeckComponent.updatePanel();
   selectedPanel = syncedTabsDeckComponent.container.querySelector(".sync-state.selected");
   Assert.ok(selectedPanel.classList.contains("notAuthedInfo"),
     "not-authed panel is selected");
 
-  accountExists = true;
-  yield syncedTabsDeckComponent.updatePanel();
+  account = {verified: false};
+  await syncedTabsDeckComponent.updatePanel();
+  selectedPanel = syncedTabsDeckComponent.container.querySelector(".sync-state.selected");
+  Assert.ok(selectedPanel.classList.contains("unverified"),
+    "unverified panel is selected");
+
+  account = {verified: true};
+  await syncedTabsDeckComponent.updatePanel();
   selectedPanel = syncedTabsDeckComponent.container.querySelector(".sync-state.selected");
   Assert.ok(selectedPanel.classList.contains("tabs-disabled"),
     "tabs disabled panel is selected");
 
   SyncedTabs._internal.isConfiguredToSyncTabs = true;
-  yield syncedTabsDeckComponent.updatePanel();
+  await syncedTabsDeckComponent.updatePanel();
   selectedPanel = syncedTabsDeckComponent.container.querySelector(".sync-state.selected");
   Assert.ok(selectedPanel.classList.contains("tabs-fetching"),
     "tabs fetch panel is selected");
 
   SyncedTabs._internal.hasSyncedThisSession = true;
   sinon.stub(SyncedTabs._internal, "getTabClients", () => Promise.resolve([]));
-  yield syncedTabsDeckComponent.updatePanel();
+  await syncedTabsDeckComponent.updatePanel();
   selectedPanel = syncedTabsDeckComponent.container.querySelector(".sync-state.selected");
   Assert.ok(selectedPanel.classList.contains("singleDeviceInfo"),
     "tabs fetch panel is selected");
 
   SyncedTabs._internal.getTabClients.restore();
   sinon.stub(SyncedTabs._internal, "getTabClients", () => Promise.resolve([{id: "mock"}]));
-  yield syncedTabsDeckComponent.updatePanel();
+  await syncedTabsDeckComponent.updatePanel();
   selectedPanel = syncedTabsDeckComponent.container.querySelector(".sync-state.selected");
   Assert.ok(selectedPanel.classList.contains("tabs-container"),
     "tabs panel is selected");
@@ -257,8 +263,8 @@ add_task(function* testSyncedTabsSidebarStatus() {
 
 add_task(testClean);
 
-add_task(function* testSyncedTabsSidebarContextMenu() {
-  yield SidebarUI.show("viewTabsSidebar");
+add_task(async function testSyncedTabsSidebarContextMenu() {
+  await SidebarUI.show("viewTabsSidebar");
   let syncedTabsDeckComponent = window.SidebarUI.browser.contentWindow.syncedTabsDeckComponent;
   let SyncedTabs = window.SidebarUI.browser.contentWindow.SyncedTabs;
 
@@ -268,18 +274,18 @@ add_task(function* testSyncedTabsSidebarContextMenu() {
   SyncedTabs._internal = {
     isConfiguredToSyncTabs: true,
     hasSyncedThisSession: true,
-    getTabClients() { return Promise.resolve([]) },
+    getTabClients() { return Promise.resolve([]); },
     syncTabs() { return Promise.resolve(); },
   };
 
-  sinon.stub(syncedTabsDeckComponent, "_accountStatus", () => Promise.resolve(true));
+  sinon.stub(syncedTabsDeckComponent, "_getSignedInUser", () => Promise.resolve({verified: true}));
   sinon.stub(SyncedTabs._internal, "getTabClients", () => Promise.resolve(Cu.cloneInto(FIXTURE, {})));
 
-  yield syncedTabsDeckComponent.updatePanel();
+  await syncedTabsDeckComponent.updatePanel();
   // This is a hacky way of waiting for the view to render. The view renders
   // after the following promise (a different instance of which is triggered
   // in updatePanel) resolves, so we wait for it here as well
-  yield syncedTabsDeckComponent.tabListComponent._store.getData();
+  await syncedTabsDeckComponent.tabListComponent._store.getData();
 
   info("Right-clicking the search box should show text-related actions");
   let filterMenuItems = [
@@ -297,7 +303,7 @@ add_task(function* testSyncedTabsSidebarContextMenu() {
     "menuseparator",
     "menuitem#syncedTabsRefreshFilter",
   ];
-  yield* testContextMenu(syncedTabsDeckComponent,
+  await testContextMenu(syncedTabsDeckComponent,
                          "#SyncedTabsSidebarTabsFilterContext",
                          ".tabsFilter",
                          filterMenuItems);
@@ -316,7 +322,7 @@ add_task(function* testSyncedTabsSidebarContextMenu() {
     ["menuitem#syncedTabsManageDevices", { hidden: true }],
     ["menuitem#syncedTabsRefresh", { hidden: false }],
   ];
-  yield* testContextMenu(syncedTabsDeckComponent,
+  await testContextMenu(syncedTabsDeckComponent,
                          "#SyncedTabsSidebarContext",
                          "#tab-7cqCr77ptzX3-0",
                          tabMenuItems);
@@ -335,7 +341,7 @@ add_task(function* testSyncedTabsSidebarContextMenu() {
     ["menuitem#syncedTabsManageDevices", { hidden: false }],
     ["menuitem#syncedTabsRefresh", { hidden: false }],
   ];
-  yield* testContextMenu(syncedTabsDeckComponent,
+  await testContextMenu(syncedTabsDeckComponent,
                          "#SyncedTabsSidebarContext",
                          "#item-7cqCr77ptzX3",
                          sidebarMenuItems);
@@ -354,7 +360,7 @@ add_task(function* testSyncedTabsSidebarContextMenu() {
     ["menuitem#syncedTabsManageDevices", { hidden: false }],
     ["menuitem#syncedTabsRefresh", { hidden: false }],
   ];
-  yield* testContextMenu(syncedTabsDeckComponent,
+  await testContextMenu(syncedTabsDeckComponent,
                          "#SyncedTabsSidebarContext",
                          "#item-OL3EJCsdb2JD",
                          menuItems);
@@ -386,7 +392,7 @@ function checkItem(node, item) {
   }
 }
 
-function* testContextMenu(syncedTabsDeckComponent, contextSelector, triggerSelector, menuSelectors) {
+async function testContextMenu(syncedTabsDeckComponent, contextSelector, triggerSelector, menuSelectors) {
   let contextMenu = document.querySelector(contextSelector);
   let triggerElement = syncedTabsDeckComponent._window.document.querySelector(triggerSelector);
   let isClosed = triggerElement.classList.contains("closed");
@@ -404,18 +410,18 @@ function* testContextMenu(syncedTabsDeckComponent, contextSelector, triggerSelec
   let offsetX = contentRect.x + rect.x + (rect.width / 2);
   let offsetY = contentRect.y + rect.y + (rect.height / 4);
 
-  yield EventUtils.synthesizeMouseAtPoint(offsetX, offsetY, {
+  await EventUtils.synthesizeMouseAtPoint(offsetX, offsetY, {
     type: "contextmenu",
     button: 2,
   }, chromeWindow);
-  yield promisePopupShown;
+  await promisePopupShown;
   is(triggerElement.classList.contains("closed"), isClosed,
     "Showing the context menu shouldn't toggle the tab list");
   checkChildren(contextMenu, menuSelectors);
 
   let promisePopupHidden = BrowserTestUtils.waitForEvent(contextMenu, "popuphidden");
   contextMenu.hidePopup();
-  yield promisePopupHidden;
+  await promisePopupHidden;
 }
 
 function checkChildren(node, selectors) {

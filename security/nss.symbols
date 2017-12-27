@@ -181,6 +181,7 @@ HASH_ResultLenByOidTag
 HASH_Update
 NSSBase64_EncodeItem_Util
 NSS_CMSContentInfo_GetContent
+NSS_CMSContentInfo_GetContentTypeTag
 NSS_CMSContentInfo_SetContent_Data
 NSS_CMSContentInfo_SetContent_EnvelopedData
 NSS_CMSContentInfo_SetContent_SignedData
@@ -263,6 +264,7 @@ NSS_Init
 NSS_Initialize
 NSS_InitWithMerge
 NSS_IsInitialized
+NSS_OptionGet
 NSS_OptionSet
 NSS_NoDB_Init
 NSS_SecureMemcmp
@@ -360,8 +362,8 @@ PK11_GetKeyData
 PK11_GetKeyGen
 PK11_GetLowLevelKeyIDForPrivateKey
 PK11_GetMechanism
-PK11_GetMinimumPwdLength
 PK11_GetModInfo
+PK11_GetModuleURI
 PK11_GetNextSafe
 PK11_GetNextSymKey
 PK11_GetPadMechanism
@@ -370,11 +372,11 @@ PK11_GetPrivateModulusLen
 PK11_GetSlotID
 PK11_GetSlotInfo
 PK11_GetSlotName
-PK11_GetSlotPWValues
 PK11_GetSlotSeries
 PK11_GetSymKeyNickname
 PK11_GetTokenInfo
 PK11_GetTokenName
+PK11_GetTokenURI
 PK11_HasAttributeSet
 PK11_HashBuf
 PK11_HasRootCerts
@@ -428,7 +430,6 @@ PK11_ResetToken
 PK11SDR_Decrypt
 PK11SDR_Encrypt
 PK11_SetPasswordFunc
-PK11_SetSlotPWValues
 PK11_SetSymKeyNickname
 PK11_Sign
 PK11_SignatureLen
@@ -439,6 +440,7 @@ PK11_UnwrapSymKey
 PK11_UpdateSlotAttribute
 PK11_UserDisableSlot
 PK11_UserEnableSlot
+PK11_Verify
 PK11_VerifyWithMechanism
 PK11_WrapPrivKey
 PK11_WrapSymKey
@@ -569,6 +571,7 @@ SECMOD_ReferenceModule
 SECMOD_ReleaseReadLock
 SECMOD_UnloadUserModule
 SECMOD_UpdateModule
+SECMOD_UpdateSlotList
 SECMOD_WaitForAnyTokenEvent
 SEC_NullTemplate_Util @DATA@
 SEC_ObjectIDTemplate_Util @DATA@
@@ -661,6 +664,7 @@ SSL_ForceHandshake
 SSL_GetChannelInfo
 SSL_GetCipherSuiteInfo
 SSL_GetClientAuthDataHook
+SSL_GetExperimentalAPI
 SSL_GetImplementedCiphers
 SSL_GetNextProto
 SSL_GetNumImplementedCiphers
@@ -710,6 +714,13 @@ VFY_VerifyDataWithAlgorithmID
 VFY_VerifyDigestDirect
 _SGN_VerifyPKCS1DigestInfo
 __PK11_SetCertificateNickname
+# These symbols are not used by Firefox but are used across NSS library boundaries.
+NSS_SecureMemcmpZero
+PORT_ZAllocAlignedOffset_Util
+CERT_FindCertByNicknameOrEmailAddrCX
+SECKEY_GetPrivateKeyType
+SEC_DerSignDataWithAlgorithmID
+SEC_CreateSignatureAlgorithmParameters
 # These symbols are not used by Firefox itself, but are used by Java's security
 # libraries, which in turn are used by Java applets/plugins/etc.  Provide them
 # to make Java code happy.

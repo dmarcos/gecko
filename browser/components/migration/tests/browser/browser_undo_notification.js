@@ -11,22 +11,23 @@ registerCleanupFunction(function() {
 
 const kExpectedNotificationId = "automigration-undo";
 
-add_task(function* autoMigrationUndoNotificationShows() {
+add_task(async function autoMigrationUndoNotificationShows() {
   let getNotification = browser =>
     gBrowser.getNotificationBox(browser).getNotificationWithValue(kExpectedNotificationId);
 
   scope.AutoMigrate.canUndo = () => true;
   let undoCalled;
-  scope.AutoMigrate.undo = () => { undoCalled = true };
+  scope.AutoMigrate.undo = () => { undoCalled = true; };
+
   for (let url of ["about:newtab", "about:home"]) {
     undoCalled = false;
     // Can't use pushPrefEnv because of bug 1323779
     Services.prefs.setCharPref("browser.migrate.automigrate.browser", "someunknownbrowser");
-    let tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, url, false);
+    let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, url, false);
     let browser = tab.linkedBrowser;
     if (!getNotification(browser)) {
       info(`Notification for ${url} not immediately present, waiting for it.`);
-      yield BrowserTestUtils.waitForNotificationBar(gBrowser, browser, kExpectedNotificationId);
+      await BrowserTestUtils.waitForNotificationBar(gBrowser, browser, kExpectedNotificationId);
     }
 
     ok(true, `Got notification for ${url}`);
@@ -35,22 +36,22 @@ add_task(function* autoMigrationUndoNotificationShows() {
     notification.querySelector("button.notification-button-default").click();
     ok(!undoCalled, "Undo should not be called when clicking the default button");
     is(notification, notificationBox._closedNotification, "Notification should be closing");
-    yield BrowserTestUtils.removeTab(tab);
+    await BrowserTestUtils.removeTab(tab);
 
     undoCalled = false;
     Services.prefs.setCharPref("browser.migrate.automigrate.browser", "chrome");
-    tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, url, false);
+    tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, url, false);
     browser = tab.linkedBrowser;
     if (!getNotification(browser)) {
       info(`Notification for ${url} not immediately present, waiting for it.`);
-      yield BrowserTestUtils.waitForNotificationBar(gBrowser, browser, kExpectedNotificationId);
+      await BrowserTestUtils.waitForNotificationBar(gBrowser, browser, kExpectedNotificationId);
     }
 
     ok(true, `Got notification for ${url}`);
     notification = getNotification(browser);
     notificationBox = notification.parentNode;
     // Set up the survey:
-    yield SpecialPowers.pushPrefEnv({set: [
+    await SpecialPowers.pushPrefEnv({set: [
       ["browser.migrate.automigrate.undo-survey", "https://example.com/?browser=%IMPORTEDBROWSER%"],
       ["browser.migrate.automigrate.undo-survey-locales", "en-US"],
     ]});
@@ -58,10 +59,10 @@ add_task(function* autoMigrationUndoNotificationShows() {
     notification.querySelector("button:not(.notification-button-default)").click();
     ok(undoCalled, "Undo should be called when clicking the non-default (Don't Keep) button");
     is(notification, notificationBox._closedNotification, "Notification should be closing");
-    let surveyTab = yield tabOpenedPromise;
+    let surveyTab = await tabOpenedPromise;
     ok(surveyTab, "Should have opened a tab with a survey");
-    yield BrowserTestUtils.removeTab(surveyTab);
-    yield BrowserTestUtils.removeTab(tab);
+    await BrowserTestUtils.removeTab(surveyTab);
+    await BrowserTestUtils.removeTab(tab);
   }
 });
 

@@ -37,14 +37,8 @@ Fake_MediaStream::TicksToTimeRoundDown(mozilla::TrackRate aRate,
 
 // Fake_SourceMediaStream
 nsresult Fake_SourceMediaStream::Start() {
-  mTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
-  if (!mTimer) {
-    return NS_ERROR_FAILURE;
-  }
-
-  mTimer->InitWithCallback(mPeriodic, 100, nsITimer::TYPE_REPEATING_SLACK);
-
-  return NS_OK;
+  return NS_NewTimerWithCallback(getter_AddRefs(mTimer),
+                                 mPeriodic, 100, nsITimer::TYPE_REPEATING_SLACK);
 }
 
 nsresult Fake_SourceMediaStream::Stop() {
@@ -83,14 +77,8 @@ void Fake_MediaStreamTrack::RemoveListener(Fake_MediaStreamTrackListener *aListe
 
 // Fake_MediaStreamBase
 nsresult Fake_MediaStreamBase::Start() {
-  mTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
-  if (!mTimer) {
-    return NS_ERROR_FAILURE;
-  }
-
-  mTimer->InitWithCallback(mPeriodic, 100, nsITimer::TYPE_REPEATING_SLACK);
-
-  return NS_OK;
+  return NS_NewTimerWithCallback(getter_AddRefs(mTimer),
+                                 mPeriodic, 100, nsITimer::TYPE_REPEATING_SLACK);
 }
 
 nsresult Fake_MediaStreamBase::Stop() {
@@ -179,7 +167,7 @@ Fake_VideoStreamSource::Notify(nsITimer* aTimer)
   const uint8_t chromaBpp = 4;
 
   int len = ((WIDTH * HEIGHT) * 3 / 2);
-  uint8_t* frame = (uint8_t*) PR_Malloc(len);
+  uint8_t* frame = (uint8_t*) malloc(len);
   memset(frame, 0x80, len); // Gray
 
   mozilla::layers::PlanarYCbCrData data;
@@ -213,11 +201,11 @@ mozilla::layers::BufferRecycleBin::BufferRecycleBin() :
 }
 
 void mozilla::layers::BufferRecycleBin::RecycleBuffer(uint8_t* buffer, uint32_t size) {
-  PR_Free(buffer);
+  free(buffer);
 }
 
 uint8_t *mozilla::layers::BufferRecycleBin::GetBuffer(uint32_t size) {
-  return (uint8_t *)PR_MALLOC(size);
+  return (uint8_t*) malloc(size);
 }
 
 // YCbCrImage constructor (from ImageLayers.cpp)

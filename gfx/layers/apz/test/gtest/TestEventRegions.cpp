@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=8 et tw=80 : */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -236,21 +236,21 @@ TEST_F(APZEventRegionsTester, Obscuration) {
 
   ApzcPanNoFling(parent, 75, 25);
 
-  HitTestResult result;
+  gfx::CompositorHitTestInfo result;
   RefPtr<AsyncPanZoomController> hit = manager->GetTargetAPZC(ScreenPoint(50, 75), &result);
   EXPECT_EQ(child, hit.get());
-  EXPECT_EQ(HitTestResult::HitLayer, result);
+  EXPECT_EQ(CompositorHitTestInfo::eVisibleToHitTest, result);
 }
 
 TEST_F(APZEventRegionsTester, Bug1119497) {
   CreateBug1119497LayerTree();
 
-  HitTestResult result;
+  gfx::CompositorHitTestInfo result;
   RefPtr<AsyncPanZoomController> hit = manager->GetTargetAPZC(ScreenPoint(50, 50), &result);
-  // We should hit layers[2], so |result| will be HitLayer but there's no
+  // We should hit layers[2], so |result| will be eVisibleToHitTest but there's no
   // actual APZC on layers[2], so it will be the APZC of the root layer.
   EXPECT_EQ(ApzcOf(layers[0]), hit.get());
-  EXPECT_EQ(HitTestResult::HitLayer, result);
+  EXPECT_EQ(CompositorHitTestInfo::eVisibleToHitTest, result);
 }
 
 TEST_F(APZEventRegionsTester, Bug1117712) {

@@ -106,24 +106,9 @@ inline void MOZ_PretendNoReturn()
 #endif
 
 /**
- * NS_PRECONDITION/POSTCONDITION are synonyms for NS_ASSERTION.
+ * NS_PRECONDITION is a synonym for NS_ASSERTION.
  */
 #define NS_PRECONDITION(expr, str) NS_ASSERTION(expr, str)
-#define NS_POSTCONDITION(expr, str) NS_ASSERTION(expr, str)
-
-/**
- * This macros triggers a program failure if executed. It indicates that
- * an attempt was made to execute some unimplemented functionality.
- */
-#ifdef DEBUG
-#define NS_NOTYETIMPLEMENTED(str)                             \
-  do {                                                        \
-    NS_DebugBreak(NS_DEBUG_ASSERTION, str, "NotYetImplemented", __FILE__, __LINE__); \
-    MOZ_PretendNoReturn();                                    \
-  } while(0)
-#else
-#define NS_NOTYETIMPLEMENTED(str)      do { /* nothing */ } while(0)
-#endif
 
 /**
  * This macros triggers a program failure if executed. It indicates that
@@ -160,21 +145,6 @@ inline void MOZ_PretendNoReturn()
   NS_DebugBreak(NS_DEBUG_WARNING, str, nullptr, __FILE__, __LINE__)
 #else
 #define NS_WARNING(str)                do { /* nothing */ } while(0)
-#endif
-
-/**
- * Trigger an debug-only abort.
- *
- * @see NS_RUNTIMEABORT for release-mode asserts.
- */
-#ifdef DEBUG
-#define NS_ABORT()                                            \
-  do {                                                        \
-    NS_DebugBreak(NS_DEBUG_ABORT, nullptr, nullptr, __FILE__, __LINE__); \
-    MOZ_PretendNoReturn();                                    \
-  } while(0)
-#else
-#define NS_ABORT()                     do { /* nothing */ } while(0)
 #endif
 
 /**
@@ -247,15 +217,6 @@ inline void MOZ_PretendNoReturn()
 ** reached.  These need to be compiled regardless of the DEBUG flag.
 ******************************************************************************/
 
-/**
- * Terminate execution <i>immediately</i>, and if possible on the current
- * platform, in such a way that execution can't be continued by other
- * code (e.g., by intercepting a signal).
- */
-#define NS_RUNTIMEABORT(msg)                                    \
-  NS_DebugBreak(NS_DEBUG_ABORT, msg, nullptr, __FILE__, __LINE__)
-
-
 /* Macros for checking the trueness of an expression passed in within an
  * interface implementation.  These need to be compiled regardless of the
  * DEBUG flag. New code should use NS_WARN_IF(condition) instead!
@@ -291,18 +252,16 @@ inline void MOZ_PretendNoReturn()
 #if defined(DEBUG) && !defined(XPCOM_GLUE_AVOID_NSPR)
 
 #define NS_ENSURE_SUCCESS_BODY(res, ret)                                  \
-    char *msg = mozilla::Smprintf("NS_ENSURE_SUCCESS(%s, %s) failed with "       \
+    mozilla::SmprintfPointer msg = mozilla::Smprintf("NS_ENSURE_SUCCESS(%s, %s) failed with " \
                            "result 0x%" PRIX32, #res, #ret,               \
                            static_cast<uint32_t>(__rv));                  \
-    NS_WARNING(msg);                                                      \
-    mozilla::SmprintfFree(msg);
+    NS_WARNING(msg.get());
 
 #define NS_ENSURE_SUCCESS_BODY_VOID(res)                                  \
-    char *msg = mozilla::Smprintf("NS_ENSURE_SUCCESS_VOID(%s) failed with "      \
+    mozilla::SmprintfPointer msg = mozilla::Smprintf("NS_ENSURE_SUCCESS_VOID(%s) failed with " \
                            "result 0x%" PRIX32, #res,                     \
                            static_cast<uint32_t>(__rv));                  \
-    NS_WARNING(msg);                                                      \
-    mozilla::SmprintfFree(msg);
+    NS_WARNING(msg.get());
 
 #else
 
@@ -363,15 +322,6 @@ inline void MOZ_PretendNoReturn()
   #define MOZ_THREAD_SAFETY_OWNERSHIP_CHECKS_SUPPORTED  1
 #endif
 
-#ifdef XPCOM_GLUE
-  #define NS_CheckThreadSafe(owningThread, msg)
-#else
-  #define NS_CheckThreadSafe(owningThread, msg)                 \
-    if (MOZ_UNLIKELY(owningThread != PR_GetCurrentThread())) {  \
-      MOZ_CRASH(msg);                                           \
-    }
-#endif
-
 #ifdef MOZILLA_INTERNAL_API
 void NS_ABORT_OOM(size_t aSize);
 #else
@@ -404,7 +354,7 @@ void printf_stderr(const char* aFmt, ...) MOZ_FORMAT_PRINTF(1, 2);
 /**
  * Same as printf_stderr, but taking va_list instead of varargs
  */
-void vprintf_stderr(const char* aFmt, va_list aArgs);
+void vprintf_stderr(const char* aFmt, va_list aArgs) MOZ_FORMAT_PRINTF(1, 0);
 
 /**
  * fprintf_stderr is like fprintf, except that if its file argument

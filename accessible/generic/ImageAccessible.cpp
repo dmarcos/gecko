@@ -17,7 +17,6 @@
 #include "nsIImageLoadingContent.h"
 #include "nsIPresShell.h"
 #include "nsIServiceManager.h"
-#include "nsIDOMHTMLImageElement.h"
 #include "nsIPersistentProperties2.h"
 #include "nsPIDOMWindow.h"
 #include "nsIURI.h"
@@ -111,7 +110,7 @@ ImageAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName)
 {
   aName.Truncate();
   if (IsLongDescIndex(aIndex) && HasLongDesc())
-    aName.AssignLiteral("showlongdesc"); 
+    aName.AssignLiteral("showlongdesc");
   else
     LinkableAccessible::ActionNameAt(aIndex, aName);
 }

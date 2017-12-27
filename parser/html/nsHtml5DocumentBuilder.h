@@ -18,11 +18,12 @@ enum eHtml5FlushState {
   eNotFlushing = 0,  // not flushing
   eInFlush = 1,      // the Flush() method is on the call stack
   eInDocUpdate = 2,  // inside an update batch on the document
-  eNotifying = 3     // flushing pending append notifications
 };
 
 class nsHtml5DocumentBuilder : public nsContentSink
 {
+  using Encoding = mozilla::Encoding;
+  template <typename T> using NotNull = mozilla::NotNull<T>;
 public:
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(nsHtml5DocumentBuilder,
                                            nsContentSink)
@@ -65,29 +66,47 @@ public:
     return mBroken;
   }
 
+  inline bool IsComplete()
+  {
+    return !mParser;
+  }
+
   inline void BeginDocUpdate()
   {
-    NS_PRECONDITION(mFlushState == eInFlush, "Tried to double-open update.");
-    NS_PRECONDITION(mParser, "Started update without parser.");
+    MOZ_RELEASE_ASSERT(IsInFlush(), "Tried to double-open doc update.");
+    MOZ_RELEASE_ASSERT(mParser, "Started doc update without parser.");
     mFlushState = eInDocUpdate;
     mDocument->BeginUpdate(UPDATE_CONTENT_MODEL);
   }
 
   inline void EndDocUpdate()
   {
-    NS_PRECONDITION(mFlushState != eNotifying, "mFlushState out of sync");
-    if (mFlushState == eInDocUpdate) {
-      mFlushState = eInFlush;
-      mDocument->EndUpdate(UPDATE_CONTENT_MODEL);
-    }
+    MOZ_RELEASE_ASSERT(IsInDocUpdate(),
+                       "Tried to end doc update without one open.");
+    mFlushState = eInFlush;
+    mDocument->EndUpdate(UPDATE_CONTENT_MODEL);
   }
 
-  bool IsInDocUpdate()
+  inline void BeginFlush()
   {
-    return mFlushState == eInDocUpdate;
+    MOZ_RELEASE_ASSERT(mFlushState == eNotFlushing,
+                       "Tried to start a flush when already flushing.");
+    MOZ_RELEASE_ASSERT(mParser, "Started a flush without parser.");
+    mFlushState = eInFlush;
   }
 
-  void SetDocumentCharsetAndSource(nsACString& aCharset, int32_t aCharsetSource);
+  inline void EndFlush()
+  {
+    MOZ_RELEASE_ASSERT(IsInFlush(), "Tried to end flush when not flushing.");
+    mFlushState = eNotFlushing;
+  }
+
+  inline bool IsInDocUpdate() { return mFlushState == eInDocUpdate; }
+
+  inline bool IsInFlush() { return mFlushState == eInFlush; }
+
+  void SetDocumentCharsetAndSource(NotNull<const Encoding*> aEncoding,
+                                   int32_t aCharsetSource);
 
   /**
    * Sets up style sheet load / parse

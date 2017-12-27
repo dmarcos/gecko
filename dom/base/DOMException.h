@@ -15,7 +15,6 @@
 
 #include <stdint.h>
 #include "jspubtd.h"
-#include "js/GCAPI.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsID.h"
@@ -26,7 +25,6 @@
 #include "mozilla/dom/BindingDeclarations.h"
 
 class nsIStackFrame;
-class nsString;
 
 nsresult
 NS_GetNameAndMessageForDOMNSResult(nsresult aNSResult, nsACString& aName,
@@ -53,7 +51,7 @@ public:
   NS_DEFINE_STATIC_CID_ACCESSOR(NS_XPCEXCEPTION_CID)
 
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(Exception)
-  
+
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_NSIEXCEPTION
   NS_DECL_NSIXPCEXCEPTION
@@ -78,7 +76,7 @@ public:
   virtual void GetErrorMessage(nsAString& aRetVal)
   {
     // Since GetName and GetMessageMoz are non-virtual and they deal with
-    // different member variables in Exception vs. DOMException, have a 
+    // different member variables in Exception vs. DOMException, have a
     // virtual method to ensure the right error message creation.
     nsAutoString name;
     nsAutoString message;
@@ -140,9 +138,6 @@ protected:
 
   bool mHoldingJSVal;
   JS::Heap<JS::Value> mThrownJSVal;
-
-private:
-  static bool sEverMadeOneFromFactory;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(Exception, MOZILLA_EXCEPTION_IID)

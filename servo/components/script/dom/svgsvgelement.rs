@@ -5,7 +5,7 @@
 use dom::attr::Attr;
 use dom::bindings::codegen::Bindings::SVGSVGElementBinding;
 use dom::bindings::inheritance::Castable;
-use dom::bindings::js::{LayoutJS, Root};
+use dom::bindings::root::{DomRoot, LayoutDom};
 use dom::bindings::str::DOMString;
 use dom::document::Document;
 use dom::element::{AttributeMutation, Element, RawLayoutElementHelpers};
@@ -13,7 +13,7 @@ use dom::node::Node;
 use dom::svggraphicselement::SVGGraphicsElement;
 use dom::virtualmethods::VirtualMethods;
 use dom_struct::dom_struct;
-use html5ever_atoms::LocalName;
+use html5ever::{LocalName, Prefix};
 use script_layout_interface::SVGSVGData;
 use style::attr::AttrValue;
 
@@ -27,7 +27,7 @@ pub struct SVGSVGElement {
 
 impl SVGSVGElement {
     fn new_inherited(local_name: LocalName,
-                     prefix: Option<DOMString>,
+                     prefix: Option<Prefix>,
                      document: &Document) -> SVGSVGElement {
         SVGSVGElement {
             svggraphicselement:
@@ -37,9 +37,9 @@ impl SVGSVGElement {
 
     #[allow(unrooted_must_root)]
     pub fn new(local_name: LocalName,
-               prefix: Option<DOMString>,
-               document: &Document) -> Root<SVGSVGElement> {
-        Node::reflect_node(box SVGSVGElement::new_inherited(local_name, prefix, document),
+               prefix: Option<Prefix>,
+               document: &Document) -> DomRoot<SVGSVGElement> {
+        Node::reflect_node(Box::new(SVGSVGElement::new_inherited(local_name, prefix, document)),
                            document,
                            SVGSVGElementBinding::Wrap)
     }
@@ -49,7 +49,7 @@ pub trait LayoutSVGSVGElementHelpers {
     fn data(&self) -> SVGSVGData;
 }
 
-impl LayoutSVGSVGElementHelpers for LayoutJS<SVGSVGElement> {
+impl LayoutSVGSVGElementHelpers for LayoutDom<SVGSVGElement> {
     #[allow(unsafe_code)]
     fn data(&self) -> SVGSVGData {
         unsafe {

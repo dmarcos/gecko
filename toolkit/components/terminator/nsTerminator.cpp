@@ -29,10 +29,9 @@
 
 #include "nsIObserverService.h"
 #include "nsIPrefService.h"
-#if defined(MOZ_CRASHREPORTER)
 #include "nsExceptionHandler.h"
-#endif
 #include "GeckoProfiler.h"
+#include "nsThreadUtils.h"
 
 #if defined(XP_WIN)
 #include <windows.h>
@@ -49,6 +48,8 @@
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Unused.h"
 #include "mozilla/Telemetry.h"
+
+#include "mozilla/dom/workers/RuntimeService.h"
 
 // Normally, the number of milliseconds that AsyncShutdown waits until
 // it decides to crash is specified as a preference. We use the
@@ -125,7 +126,7 @@ struct Options {
 void
 RunWatchdog(void* arg)
 {
-  PR_SetCurrentThreadName("Shutdown Hang Terminator");
+  NS_SetCurrentThreadName("Shutdown Hang Terminator");
 
   // Let's copy and deallocate options, that's one less leak to worry
   // about.
@@ -155,7 +156,15 @@ RunWatchdog(void* arg)
       continue;
     }
 
+    mozilla::dom::workers::RuntimeService* runtimeService =
+      mozilla::dom::workers::RuntimeService::GetService();
+    if (runtimeService) {
+     runtimeService->CrashIfHanging();
+    }
+
     // Shutdown is apparently dead. Crash the process.
+    CrashReporter::SetMinidumpAnalysisAllThreads();
+
     MOZ_CRASH("Shutdown too long, probably frozen, causing a crash.");
   }
 }
@@ -215,8 +224,8 @@ PRMonitor* gWriteReady = nullptr;
 
 void RunWriter(void* arg)
 {
-  AutoProfilerRegister registerThread("Shutdown Statistics Writer");
-  PR_SetCurrentThreadName("Shutdown Statistics Writer");
+  AUTO_PROFILER_REGISTER_THREAD("Shutdown Statistics Writer");
+  NS_SetCurrentThreadName("Shutdown Statistics Writer");
 
   MOZ_LSAN_INTENTIONALLY_LEAK_OBJECT(arg);
   // Shutdown will generally complete before we have a chance to
@@ -224,7 +233,8 @@ void RunWriter(void* arg)
 
   // Setup destinationPath and tmpFilePath
 
-  nsCString destinationPath(static_cast<char*>(arg));
+  nsCString destinationPath;
+  destinationPath.Adopt(static_cast<char*>(arg));
   nsAutoCString tmpFilePath;
   tmpFilePath.Append(destinationPath);
   tmpFilePath.AppendLiteral(".tmp");
@@ -357,12 +367,12 @@ nsTerminator::Start()
 {
   MOZ_ASSERT(!mInitialized);
   StartWatchdog();
-#if !defined(DEBUG)
-  // Only allow nsTerminator to write on non-debug builds so we don't get leak warnings on
-  // shutdown for intentional leaks (see bug 1242084). This will be enabled again by bug
-  // 1255484 when 1255478 lands.
+#if !defined(NS_FREE_PERMANENT_DATA)
+  // Only allow nsTerminator to write on non-leak-checked builds so we don't
+  // get leak warnings on shutdown for intentional leaks (see bug 1242084).
+  // This will be enabled again by bug 1255484 when 1255478 lands.
   StartWriter();
-#endif // !defined(DEBUG)
+#endif // !defined(NS_FREE_PERMANENT_DATA)
   mInitialized = true;
 }
 
@@ -391,6 +401,10 @@ nsTerminator::StartWatchdog()
   UniquePtr<Options> options(new Options());
   const PRIntervalTime ticksDuration = PR_MillisecondsToInterval(1000);
   options->crashAfterTicks = crashAfterMS / ticksDuration;
+  // Handle systems where ticksDuration is greater than crashAfterMS.
+  if (options->crashAfterTicks == 0) {
+    options->crashAfterTicks = crashAfterMS / 1000;
+  }
 
   DebugOnly<PRThread*> watchdogThread = CreateSystemThread(RunWatchdog,
                                                 options.release());
@@ -451,12 +465,12 @@ nsTerminator::Observe(nsISupports *, const char *aTopic, const char16_t *)
   }
 
   UpdateHeartbeat(aTopic);
-#if !defined(DEBUG)
-  // Only allow nsTerminator to write on non-debug builds so we don't get leak warnings on
+#if !defined(NS_FREE_PERMANENT_DATA)
+  // Only allow nsTerminator to write on non-leak checked builds so we don't get leak warnings on
   // shutdown for intentional leaks (see bug 1242084). This will be enabled again by bug
   // 1255484 when 1255478 lands.
   UpdateTelemetry();
-#endif // !defined(DEBUG)
+#endif // !defined(NS_FREE_PERMANENT_DATA)
   UpdateCrashReport(aTopic);
 
   // Perform a little cleanup
@@ -514,7 +528,7 @@ nsTerminator::UpdateTelemetry()
       continue;
     }
     if (fields++ > 0) {
-      telemetryData->Append(", ");
+      telemetryData->AppendLiteral(", ");
     }
     telemetryData->AppendLiteral(R"(")");
     telemetryData->Append(shutdownStep.mTopic);
@@ -542,13 +556,11 @@ nsTerminator::UpdateTelemetry()
 void
 nsTerminator::UpdateCrashReport(const char* aTopic)
 {
-#if defined(MOZ_CRASHREPORTER)
   // In case of crash, we wish to know where in shutdown we are
   nsAutoCString report(aTopic);
 
   Unused << CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("ShutdownProgress"),
                                                report);
-#endif // defined(MOZ_CRASHREPORTER)
 }
 
 

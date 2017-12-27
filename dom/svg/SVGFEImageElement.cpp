@@ -6,6 +6,7 @@
 
 #include "mozilla/dom/SVGFEImageElement.h"
 
+#include "mozilla/EventStateManager.h"
 #include "mozilla/EventStates.h"
 #include "mozilla/dom/SVGFEImageElementBinding.h"
 #include "mozilla/dom/SVGFilterElement.h"
@@ -43,8 +44,7 @@ nsSVGElement::StringInfo SVGFEImageElement::sStringInfo[3] =
 
 NS_IMPL_ISUPPORTS_INHERITED(SVGFEImageElement, SVGFEImageElementBase,
                             nsIDOMNode, nsIDOMElement, nsIDOMSVGElement,
-                            imgINotificationObserver, nsIImageLoadingContent,
-                            imgIOnloadBlocker)
+                            imgINotificationObserver, nsIImageLoadingContent)
 
 //----------------------------------------------------------------------
 // Implementation
@@ -91,6 +91,9 @@ SVGFEImageElement::LoadSVGImage(bool aForce, bool aNotify)
     }
   }
 
+  // Mark channel as urgent-start before load image if the image load is
+  // initaiated by a user interaction.
+  mUseUrgentStartForChannel = EventStateManager::IsHandlingUserInput();
   return LoadImage(href, aForce, aNotify, eImageLoadType_Normal);
 }
 
@@ -107,7 +110,7 @@ SVGFEImageElement::AsyncEventRunning(AsyncEventDispatcher* aEvent)
 // nsIContent methods:
 
 NS_IMETHODIMP_(bool)
-SVGFEImageElement::IsAttributeMapped(const nsIAtom* name) const
+SVGFEImageElement::IsAttributeMapped(const nsAtom* name) const
 {
   static const MappedAttributeEntry* const map[] = {
     sGraphicsMap
@@ -118,28 +121,27 @@ SVGFEImageElement::IsAttributeMapped(const nsIAtom* name) const
 }
 
 nsresult
-SVGFEImageElement::AfterSetAttr(int32_t aNamespaceID, nsIAtom* aName,
-                                const nsAttrValue* aValue, bool aNotify)
+SVGFEImageElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
+                                const nsAttrValue* aValue,
+                                const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
+                                bool aNotify)
 {
   if (aName == nsGkAtoms::href &&
       (aNamespaceID == kNameSpaceID_XLink ||
        aNamespaceID == kNameSpaceID_None)) {
 
-    // If there isn't a frame we still need to load the image in case
-    // the frame is created later e.g. by attaching to a document.
-    // If there is a frame then it should deal with loading as the image
-    // url may be animated.
-    if (!GetPrimaryFrame()) {
-      if (aValue) {
-        LoadSVGImage(true, aNotify);
-      } else {
-        CancelImageRequests(aNotify);
-      }
+    if (aValue) {
+      LoadSVGImage(true, aNotify);
+    } else {
+      CancelImageRequests(aNotify);
     }
   }
 
   return SVGFEImageElementBase::AfterSetAttr(aNamespaceID, aName,
-                                             aValue, aNotify);
+                                             aValue, aOldValue,
+                                             aSubjectPrincipal,
+                                             aNotify);
 }
 
 void
@@ -173,7 +175,9 @@ SVGFEImageElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
     ClearBrokenState();
     RemoveStatesSilently(NS_EVENT_STATE_BROKEN);
     nsContentUtils::AddScriptRunner(
-      NewRunnableMethod(this, &SVGFEImageElement::MaybeLoadSVGImage));
+      NewRunnableMethod("dom::SVGFEImageElement::MaybeLoadSVGImage",
+                        this,
+                        &SVGFEImageElement::MaybeLoadSVGImage));
   }
 
   return rv;
@@ -266,7 +270,7 @@ SVGFEImageElement::GetPrimitiveDescription(nsSVGFilterInstance* aInstance,
 
 bool
 SVGFEImageElement::AttributeAffectsRendering(int32_t aNameSpaceID,
-                                             nsIAtom* aAttribute) const
+                                             nsAtom* aAttribute) const
 {
   // nsGkAtoms::href is deliberately omitted as the frame has special
   // handling to load the image

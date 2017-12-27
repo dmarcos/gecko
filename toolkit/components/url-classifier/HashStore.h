@@ -8,13 +8,13 @@
 #include "Entries.h"
 #include "ChunkSet.h"
 
+#include "chromium/safebrowsing.pb.h"
 #include "nsString.h"
 #include "nsTArray.h"
 #include "nsIFile.h"
 #include "nsIFileStreams.h"
 #include "nsCOMPtr.h"
 #include "nsClassHashtable.h"
-#include "safebrowsing.pb.h"
 #include <string>
 
 namespace mozilla {
@@ -65,7 +65,8 @@ public:
       mAddPrefixes.Length() == 0 &&
       mSubPrefixes.Length() == 0 &&
       mAddCompletes.Length() == 0 &&
-      mSubCompletes.Length() == 0;
+      mSubCompletes.Length() == 0 &&
+      mMissPrefixes.Length() == 0;
   }
 
   // Throughout, uint32_t aChunk refers only to the chunk number. Chunk data is
@@ -91,6 +92,7 @@ public:
   MOZ_MUST_USE nsresult NewSubComplete(uint32_t aAddChunk,
                                        const Completion& aCompletion,
                                        uint32_t aSubChunk);
+  MOZ_MUST_USE nsresult NewMissPrefix(const Prefix& aPrefix);
 
   ChunkSet& AddChunks() { return mAddChunks; }
   ChunkSet& SubChunks() { return mSubChunks; }
@@ -105,6 +107,9 @@ public:
   AddCompleteArray& AddCompletes() { return mAddCompletes; }
   SubCompleteArray& SubCompletes() { return mSubCompletes; }
 
+  // Entries that cannot be completed.
+  MissPrefixArray& MissPrefixes() { return mMissPrefixes; }
+
   // For downcasting.
   static const int TAG = 2;
 
@@ -117,8 +122,11 @@ private:
   ChunkSet mSubExpirations;
 
   // 4-byte sha256 prefixes.
-  AddPrefixArray mAddPrefixes;
-  SubPrefixArray mSubPrefixes;
+  AddPrefixArray  mAddPrefixes;
+  SubPrefixArray  mSubPrefixes;
+
+  // This is only used by gethash so don't add this to Header.
+  MissPrefixArray mMissPrefixes;
 
   // 32-byte hashes.
   AddCompleteArray mAddCompletes;
@@ -176,9 +184,10 @@ public:
 
   void SetFullUpdate(bool aIsFullUpdate) { mFullUpdate = aIsFullUpdate; }
   void NewPrefixes(int32_t aSize, std::string& aPrefixes);
-  void NewRemovalIndices(const uint32_t* aIndices, size_t aNumOfIndices);
   void SetNewClientState(const nsACString& aState) { mClientState = aState; }
   void NewChecksum(const std::string& aChecksum);
+
+  nsresult NewRemovalIndices(const uint32_t* aIndices, size_t aNumOfIndices);
   nsresult NewFullHashResponse(const Prefix& aPrefix,
                                CachedFullHashResponse& aResponse);
 

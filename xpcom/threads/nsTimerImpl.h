@@ -33,12 +33,18 @@ extern mozilla::LogModule* GetTimerLog();
     {0x84, 0x27, 0xfb, 0xab, 0x44, 0xf2, 0x9b, 0xc8} \
 }
 
+class nsTimerImplHolder;
+
 // TimerThread, nsTimerEvent, and nsTimer have references to these. nsTimer has
 // a separate lifecycle so we can Cancel() the underlying timer when the user of
 // the nsTimer has let go of its last reference.
 class nsTimerImpl
 {
-  ~nsTimerImpl() {}
+  ~nsTimerImpl()
+  {
+    MOZ_ASSERT(!mHolder);
+  }
+
 public:
   typedef mozilla::TimeStamp TimeStamp;
 
@@ -50,7 +56,7 @@ public:
   static void Shutdown();
 
   void SetDelayInternal(uint32_t aDelay, TimeStamp aBase = TimeStamp::Now());
-  bool CancelCheckIfFiring();
+  void CancelImpl(bool aClearITimer);
 
   void Fire(int32_t aGeneration);
 
@@ -63,8 +69,6 @@ public:
   {
     return mGeneration;
   }
-
-  nsresult InitCommon(uint32_t aDelay, uint32_t aType);
 
   struct Callback {
     Callback() :
@@ -125,6 +129,12 @@ public:
     void*                 mClosure;
   };
 
+  nsresult InitCommon(uint32_t aDelayMS, uint32_t aType,
+                      Callback&& newCallback);
+
+  nsresult InitCommon(const mozilla::TimeDuration& aDelay, uint32_t aType,
+                      Callback&& newCallback);
+
   Callback& GetCallback()
   {
     mMutex.AssertCurrentThreadOwns();
@@ -146,10 +156,25 @@ public:
         nsITimer::TYPE_REPEATING_PRECISE <
           nsITimer::TYPE_REPEATING_PRECISE_CAN_SKIP,
         "invalid ordering of timer types!");
-    return mType >= nsITimer::TYPE_REPEATING_SLACK;
+    return mType >= nsITimer::TYPE_REPEATING_SLACK &&
+           mType < nsITimer::TYPE_ONE_SHOT_LOW_PRIORITY;
+  }
+
+  bool IsLowPriority() const
+  {
+    return mType == nsITimer::TYPE_ONE_SHOT_LOW_PRIORITY ||
+           mType == nsITimer::TYPE_REPEATING_SLACK_LOW_PRIORITY;
+  }
+
+  bool IsSlack() const
+  {
+    return mType == nsITimer::TYPE_REPEATING_SLACK ||
+           mType == nsITimer::TYPE_REPEATING_SLACK_LOW_PRIORITY;
   }
 
   void GetName(nsACString& aName);
+
+  void SetHolder(nsTimerImplHolder* aHolder);
 
   nsCOMPtr<nsIEventTarget> mEventTarget;
 
@@ -161,6 +186,10 @@ public:
                                       uint32_t aType,
                                       const Callback::Name& aName);
 
+  // This weak reference must be cleared by the nsTimerImplHolder by calling
+  // SetHolder(nullptr) before the holder is destroyed.
+  nsTimerImplHolder*    mHolder;
+
   // These members are set by the initiating thread, when the timer's type is
   // changed and during the period where it fires on that thread.
   uint8_t               mType;
@@ -171,9 +200,9 @@ public:
   // Updated only after this timer has been removed from the timer thread.
   int32_t               mGeneration;
 
-  uint32_t              mDelay;
+  mozilla::TimeDuration mDelay;
   // Updated only after this timer has been removed from the timer thread.
-  TimeStamp             mTimeout;
+  mozilla::TimeStamp    mTimeout;
 
 #ifdef MOZ_TASK_TRACER
   mozilla::tasktracer::TracedTaskCommon mTracedTask;
@@ -182,7 +211,7 @@ public:
   static double         sDeltaSum;
   static double         sDeltaSumSquared;
   static double         sDeltaNum;
-  const RefPtr<nsITimer>      mITimer;
+  RefPtr<nsITimer>      mITimer;
   mozilla::Mutex mMutex;
   Callback              mCallback;
   Callback              mCallbackDuringFire;
@@ -196,7 +225,6 @@ public:
 
   friend class TimerThread;
   friend class nsTimerEvent;
-  friend struct TimerAdditionComparator;
 
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_FORWARD_SAFE_NSITIMER(mImpl);
@@ -208,5 +236,41 @@ private:
   // null this to break the cycle.
   RefPtr<nsTimerImpl> mImpl;
 };
+
+// A class that holds on to an nsTimerImpl.  This lets the nsTimerImpl object
+// directly instruct its holder to forget the timer, avoiding list lookups.
+class nsTimerImplHolder
+{
+public:
+  explicit nsTimerImplHolder(nsTimerImpl* aTimerImpl)
+    : mTimerImpl(aTimerImpl)
+  {
+    if (mTimerImpl) {
+      mTimerImpl->SetHolder(this);
+    }
+  }
+
+  ~nsTimerImplHolder()
+  {
+    if (mTimerImpl) {
+      mTimerImpl->SetHolder(nullptr);
+    }
+  }
+
+  void
+  Forget(nsTimerImpl* aTimerImpl)
+  {
+    if (MOZ_UNLIKELY(!mTimerImpl)) {
+      return;
+    }
+    MOZ_ASSERT(aTimerImpl == mTimerImpl);
+    mTimerImpl->SetHolder(nullptr);
+    mTimerImpl = nullptr;
+  }
+
+protected:
+  RefPtr<nsTimerImpl> mTimerImpl;
+};
+
 
 #endif /* nsTimerImpl_h___ */

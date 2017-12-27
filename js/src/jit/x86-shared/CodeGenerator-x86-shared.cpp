@@ -363,7 +363,6 @@ CodeGeneratorX86Shared::visitWasmSelect(LWasmSelect* ins)
     }
 
     masm.bind(&done);
-    return;
 }
 
 void
@@ -487,8 +486,8 @@ CodeGeneratorX86Shared::generateOutOfLineCode()
         // Push the frame size, so the handler can recover the IonScript.
         masm.push(Imm32(frameSize()));
 
-        JitCode* handler = gen->jitRuntime()->getGenericBailoutHandler();
-        masm.jmp(ImmPtr(handler->raw()), Relocation::JITCODE);
+        TrampolinePtr handler = gen->jitRuntime()->getGenericBailoutHandler();
+        masm.jump(handler);
     }
 
     return !masm.oom();
@@ -542,7 +541,7 @@ CodeGeneratorX86Shared::bailout(const T& binder, LSnapshot* snapshot)
     // reserved per external jump, whereas it takes only 10 bytes to encode a
     // a non-table based bailout.
     if (assignBailoutId(snapshot)) {
-        binder(masm, deoptTable_->raw() + snapshot->bailoutId() * BAILOUT_TABLE_ENTRY_SIZE);
+        binder(masm, deoptTable_->value + snapshot->bailoutId() * BAILOUT_TABLE_ENTRY_SIZE);
         return;
     }
 #endif
@@ -1871,10 +1870,10 @@ CodeGeneratorX86Shared::emitTableSwitchDispatch(MTableSwitch* mir, Register inde
 
     // Compute the position where a pointer to the right case stands.
     masm.mov(ool->jumpLabel()->patchAt(), base);
-    Operand pointer = Operand(base, index, ScalePointer);
+    BaseIndex pointer(base, index, ScalePointer);
 
     // Jump to the right case
-    masm.jmp(pointer);
+    masm.branchToComputedAddress(pointer);
 }
 
 void
@@ -2412,8 +2411,8 @@ CodeGeneratorX86Shared::generateInvalidateEpilogue()
 
     // Push the Ion script onto the stack (when we determine what that pointer is).
     invalidateEpilogueData_ = masm.pushWithPatch(ImmWord(uintptr_t(-1)));
-    JitCode* thunk = gen->jitRuntime()->getInvalidationThunk();
 
+    TrampolinePtr thunk = gen->jitRuntime()->getInvalidationThunk();
     masm.call(thunk);
 
     // We should never reach this point in JIT code -- the invalidation thunk should
@@ -2963,8 +2962,10 @@ CodeGeneratorX86Shared::visitSimdAllTrue(LSimdAllTrue* ins)
     FloatRegister input = ToFloatRegister(ins->input());
     Register output = ToRegister(ins->output());
 
-    masm.vmovmskps(input, output);
-    masm.cmp32(output, Imm32(0xf));
+    // We know that the input lanes are boolean, so they are either 0 or -1.
+    // The all-true vector has all 128 bits set, no matter the lane geometry.
+    masm.vpmovmskb(input, output);
+    masm.cmp32(output, Imm32(0xffff));
     masm.emitSet(Assembler::Zero, output);
 }
 
@@ -2974,7 +2975,7 @@ CodeGeneratorX86Shared::visitSimdAnyTrue(LSimdAnyTrue* ins)
     FloatRegister input = ToFloatRegister(ins->input());
     Register output = ToRegister(ins->output());
 
-    masm.vmovmskps(input, output);
+    masm.vpmovmskb(input, output);
     masm.cmp32(output, Imm32(0x0));
     masm.emitSet(Assembler::NonZero, output);
 }
@@ -4418,7 +4419,7 @@ CodeGeneratorX86Shared::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arr
 template<typename S, typename T>
 void
 CodeGeneratorX86Shared::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType, const S& value,
-                                                    const T& mem)
+                                                   const T& mem)
 {
     switch (arrayType) {
       case Scalar::Int8:

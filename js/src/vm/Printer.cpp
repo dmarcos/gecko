@@ -18,6 +18,10 @@
 
 #include "ds/LifoAlloc.h"
 
+#ifdef XP_WIN32
+#include "jswin.h"
+#endif
+
 using mozilla::PodCopy;
 
 namespace
@@ -150,16 +154,20 @@ Sprinter::checkInvariants() const
     MOZ_ASSERT(base[size - 1] == 0);
 }
 
-const char*
-Sprinter::string() const
+char*
+Sprinter::release()
 {
-    return base;
-}
+    checkInvariants();
+    if (hadOOM_)
+        return nullptr;
 
-const char*
-Sprinter::stringEnd() const
-{
-    return base + offset;
+    char* str = base;
+    base = nullptr;
+    offset = size = 0;
+#ifdef DEBUG
+    initialized = false;
+#endif
+    return str;
 }
 
 char*
@@ -446,6 +454,18 @@ Fprinter::put(const char* s, size_t len)
         reportOutOfMemory();
         return false;
     }
+#ifdef XP_WIN32
+    if ((file_ == stderr) && (IsDebuggerPresent())) {
+        UniqueChars buf(static_cast<char*>(js_malloc(len + 1)));
+        if (!buf) {
+            reportOutOfMemory();
+            return false;
+        }
+        PodCopy(buf.get(), s, len);
+        buf[len] = '\0';
+        OutputDebugStringA(buf.get());
+    }
+#endif
     return true;
 }
 
@@ -547,20 +567,6 @@ LSprinter::put(const char* s, size_t len)
 
     MOZ_ASSERT(len <= INT_MAX);
     return true;
-}
-
-void
-LSprinter::reportOutOfMemory()
-{
-    if (hadOOM_)
-        return;
-    hadOOM_ = true;
-}
-
-bool
-LSprinter::hadOutOfMemory() const
-{
-    return hadOOM_;
 }
 
 } // namespace js

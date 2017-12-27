@@ -2,7 +2,6 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-Cu.import("resource://gre/modules/Task.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
                                   "resource://gre/modules/PlacesUtils.jsm");
@@ -18,6 +17,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "setTimeout",
 XPCOMUtils.defineLazyServiceGetter(this, "serviceWorkerManager",
                                    "@mozilla.org/serviceworkers/manager;1",
                                    "nsIServiceWorkerManager");
+XPCOMUtils.defineLazyServiceGetter(this, "quotaManagerService",
+                                   "@mozilla.org/dom/quota-manager-service;1",
+                                   "nsIQuotaManagerService");
 
 /**
 * A number of iterations after which to yield time back
@@ -33,35 +35,33 @@ XPCOMUtils.defineLazyGetter(this, "sanitizer", () => {
   return sanitizer;
 });
 
-function makeRange(options) {
+const makeRange = options => {
   return (options.since == null) ?
     null :
     [PlacesUtils.toPRTime(options.since), PlacesUtils.toPRTime(Date.now())];
-}
+};
 
-function clearCache() {
+const clearCache = () => {
   // Clearing the cache does not support timestamps.
   return sanitizer.items.cache.clear();
-}
+};
 
-let clearCookies = Task.async(function* (options) {
+const clearCookies = async function(options) {
   let cookieMgr = Services.cookies;
   // This code has been borrowed from sanitize.js.
   let yieldCounter = 0;
 
-  if (options.since) {
+  if (options.since || options.hostnames) {
     // Iterate through the cookies and delete any created after our cutoff.
-    let cookiesEnum = cookieMgr.enumerator;
-    while (cookiesEnum.hasMoreElements()) {
-      let cookie = cookiesEnum.getNext().QueryInterface(Ci.nsICookie2);
-
-      if (cookie.creationTime >= PlacesUtils.toPRTime(options.since)) {
+    for (const cookie of XPCOMUtils.IterSimpleEnumerator(cookieMgr.enumerator, Ci.nsICookie2)) {
+      if ((!options.since || cookie.creationTime >= PlacesUtils.toPRTime(options.since)) &&
+          (!options.hostnames || options.hostnames.includes(cookie.host.replace(/^\./, "")))) {
         // This cookie was created after our cutoff, clear it.
         cookieMgr.remove(cookie.host, cookie.name, cookie.path,
                          false, cookie.originAttributes);
 
         if (++yieldCounter % YIELD_PERIOD == 0) {
-          yield new Promise(resolve => setTimeout(resolve, 0)); // Don't block the main thread too long.
+          await new Promise(resolve => setTimeout(resolve, 0)); // Don't block the main thread too long.
         }
       }
     }
@@ -69,21 +69,65 @@ let clearCookies = Task.async(function* (options) {
     // Remove everything.
     cookieMgr.removeAll();
   }
-});
+};
 
-function clearDownloads(options) {
+const clearDownloads = options => {
   return sanitizer.items.downloads.clear(makeRange(options));
-}
+};
 
-function clearFormData(options) {
+const clearFormData = options => {
   return sanitizer.items.formdata.clear(makeRange(options));
-}
+};
 
-function clearHistory(options) {
+const clearHistory = options => {
   return sanitizer.items.history.clear(makeRange(options));
-}
+};
 
-let clearPasswords = Task.async(function* (options) {
+const clearIndexedDB = async function(options) {
+  let promises = [];
+
+  await new Promise(resolve => {
+    quotaManagerService.getUsage(request => {
+      if (request.resultCode != Components.results.NS_OK) {
+        // We are probably shutting down. We don't want to propagate the error,
+        // rejecting the promise.
+        resolve();
+        return;
+      }
+
+      for (let item of request.result) {
+        let principal = Services.scriptSecurityManager.createCodebasePrincipalFromOrigin(item.origin);
+        let uri = principal.URI;
+        if (uri.scheme == "http" || uri.scheme == "https" || uri.scheme == "file") {
+          promises.push(new Promise(r => {
+            let req = quotaManagerService.clearStoragesForPrincipal(principal, null, false);
+            req.callback = () => { r(); };
+          }));
+        }
+      }
+
+      resolve();
+    });
+  });
+
+  return Promise.all(promises);
+};
+
+const clearLocalStorage = async function(options) {
+  if (options.since) {
+    return Promise.reject(
+      {message: "Firefox does not support clearing localStorage with 'since'."});
+  }
+  if (options.hostnames) {
+    for (let hostname of options.hostnames) {
+      Services.obs.notifyObservers(null, "extension:purge-localStorage", hostname);
+    }
+  } else {
+    Services.obs.notifyObservers(null, "extension:purge-localStorage");
+  }
+};
+
+const clearPasswords = async function(options) {
   let loginManager = Services.logins;
   let yieldCounter = 0;
 
@@ -95,7 +139,7 @@ let clearPasswords = Task.async(function* (options) {
       if (login.timePasswordChanged >= options.since) {
         loginManager.removeLogin(login);
         if (++yieldCounter % YIELD_PERIOD == 0) {
-          yield new Promise(resolve => setTimeout(resolve, 0)); // Don't block the main thread too long.
+          await new Promise(resolve => setTimeout(resolve, 0)); // Don't block the main thread too long.
         }
       }
     }
@@ -103,13 +147,13 @@ let clearPasswords = Task.async(function* (options) {
     // Remove everything.
     loginManager.removeAllLogins();
   }
-});
+};
 
-function clearPluginData(options) {
+const clearPluginData = options => {
   return sanitizer.items.pluginData.clear(makeRange(options));
-}
+};
 
-let clearServiceWorkers = Task.async(function* () {
+const clearServiceWorkers = async function() {
   // Clearing service workers does not support timestamps.
   let yieldCounter = 0;
 
@@ -120,12 +164,12 @@ let clearServiceWorkers = Task.async(function* () {
     let host = sw.principal.URI.host;
     serviceWorkerManager.removeAndPropagate(host);
     if (++yieldCounter % YIELD_PERIOD == 0) {
-      yield new Promise(resolve => setTimeout(resolve, 0)); // Don't block the main thread too long.
+      await new Promise(resolve => setTimeout(resolve, 0)); // Don't block the main thread too long.
     }
   }
-});
+};
 
-function doRemoval(options, dataToRemove, extension) {
+const doRemoval = (options, dataToRemove, extension) => {
   if (options.originTypes &&
       (options.originTypes.protectedWeb || options.originTypes.extension)) {
     return Promise.reject(
@@ -152,6 +196,12 @@ function doRemoval(options, dataToRemove, extension) {
         case "history":
           removalPromises.push(clearHistory(options));
           break;
+        case "indexedDB":
+          removalPromises.push(clearIndexedDB(options));
+          break;
+        case "localStorage":
+          removalPromises.push(clearLocalStorage(options));
+          break;
         case "passwords":
           removalPromises.push(clearPasswords(options));
           break;
@@ -171,7 +221,7 @@ function doRemoval(options, dataToRemove, extension) {
       `Firefox does not support dataTypes: ${invalidDataTypes.toString()}.`);
   }
   return Promise.all(removalPromises);
-}
+};
 
 this.browsingData = class extends ExtensionAPI {
   getAPI(context) {
@@ -224,6 +274,12 @@ this.browsingData = class extends ExtensionAPI {
         },
         removeHistory(options) {
           return doRemoval(options, {history: true});
+        },
+        removeIndexedDB(options) {
+          return doRemoval(options, {indexedDB: true});
+        },
+        removeLocalStorage(options) {
+          return doRemoval(options, {localStorage: true});
         },
         removePasswords(options) {
           return doRemoval(options, {passwords: true});

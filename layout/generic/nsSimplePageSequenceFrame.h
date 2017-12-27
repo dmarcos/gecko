@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -19,7 +20,7 @@ class HTMLCanvasElement;
 } // namespace mozilla
 
 //-----------------------------------------------
-// This class maintains all the data that 
+// This class maintains all the data that
 // is used by all the page frame
 // It lives while the nsSimplePageSequenceFrame lives
 class nsSharedPageData {
@@ -37,7 +38,7 @@ public:
 
   nsSize      mReflowSize;
   nsMargin    mReflowMargin;
-  // Margin for headers and footers; it defaults to 4/100 of an inch on UNIX 
+  // Margin for headers and footers; it defaults to 4/100 of an inch on UNIX
   // and 0 elsewhere; I think it has to do with some inconsistency in page size
   // computations
   nsMargin    mEdgePaperMargin;
@@ -51,30 +52,26 @@ public:
 };
 
 // Simple page sequence frame class. Used when we're in paginated mode
-class nsSimplePageSequenceFrame : public nsContainerFrame,
-                                  public nsIPageSequenceFrame {
+class nsSimplePageSequenceFrame final
+  : public nsContainerFrame
+  , public nsIPageSequenceFrame
+{
 public:
   friend nsSimplePageSequenceFrame* NS_NewSimplePageSequenceFrame(nsIPresShell* aPresShell,
                                                                   nsStyleContext* aContext);
 
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsSimplePageSequenceFrame)
 
   // nsIFrame
   void Reflow(nsPresContext* aPresContext,
               ReflowOutput& aDesiredSize,
-              const ReflowInput& aMaxSize,
+              const ReflowInput& aReflowInput,
               nsReflowStatus& aStatus) override;
 
   void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                        const nsRect&           aDirtyRect,
                         const nsDisplayListSet& aLists) override;
 
-  // nsIPageSequenceFrame
-  NS_IMETHOD SetPageNo(int32_t aPageNo) { return NS_OK;}
-  NS_IMETHOD SetSelectionHeight(nscoord aYOffset, nscoord aHeight) override { mYSelOffset = aYOffset; mSelectionHeight = aHeight; return NS_OK; }
-  NS_IMETHOD SetTotalNumPages(int32_t aTotal) override { mTotalPages = aTotal; return NS_OK; }
-  
   // For Shrink To Fit
   NS_IMETHOD GetSTFPercent(float& aSTFPercent) override;
 
@@ -99,11 +96,9 @@ public:
   bool HasTransformGetter() const override { return true; }
 
   /**
-   * Get the "type" of the frame
-   *
-   * @see nsGkAtoms::sequenceFrame
+   * Return our first page frame.
    */
-  nsIAtom* GetType() const override;
+  void AppendDirectlyOwnedAnonBoxes(nsTArray<OwnedAnonBox>& aResult) override;
 
 #ifdef DEBUG_FRAME_DUMP
   nsresult GetFrameName(nsAString& aResult) const override;
@@ -149,15 +144,9 @@ protected:
   nsTArray<int32_t> mPageRanges;
   nsTArray<RefPtr<mozilla::dom::HTMLCanvasElement> > mCurrentCanvasList;
 
-  // Selection Printing Info
-  nscoord      mSelectionHeight;
-  nscoord      mYSelOffset;
-
   // Asynch Printing
   bool mPrintThisPage;
   bool mDoingPageRange;
-
-  bool mIsPrintingSelection;
 
   bool mCalledBeginPage;
 

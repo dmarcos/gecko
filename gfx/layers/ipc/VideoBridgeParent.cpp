@@ -1,10 +1,11 @@
-/* vim: set ts=2 sw=2 et tw=80: */
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "VideoBridgeParent.h"
+#include "CompositorThread.h"
 #include "mozilla/layers/TextureHost.h"
 
 namespace mozilla {
@@ -13,7 +14,6 @@ namespace layers {
 using namespace mozilla::ipc;
 using namespace mozilla::gfx;
 
-
 static VideoBridgeParent* sVideoBridgeSingleton;
 
 VideoBridgeParent::VideoBridgeParent()
@@ -21,6 +21,7 @@ VideoBridgeParent::VideoBridgeParent()
 {
   mSelfRef = this;
   sVideoBridgeSingleton = this;
+  mCompositorThreadRef = CompositorThreadHolder::GetSingleton();
 }
 
 VideoBridgeParent::~VideoBridgeParent()
@@ -50,6 +51,7 @@ VideoBridgeParent::ActorDestroy(ActorDestroyReason aWhy)
 void
 VideoBridgeParent::DeallocPVideoBridgeParent()
 {
+  mCompositorThreadRef = nullptr;
   mSelfRef = nullptr;
 }
 
@@ -60,7 +62,7 @@ VideoBridgeParent::AllocPTextureParent(const SurfaceDescriptor& aSharedData,
                                        const uint64_t& aSerial)
 {
   PTextureParent* parent =
-    TextureHost::CreateIPDLActor(this, aSharedData, aLayersBackend, aFlags, aSerial);
+    TextureHost::CreateIPDLActor(this, aSharedData, aLayersBackend, aFlags, aSerial, Nothing());
   mTextureMap[aSerial] = parent;
   return parent;
 }

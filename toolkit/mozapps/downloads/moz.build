@@ -10,16 +10,12 @@ with Files('**'):
 TEST_DIRS += ['tests']
 
 EXTRA_COMPONENTS += [
-    'nsHelperAppDlg.manifest',
-]
-
-EXTRA_PP_COMPONENTS += [
     'nsHelperAppDlg.js',
+    'nsHelperAppDlg.manifest',
 ]
 
 EXTRA_JS_MODULES += [
     'DownloadLastDir.jsm',
-    'DownloadPaths.jsm',
     'DownloadUtils.jsm',
 ]
 

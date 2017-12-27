@@ -16,14 +16,14 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(BROTLI_URL);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   let wait = waitForNetworkEvents(monitor, BROTLI_REQUESTS);
   yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
@@ -31,26 +31,33 @@ add_task(function* () {
   });
   yield wait;
 
+  let requestItem = document.querySelector(".request-list-item");
+  let requestsListStatus = requestItem.querySelector(".requests-list-status");
+  EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+  yield waitUntil(() => requestsListStatus.title);
+
   verifyRequestItemTarget(
     document,
-    getDisplayedRequests(gStore.getState()),
-    getSortedRequests(gStore.getState()).get(0),
+    getDisplayedRequests(store.getState()),
+    getSortedRequests(store.getState()).get(0),
     "GET", HTTPS_CONTENT_TYPE_SJS + "?fmt=br", {
       status: 200,
       statusText: "Connected",
       type: "plain",
       fullMimeType: "text/plain",
-      transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 10),
+      transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 60),
       size: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 64),
       time: true
     });
 
   wait = waitForDOM(document, ".CodeMirror-code");
+  let onResponseContent = monitor.panelWin.once(EVENTS.RECEIVED_RESPONSE_CONTENT);
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector(".network-details-panel-toggle"));
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector("#response-tab"));
   yield wait;
+  yield onResponseContent;
   yield testResponse("br");
   yield teardown(monitor);
 

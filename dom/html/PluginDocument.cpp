@@ -48,6 +48,14 @@ public:
 
   void StartLayout() { MediaDocument::StartLayout(); }
 
+  virtual void Destroy() override
+  {
+    if (mStreamListener) {
+      mStreamListener->DropDocumentRef();
+    }
+    MediaDocument::Destroy();
+  }
+
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(PluginDocument, MediaDocument)
 protected:
   ~PluginDocument() override;
@@ -75,8 +83,7 @@ private:
 NS_IMETHODIMP
 PluginStreamListener::OnStartRequest(nsIRequest* request, nsISupports *ctxt)
 {
-  PROFILER_LABEL("PluginStreamListener", "OnStartRequest",
-    js::ProfileEntry::Category::NETWORK);
+  AUTO_PROFILER_LABEL("PluginStreamListener::OnStartRequest", NETWORK);
 
   nsCOMPtr<nsIContent> embed = mPluginDoc->GetPluginContent();
   nsCOMPtr<nsIObjectLoadingContent> objlc = do_QueryInterface(embed);
@@ -111,12 +118,9 @@ PluginDocument::~PluginDocument() = default;
 NS_IMPL_CYCLE_COLLECTION_INHERITED(PluginDocument, MediaDocument,
                                    mPluginContent)
 
-NS_IMPL_ADDREF_INHERITED(PluginDocument, MediaDocument)
-NS_IMPL_RELEASE_INHERITED(PluginDocument, MediaDocument)
-
-NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(PluginDocument)
-  NS_INTERFACE_TABLE_INHERITED(PluginDocument, nsIPluginDocument)
-NS_INTERFACE_TABLE_TAIL_INHERITING(MediaDocument)
+NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(PluginDocument,
+                                             MediaDocument,
+                                             nsIPluginDocument)
 
 void
 PluginDocument::SetScriptGlobalObject(nsIScriptGlobalObject* aScriptGlobalObject)

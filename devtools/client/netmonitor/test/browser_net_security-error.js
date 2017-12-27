@@ -9,15 +9,14 @@
 
 add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(CUSTOM_GET_URL);
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
-  let { EVENTS } = windowRequire("devtools/client/netmonitor/src/constants");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   info("Requesting a resource that has a certificate problem.");
 
-  let requestsDone = waitForSecurityBrokenNetworkEvent();
+  let requestsDone = waitForNetworkEvents(monitor, 1);
   yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
     content.wrappedJSObject.performRequests(1, "https://nocert.example.com");
   });
@@ -26,6 +25,8 @@ add_task(function* () {
   let securityInfoLoaded = waitForDOM(document, ".security-info-value");
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector(".network-details-panel-toggle"));
+
+  yield waitUntil(() => document.querySelector("#security-tab"));
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector("#security-tab"));
   yield securityInfoLoaded;
@@ -34,28 +35,4 @@ add_task(function* () {
   isnot(errormsg.textContent, "", "Error message is not empty.");
 
   return teardown(monitor);
-
-  /**
-   * Returns a promise that's resolved once a request with security issues is
-   * completed.
-   */
-  function waitForSecurityBrokenNetworkEvent() {
-    let awaitedEvents = [
-      "UPDATING_REQUEST_HEADERS",
-      "RECEIVED_REQUEST_HEADERS",
-      "UPDATING_REQUEST_COOKIES",
-      "RECEIVED_REQUEST_COOKIES",
-      "STARTED_RECEIVING_RESPONSE",
-      "UPDATING_RESPONSE_CONTENT",
-      "RECEIVED_RESPONSE_CONTENT",
-      "UPDATING_EVENT_TIMINGS",
-      "RECEIVED_EVENT_TIMINGS",
-    ];
-
-    let promises = awaitedEvents.map((event) => {
-      return monitor.panelWin.once(EVENTS[event]);
-    });
-
-    return Promise.all(promises);
-  }
 });

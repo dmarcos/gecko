@@ -4,7 +4,6 @@
 
 #include "AndroidBridge.h"
 #include "AndroidDecoderModule.h"
-#include "AndroidSurfaceTexture.h"
 #include "JavaCallbacksSupport.h"
 #include "SimpleMap.h"
 #include "GLImages.h"
@@ -17,7 +16,14 @@
 #include "nsPromiseFlatString.h"
 #include "nsThreadUtils.h"
 #include "prlog.h"
+
 #include <jni.h>
+
+#ifdef NIGHTLY_BUILD
+#define DEBUG_SHUTDOWN(fmt, ...) printf_stderr("[DEBUG SHUTDOWN] %s: " fmt "\n", __func__, ##__VA_ARGS__)
+#else
+#define DEBUG_SHUTDOWN(...) do { } while (0)
+#endif
 
 #undef LOG
 #define LOG(arg, ...)                                                          \
@@ -113,11 +119,11 @@ public:
       int32_t offset;
       ok &= NS_SUCCEEDED(info->Offset(&offset));
 
-      int64_t presentationTimeUs;
-      ok &= NS_SUCCEEDED(info->PresentationTimeUs(&presentationTimeUs));
-
       int32_t size;
       ok &= NS_SUCCEEDED(info->Size(&size));
+
+      int64_t presentationTimeUs;
+      ok &= NS_SUCCEEDED(info->PresentationTimeUs(&presentationTimeUs));
 
       if (!ok) {
         HandleError(MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
@@ -125,26 +131,29 @@ public:
         return;
       }
 
-      bool isEOS = !!(flags & MediaCodec::BUFFER_FLAG_END_OF_STREAM);
+
       InputInfo inputInfo;
-      if (!mDecoder->mInputInfos.Find(presentationTimeUs, inputInfo)
-          && !isEOS) {
+      ok = mDecoder->mInputInfos.Find(presentationTimeUs, inputInfo);
+      bool isEOS = !!(flags & MediaCodec::BUFFER_FLAG_END_OF_STREAM);
+      if (!ok && !isEOS) {
+        // Ignore output with no corresponding input.
         return;
       }
 
-      if (size > 0) {
+      if (ok && (size > 0 || presentationTimeUs >= 0)) {
         RefPtr<layers::Image> img = new SurfaceTextureImage(
-          mDecoder->mSurfaceTexture.get(), inputInfo.mImageSize,
+          mDecoder->mSurfaceHandle, inputInfo.mImageSize, false /* NOT continuous */,
           gl::OriginPos::BottomLeft);
 
         RefPtr<VideoData> v = VideoData::CreateFromImage(
-          inputInfo.mDisplaySize, offset, presentationTimeUs,
+          inputInfo.mDisplaySize, offset,
+          TimeUnit::FromMicroseconds(presentationTimeUs),
           TimeUnit::FromMicroseconds(inputInfo.mDurationUs),
           img, !!(flags & MediaCodec::BUFFER_FLAG_SYNC_FRAME),
-          presentationTimeUs);
+          TimeUnit::FromMicroseconds(presentationTimeUs));
 
         v->SetListener(Move(releaseSample));
-        mDecoder->UpdateOutputStatus(v);
+        mDecoder->UpdateOutputStatus(Move(v));
       }
 
       if (isEOS) {
@@ -165,29 +174,27 @@ public:
 
   RemoteVideoDecoder(const VideoInfo& aConfig,
                      MediaFormat::Param aFormat,
-                     layers::ImageContainer* aImageContainer,
                      const nsString& aDrmStubId, TaskQueue* aTaskQueue)
     : RemoteDataDecoder(MediaData::Type::VIDEO_DATA, aConfig.mMimeType,
                         aFormat, aDrmStubId, aTaskQueue)
-    , mImageContainer(aImageContainer)
     , mConfig(aConfig)
   {
   }
 
+  ~RemoteVideoDecoder() {
+    if (mSurface) {
+      SurfaceAllocator::DisposeSurface(mSurface);
+    }
+  }
+
   RefPtr<InitPromise> Init() override
   {
-    mSurfaceTexture = AndroidSurfaceTexture::Create();
-    if (!mSurfaceTexture) {
-      NS_WARNING("Failed to create SurfaceTexture for video decode\n");
-      return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR,
-                                          __func__);
+    mSurface = GeckoSurface::LocalRef(SurfaceAllocator::AcquireSurface(mConfig.mImage.width, mConfig.mImage.height, false));
+    if (!mSurface) {
+      return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
     }
 
-    if (!jni::IsFennec()) {
-      NS_WARNING("Remote decoding not supported in non-Fennec environment\n");
-      return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR,
-                                          __func__);
-    }
+    mSurfaceHandle = mSurface->GetHandle();
 
     // Register native methods.
     JavaCallbacksSupport::Init();
@@ -198,7 +205,7 @@ public:
 
     mJavaDecoder = CodecProxy::Create(false, // false indicates to create a decoder and true denotes encoder
                                       mFormat,
-                                      mSurfaceTexture->JavaSurface(),
+                                      mSurface,
                                       mJavaCallbacks,
                                       mDrmStubId);
     if (mJavaDecoder == nullptr) {
@@ -207,13 +214,13 @@ public:
     }
     mIsCodecSupportAdaptivePlayback =
       mJavaDecoder->IsAdaptivePlaybackSupported();
-
     return InitPromise::CreateAndResolve(TrackInfo::kVideoTrack, __func__);
   }
 
   RefPtr<MediaDataDecoder::FlushPromise> Flush() override
   {
     mInputInfos.Clear();
+    mSeekTarget.reset();
     return RemoteDataDecoder::Flush();
   }
 
@@ -226,7 +233,7 @@ public:
 
     InputInfo info(
       aSample->mDuration.ToMicroseconds(), config->mImage, config->mDisplay);
-    mInputInfos.Insert(aSample->mTime, info);
+    mInputInfos.Insert(aSample->mTime.ToMicroseconds(), info);
     return RemoteDataDecoder::Decode(aSample);
   }
 
@@ -235,12 +242,31 @@ public:
     return mIsCodecSupportAdaptivePlayback;
   }
 
+  void SetSeekThreshold(const TimeUnit& aTime) override
+  {
+    mSeekTarget = Some(aTime);
+  }
+
+  bool IsUsefulData(const RefPtr<MediaData>& aSample) override
+  {
+    AssertOnTaskQueue();
+    if (!mSeekTarget) {
+      return true;
+    }
+    if (aSample->GetEndTime() > mSeekTarget.value()) {
+      mSeekTarget.reset();
+      return true;
+    }
+    return false;
+  }
+
 private:
-  layers::ImageContainer* mImageContainer;
   const VideoInfo mConfig;
-  RefPtr<AndroidSurfaceTexture> mSurfaceTexture;
+  GeckoSurface::GlobalRef mSurface;
+  AndroidSurfaceTextureHandle mSurfaceHandle;
   SimpleMap<InputInfo> mInputInfos;
   bool mIsCodecSupportAdaptivePlayback = false;
+  Maybe<TimeUnit> mSeekTarget;
 };
 
 class RemoteAudioDecoder : public RemoteDataDecoder
@@ -344,11 +370,11 @@ private:
         aSample->WriteToByteBuffer(dest);
 
         RefPtr<AudioData> data = new AudioData(
-          0, presentationTimeUs,
-          FramesToUsecs(numFrames, mOutputSampleRate).value(), numFrames,
+          0, TimeUnit::FromMicroseconds(presentationTimeUs),
+          FramesToTimeUnit(numFrames, mOutputSampleRate), numFrames,
           Move(audio), mOutputChannels, mOutputSampleRate);
 
-        mDecoder->UpdateOutputStatus(data);
+        mDecoder->UpdateOutputStatus(Move(data));
       }
 
       if ((flags & MediaCodec::BUFFER_FLAG_END_OF_STREAM) != 0) {
@@ -410,7 +436,6 @@ RemoteDataDecoder::CreateVideoDecoder(const CreateDecoderParams& aParams,
                                       const nsString& aDrmStubId,
                                       CDMProxy* aProxy)
 {
-
   const VideoInfo& config = aParams.VideoConfig();
   MediaFormat::LocalRef format;
   NS_ENSURE_SUCCESS(
@@ -421,7 +446,7 @@ RemoteDataDecoder::CreateVideoDecoder(const CreateDecoderParams& aParams,
     nullptr);
 
   RefPtr<MediaDataDecoder> decoder = new RemoteVideoDecoder(
-    config, format, aParams.mImageContainer, aDrmStubId, aParams.mTaskQueue);
+    config, format, aDrmStubId, aParams.mTaskQueue);
   if (aProxy) {
     decoder = new EMEMediaDataDecoderProxy(aParams, decoder.forget(), aProxy);
   }
@@ -517,7 +542,71 @@ RemoteDataDecoder::ProcessShutdown()
 
   mFormat = nullptr;
 
+  DEBUG_SHUTDOWN("decoder=%p mime=%s", this, mMimeType.get());
   return ShutdownPromise::CreateAndResolve(true, __func__);
+}
+
+static CryptoInfo::LocalRef
+GetCryptoInfoFromSample(const MediaRawData* aSample)
+{
+  auto& cryptoObj = aSample->mCrypto;
+
+  if (!cryptoObj.mValid) {
+    return nullptr;
+  }
+
+  CryptoInfo::LocalRef cryptoInfo;
+  nsresult rv = CryptoInfo::New(&cryptoInfo);
+  NS_ENSURE_SUCCESS(rv, nullptr);
+
+  uint32_t numSubSamples = std::min<uint32_t>(
+    cryptoObj.mPlainSizes.Length(), cryptoObj.mEncryptedSizes.Length());
+
+  uint32_t totalSubSamplesSize = 0;
+  for (auto& size : cryptoObj.mEncryptedSizes) {
+    totalSubSamplesSize += size;
+  }
+
+  // mPlainSizes is uint16_t, need to transform to uint32_t first.
+  nsTArray<uint32_t> plainSizes;
+  for (auto& size : cryptoObj.mPlainSizes) {
+    totalSubSamplesSize += size;
+    plainSizes.AppendElement(size);
+  }
+
+  uint32_t codecSpecificDataSize = aSample->Size() - totalSubSamplesSize;
+  // Size of codec specific data("CSD") for Android MediaCodec usage should be
+  // included in the 1st plain size.
+  plainSizes[0] += codecSpecificDataSize;
+
+  static const int kExpectedIVLength = 16;
+  auto tempIV(cryptoObj.mIV);
+  auto tempIVLength = tempIV.Length();
+  MOZ_ASSERT(tempIVLength <= kExpectedIVLength);
+  for (size_t i = tempIVLength; i < kExpectedIVLength; i++) {
+    // Padding with 0
+    tempIV.AppendElement(0);
+  }
+
+  auto numBytesOfPlainData = mozilla::jni::IntArray::New(
+    reinterpret_cast<int32_t*>(&plainSizes[0]), plainSizes.Length());
+
+  auto numBytesOfEncryptedData = mozilla::jni::IntArray::New(
+    reinterpret_cast<const int32_t*>(&cryptoObj.mEncryptedSizes[0]),
+    cryptoObj.mEncryptedSizes.Length());
+  auto iv = mozilla::jni::ByteArray::New(reinterpret_cast<int8_t*>(&tempIV[0]),
+                                         tempIV.Length());
+  auto keyId = mozilla::jni::ByteArray::New(
+    reinterpret_cast<const int8_t*>(&cryptoObj.mKeyId[0]),
+    cryptoObj.mKeyId.Length());
+  cryptoInfo->Set(numSubSamples,
+                  numBytesOfPlainData,
+                  numBytesOfEncryptedData,
+                  keyId,
+                  iv,
+                  MediaCodec::CRYPTO_MODE_AES_CTR);
+
+  return cryptoInfo;
 }
 
 RefPtr<MediaDataDecoder::DecodePromise>
@@ -527,7 +616,7 @@ RemoteDataDecoder::Decode(MediaRawData* aSample)
 
   RefPtr<RemoteDataDecoder> self = this;
   RefPtr<MediaRawData> sample = aSample;
-  return InvokeAsync(mTaskQueue, __func__, [self, sample, this]() {
+  return InvokeAsync(mTaskQueue, __func__, [self, sample]() {
     jni::ByteBuffer::LocalRef bytes = jni::ByteBuffer::New(
       const_cast<uint8_t*>(sample->Data()), sample->Size());
 
@@ -537,11 +626,11 @@ RemoteDataDecoder::Decode(MediaRawData* aSample)
       return DecodePromise::CreateAndReject(
         MediaResult(NS_ERROR_OUT_OF_MEMORY, __func__), __func__);
     }
-    bufferInfo->Set(0, sample->Size(), sample->mTime, 0);
+    bufferInfo->Set(0, sample->Size(), sample->mTime.ToMicroseconds(), 0);
 
-    mDrainStatus = DrainStatus::DRAINABLE;
-    return mJavaDecoder->Input(bytes, bufferInfo, GetCryptoInfoFromSample(sample))
-           ? mDecodePromise.Ensure(__func__)
+    self->mDrainStatus = DrainStatus::DRAINABLE;
+    return self->mJavaDecoder->Input(bytes, bufferInfo, GetCryptoInfoFromSample(sample))
+           ? self->mDecodePromise.Ensure(__func__)
            : DecodePromise::CreateAndReject(
                MediaResult(NS_ERROR_OUT_OF_MEMORY, __func__), __func__);
 
@@ -552,11 +641,15 @@ void
 RemoteDataDecoder::UpdateInputStatus(int64_t aTimestamp, bool aProcessed)
 {
   if (!mTaskQueue->IsCurrentThreadIn()) {
-    mTaskQueue->Dispatch(
-      NewRunnableMethod<int64_t, bool>(this,
-                                       &RemoteDataDecoder::UpdateInputStatus,
-                                       aTimestamp,
-                                       aProcessed));
+    nsresult rv =
+      mTaskQueue->Dispatch(
+        NewRunnableMethod<int64_t, bool>("RemoteDataDecoder::UpdateInputStatus",
+                                         this,
+                                         &RemoteDataDecoder::UpdateInputStatus,
+                                         aTimestamp,
+                                         aProcessed));
+    MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+    Unused << rv;
     return;
   }
   AssertOnTaskQueue();
@@ -577,20 +670,26 @@ RemoteDataDecoder::UpdateInputStatus(int64_t aTimestamp, bool aProcessed)
 }
 
 void
-RemoteDataDecoder::UpdateOutputStatus(MediaData* aSample)
+RemoteDataDecoder::UpdateOutputStatus(RefPtr<MediaData>&& aSample)
 {
   if (!mTaskQueue->IsCurrentThreadIn()) {
-    mTaskQueue->Dispatch(
-      NewRunnableMethod<MediaData*>(this,
-                                    &RemoteDataDecoder::UpdateOutputStatus,
-                                    aSample));
+    nsresult rv =
+      mTaskQueue->Dispatch(
+        NewRunnableMethod<const RefPtr<MediaData>>("RemoteDataDecoder::UpdateOutputStatus",
+                                                   this,
+                                                   &RemoteDataDecoder::UpdateOutputStatus,
+                                                   Move(aSample)));
+    MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+    Unused << rv;
     return;
   }
   AssertOnTaskQueue();
   if (mShutdown) {
     return;
   }
-  mDecodedData.AppendElement(aSample);
+  if (IsUsefulData(aSample)) {
+    mDecodedData.AppendElement(Move(aSample));
+  }
   ReturnDecodedData();
 }
 
@@ -604,7 +703,8 @@ RemoteDataDecoder::ReturnDecodedData()
   if (!mDecodePromise.IsEmpty()) {
     mDecodePromise.Resolve(mDecodedData, __func__);
     mDecodedData.Clear();
-  } else if (!mDrainPromise.IsEmpty()) {
+  } else if (!mDrainPromise.IsEmpty() &&
+             (!mDecodedData.IsEmpty() || mDrainStatus == DrainStatus::DRAINED)) {
     mDrainPromise.Resolve(mDecodedData, __func__);
     mDecodedData.Clear();
   }
@@ -614,8 +714,12 @@ void
 RemoteDataDecoder::DrainComplete()
 {
   if (!mTaskQueue->IsCurrentThreadIn()) {
-    mTaskQueue->Dispatch(
-      NewRunnableMethod(this, &RemoteDataDecoder::DrainComplete));
+    nsresult rv =
+      mTaskQueue->Dispatch(
+        NewRunnableMethod("RemoteDataDecoder::DrainComplete",
+                          this, &RemoteDataDecoder::DrainComplete));
+    MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+    Unused << rv;
     return;
   }
   AssertOnTaskQueue();
@@ -632,8 +736,13 @@ void
 RemoteDataDecoder::Error(const MediaResult& aError)
 {
   if (!mTaskQueue->IsCurrentThreadIn()) {
-    mTaskQueue->Dispatch(
-      NewRunnableMethod<MediaResult>(this, &RemoteDataDecoder::Error, aError));
+    nsresult rv =
+      mTaskQueue->Dispatch(
+        NewRunnableMethod<MediaResult>("RemoteDataDecoder::Error",
+                                       this, &RemoteDataDecoder::Error,
+                                       aError));
+    MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+    Unused << rv;
     return;
   }
   AssertOnTaskQueue();

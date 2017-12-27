@@ -40,11 +40,11 @@ SizeOfFramePrefix = {
     'JitFrame_BaselineJS': 'JitFrameLayout',
     'JitFrame_BaselineStub': 'BaselineStubFrameLayout',
     'JitFrame_IonStub': 'JitStubFrameLayout',
-    # Technically EntryFrameLayout, but that doesn't wind up in the
-    # debuginfo because there are no uses of it.
-    'JitFrame_Entry': 'JitFrameLayout',
+    'JitFrame_CppToJSJit': 'JitFrameLayout',
+    'JitFrame_WasmToJSJit': 'JitFrameLayout',
     'JitFrame_Rectifier': 'RectifierFrameLayout',
     'JitFrame_IonAccessorIC': 'IonAccessorICFrameLayout',
+    'JitFrame_IonICCall': 'IonICCallFrameLayout',
     'JitFrame_Exit': 'ExitFrameLayout',
     'JitFrame_Bailout': 'JitFrameLayout',
 }
@@ -331,12 +331,12 @@ class UnwinderState(object):
             return not self.text_address_claimed(pc)
 
         cx = self.get_tls_context()
-        runtime = cx['runtime_']
-        if runtime == 0:
+        runtime = cx['runtime_']['value']
+        if long(runtime.address) == 0:
             return False
 
         jitRuntime = runtime['jitRuntime_']
-        if jitRuntime == 0:
+        if long(jitRuntime.address) == 0:
             return False
 
         execAllocators = [jitRuntime['execAlloc_'], jitRuntime['backedgeExecAlloc_']]
@@ -368,7 +368,7 @@ class UnwinderState(object):
                        self.typecache.FRAME_HEADER_SIZE_MASK)
         header_size = header_size * self.typecache.void_starstar.sizeof
         frame_type = long(value & self.typecache.FRAMETYPE_MASK)
-        if frame_type == self.typecache.JitFrame_Entry:
+        if frame_type == self.typecache.JitFrame_CppToJSJit:
             # Trampoline-x64.cpp pushes a JitFrameLayout object, but
             # the stack pointer is actually adjusted as if a
             # CommonFrameLayout object was pushed.
@@ -436,24 +436,23 @@ class UnwinderState(object):
         elif self.activation is None:
             cx = self.get_tls_context()
             self.activation = cx['jitActivation']
-            jittop = cx['jitTop']
         else:
-            jittop = self.activation['prevJitTop_']
             self.activation = self.activation['prevJitActivation_']
 
-        if jittop == 0:
+        packedExitFP = self.activation['packedExitFP_']
+        if packedExitFP == 0:
             return None
 
         exit_sp = pending_frame.read_register(self.SP_REGISTER)
         frame_type = self.typecache.JitFrame_Exit
-        return self.create_frame(pc, exit_sp, jittop, frame_type, pending_frame)
+        return self.create_frame(pc, exit_sp, packedExitFP, frame_type, pending_frame)
 
     # A wrapper for unwind_entry_frame_registers that handles
     # architecture-independent boilerplate.
     def unwind_entry_frame(self, pc, pending_frame):
         sp = self.next_sp
         # Notify the frame filter.
-        self.add_frame(sp, name = 'JitFrame_Entry')
+        self.add_frame(sp, name = 'JitFrame_CppToJSJit')
         # Make an unwind_info for the per-architecture code to fill in.
         frame_id = SpiderMonkeyFrameId(sp, pc)
         unwind_info = pending_frame.create_unwind_info(frame_id)
@@ -474,7 +473,7 @@ class UnwinderState(object):
             return None
 
         if self.next_sp is not None:
-            if self.next_type == self.typecache.JitFrame_Entry:
+            if self.next_type == self.typecache.JitFrame_CppToJSJit:
                 return self.unwind_entry_frame(pc, pending_frame)
             return self.unwind_ordinary(pc, pending_frame)
         # Maybe we've found an exit frame.  FIXME I currently don't

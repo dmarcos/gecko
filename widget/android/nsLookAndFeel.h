@@ -8,12 +8,14 @@
 #include "nsXPLookAndFeel.h"
 #include "AndroidBridge.h"
 
-class nsLookAndFeel: public nsXPLookAndFeel
+class nsLookAndFeel final : public nsXPLookAndFeel
 {
 public:
     nsLookAndFeel();
     virtual ~nsLookAndFeel();
 
+    virtual void NativeInit() final;
+    virtual void RefreshImpl();
     virtual nsresult NativeGetColor(ColorID aID, nscolor &aResult);
     virtual nsresult GetIntImpl(IntID aID, int32_t &aResult);
     virtual nsresult GetFloatImpl(FloatID aID, float &aResult);
@@ -31,6 +33,9 @@ protected:
 
     nsresult GetSystemColors();
     nsresult CallRemoteGetSystemColors();
+
+    void EnsureInitSystemColors();
+    void EnsureInitShowPassword();
 };
 
 #endif

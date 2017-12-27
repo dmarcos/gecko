@@ -5,7 +5,7 @@
 description: Rest object contains just unextracted data (AssignmentExpression)
 esid: sec-variable-statement-runtime-semantics-evaluation
 es6id: 13.3.2.4
-features: [destructuring-binding]
+features: [object-rest, destructuring-binding]
 flags: [generated]
 includes: [propertyHelper.js]
 info: |
@@ -25,19 +25,22 @@ var vals = {x: 1, y: 2, a: 5, b: 3};
 
 result = {a, b, ...rest} = vals;
 
-assert.sameValue(rest.x, 1);
-assert.sameValue(rest.y, 2);
 assert.sameValue(rest.a, undefined);
 assert.sameValue(rest.b, undefined);
 
-verifyEnumerable(rest, "x");
-verifyWritable(rest, "x");
-verifyConfigurable(rest, "x");
+verifyProperty(rest, "x", {
+  enumerable: true,
+  writable: true,
+  configurable: true,
+  value: 1
+});
 
-verifyEnumerable(rest, "y");
-verifyWritable(rest, "y");
-verifyConfigurable(rest, "y");
-
+verifyProperty(rest, "y", {
+  enumerable: true,
+  writable: true,
+  configurable: true,
+  value: 2
+});
 
 assert.sameValue(result, vals);
 

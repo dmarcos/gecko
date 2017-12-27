@@ -27,7 +27,6 @@ def items(s):
     "common/test.html",
     "support/test.html",
     "css21/archive/test.html",
-    "work-in-progress/test.html",
     "conformance-checkers/test.html",
     "conformance-checkers/README.md",
     "conformance-checkers/html/Makefile",
@@ -35,6 +34,9 @@ def items(s):
     "foo/tools/test.html",
     "foo/resources/test.html",
     "foo/support/test.html",
+    "foo/test-support.html",
+    "css/common/test.html",
+    "css/CSS2/archive/test.html",
 ])
 def test_name_is_non_test(rel_path):
     s = create(rel_path)
@@ -50,7 +52,8 @@ def test_name_is_non_test(rel_path):
     "foo/conformance-checkers/test.html",
     "foo/_certs/test.html",
     "foo/css21/archive/test.html",
-    "foo/work-in-progress/test.html",
+    "foo/CSS2/archive/test.html",
+    "css/css21/archive/test.html",
 ])
 def test_not_name_is_non_test(rel_path):
     s = create(rel_path)
@@ -121,6 +124,7 @@ def test_worker():
     assert not s.name_is_visual
     assert not s.name_is_multi_global
     assert s.name_is_worker
+    assert not s.name_is_window
     assert not s.name_is_reference
 
     assert not s.content_is_testharness
@@ -130,6 +134,30 @@ def test_worker():
 
     expected_urls = [
         "/html/test.worker.html",
+    ]
+    assert len(items) == len(expected_urls)
+
+    for item, url in zip(items, expected_urls):
+        assert item.url == url
+        assert item.timeout is None
+
+def test_window():
+    s = create("html/test.window.js")
+    assert not s.name_is_non_test
+    assert not s.name_is_manual
+    assert not s.name_is_visual
+    assert not s.name_is_multi_global
+    assert not s.name_is_worker
+    assert s.name_is_window
+    assert not s.name_is_reference
+
+    assert not s.content_is_testharness
+
+    item_type, items = s.manifest_items()
+    assert item_type == "testharness"
+
+    expected_urls = [
+        "/html/test.window.html",
     ]
     assert len(items) == len(expected_urls)
 
@@ -148,6 +176,23 @@ test()"""
 
     s = create("html/test.worker.js", contents=contents)
     assert s.name_is_worker
+
+    item_type, items = s.manifest_items()
+    assert item_type == "testharness"
+
+    for item in items:
+        assert item.timeout == "long"
+
+
+def test_window_long_timeout():
+    contents = b"""// META: timeout=long
+test()"""
+
+    metadata = list(read_script_metadata(BytesIO(contents), js_meta_re))
+    assert metadata == [(b"timeout", b"long")]
+
+    s = create("html/test.window.js", contents=contents)
+    assert s.name_is_window
 
     item_type, items = s.manifest_items()
     assert item_type == "testharness"
@@ -405,6 +450,26 @@ def test_testharness_ext(filename):
 
 
 @pytest.mark.parametrize("ext", ["htm", "html"])
+def test_testdriver(ext):
+    content = b"<script src=/resources/testdriver.js></script>"
+
+    filename = "html/test." + ext
+    s = create(filename, content)
+
+    assert s.has_testdriver
+
+
+@pytest.mark.parametrize("ext", ["htm", "html"])
+def test_relative_testdriver(ext):
+    content = b"<script src=../resources/testdriver.js></script>"
+
+    filename = "html/test." + ext
+    s = create(filename, content)
+
+    assert not s.has_testdriver
+
+
+@pytest.mark.parametrize("ext", ["htm", "html"])
 def test_reftest_node(ext):
     content = b"<link rel=match href=ref.html>"
 
@@ -494,3 +559,23 @@ def test_no_parse():
 def test_relpath_normalized(input, expected):
     s = create(input, b"")
     assert s.rel_path == expected
+
+
+@pytest.mark.parametrize("url", [b"ref.html",
+                                 b"\x20ref.html",
+                                 b"ref.html\x20",
+                                 b"\x09\x0a\x0c\x0d\x20ref.html\x09\x0a\x0c\x0d\x20"])
+def test_reftest_url_whitespace(url):
+    content = b"<link rel=match href='%s'>" % url
+    s = create("foo/test.html", content)
+    assert s.references == [("/foo/ref.html", "==")]
+
+
+@pytest.mark.parametrize("url", [b"http://example.com/",
+                                 b"\x20http://example.com/",
+                                 b"http://example.com/\x20",
+                                 b"\x09\x0a\x0c\x0d\x20http://example.com/\x09\x0a\x0c\x0d\x20"])
+def test_spec_links_whitespace(url):
+    content = b"<link rel=help href='%s'>" % url
+    s = create("foo/test.html", content)
+    assert s.spec_links == {"http://example.com/"}

@@ -13,12 +13,12 @@ function test()
   // Observer must be attached *before* Scratchpad is opened.
   CloseObserver.init();
 
-  gBrowser.selectedTab = gBrowser.addTab();
-  gBrowser.selectedBrowser.addEventListener("load", function () {
+  gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
+  BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser).then(function () {
     openScratchpad(runTests);
-  }, {capture: true, once: true});
+  });
 
-  content.location = "data:text/html;charset=utf8,<p>test browser last window closing</p>";
+  gBrowser.loadURI("data:text/html;charset=utf8,<p>test browser last window closing</p>");
 }
 
 

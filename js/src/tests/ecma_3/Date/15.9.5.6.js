@@ -25,7 +25,6 @@
 */
 
 var SECTION = "15.9.5.6";
-var VERSION = "ECMA_3"; 
 var TITLE   = "Date.prototype.toLocaleDateString()"; 
  
 var status = '';
@@ -33,7 +32,6 @@ var actual = '';
 var expect = '';
 
 
-startTest();
 writeHeaderToLog( SECTION + " "+ TITLE);
 
 // first, some generic tests -
@@ -93,7 +91,6 @@ test();
 function addTestCase()
 {
   new TestCase(
-    "unknown-test-name",
     status,
     expect,
     actual);

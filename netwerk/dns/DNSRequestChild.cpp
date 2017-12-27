@@ -4,6 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/dom/ContentChild.h"
 #include "mozilla/net/ChildDNSService.h"
 #include "mozilla/net/DNSRequestChild.h"
 #include "mozilla/net/NeckoChild.h"
@@ -164,7 +165,8 @@ class CancelDNSRequestEvent : public Runnable
 {
 public:
   CancelDNSRequestEvent(DNSRequestChild* aDnsReq, nsresult aReason)
-    : mDnsRequest(aDnsReq)
+    : Runnable("net::CancelDNSRequestEvent")
+    , mDnsRequest(aDnsReq)
     , mReasonForCancel(aReason)
   {}
 
@@ -212,9 +214,10 @@ DNSRequestChild::StartRequest()
   // we can only do IPDL on the main thread
   if (!NS_IsMainThread()) {
     SystemGroup::Dispatch(
-      "StartDNSRequestChild",
       TaskCategory::Other,
-      NewRunnableMethod(this, &DNSRequestChild::StartRequest));
+      NewRunnableMethod("net::DNSRequestChild::StartRequest",
+                        this,
+                        &DNSRequestChild::StartRequest));
     return;
   }
 
@@ -222,6 +225,12 @@ DNSRequestChild::StartRequest()
     = SystemGroup::EventTargetFor(TaskCategory::Other);
 
   gNeckoChild->SetEventTargetForActor(this, systemGroupEventTarget);
+
+  mozilla::dom::ContentChild* cc =
+    static_cast<mozilla::dom::ContentChild*>(gNeckoChild->Manager());
+  if (cc->IsShuttingDown()) {
+    return;
+  }
 
   // Send request to Parent process.
   gNeckoChild->SendPDNSRequestConstructor(this, mHost, mOriginAttributes,
@@ -272,7 +281,9 @@ DNSRequestChild::RecvLookupCompleted(const DNSRequestResponse& reply)
     CallOnLookupComplete();
   } else {
     nsCOMPtr<nsIRunnable> event =
-      NewRunnableMethod(this, &DNSRequestChild::CallOnLookupComplete);
+      NewRunnableMethod("net::DNSRequestChild::CallOnLookupComplete",
+                        this,
+                        &DNSRequestChild::CallOnLookupComplete);
     mTarget->Dispatch(event, NS_DISPATCH_NORMAL);
   }
 
@@ -315,9 +326,7 @@ DNSRequestChild::Cancel(nsresult reason)
   if(mIPCOpen) {
     // We can only do IPDL on the main thread
     nsCOMPtr<nsIRunnable> runnable = new CancelDNSRequestEvent(this, reason);
-    SystemGroup::Dispatch("CancelDNSRequest",
-                          TaskCategory::Other,
-                          runnable.forget());
+    SystemGroup::Dispatch(TaskCategory::Other, runnable.forget());
   }
   return NS_OK;
 }

@@ -1,34 +1,48 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef GFX_WEBRENDERTYPES_H
 #define GFX_WEBRENDERTYPES_H
 
+#include "FrameMetrics.h"
+#include "ImageTypes.h"
 #include "mozilla/webrender/webrender_ffi.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/gfx/Matrix.h"
 #include "mozilla/gfx/Types.h"
 #include "mozilla/gfx/Tools.h"
+#include "mozilla/PodOperations.h"
 #include "mozilla/Range.h"
+#include "mozilla/Variant.h"
 #include "Units.h"
+#include "RoundedRect.h"
 #include "nsStyleConsts.h"
 
-typedef mozilla::Maybe<WrImageMask> MaybeImageMask;
-
 namespace mozilla {
+
+namespace ipc {
+class ByteBuf;
+} // namespace ipc
+
 namespace wr {
 
-typedef WrGradientExtendMode GradientExtendMode;
-typedef WrMixBlendMode MixBlendMode;
-typedef WrImageRendering ImageRendering;
-typedef WrImageFormat ImageFormat;
-typedef WrWindowId WindowId;
-typedef WrPipelineId PipelineId;
-typedef WrImageKey ImageKey;
-typedef WrFontKey FontKey;
-typedef WrEpoch Epoch;
+typedef wr::WrWindowId WindowId;
+typedef wr::WrPipelineId PipelineId;
+typedef wr::WrImageKey ImageKey;
+typedef wr::WrFontKey FontKey;
+typedef wr::WrFontInstanceKey FontInstanceKey;
+typedef wr::WrEpoch Epoch;
+typedef wr::WrExternalImageId ExternalImageId;
+typedef wr::WrDebugFlags DebugFlags;
+
+typedef mozilla::Maybe<mozilla::wr::WrImageMask> MaybeImageMask;
+typedef Maybe<ExternalImageId> MaybeExternalImageId;
+
+typedef Maybe<FontInstanceOptions> MaybeFontInstanceOptions;
+typedef Maybe<FontInstancePlatformOptions> MaybeFontInstancePlatformOptions;
 
 inline WindowId NewWindowId(uint64_t aId) {
   WindowId id;
@@ -42,32 +56,41 @@ inline Epoch NewEpoch(uint32_t aEpoch) {
   return e;
 }
 
-inline Maybe<WrImageFormat>
-SurfaceFormatToWrImageFormat(gfx::SurfaceFormat aFormat) {
+inline DebugFlags NewDebugFlags(uint32_t aFlags) {
+  DebugFlags flags;
+  flags.mBits = aFlags;
+  return flags;
+}
+
+inline Maybe<wr::ImageFormat>
+SurfaceFormatToImageFormat(gfx::SurfaceFormat aFormat) {
   switch (aFormat) {
     case gfx::SurfaceFormat::R8G8B8X8:
       // TODO: use RGBA + opaque flag
-      return Some(WrImageFormat::RGBA8);
+    case gfx::SurfaceFormat::R8G8B8A8:
+      return Some(wr::ImageFormat::BGRA8);
     case gfx::SurfaceFormat::B8G8R8X8:
       // TODO: WebRender will have a BGRA + opaque flag for this but does not
       // have it yet (cf. issue #732).
     case gfx::SurfaceFormat::B8G8R8A8:
-      return Some(WrImageFormat::RGBA8);
+      return Some(wr::ImageFormat::BGRA8);
     case gfx::SurfaceFormat::B8G8R8:
-      return Some(WrImageFormat::RGB8);
+      return Some(wr::ImageFormat::RGB8);
     case gfx::SurfaceFormat::A8:
-      return Some(WrImageFormat::A8);
+      return Some(wr::ImageFormat::A8);
+    case gfx::SurfaceFormat::R8G8:
+      return Some(wr::ImageFormat::RG8);
     case gfx::SurfaceFormat::UNKNOWN:
-      return Some(WrImageFormat::Invalid);
+      return Some(wr::ImageFormat::Invalid);
     default:
       return Nothing();
   }
 }
 
 inline gfx::SurfaceFormat
-WrImageFormatToSurfaceFormat(ImageFormat aFormat) {
+ImageFormatToSurfaceFormat(ImageFormat aFormat) {
   switch (aFormat) {
-    case ImageFormat::RGBA8:
+    case ImageFormat::BGRA8:
       return gfx::SurfaceFormat::B8G8R8A8;
     case ImageFormat::A8:
       return gfx::SurfaceFormat::A8;
@@ -78,10 +101,20 @@ WrImageFormatToSurfaceFormat(ImageFormat aFormat) {
   }
 }
 
-struct ImageDescriptor: public WrImageDescriptor {
+struct ImageDescriptor: public wr::WrImageDescriptor {
+  // We need a default constructor for ipdl serialization.
+  ImageDescriptor()
+  {
+    format = wr::ImageFormat::Invalid;
+    width = 0;
+    height = 0;
+    stride = 0;
+    is_opaque = false;
+  }
+
   ImageDescriptor(const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat)
   {
-    format = SurfaceFormatToWrImageFormat(aFormat).value();
+    format = wr::SurfaceFormatToImageFormat(aFormat).value();
     width = aSize.width;
     height = aSize.height;
     stride = 0;
@@ -90,18 +123,66 @@ struct ImageDescriptor: public WrImageDescriptor {
 
   ImageDescriptor(const gfx::IntSize& aSize, uint32_t aByteStride, gfx::SurfaceFormat aFormat)
   {
-    format = SurfaceFormatToWrImageFormat(aFormat).value();
+    format = wr::SurfaceFormatToImageFormat(aFormat).value();
     width = aSize.width;
     height = aSize.height;
     stride = aByteStride;
     is_opaque = gfx::IsOpaqueFormat(aFormat);
   }
+
+  ImageDescriptor(const gfx::IntSize& aSize, uint32_t aByteStride, gfx::SurfaceFormat aFormat, bool opaque)
+  {
+    format = wr::SurfaceFormatToImageFormat(aFormat).value();
+    width = aSize.width;
+    height = aSize.height;
+    stride = aByteStride;
+    is_opaque = opaque;
+  }
+
 };
+
+// Whenever possible, use wr::WindowId instead of manipulating uint64_t.
+inline uint64_t AsUint64(const WindowId& aId) {
+  return static_cast<uint64_t>(aId.mHandle);
+}
 
 // Whenever possible, use wr::ImageKey instead of manipulating uint64_t.
 inline uint64_t AsUint64(const ImageKey& aId) {
-  return (static_cast<uint64_t>(aId.mNamespace) << 32)
+  return (static_cast<uint64_t>(aId.mNamespace.mHandle) << 32)
         + static_cast<uint64_t>(aId.mHandle);
+}
+
+inline ImageKey AsImageKey(const uint64_t& aId) {
+  ImageKey imageKey;
+  imageKey.mNamespace.mHandle = aId >> 32;
+  imageKey.mHandle = aId;
+  return imageKey;
+}
+
+// Whenever possible, use wr::FontKey instead of manipulating uint64_t.
+inline uint64_t AsUint64(const FontKey& aId) {
+  return (static_cast<uint64_t>(aId.mNamespace.mHandle) << 32)
+        + static_cast<uint64_t>(aId.mHandle);
+}
+
+inline FontKey AsFontKey(const uint64_t& aId) {
+  FontKey fontKey;
+  fontKey.mNamespace.mHandle = aId >> 32;
+  fontKey.mHandle = aId;
+  return fontKey;
+}
+
+// Whenever possible, use wr::FontInstanceKey instead of manipulating uint64_t.
+inline uint64_t AsUint64(const FontInstanceKey& aId) {
+  return (static_cast<uint64_t>(aId.mNamespace.mHandle) << 32)
+        + static_cast<uint64_t>(aId.mHandle);
+}
+
+inline FontInstanceKey AsFontInstanceKey(const uint64_t& aId) {
+  FontInstanceKey instanceKey;
+  instanceKey.mNamespace.mHandle = aId >> 32;
+  instanceKey.mHandle = aId;
+  return instanceKey;
 }
 
 // Whenever possible, use wr::PipelineId instead of manipulating uint64_t.
@@ -123,7 +204,20 @@ inline ImageRendering ToImageRendering(gfx::SamplingFilter aFilter)
                                                : ImageRendering::Auto;
 }
 
-static inline MixBlendMode ToWrMixBlendMode(gfx::CompositionOp compositionOp)
+static inline FontRenderMode ToFontRenderMode(gfx::AntialiasMode aMode, bool aPermitSubpixelAA = true)
+{
+  switch (aMode) {
+    case gfx::AntialiasMode::NONE:
+      return FontRenderMode::Mono;
+    case gfx::AntialiasMode::GRAY:
+      return FontRenderMode::Alpha;
+    case gfx::AntialiasMode::SUBPIXEL:
+    default:
+      return aPermitSubpixelAA ? FontRenderMode::Subpixel : FontRenderMode::Alpha;
+  }
+}
+
+static inline MixBlendMode ToMixBlendMode(gfx::CompositionOp compositionOp)
 {
   switch (compositionOp)
   {
@@ -162,9 +256,9 @@ static inline MixBlendMode ToWrMixBlendMode(gfx::CompositionOp compositionOp)
   }
 }
 
-static inline WrColor ToWrColor(const gfx::Color& color)
+static inline wr::ColorF ToColorF(const gfx::Color& color)
 {
-  WrColor c;
+  wr::ColorF c;
   c.r = color.r;
   c.g = color.g;
   c.b = color.b;
@@ -172,132 +266,193 @@ static inline WrColor ToWrColor(const gfx::Color& color)
   return c;
 }
 
-template<class T>
-static inline WrPoint ToWrPoint(const gfx::PointTyped<T>& point)
+static inline wr::ColorU ToColorU(const gfx::Color& color)
 {
-  WrPoint p;
+  wr::ColorU c;
+  c.r = uint8_t(color.r * 255.0f);
+  c.g = uint8_t(color.g * 255.0f);
+  c.b = uint8_t(color.b * 255.0f);
+  c.a = uint8_t(color.a * 255.0f);
+  return c;
+}
+
+static inline wr::LayoutPoint ToLayoutPoint(const mozilla::LayoutDevicePoint& point)
+{
+  wr::LayoutPoint p;
   p.x = point.x;
   p.y = point.y;
   return p;
 }
 
-template<class T>
-static inline WrPoint ToWrPoint(const gfx::IntPointTyped<T>& point)
+static inline wr::LayoutPoint ToLayoutPoint(const mozilla::LayoutDeviceIntPoint& point)
 {
-  return ToWrPoint(IntPointToPoint(point));
+  return ToLayoutPoint(LayoutDevicePoint(point));
 }
 
-static inline WrPoint ToWrPoint(const gfx::Point& point)
+static inline wr::WorldPoint ToWorldPoint(const mozilla::ScreenPoint& point)
 {
-  WrPoint p;
+  wr::WorldPoint p;
   p.x = point.x;
   p.y = point.y;
   return p;
 }
 
-template<class T>
-static inline WrRect ToWrRect(const gfx::RectTyped<T>& rect)
+static inline wr::LayoutVector2D ToLayoutVector2D(const mozilla::LayoutDevicePoint& point)
 {
-  WrRect r;
-  r.x = rect.x;
-  r.y = rect.y;
-  r.width = rect.width;
-  r.height = rect.height;
+  wr::LayoutVector2D p;
+  p.x = point.x;
+  p.y = point.y;
+  return p;
+}
+
+static inline wr::LayoutVector2D ToLayoutVector2D(const mozilla::LayoutDeviceIntPoint& point)
+{
+  return ToLayoutVector2D(LayoutDevicePoint(point));
+}
+
+static inline wr::LayoutRect ToLayoutRect(const mozilla::LayoutDeviceRect& rect)
+{
+  wr::LayoutRect r;
+  r.origin.x = rect.X();
+  r.origin.y = rect.Y();
+  r.size.width = rect.Width();
+  r.size.height = rect.Height();
   return r;
 }
 
-template<class T>
-static inline WrRect ToWrRect(const gfx::IntRectTyped<T>& rect)
+static inline wr::LayoutRect ToLayoutRect(const gfxRect& rect)
 {
-  return ToWrRect(IntRectToRect(rect));
+  wr::LayoutRect r;
+  r.origin.x = rect.X();
+  r.origin.y = rect.Y();
+  r.size.width = rect.Width();
+  r.size.height = rect.Height();
+  return r;
 }
 
-template<class T>
-static inline WrSize ToWrSize(const gfx::SizeTyped<T>& size)
+static inline wr::DeviceUintRect ToDeviceUintRect(const mozilla::ImageIntRect& rect)
 {
-  WrSize ls;
+  wr::DeviceUintRect r;
+  r.origin.x = rect.X();
+  r.origin.y = rect.Y();
+  r.size.width = rect.Width();
+  r.size.height = rect.Height();
+  return r;
+}
+
+static inline wr::LayoutRect ToLayoutRect(const mozilla::LayoutDeviceIntRect& rect)
+{
+  return ToLayoutRect(IntRectToRect(rect));
+}
+
+static inline wr::LayoutSize ToLayoutSize(const mozilla::LayoutDeviceSize& size)
+{
+  wr::LayoutSize ls;
   ls.width = size.width;
   ls.height = size.height;
   return ls;
 }
 
-template<class T>
-static inline WrSize ToWrSize(const gfx::IntSizeTyped<T>& size)
+static inline wr::ComplexClipRegion ToComplexClipRegion(const RoundedRect& rect)
 {
-  return ToWrSize(IntSizeToSize(size));
+  wr::ComplexClipRegion ret;
+  ret.rect               = ToLayoutRect(rect.rect);
+  ret.radii.top_left     = ToLayoutSize(LayoutDeviceSize::FromUnknownSize(rect.corners.radii[mozilla::eCornerTopLeft]));
+  ret.radii.top_right    = ToLayoutSize(LayoutDeviceSize::FromUnknownSize(rect.corners.radii[mozilla::eCornerTopRight]));
+  ret.radii.bottom_left  = ToLayoutSize(LayoutDeviceSize::FromUnknownSize(rect.corners.radii[mozilla::eCornerBottomLeft]));
+  ret.radii.bottom_right = ToLayoutSize(LayoutDeviceSize::FromUnknownSize(rect.corners.radii[mozilla::eCornerBottomRight]));
+  ret.mode = wr::ClipMode::Clip;
+  return ret;
+}
+
+static inline wr::LayoutSize ToLayoutSize(const mozilla::LayoutDeviceIntSize& size)
+{
+  return ToLayoutSize(LayoutDeviceSize(size));
 }
 
 template<class S, class T>
-static inline WrMatrix ToWrMatrix(const gfx::Matrix4x4Typed<S, T>& m)
+static inline wr::LayoutTransform ToLayoutTransform(const gfx::Matrix4x4Typed<S, T>& m)
 {
-  WrMatrix transform;
-  static_assert(sizeof(m.components) == sizeof(transform.values),
-      "Matrix components size mismatch!");
-  memcpy(transform.values, m.components, sizeof(transform.values));
+  wr::LayoutTransform transform;
+  transform.m11 = m._11;
+  transform.m12 = m._12;
+  transform.m13 = m._13;
+  transform.m14 = m._14;
+  transform.m21 = m._21;
+  transform.m22 = m._22;
+  transform.m23 = m._23;
+  transform.m24 = m._24;
+  transform.m31 = m._31;
+  transform.m32 = m._32;
+  transform.m33 = m._33;
+  transform.m34 = m._34;
+  transform.m41 = m._41;
+  transform.m42 = m._42;
+  transform.m43 = m._43;
+  transform.m44 = m._44;
   return transform;
 }
 
-static inline WrBorderStyle ToWrBorderStyle(const uint8_t& style)
+static inline wr::BorderStyle ToBorderStyle(const uint8_t& style)
 {
   switch (style) {
   case NS_STYLE_BORDER_STYLE_NONE:
-    return WrBorderStyle::None;
+    return wr::BorderStyle::None;
   case NS_STYLE_BORDER_STYLE_SOLID:
-    return WrBorderStyle::Solid;
+    return wr::BorderStyle::Solid;
   case NS_STYLE_BORDER_STYLE_DOUBLE:
-    return WrBorderStyle::Double;
+    return wr::BorderStyle::Double;
   case NS_STYLE_BORDER_STYLE_DOTTED:
-    return WrBorderStyle::Dotted;
+    return wr::BorderStyle::Dotted;
   case NS_STYLE_BORDER_STYLE_DASHED:
-    return WrBorderStyle::Dashed;
+    return wr::BorderStyle::Dashed;
   case NS_STYLE_BORDER_STYLE_HIDDEN:
-    return WrBorderStyle::Hidden;
+    return wr::BorderStyle::Hidden;
   case NS_STYLE_BORDER_STYLE_GROOVE:
-    return WrBorderStyle::Groove;
+    return wr::BorderStyle::Groove;
   case NS_STYLE_BORDER_STYLE_RIDGE:
-    return WrBorderStyle::Ridge;
+    return wr::BorderStyle::Ridge;
   case NS_STYLE_BORDER_STYLE_INSET:
-    return WrBorderStyle::Inset;
+    return wr::BorderStyle::Inset;
   case NS_STYLE_BORDER_STYLE_OUTSET:
-    return WrBorderStyle::Outset;
+    return wr::BorderStyle::Outset;
   default:
     MOZ_ASSERT(false);
   }
-  return WrBorderStyle::None;
+  return wr::BorderStyle::None;
 }
 
-static inline WrBorderSide ToWrBorderSide(const gfx::Color& color, const uint8_t& style)
+static inline wr::BorderSide ToBorderSide(const gfx::Color& color, const uint8_t& style)
 {
-  WrBorderSide bs;
-  bs.color = ToWrColor(color);
-  bs.style = ToWrBorderStyle(style);
+  wr::BorderSide bs;
+  bs.color = ToColorF(color);
+  bs.style = ToBorderStyle(style);
   return bs;
 }
 
-static inline WrBorderRadius ToWrUniformBorderRadius(const LayerSize& aSize)
+static inline wr::BorderRadius EmptyBorderRadius()
 {
-  WrBorderRadius br;
-  br.top_left = ToWrSize(aSize);
-  br.top_right = ToWrSize(aSize);
-  br.bottom_left = ToWrSize(aSize);
-  br.bottom_right = ToWrSize(aSize);
+  wr::BorderRadius br;
+  PodZero(&br);
   return br;
 }
 
-static inline WrBorderRadius ToWrBorderRadius(const LayerSize& topLeft, const LayerSize& topRight,
-                                              const LayerSize& bottomLeft, const LayerSize& bottomRight)
+static inline wr::BorderRadius ToBorderRadius(const mozilla::LayoutDeviceSize& topLeft,
+                                              const mozilla::LayoutDeviceSize& topRight,
+                                              const mozilla::LayoutDeviceSize& bottomLeft,
+                                              const mozilla::LayoutDeviceSize& bottomRight)
 {
-  WrBorderRadius br;
-  br.top_left = ToWrSize(topLeft);
-  br.top_right = ToWrSize(topRight);
-  br.bottom_left = ToWrSize(bottomLeft);
-  br.bottom_right = ToWrSize(bottomRight);
+  wr::BorderRadius br;
+  br.top_left = ToLayoutSize(topLeft);
+  br.top_right = ToLayoutSize(topRight);
+  br.bottom_left = ToLayoutSize(bottomLeft);
+  br.bottom_right = ToLayoutSize(bottomRight);
   return br;
 }
 
-static inline WrBorderWidths ToWrBorderWidths(float top, float right, float bottom, float left)
+static inline wr::BorderWidths ToBorderWidths(float top, float right, float bottom, float left)
 {
-  WrBorderWidths bw;
+  wr::BorderWidths bw;
   bw.top = top;
   bw.right = right;
   bw.bottom = bottom;
@@ -305,19 +460,19 @@ static inline WrBorderWidths ToWrBorderWidths(float top, float right, float bott
   return bw;
 }
 
-static inline WrNinePatchDescriptor ToWrNinePatchDescriptor(uint32_t width, uint32_t height,
-                                                            const WrSideOffsets2Du32& slice)
+static inline wr::NinePatchDescriptor ToNinePatchDescriptor(uint32_t width, uint32_t height,
+                                                            const wr::SideOffsets2D_u32& slice)
 {
-  WrNinePatchDescriptor patch;
+  NinePatchDescriptor patch;
   patch.width = width;
   patch.height = height;
   patch.slice = slice;
   return patch;
 }
 
-static inline WrSideOffsets2Du32 ToWrSideOffsets2Du32(uint32_t top, uint32_t right, uint32_t bottom, uint32_t left)
+static inline wr::SideOffsets2D_u32 ToSideOffsets2D_u32(uint32_t top, uint32_t right, uint32_t bottom, uint32_t left)
 {
-  WrSideOffsets2Du32 offset;
+  SideOffsets2D_u32 offset;
   offset.top = top;
   offset.right = right;
   offset.bottom = bottom;
@@ -325,9 +480,9 @@ static inline WrSideOffsets2Du32 ToWrSideOffsets2Du32(uint32_t top, uint32_t rig
   return offset;
 }
 
-static inline WrSideOffsets2Df32 ToWrSideOffsets2Df32(float top, float right, float bottom, float left)
+static inline wr::SideOffsets2D_f32 ToSideOffsets2D_f32(float top, float right, float bottom, float left)
 {
-  WrSideOffsets2Df32 offset;
+  SideOffsets2D_f32 offset;
   offset.top = top;
   offset.right = right;
   offset.bottom = bottom;
@@ -335,92 +490,129 @@ static inline WrSideOffsets2Df32 ToWrSideOffsets2Df32(float top, float right, fl
   return offset;
 }
 
-static inline WrRepeatMode ToWrRepeatMode(uint8_t repeatMode)
+static inline wr::RepeatMode ToRepeatMode(uint8_t repeatMode)
 {
   switch (repeatMode) {
   case NS_STYLE_BORDER_IMAGE_REPEAT_STRETCH:
-    return WrRepeatMode::Stretch;
+    return wr::RepeatMode::Stretch;
   case NS_STYLE_BORDER_IMAGE_REPEAT_REPEAT:
-    return WrRepeatMode::Repeat;
+    return wr::RepeatMode::Repeat;
   case NS_STYLE_BORDER_IMAGE_REPEAT_ROUND:
-    return WrRepeatMode::Round;
+    return wr::RepeatMode::Round;
   case NS_STYLE_BORDER_IMAGE_REPEAT_SPACE:
-    return WrRepeatMode::Space;
+    return wr::RepeatMode::Space;
   default:
     MOZ_ASSERT(false);
   }
 
-  return WrRepeatMode::Stretch;
+  return wr::RepeatMode::Stretch;
 }
 
-template<class T>
-static inline WrComplexClipRegion ToWrComplexClipRegion(const gfx::RectTyped<T>& rect,
-                                                        const LayerSize& size)
+template<class S, class T>
+static inline wr::WrTransformProperty ToWrTransformProperty(uint64_t id,
+                                                            const gfx::Matrix4x4Typed<S, T>& transform)
 {
-  WrComplexClipRegion complex_clip;
-  complex_clip.rect = wr::ToWrRect(rect);
-  complex_clip.radii = wr::ToWrUniformBorderRadius(size);
-  return complex_clip;
+  wr::WrTransformProperty prop;
+  prop.id = id;
+  prop.transform = ToLayoutTransform(transform);
+  return prop;
 }
 
-static inline WrExternalImageId ToWrExternalImageId(uint64_t aID)
+static inline wr::WrOpacityProperty ToWrOpacityProperty(uint64_t id, const float opacity)
 {
-  WrExternalImageId Id;
+  wr::WrOpacityProperty prop;
+  prop.id = id;
+  prop.opacity = opacity;
+  return prop;
+}
+
+// Whenever possible, use wr::ExternalImageId instead of manipulating uint64_t.
+inline uint64_t AsUint64(const ExternalImageId& aId) {
+  return static_cast<uint64_t>(aId.mHandle);
+}
+
+static inline ExternalImageId ToExternalImageId(uint64_t aID)
+{
+  ExternalImageId Id;
   Id.mHandle = aID;
   return Id;
 }
 
-static inline WrExternalImage RawDataToWrExternalImage(const uint8_t* aBuff,
-                                                       size_t size)
+static inline wr::WrExternalImage RawDataToWrExternalImage(const uint8_t* aBuff,
+                                                           size_t size)
 {
-  return WrExternalImage {
-    WrExternalImageType::RawData,
+  return wr::WrExternalImage {
+    wr::WrExternalImageType::RawData,
     0, 0.0f, 0.0f, 0.0f, 0.0f,
     aBuff, size
   };
 }
 
-static inline WrExternalImage NativeTextureToWrExternalImage(uint8_t aHandle,
-                                                             float u0, float v0,
-                                                             float u1, float v1)
+static inline wr::WrExternalImage NativeTextureToWrExternalImage(uint32_t aHandle,
+                                                                 float u0, float v0,
+                                                                 float u1, float v1)
 {
-  return WrExternalImage {
-    WrExternalImageType::NativeTexture,
+  return wr::WrExternalImage {
+    wr::WrExternalImageType::NativeTexture,
     aHandle, u0, v0, u1, v1,
     nullptr, 0
   };
 }
 
-struct VecU8 {
-  WrVecU8 inner;
-  VecU8() {
-    inner.data = nullptr;
-    inner.capacity = 0;
+inline wr::ByteSlice RangeToByteSlice(mozilla::Range<uint8_t> aRange) {
+  return wr::ByteSlice { aRange.begin().get(), aRange.length() };
+}
+
+inline mozilla::Range<const uint8_t> ByteSliceToRange(wr::ByteSlice aWrSlice) {
+  return mozilla::Range<const uint8_t>(aWrSlice.buffer, aWrSlice.len);
+}
+
+inline mozilla::Range<uint8_t> MutByteSliceToRange(wr::MutByteSlice aWrSlice) {
+  return mozilla::Range<uint8_t>(aWrSlice.buffer, aWrSlice.len);
+}
+
+struct Vec_u8 {
+  wr::WrVecU8 inner;
+  Vec_u8() {
+    SetEmpty();
   }
-  VecU8(VecU8&) = delete;
-  VecU8(VecU8&& src) {
+  Vec_u8(Vec_u8&) = delete;
+  Vec_u8(Vec_u8&& src) {
     inner = src.inner;
-    src.inner.data = nullptr;
-    src.inner.capacity = 0;
+    src.SetEmpty();
   }
 
-  VecU8&
-  operator=(VecU8&& src) {
+  explicit Vec_u8(mozilla::ipc::ByteBuf&& aSrc);
+
+  Vec_u8&
+  operator=(Vec_u8&& src) {
     inner = src.inner;
-    src.inner.data = nullptr;
-    src.inner.capacity = 0;
+    src.SetEmpty();
     return *this;
   }
 
-  WrVecU8
+  wr::WrVecU8
   Extract() {
-    WrVecU8 ret = inner;
-    inner.data = nullptr;
-    inner.capacity = 0;
+    wr::WrVecU8 ret = inner;
+    SetEmpty();
     return ret;
   }
 
-  ~VecU8() {
+  void
+  SetEmpty() {
+    inner.data = (uint8_t*)1;
+    inner.capacity = 0;
+    inner.length = 0;
+  }
+
+  size_t Length() { return inner.length; }
+
+  void PushBytes(Range<uint8_t> aBytes)
+  {
+    wr_vec_u8_push_bytes(&inner, RangeToByteSlice(aBytes));
+  }
+
+  ~Vec_u8() {
     if (inner.data) {
       wr_vec_u8_free(inner);
     }
@@ -451,6 +643,27 @@ struct ByteBuffer
       mLength = 0;
     }
   }
+
+  ByteBuffer(ByteBuffer&& aFrom)
+  : mLength(aFrom.mLength)
+  , mData(aFrom.mData)
+  , mOwned(aFrom.mOwned)
+  {
+    aFrom.mLength = 0;
+    aFrom.mData = nullptr;
+    aFrom.mOwned = false;
+  }
+
+  ByteBuffer(ByteBuffer& aFrom)
+  : mLength(aFrom.mLength)
+  , mData(aFrom.mData)
+  , mOwned(aFrom.mOwned)
+  {
+    aFrom.mLength = 0;
+    aFrom.mData = nullptr;
+    aFrom.mOwned = false;
+  }
+
 
   ByteBuffer()
     : mLength(0)
@@ -492,20 +705,81 @@ struct ByteBuffer
   bool mOwned;
 };
 
-inline WrByteSlice RangeToByteSlice(mozilla::Range<uint8_t> aRange) {
-  return WrByteSlice { aRange.begin().get(), aRange.length() };
-}
-
-inline mozilla::Range<const uint8_t> ByteSliceToRange(WrByteSlice aWrSlice) {
-  return mozilla::Range<const uint8_t>(aWrSlice.buffer, aWrSlice.len);
-}
-
 struct BuiltDisplayList {
-  VecU8 dl;
-  WrBuiltDisplayListDescriptor dl_desc;
-  VecU8 aux;
-  WrAuxiliaryListsDescriptor aux_desc;
+  wr::VecU8 dl;
+  wr::BuiltDisplayListDescriptor dl_desc;
 };
+
+static inline wr::WrFilterOpType ToWrFilterOpType(uint32_t type) {
+  switch (type) {
+    case NS_STYLE_FILTER_BLUR:
+      return wr::WrFilterOpType::Blur;
+    case NS_STYLE_FILTER_BRIGHTNESS:
+      return wr::WrFilterOpType::Brightness;
+    case NS_STYLE_FILTER_CONTRAST:
+      return wr::WrFilterOpType::Contrast;
+    case NS_STYLE_FILTER_GRAYSCALE:
+      return wr::WrFilterOpType::Grayscale;
+    case NS_STYLE_FILTER_HUE_ROTATE:
+      return wr::WrFilterOpType::HueRotate;
+    case NS_STYLE_FILTER_INVERT:
+      return wr::WrFilterOpType::Invert;
+    case NS_STYLE_FILTER_OPACITY:
+      return wr::WrFilterOpType::Opacity;
+    case NS_STYLE_FILTER_SATURATE:
+      return wr::WrFilterOpType::Saturate;
+    case NS_STYLE_FILTER_SEPIA:
+      return wr::WrFilterOpType::Sepia;
+    case NS_STYLE_FILTER_DROP_SHADOW:
+      return wr::WrFilterOpType::DropShadow;
+  }
+  MOZ_ASSERT_UNREACHABLE("Tried to convert unknown filter type.");
+  return wr::WrFilterOpType::Grayscale;
+}
+
+// Corresponds to an "internal" webrender clip id. That is, a
+// ClipId::Clip(x,pipeline_id) maps to a WrClipId{x}. We use a struct wrapper
+// instead of a typedef so that this is a distinct type from FrameMetrics::ViewID
+// and the compiler will catch accidental conversions between the two.
+struct WrClipId {
+  uint64_t id;
+
+  bool operator==(const WrClipId& other) const {
+    return id == other.id;
+  }
+};
+
+// Corresponds to a clip id for a position:sticky clip in webrender. Similar
+// to WrClipId but a separate struct so we don't get them mixed up in C++.
+struct WrStickyId {
+  uint64_t id;
+
+  bool operator==(const WrStickyId& other) const {
+    return id == other.id;
+  }
+};
+
+typedef Variant<layers::FrameMetrics::ViewID, WrClipId> ScrollOrClipId;
+
+enum class WebRenderError : int8_t {
+  INITIALIZE = 0,
+  MAKE_CURRENT,
+  RENDER,
+
+  Sentinel /* this must be last for serialization purposes. */
+};
+
+static inline wr::WrYuvColorSpace ToWrYuvColorSpace(YUVColorSpace aYUVColorSpace) {
+  switch (aYUVColorSpace) {
+    case YUVColorSpace::BT601:
+      return wr::WrYuvColorSpace::Rec601;
+    case YUVColorSpace::BT709:
+      return wr::WrYuvColorSpace::Rec709;
+    default:
+      MOZ_ASSERT_UNREACHABLE("Tried to convert invalid YUVColorSpace.");
+  }
+  return wr::WrYuvColorSpace::Rec601;
+}
 
 } // namespace wr
 } // namespace mozilla

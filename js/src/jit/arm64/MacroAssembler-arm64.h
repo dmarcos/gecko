@@ -359,10 +359,6 @@ class MacroAssemblerCompat : public vixl::MacroAssembler
     void moveValue(const Value& src, const ValueOperand& dest) {
         moveValue(src, dest.valueReg());
     }
-    void moveValue(const ValueOperand& src, const ValueOperand& dest) {
-        if (src.valueReg() != dest.valueReg())
-            movePtr(src.valueReg(), dest.valueReg());
-    }
 
     CodeOffset pushWithPatch(ImmWord imm) {
         vixl::UseScratchRegisterScope temps(this);
@@ -661,6 +657,11 @@ class MacroAssemblerCompat : public vixl::MacroAssembler
     }
     void jump(JitCode* code) {
         branch(code);
+    }
+    void jump(TrampolinePtr code) {
+        syncStackPtr();
+        BufferOffset loc = b(-1); // The jump target will be patched by executableCopy().
+        addPendingJump(loc, ImmPtr(code.value), Relocation::HARDCODED);
     }
     void jump(RepatchLabel* label) {
         MOZ_CRASH("jump (repatchlabel)");
@@ -1304,7 +1305,7 @@ class MacroAssemblerCompat : public vixl::MacroAssembler
         MOZ_CRASH("branchNegativeZeroFloat32");
     }
 
-    void boxDouble(FloatRegister src, const ValueOperand& dest) {
+    void boxDouble(FloatRegister src, const ValueOperand& dest, FloatRegister) {
         Fmov(ARMRegister(dest.valueReg(), 64), ARMFPRegister(src, 64));
     }
     void boxNonDouble(JSValueType type, Register src, const ValueOperand& dest) {
@@ -1842,10 +1843,6 @@ class MacroAssemblerCompat : public vixl::MacroAssembler
         }
     }
 
-    void writePrebarrierOffset(CodeOffset label) {
-        preBarriers_.writeUnsigned(label.offset());
-    }
-
     void computeEffectiveAddress(const Address& address, Register dest) {
         Add(ARMRegister(dest, 64), ARMRegister(address.base, 64), Operand(address.offset));
     }
@@ -1864,11 +1861,11 @@ class MacroAssemblerCompat : public vixl::MacroAssembler
         return CodeOffset(nextOffset().getOffset());
     }
 
-    void handleFailureWithHandlerTail(void* handler);
+    void handleFailureWithHandlerTail(void* handler, Label* profilerExitTail);
 
     void profilerEnterFrame(Register framePtr, Register scratch);
     void profilerExitFrame() {
-        branch(GetJitContext()->runtime->jitRuntime()->getProfilerExitFrameTail());
+        jump(GetJitContext()->runtime->jitRuntime()->getProfilerExitFrameTail());
     }
     Address ToPayload(Address value) {
         return value;
@@ -1907,6 +1904,13 @@ class MacroAssemblerCompat : public vixl::MacroAssembler
     template <typename T>
     void atomicEffectOp(int nbytes, AtomicOp op, const Imm32& value, const T& mem) {
         MOZ_CRASH("atomicEffectOp");
+    }
+
+    template <typename T>
+    void atomicFetchOp64(AtomicOp op, Register64 value, const T& mem, Register64 temp,
+                         Register64 output)
+    {
+        MOZ_CRASH("AtomicFetchOp64");
     }
 
   public:
@@ -2128,6 +2132,43 @@ class MacroAssemblerCompat : public vixl::MacroAssembler
     template <typename T, typename S>
     void atomicXor32(const S& value, const T& mem) {
         atomicEffectOp(4, AtomicFetchXorOp, value, mem);
+    }
+
+    template <typename T>
+    void atomicFetchAdd64(Register64 value, const T& mem, Register64 temp, Register64 output) {
+        atomicFetchOp64(AtomicFetchAddOp, value, mem, temp, output);
+    }
+
+    template <typename T>
+    void atomicFetchSub64(Register64 value, const T& mem, Register64 temp, Register64 output) {
+        atomicFetchOp64(AtomicFetchSubOp, value, mem, temp, output);
+    }
+
+    template <typename T>
+    void atomicFetchAnd64(Register64 value, const T& mem, Register64 temp, Register64 output) {
+        atomicFetchOp64(AtomicFetchAndOp, value, mem, temp, output);
+    }
+
+    template <typename T>
+    void atomicFetchOr64(Register64 value, const T& mem, Register64 temp, Register64 output) {
+        atomicFetchOp64(AtomicFetchOrOp, value, mem, temp, output);
+    }
+
+    template <typename T>
+    void atomicFetchXor64(Register64 value, const T& mem, Register64 temp, Register64 output) {
+        atomicFetchOp64(AtomicFetchXorOp, value, mem, temp, output);
+    }
+
+    template <typename T>
+    void atomicExchange64(const T& mem, Register64 src, Register64 output) {
+        MOZ_CRASH("atomicExchange64");
+    }
+
+    template <typename T>
+    void compareExchange64(const T& mem, Register64 expected, Register64 replacement,
+                           Register64 output)
+    {
+        MOZ_CRASH("compareExchange64");
     }
 
     template<typename T>

@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -24,9 +25,11 @@ public:
    * only be called while IsInRefresh().
    *
    * If too many id's are allocated without being returned then
-   * the refresh driver will suspend until they catch up.
+   * the refresh driver will suspend until they catch up. This
+   * "throttling" behaviour can be skipped by passing aThrottle=false.
+   * Otherwise call sites should generally be passing aThrottle=true.
    */
-  virtual uint64_t GetTransactionId() = 0;
+  virtual uint64_t GetTransactionId(bool aThrottle) = 0;
 
   /**
    * Return the transaction id that for the last non-revoked transaction.

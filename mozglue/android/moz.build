@@ -52,9 +52,9 @@ LOCAL_INCLUDES += [
     '/xpcom/build',
 ]
 
-DISABLE_STL_WRAPPING = True
+DisableStlWrapping()
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']
 
 DEFINES['XPCOM_GLUE'] = True

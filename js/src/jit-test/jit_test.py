@@ -73,8 +73,11 @@ def main(argv):
                   action='store_true',
                   help="don't print output for failed tests"
                   " (no-op with --show-output)")
-    op.add_option('-x', '--exclude', dest='exclude', action='append',
+    op.add_option('-x', '--exclude', dest='exclude',
+                  default=[], action='append',
                   help='exclude given test dir or path')
+    op.add_option('--exclude-from', dest='exclude_from', type=str,
+                  help='exclude each test dir or path in FILE')
     op.add_option('--slow', dest='run_slow', action='store_true',
                   help='also run tests marked as slow')
     op.add_option('--no-slow', dest='run_slow', action='store_false',
@@ -109,6 +112,8 @@ def main(argv):
                   help='Run a single test under the specified debugger')
     op.add_option('--valgrind', dest='valgrind', action='store_true',
                   help='Enable the |valgrind| flag, if valgrind is in $PATH.')
+    op.add_option('--unusable-error-status', action='store_true',
+                  help='Ignore incorrect exit status on tests that should return nonzero.')
     op.add_option('--valgrind-all', dest='valgrind_all', action='store_true',
                   help='Run all tests with valgrind, if valgrind is in $PATH.')
     op.add_option('--avoid-stdio', dest='avoid_stdio', action='store_true',
@@ -230,12 +235,32 @@ def main(argv):
     if read_all:
         test_list = jittests.find_tests()
 
-    # If code coverage is enabled, exclude tests. (bug 1347245)
+    # Exclude tests when code coverage is enabled.
+    # This part is equivalent to:
+    # skip-if = coverage
     if os.getenv('GCOV_PREFIX') is not None:
-        if options.exclude:
-            options.exclude += ['asm.js/testSIMD.js']
-        else:
-            options.exclude = ['asm.js/testSIMD.js']
+        # GCOV errors.
+        options.exclude += [os.path.join('asm.js', 'testSIMD.js')]               # Bug 1347245
+
+        # JSVM errors.
+        options.exclude += [os.path.join('basic', 'functionnames.js')]           # Bug 1369783
+        options.exclude += [os.path.join('debug', 'Debugger-findScripts-23.js')]
+        options.exclude += [os.path.join('debug', 'bug1160182.js')]
+        options.exclude += [os.path.join('xdr', 'incremental-encoder.js')]
+        options.exclude += [os.path.join('xdr', 'bug1186973.js')]                # Bug 1369785
+        options.exclude += [os.path.join('xdr', 'relazify.js')]
+        options.exclude += [os.path.join('basic', 'werror.js')]
+
+        # Prevent code coverage test that expects coverage
+        # to be off when it starts.
+        options.exclude += [os.path.join('debug', 'Script-getOffsetsCoverage-02.js')]
+
+    if options.exclude_from:
+        with open(options.exclude_from) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line.startswith("#") and len(line):
+                    options.exclude.append(line)
 
     if options.exclude:
         exclude_list = []
@@ -342,7 +367,7 @@ def main(argv):
     try:
         ok = None
         if options.remote:
-            ok = jittests.run_tests_remote(job_list, job_count, prefix, options)
+            ok = jittests.run_tests(job_list, job_count, prefix, options, remote=True)
         else:
             with change_env(test_environment):
                 ok = jittests.run_tests(job_list, job_count, prefix, options)

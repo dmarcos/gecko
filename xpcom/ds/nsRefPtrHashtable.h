@@ -42,6 +42,11 @@ public:
   bool Get(KeyType aKey, UserDataType* aData) const;
 
   /**
+   * @copydoc nsBaseHashtable::Get
+   */
+  already_AddRefed<PtrType> Get(KeyType aKey) const;
+
+  /**
    * Gets a weak reference to the hashtable entry.
    * @param aFound If not nullptr, will be set to true if the entry is found,
    *               to false otherwise.
@@ -57,17 +62,16 @@ public:
   MOZ_MUST_USE bool Put(KeyType aKey, already_AddRefed<PtrType> aData,
                         const mozilla::fallible_t&);
 
-  // Overload Remove, rather than overriding it.
-  using base_type::Remove;
-
   /**
-   * Remove the data for the associated key, swapping the current value into
-   * pData, thereby avoiding calls to AddRef and Release.
+   * Remove the entry associated with aKey (if any), optionally _moving_ its
+   * current value into *aData, thereby avoiding calls to AddRef and Release.
+   * Return true if found.
    * @param aKey the key to remove from the hashtable
-   * @param aData This is an XPCOM getter, so aData is already_addrefed.
-   *   If the key doesn't exist, aData will be set to nullptr. Must be non-null.
+   * @param aData where to move the value (if non-null).  If an entry is not
+   *              found it will be set to nullptr.
+   * @return true if an entry for aKey was found (and removed)
    */
-  bool Remove(KeyType aKey, UserDataType* aData);
+  inline bool Remove(KeyType aKey, UserDataType* aData = nullptr);
 };
 
 template<typename K, typename T>
@@ -120,6 +124,19 @@ nsRefPtrHashtable<KeyClass, PtrType>::Get(KeyType aKey,
 }
 
 template<class KeyClass, class PtrType>
+already_AddRefed<PtrType>
+nsRefPtrHashtable<KeyClass, PtrType>::Get(KeyType aKey) const
+{
+  typename base_type::EntryType* ent = this->GetEntry(aKey);
+  if (!ent) {
+    return nullptr;
+  }
+
+  RefPtr<PtrType> copy = ent->mData;
+  return copy.forget();
+}
+
+template<class KeyClass, class PtrType>
 PtrType*
 nsRefPtrHashtable<KeyClass, PtrType>::GetWeak(KeyType aKey, bool* aFound) const
 {
@@ -157,7 +174,7 @@ nsRefPtrHashtable<KeyClass, PtrType>::Put(KeyType aKey,
                                           already_AddRefed<PtrType> aData,
                                           const mozilla::fallible_t&)
 {
-  typename base_type::EntryType* ent = this->PutEntry(aKey);
+  typename base_type::EntryType* ent = this->PutEntry(aKey, mozilla::fallible);
 
   if (!ent) {
     return false;
@@ -173,18 +190,19 @@ bool
 nsRefPtrHashtable<KeyClass, PtrType>::Remove(KeyType aKey,
                                              UserDataType* aRefPtr)
 {
-  MOZ_ASSERT(aRefPtr);
   typename base_type::EntryType* ent = this->GetEntry(aKey);
 
   if (ent) {
-    ent->mData.forget(aRefPtr);
-    this->Remove(aKey);
+    if (aRefPtr) {
+      ent->mData.forget(aRefPtr);
+    }
+    this->RemoveEntry(ent);
     return true;
   }
 
-  // If the key doesn't exist, set *aRefPtr to null
-  // so that it is a valid XPCOM getter.
-  *aRefPtr = nullptr;
+  if (aRefPtr) {
+    *aRefPtr = nullptr;
+  }
   return false;
 }
 

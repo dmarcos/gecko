@@ -49,7 +49,7 @@ class AccessibleCaretManager
 {
 public:
   explicit AccessibleCaretManager(nsIPresShell* aPresShell);
-  virtual ~AccessibleCaretManager();
+  virtual ~AccessibleCaretManager() = default;
 
   // Called by AccessibleCaretEventHub to inform us that PresShell is destroyed.
   void Terminate();
@@ -145,13 +145,13 @@ protected:
   // Update carets based on current selection status. This function will flush
   // layout, so caller must ensure the PresShell is still valid after calling
   // this method.
-  void UpdateCarets(UpdateCaretsHintSet aHints = UpdateCaretsHint::Default);
+  void UpdateCarets(const UpdateCaretsHintSet& aHints = UpdateCaretsHint::Default);
 
   // Force hiding all carets regardless of the current selection status.
   void HideCarets();
 
-  void UpdateCaretsForCursorMode(UpdateCaretsHintSet aHints);
-  void UpdateCaretsForSelectionMode(UpdateCaretsHintSet aHints);
+  void UpdateCaretsForCursorMode(const UpdateCaretsHintSet& aHints);
+  void UpdateCaretsForSelectionMode(const UpdateCaretsHintSet& aHints);
 
   // Provide haptic / touch feedback, primarily for select on longpress.
   void ProvideHapticFeedback();
@@ -181,14 +181,22 @@ protected:
 
   // If aDirection is eDirNext, get the frame for the range start in the first
   // range from the current selection, and return the offset into that frame as
-  // well as the range start node and the node offset. Otherwise, get the frame
-  // and offset for the range end in the last range instead.
+  // well as the range start content and the content offset. Otherwise, get the
+  // frame and the offset for the range end in the last range instead.
   nsIFrame* GetFrameForFirstRangeStartOrLastRangeEnd(
-    nsDirection aDirection, int32_t* aOutOffset, nsINode** aOutNode = nullptr,
-    int32_t* aOutNodeOffset = nullptr) const;
+    nsDirection aDirection,
+    int32_t* aOutOffset,
+    nsIContent** aOutContent = nullptr,
+    int32_t* aOutContentOffset = nullptr) const;
 
   nsresult DragCaretInternal(const nsPoint& aPoint);
   nsPoint AdjustDragBoundary(const nsPoint& aPoint) const;
+
+  // Start the selection scroll timer if the caret is being dragged out of
+  // the scroll port.
+  void StartSelectionAutoScrollTimer(const nsPoint& aPoint) const;
+  void StopSelectionAutoScrollTimer() const;
+
   void ClearMaintainedSelection() const;
 
   // Caller is responsible to use IsTerminated() to check whether PresShell is

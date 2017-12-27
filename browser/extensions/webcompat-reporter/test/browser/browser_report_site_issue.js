@@ -1,33 +1,40 @@
 /* Test that clicking on the Report Site Issue button opens a new tab
    and sends a postMessaged blob to it. */
-add_task(function* test_screenshot() {
+add_task(async function test_screenshot() {
   requestLongerTimeout(2);
 
   // ./head.js sets the value for PREF_WC_REPORTER_ENDPOINT
-  yield SpecialPowers.pushPrefEnv({set: [[PREF_WC_REPORTER_ENDPOINT, NEW_ISSUE_PAGE]]});
+  await SpecialPowers.pushPrefEnv({set: [[PREF_WC_REPORTER_ENDPOINT, NEW_ISSUE_PAGE]]});
 
-  let tab1 = yield BrowserTestUtils.openNewForegroundTab(gBrowser, TEST_PAGE);
-  yield PanelUI.show();
+  let tab1 = await BrowserTestUtils.openNewForegroundTab(gBrowser, TEST_PAGE);
 
-  let webcompatButton = document.getElementById("webcompat-reporter-button");
+  let webcompatButton = document.getElementById(WC_PAGE_ACTION_ID);
   ok(webcompatButton, "Report Site Issue button exists.");
 
-  let newTabPromise = BrowserTestUtils.waitForNewTab(gBrowser);
+  let screenshotPromise;
+  let newTabPromise = new Promise(resolve => {
+    gBrowser.tabContainer.addEventListener("TabOpen", event => {
+      let tab = event.target;
+      screenshotPromise = BrowserTestUtils.waitForContentEvent(
+        tab.linkedBrowser, "ScreenshotReceived", false, null, true);
+      resolve(tab);
+    }, { once: true });
+  });
+  openPageActions();
   webcompatButton.click();
-  let tab2 = yield newTabPromise;
+  let tab2 = await newTabPromise;
+  await screenshotPromise;
 
-  yield BrowserTestUtils.waitForContentEvent(tab2.linkedBrowser, "ScreenshotReceived", false, null, true);
-
-  yield ContentTask.spawn(tab2.linkedBrowser, {TEST_PAGE}, function(args) {
+  await ContentTask.spawn(tab2.linkedBrowser, {TEST_PAGE}, function(args) {
     let doc = content.document;
     let urlParam = doc.getElementById("url").innerText;
     let preview = doc.getElementById("screenshot-preview");
     is(urlParam, args.TEST_PAGE, "Reported page is correctly added to the url param");
 
-    is(preview.innerText, "Pass", "A Blob object was successfully transferred to the test page.")
+    is(preview.innerText, "Pass", "A Blob object was successfully transferred to the test page.");
     ok(preview.style.backgroundImage.startsWith("url(\"data:image/png;base64,iVBOR"), "A green screenshot was successfully postMessaged");
   });
 
-  yield BrowserTestUtils.removeTab(tab2);
-  yield BrowserTestUtils.removeTab(tab1);
+  await BrowserTestUtils.removeTab(tab2);
+  await BrowserTestUtils.removeTab(tab1);
 });

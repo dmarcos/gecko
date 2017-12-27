@@ -41,6 +41,7 @@ public:
   virtual void SetAttribute(SdpAttribute* attr) = 0;
   virtual void RemoveAttribute(AttributeType type) = 0;
   virtual void Clear() = 0;
+  virtual uint32_t Count() const = 0;
 
   virtual const SdpConnectionAttribute& GetConnection() const = 0;
   virtual const SdpOptionsAttribute& GetIceOptions() const = 0;
@@ -64,7 +65,8 @@ public:
   virtual const SdpRtcpFbAttributeList& GetRtcpFb() const = 0;
   virtual const SdpRtpmapAttributeList& GetRtpmap() const = 0;
   virtual const SdpSctpmapAttributeList& GetSctpmap() const = 0;
-  virtual unsigned int GetSctpPort() const = 0;
+  virtual uint32_t GetSctpPort() const = 0;
+  virtual uint32_t GetMaxMessageSize() const = 0;
   virtual const SdpSsrcAttributeList& GetSsrc() const = 0;
   virtual const SdpSsrcGroupAttributeList& GetSsrcGroup() const = 0;
 

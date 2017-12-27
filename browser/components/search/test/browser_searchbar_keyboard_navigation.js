@@ -1,7 +1,5 @@
 // Tests that keyboard navigation in the search panel works as designed.
 
-const searchbar = document.getElementById("searchbar");
-const textbox = searchbar._textbox;
 const searchPopup = document.getElementById("PopupSearchAutoComplete");
 const oneOffsContainer =
   document.getAnonymousElementByAttribute(searchPopup, "anonid",
@@ -22,23 +20,33 @@ function getOpenSearchItems() {
   return os;
 }
 
-add_task(function* init() {
-  yield promiseNewEngine("testEngine.xml");
+let searchbar;
+let textbox;
+
+add_task(async function init() {
+  await SpecialPowers.pushPrefEnv({ set: [
+    ["browser.search.widget.inNavBar", true],
+  ]});
+
+  searchbar = document.getElementById("searchbar");
+  textbox = searchbar._textbox;
+
+  await promiseNewEngine("testEngine.xml");
 
   // First cleanup the form history in case other tests left things there.
-  yield new Promise((resolve, reject) => {
+  await new Promise((resolve, reject) => {
     info("cleanup the search history");
     searchbar.FormHistory.update({op: "remove", fieldname: "searchbar-history"},
                                  {handleCompletion: resolve,
                                   handleError: reject});
   });
 
-  yield new Promise((resolve, reject) => {
+  await new Promise((resolve, reject) => {
     info("adding search history values: " + kValues);
     let addOps = kValues.map(value => {
  return {op: "add",
                                              fieldname: "searchbar-history",
-                                             value}
+                                             value};
                                    });
     searchbar.FormHistory.update(addOps, {
       handleCompletion() {
@@ -48,7 +56,7 @@ add_task(function* init() {
             kValues.map(value => {
  return {op: "remove",
                                            fieldname: "searchbar-history",
-                                           value}
+                                           value};
                                  });
           searchbar.FormHistory.update(removeOps);
         });
@@ -63,11 +71,11 @@ add_task(function* init() {
 });
 
 
-add_task(function* test_arrows() {
+add_task(async function test_arrows() {
   let promise = promiseEvent(searchPopup, "popupshown");
   info("Opening search panel");
   searchbar.focus();
-  yield promise;
+  await promise;
   is(textbox.mController.searchString, kUserValue, "The search string should be 'foo'");
 
   // Check the initial state of the panel before sending keyboard events.
@@ -78,7 +86,7 @@ add_task(function* test_arrows() {
   // before-last one-off buttons aren't different. We should always have more
   // than 4 default engines, but it's safer to check this assumption.
   let oneOffs = getOneOffs();
-  ok(oneOffs.length >= 4, "we have at least 4 one-off buttons displayed")
+  ok(oneOffs.length >= 4, "we have at least 4 one-off buttons displayed");
 
   ok(!textbox.selectedButton, "no one-off button should be selected");
 
@@ -143,7 +151,7 @@ add_task(function* test_arrows() {
      "the textfield value should be back to initial value");
 });
 
-add_task(function* test_typing_clears_button_selection() {
+add_task(async function test_typing_clears_button_selection() {
   is(Services.focus.focusedElement, textbox.inputField,
      "the search bar should be focused"); // from the previous test.
   ok(!textbox.selectedButton, "no button should be selected");
@@ -160,7 +168,7 @@ add_task(function* test_typing_clears_button_selection() {
   EventUtils.synthesizeKey("VK_BACK_SPACE", {});
 });
 
-add_task(function* test_tab() {
+add_task(async function test_tab() {
   is(Services.focus.focusedElement, textbox.inputField,
      "the search bar should be focused"); // from the previous test.
 
@@ -185,19 +193,19 @@ add_task(function* test_tab() {
   // Pressing tab again should close the panel...
   let promise = promiseEvent(searchPopup, "popuphidden");
   EventUtils.synthesizeKey("VK_TAB", {});
-  yield promise;
+  await promise;
 
   // ... and move the focus out of the searchbox.
   isnot(Services.focus.focusedElement, textbox.inputField,
         "the search bar no longer be focused");
 });
 
-add_task(function* test_shift_tab() {
+add_task(async function test_shift_tab() {
   // First reopen the panel.
   let promise = promiseEvent(searchPopup, "popupshown");
   info("Opening search panel");
   searchbar.focus();
-  yield promise;
+  await promise;
 
   let oneOffs = getOneOffs();
   ok(!textbox.selectedButton, "no one-off button should be selected");
@@ -223,29 +231,29 @@ add_task(function* test_shift_tab() {
   // Pressing shift+tab again should close the panel...
   promise = promiseEvent(searchPopup, "popuphidden");
   EventUtils.synthesizeKey("VK_TAB", {shiftKey: true});
-  yield promise;
+  await promise;
 
   // ... and move the focus out of the searchbox.
   isnot(Services.focus.focusedElement, textbox.inputField,
         "the search bar no longer be focused");
 });
 
-add_task(function* test_alt_down() {
+add_task(async function test_alt_down() {
   // First refocus the panel.
   let promise = promiseEvent(searchPopup, "popupshown");
   info("Opening search panel");
   searchbar.focus();
-  yield promise;
+  await promise;
 
   // close the panel using the escape key.
   promise = promiseEvent(searchPopup, "popuphidden");
   EventUtils.synthesizeKey("VK_ESCAPE", {});
-  yield promise;
+  await promise;
 
   // check that alt+down opens the panel...
   promise = promiseEvent(searchPopup, "popupshown");
   EventUtils.synthesizeKey("VK_DOWN", {altKey: true});
-  yield promise;
+  await promise;
 
   // ... and does nothing else.
   ok(!textbox.selectedButton, "no one-off button should be selected");
@@ -272,16 +280,16 @@ add_task(function* test_alt_down() {
      "the first one-off button should be selected");
 });
 
-add_task(function* test_alt_up() {
+add_task(async function test_alt_up() {
   // close the panel using the escape key.
   let promise = promiseEvent(searchPopup, "popuphidden");
   EventUtils.synthesizeKey("VK_ESCAPE", {});
-  yield promise;
+  await promise;
 
   // check that alt+up opens the panel...
   promise = promiseEvent(searchPopup, "popupshown");
   EventUtils.synthesizeKey("VK_UP", {altKey: true});
-  yield promise;
+  await promise;
 
   // ... and does nothing else.
   ok(!textbox.selectedButton, "no one-off button should be selected");
@@ -315,7 +323,7 @@ add_task(function* test_alt_up() {
   ok(!textbox.selectedButton, "no one-off should be selected anymore");
 });
 
-add_task(function* test_tab_and_arrows() {
+add_task(async function test_tab_and_arrows() {
   // Check the initial state is as expected.
   ok(!textbox.selectedButton, "no one-off button should be selected");
   is(searchPopup.selectedIndex, -1, "no suggestion should be selected");
@@ -379,20 +387,20 @@ add_task(function* test_tab_and_arrows() {
   // Finally close the panel.
   let promise = promiseEvent(searchPopup, "popuphidden");
   searchPopup.hidePopup();
-  yield promise;
+  await promise;
 });
 
-add_task(function* test_open_search() {
+add_task(async function test_open_search() {
   let rootDir = getRootDirectory(gTestPath);
-  yield BrowserTestUtils.openNewForegroundTab(gBrowser, rootDir + "opensearch.html");
+  await BrowserTestUtils.openNewForegroundTab(gBrowser, rootDir + "opensearch.html");
 
   let promise = promiseEvent(searchPopup, "popupshown");
   info("Opening search panel");
   searchbar.focus();
-  yield promise;
+  await promise;
 
   let engines = getOpenSearchItems();
-  is(engines.length, 2, "the opensearch.html page exposes 2 engines")
+  is(engines.length, 2, "the opensearch.html page exposes 2 engines");
 
   // Check that there's initially no selection.
   is(searchPopup.selectedIndex, -1, "no suggestion should be selected");
@@ -432,7 +440,7 @@ add_task(function* test_open_search() {
 
   promise = promiseEvent(searchPopup, "popuphidden");
   searchPopup.hidePopup();
-  yield promise;
+  await promise;
 
   gBrowser.removeCurrentTab();
 });

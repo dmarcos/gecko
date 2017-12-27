@@ -10,104 +10,125 @@
 /***** Interfaces to Data *****/
 
 [SecureContext, Pref="security.webauth.webauthn"]
-interface ScopedCredentialInfo {
-    readonly attribute ScopedCredential    credential;
-    readonly attribute WebAuthnAttestation attestation;
+interface PublicKeyCredential : Credential {
+    [SameObject] readonly attribute ArrayBuffer              rawId;
+    [SameObject] readonly attribute AuthenticatorResponse    response;
+    // Extensions are not supported yet.
+    // [SameObject] readonly attribute AuthenticationExtensions clientExtensionResults; // Add in Bug 1406458
 };
 
-dictionary Account {
-    required DOMString rpDisplayName;
-    required DOMString displayName;
-    required DOMString id;
-    DOMString          name;
-    DOMString          imageURL;
-};
-
-typedef (boolean or DOMString) WebAuthnAlgorithmID; // Fix when upstream there's a definition of how to serialize AlgorithmIdentifier
-
-dictionary ScopedCredentialParameters {
-    required ScopedCredentialType type;
-    required WebAuthnAlgorithmID  algorithm; // NOTE: changed from AllgorithmIdentifier because typedef (object or DOMString) not serializable
-};
-
-dictionary ScopedCredentialOptions {
-    unsigned long                        timeoutSeconds;
-    USVString                            rpId;
-    sequence<ScopedCredentialDescriptor> excludeList;
-    WebAuthnExtensions                   extensions;
+[SecureContext]
+partial interface PublicKeyCredential {
+    static Promise<boolean> isUserVerifyingPlatformAuthenticatorAvailable();
 };
 
 [SecureContext, Pref="security.webauth.webauthn"]
-interface WebAuthnAssertion {
-    readonly attribute ScopedCredential credential;
-    readonly attribute ArrayBuffer      clientData;
-    readonly attribute ArrayBuffer      authenticatorData;
-    readonly attribute ArrayBuffer      signature;
-};
-
-dictionary AssertionOptions {
-    unsigned long                        timeoutSeconds;
-    USVString                            rpId;
-    sequence<ScopedCredentialDescriptor> allowList;
-    WebAuthnExtensions                   extensions;
-};
-
-dictionary WebAuthnExtensions {
+interface AuthenticatorResponse {
+    [SameObject] readonly attribute ArrayBuffer clientDataJSON;
 };
 
 [SecureContext, Pref="security.webauth.webauthn"]
-interface WebAuthnAttestation {
-    readonly    attribute USVString     format;
-    readonly    attribute ArrayBuffer   clientData;
-    readonly    attribute ArrayBuffer   authenticatorData;
-    readonly    attribute any           attestation;
+interface AuthenticatorAttestationResponse : AuthenticatorResponse {
+    [SameObject] readonly attribute ArrayBuffer attestationObject;
 };
 
-// Renamed from "ClientData" to avoid a collision with U2F
-dictionary WebAuthnClientData {
+[SecureContext, Pref="security.webauth.webauthn"]
+interface AuthenticatorAssertionResponse : AuthenticatorResponse {
+    [SameObject] readonly attribute ArrayBuffer      authenticatorData;
+    [SameObject] readonly attribute ArrayBuffer      signature;
+    [SameObject] readonly attribute ArrayBuffer      userHandle;
+};
+
+dictionary PublicKeyCredentialParameters {
+    required PublicKeyCredentialType  type;
+    required COSEAlgorithmIdentifier  alg;
+};
+
+dictionary MakePublicKeyCredentialOptions {
+    required PublicKeyCredentialRpEntity   rp;
+    required PublicKeyCredentialUserEntity user;
+
+    required BufferSource                            challenge;
+    required sequence<PublicKeyCredentialParameters> pubKeyCredParams;
+
+    unsigned long                                timeout;
+    sequence<PublicKeyCredentialDescriptor>      excludeCredentials = [];
+    AuthenticatorSelectionCriteria               authenticatorSelection;
+    // Extensions are not supported yet.
+    // AuthenticationExtensions                  extensions; // Add in Bug 1406458
+};
+
+dictionary PublicKeyCredentialEntity {
+    required DOMString    name;
+    USVString             icon;
+};
+
+dictionary PublicKeyCredentialRpEntity : PublicKeyCredentialEntity {
+    DOMString      id;
+};
+
+dictionary PublicKeyCredentialUserEntity : PublicKeyCredentialEntity {
+    required BufferSource   id;
+    required DOMString      displayName;
+};
+
+dictionary AuthenticatorSelectionCriteria {
+    AuthenticatorAttachment      authenticatorAttachment;
+    boolean                      requireResidentKey = false;
+    UserVerificationRequirement  userVerification = "preferred";
+};
+
+enum AuthenticatorAttachment {
+    "platform",       // Platform attachment
+    "cross-platform"  // Cross-platform attachment
+};
+
+enum UserVerificationRequirement {
+    "required",
+    "preferred",
+    "discouraged"
+};
+
+dictionary PublicKeyCredentialRequestOptions {
+    required BufferSource                challenge;
+    unsigned long                        timeout;
+    USVString                            rpId;
+    sequence<PublicKeyCredentialDescriptor> allowCredentials = [];
+    // Extensions are not supported yet.
+    // AuthenticationExtensions             extensions; // Add in Bug 1406458
+};
+
+typedef record<DOMString, any>       AuthenticationExtensions;
+
+dictionary CollectedClientData {
     required DOMString           challenge;
     required DOMString           origin;
-    required WebAuthnAlgorithmID hashAlg; // NOTE: changed from AllgorithmIdentifier because typedef (object or DOMString) not serializable
-    DOMString                    tokenBinding;
-    WebAuthnExtensions           extensions;
+    required DOMString           hashAlgorithm;
+    DOMString                    tokenBindingId;
+    // Extensions are not supported yet.
+    // AuthenticationExtensions     clientExtensions; // Add in Bug 1406458
+    // AuthenticationExtensions     authenticatorExtensions; // Add in Bug 1406458
 };
 
-enum ScopedCredentialType {
-    "ScopedCred"
+enum PublicKeyCredentialType {
+    "public-key"
 };
 
-[SecureContext, Pref="security.webauth.webauthn"]
-interface ScopedCredential {
-    readonly attribute ScopedCredentialType type;
-    readonly attribute ArrayBuffer          id;
+dictionary PublicKeyCredentialDescriptor {
+    required PublicKeyCredentialType      type;
+    required BufferSource                 id;
+    sequence<AuthenticatorTransport>      transports;
 };
 
-dictionary ScopedCredentialDescriptor {
-    required ScopedCredentialType type;
-    required BufferSource         id;
-    sequence <WebAuthnTransport>  transports;
-};
-
-// Renamed from "Transport" to avoid a collision with U2F
-enum WebAuthnTransport {
+enum AuthenticatorTransport {
     "usb",
     "nfc",
     "ble"
 };
 
-/***** The Main API *****/
+typedef long COSEAlgorithmIdentifier;
 
-[SecureContext, Pref="security.webauth.webauthn"]
-interface WebAuthentication {
-    Promise<ScopedCredentialInfo> makeCredential (
-        Account                                 accountInformation,
-        sequence<ScopedCredentialParameters>    cryptoParameters,
-        BufferSource                            attestationChallenge,
-        optional ScopedCredentialOptions        options
-    );
+typedef sequence<AAGUID>      AuthenticatorSelectionList;
 
-    Promise<WebAuthnAssertion> getAssertion (
-        BufferSource               assertionChallenge,
-        optional AssertionOptions  options
-    );
-};
+typedef BufferSource      AAGUID;
+

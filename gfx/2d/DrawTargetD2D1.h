@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -11,6 +12,7 @@
 #include <d2d1_1.h>
 #include "PathD2D.h"
 #include "HelpersD2D.h"
+#include "mozilla/StaticPtr.h"
 
 #include <vector>
 #include <sstream>
@@ -36,6 +38,8 @@ public:
   virtual DrawTargetType GetType() const override { return DrawTargetType::HARDWARE_RASTER; }
   virtual BackendType GetBackendType() const override { return BackendType::DIRECT2D1_1; }
   virtual already_AddRefed<SourceSurface> Snapshot() override;
+  virtual already_AddRefed<SourceSurface> IntoLuminanceSource(LuminanceType aLuminanceType,
+                                                              float aOpacity) override;
   virtual IntSize GetSize() override { return mSize; }
 
   virtual void Flush() override;
@@ -86,8 +90,7 @@ public:
   virtual void FillGlyphs(ScaledFont *aFont,
                           const GlyphBuffer &aBuffer,
                           const Pattern &aPattern,
-                          const DrawOptions &aOptions = DrawOptions(),
-                          const GlyphRenderingOptions *aRenderingOptions = nullptr) override;
+                          const DrawOptions &aOptions = DrawOptions()) override;
   virtual void Mask(const Pattern &aSource,
                     const Pattern &aMask,
                     const DrawOptions &aOptions = DrawOptions()) override;
@@ -151,9 +154,8 @@ public:
     return GetImageForSurface(aSurface, mat, aExtendMode, nullptr);
   }
 
-  static ID2D1Factory1 *factory();
+  static RefPtr<ID2D1Factory1> factory();
   static void CleanupD2D();
-  static IDWriteFactory *GetDWriteFactory();
 
   operator std::string() const {
     std::stringstream stream;
@@ -225,10 +227,12 @@ private:
                     bool aPixelAligned = false, bool aForceIgnoreAlpha = false,
                     const D2D1_RECT_F& aLayerRect = D2D1::InfiniteRect());
 
+  // This function is used to determine if the mDC is still valid; if it is
+  // stale, we should avoid using it to execute any draw commands.
+  bool IsDeviceContextValid();
+
   IntSize mSize;
 
-  RefPtr<ID3D11Device> mDevice;
-  RefPtr<ID3D11Texture2D> mTexture;
   RefPtr<ID2D1Geometry> mCurrentClippedGeometry;
   // This is only valid if mCurrentClippedGeometry is non-null. And will
   // only be the intersection of all pixel-aligned retangular clips. This is in
@@ -276,6 +280,7 @@ private:
   // The latest snapshot of this surface. This needs to be told when this
   // target is modified. We keep it alive as a cache.
   RefPtr<SourceSurfaceD2D1> mSnapshot;
+  std::shared_ptr<Mutex> mSnapshotLock;
   // A list of targets we need to flush when we're modified.
   TargetSet mDependentTargets;
   // A list of targets which have this object in their mDependentTargets set
@@ -287,10 +292,15 @@ private:
   // this causes an infinite recursion inside D2D as it tries to resolve the bounds.
   // If we resolve the current command list before this happens
   // we can avoid the subsequent hang. (See bug 1293586)
-  bool mDidComplexBlendWithListInList;
+  uint32_t mComplexBlendsWithListInList;
 
-  static ID2D1Factory1 *mFactory;
-  static IDWriteFactory *mDWriteFactory;
+  static StaticRefPtr<ID2D1Factory1> mFactory;
+  // This value is uesed to verify if the DrawTarget is created by a stale device.
+  uint32_t mDeviceSeq;
+
+  // List of effects we use
+  bool EnsureLuminanceEffect();
+  RefPtr<ID2D1Effect> mLuminanceEffect;
 };
 
 }

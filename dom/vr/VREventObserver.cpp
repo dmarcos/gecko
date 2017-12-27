@@ -10,6 +10,8 @@
 #include "nsGlobalWindow.h"
 #include "VRManagerChild.h"
 
+#include "mozilla/Telemetry.h"
+
 namespace mozilla {
 namespace dom {
 
@@ -20,11 +22,14 @@ using namespace gfx;
  * window.onvrdisplaydeactivate, window.onvrdisplayconnected,
  * window.onvrdisplaydisconnected, and window.onvrdisplaypresentchange.
  */
-VREventObserver::VREventObserver(nsGlobalWindow* aGlobalWindow)
+VREventObserver::VREventObserver(nsGlobalWindowInner* aGlobalWindow)
   : mWindow(aGlobalWindow)
+  , mIs2DView(true)
+  , mHasReset(false)
 {
-  MOZ_ASSERT(aGlobalWindow && aGlobalWindow->IsInnerWindow());
+  MOZ_ASSERT(aGlobalWindow);
 
+  UpdateSpentTimeIn2DTelemetry(false);
   VRManagerChild* vmc = VRManagerChild::Get();
   if (vmc) {
     vmc->AddListener(this);
@@ -42,12 +47,33 @@ VREventObserver::DisconnectFromOwner()
   // In the event that nsGlobalWindow is deallocated, VREventObserver may
   // still be AddRef'ed elsewhere.  Ensure that we don't UAF by
   // dereferencing mWindow.
+  UpdateSpentTimeIn2DTelemetry(true);
   mWindow = nullptr;
 
   // Unregister from VRManagerChild
   if (VRManagerChild::IsCreated()) {
     VRManagerChild* vmc = VRManagerChild::Get();
     vmc->RemoveListener(this);
+  }
+}
+
+void
+VREventObserver::UpdateSpentTimeIn2DTelemetry(bool aUpdate)
+{
+  // mHasReset for avoiding setting the telemetry continuously
+  // for the telemetry is already been set when it is at the background.
+  // then, it would be set again when the process is exit and calling
+  // VREventObserver::DisconnectFromOwner().
+  if (mWindow && mIs2DView && aUpdate && mHasReset) {
+    // The WebVR content is closed, and we will collect the telemetry info
+    // for the users who view it in 2D view only.
+    Telemetry::Accumulate(Telemetry::WEBVR_USERS_VIEW_IN, 0);
+    Telemetry::AccumulateTimeDelta(Telemetry::WEBVR_TIME_SPENT_VIEWING_IN_2D,
+                                   mSpendTimeIn2DView);
+    mHasReset = false;
+  } else if (!aUpdate) {
+    mSpendTimeIn2DView = TimeStamp::Now();
+    mHasReset = true;
   }
 }
 
@@ -118,6 +144,10 @@ VREventObserver::NotifyVRDisplayDisconnect(uint32_t aDisplayID)
 void
 VREventObserver::NotifyVRDisplayPresentChange(uint32_t aDisplayID)
 {
+  // When switching to HMD present mode, it is no longer
+  // to be a 2D view.
+  mIs2DView = false;
+
   if (mWindow && mWindow->AsInner()->IsCurrentInnerWindow()) {
     mWindow->NotifyActiveVRDisplaysChanged();
     MOZ_ASSERT(nsContentUtils::IsSafeToRunScript());

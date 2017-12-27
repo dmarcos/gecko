@@ -1,7 +1,8 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 "use strict";
 
 this.EXPORTED_SYMBOLS = ["ExtensionTestUtils"];
@@ -9,7 +10,6 @@ this.EXPORTED_SYMBOLS = ["ExtensionTestUtils"];
 const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Components.utils.import("resource://gre/modules/ExtensionUtils.jsm");
-Components.utils.import("resource://gre/modules/Task.jsm");
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
@@ -24,6 +24,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "Schemas",
                                   "resource://gre/modules/Schemas.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Services",
                                   "resource://gre/modules/Services.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "TestUtils",
+                                  "resource://testing-common/TestUtils.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "Management", () => {
   const {Management} = Cu.import("resource://gre/modules/Extension.jsm", {});
@@ -58,25 +60,25 @@ function frameScript() {
   Components.utils.import("resource://gre/modules/Services.jsm");
 
   Services.obs.notifyObservers(this, "tab-content-frameloader-created");
+
+  // eslint-disable-next-line mozilla/balanced-listeners, no-undef
+  addEventListener("MozHeapMinimize", () => {
+    Services.obs.notifyObservers(null, "memory-pressure", "heap-minimize");
+  }, true, true);
 }
 
 const FRAME_SCRIPT = `data:text/javascript,(${encodeURI(frameScript)}).call(this)`;
 
-
-const XUL_URL = "data:application/vnd.mozilla.xul+xml;charset=utf-8," + encodeURI(
-  `<?xml version="1.0"?>
-  <window id="documentElement"/>`);
-
 let kungFuDeathGrip = new Set();
-function promiseBrowserLoaded(browser, url) {
+function promiseBrowserLoaded(browser, url, redirectUrl) {
   return new Promise(resolve => {
     const listener = {
       QueryInterface: XPCOMUtils.generateQI([Ci.nsISupportsWeakReference, Ci.nsIWebProgressListener]),
 
       onStateChange(webProgress, request, stateFlags, statusCode) {
         let requestUrl = request.URI ? request.URI.spec : webProgress.DOMWindow.location.href;
-
-        if (webProgress.isTopLevel && requestUrl === url &&
+        if (webProgress.isTopLevel &&
+            (requestUrl === url || requestUrl === redirectUrl) &&
             (stateFlags & Ci.nsIWebProgressListener.STATE_STOP)) {
           resolve();
           kungFuDeathGrip.delete(listener);
@@ -94,8 +96,9 @@ function promiseBrowserLoaded(browser, url) {
 }
 
 class ContentPage {
-  constructor(remote = REMOTE_CONTENT_SCRIPTS) {
+  constructor(remote = REMOTE_CONTENT_SCRIPTS, extension = null) {
     this.remote = remote;
+    this.extension = extension;
 
     this.browserReady = this._initBrowser();
   }
@@ -111,7 +114,7 @@ class ContentPage {
 
     chromeShell.createAboutBlankContentViewer(system);
     chromeShell.useGlobalHistory = false;
-    chromeShell.loadURI(XUL_URL, 0, null, null, null);
+    chromeShell.loadURI("chrome://extensions/content/dummy.xul", 0, null, null, null);
 
     await promiseObserved("chrome-document-global-created",
                           win => win.document == chromeShell.document);
@@ -121,6 +124,13 @@ class ContentPage {
     let browser = chromeDoc.createElement("browser");
     browser.setAttribute("type", "content");
     browser.setAttribute("disableglobalhistory", "true");
+
+    if (this.extension && this.extension.remote) {
+      this.remote = true;
+      browser.setAttribute("remote", "true");
+      browser.setAttribute("remoteType", "extension");
+      browser.sameProcessAsFrameLoader = this.extension.groupFrameLoader;
+    }
 
     let awaitFrameLoader = Promise.resolve();
     if (this.remote) {
@@ -137,20 +147,25 @@ class ContentPage {
     return browser;
   }
 
-  async loadURL(url) {
+  async loadURL(url, redirectUrl = undefined) {
     await this.browserReady;
 
     this.browser.loadURI(url);
-    return promiseBrowserLoaded(this.browser, url);
+    return promiseBrowserLoaded(this.browser, url, redirectUrl);
   }
 
   async close() {
     await this.browserReady;
 
+    let {messageManager} = this.browser;
+
     this.browser = null;
 
     this.windowlessBrowser.close();
     this.windowlessBrowser = null;
+
+    await TestUtils.topicObserved("message-manager-disconnect",
+                                  subject => subject === messageManager);
   }
 }
 
@@ -174,7 +189,7 @@ class ExtensionWrapper {
     this.messageQueue = new Set();
 
 
-    this.testScope.do_register_cleanup(() => {
+    this.testScope.registerCleanupFunction(() => {
       this.clearMessageQueues();
 
       if (this.state == "pending" || this.state == "running") {
@@ -188,6 +203,7 @@ class ExtensionWrapper {
 
     if (extension) {
       this.id = extension.id;
+      this.uuid = extension.uuid;
       this.attachExtension(extension);
     }
   }
@@ -218,7 +234,7 @@ class ExtensionWrapper {
     extension.on("test-done", this.handleResult);
     extension.on("test-message", this.handleMessage);
 
-    this.testScope.do_print(`Extension attached`);
+    this.testScope.info(`Extension attached`);
   }
 
   clearMessageQueues() {
@@ -244,7 +260,7 @@ class ExtensionWrapper {
         break;
 
       case "test-log":
-        this.testScope.do_print(msg);
+        this.testScope.info(msg);
         break;
 
       case "test-result":
@@ -523,6 +539,13 @@ class AOMExtensionWrapper extends ExtensionWrapper {
     }
   }
 
+  async _flushCache() {
+    if (this.extension && this.extension.rootURI instanceof Ci.nsIJARURI) {
+      let file = this.extension.rootURI.JARFile.QueryInterface(Ci.nsIFileURL).file;
+      await Services.ppmm.broadcastAsyncMessage("Extension:FlushJarCache", {path: file.path});
+    }
+  }
+
   get version() {
     return this.addon && this.addon.version;
   }
@@ -540,11 +563,18 @@ class AOMExtensionWrapper extends ExtensionWrapper {
     return this._install(this.file);
   }
 
-  upgrade(data) {
+  async unload() {
+    await this._flushCache();
+    return super.unload();
+  }
+
+  async upgrade(data) {
     this.startupPromise = new Promise(resolve => {
       this.resolveStartup = resolve;
     });
     this.state = "restarting";
+
+    await this._flushCache();
 
     let xpiFile = Extension.generateXPI(data);
 
@@ -557,8 +587,8 @@ class AOMExtensionWrapper extends ExtensionWrapper {
 var ExtensionTestUtils = {
   BASE_MANIFEST,
 
-  normalizeManifest: Task.async(function* (manifest, baseManifest = BASE_MANIFEST) {
-    yield Management.lazyInit();
+  async normalizeManifest(manifest, baseManifest = BASE_MANIFEST) {
+    await Management.lazyInit();
 
     let errors = [];
     let context = {
@@ -577,7 +607,7 @@ var ExtensionTestUtils = {
     normalized.errors = errors;
 
     return normalized;
-  }),
+  },
 
   currentScope: null,
 
@@ -615,7 +645,7 @@ var ExtensionTestUtils = {
     Services.dirsvc.registerProvider(dirProvider);
 
 
-    scope.do_register_cleanup(() => {
+    scope.registerCleanupFunction(() => {
       tmpD.remove(true);
       Services.dirsvc.unregisterProvider(dirProvider);
 
@@ -667,10 +697,28 @@ var ExtensionTestUtils = {
     REMOTE_CONTENT_SCRIPTS = !!val;
   },
 
-  loadContentPage(url, remote = undefined) {
-    let contentPage = new ContentPage(remote);
+  /**
+   * Loads a content page into a hidden docShell.
+   *
+   * @param {string} url
+   *        The URL to load.
+   * @param {object} [options = {}]
+   * @param {ExtensionWrapper} [options.extension]
+   *        If passed, load the URL as an extension page for the given
+   *        extension.
+   * @param {boolean} [options.remote]
+   *        If true, load the URL in a content process. If false, load
+   *        it in the parent process.
+   * @param {string} [options.redirectUrl]
+   *        An optional URL that the initial page is expected to
+   *        redirect to.
+   *
+   * @returns {ContentPage}
+   */
+  loadContentPage(url, {extension = undefined, remote = undefined, redirectUrl = undefined} = {}) {
+    let contentPage = new ContentPage(remote, extension && extension.extension);
 
-    return contentPage.loadURL(url).then(() => {
+    return contentPage.loadURL(url, redirectUrl).then(() => {
       return contentPage;
     });
   },

@@ -3,6 +3,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* Import stylesheets for specific tooltip widgets */
+@import url(chrome://devtools/content/shared/widgets/color-widget.css);
+@import url(chrome://devtools/content/shared/widgets/cubic-bezier.css);
+@import url(chrome://devtools/content/shared/widgets/filter-widget.css);
+@import url(chrome://devtools/content/shared/widgets/spectrum.css);
+
 /* Tooltip specific theme variables */
 
 .theme-dark {
@@ -53,6 +59,13 @@
 }
 .devtools-tooltip[wide] {
   max-width: 600px;
+}
+
+/* Tooltip: CSS variables tooltip */
+
+.devtools-tooltip-css-variable {
+  color: var(--theme-body-color);
+  padding: 2px;
 }
 
 /* Tooltip: Simple Text */
@@ -109,7 +122,7 @@
 }
 
 .tooltip-xul-wrapper {
-  -moz-appearance: none; appearance: none;
+  -moz-appearance: none;
   background: transparent;
   overflow: visible;
   border-style: none;
@@ -389,7 +402,7 @@
 }
 
 .stack-frame-call:hover {
-  background-color: var(--theme-selection-background-semitransparent);
+  background-color: var(--theme-selection-background-hover);
 }
 
 .stack-frame-async {
@@ -452,6 +465,5 @@
 .devtools-tooltip-image-broken {
   box-sizing: border-box;
   height: 100%;
-  text-align: center;
-  line-height: 30px;
+  padding: 7px;
 }

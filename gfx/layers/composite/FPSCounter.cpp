@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -210,7 +211,10 @@ FPSCounter::WriteFrameTimeStamps(PRFileDesc* fd)
   const int bufferSize = 256;
   char buffer[bufferSize];
   int writtenCount = SprintfLiteral(buffer, "FPS Data for: %s\n", mFPSName);
-  MOZ_ASSERT(writtenCount >= 0);
+  MOZ_ASSERT(writtenCount < bufferSize);
+  if (writtenCount >= bufferSize) {
+    return;
+  }
   PR_Write(fd, buffer, writtenCount);
 
   ResetReverseIterator();
@@ -225,8 +229,10 @@ FPSCounter::WriteFrameTimeStamps(PRFileDesc* fd)
   while (HasNext(startTimeStamp)) {
     TimeDuration duration = previousSample - nextTimeStamp;
     writtenCount = SprintfLiteral(buffer, "%f,\n", duration.ToMilliseconds());
-
-    MOZ_ASSERT(writtenCount >= 0);
+    MOZ_ASSERT(writtenCount < bufferSize);
+    if (writtenCount >= bufferSize) {
+      continue;
+    }
     PR_Write(fd, buffer, writtenCount);
 
     previousSample = nextTimeStamp;
@@ -299,8 +305,13 @@ FPSCounter::PrintFPS()
 void
 FPSCounter::PrintHistogram(std::map<int, int>& aHistogram)
 {
+  if (aHistogram.size() == 0) {
+    return;
+  }
+
   int length = 0;
   const int kBufferLength = 512;
+  int availableSpace = kBufferLength;
   char buffer[kBufferLength];
 
   for (std::map<int, int>::iterator iter = aHistogram.begin();
@@ -309,9 +320,14 @@ FPSCounter::PrintHistogram(std::map<int, int>& aHistogram)
     int fps = iter->first;
     int count = iter->second;
 
-    length += snprintf(buffer + length, kBufferLength - length,
-                       "FPS: %d = %d. ", fps, count);
-    NS_ASSERTION(length >= kBufferLength, "Buffer overrun while printing FPS histogram.");
+    int lengthRequired = snprintf(buffer + length, availableSpace,
+                                  "FPS: %d = %d. ", fps, count);
+    // Ran out of buffer space. Oh well - just print what we have.
+    if (lengthRequired > availableSpace) {
+      break;
+    }
+    length += lengthRequired;
+    availableSpace -= lengthRequired;
   }
 
   printf_stderr("%s\n", buffer);

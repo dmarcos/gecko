@@ -15,6 +15,7 @@
 #include "NullHttpChannel.h"
 #include "nsQueryObject.h"
 #include "nsNetUtil.h"
+#include "TCPFastOpenLayer.h"
 
 namespace mozilla {
 namespace net {
@@ -102,6 +103,7 @@ NullHttpTransaction::NullHttpTransaction(nsHttpConnectionInfo *ci,
   , mCapsToClear(0)
   , mIsDone(false)
   , mClaimed(false)
+  , mFastOpenStatus(TFO_NOT_TRIED)
   , mCallbacks(callbacks)
   , mConnectionInfo(ci)
 {
@@ -170,6 +172,40 @@ void
 NullHttpTransaction::OnTransportStatus(nsITransport* transport,
                                        nsresult status, int64_t progress)
 {
+  if (status == NS_NET_STATUS_RESOLVING_HOST) {
+    if (mTimings.domainLookupStart.IsNull()) {
+      mTimings.domainLookupStart = TimeStamp::Now();
+    }
+  } else if (status == NS_NET_STATUS_RESOLVED_HOST) {
+    if (mTimings.domainLookupEnd.IsNull()) {
+      mTimings.domainLookupEnd = TimeStamp::Now();
+    }
+  } else if (status == NS_NET_STATUS_CONNECTING_TO) {
+    if (mTimings.connectStart.IsNull()) {
+      mTimings.connectStart = TimeStamp::Now();
+    }
+  } else if (status == NS_NET_STATUS_CONNECTED_TO) {
+    TimeStamp tnow = TimeStamp::Now();
+    if (mTimings.connectEnd.IsNull()) {
+        mTimings.connectEnd = tnow;
+    }
+    if (mTimings.tcpConnectEnd.IsNull()) {
+        mTimings.tcpConnectEnd = tnow;
+    }
+    // After a socket is connected we know for sure whether data has been
+    // sent on SYN packet and if not we should update TLS start timing.
+    if ((mFastOpenStatus != TFO_DATA_SENT) &&
+        !mTimings.secureConnectionStart.IsNull()) {
+        mTimings.secureConnectionStart = tnow;
+    }
+  } else if (status == NS_NET_STATUS_TLS_HANDSHAKE_STARTING) {
+    if (mTimings.secureConnectionStart.IsNull()) {
+        mTimings.secureConnectionStart = TimeStamp::Now();
+    }
+  } else if (status == NS_NET_STATUS_TLS_HANDSHAKE_ENDED) {
+    mTimings.connectEnd = TimeStamp::Now();;
+  }
+
   if (mActivityDistributor) {
     NS_DispatchToMainThread(new CallObserveActivity(mActivityDistributor,
                                   mConnectionInfo->GetOrigin(),
@@ -206,12 +242,6 @@ NullHttpTransaction::SetDNSWasRefreshed()
 {
   MOZ_ASSERT(NS_IsMainThread(), "SetDNSWasRefreshed on main thread only!");
   mCapsToClear |= NS_HTTP_REFRESH_DNS;
-}
-
-uint64_t
-NullHttpTransaction::Available()
-{
-  return 0;
 }
 
 nsresult

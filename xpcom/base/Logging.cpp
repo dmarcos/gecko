@@ -12,7 +12,7 @@
 #include "mozilla/FileUtils.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/StaticPtr.h"
-#include "mozilla/Sprintf.h"
+#include "mozilla/Printf.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/UniquePtrExtensions.h"
@@ -41,6 +41,21 @@ const uint32_t kInitialModuleCount = 256;
 const uint32_t kRotateFilesNumber = 4;
 
 namespace mozilla {
+
+LazyLogModule::operator LogModule*()
+{
+  // NB: The use of an atomic makes the reading and assignment of mLog
+  //     thread-safe. There is a small chance that mLog will be set more
+  //     than once, but that's okay as it will be set to the same LogModule
+  //     instance each time. Also note LogModule::Get is thread-safe.
+  LogModule* tmp = mLog;
+  if (MOZ_UNLIKELY(!tmp)) {
+    tmp = LogModule::Get(mLogName);
+    mLog = tmp;
+  }
+
+  return tmp;
+}
 
 namespace detail {
 
@@ -346,11 +361,13 @@ public:
   }
 
   void Print(const char* aName, LogLevel aLevel, const char* aFmt, va_list aArgs)
+    MOZ_FORMAT_PRINTF(4, 0)
   {
     const size_t kBuffSize = 1024;
     char buff[kBuffSize];
 
     char* buffToWrite = buff;
+    SmprintfPointer allocatedBuff;
 
     va_list argsCopy;
     va_copy(argsCopy, aArgs);
@@ -367,7 +384,8 @@ public:
       charsWritten = strlen(buff);
     } else if (static_cast<size_t>(charsWritten) >= kBuffSize - 1) {
       // We may have maxed out, allocate a buffer instead.
-      buffToWrite = mozilla::Vsmprintf(aFmt, aArgs);
+      allocatedBuff = mozilla::Vsmprintf(aFmt, aArgs);
+      buffToWrite = allocatedBuff.get();
       charsWritten = strlen(buffToWrite);
     }
 
@@ -425,10 +443,6 @@ public:
 
     if (mIsSync) {
       fflush(out);
-    }
-
-    if (buffToWrite != buff) {
-      mozilla::SmprintfFree(buffToWrite);
     }
 
     if (mRotate > 0 && outFile) {

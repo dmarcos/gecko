@@ -12,11 +12,15 @@
 #include "mozilla/EventForwards.h"
 #include "mozilla/TimeStamp.h"
 #include "nsCOMPtr.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsISupportsImpl.h"
 #include "nsIWidget.h"
 #include "nsString.h"
 #include "Units.h"
+
+#ifdef DEBUG
+#include "nsXULAppAPI.h"
+#endif // #ifdef DEBUG
 
 namespace IPC {
 template<typename T>
@@ -24,6 +28,8 @@ struct ParamTraits;
 } // namespace IPC
 
 namespace mozilla {
+
+class EventTargetChainItem;
 
 /******************************************************************************
  * mozilla::BaseEventFlags
@@ -93,9 +99,6 @@ public:
   // If mRetargetToNonNativeAnonymous is true and the target is in a non-native
   // native anonymous subtree, the event target is set to mOriginalTarget.
   bool    mRetargetToNonNativeAnonymous : 1;
-  // If mNoCrossProcessBoundaryForwarding is true, the event is not allowed to
-  // cross process boundary.
-  bool    mNoCrossProcessBoundaryForwarding : 1;
   // If mNoContentDispatch is true, the event is never dispatched to the
   // event handlers which are added to the contents, onfoo attributes and
   // properties.  Note that this flag is ignored when
@@ -108,17 +111,15 @@ public:
   bool    mNoContentDispatch : 1;
   // If mOnlyChromeDispatch is true, the event is dispatched to only chrome.
   bool    mOnlyChromeDispatch : 1;
+  // Indicates if the key combination is reserved by chrome.  This is set by
+  // MarkAsReservedByChrome().
+  bool mIsReservedByChrome : 1;
   // If mOnlySystemGroupDispatchInContent is true, event listeners added to
   // the default group for non-chrome EventTarget won't be called.
   // Be aware, if this is true, EventDispatcher needs to check if each event
   // listener is added to chrome node, so, don't set this to true for the
   // events which are fired a lot of times like eMouseMove.
   bool    mOnlySystemGroupDispatchInContent : 1;
-  // If mWantReplyFromContentProcess is true, the event will be redispatched
-  // in the parent process after the content process has handled it. Useful
-  // for when the parent process need the know first how the event was used
-  // by content before handling it itself.
-  bool mWantReplyFromContentProcess : 1;
   // The event's action will be handled by APZ. The main thread should not
   // perform its associated action. This is currently only relevant for
   // wheel and touch events.
@@ -143,6 +144,23 @@ public:
   // coordinate related getters.
   bool mIsPositionless : 1;
 
+  // Flags managing state of propagation between processes.
+  // Note the the following flags shouldn't be referred directly.  Use utility
+  // methods instead.
+
+  // If mNoRemoteProcessDispatch is true, the event is not allowed to be sent
+  // to remote process.
+  bool mNoRemoteProcessDispatch : 1;
+  // If mWantReplyFromContentProcess is true, the event will be redispatched
+  // in the parent process after the content process has handled it. Useful
+  // for when the parent process need the know first how the event was used
+  // by content before handling it itself.
+  bool mWantReplyFromContentProcess : 1;
+  // If mPostedToRemoteProcess is true, the event has been posted to the
+  // remote process (but it's not handled yet if it's not a duplicated event
+  // instance).
+  bool mPostedToRemoteProcess : 1;
+
   // If the event is being handled in target phase, returns true.
   inline bool InTargetPhase() const
   {
@@ -160,10 +178,6 @@ public:
   {
     StopPropagation();
     mImmediatePropagationStopped = true;
-  }
-  inline void StopCrossProcessForwarding()
-  {
-    mNoCrossProcessBoundaryForwarding = true;
   }
   inline void PreventDefault(bool aCalledByDefaultHandler = true)
   {
@@ -205,6 +219,152 @@ public:
   inline bool PropagationStopped() const
   {
     return mPropagationStopped;
+  }
+
+  // Helper methods to access flags managing state of propagation between
+  // processes.
+
+  /**
+   * Prevent to be dispatched to remote process.
+   */
+  inline void StopCrossProcessForwarding()
+  {
+    MOZ_ASSERT(!mPostedToRemoteProcess);
+    mNoRemoteProcessDispatch = true;
+    mWantReplyFromContentProcess = false;
+  }
+  /**
+   * Return true if the event shouldn't be dispatched to remote process.
+   */
+  inline bool IsCrossProcessForwardingStopped() const
+  {
+    return mNoRemoteProcessDispatch;
+  }
+  /**
+   * Mark the event as waiting reply from remote process.
+   * If the caller needs to win other keyboard event handlers in chrome,
+   * the caller should call StopPropagation() too.
+   * Otherwise, if the caller just needs to know if the event is consumed by
+   * either content or chrome, it should just call this because the event
+   * may be reserved by chrome and it needs to be dispatched into the DOM
+   * tree in chrome for checking if it's reserved before being sent to any
+   * remote processes.
+   */
+  inline void MarkAsWaitingReplyFromRemoteProcess()
+  {
+    MOZ_ASSERT(!mPostedToRemoteProcess);
+    mNoRemoteProcessDispatch = false;
+    mWantReplyFromContentProcess = true;
+  }
+  /**
+   * Reset "waiting reply from remote process" state.  This is useful when
+   * you dispatch a copy of an event coming from different process.
+   */
+  inline void ResetWaitingReplyFromRemoteProcessState()
+  {
+    if (IsWaitingReplyFromRemoteProcess()) {
+      // FYI: mWantReplyFromContentProcess is also used for indicating
+      //      "handled in remote process" state.  Therefore, only when
+      //      IsWaitingReplyFromRemoteProcess() returns true, this should
+      //      reset the flag.
+      mWantReplyFromContentProcess = false;
+    }
+  }
+  /**
+   * Return true if the event handler should wait reply event.  I.e., if this
+   * returns true, any event handler should do nothing with the event.
+   */
+  inline bool IsWaitingReplyFromRemoteProcess() const
+  {
+    return !mNoRemoteProcessDispatch && mWantReplyFromContentProcess;
+  }
+  /**
+   * Mark the event as already handled in the remote process.  This should be
+   * called when initializing reply events.
+   */
+  inline void MarkAsHandledInRemoteProcess()
+  {
+    mNoRemoteProcessDispatch = true;
+    mWantReplyFromContentProcess = true;
+    mPostedToRemoteProcess = false;
+  }
+  /**
+   * Return true if the event has already been handled in the remote process.
+   */
+  inline bool IsHandledInRemoteProcess() const
+  {
+    return mNoRemoteProcessDispatch && mWantReplyFromContentProcess;
+  }
+  /**
+   * Return true if the event should be sent back to its parent process.
+   */
+  inline bool WantReplyFromContentProcess() const
+  {
+    MOZ_ASSERT(!XRE_IsParentProcess());
+    return IsWaitingReplyFromRemoteProcess();
+  }
+  /**
+   * Mark the event has already posted to a remote process.
+   */
+  inline void MarkAsPostedToRemoteProcess()
+  {
+    MOZ_ASSERT(!IsCrossProcessForwardingStopped());
+    mPostedToRemoteProcess = true;
+  }
+  /**
+   * Reset the cross process dispatching state.  This should be used when a
+   * process receives the event because the state is in the sender.
+   */
+  inline void ResetCrossProcessDispatchingState()
+  {
+    MOZ_ASSERT(!IsCrossProcessForwardingStopped());
+    mPostedToRemoteProcess = false;
+    // Ignore propagation state in the different process if it's marked as
+    // "waiting reply from remote process" because the process needs to
+    // stop propagation in the process until receiving a reply event.
+    if (IsWaitingReplyFromRemoteProcess()) {
+      mPropagationStopped = mImmediatePropagationStopped = false;
+    }
+  }
+  /**
+   * Return true if the event has been posted to a remote process.
+   * Note that MarkAsPostedToRemoteProcess() is called by
+   * ParamTraits<mozilla::WidgetEvent>.  Therefore, it *might* be possible
+   * that posting the event failed even if this returns true.  But that must
+   * really rare.  If that'd be problem for you, you should unmark this in
+   * TabParent or somewhere.
+   */
+  inline bool HasBeenPostedToRemoteProcess() const
+  {
+    return mPostedToRemoteProcess;
+  }
+  /**
+   * Mark the event is reserved by chrome.  I.e., shouldn't be dispatched to
+   * content because it shouldn't be cancelable.
+   */
+  inline void MarkAsReservedByChrome()
+  {
+    MOZ_ASSERT(!mPostedToRemoteProcess);
+    mIsReservedByChrome = true;
+    // For reserved commands (such as Open New Tab), we don't need to wait for
+    // the content to answer, neither to give a chance for content to override
+    // its behavior.
+    StopCrossProcessForwarding();
+    // If the event is reserved by chrome, we shouldn't expose the event to
+    // web contents because such events shouldn't be cancelable.  So, it's not
+    // good behavior to fire such events but to ignore the defaultPrevented
+    // attribute value in chrome.
+    mOnlySystemGroupDispatchInContent = true;
+  }
+  /**
+   * Return true if the event is reserved by chrome.
+   */
+  inline bool IsReservedByChrome() const
+  {
+    MOZ_ASSERT(!mIsReservedByChrome ||
+               (IsCrossProcessForwardingStopped() &&
+                mOnlySystemGroupDispatchInContent));
+    return mIsReservedByChrome;
   }
 
   inline void Clear()
@@ -354,7 +514,9 @@ protected:
     , mMessage(aMessage)
     , mRefPoint(0, 0)
     , mLastRefPoint(0, 0)
+    , mFocusSequenceNumber(0)
     , mSpecifiedEventType(nullptr)
+    , mPath(nullptr)
   {
     MOZ_COUNT_CTOR(WidgetEvent);
     mFlags.Clear();
@@ -366,6 +528,7 @@ protected:
 
   WidgetEvent()
     : WidgetEventTime()
+    , mPath(nullptr)
   {
     MOZ_COUNT_CTOR(WidgetEvent);
   }
@@ -382,6 +545,7 @@ public:
   }
 
   WidgetEvent(const WidgetEvent& aOther)
+    : WidgetEventTime()
   {
     MOZ_COUNT_CTOR(WidgetEvent);
     *this = aOther;
@@ -404,15 +568,19 @@ public:
   LayoutDeviceIntPoint mRefPoint;
   // The previous mRefPoint, if known, used to calculate mouse movement deltas.
   LayoutDeviceIntPoint mLastRefPoint;
+  // The sequence number of the last potentially focus changing event handled
+  // by APZ. This is used to track when that event has been processed by content,
+  // and focus can be reconfirmed for async keyboard scrolling.
+  uint64_t mFocusSequenceNumber;
   // See BaseEventFlags definition for the detail.
   BaseEventFlags mFlags;
 
   // If JS creates an event with unknown event type or known event type but
   // for different event interface, the event type is stored to this.
   // NOTE: This is always used if the instance is a WidgetCommandEvent instance.
-  nsCOMPtr<nsIAtom> mSpecifiedEventType;
+  RefPtr<nsAtom> mSpecifiedEventType;
 
-  // nsIAtom isn't available on non-main thread due to unsafe.  Therefore,
+  // nsAtom isn't available on non-main thread due to unsafe.  Therefore,
   // mSpecifiedEventTypeString is used instead of mSpecifiedEventType if
   // the event is created in non-main thread.
   nsString mSpecifiedEventTypeString;
@@ -424,6 +592,11 @@ public:
   nsCOMPtr<dom::EventTarget> mCurrentTarget;
   nsCOMPtr<dom::EventTarget> mOriginalTarget;
 
+  /// The possible related target
+  nsCOMPtr<dom::EventTarget> mRelatedTarget;
+
+  nsTArray<EventTargetChainItem>* mPath;
+
   dom::EventTarget* GetDOMEventTarget() const;
   dom::EventTarget* GetCurrentDOMEventTarget() const;
   dom::EventTarget* GetOriginalDOMEventTarget() const;
@@ -434,6 +607,7 @@ public:
     // mMessage should be initialized with the constructor.
     mRefPoint = aEvent.mRefPoint;
     // mLastRefPoint doesn't need to be copied.
+    mFocusSequenceNumber = aEvent.mFocusSequenceNumber;
     AssignEventTime(aEvent);
     // mFlags should be copied manually if it's necessary.
     mSpecifiedEventType = aEvent.mSpecifiedEventType;
@@ -441,6 +615,7 @@ public:
     mTarget = aCopyTargets ? aEvent.mTarget : nullptr;
     mCurrentTarget = aCopyTargets ? aEvent.mCurrentTarget : nullptr;
     mOriginalTarget = aCopyTargets ? aEvent.mOriginalTarget : nullptr;
+    mRelatedTarget = aCopyTargets ? aEvent.mRelatedTarget : nullptr;
   }
 
   /**
@@ -448,14 +623,9 @@ public:
    */
   void StopPropagation() { mFlags.StopPropagation(); }
   void StopImmediatePropagation() { mFlags.StopImmediatePropagation(); }
-  void StopCrossProcessForwarding() { mFlags.StopCrossProcessForwarding(); }
-  void PreventDefault(bool aCalledByDefaultHandler = true)
-  {
-    // Legacy mouse events shouldn't be prevented on ePointerDown by default
-    // handlers.
-    MOZ_RELEASE_ASSERT(!aCalledByDefaultHandler || mMessage != ePointerDown);
-    mFlags.PreventDefault(aCalledByDefaultHandler);
-  }
+  void PreventDefault(bool aCalledByDefaultHandler = true,
+                      nsIPrincipal* aPrincipal = nullptr);
+
   void PreventDefaultBeforeDispatch() { mFlags.PreventDefaultBeforeDispatch(); }
   bool DefaultPrevented() const { return mFlags.DefaultPrevented(); }
   bool DefaultPreventedByContent() const
@@ -464,6 +634,106 @@ public:
   }
   bool IsTrusted() const { return mFlags.IsTrusted(); }
   bool PropagationStopped() const { return mFlags.PropagationStopped(); }
+
+  /**
+   * Prevent to be dispatched to remote process.
+   */
+  inline void StopCrossProcessForwarding()
+  {
+    mFlags.StopCrossProcessForwarding();
+  }
+  /**
+   * Return true if the event shouldn't be dispatched to remote process.
+   */
+  inline bool IsCrossProcessForwardingStopped() const
+  {
+    return mFlags.IsCrossProcessForwardingStopped();
+  }
+  /**
+   * Mark the event as waiting reply from remote process.
+   * Note that this also stops immediate propagation in current process.
+   */
+  inline void MarkAsWaitingReplyFromRemoteProcess()
+  {
+    mFlags.MarkAsWaitingReplyFromRemoteProcess();
+  }
+  /**
+   * Reset "waiting reply from remote process" state.  This is useful when
+   * you dispatch a copy of an event coming from different process.
+   */
+  inline void ResetWaitingReplyFromRemoteProcessState()
+  {
+    mFlags.ResetWaitingReplyFromRemoteProcessState();
+  }
+  /**
+   * Return true if the event handler should wait reply event.  I.e., if this
+   * returns true, any event handler should do nothing with the event.
+   */
+  inline bool IsWaitingReplyFromRemoteProcess() const
+  {
+    return mFlags.IsWaitingReplyFromRemoteProcess();
+  }
+  /**
+   * Mark the event as already handled in the remote process.  This should be
+   * called when initializing reply events.
+   */
+  inline void MarkAsHandledInRemoteProcess()
+  {
+    mFlags.MarkAsHandledInRemoteProcess();
+  }
+  /**
+   * Return true if the event has already been handled in the remote process.
+   * I.e., if this returns true, the event is a reply event.
+   */
+  inline bool IsHandledInRemoteProcess() const
+  {
+    return mFlags.IsHandledInRemoteProcess();
+  }
+  /**
+   * Return true if the event should be sent back to its parent process.
+   * So, usual event handlers shouldn't call this.
+   */
+  inline bool WantReplyFromContentProcess() const
+  {
+    return mFlags.WantReplyFromContentProcess();
+  }
+  /**
+   * Mark the event has already posted to a remote process.
+   */
+  inline void MarkAsPostedToRemoteProcess()
+  {
+    mFlags.MarkAsPostedToRemoteProcess();
+  }
+  /**
+   * Reset the cross process dispatching state.  This should be used when a
+   * process receives the event because the state is in the sender.
+   */
+  inline void ResetCrossProcessDispatchingState()
+  {
+    mFlags.ResetCrossProcessDispatchingState();
+  }
+  /**
+   * Return true if the event has been posted to a remote process.
+   */
+  inline bool HasBeenPostedToRemoteProcess() const
+  {
+    return mFlags.HasBeenPostedToRemoteProcess();
+  }
+  /**
+   * Mark the event is reserved by chrome.  I.e., shouldn't be dispatched to
+   * content because it shouldn't be cancelable.
+   */
+  inline void MarkAsReservedByChrome()
+  {
+    mFlags.MarkAsReservedByChrome();
+  }
+  /**
+   * Return true if the event is reserved by chrome.
+   */
+  inline bool IsReservedByChrome() const
+  {
+    return mFlags.IsReservedByChrome();
+  }
 
   /**
    * Utils for checking event types
@@ -509,9 +779,13 @@ public:
    */
   bool HasDragEventMessage() const;
   /**
-   * Returns true if the event mMessage is one of key events.
+   * Returns true if aMessage or mMessage is one of key events.
    */
-  bool HasKeyEventMessage() const;
+  static bool IsKeyEventMessage(EventMessage aMessage);
+  bool HasKeyEventMessage() const
+  {
+    return IsKeyEventMessage(mMessage);
+  }
   /**
    * Returns true if the event mMessage is one of composition events or text
    * event.
@@ -526,6 +800,11 @@ public:
    * Returns true if the event can be sent to remote process.
    */
   bool CanBeSentToRemoteProcess() const;
+  /**
+   * Returns true if the original target is a remote process and the event
+   * will be posted to the remote process later.
+   */
+  bool WillBeSentToRemoteProcess() const;
   /**
    * Returns true if the event is native event deliverer event for plugin and
    * it should be retarted to focused document.
@@ -731,6 +1010,8 @@ public:
                                                mMessage != eLoadEnd &&
                                                mMessage != eLoadError;
   }
+
+  bool IsUserAction() const;
 };
 
 /******************************************************************************

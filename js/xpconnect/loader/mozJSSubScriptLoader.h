@@ -36,18 +36,20 @@ private:
     bool ReadScript(nsIURI* uri, JSContext* cx, JS::HandleObject targetObj,
                     const nsAString& charset, const char* uriStr,
                     nsIIOService* serv,
-                    bool reuseGlobal, JS::MutableHandleScript script,
-                    JS::MutableHandleFunction function);
+                    bool wantReturnValue,
+                    JS::MutableHandleScript script);
 
-    nsresult ReadScriptAsync(nsIURI* uri, JS::HandleObject targetObj,
+    nsresult ReadScriptAsync(nsIURI* uri,
+                             JS::HandleObject targetObj,
+                             JS::HandleObject loadScope,
                              const nsAString& charset,
-                             nsIIOService* serv, bool reuseGlobal,
-                             bool cache, JS::MutableHandleValue retval);
+                             nsIIOService* serv,
+                             bool wantReturnValue,
+                             bool cache,
+                             JS::MutableHandleValue retval);
 
     nsresult DoLoadSubScriptWithOptions(const nsAString& url,
                                         LoadSubScriptOptions& options,
                                         JSContext* cx,
                                         JS::MutableHandleValue retval);
-
-    nsCOMPtr<nsIPrincipal> mSystemPrincipal;
 };

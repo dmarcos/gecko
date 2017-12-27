@@ -1,35 +1,56 @@
 "use strict";
 
+/* global windowTracker, EventManager, EventEmitter */
+
 Cu.import("resource://gre/modules/Services.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
-                                  "resource://gre/modules/Preferences.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "LightweightThemeManager",
                                   "resource://gre/modules/LightweightThemeManager.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "gThemesEnabled", () => {
-  return Preferences.get("extensions.webextensions.themes.enabled");
+  return Services.prefs.getBoolPref("extensions.webextensions.themes.enabled");
 });
 
-const ICONS = Preferences.get("extensions.webextensions.themes.icons.buttons", "").split(",");
+var {
+  getWinUtils,
+} = ExtensionUtils;
 
-/** Class representing a theme. */
+const ICONS = Services.prefs.getStringPref("extensions.webextensions.themes.icons.buttons", "").split(",");
+
+const onUpdatedEmitter = new EventEmitter();
+
+// Represents an empty theme for convenience of use
+const emptyTheme = {
+  details: {},
+};
+
+
+let defaultTheme = emptyTheme;
+// Map[windowId -> Theme instance]
+let windowOverrides = new Map();
+
+/**
+ * Class representing either a global theme affecting all windows or an override on a specific window.
+ * Any extension updating the theme with a new global theme will replace the singleton defaultTheme.
+ */
 class Theme {
   /**
    * Creates a theme instance.
    *
-   * @param {string} baseURI The base URI of the extension, used to
-   *   resolve relative filepaths.
-   * @param {Object} logger  Reference to the (console) logger that will be used
-   *   to show manifest warnings to the theme author.
+   * @param {string} extension Extension that created the theme.
+   * @param {Integer} windowId The windowId where the theme is applied.
    */
-  constructor(baseURI, logger) {
-    // A dictionary of light weight theme styles.
+  constructor(extension, windowId) {
+    // The base URI of the extension, used to resolve relative filepaths.
+    this.baseURI = extension.baseURI;
+    // Logger that will be used to show manifest warnings to the theme author.
+    this.logger = extension.logger;
+
+    this.extension = extension;
+    this.windowId = windowId;
     this.lwtStyles = {
       icons: {},
     };
-    this.baseURI = baseURI;
-    this.logger = logger;
   }
 
   /**
@@ -40,6 +61,13 @@ class Theme {
    *   properties can be found in the schema under ThemeType.
    */
   load(details) {
+    this.details = details;
+
+    if (this.windowId) {
+      this.lwtStyles.window = getWinUtils(
+        windowTracker.getWindow(this.windowId)).outerWindowID;
+    }
+
     if (details.colors) {
       this.loadColors(details.colors);
     }
@@ -60,10 +88,21 @@ class Theme {
     if (this.lwtStyles.headerURL &&
         this.lwtStyles.accentcolor &&
         this.lwtStyles.textcolor) {
+      if (this.windowId) {
+        windowOverrides.set(this.windowId, this);
+      } else {
+        windowOverrides.clear();
+        defaultTheme = this;
+      }
+      onUpdatedEmitter.emit("theme-updated", this.details, this.windowId);
+
       LightweightThemeManager.fallbackThemeData = this.lwtStyles;
       Services.obs.notifyObservers(null,
-        "lightweight-theme-styling-update",
-        JSON.stringify(this.lwtStyles));
+                                   "lightweight-theme-styling-update",
+                                   JSON.stringify(this.lwtStyles));
+    } else {
+      this.logger.warn("Your theme doesn't include one of the following required " +
+        "properties: 'headerURL', 'accentcolor' or 'textcolor'");
     }
   }
 
@@ -91,8 +130,24 @@ class Theme {
           this.lwtStyles.accentcolor = cssColor;
           break;
         case "textcolor":
-        case "tab_text":
+        case "background_tab_text":
           this.lwtStyles.textcolor = cssColor;
+          break;
+        case "toolbar":
+          this.lwtStyles.toolbarColor = cssColor;
+          break;
+        case "toolbar_text":
+        case "bookmark_text":
+          this.lwtStyles.toolbar_text = cssColor;
+          break;
+        case "tab_text":
+        case "toolbar_field":
+        case "toolbar_field_text":
+        case "toolbar_field_border":
+        case "toolbar_top_separator":
+        case "toolbar_bottom_separator":
+        case "toolbar_vertical_separator":
+          this.lwtStyles[color] = cssColor;
           break;
       }
     }
@@ -133,14 +188,17 @@ class Theme {
    * @param {Object} icons Dictionary mapping icon properties to extension URLs.
    */
   loadIcons(icons) {
-    if (!Preferences.get("extensions.webextensions.themes.icons.enabled")) {
+    if (!Services.prefs.getBoolPref("extensions.webextensions.themes.icons.enabled")) {
       // Return early if icons are disabled.
       return;
     }
 
     for (let icon of Object.getOwnPropertyNames(icons)) {
       let val = icons[icon];
-      if (!val || !ICONS.includes(icon)) {
+      // We also have to compare against the baseURI spec because
+      // `val` might have been resolved already. Resolving "" against
+      // the baseURI just produces that URI, so check for equality.
+      if (!val || val == this.baseURI.spec || !ICONS.includes(icon)) {
         continue;
       }
       let variableName = `--${icon}-icon`;
@@ -212,10 +270,7 @@ class Theme {
     }
   }
 
-  /**
-   * Unloads the currently applied theme.
-   */
-  unload() {
+  static unload(windowId) {
     let lwtStyles = {
       headerURL: "",
       accentcolor: "",
@@ -226,13 +281,22 @@ class Theme {
       icons: {},
     };
 
+    if (windowId) {
+      lwtStyles.window = getWinUtils(windowTracker.getWindow(windowId)).outerWindowID;
+      windowOverrides.set(windowId, emptyTheme);
+    } else {
+      windowOverrides.clear();
+      defaultTheme = emptyTheme;
+    }
+    onUpdatedEmitter.emit("theme-updated", {}, windowId);
+
     for (let icon of ICONS) {
       lwtStyles.icons[`--${icon}--icon`] = "";
     }
     LightweightThemeManager.fallbackThemeData = null;
     Services.obs.notifyObservers(null,
-      "lightweight-theme-styling-update",
-      JSON.stringify(lwtStyles));
+                                 "lightweight-theme-styling-update",
+                                 JSON.stringify(lwtStyles));
   }
 }
 
@@ -251,13 +315,24 @@ this.theme = class extends ExtensionAPI {
       return;
     }
 
-    this.theme = new Theme(extension.baseURI, extension.logger);
-    this.theme.load(manifest.theme);
+    defaultTheme = new Theme(extension);
+    defaultTheme.load(manifest.theme);
   }
 
-  onShutdown() {
-    if (this.theme) {
-      this.theme.unload();
+  onShutdown(reason) {
+    if (reason === "APP_SHUTDOWN") {
+      return;
+    }
+
+    let {extension} = this;
+    for (let [windowId, theme] of windowOverrides) {
+      if (theme.extension === extension) {
+        Theme.unload(windowId);
+      }
+    }
+
+    if (defaultTheme.extension === extension) {
+      Theme.unload();
     }
   }
 
@@ -266,21 +341,67 @@ this.theme = class extends ExtensionAPI {
 
     return {
       theme: {
-        update: (details) => {
+        getCurrent: (windowId) => {
+          // Take last focused window when no ID is supplied.
+          if (!windowId) {
+            windowId = windowTracker.getId(windowTracker.topWindow);
+          }
+
+          if (windowOverrides.has(windowId)) {
+            return Promise.resolve(windowOverrides.get(windowId).details);
+          }
+          return Promise.resolve(defaultTheme.details);
+        },
+        update: (windowId, details) => {
           if (!gThemesEnabled) {
             // Return early if themes are disabled.
             return;
           }
 
-          if (!this.theme) {
-            // WebExtensions using the Theme API will not have a theme defined
-            // in the manifest. Therefore, we need to initialize the theme the
-            // first time browser.theme.update is called.
-            this.theme = new Theme(extension.baseURI, extension.logger);
+          if (windowId) {
+            const browserWindow = windowTracker.getWindow(windowId, context);
+            if (!browserWindow) {
+              return Promise.reject(`Invalid window ID: ${windowId}`);
+            }
           }
 
-          this.theme.load(details);
+          let theme = new Theme(extension, windowId);
+          theme.load(details);
         },
+        reset: (windowId) => {
+          if (!gThemesEnabled) {
+            // Return early if themes are disabled.
+            return;
+          }
+
+          if (windowId) {
+            const browserWindow = windowTracker.getWindow(windowId, context);
+            if (!browserWindow) {
+              return Promise.reject(`Invalid window ID: ${windowId}`);
+            }
+          }
+
+          if (!defaultTheme && !windowOverrides.has(windowId)) {
+            // If no theme has been initialized, nothing to do.
+            return;
+          }
+
+          Theme.unload(windowId);
+        },
+        onUpdated: new EventManager(context, "theme.onUpdated", fire => {
+          let callback = (event, theme, windowId) => {
+            if (windowId) {
+              fire.async({theme, windowId});
+            } else {
+              fire.async({theme});
+            }
+          };
+
+          onUpdatedEmitter.on("theme-updated", callback);
+          return () => {
+            onUpdatedEmitter.off("theme-updated", callback);
+          };
+        }).api(),
       },
     };
   }

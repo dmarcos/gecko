@@ -4,14 +4,13 @@
 
 use dom::bindings::codegen::Bindings::HTMLMeterElementBinding::{self, HTMLMeterElementMethods};
 use dom::bindings::inheritance::Castable;
-use dom::bindings::js::Root;
-use dom::bindings::str::DOMString;
+use dom::bindings::root::DomRoot;
 use dom::document::Document;
 use dom::htmlelement::HTMLElement;
 use dom::node::Node;
 use dom::nodelist::NodeList;
 use dom_struct::dom_struct;
-use html5ever_atoms::LocalName;
+use html5ever::{LocalName, Prefix};
 
 #[dom_struct]
 pub struct HTMLMeterElement {
@@ -20,7 +19,7 @@ pub struct HTMLMeterElement {
 
 impl HTMLMeterElement {
     fn new_inherited(local_name: LocalName,
-                     prefix: Option<DOMString>,
+                     prefix: Option<Prefix>,
                      document: &Document) -> HTMLMeterElement {
         HTMLMeterElement {
             htmlelement: HTMLElement::new_inherited(local_name, prefix, document)
@@ -29,9 +28,9 @@ impl HTMLMeterElement {
 
     #[allow(unrooted_must_root)]
     pub fn new(local_name: LocalName,
-               prefix: Option<DOMString>,
-               document: &Document) -> Root<HTMLMeterElement> {
-        Node::reflect_node(box HTMLMeterElement::new_inherited(local_name, prefix, document),
+               prefix: Option<Prefix>,
+               document: &Document) -> DomRoot<HTMLMeterElement> {
+        Node::reflect_node(Box::new(HTMLMeterElement::new_inherited(local_name, prefix, document)),
                            document,
                            HTMLMeterElementBinding::Wrap)
     }
@@ -39,7 +38,7 @@ impl HTMLMeterElement {
 
 impl HTMLMeterElementMethods for HTMLMeterElement {
     // https://html.spec.whatwg.org/multipage/#dom-lfe-labels
-    fn Labels(&self) -> Root<NodeList> {
+    fn Labels(&self) -> DomRoot<NodeList> {
         self.upcast::<HTMLElement>().labels()
     }
 }

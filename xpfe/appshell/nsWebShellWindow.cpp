@@ -68,6 +68,7 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/EventDispatcher.h"
 #include "mozilla/MouseEvents.h"
 
 #include "nsPIWindowRoot.h"
@@ -208,7 +209,7 @@ nsresult nsWebShellWindow::Initialize(nsIXULWindow* aParent,
 
   r.x = r.y = 0;
   nsCOMPtr<nsIBaseWindow> docShellAsWin(do_QueryInterface(mDocShell));
-  NS_ENSURE_SUCCESS(docShellAsWin->InitWindow(nullptr, mWindow, 
+  NS_ENSURE_SUCCESS(docShellAsWin->InitWindow(nullptr, mWindow,
    r.x, r.y, r.width, r.height), NS_ERROR_FAILURE);
   NS_ENSURE_SUCCESS(docShellAsWin->Create(), NS_ERROR_FAILURE);
 
@@ -257,10 +258,11 @@ nsresult nsWebShellWindow::Initialize(nsIXULWindow* aParent,
                          nsIWebNavigation::LOAD_FLAGS_NONE,
                          nullptr,
                          nullptr,
-                         nullptr);
+                         nullptr,
+                         nsContentUtils::GetSystemPrincipal());
     NS_ENSURE_SUCCESS(rv, rv);
   }
-                     
+
   return rv;
 }
 
@@ -330,9 +332,10 @@ nsWebShellWindow::RequestWindowClose(nsIWidget* aWidget)
     RefPtr<nsPresContext> presContext = presShell->GetPresContext();
 
     nsEventStatus status = nsEventStatus_eIgnore;
-    WidgetMouseEvent event(true, eWindowClose, nullptr,
+    WidgetMouseEvent event(true, eClose, nullptr,
                            WidgetMouseEvent::eReal);
-    if (NS_SUCCEEDED(eventTarget->DispatchDOMEvent(&event, nullptr, presContext, &status)) &&
+    if (NS_SUCCEEDED(EventDispatcher::Dispatch(eventTarget, presContext,
+                                               &event, nullptr, &status)) &&
         status == nsEventStatus_eConsumeNoDefault)
       return false;
   }
@@ -363,8 +366,6 @@ nsWebShellWindow::SizeModeChanged(nsSizeMode sizeMode)
   nsCOMPtr<nsPIDOMWindowOuter> ourWindow =
     mDocShell ? mDocShell->GetWindow() : nullptr;
   if (ourWindow) {
-    MOZ_ASSERT(ourWindow->IsOuterWindow());
-
     // Ensure that the fullscreen state is synchronized between
     // the widget and the outer window object.
     if (sizeMode == nsSizeMode_Fullscreen) {
@@ -405,8 +406,17 @@ nsWebShellWindow::UIResolutionChanged()
   nsCOMPtr<nsPIDOMWindowOuter> ourWindow =
     mDocShell ? mDocShell->GetWindow() : nullptr;
   if (ourWindow) {
-    MOZ_ASSERT(ourWindow->IsOuterWindow());
     ourWindow->DispatchCustomEvent(NS_LITERAL_STRING("resolutionchange"));
+  }
+}
+
+void
+nsWebShellWindow::FullscreenWillChange(bool aInFullscreen)
+{
+  if (mDocShell) {
+    if (nsCOMPtr<nsPIDOMWindowOuter> ourWindow = mDocShell->GetWindow()) {
+      ourWindow->FullscreenWillChange(aInFullscreen);
+    }
   }
 }
 
@@ -417,6 +427,17 @@ nsWebShellWindow::FullscreenChanged(bool aInFullscreen)
     if (nsCOMPtr<nsPIDOMWindowOuter> ourWindow = mDocShell->GetWindow()) {
       ourWindow->FinishFullscreenChange(aInFullscreen);
     }
+  }
+}
+
+void
+nsWebShellWindow::OcclusionStateChanged(bool aIsFullyOccluded)
+{
+  nsCOMPtr<nsPIDOMWindowOuter> ourWindow =
+    mDocShell ? mDocShell->GetWindow() : nullptr;
+  if (ourWindow) {
+    // And always fire a user-defined occlusionstatechange event on the window
+    ourWindow->DispatchCustomEvent(NS_LITERAL_STRING("occlusionstatechange"));
   }
 }
 
@@ -488,6 +509,9 @@ nsWebShellWindow::WindowDeactivated()
 #ifdef USE_NATIVE_MENUS
 static void LoadNativeMenus(nsIDOMDocument *aDOMDoc, nsIWidget *aParentWindow)
 {
+  if (gfxPlatform::IsHeadless()) {
+    return;
+  }
   nsCOMPtr<nsINativeMenuService> nms = do_GetService("@mozilla.org/widget/nativemenuservice;1");
   if (!nms) {
     return;
@@ -505,7 +529,7 @@ static void LoadNativeMenus(nsIDOMDocument *aDOMDoc, nsIWidget *aParentWindow)
     menubarElements->Item(0, getter_AddRefs(menubarNode));
 
   if (menubarNode) {
-    nsCOMPtr<nsIContent> menubarContent(do_QueryInterface(menubarNode));
+    nsCOMPtr<Element> menubarContent(do_QueryInterface(menubarNode));
     nms->CreateNativeMenuBar(aParentWindow, menubarContent);
   } else {
     nms->CreateNativeMenuBar(aParentWindow, nullptr);
@@ -516,6 +540,7 @@ static void LoadNativeMenus(nsIDOMDocument *aDOMDoc, nsIWidget *aParentWindow)
 namespace mozilla {
 
 class WebShellWindowTimerCallback final : public nsITimerCallback
+                                        , public nsINamed
 {
 public:
   explicit WebShellWindowTimerCallback(nsWebShellWindow* aWindow)
@@ -534,13 +559,19 @@ public:
     return NS_OK;
   }
 
+  NS_IMETHOD GetName(nsACString& aName) override
+  {
+    aName.AssignLiteral("WebShellWindowTimerCallback");
+    return NS_OK;
+  }
+
 private:
   ~WebShellWindowTimerCallback() {}
 
   RefPtr<nsWebShellWindow> mWindow;
 };
 
-NS_IMPL_ISUPPORTS(WebShellWindowTimerCallback, nsITimerCallback)
+NS_IMPL_ISUPPORTS(WebShellWindowTimerCallback, nsITimerCallback, nsINamed)
 
 } // namespace mozilla
 
@@ -549,7 +580,7 @@ nsWebShellWindow::SetPersistenceTimer(uint32_t aDirtyFlags)
 {
   MutexAutoLock lock(mSPTimerLock);
   if (!mSPTimer) {
-    mSPTimer = do_CreateInstance("@mozilla.org/timer;1");
+    mSPTimer = NS_NewTimer();
     if (!mSPTimer) {
       NS_WARNING("Couldn't create @mozilla.org/timer;1 instance?");
       return;
@@ -595,7 +626,7 @@ nsWebShellWindow::OnStateChange(nsIWebProgress *aProgress,
 {
   // If the notification is not about a document finishing, then just
   // ignore it...
-  if (!(aStateFlags & nsIWebProgressListener::STATE_STOP) || 
+  if (!(aStateFlags & nsIWebProgressListener::STATE_STOP) ||
       !(aStateFlags & nsIWebProgressListener::STATE_IS_NETWORK)) {
     return NS_OK;
   }
@@ -644,7 +675,7 @@ nsWebShellWindow::OnLocationChange(nsIWebProgress *aProgress,
   return NS_OK;
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsWebShellWindow::OnStatusChange(nsIWebProgress* aWebProgress,
                                  nsIRequest* aRequest,
                                  nsresult aStatus,
@@ -690,11 +721,11 @@ bool nsWebShellWindow::ExecuteCloseHandler()
       contentViewer->GetPresContext(getter_AddRefs(presContext));
 
       nsEventStatus status = nsEventStatus_eIgnore;
-      WidgetMouseEvent event(true, eWindowClose, nullptr,
+      WidgetMouseEvent event(true, eClose, nullptr,
                              WidgetMouseEvent::eReal);
 
-      nsresult rv =
-        eventTarget->DispatchDOMEvent(&event, nullptr, presContext, &status);
+      nsresult rv = EventDispatcher::Dispatch(eventTarget, presContext,
+                                              &event, nullptr, &status);
       if (NS_SUCCEEDED(rv) && status == nsEventStatus_eConsumeNoDefault)
         return true;
       // else fall through and return false

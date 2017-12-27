@@ -4,6 +4,8 @@
 tests for mozfile.load
 """
 
+from __future__ import absolute_import
+
 import mozhttpd
 import os
 import tempfile
@@ -60,6 +62,7 @@ class TestLoad(unittest.TestCase):
             # remove the tempfile
             if os.path.exists(tmp.name):
                 os.remove(tmp.name)
+
 
 if __name__ == '__main__':
     mozunit.main()

@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+from __future__ import absolute_import
+
 import os
 import time
 import proctest
@@ -30,6 +32,7 @@ class ProcTestKill(proctest.ProcTest):
         p.kill()
 
         self.determine_status(p, expectedfail=('returncode',))
+
 
 if __name__ == '__main__':
     mozunit.main()

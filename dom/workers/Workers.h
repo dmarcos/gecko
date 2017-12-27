@@ -9,6 +9,7 @@
 
 #include "jsapi.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/Mutex.h"
 #include <stdint.h>
 #include "nsAutoPtr.h"
@@ -21,6 +22,7 @@
 #include "nsIWeakReferenceUtils.h"
 #include "nsIInterfaceRequestor.h"
 #include "mozilla/dom/ChannelInfo.h"
+#include "mozilla/dom/ServiceWorkerDescriptor.h"
 #include "mozilla/net/ReferrerPolicy.h"
 
 #define BEGIN_WORKERS_NAMESPACE \
@@ -102,25 +104,12 @@ struct JSSettings
 
   struct JSGCSetting
   {
-    JSGCParamKey key;
+    mozilla::Maybe<JSGCParamKey> key;
     uint32_t value;
 
     JSGCSetting()
-    : key(static_cast<JSGCParamKey>(-1)), value(0)
+    : key(), value(0)
     { }
-
-    bool
-    IsSet() const
-    {
-      return key != static_cast<JSGCParamKey>(-1);
-    }
-
-    void
-    Unset()
-    {
-      key = static_cast<JSGCParamKey>(-1);
-      value = 0;
-    }
   };
 
   // There are several settings that we know we need so it makes sense to
@@ -166,11 +155,11 @@ struct JSSettings
 
     for (uint32_t index = 0; index < ArrayLength(gcSettings); index++) {
       JSSettings::JSGCSetting& setting = gcSettings[index];
-      if (setting.key == aKey) {
+      if (setting.key.isSome() && *setting.key == aKey) {
         foundSetting = &setting;
         break;
       }
-      if (!firstEmptySetting && !setting.IsSet()) {
+      if (!firstEmptySetting && setting.key.isNothing()) {
         firstEmptySetting = &setting;
       }
     }
@@ -183,13 +172,13 @@ struct JSSettings
           return false;
         }
       }
-      foundSetting->key = aKey;
+      foundSetting->key = mozilla::Some(aKey);
       foundSetting->value = aValue;
       return true;
     }
 
     if (foundSetting) {
-      foundSetting->Unset();
+      foundSetting->key.reset();
       return true;
     }
 
@@ -214,7 +203,14 @@ struct WorkerLoadInfo
   // All of these should be released in WorkerPrivateParent::ForgetMainThreadObjects.
   nsCOMPtr<nsIURI> mBaseURI;
   nsCOMPtr<nsIURI> mResolvedScriptURI;
+
+  // This is the principal of the global (parent worker or a window) loading
+  // the worker. It can be null if we are executing a ServiceWorker, otherwise,
+  // except for data: URL, it must subsumes the worker principal.
+  // If we load a data: URL, mPrincipal will be a null principal.
+  nsCOMPtr<nsIPrincipal> mLoadingPrincipal;
   nsCOMPtr<nsIPrincipal> mPrincipal;
+
   nsCOMPtr<nsIScriptContext> mScriptContext;
   nsCOMPtr<nsPIDOMWindowInner> mWindow;
   nsCOMPtr<nsIContentSecurityPolicy> mCSP;
@@ -257,12 +253,12 @@ struct WorkerLoadInfo
   nsString mOrigin; // Derived from mPrincipal; can be used on worker thread.
 
   nsString mServiceWorkerCacheName;
+  Maybe<ServiceWorkerDescriptor> mServiceWorkerDescriptor;
 
   ChannelInfo mChannelInfo;
   nsLoadFlags mLoadFlags;
 
   uint64_t mWindowID;
-  uint64_t mServiceWorkerID;
 
   net::ReferrerPolicy mReferrerPolicy;
   bool mFromWindow;
@@ -290,7 +286,7 @@ struct WorkerLoadInfo
   nsresult
   SetPrincipalFromChannel(nsIChannel* aChannel);
 
-#if defined(DEBUG) || !defined(RELEASE_OR_BETA)
+#ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
   bool
   FinalChannelPrincipalIsValid(nsIChannel* aChannel);
 
@@ -377,9 +373,6 @@ public:
   bool
   PostTask(WorkerTask* aTask);
 };
-
-WorkerCrossThreadDispatcher*
-GetWorkerCrossThreadDispatcher(JSContext* aCx, const JS::Value& aWorker);
 
 // Random unique constant to facilitate JSPrincipal debugging
 const uint32_t kJSPrincipalsDebugToken = 0x7e2df9d2;

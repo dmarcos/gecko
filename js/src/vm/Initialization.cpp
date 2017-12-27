@@ -31,6 +31,7 @@
 #include "vm/Time.h"
 #include "vm/TraceLogging.h"
 #include "vtune/VTuneWrapper.h"
+#include "wasm/WasmBuiltins.h"
 #include "wasm/WasmInstance.h"
 
 using JS::detail::InitState;
@@ -81,14 +82,15 @@ JS::detail::InitWithFailureDiagnostic(bool isDebugBuild)
     MOZ_ASSERT(!JSRuntime::hasLiveRuntimes(),
                "how do we have live runtimes before JS_Init?");
 
+    libraryInitState = InitState::Initializing;
+
     PRMJ_NowInit();
 
     // The first invocation of `ProcessCreation` creates a temporary thread
     // and crashes if that fails, i.e. because we're out of memory. To prevent
     // that from happening at some later time, get it out of the way during
     // startup.
-    bool ignored;
-    mozilla::TimeStamp::ProcessCreation(ignored);
+    mozilla::TimeStamp::ProcessCreation();
 
 #ifdef DEBUG
     CheckMessageParameterCounts();
@@ -98,19 +100,19 @@ JS::detail::InitWithFailureDiagnostic(bool isDebugBuild)
 
 #if defined(DEBUG) || defined(JS_OOM_BREAKPOINT)
     RETURN_IF_FAIL(js::oom::InitThreadType());
-    js::oom::SetThreadType(js::oom::THREAD_TYPE_COOPERATING);
 #endif
+
+    js::InitMallocAllocator();
 
     RETURN_IF_FAIL(js::Mutex::Init());
 
     RETURN_IF_FAIL(js::wasm::InitInstanceStaticData());
 
     js::gc::InitMemorySubsystem(); // Ensure gc::SystemPageSize() works.
-    RETURN_IF_FAIL(js::gc::InitializeStaticData());
 
     RETURN_IF_FAIL(js::jit::InitProcessExecutableMemory());
 
-    MOZ_ALWAYS_TRUE(js::MemoryProtectionExceptionHandler::install());
+    RETURN_IF_FAIL(js::MemoryProtectionExceptionHandler::install());
 
     RETURN_IF_FAIL(js::jit::InitializeIon());
 
@@ -172,6 +174,7 @@ JS_ShutDown(void)
     js::MemoryProtectionExceptionHandler::uninstall();
 
     js::wasm::ShutDownInstanceStaticData();
+    js::wasm::ShutDownProcessStaticData();
 
     js::Mutex::ShutDown();
 
@@ -190,10 +193,19 @@ JS_ShutDown(void)
     u_cleanup();
 #endif // EXPOSE_INTL_API
 
+#ifdef MOZ_VTUNE
+    js::vtune::Shutdown();
+#endif // MOZ_VTUNE
+
     js::FinishDateTimeState();
 
-    if (!JSRuntime::hasLiveRuntimes())
+    if (!JSRuntime::hasLiveRuntimes()) {
+        js::wasm::ReleaseBuiltinThunks();
         js::jit::ReleaseProcessExecutableMemory();
+        MOZ_ASSERT(!js::LiveMappedBufferCount());
+    }
+
+    js::ShutDownMallocAllocator();
 
     libraryInitState = InitState::ShutDown;
 }

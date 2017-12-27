@@ -5,7 +5,7 @@
 description: Rest object doesn't contain non-enumerable properties (For..of statement)
 esid: sec-for-in-and-for-of-statements-runtime-semantics-labelledevaluation
 es6id: 13.7.5.11
-features: [destructuring-binding]
+features: [object-rest, destructuring-binding]
 flags: [generated]
 includes: [propertyHelper.js]
 info: |
@@ -33,18 +33,21 @@ Object.defineProperty(obj, "x", { value: 4, enumerable: false });
 var counter = 0;
 
 for ({...rest} of [obj]) {
-  assert.sameValue(rest.a, 3);
-  assert.sameValue(rest.b, 4);
   assert.sameValue(Object.getOwnPropertyDescriptor(rest, "x"), undefined);
 
-  verifyEnumerable(rest, "a");
-  verifyWritable(rest, "a");
-  verifyConfigurable(rest, "a");
+  verifyProperty(rest, "a", {
+    enumerable: true,
+    writable: true,
+    configurable: true,
+    value: 3
+  });
 
-  verifyEnumerable(rest, "b");
-  verifyWritable(rest, "b");
-  verifyConfigurable(rest, "b");
-
+  verifyProperty(rest, "b", {
+    enumerable: true,
+    writable: true,
+    configurable: true,
+    value: 4
+  });
   counter += 1;
 }
 

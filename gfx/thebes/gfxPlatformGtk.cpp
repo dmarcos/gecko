@@ -13,14 +13,13 @@
 #include "nsUnicodeProperties.h"
 #include "gfx2DGlue.h"
 #include "gfxFcPlatformFontList.h"
-#include "gfxFontconfigUtils.h"
-#include "gfxFontconfigFonts.h"
 #include "gfxConfig.h"
 #include "gfxContext.h"
 #include "gfxUserFontSet.h"
 #include "gfxUtils.h"
 #include "gfxFT2FontBase.h"
 #include "gfxPrefs.h"
+#include "gfxTextRun.h"
 #include "VsyncSource.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Monitor.h"
@@ -66,6 +65,7 @@
 using namespace mozilla;
 using namespace mozilla::gfx;
 using namespace mozilla::unicode;
+using mozilla::dom::SystemFontListEntry;
 
 #if (MOZ_WIDGET_GTK == 2)
 static cairo_user_data_key_t cairo_gdk_drawable_key;
@@ -183,7 +183,7 @@ gfxPlatformGtk::CreateOffscreenSurface(const IntSize& aSize,
 }
 
 nsresult
-gfxPlatformGtk::GetFontList(nsIAtom *aLangGroup,
+gfxPlatformGtk::GetFontList(nsAtom *aLangGroup,
                             const nsACString& aGenericFamily,
                             nsTArray<nsString>& aListOfFonts)
 {
@@ -217,24 +217,20 @@ gfxPlatformGtk::GetCommonFallbackFonts(uint32_t aCh, uint32_t aNextCh,
                                        Script aRunScript,
                                        nsTArray<const char*>& aFontList)
 {
-    if (aNextCh == 0xfe0fu) {
-      // if char is followed by VS16, try for a color emoji glyph
-      aFontList.AppendElement(kFontEmojiOneMozilla);
+    EmojiPresentation emoji = GetEmojiPresentation(aCh);
+    if (emoji != EmojiPresentation::TextOnly) {
+        if (aNextCh == kVariationSelector16 ||
+           (aNextCh != kVariationSelector15 &&
+            emoji == EmojiPresentation::EmojiDefault)) {
+            // if char is followed by VS16, try for a color emoji glyph
+            aFontList.AppendElement(kFontEmojiOneMozilla);
+        }
     }
 
     aFontList.AppendElement(kFontDejaVuSerif);
     aFontList.AppendElement(kFontFreeSerif);
     aFontList.AppendElement(kFontDejaVuSans);
     aFontList.AppendElement(kFontFreeSans);
-
-    if (!IS_IN_BMP(aCh)) {
-        uint32_t p = aCh >> 16;
-        if (p == 1) { // try color emoji font, unless VS15 (text style) present
-            if (aNextCh != 0xfe0fu && aNextCh != 0xfe0eu) {
-                aFontList.AppendElement(kFontEmojiOneMozilla);
-            }
-        }
-    }
 
     // add fonts for CJK ranges
     // xxx - this isn't really correct, should use the same CJK font ordering
@@ -248,6 +244,13 @@ gfxPlatformGtk::GetCommonFallbackFonts(uint32_t aCh, uint32_t aNextCh,
         aFontList.AppendElement(kFontWenQuanYiMicroHei);
         aFontList.AppendElement(kFontNanumGothic);
     }
+}
+
+void
+gfxPlatformGtk::ReadSystemFontList(
+    InfallibleTArray<SystemFontListEntry>* retValue)
+{
+    gfxFcPlatformFontList::PlatformFontList()->ReadSystemFontList(retValue);
 }
 
 gfxPlatformFontList*
@@ -310,34 +313,10 @@ gfxPlatformGtk::GetFTLibrary()
     return gfxFcPlatformFontList::GetFTLibrary();
 }
 
-bool
-gfxPlatformGtk::IsFontFormatSupported(nsIURI *aFontURI, uint32_t aFormatFlags)
-{
-    // check for strange format flags
-    NS_ASSERTION(!(aFormatFlags & gfxUserFontSet::FLAG_FORMAT_NOT_USED),
-                 "strange font format hint set");
-
-    // accept supported formats
-    // Pango doesn't apply features from AAT TrueType extensions.
-    // Assume that if this is the only SFNT format specified,
-    // then AAT extensions are required for complex script support.
-    if (aFormatFlags & gfxUserFontSet::FLAG_FORMATS_COMMON) {
-        return true;
-    }
-
-    // reject all other formats, known and unknown
-    if (aFormatFlags != 0) {
-        return false;
-    }
-
-    // no format hint set, need to look at data
-    return true;
-}
-
 static int32_t sDPI = 0;
 
 int32_t
-gfxPlatformGtk::GetDPI()
+gfxPlatformGtk::GetFontScaleDPI()
 {
     if (!sDPI) {
         // Make sure init is run so we have a resolution
@@ -353,14 +332,14 @@ gfxPlatformGtk::GetDPI()
 }
 
 double
-gfxPlatformGtk::GetDPIScale()
+gfxPlatformGtk::GetFontScaleFactor()
 {
     // Integer scale factors work well with GTK window scaling, image scaling,
     // and pixel alignment, but there is a range where 1 is too small and 2 is
     // too big.  An additional step of 1.5 is added because this is common
     // scale on WINNT and at this ratio the advantages of larger rendering
     // outweigh the disadvantages from scaling and pixel mis-alignment.
-    int32_t dpi = GetDPI();
+    int32_t dpi = GetFontScaleDPI();
     if (dpi < 132) {
         return 1.0;
     }
@@ -592,26 +571,6 @@ gfxPlatformGtk::GetGdkDrawable(cairo_surface_t *target)
 }
 #endif
 
-already_AddRefed<ScaledFont>
-gfxPlatformGtk::GetScaledFontForFont(DrawTarget* aTarget, gfxFont *aFont)
-{
-    switch (aTarget->GetBackendType()) {
-    case BackendType::CAIRO:
-    case BackendType::SKIA:
-        if (aFont->GetType() == gfxFont::FONT_TYPE_FONTCONFIG) {
-            gfxFontconfigFontBase* fcFont = static_cast<gfxFontconfigFontBase*>(aFont);
-            return Factory::CreateScaledFontForFontconfigFont(
-                    fcFont->GetCairoScaledFont(),
-                    fcFont->GetPattern(),
-                    fcFont->GetUnscaledFont(),
-                    fcFont->GetAdjustedSize());
-        }
-        MOZ_FALLTHROUGH;
-    default:
-        return GetScaledFontForFontWithCairoSkia(aTarget, aFont);
-    }
-}
-
 #ifdef GL_PROVIDER_GLX
 
 class GLXVsyncSource final : public VsyncSource
@@ -658,7 +617,10 @@ public:
       if (!mVsyncThread.Start())
         return false;
 
-      RefPtr<Runnable> vsyncSetup = NewRunnableMethod(this, &GLXDisplay::SetupGLContext);
+      RefPtr<Runnable> vsyncSetup =
+        NewRunnableMethod("GLXVsyncSource::GLXDisplay::SetupGLContext",
+                          this,
+                          &GLXDisplay::SetupGLContext);
       mVsyncThread.message_loop()->PostTask(vsyncSetup.forget());
       // Wait until the setup has completed.
       lock.Wait();
@@ -730,7 +692,8 @@ public:
       // If the task has not nulled itself out, it hasn't yet realized
       // that vsync was disabled earlier, so continue its execution.
       if (!mVsyncTask) {
-        mVsyncTask = NewRunnableMethod(this, &GLXDisplay::RunVsync);
+        mVsyncTask = NewRunnableMethod(
+          "GLXVsyncSource::GLXDisplay::RunVsync", this, &GLXDisplay::RunVsync);
         RefPtr<Runnable> addrefedTask = mVsyncTask;
         mVsyncThread.message_loop()->PostTask(addrefedTask.forget());
       }
@@ -754,7 +717,8 @@ public:
       DisableVsync();
 
       // Cleanup thread-specific resources before shutting down.
-      RefPtr<Runnable> shutdownTask = NewRunnableMethod(this, &GLXDisplay::Cleanup);
+      RefPtr<Runnable> shutdownTask = NewRunnableMethod(
+        "GLXVsyncSource::GLXDisplay::Cleanup", this, &GLXDisplay::Cleanup);
       mVsyncThread.message_loop()->PostTask(shutdownTask.forget());
 
       // Stop, waiting for the cleanup task to finish execution.

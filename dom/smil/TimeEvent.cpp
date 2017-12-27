@@ -41,7 +41,7 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(TimeEvent, Event,
 NS_IMPL_ADDREF_INHERITED(TimeEvent, Event)
 NS_IMPL_RELEASE_INHERITED(TimeEvent, Event)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(TimeEvent)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(TimeEvent)
   NS_INTERFACE_MAP_ENTRY(nsIDOMTimeEvent)
 NS_INTERFACE_MAP_END_INHERITING(Event)
 
@@ -53,7 +53,7 @@ TimeEvent::GetDetail(int32_t* aDetail)
 }
 
 void
-TimeEvent::InitTimeEvent(const nsAString& aType, nsGlobalWindow* aView,
+TimeEvent::InitTimeEvent(const nsAString& aType, nsGlobalWindowInner* aView,
                          int32_t aDetail)
 {
   NS_ENSURE_TRUE_VOID(!mEvent->mFlags.mIsBeingDispatched);

@@ -3,7 +3,7 @@
     "message": "Интернеттен скриншоттарды түсіріп, оларды уақытша немесе тұрақты түрде сақтаңыз."
   },
   "addonAuthorsList": {
-    "message": "Mozilla <screenshots-feedback@mozilla.org>"
+    "message": "Mozilla <screenshots-feedback@mozilla.com>"
   },
   "contextMenuLabel": {
     "message": "Скриншотты түсіру"
@@ -29,6 +29,21 @@
   "downloadScreenshot": {
     "message": "Жүктеп алу"
   },
+  "downloadOnlyNotice": {
+    "message": "Сіз тек жүктеп алу режиміндесіз."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox скриншоттары тек жүктеп алу режиміне келесі жағдайларда ауысады:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "Жекелік шолу терезесінде."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Үшінші жақты cookies сөндірілген."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "\"Тарихты ешқашан сақтамау\" іске қосылған."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Сілтеме көшірілді"
   },
@@ -36,6 +51,28 @@
     "message": "Сіздің скриншотыңызға сілтеме алмасу буферіне көшірілді. Кірістіру үшін $META_KEY$-V басыңыз.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Көшіріп алу"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Скриншот көшірілді"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "Сіздің скриншотыңыз алмасу буферіне көшірілді. Кірістіру үшін $META_KEY$-V басыңыз.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "Бұл сурет $PIXELS$ пиксельге дейін қиылды.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -49,6 +86,12 @@
   "connectionErrorTitle": {
     "message": "Скриншоттарыңызға байланыса алмадық."
   },
+  "connectionErrorDetails": {
+    "message": "Интернетпен байланысыңызды тексеріңіз. Егер сізде интернетпен байланыс бар болса, онда Firefox скриншоттары қызметімен уақытша мәселелер болуы мүмкін."
+  },
+  "loginErrorDetails": {
+    "message": "Скриншотыңызды сақтай алмадық, өйткені Firefox скриншоттары қызметімен мәселе бар болып тұр. Кейінірек қайталап көріңіз."
+  },
   "unshootablePageErrorTitle": {
     "message": "Бұл беттің скриншотын түсіре алмаймыз."
   },
@@ -58,17 +101,47 @@
   "selfScreenshotErrorTitle": {
     "message": "Firefox скриншоттары бетінің скриншотын түсіру мүмкін емес!"
   },
+  "emptySelectionErrorTitle": {
+    "message": "Сіздің таңдауыңыз тым кішкентай"
+  },
+  "privateWindowErrorTitle": {
+    "message": "Скриншоттар жекелік шолу режимінде сөнідірілген"
+  },
+  "privateWindowErrorDetails": {
+    "message": "Қолайсыздық үшін кешірім сұраймыз. Бұл мүмкіндікті болашақ шығарылымдарда іске асыруға жұмысты жасаймыз."
+  },
   "genericErrorTitle": {
     "message": "Қап! Firefox скриншоттары жасамай қалған сияқты."
   },
-  "tourBodyOne": {
+  "genericErrorDetails": {
+    "message": "Не болғанын білмейміз. Қайталап көресіз бе, немесе басқа парақтың скриншотын түсіріп көресіз бе?"
+  },
+  "tourBodyIntro": {
     "message": "Firefox ішінен скриншоттарды түсіру, сақтау және олармен бөлісу."
   },
-  "tourHeaderTwo": {
+  "tourHeaderPageAction": {
+    "message": "Сақтаудың жаңа жолы"
+  },
+  "tourBodyPageAction": {
+    "message": "Скриншотты жасағыңыз келген уақытта адрестік жолақтың бет әрекеттері мәзірін ашыңыз."
+  },
+  "tourHeaderClickAndDrag": {
     "message": "Тек керек нәрсені түсіріңіз"
   },
-  "tourHeaderThree": {
+  "tourBodyClickAndDrag": {
+    "message": "Беттің тек бір бөлігін түсіру үшін тышқанды шертіп, тартыңыз. Таңдауыңызды түспен ерекшелеу үшін үстінен өткізсеңіз болады."
+  },
+  "tourHeaderFullPage": {
+    "message": "Терезелер немесе толық беттерді түсіріңіз"
+  },
+  "tourBodyFullPage": {
+    "message": "Жоғарғы оң жақта орналасқан батырмаларды терезенің көрінетін аймағын, немесе толық бетті түсіру үшін қолданыңыз."
+  },
+  "tourHeaderDownloadUpload": {
     "message": "Өзіңізге керек түрде"
+  },
+  "tourBodyDownloadUpload": {
+    "message": "Қиылған скриншоттармен оңай бөлісу үшін оларды интернетте сақтауға, немесе сіздің компьютеріңізге жүктеп алуға болады. Сонымен қатар, сіз жасаған барлық скриншоттарды табу үшін Менің скриншоттарым батырмасына шерте аласыз."
   },
   "tourSkip": {
     "message": "Аттап кету"
@@ -81,5 +154,25 @@
   },
   "tourDone": {
     "message": "Дайын"
+  },
+  "termsAndPrivacyNotice2": {
+    "message": "Firefox скриншоттарын қолдану арқылы, сіз біздің $TERMSANDPRIVACYNOTICETERMSLINK$ және $TERMSANDPRIVACYNOTICEPRIVACYLINK$ келісесіз.",
+    "placeholders": {
+      "termsandprivacynoticetermslink": {
+        "content": "$1"
+      },
+      "termsandprivacynoticeprivacylink": {
+        "content": "$2"
+      }
+    }
+  },
+  "termsAndPrivacyNoticeTermsLink": {
+    "message": "Қолдану шарттары"
+  },
+  "termsAndPrivacyNoticyPrivacyLink": {
+    "message": "Жекелік ескертуі"
+  },
+  "libraryLabel": {
+    "message": "Скриншоттар"
   }
 }

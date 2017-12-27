@@ -9,21 +9,10 @@
 "use strict";
 
 const gMozillaSpecificProperties = {
-  "-moz-border-bottom-colors": {
-    from: "rgb(255, 0, 0) rgb(255, 0, 0) rgb(255, 0, 0) rgb(255, 0, 0)",
-    to: "rgb(0, 255, 0) rgb(0, 255, 0) rgb(0, 255, 0) rgb(0, 255, 0)"
-  },
-  "-moz-border-left-colors": {
-    from: "rgb(255, 0, 0) rgb(255, 0, 0) rgb(255, 0, 0) rgb(255, 0, 0)",
-    to: "rgb(0, 255, 0) rgb(0, 255, 0) rgb(0, 255, 0) rgb(0, 255, 0)"
-  },
-  "-moz-border-right-colors": {
-    from: "rgb(255, 0, 0) rgb(255, 0, 0) rgb(255, 0, 0) rgb(255, 0, 0)",
-    to: "rgb(0, 255, 0) rgb(0, 255, 0) rgb(0, 255, 0) rgb(0, 255, 0)"
-  },
-  "-moz-border-top-colors": {
-    from: "rgb(255, 0, 0) rgb(255, 0, 0) rgb(255, 0, 0) rgb(255, 0, 0)",
-    to: "rgb(0, 255, 0) rgb(0, 255, 0) rgb(0, 255, 0) rgb(0, 255, 0)"
+  "-moz-appearance": {
+    // https://drafts.csswg.org/css-align/#propdef-align-content
+    from: "button",
+    to: "none"
   },
   "-moz-box-align": {
     // https://developer.mozilla.org/en/docs/Web/CSS/box-align
@@ -58,7 +47,7 @@ const gMozillaSpecificProperties = {
   "-moz-force-broken-image-icon": {
     // https://developer.mozilla.org/en/docs/Web/CSS/-moz-force-broken-image-icon
     from: "1",
-    to: "5"
+    to: "0"
   },
   "image-rendering": {
     // https://drafts.csswg.org/css-images-3/#propdef-image-rendering

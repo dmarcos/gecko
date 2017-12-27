@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,6 +13,7 @@
 #include "Units.h"
 
 class nsIFrame;
+class nsStyleContext;
 
 namespace mozilla {
 
@@ -23,9 +25,7 @@ namespace mozilla {
 class SVGImageContext
 {
 public:
-  SVGImageContext()
-    : mIsPaintingSVGImageElement(false)
-  { }
+  SVGImageContext() {}
 
   /**
    * Currently it seems that the aViewportSize parameter ends up being used
@@ -42,21 +42,20 @@ public:
    * in order to get the size that's created for |fallbackContext|.  At some
    * point we need to clean this code up, make our abstractions clear, create
    * that utility and stop using Maybe for this parameter.
-   *
-   * Note: 'aIsPaintingSVGImageElement' should be used to indicate whether
-   * the SVG image in question is being painted for an SVG <image> element.
    */
   explicit SVGImageContext(const Maybe<CSSIntSize>& aViewportSize,
-                           const Maybe<SVGPreserveAspectRatio>& aPreserveAspectRatio  = Nothing(),
-                           bool aIsPaintingSVGImageElement = false)
+                           const Maybe<SVGPreserveAspectRatio>& aPreserveAspectRatio  = Nothing())
     : mViewportSize(aViewportSize)
     , mPreserveAspectRatio(aPreserveAspectRatio)
-    , mIsPaintingSVGImageElement(aIsPaintingSVGImageElement)
   { }
 
-  static void MaybeInitAndStoreContextPaint(Maybe<SVGImageContext>& aContext,
-                                            nsIFrame* aFromFrame,
-                                            imgIContainer* aImgContainer);
+  static void MaybeStoreContextPaint(Maybe<SVGImageContext>& aContext,
+                                     nsIFrame* aFromFrame,
+                                     imgIContainer* aImgContainer);
+
+  static void MaybeStoreContextPaint(Maybe<SVGImageContext>& aContext,
+                                     nsStyleContext* aFromStyleContext,
+                                     imgIContainer* aImgContainer);
 
   const Maybe<CSSIntSize>& GetViewportSize() const {
     return mViewportSize;
@@ -78,8 +77,8 @@ public:
     return mContextPaint.get();
   }
 
-  bool IsPaintingForSVGImageElement() const {
-    return mIsPaintingSVGImageElement;
+  void ClearContextPaint() {
+    mContextPaint = nullptr;
   }
 
   bool operator==(const SVGImageContext& aOther) const {
@@ -92,30 +91,28 @@ public:
 
     return contextPaintIsEqual &&
            mViewportSize == aOther.mViewportSize &&
-           mPreserveAspectRatio == aOther.mPreserveAspectRatio &&
-           mIsPaintingSVGImageElement == aOther.mIsPaintingSVGImageElement;
+           mPreserveAspectRatio == aOther.mPreserveAspectRatio;
   }
 
   bool operator!=(const SVGImageContext& aOther) const {
     return !(*this == aOther);
   }
 
-  uint32_t Hash() const {
-    uint32_t hash = 0;
+  PLDHashNumber Hash() const {
+    PLDHashNumber hash = 0;
     if (mContextPaint) {
       hash = HashGeneric(hash, mContextPaint->Hash());
     }
     return HashGeneric(hash,
                        mViewportSize.map(HashSize).valueOr(0),
-                       mPreserveAspectRatio.map(HashPAR).valueOr(0),
-                       mIsPaintingSVGImageElement);
+                       mPreserveAspectRatio.map(HashPAR).valueOr(0));
   }
 
 private:
-  static uint32_t HashSize(const CSSIntSize& aSize) {
+  static PLDHashNumber HashSize(const CSSIntSize& aSize) {
     return HashGeneric(aSize.width, aSize.height);
   }
-  static uint32_t HashPAR(const SVGPreserveAspectRatio& aPAR) {
+  static PLDHashNumber HashPAR(const SVGPreserveAspectRatio& aPAR) {
     return aPAR.Hash();
   }
 
@@ -123,7 +120,6 @@ private:
   RefPtr<SVGEmbeddingContextPaint> mContextPaint;
   Maybe<CSSIntSize>             mViewportSize;
   Maybe<SVGPreserveAspectRatio> mPreserveAspectRatio;
-  bool                          mIsPaintingSVGImageElement;
 };
 
 } // namespace mozilla

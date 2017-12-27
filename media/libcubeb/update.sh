@@ -30,6 +30,8 @@ cp $1/src/cubeb_resampler_internal.h src
 cp $1/src/cubeb_ring_array.h src
 cp $1/src/cubeb_ringbuffer.h src
 cp $1/src/cubeb_sndio.c src
+cp $1/src/cubeb_strings.c src
+cp $1/src/cubeb_strings.h src
 cp $1/src/cubeb_utils.h src
 cp $1/src/cubeb_utils_unix.h src
 cp $1/src/cubeb_utils_win.h src
@@ -67,5 +69,8 @@ else
   echo "Remember to update README_MOZILLA with the version details."
 fi
 
-echo "Applying a patch on top of $rev"
+echo "Applying disable-assert.patch on top of $rev"
 patch -p3 < disable-assert.patch
+
+echo "Applying prefer-pulse-rust.patch on top of $rev"
+patch -p3 < prefer-pulse-rust.patch

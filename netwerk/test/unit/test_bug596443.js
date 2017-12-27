@@ -1,5 +1,6 @@
 Cu.import("resource://testing-common/httpd.js");
 Cu.import("resource://gre/modules/NetUtil.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 
 var httpserver = new HttpServer();
 
@@ -41,7 +42,7 @@ Listener.prototype = {
         this._buffer = this._buffer.concat(read_stream(stream, count));
     },
     onStopRequest: function (request, ctx, status) {
-        do_check_eq(this._buffer, this._response);
+        Assert.equal(this._buffer, this._response);
         if (--expectedOnStopRequests == 0)
             do_timeout(10, function() {
                         httpserver.stop(do_test_finished);
@@ -52,6 +53,8 @@ Listener.prototype = {
 function run_test() {
     httpserver.registerPathHandler("/bug596443", handler);
     httpserver.start(-1);
+
+    Services.prefs.setBoolPref("network.http.rcwn.enabled", false);
 
     // make sure we have a profile so we can use the disk-cache
     do_get_profile();

@@ -1,7 +1,8 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-* This Source Code Form is subject to the terms of the Mozilla Public
-* License, v. 2.0. If a copy of the MPL was not distributed with this
-* file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef MOZILLA_GFX_COMPOSITOR_H
 #define MOZILLA_GFX_COMPOSITOR_H
@@ -10,7 +11,7 @@
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/RefPtr.h"             // for already_AddRefed, RefCounted
 #include "mozilla/gfx/2D.h"             // for DrawTarget
-#include "mozilla/gfx/MatrixFwd.h"      // for Matrix4x4
+#include "mozilla/gfx/MatrixFwd.h"      // for Matrix, Matrix4x4
 #include "mozilla/gfx/Point.h"          // for IntSize, Point
 #include "mozilla/gfx/Polygon.h"        // for Polygon
 #include "mozilla/gfx/Rect.h"           // for Rect, IntRect
@@ -114,7 +115,6 @@ class nsIWidget;
 
 namespace mozilla {
 namespace gfx {
-class Matrix;
 class DrawTarget;
 class DataSourceSurface;
 } // namespace gfx
@@ -467,24 +467,8 @@ public:
     return mLastCompositionEndTime;
   }
 
+  void UnlockAfterComposition(TextureHost* aTexture) override;
   bool NotifyNotUsedAfterComposition(TextureHost* aTextureHost) override;
-
-  /**
-   * Each Compositor has a unique ID.
-   * This ID is used to keep references to each Compositor in a map accessed
-   * from the compositor thread only, so that async compositables can find
-   * the right compositor parent and schedule compositing even if the compositor
-   * changed.
-   */
-  uint32_t GetCompositorID() const
-  {
-    return mCompositorID;
-  }
-  void SetCompositorID(uint32_t aID)
-  {
-    MOZ_ASSERT(mCompositorID == 0, "The compositor ID must be set only once.");
-    mCompositorID = aID;
-  }
 
   /**
    * Notify the compositor that composition is being paused. This allows the
@@ -587,7 +571,6 @@ protected:
    */
   TimeStamp mLastCompositionEndTime;
 
-  uint32_t mCompositorID;
   DiagnosticTypes mDiagnosticTypes;
   CompositorBridgeParent* mParent;
 

@@ -22,15 +22,18 @@ namespace jit {
     _(GuardIsInt32Index)                  \
     _(GuardType)                          \
     _(GuardClass)                         \
+    _(GuardIsNativeFunction)              \
+    _(GuardIsNativeObject)                \
     _(GuardIsProxy)                       \
-    _(GuardIsCrossCompartmentWrapper)     \
     _(GuardNotDOMProxy)                   \
+    _(GuardSpecificInt32Immediate)        \
     _(GuardMagicValue)                    \
     _(GuardNoUnboxedExpando)              \
     _(GuardAndLoadUnboxedExpando)         \
     _(GuardNoDetachedTypedObjects)        \
     _(GuardNoDenseElements)               \
     _(GuardAndGetIndexFromString)         \
+    _(GuardIndexIsNonNegative)            \
     _(LoadProto)                          \
     _(LoadEnclosingEnvironment)           \
     _(LoadWrapperTarget)                  \
@@ -39,7 +42,6 @@ namespace jit {
     _(LoadUndefinedResult)                \
     _(LoadBooleanResult)                  \
     _(LoadInt32ArrayLengthResult)         \
-    _(LoadUnboxedArrayLengthResult)       \
     _(LoadArgumentsObjectLengthResult)    \
     _(LoadFunctionLengthResult)           \
     _(LoadStringLengthResult)             \
@@ -49,11 +51,19 @@ namespace jit {
     _(LoadDenseElementHoleResult)         \
     _(LoadDenseElementExistsResult)       \
     _(LoadDenseElementHoleExistsResult)   \
-    _(LoadUnboxedArrayElementResult)      \
+    _(LoadTypedElementExistsResult)       \
     _(LoadTypedElementResult)             \
     _(LoadObjectResult)                   \
+    _(LoadTypeOfObjectResult)             \
+    _(CompareStringResult)                \
+    _(CompareObjectResult)                \
+    _(CompareSymbolResult)                \
+    _(ArrayJoinResult)                    \
+    _(CallPrintString)                    \
+    _(Breakpoint)                         \
     _(MegamorphicLoadSlotByValueResult)   \
-    _(MegamorphicHasOwnResult)            \
+    _(MegamorphicHasPropResult)           \
+    _(CallObjectHasSparseElementResult)   \
     _(WrapResult)
 
 // Represents a Value on the Baseline frame's expression stack. Slot 0 is the
@@ -457,37 +467,6 @@ class MOZ_RAII AutoScratchRegister
     operator Register() const { return reg_; }
 };
 
-// Like AutoScratchRegister, but lets the caller specify a register that should
-// not be allocated here.
-class MOZ_RAII AutoScratchRegisterExcluding
-{
-    CacheRegisterAllocator& alloc_;
-    Register reg_;
-
-  public:
-    AutoScratchRegisterExcluding(CacheRegisterAllocator& alloc, MacroAssembler& masm,
-                                 Register excluding)
-      : alloc_(alloc)
-    {
-        MOZ_ASSERT(excluding != InvalidReg);
-
-        reg_ = alloc.allocateRegister(masm);
-
-        if (reg_ == excluding) {
-            // We need a different register, so try again.
-            reg_ = alloc.allocateRegister(masm);
-            MOZ_ASSERT(reg_ != excluding);
-            alloc_.releaseRegister(excluding);
-        }
-
-        MOZ_ASSERT(alloc_.currentOpRegs_.has(reg_));
-    }
-    ~AutoScratchRegisterExcluding() {
-        alloc_.releaseRegister(reg_);
-    }
-    operator Register() const { return reg_; }
-};
-
 // The FailurePath class stores everything we need to generate a failure path
 // at the end of the IC code. The failure path restores the input registers, if
 // needed, and jumps to the next stub.
@@ -583,11 +562,13 @@ class MOZ_RAII CacheIRCompiler
     }
 
     void emitLoadTypedObjectResultShared(const Address& fieldAddr, Register scratch,
-                                         TypedThingLayout layout, uint32_t typeDescr,
+                                         uint32_t typeDescr,
                                          const AutoOutputRegister& output);
 
     void emitStoreTypedObjectReferenceProp(ValueOperand val, ReferenceTypeDescr::Type type,
                                            const Address& dest, Register scratch);
+
+    void emitRegisterEnumerator(Register enumeratorsList, Register iter, Register scratch);
 
   private:
     void emitPostBarrierShared(Register obj, const ConstantOrRegister& val, Register scratch,
@@ -609,6 +590,8 @@ class MOZ_RAII CacheIRCompiler
         MOZ_ASSERT(index != InvalidReg);
         emitPostBarrierShared(obj, val, scratch, index);
     }
+
+    bool emitComparePointerResultShared(bool symbol);
 
 #define DEFINE_SHARED_OP(op) MOZ_MUST_USE bool emit##op();
     CACHE_IR_SHARED_OPS(DEFINE_SHARED_OP)

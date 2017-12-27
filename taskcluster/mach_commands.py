@@ -9,6 +9,7 @@ from __future__ import absolute_import, print_function, unicode_literals
 
 import json
 import logging
+import os
 import sys
 import traceback
 import re
@@ -29,7 +30,7 @@ class ShowTaskGraphSubCommand(SubCommand):
     def __call__(self, func):
         after = SubCommand.__call__(self, func)
         args = [
-            CommandArgument('--root', '-r', default='taskcluster/ci',
+            CommandArgument('--root', '-r',
                             help="root of the taskgraph definition relative to topsrcdir"),
             CommandArgument('--quiet', '-q', action="store_true",
                             help="suppress all logging output"),
@@ -41,7 +42,7 @@ class ShowTaskGraphSubCommand(SubCommand):
             CommandArgument('--labels', '-L', action="store_const",
                             dest="format", const="labels",
                             help="Output the label for each task in the task graph (default)"),
-            CommandArgument('--parameters', '-p', required=True,
+            CommandArgument('--parameters', '-p', default="project=mozilla-central",
                             help="parameters file (.yml or .json; see "
                                  "`taskcluster/docs/parameters.rst`)`"),
             CommandArgument('--no-optimize', dest="optimize", action="store_false",
@@ -50,7 +51,9 @@ class ShowTaskGraphSubCommand(SubCommand):
                             "index (a.k.a. optimize the graph)"),
             CommandArgument('--tasks-regex', '--tasks', default=None,
                             help="only return tasks with labels matching this regular "
-                            "expression.")
+                            "expression."),
+            CommandArgument('-F', '--fast', dest='fast', default=False, action='store_true',
+                            help="enable fast task generation for local debugging.")
 
         ]
         for arg in args:
@@ -69,17 +72,6 @@ class MachCommands(MachCommandBase):
         by dependencies: for example, a binary must be built before it is tested,
         and that build may further depend on various toolchains, libraries, etc.
         """
-
-    @SubCommand('taskgraph', 'python-tests',
-                description='Run the taskgraph unit tests')
-    def taskgraph_python_tests(self, **options):
-        import unittest
-        import mozunit
-        suite = unittest.defaultTestLoader.discover('taskgraph.test')
-        runner = mozunit.MozTestRunner(verbosity=2)
-        result = runner.run(suite)
-        if not result.wasSuccessful():
-            sys.exit(1)
 
     @ShowTaskGraphSubCommand('taskgraph', 'tasks',
                              description="Show all tasks in the taskgraph")
@@ -114,7 +106,6 @@ class MachCommands(MachCommandBase):
     @SubCommand('taskgraph', 'decision',
                 description="Run the decision task")
     @CommandArgument('--root', '-r',
-                     default='taskcluster/ci',
                      help="root of the taskgraph definition relative to topsrcdir")
     @CommandArgument('--base-repository',
                      required=True,
@@ -128,6 +119,18 @@ class MachCommands(MachCommandBase):
     @CommandArgument('--head-rev',
                      required=True,
                      help='Commit revision to use from head repository')
+    @CommandArgument('--comm-base-repository',
+                     required=False,
+                     help='URL for "base" comm-* repository to clone')
+    @CommandArgument('--comm-head-repository',
+                     required=False,
+                     help='URL for "head" comm-* repository to fetch revision from')
+    @CommandArgument('--comm-head-ref',
+                     required=False,
+                     help='comm-* Reference (this is same as rev usually for hg)')
+    @CommandArgument('--comm-head-rev',
+                     required=False,
+                     help='Commit revision to use from head comm-* repository')
     @CommandArgument('--message',
                      required=True,
                      help='Commit message to be parsed. Example: "try: -b do -p all -u all"')
@@ -149,12 +152,10 @@ class MachCommands(MachCommandBase):
     @CommandArgument('--level',
                      required=True,
                      help='SCM level of this repository')
-    @CommandArgument('--triggered-by',
-                     choices=['nightly', 'push'],
-                     default='push',
-                     help='Source of execution of the decision graph')
     @CommandArgument('--target-tasks-method',
                      help='method for selecting the target tasks to generate')
+    @CommandArgument('--try-task-config-file',
+                     help='path to try task configuration file')
     def taskgraph_decision(self, **options):
         """Run the decision task: generate a task graph and submit to
         TaskCluster.  This is only meant to be called within decision tasks,
@@ -166,81 +167,6 @@ class MachCommands(MachCommandBase):
         try:
             self.setup_logging()
             return taskgraph.decision.taskgraph_decision(options)
-        except Exception:
-            traceback.print_exc()
-            sys.exit(1)
-
-    @SubCommand('taskgraph', 'action-task',
-                description="Run the add-tasks task. DEPRECATED! Use 'add-tasks' instead.")
-    @CommandArgument('--root', '-r',
-                     default='taskcluster/ci',
-                     help="root of the taskgraph definition relative to topsrcdir")
-    @CommandArgument('--decision-id',
-                     required=True,
-                     help="Decision Task ID of the reference decision task")
-    @CommandArgument('--task-labels',
-                     required=True,
-                     help='Comma separated list of task labels to be scheduled')
-    def taskgraph_action(self, **options):
-        """Run the action task: Generates a task graph using the set of labels
-        provided in the task-labels parameter. It uses the full-task file of
-        the gecko decision task."""
-
-        import taskgraph.action
-        try:
-            self.setup_logging()
-            return taskgraph.action.add_tasks(options['decision_id'],
-                                              options['task_labels'].split(','))
-        except Exception:
-            traceback.print_exc()
-            sys.exit(1)
-
-    @SubCommand('taskgraph', 'add-tasks',
-                description="Run the add-tasks task")
-    @CommandArgument('--root', '-r',
-                     default='taskcluster/ci',
-                     help="root of the taskgraph definition relative to topsrcdir")
-    @CommandArgument('--decision-id',
-                     required=True,
-                     help="Decision Task ID of the reference decision task")
-    @CommandArgument('--task-labels',
-                     required=True,
-                     help='Comma separated list of task labels to be scheduled')
-    def taskgraph_add_tasks(self, **options):
-        """Run the action task: Generates a task graph using the set of labels
-        provided in the task-labels parameter. It uses the full-task file of
-        the gecko decision task."""
-
-        import taskgraph.action
-        try:
-            self.setup_logging()
-            return taskgraph.action.add_tasks(options['decision_id'],
-                                              options['task_labels'].split(','))
-        except Exception:
-            traceback.print_exc()
-            sys.exit(1)
-
-    @SubCommand('taskgraph', 'backfill',
-                description="Run the backfill task")
-    @CommandArgument('--root', '-r',
-                     default='taskcluster/ci',
-                     help="root of the taskgraph definition relative to topsrcdir")
-    @CommandArgument('--project',
-                     required=True,
-                     help="Project of the jobs that need to be backfilled.")
-    @CommandArgument('--job-id',
-                     required=True,
-                     help="Id of the job to be backfilled.")
-    def taskgraph_backfill(self, **options):
-        """Run the backfill task: Given a job in a project, it will
-        add that job type to any previous revisions in treeherder
-        until either a hard limit is met or a green version of that
-        job is found."""
-
-        import taskgraph.action
-        try:
-            self.setup_logging()
-            return taskgraph.action.backfill(options['project'], options['job_id'])
         except Exception:
             traceback.print_exc()
             sys.exit(1)
@@ -281,37 +207,89 @@ class MachCommands(MachCommandBase):
             traceback.print_exc()
             sys.exit(1)
 
-    @SubCommand('taskgraph', 'add-talos',
-                description="Run the add-talos task")
-    @CommandArgument('--root', '-r',
-                     default='taskcluster/ci',
-                     help="root of the taskgraph definition relative to topsrcdir")
-    @CommandArgument('--decision-task-id',
-                     required=True,
-                     help="Id of the decision task that is part of the push to be talos'd")
-    @CommandArgument('--times',
-                     required=False,
-                     default=1,
-                     type=int,
-                     help="Number of times to add each job.")
-    def taskgraph_add_talos(self, **options):
-        """Add all talos jobs for a push."""
-
-        import taskgraph.action
+    @SubCommand('taskgraph', 'action-callback',
+                description='Run action callback used by action tasks')
+    def action_callback(self, **options):
+        import taskgraph.actions
         try:
             self.setup_logging()
-            return taskgraph.action.add_talos(options['decision_task_id'], options['times'])
+
+            task_group_id = os.environ.get('ACTION_TASK_GROUP_ID', None)
+            task_id = json.loads(os.environ.get('ACTION_TASK_ID', 'null'))
+            task = json.loads(os.environ.get('ACTION_TASK', 'null'))
+            input = json.loads(os.environ.get('ACTION_INPUT', 'null'))
+            callback = os.environ.get('ACTION_CALLBACK', None)
+            parameters = json.loads(os.environ.get('ACTION_PARAMETERS', '{}'))
+
+            return taskgraph.actions.trigger_action_callback(
+                    task_group_id=task_group_id,
+                    task_id=task_id,
+                    task=task,
+                    input=input,
+                    callback=callback,
+                    parameters=parameters,
+                    test=False)
         except Exception:
             traceback.print_exc()
             sys.exit(1)
 
-    @SubCommand('taskgraph', 'action-callback',
-                description='Run action callback used by action tasks')
-    def action_callback(self, **options):
-        import actions
+    @SubCommand('taskgraph', 'test-action-callback',
+                description='Run an action callback in a testing mode')
+    @CommandArgument('--parameters', '-p', default='project=mozilla-central',
+                     help='parameters file (.yml or .json; see '
+                          '`taskcluster/docs/parameters.rst`)`')
+    @CommandArgument('--task-id', default=None,
+                     help='TaskId to which the action applies')
+    @CommandArgument('--task-group-id', default=None,
+                     help='TaskGroupId to which the action applies')
+    @CommandArgument('--input', default=None,
+                     help='Action input (.yml or .json)')
+    @CommandArgument('--task', default=None,
+                     help='Task definition (.yml or .json; if omitted, the task will be'
+                          'fetched from the queue)')
+    @CommandArgument('callback', default=None,
+                     help='Action callback name (Python function name)')
+    def test_action_callback(self, **options):
+        import taskgraph.parameters
+        from taskgraph.util.taskcluster import get_task_definition
+        import taskgraph.actions
+        import yaml
+
+        def load_data(filename):
+            with open(filename) as f:
+                if filename.endswith('.yml'):
+                    return yaml.safe_load(f)
+                elif filename.endswith('.json'):
+                    return json.load(f)
+                else:
+                    raise Exception("unknown filename {}".format(filename))
+
         try:
             self.setup_logging()
-            return actions.trigger_action_callback()
+            task_id = options['task_id']
+            if options['task']:
+                task = load_data(options['task'])
+            elif task_id:
+                task = get_task_definition(task_id)
+            else:
+                task = None
+
+            if options['input']:
+                input = load_data(options['input'])
+            else:
+                input = None
+
+            parameters = taskgraph.parameters.load_parameters_file(options['parameters'])
+            parameters.check()
+
+            return taskgraph.actions.trigger_action_callback(
+                    task_group_id=options['task_group_id'],
+                    task_id=task_id,
+                    task=task,
+                    input=input,
+                    callback=options['callback'],
+                    parameters=parameters,
+                    test=True)
         except Exception:
             traceback.print_exc()
             sys.exit(1)
@@ -340,14 +318,17 @@ class MachCommands(MachCommandBase):
         import taskgraph.parameters
         import taskgraph.target_tasks
         import taskgraph.generator
+        import taskgraph
+        if options['fast']:
+            taskgraph.fast = True
 
         try:
             self.setup_logging(quiet=options['quiet'], verbose=options['verbose'])
-            parameters = taskgraph.parameters.load_parameters_file(options)
+            parameters = taskgraph.parameters.load_parameters_file(options['parameters'])
             parameters.check()
 
             tgg = taskgraph.generator.TaskGraphGenerator(
-                root_dir=options['root'],
+                root_dir=options.get('root'),
                 parameters=parameters)
 
             tg = getattr(tgg, graph_attr)
@@ -360,8 +341,8 @@ class MachCommands(MachCommandBase):
             sys.exit(1)
 
     def show_taskgraph_labels(self, taskgraph):
-        for label in taskgraph.graph.visit_postorder():
-            print(label)
+        for index in taskgraph.graph.visit_postorder():
+            print(taskgraph.tasks[index].label)
 
     def show_taskgraph_json(self, taskgraph):
         print(json.dumps(taskgraph.to_json(),
@@ -439,6 +420,26 @@ class TaskClusterImagesProvider(object):
                 build_image(image_name)
             else:
                 build_context(image_name, context_only)
+        except Exception:
+            traceback.print_exc()
+            sys.exit(1)
+
+
+@CommandProvider
+class TaskClusterPartialsData(object):
+    @Command('release-history', category="ci",
+             description="Query balrog for release history used by enable partials generation")
+    @CommandArgument('-b', '--branch',
+                     help="The gecko project branch used in balrog, such as "
+                          "mozilla-central, release, date")
+    @CommandArgument('--product', default='Firefox',
+                     help="The product identifier, such as 'Firefox'")
+    def generate_partials_builds(self, product, branch):
+        from taskgraph.util.partials import populate_release_history
+        try:
+            import yaml
+            release_history = {'release_history': populate_release_history(product, branch)}
+            print(yaml.safe_dump(release_history, allow_unicode=True, default_flow_style=False))
         except Exception:
             traceback.print_exc()
             sys.exit(1)

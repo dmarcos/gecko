@@ -10,10 +10,10 @@
 #include "ThreadInfo.h"
 
 ProfilerBacktrace::ProfilerBacktrace(const char* aName, int aThreadId,
-                                     ProfileBuffer* aBuffer)
+                                     UniquePtr<ProfileBuffer> aBuffer)
   : mName(strdup(aName))
   , mThreadId(aThreadId)
-  , mBuffer(aBuffer)
+  , mBuffer(Move(aBuffer))
 {
   MOZ_COUNT_CTOR(ProfilerBacktrace);
 }
@@ -21,22 +21,26 @@ ProfilerBacktrace::ProfilerBacktrace(const char* aName, int aThreadId,
 ProfilerBacktrace::~ProfilerBacktrace()
 {
   MOZ_COUNT_DTOR(ProfilerBacktrace);
-  delete mBuffer;
 }
 
 void
 ProfilerBacktrace::StreamJSON(SpliceableJSONWriter& aWriter,
-                              const TimeStamp& aStartTime,
+                              const TimeStamp& aProcessStartTime,
                               UniqueStacks& aUniqueStacks)
 {
   // This call to StreamSamplesAndMarkers() can safely pass in a non-null
   // JSContext. That's because StreamSamplesAndMarkers() only accesses the
   // JSContext when streaming JitReturnAddress entries, and such entries
   // never appear in synchronous samples.
+  double firstSampleTimeIgnored;
   StreamSamplesAndMarkers(mName.get(), mThreadId,
-                          mBuffer, aWriter, aStartTime,
-                          /* aSinceTime */ 0, /* aContext */ nullptr,
+                          *mBuffer.get(), aWriter, aProcessStartTime,
+                          /* aRegisterTime */ TimeStamp(),
+                          /* aUnregisterTime */ TimeStamp(),
+                          /* aSinceTime */ 0, &firstSampleTimeIgnored,
+                          /* aContext */ nullptr,
                           /* aSavedStreamedSamples */ nullptr,
+                          /* aFirstSavedStreamedSampleTime */ 0.0,
                           /* aSavedStreamedMarkers */ nullptr,
                           aUniqueStacks);
 }

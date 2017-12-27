@@ -5,6 +5,7 @@
 loadRelativeToScript('utility.js');
 loadRelativeToScript('annotations.js');
 loadRelativeToScript('callgraph.js');
+loadRelativeToScript('dumpCFG.js');
 
 ///////////////////////////////////////////////////////////////////////////////
 // Annotations
@@ -24,10 +25,19 @@ function checkExternalFunction(entry)
         "fmod",
         "floor",
         "ceil",
-
+        "atof",
+        /memchr/,
+        "strlen",
+        "Servo_ComputedValues_EqualCustomProperties",
+        /Servo_DeclarationBlock_GetCssText/,
+        "Servo_GetArcStringData",
+        "Servo_IsWorkerThread",
+        /nsIFrame::AppendOwnedAnonBoxes/,
         // Assume that atomic accesses are threadsafe.
         /^__atomic_fetch_/,
         /^__atomic_load_/,
+        /^__atomic_store_/,
+        /^__atomic_thread_fence/,
     ];
     if (entry.matches(whitelist))
         return;
@@ -37,7 +47,6 @@ function checkExternalFunction(entry)
         "memcpy",
         "memset",
         "memmove",
-        "strlen",
     ];
 
     if (entry.isSafeArgument(1) && simpleWrites.includes(entry.name))
@@ -56,7 +65,7 @@ function hasThreadsafeReferenceCounts(entry, regexp)
         "nsIRunnable",
 
         // I don't know if these always have threadsafe refcounts.
-        "nsIAtom",
+        "nsAtom",
         "nsIPermissionManager",
         "nsIURI",
     ];
@@ -90,6 +99,7 @@ function checkOverridableVirtualCall(entry, location, callee)
         "Gecko_AddRefAtom",
         "Gecko_ReleaseAtom",
         /nsPrincipal::Get/,
+        /CounterStylePtr::Reset/,
     ];
     if (entry.matches(whitelist))
         return;
@@ -100,10 +110,6 @@ function checkOverridableVirtualCall(entry, location, callee)
 function checkIndirectCall(entry, location, callee)
 {
     var name = entry.name;
-
-    // replace_malloc indirects through this table.
-    if (callee.startsWith('malloc_table_t.'))
-        return;
 
     // These hash table callbacks should be threadsafe.
     if (/PLDHashTable/.test(name) && (/matchEntry/.test(callee) || /hashKey/.test(callee)))
@@ -117,12 +123,6 @@ function checkIndirectCall(entry, location, callee)
 function checkVariableAssignment(entry, location, variable)
 {
     var name = entry.name;
-
-    // Malloc related state.
-    if (/replace_malloc_initialized/.test(variable))
-        return;
-    if (name == "replace_init")
-        return;
 
     dumpError(entry, location, "Variable assignment " + variable);
 }
@@ -153,9 +153,13 @@ function treatAsSafeArgument(entry, varName, csuName)
         // Various Servo binding out parameters. This is a mess and there needs
         // to be a way to indicate which params are out parameters, either using
         // an attribute or a naming convention.
+        ["Gecko_CopyAnimationNames", "aDest", null],
         ["Gecko_CopyFontFamilyFrom", "dst", null],
-        ["Gecko_SetListStyleType", "style_struct", null],
-        ["Gecko_CopyListStyleTypeFrom", "dst", null],
+        ["Gecko_SetAnimationName", "aStyleAnimation", null],
+        ["Gecko_SetCounterStyleToName", "aPtr", null],
+        ["Gecko_SetCounterStyleToSymbols", "aPtr", null],
+        ["Gecko_SetCounterStyleToString", "aPtr", null],
+        ["Gecko_CopyCounterStyle", "aDst", null],
         ["Gecko_SetMozBinding", "aDisplay", null],
         [/ClassOrClassList/, /aClass/, null],
         ["Gecko_GetAtomAsUTF16", "aLength", null],
@@ -166,13 +170,13 @@ function treatAsSafeArgument(entry, varName, csuName)
         ["Gecko_SetImageOrientationAsFromImage", "aVisibility", null],
         ["Gecko_CopyImageOrientationFrom", "aDst", null],
         ["Gecko_SetImageElement", "aImage", null],
-        ["Gecko_SetUrlImageValue", "aImage", null],
+        ["Gecko_SetLayerImageImageValue", "aImage", null],
         ["Gecko_CopyImageValueFrom", "aImage", null],
         ["Gecko_SetCursorArrayLength", "aStyleUI", null],
         ["Gecko_CopyCursorArrayFrom", "aDest", null],
-        ["Gecko_SetCursorImage", "aCursor", null],
+        ["Gecko_SetCursorImageValue", "aCursor", null],
+        ["Gecko_SetListStyleImageImageValue", "aList", null],
         ["Gecko_SetListStyleImageNone", "aList", null],
-        ["Gecko_SetListStyleImage", "aList", null],
         ["Gecko_CopyListStyleImageFrom", "aList", null],
         ["Gecko_ClearStyleContents", "aContent", null],
         ["Gecko_CopyStyleContentsFrom", "aContent", null],
@@ -187,12 +191,19 @@ function treatAsSafeArgument(entry, varName, csuName)
         ["Gecko_CSSFontFaceRule_GetCssText", "aResult", null],
         ["Gecko_EnsureTArrayCapacity", "aArray", null],
         ["Gecko_ClearPODTArray", "aArray", null],
+        ["Gecko_SetStyleGridTemplate", "aGridTemplate", null],
+        ["Gecko_ResizeTArrayForStrings", "aArray", null],
         ["Gecko_ClearAndResizeStyleContents", "aContent", null],
         [/Gecko_ClearAndResizeCounter/, "aContent", null],
         [/Gecko_CopyCounter.*?From/, "aContent", null],
+        [/Gecko_SetContentDataImageValue/, "aList", null],
         [/Gecko_SetContentData/, "aContent", null],
+        ["Gecko_SetCounterFunction", "aContent", null],
         [/Gecko_EnsureStyle.*?ArrayLength/, "aArray", null],
-        ["Gecko_AnimationAppendKeyframe", "aKeyframes", null],
+        ["Gecko_GetOrCreateKeyframeAtStart", "aKeyframes", null],
+        ["Gecko_GetOrCreateInitialKeyframe", "aKeyframes", null],
+        ["Gecko_GetOrCreateFinalKeyframe", "aKeyframes", null],
+        ["Gecko_AppendPropertyValuePair", "aProperties", null],
         ["Gecko_SetStyleCoordCalcValue", null, null],
         ["Gecko_StyleClipPath_SetURLValue", "aClip", null],
         ["Gecko_nsStyleFilter_SetURLValue", "aEffects", null],
@@ -207,6 +218,31 @@ function treatAsSafeArgument(entry, varName, csuName)
         ["Gecko_ClearWillChange", "aDisplay", null],
         ["Gecko_AppendWillChange", "aDisplay", null],
         ["Gecko_CopyWillChangeFrom", "aDest", null],
+        ["Gecko_InitializeImageCropRect", "aImage", null],
+        ["Gecko_CopyShapeSourceFrom", "aDst", null],
+        ["Gecko_DestroyShapeSource", "aShape", null],
+        ["Gecko_StyleShapeSource_SetURLValue", "aShape", null],
+        ["Gecko_NewBasicShape", "aShape", null],
+        ["Gecko_NewShapeImage", "aShape", null],
+        ["Gecko_nsFont_InitSystem", "aDest", null],
+        ["Gecko_nsFont_SetFontFeatureValuesLookup", "aFont", null],
+        ["Gecko_nsFont_ResetFontFeatureValuesLookup", "aFont", null],
+        ["Gecko_nsStyleFont_FixupNoneGeneric", "aFont", null],
+        ["Gecko_StyleTransition_SetUnsupportedProperty", "aTransition", null],
+        ["Gecko_AddPropertyToSet", "aPropertySet", null],
+        ["Gecko_CalcStyleDifference", "aAnyStyleChanged", null],
+        ["Gecko_CalcStyleDifference", "aOnlyResetStructsChanged", null],
+        ["Gecko_nsStyleSVG_CopyContextProperties", "aDst", null],
+        ["Gecko_nsStyleFont_PrefillDefaultForGeneric", "aFont", null],
+        ["Gecko_nsStyleSVG_SetContextPropertiesLength", "aSvg", null],
+        ["Gecko_ClearAlternateValues", "aFont", null],
+        ["Gecko_AppendAlternateValues", "aFont", null],
+        ["Gecko_CopyAlternateValuesFrom", "aDest", null],
+        ["Gecko_CounterStyle_GetName", "aResult", null],
+        ["Gecko_CounterStyle_GetSingleString", "aResult", null],
+        ["Gecko_EnsureMozBorderColors", "aBorder", null],
+        ["Gecko_nsTArray_FontFamilyName_AppendNamed", "aNames", null],
+        ["Gecko_nsTArray_FontFamilyName_AppendGeneric", "aNames", null],
     ];
     for (var [entryMatch, varMatch, csuMatch] of whitelist) {
         assert(entryMatch || varMatch || csuMatch);
@@ -218,6 +254,36 @@ function treatAsSafeArgument(entry, varName, csuName)
             continue;
         return true;
     }
+    return false;
+}
+
+function isSafeAssignment(entry, edge, variable)
+{
+    if (edge.Kind != 'Assign')
+        return false;
+
+    var [mangled, unmangled] = splitFunction(entry.name);
+
+    // The assignment
+    //
+    //   nsFont* font = fontTypes[eType];
+    //
+    // ends up with 'font' pointing to a member of 'this', so it should inherit
+    // the safety of 'this'.
+    if (unmangled.includes("mozilla::LangGroupFontPrefs::Initialize") &&
+        variable == 'font')
+    {
+        const [lhs, rhs] = edge.Exp;
+        const {Kind, Exp: [{Kind: indexKind, Exp: [collection, index]}]} = rhs;
+        if (Kind == 'Drf' &&
+            indexKind == 'Index' &&
+            collection.Kind == 'Var' &&
+            collection.Variable.Name[0] == 'fontTypes')
+        {
+            return entry.isSafeArgument(0); // 'this'
+        }
+    }
+
     return false;
 }
 
@@ -233,11 +299,15 @@ function checkFieldWrite(entry, location, fields)
             return;
         if (/nsCOMPtr<.*?>.mRawPtr/.test(field))
             return;
-}
+
+        if (/\bThreadLocal<\b/.test(field))
+            return;
+    }
 
     var str = "";
     for (var field of fields)
         str += " " + field;
+
     dumpError(entry, location, "Field write" + str);
 }
 
@@ -257,6 +327,11 @@ function checkDereferenceWrite(entry, location, variable)
 
     // Operations on nsISupports reference counts.
     if (hasThreadsafeReferenceCounts(entry, /nsCOMPtr<T>::swap\(.*?\[with T = (.*?)\]/))
+        return;
+
+    // ConvertToLowerCase::write writes through a local pointer into the first
+    // argument.
+    if (/ConvertToLowerCase::write/.test(name) && entry.isSafeArgument(0))
         return;
 
     dumpError(entry, location, "Dereference write " + (variable ? variable : "<unknown>"));
@@ -301,6 +376,14 @@ function ignoreCallEdge(entry, callee)
         return true;
     }
 
+    // StyleShapeSource exclusively owns its UniquePtr<nsStyleImage>.
+    if (/nsStyleImage::SetURLValue/.test(callee) &&
+        /StyleShapeSource::SetURL/.test(name) &&
+        entry.isSafeArgument(0))
+    {
+        return true;
+    }
+
     // The AddRef through a just-assigned heap pointer here is not handled by
     // the analysis.
     if (/nsCSSValue::Array::AddRef/.test(callee) &&
@@ -310,10 +393,27 @@ function ignoreCallEdge(entry, callee)
         return true;
     }
 
+    // AllChildrenIterator asks AppendOwnedAnonBoxes to append into an nsTArray
+    // local variable.
+    if (/nsIFrame::AppendOwnedAnonBoxes/.test(callee) &&
+        /AllChildrenIterator::AppendNativeAnonymousChildren/.test(name))
+    {
+        return true;
+    }
+
     // Runnables are created and named on one thread, then dispatched
     // (possibly to another). Writes on the origin thread are ok.
     if (/::SetName/.test(callee) &&
         /::UnlabeledDispatch/.test(name))
+    {
+        return true;
+    }
+
+    // We manually lock here
+    if (name == "Gecko_nsFont_InitSystem" ||
+        name == "Gecko_GetFontMetrics" ||
+        name == "Gecko_nsStyleFont_FixupMinFontSize" ||
+        /ThreadSafeGetDefaultFontHelper/.test(name))
     {
         return true;
     }
@@ -328,28 +428,40 @@ function ignoreContents(entry)
         "abort",
         /MOZ_ReportAssertionFailure/,
         /MOZ_ReportCrash/,
+        /MOZ_CrashPrintf/,
+        /MOZ_CrashOOL/,
         /AnnotateMozCrashReason/,
         /InvalidArrayIndex_CRASH/,
         /NS_ABORT_OOM/,
 
         // These ought to be threadsafe.
         "NS_DebugBreak",
-        "replace_free", "replace_malloc",
         /mozalloc_handle_oom/,
         /^NS_Log/, /log_print/, /LazyLogModule::operator/,
         /SprintfLiteral/, "PR_smprintf", "PR_smprintf_free",
-        /NS_DispatchToMainThread/, /NS_ReleaseOnMainThread/,
+        /NS_DispatchToMainThread/, /NS_ReleaseOnMainThreadSystemGroup/,
         /NS_NewRunnableFunction/, /NS_Atomize/,
         /nsCSSValue::BufferFromString/,
         /NS_strdup/,
         /Assert_NoQueryNeeded/,
+        /AssertCurrentThreadOwnsMe/,
+        /PlatformThread::CurrentId/,
         /imgRequestProxy::GetProgressTracker/, // Uses an AutoLock
         /Smprintf/,
         "malloc",
+        "calloc",
         "free",
         "realloc",
-        /profiler_register_thread/,
-        /profiler_unregister_thread/,
+        "memalign",
+        "strdup",
+        "strndup",
+        "moz_xmalloc",
+        "moz_xcalloc",
+        "moz_xrealloc",
+        "moz_xmemalign",
+        "moz_xstrdup",
+        "moz_xstrndup",
+        "jemalloc_thread_local_arena",
 
         // These all create static strings in local storage, which is threadsafe
         // to do but not understood by the analysis yet.
@@ -358,23 +470,29 @@ function ignoreContents(entry)
         /nsCSSProps::ValueToKeyword/,
         /nsCSSKeywords::GetStringValue/,
 
-        // The analysis can't cope with the indirection used for the objects
-        // being initialized here.
-        "Gecko_AnimationAppendKeyframe",
-        "Gecko_NewStyleQuoteValues",
-        "Gecko_NewCSSValueSharedList",
-        /nsCSSValue::SetCalcValue/,
-        /CSSValueSerializeCalcOps::Append/,
-        "Gecko_CSSValue_SetFunction",
-        "Gecko_CSSValue_SetArray",
+        // These could probably be handled by treating the scope of PSAutoLock
+        // aka BaseAutoLock<PSMutex> as threadsafe.
+        /profiler_register_thread/,
+        /profiler_unregister_thread/,
 
-        // Needs main thread assertions or other fixes.
-        /UndisplayedMap::GetEntryFor/,
-        /nsStyleContext::CalcStyleDifferenceInternal/,
+        // The analysis thinks we'll write to mBits in the DoGetStyleFoo<false>
+        // call.  Maybe the template parameter confuses it?
+        /nsStyleContext::PeekStyle/,
+
+        // The analysis can't cope with the indirection used for the objects
+        // being initialized here, from nsCSSValue::Array::Create to the return
+        // value of the Item(i) getter.
+        /nsCSSValue::SetCalcValue/,
+
+        // Unable to analyze safety of linked list initialization.
+        "Gecko_NewCSSValueSharedList",
+        "Gecko_CSSValue_InitSharedList",
+
+        // Unable to trace through dataflow, but straightforward if inspected.
+        "Gecko_NewNoneTransform",
+
+        // Need main thread assertions or other fixes.
         /EffectCompositor::GetServoAnimationRule/,
-        /LookAndFeel::GetColor/,
-        "Gecko_CopyStyleContentsFrom",
-        "Gecko_CSSValue_SetAbsoluteLength",
     ];
     if (entry.matches(whitelist))
         return true;
@@ -386,21 +504,22 @@ function ignoreContents(entry)
             /nsTArray_Impl.*?::AppendElement/,
             /nsTArray_Impl.*?::RemoveElementsAt/,
             /nsTArray_Impl.*?::ReplaceElementsAt/,
-            /nsTArray_Impl.*?::InsertElementsAt/,
+            /nsTArray_Impl.*?::InsertElementAt/,
             /nsTArray_Impl.*?::SetCapacity/,
+            /nsTArray_Impl.*?::SetLength/,
             /nsTArray_base.*?::EnsureCapacity/,
             /nsTArray_base.*?::ShiftData/,
             /AutoTArray.*?::Init/,
-            /nsAC?String::SetCapacity/,
-            /nsAC?String::SetLength/,
-            /nsAC?String::Assign/,
-            /nsAC?String::Append/,
-            /nsAC?String::Replace/,
-            /nsAC?String::Truncate/,
-            /nsString::StripChars/,
-            /nsAC?String::operator=/,
-            /nsAutoString::nsAutoString/,
-            /nsFixedCString::nsFixedCString/,
+            /(nsTSubstring<T>|nsAC?String)::SetCapacity/,
+            /(nsTSubstring<T>|nsAC?String)::SetLength/,
+            /(nsTSubstring<T>|nsAC?String)::Assign/,
+            /(nsTSubstring<T>|nsAC?String)::Append/,
+            /(nsTSubstring<T>|nsAC?String)::Replace/,
+            /(nsTSubstring<T>|nsAC?String)::Trim/,
+            /(nsTSubstring<T>|nsAC?String)::Truncate/,
+            /(nsTSubstring<T>|nsAC?String)::StripTaggedASCII/,
+            /(nsTSubstring<T>|nsAC?String)::operator=/,
+            /nsTAutoStringN<T, N>::nsTAutoStringN/,
 
             // Similar for some other data structures
             /nsCOMArray_base::SetCapacity/,
@@ -436,8 +555,8 @@ function ignoreContents(entry)
     if (entry.isSafeArgument(2)) {
         var secondArgWhitelist = [
             /nsStringBuffer::ToString/,
-            /AppendUTF8toUTF16/,
-            /AppendASCIItoUTF16/,
+            /AppendUTF\d+toUTF\d+/,
+            /AppendASCIItoUTF\d+/,
         ];
         if (entry.matches(secondArgWhitelist))
             return true;
@@ -516,12 +635,12 @@ function isZero(exp)
 // which are safe using a sorted array, so that this can be propagated down the
 // stack. Zero is |this|, and arguments are indexed starting at one.
 
-function WorklistEntry(name, safeArguments, stack)
+function WorklistEntry(name, safeArguments, stack, parameterNames)
 {
     this.name = name;
     this.safeArguments = safeArguments;
     this.stack = stack;
-    this.parameterNames = {};
+    this.parameterNames = parameterNames;
 }
 
 WorklistEntry.prototype.readable = function()
@@ -629,6 +748,12 @@ CallSite.prototype.safeString = function()
 var errorCount = 0;
 var errorLimit = 100;
 
+// We want to suppress output for functions that ended up not having any
+// hazards, for brevity of the final output. So each new toplevel function will
+// initialize this to a string, which should be printed only if an error is
+// seen.
+var errorHeader;
+
 var startTime = new Date;
 function elapsedTime()
 {
@@ -668,34 +793,40 @@ if (options.verbose) {
 }
 
 print(elapsedTime() + "Loading types...");
-loadTypes('src_comp.xdb');
+if (os.getenv("TYPECACHE"))
+    loadTypesWithCache('src_comp.xdb', os.getenv("TYPECACHE"));
+else
+    loadTypes('src_comp.xdb');
 print(elapsedTime() + "Starting analysis...");
-
-var reachable = {};
 
 var xdb = xdbLibrary();
 xdb.open("src_body.xdb");
 
 var minStream = xdb.min_data_stream();
 var maxStream = xdb.max_data_stream();
-
 var roots = [];
-for (var bodyIndex = minStream; bodyIndex <= maxStream; bodyIndex++) {
-    var key = xdb.read_key(bodyIndex);
-    var name = key.readString();
-    if (/^Gecko_/.test(name)) {
-        var data = xdb.read_entry(key);
-        if (/ServoBindings.cpp/.test(data.readString()))
-            roots.push(name);
-        xdb.free_string(data);
+
+var [flag, arg] = scriptArgs;
+if (flag && (flag == '-f' || flag == '--function')) {
+    roots = [arg];
+} else {
+    for (var bodyIndex = minStream; bodyIndex <= maxStream; bodyIndex++) {
+        var key = xdb.read_key(bodyIndex);
+        var name = key.readString();
+        if (/^Gecko_/.test(name)) {
+            var data = xdb.read_entry(key);
+            if (/ServoBindings.cpp/.test(data.readString()))
+                roots.push(name);
+            xdb.free_string(data);
+        }
+        xdb.free_string(key);
     }
-    xdb.free_string(key);
 }
 
 print(elapsedTime() + "Found " + roots.length + " roots.");
 for (var i = 0; i < roots.length; i++) {
     var root = roots[i];
-    print(elapsedTime() + "#" + (i + 1) + " Analyzing " + root + " ...");
+    errorHeader = elapsedTime() + "#" + (i + 1) + " Analyzing " + root + " ...";
     try {
         processRoot(root);
     } catch (e) {
@@ -716,8 +847,16 @@ var assignments;
 // All loops in the current function which are reachable off main thread.
 var reachableLoops;
 
+// Functions that are reachable from the current root.
+var reachable = {};
+
 function dumpError(entry, location, text)
 {
+    if (errorHeader) {
+        print(errorHeader);
+        errorHeader = undefined;
+    }
+
     var stack = entry.stack;
     print("Error: " + text);
     print("Location: " + entry.name + (location ? " @ " + location : "") + stack[0].safeString());
@@ -748,7 +887,7 @@ function variableAssignRhs(edge)
     return null;
 }
 
-function processAssign(entry, location, lhs, edge)
+function processAssign(body, entry, location, lhs, edge)
 {
     var fields;
     [lhs, fields] = stripFields(lhs);
@@ -762,17 +901,19 @@ function processAssign(entry, location, lhs, edge)
             // taken and indirect assignments might occur. This is an
             // unsoundness in the analysis.
 
+            let assign = [body, edge];
+
             // Chain assignments if the RHS has only been assigned once.
             var rhsVariable = variableAssignRhs(edge);
             if (rhsVariable) {
-                var rhsEdge = singleAssignment(variableName(rhsVariable));
-                if (rhsEdge)
-                    edge = rhsEdge;
+                var rhsAssign = singleAssignment(variableName(rhsVariable));
+                if (rhsAssign)
+                    assign = rhsAssign;
             }
 
             if (!(name in assignments))
                 assignments[name] = [];
-            assignments[name].push(edge);
+            assignments[name].push(assign);
         } else {
             checkVariableAssignment(entry, location, name);
         }
@@ -783,6 +924,22 @@ function processAssign(entry, location, lhs, edge)
             variable = lhs.Exp[0].Variable;
             if (isSafeVariable(entry, variable))
                 return;
+        } else if (lhs.Exp[0].Kind == "Fld") {
+            const {
+                Type: {Kind, Type: fieldType},
+                FieldCSU: {Type: {Kind: containerTypeKind,
+                                  Name: containerTypeName}}
+            } = lhs.Exp[0].Field;
+            const [containerExpr] = lhs.Exp[0].Exp;
+
+            if (containerTypeKind == 'CSU' &&
+                Kind == 'Pointer' &&
+                isEdgeSafeArgument(entry, containerExpr) &&
+                isSafeMemberPointer(containerTypeName, fieldType))
+            {
+                return;
+            }
+
         }
         if (fields.length)
             checkFieldWrite(entry, location, fields);
@@ -842,7 +999,7 @@ function process(entry, body, addCallee)
             switch (callee.kind) {
             case "direct":
                 var safeArguments = getEdgeSafeArguments(entry, edge, callee.name);
-                addCallee(new CallSite(callee.name, safeArguments, location, entry.parameterNames));
+                addCallee(new CallSite(callee.name, safeArguments, location, {}));
                 break;
               case "resolved-field":
                 break;
@@ -866,11 +1023,11 @@ function process(entry, body, addCallee)
 
         if (edge.Kind == "Assign") {
             assert(edge.Exp.length == 2);
-            processAssign(entry, location, edge.Exp[0], edge);
+            processAssign(body, entry, location, edge.Exp[0], edge);
         } else if (edge.Kind == "Call") {
             assert(edge.Exp.length <= 2);
             if (edge.Exp.length == 2)
-                processAssign(entry, location, edge.Exp[1], edge);
+                processAssign(body, entry, location, edge.Exp[1], edge);
 
             // Treat assertion failures as if they don't return, so that
             // asserting NS_IsMainThread() is sufficient to prevent the
@@ -938,7 +1095,10 @@ function maybeProcessMissingFunction(entry, addCallee)
 function processRoot(name)
 {
     var safeArguments = [];
-    var worklist = [new WorklistEntry(name, safeArguments, [new CallSite(name, safeArguments, null, {})])];
+    var parameterNames = {};
+    var worklist = [new WorklistEntry(name, safeArguments, [new CallSite(name, safeArguments, null, parameterNames)], parameterNames)];
+
+    reachable = {};
 
     while (worklist.length > 0) {
         var entry = worklist.pop();
@@ -948,6 +1108,7 @@ function processRoot(name)
         // analyzing functions separately for each subset if simpler, ensures that
         // the stack traces we produce accurately characterize the stack arguments,
         // and should be fast enough for now.
+
         if (entry.mangledName() in reachable)
             continue;
         reachable[entry.mangledName()] = true;
@@ -979,7 +1140,7 @@ function processRoot(name)
         for (var callee of callees) {
             if (!ignoreCallEdge(entry, callee.callee)) {
                 var nstack = [callee, ...entry.stack];
-                worklist.push(new WorklistEntry(callee.callee, callee.safeArguments, nstack));
+                worklist.push(new WorklistEntry(callee.callee, callee.safeArguments, nstack, callee.parameterNames));
             }
         }
     }
@@ -1030,9 +1191,13 @@ function singleAssignment(name)
 }
 
 function expressionValueEdge(exp) {
-    if (exp.Kind == "Var" && exp.Variable.Kind == "Temp")
-        return singleAssignment(variableName(exp.Variable));
-    return null;
+    if (!(exp.Kind == "Var" && exp.Variable.Kind == "Temp"))
+        return null;
+    const assign = singleAssignment(variableName(exp.Variable));
+    if (!assign)
+        return null;
+    const [body, edge] = assign;
+    return edge;
 }
 
 function isSafeVariable(entry, variable)
@@ -1045,10 +1210,24 @@ function isSafeVariable(entry, variable)
         return false;
     var name = variableName(variable);
 
+    if (!entry.safeLocals)
+        entry.safeLocals = new Map;
+    if (entry.safeLocals.has(name))
+        return entry.safeLocals.get(name);
+
+    const safe = isSafeLocalVariable(entry, name);
+    entry.safeLocals.set(name, safe);
+    return safe;
+}
+
+function isSafeLocalVariable(entry, name)
+{
     // If there is a single place where this variable has been assigned on
     // edges we are considering, look at that edge.
-    var edge = singleAssignment(name);
-    if (edge) {
+    var assign = singleAssignment(name);
+    if (assign) {
+        const [body, edge] = assign;
+
         // Treat temporary pointers to DebugOnly contents as thread local.
         if (isDirectCall(edge, /DebugOnly.*?::operator/))
             return true;
@@ -1062,32 +1241,77 @@ function isSafeVariable(entry, variable)
             return true;
         }
 
-        // References to the contents of an array are threadsafe if the array
-        // itself is threadsafe.
-        if ((isDirectCall(edge, /operator\[\]/) ||
-             isDirectCall(edge, /nsStyleContent::ContentAt/)) &&
-            isEdgeSafeArgument(entry, edge.PEdgeCallInstance.Exp))
-        {
-            return true;
-        }
-
-        // Watch for the coerced result of a getter_AddRefs call.
-        if (isDirectCall(edge, /operator /)) {
-            var otherEdge = expressionValueEdge(edge.PEdgeCallInstance.Exp);
-            if (otherEdge &&
-                isDirectCall(otherEdge, /getter_AddRefs/) &&
-                isEdgeSafeArgument(entry, otherEdge.PEdgeCallArguments.Exp[0]))
+        if ("PEdgeCallInstance" in edge) {
+            // References to the contents of an array are threadsafe if the array
+            // itself is threadsafe.
+            if ((isDirectCall(edge, /operator\[\]/) ||
+                 isDirectCall(edge, /nsTArray.*?::InsertElementAt\b/) ||
+                 isDirectCall(edge, /nsStyleContent::ContentAt/)) &&
+                isEdgeSafeArgument(entry, edge.PEdgeCallInstance.Exp))
             {
                 return true;
             }
+
+            // Watch for the coerced result of a getter_AddRefs or getter_Copies call.
+            if (isDirectCall(edge, /operator /)) {
+                var otherEdge = expressionValueEdge(edge.PEdgeCallInstance.Exp);
+                if (otherEdge &&
+                    isDirectCall(otherEdge, /getter_(?:AddRefs|Copies)/) &&
+                    isEdgeSafeArgument(entry, otherEdge.PEdgeCallArguments.Exp[0]))
+                {
+                    return true;
+                }
+            }
+
+            // RefPtr::operator->() and operator* transmit the safety of the
+            // RefPtr to the return value.
+            if (isDirectCall(edge, /RefPtr<.*?>::operator(->|\*)\(\)/) &&
+                isEdgeSafeArgument(entry, edge.PEdgeCallInstance.Exp))
+            {
+                return true;
+            }
+
+            // Placement-new returns a pointer that is as safe as the pointer
+            // passed to it. Exp[0] is the size, Exp[1] is the pointer/address.
+            // Note that the invocation of the constructor is a separate call,
+            // and so need not be considered here.
+            if (isDirectCall(edge, /operator new/) &&
+                edge.PEdgeCallInstance.Exp.length == 2 &&
+                isEdgeSafeArgument(entry, edge.PEdgeCallInstance.Exp[1]))
+            {
+                return true;
+            }
+
+            // Coercion via AsAString preserves safety.
+            if (isDirectCall(edge, /AsAString/) &&
+                isEdgeSafeArgument(entry, edge.PEdgeCallInstance.Exp))
+            {
+                return true;
+            }
+
+            // Special case:
+            //
+            //   keyframe->mTimingFunction.emplace()
+            //   keyframe->mTimingFunction->Init()
+            //
+            // The object calling Init should be considered safe here because
+            // we just emplaced it, though in general keyframe::operator->
+            // could do something crazy.
+            if (isDirectCall(edge, /operator->/)) do {
+                const predges = getPredecessors(body)[edge.Index[0]];
+                if (!predges || predges.length != 1)
+                    break;
+                const predge = predges[0];
+                if (!isDirectCall(predge, /\bemplace\b/))
+                    break;
+                const instance = predge.PEdgeCallInstance;
+                if (JSON.stringify(instance) == JSON.stringify(edge.PEdgeCallInstance))
+                    return true;
+            } while (false);
         }
 
-        // Coercion via AsAString preserves safety.
-        if (isDirectCall(edge, /AsAString/) &&
-            isEdgeSafeArgument(entry, edge.PEdgeCallInstance.Exp))
-        {
+        if (isSafeAssignment(entry, edge, name))
             return true;
-        }
 
         // Watch out for variables which were assigned arguments.
         var rhsVariable = variableAssignRhs(edge);
@@ -1121,6 +1345,26 @@ function isSafeVariable(entry, variable)
     return true;
 }
 
+function isSafeMemberPointer(containerType, memberType)
+{
+    if (memberType.Kind != 'Pointer')
+        return false;
+
+    const {Type: {Kind: pointeeKind, Name: pointeeTypeName}} = memberType;
+
+    // nsStyleBorder has a member mBorderColors of type nsBorderColors**. It is
+    // lazily initialized to an array of 4 nsBorderColors, and should inherit
+    // the safety of its container.
+    if (containerType == 'nsStyleBorder' &&
+        pointeeKind == 'CSU' &&
+        pointeeTypeName == 'nsBorderColors')
+    {
+        return true;
+    }
+
+    return false;
+}
+
 // Return whether 'exp == value' holds only when execution is on the main thread.
 function testFailsOffMainThread(exp, value) {
     switch (exp.Kind) {
@@ -1130,6 +1374,8 @@ function testFailsOffMainThread(exp, value) {
             if (isDirectCall(edge, /NS_IsMainThread/) && value)
                 return true;
             if (isDirectCall(edge, /IsInServoTraversal/) && !value)
+                return true;
+            if (isDirectCall(edge, /IsCurrentThreadInServoTraversal/) && !value)
                 return true;
             if (isDirectCall(edge, /__builtin_expect/))
                 return testFailsOffMainThread(edge.PEdgeCallArguments.Exp[0], value);

@@ -13,8 +13,13 @@
 #include "nsTArray.h"
 #include "nsThreadUtils.h"
 #include "nsWindowsHelpers.h"
+#include "prenv.h"
+#include <shlobj.h>
+#include <shlwapi.h>
 #include <initguid.h>
 #include <stdint.h>
+#include "mozilla/mscom/EnsureMTA.h"
+#include "mozilla/WindowsVersion.h"
 
 #ifdef WMF_MUST_DEFINE_AAC_MFT_CLSID
 // Some SDK versions don't define the AAC decoder CLSID.
@@ -23,6 +28,8 @@ DEFINE_GUID(CLSID_CMSAACDecMFT, 0x32D186A7, 0x218F, 0x4C75, 0x88, 0x76, 0xDD, 0x
 #endif
 
 namespace mozilla {
+
+using media::TimeUnit;
 
 HRESULT
 HNsToFrames(int64_t aHNs, uint32_t aRate, int64_t* aOutFrames)
@@ -38,7 +45,7 @@ HNsToFrames(int64_t aHNs, uint32_t aRate, int64_t* aOutFrames)
 }
 
 HRESULT
-GetDefaultStride(IMFMediaType *aType, uint32_t aWidth, uint32_t* aOutStride)
+GetDefaultStride(IMFMediaType* aType, uint32_t aWidth, uint32_t* aOutStride)
 {
   // Try to get the default stride from the media type.
   HRESULT hr = aType->GetUINT32(MF_MT_DEFAULT_STRIDE, aOutStride);
@@ -59,35 +66,51 @@ GetDefaultStride(IMFMediaType *aType, uint32_t aWidth, uint32_t* aOutStride)
   return hr;
 }
 
+YUVColorSpace
+GetYUVColorSpace(IMFMediaType* aType)
+{
+  UINT32 yuvColorMatrix;
+  HRESULT hr = aType->GetUINT32(MF_MT_YUV_MATRIX, &yuvColorMatrix);
+  NS_ENSURE_TRUE(SUCCEEDED(hr), YUVColorSpace::BT601);
+
+  switch (yuvColorMatrix) {
+    case MFVideoTransferMatrix_BT709:
+      return YUVColorSpace::BT709;
+    case MFVideoTransferMatrix_BT601:
+    default:
+      return YUVColorSpace::BT601;
+  }
+}
+
 int32_t
 MFOffsetToInt32(const MFOffset& aOffset)
 {
   return int32_t(aOffset.value + (aOffset.fract / 65536.0f));
 }
 
-media::TimeUnit
+TimeUnit
 GetSampleDuration(IMFSample* aSample)
 {
-  NS_ENSURE_TRUE(aSample, media::TimeUnit::Invalid());
+  NS_ENSURE_TRUE(aSample, TimeUnit::Invalid());
   int64_t duration = 0;
   aSample->GetSampleDuration(&duration);
-  return media::TimeUnit::FromMicroseconds(HNsToUsecs(duration));
+  return TimeUnit::FromMicroseconds(HNsToUsecs(duration));
 }
 
-media::TimeUnit
+TimeUnit
 GetSampleTime(IMFSample* aSample)
 {
-  NS_ENSURE_TRUE(aSample, media::TimeUnit::Invalid());
+  NS_ENSURE_TRUE(aSample, TimeUnit::Invalid());
   LONGLONG timestampHns = 0;
   HRESULT hr = aSample->GetSampleTime(&timestampHns);
-  NS_ENSURE_TRUE(SUCCEEDED(hr), media::TimeUnit::Invalid());
-  return media::TimeUnit::FromMicroseconds(HNsToUsecs(timestampHns));
+  NS_ENSURE_TRUE(SUCCEEDED(hr), TimeUnit::Invalid());
+  return TimeUnit::FromMicroseconds(HNsToUsecs(timestampHns));
 }
 
 // Gets the sub-region of the video frame that should be displayed.
 // See: http://msdn.microsoft.com/en-us/library/windows/desktop/bb530115(v=vs.85).aspx
 HRESULT
-GetPictureRegion(IMFMediaType* aMediaType, nsIntRect& aOutPictureRegion)
+GetPictureRegion(IMFMediaType* aMediaType, gfx::IntRect& aOutPictureRegion)
 {
   // Determine if "pan and scan" is enabled for this media. If it is, we
   // only display a region of the video frame, not the entire frame.
@@ -125,10 +148,10 @@ GetPictureRegion(IMFMediaType* aMediaType, nsIntRect& aOutPictureRegion)
 
   if (SUCCEEDED(hr)) {
     // The media specified a picture region, return it.
-    aOutPictureRegion = nsIntRect(MFOffsetToInt32(videoArea.OffsetX),
-                                  MFOffsetToInt32(videoArea.OffsetY),
-                                  videoArea.Area.cx,
-                                  videoArea.Area.cy);
+    aOutPictureRegion = gfx::IntRect(MFOffsetToInt32(videoArea.OffsetX),
+                                     MFOffsetToInt32(videoArea.OffsetY),
+                                     videoArea.Area.cx,
+                                     videoArea.Area.cy);
     return S_OK;
   }
 
@@ -136,8 +159,25 @@ GetPictureRegion(IMFMediaType* aMediaType, nsIntRect& aOutPictureRegion)
   UINT32 width = 0, height = 0;
   hr = MFGetAttributeSize(aMediaType, MF_MT_FRAME_SIZE, &width, &height);
   NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
-  aOutPictureRegion = nsIntRect(0, 0, width, height);
+  NS_ENSURE_TRUE(width <= MAX_VIDEO_WIDTH, E_FAIL);
+  NS_ENSURE_TRUE(height <= MAX_VIDEO_HEIGHT, E_FAIL);
+
+  aOutPictureRegion = gfx::IntRect(0, 0, width, height);
   return S_OK;
+}
+
+nsString
+GetProgramW6432Path()
+{
+  char* programPath = PR_GetEnvSecure("ProgramW6432");
+  if (!programPath) {
+    programPath = PR_GetEnvSecure("ProgramFiles");
+  }
+
+  if (!programPath) {
+    return NS_LITERAL_STRING("C:\\Program Files");
+  }
+  return NS_ConvertUTF8toUTF16(programPath);
 }
 
 namespace wmf {
@@ -205,6 +245,16 @@ LoadDLLs()
 HRESULT
 MFStartup()
 {
+  if (IsWin7AndPre2000Compatible()) {
+    /*
+     * Specific exclude the usage of WMF on Win 7 with compatibility mode
+     * prior to Win 2000 as we may crash while trying to startup WMF.
+     * Using GetVersionEx API which takes compatibility mode into account.
+     * See Bug 1279171.
+     */
+    return E_FAIL;
+  }
+
   HRESULT hr = LoadDLLs();
   if (FAILED(hr)) {
     return hr;
@@ -215,14 +265,20 @@ MFStartup()
   // decltype is unusable for functions having default parameters
   DECL_FUNCTION_PTR(MFStartup, ULONG, DWORD);
   ENSURE_FUNCTION_PTR_(MFStartup, Mfplat.dll)
-  return MFStartupPtr(MF_WIN7_VERSION, MFSTARTUP_FULL);
+
+  hr = E_FAIL;
+  mozilla::mscom::EnsureMTA(
+    [&]() -> void { hr = MFStartupPtr(MF_WIN7_VERSION, MFSTARTUP_FULL); });
+  return hr;
 }
 
 HRESULT
 MFShutdown()
 {
   ENSURE_FUNCTION_PTR(MFShutdown, Mfplat.dll)
-  return (MFShutdownPtr)();
+  HRESULT hr = E_FAIL;
+  mozilla::mscom::EnsureMTA([&]() -> void { hr = (MFShutdownPtr)(); });
+  return hr;
 }
 
 HRESULT

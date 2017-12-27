@@ -9,7 +9,7 @@
 
 #include "NamespaceImports.h"
 
-#include "gc/Heap.h"
+#include "gc/Cell.h"
 #include "gc/StoreBuffer.h"
 #include "js/HeapAPI.h"
 #include "js/Id.h"
@@ -283,7 +283,7 @@ struct InternalBarrierMethods<Value>
         DispatchTyped(PreBarrierFunctor<Value>(), v);
     }
 
-    static void postBarrier(Value* vp, const Value& prev, const Value& next) {
+    static MOZ_ALWAYS_INLINE void postBarrier(Value* vp, const Value& prev, const Value& next) {
         MOZ_ASSERT(!CurrentThreadIsIonCompiling());
         MOZ_ASSERT(vp);
 
@@ -318,12 +318,18 @@ struct InternalBarrierMethods<jsid>
 };
 
 // Base class of all barrier types.
+//
+// This is marked non-memmovable since post barriers added by derived classes
+// can add pointers to class instances to the store buffer.
 template <typename T>
-class BarrieredBase
+class MOZ_NON_MEMMOVABLE BarrieredBase
 {
   protected:
     // BarrieredBase is not directly instantiable.
     explicit BarrieredBase(const T& v) : value(v) {}
+
+    // BarrieredBase subclasses cannot be copy constructed by default.
+    BarrieredBase(const BarrieredBase<T>& other) = default;
 
     // Storage for all barrier classes. |value| must be a GC thing reference
     // type: either a direct pointer to a GC thing or a supported tagged
@@ -366,7 +372,7 @@ class WriteBarrieredBase : public BarrieredBase<T>,
 
   protected:
     void pre() { InternalBarrierMethods<T>::preBarrier(this->value); }
-    void post(const T& prev, const T& next) {
+    MOZ_ALWAYS_INLINE void post(const T& prev, const T& next) {
         InternalBarrierMethods<T>::postBarrier(&this->value, prev, next);
     }
 };
@@ -433,10 +439,16 @@ class GCPtr : public WriteBarrieredBase<T>
     }
 #ifdef DEBUG
     ~GCPtr() {
-        // No prebarrier necessary as this only happens when we are sweeping or
-        // after we have just collected the nursery.  Note that the wrapped
-        // pointer may already have been freed by this point.
-        MOZ_ASSERT(CurrentThreadIsGCSweeping());
+        // No barriers are necessary as this only happens when we are sweeping
+        // or when after GCManagedDeletePolicy has triggered the barriers for us
+        // and cleared the pointer.
+        //
+        // If you get a crash here, you may need to make the containing object
+        // use GCManagedDeletePolicy and use JS::DeletePolicy to destroy it.
+        //
+        // Note that when sweeping the wrapped pointer may already have been
+        // freed by this point.
+        MOZ_ASSERT(CurrentThreadIsGCSweeping() || this->value == JS::GCPolicy<T>::initial());
         Poison(this, JS_FREED_HEAP_PTR_PATTERN, sizeof(*this));
     }
 #endif
@@ -578,9 +590,10 @@ class ReadBarriered : public ReadBarrieredBase<T>,
         this->post(JS::GCPolicy<T>::initial(), v);
     }
 
-    // Copy is creating a new edge, so we must read barrier the source edge.
+    // The copy constructor creates a new weak edge but the wrapped pointer does
+    // not escape, so no read barrier is necessary.
     explicit ReadBarriered(const ReadBarriered& v) : ReadBarrieredBase<T>(v) {
-        this->post(JS::GCPolicy<T>::initial(), v.get());
+        this->post(JS::GCPolicy<T>::initial(), v.unbarrieredGet());
     }
 
     // Move retains the lifetime status of the source edge, so does not fire
@@ -647,27 +660,13 @@ class HeapSlot : public WriteBarrieredBase<Value>
         Element = 1
     };
 
-    explicit HeapSlot() = delete;
-
-    explicit HeapSlot(NativeObject* obj, Kind kind, uint32_t slot, const Value& v)
-      : WriteBarrieredBase<Value>(v)
-    {
-        post(obj, kind, slot, v);
-    }
-
-    explicit HeapSlot(NativeObject* obj, Kind kind, uint32_t slot, const HeapSlot& s)
-      : WriteBarrieredBase<Value>(s.value)
-    {
-        post(obj, kind, slot, s);
-    }
-
-    ~HeapSlot() {
-        pre();
-    }
-
     void init(NativeObject* owner, Kind kind, uint32_t slot, const Value& v) {
         value = v;
         post(owner, kind, slot, v);
+    }
+
+    void destroy() {
+        pre();
     }
 
 #ifdef DEBUG
@@ -676,16 +675,11 @@ class HeapSlot : public WriteBarrieredBase<Value>
                                                const Value& target) const;
 #endif
 
-    void set(NativeObject* owner, Kind kind, uint32_t slot, const Value& v) {
+    MOZ_ALWAYS_INLINE void set(NativeObject* owner, Kind kind, uint32_t slot, const Value& v) {
         MOZ_ASSERT(preconditionForSet(owner, kind, slot));
         pre();
         value = v;
         post(owner, kind, slot, v);
-    }
-
-    /* For users who need to manually barrier the raw types. */
-    static void writeBarrierPost(NativeObject* owner, Kind kind, uint32_t slot, const Value& target) {
-        reinterpret_cast<HeapSlot*>(const_cast<Value*>(&target))->post(owner, kind, slot, target);
     }
 
   private:

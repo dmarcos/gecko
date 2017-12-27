@@ -11,10 +11,9 @@ Services.scriptloader.loadSubScript(
   "chrome://mochitests/content/browser/devtools/client/inspector/test/head.js",
   this);
 
-Services.prefs.setBoolPref("devtools.fontinspector.enabled", true);
 Services.prefs.setCharPref("devtools.inspector.activeSidebar", "fontinspector");
 registerCleanupFunction(() => {
-  Services.prefs.clearUserPref("devtools.fontinspector.enabled");
+  Services.prefs.clearUserPref("devtools.inspector.activeSidebar");
 });
 
 /**
@@ -47,7 +46,7 @@ var openFontInspectorForURL = Task.async(function* (url) {
   return {
     toolbox,
     inspector,
-    view: inspector.getPanel("fontinspector")
+    view: inspector.fontinspector
   };
 });
 
@@ -61,8 +60,8 @@ var openFontInspectorForURL = Task.async(function* (url) {
 function* updatePreviewText(view, text) {
   info(`Changing the preview text to '${text}'`);
 
-  let doc = view.chromeDoc;
-  let input = doc.getElementById("font-preview-text-input");
+  let doc = view.document;
+  let input = doc.querySelector("#sidebar-panel-fontinspector .devtools-textinput");
   let update = view.inspector.once("fontinspector-updated");
 
   info("Focusing the input field.");

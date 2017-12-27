@@ -66,13 +66,12 @@ public:
   virtual already_AddRefed<mozilla::gfx::SourceSurface>
   GetSurfaceSnapshot(gfxAlphaType* aOutAlphaType) override;
 
-  NS_IMETHOD SetIsOpaque(bool aIsOpaque) override;
+  virtual void SetIsOpaque(bool aIsOpaque) override;
   virtual bool GetIsOpaque() override;
   NS_IMETHOD Reset() override;
   virtual already_AddRefed<Layer> GetCanvasLayer(nsDisplayListBuilder* aBuilder,
                                                  Layer* aOldLayer,
-                                                 LayerManager* aManager,
-                                                 bool aMirror = false) override;
+                                                 LayerManager* aManager) override;
   virtual void MarkContextClean() override;
 
   NS_IMETHOD Redraw(const gfxRect& aDirty) override;

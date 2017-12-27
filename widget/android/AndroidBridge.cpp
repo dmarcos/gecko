@@ -15,7 +15,6 @@
 #include "nsXULAppAPI.h"
 #include <prthread.h>
 #include "AndroidBridge.h"
-#include "AndroidJNIWrapper.h"
 #include "AndroidBridgeUtilities.h"
 #include "nsAlertsUtils.h"
 #include "nsAppShell.h"
@@ -57,7 +56,6 @@
 
 using namespace mozilla;
 using namespace mozilla::gfx;
-using namespace mozilla::jni;
 using namespace mozilla::java;
 
 AndroidBridge* AndroidBridge::sBridge = nullptr;
@@ -129,7 +127,7 @@ AndroidBridge::ConstructBridge()
      * to call dlclose() while we're already inside dlclose().
      * Conveniently, NSS has an env var that can prevent it from unloading.
      */
-    putenv("NSS_DISABLE_UNLOAD=1");
+    putenv(const_cast<char*>("NSS_DISABLE_UNLOAD=1"));
 
     MOZ_ASSERT(!sBridge);
     sBridge = new AndroidBridge();
@@ -153,7 +151,6 @@ AndroidBridge::~AndroidBridge()
 }
 
 AndroidBridge::AndroidBridge()
-  : mUiTaskQueueLock("UiTaskQueue")
 {
     ALOG_BRIDGE("AndroidBridge::Init");
 
@@ -161,7 +158,7 @@ AndroidBridge::AndroidBridge()
     AutoLocalJNIFrame jniFrame(jEnv);
 
     mMessageQueue = java::GeckoThread::MsgQueue();
-    auto msgQueueClass = Class::LocalRef::Adopt(
+    auto msgQueueClass = jni::Class::LocalRef::Adopt(
             jEnv, jEnv->GetObjectClass(mMessageQueue.Get()));
     // mMessageQueueNext must not be null
     mMessageQueueNext = GetMethodID(
@@ -173,9 +170,7 @@ AndroidBridge::AndroidBridge()
     AutoJNIClass string(jEnv, "java/lang/String");
     jStringClass = string.getGlobalRef();
 
-    if (!GetStaticIntField("android/os/Build$VERSION", "SDK_INT", &mAPIVersion, jEnv)) {
-        ALOG_BRIDGE("Failed to find API version");
-    }
+    mAPIVersion = jni::GetAPIVersion();
 
     AutoJNIClass channels(jEnv, "java/nio/channels/Channels");
     jChannels = channels.getGlobalRef();
@@ -191,71 +186,36 @@ AndroidBridge::AndroidBridge()
     jAvailable = inputStream.getMethod("available", "()I");
 }
 
-// Raw JNIEnv variants.
-jstring AndroidBridge::NewJavaString(JNIEnv* env, const char16_t* string, uint32_t len) {
-   jstring ret = env->NewString(reinterpret_cast<const jchar*>(string), len);
-   if (env->ExceptionCheck()) {
-       ALOG_BRIDGE("Exceptional exit of: %s", __PRETTY_FUNCTION__);
-       env->ExceptionDescribe();
-       env->ExceptionClear();
-       return nullptr;
-    }
-    return ret;
-}
-
-jstring AndroidBridge::NewJavaString(JNIEnv* env, const nsAString& string) {
-    return NewJavaString(env, string.BeginReading(), string.Length());
-}
-
-jstring AndroidBridge::NewJavaString(JNIEnv* env, const char* string) {
-    return NewJavaString(env, NS_ConvertUTF8toUTF16(string));
-}
-
-jstring AndroidBridge::NewJavaString(JNIEnv* env, const nsACString& string) {
-    return NewJavaString(env, NS_ConvertUTF8toUTF16(string));
-}
-
-// AutoLocalJNIFrame variants..
-jstring AndroidBridge::NewJavaString(AutoLocalJNIFrame* frame, const char16_t* string, uint32_t len) {
-    return NewJavaString(frame->GetEnv(), string, len);
-}
-
-jstring AndroidBridge::NewJavaString(AutoLocalJNIFrame* frame, const nsAString& string) {
-    return NewJavaString(frame, string.BeginReading(), string.Length());
-}
-
-jstring AndroidBridge::NewJavaString(AutoLocalJNIFrame* frame, const char* string) {
-    return NewJavaString(frame, NS_ConvertUTF8toUTF16(string));
-}
-
-jstring AndroidBridge::NewJavaString(AutoLocalJNIFrame* frame, const nsACString& string) {
-    return NewJavaString(frame, NS_ConvertUTF8toUTF16(string));
-}
-
 static void
-getHandlersFromStringArray(JNIEnv *aJNIEnv, jobjectArray jArr, jsize aLen,
+getHandlersFromStringArray(JNIEnv *aJNIEnv, jni::ObjectArray::Param aArr, size_t aLen,
                            nsIMutableArray *aHandlersArray,
                            nsIHandlerApp **aDefaultApp,
                            const nsAString& aAction = EmptyString(),
                            const nsACString& aMimeType = EmptyCString())
 {
     nsString empty = EmptyString();
-    for (jsize i = 0; i < aLen; i+=4) {
 
-        AutoLocalJNIFrame jniFrame(aJNIEnv, 4);
-        nsJNIString name(
-            static_cast<jstring>(aJNIEnv->GetObjectArrayElement(jArr, i)), aJNIEnv);
-        nsJNIString isDefault(
-            static_cast<jstring>(aJNIEnv->GetObjectArrayElement(jArr, i + 1)), aJNIEnv);
-        nsJNIString packageName(
-            static_cast<jstring>(aJNIEnv->GetObjectArrayElement(jArr, i + 2)), aJNIEnv);
-        nsJNIString className(
-            static_cast<jstring>(aJNIEnv->GetObjectArrayElement(jArr, i + 3)), aJNIEnv);
+    auto getNormalizedString = [] (jni::Object::Param obj) -> nsString {
+        nsString out;
+        if (!obj) {
+            out.SetIsVoid(true);
+        } else {
+            out.Assign(jni::String::Ref::From(obj)->ToString());
+        }
+        return out;
+    };
+
+    for (size_t i = 0; i < aLen; i += 4) {
+        nsString name(getNormalizedString(aArr->GetElement(i)));
+        nsString isDefault(getNormalizedString(aArr->GetElement(i + 1)));
+        nsString packageName(getNormalizedString(aArr->GetElement(i + 2)));
+        nsString className(getNormalizedString(aArr->GetElement(i + 3)));
+
         nsIHandlerApp* app = nsOSHelperAppService::
             CreateAndroidHandlerApp(name, className, packageName,
                                     className, aMimeType, aAction);
 
-        aHandlersArray->AppendElement(app, false);
+        aHandlersArray->AppendElement(app);
         if (aDefaultApp && isDefault.Length() > 0)
             *aDefaultApp = app;
     }
@@ -274,12 +234,12 @@ AndroidBridge::GetHandlersForMimeType(const nsAString& aMimeType,
         return false;
 
     JNIEnv* const env = arr.Env();
-    jsize len = env->GetArrayLength(arr.Get());
+    size_t len = arr->Length();
 
     if (!aHandlersArray)
         return len > 0;
 
-    getHandlersFromStringArray(env, arr.Get(), len, aHandlersArray,
+    getHandlersFromStringArray(env, arr, len, aHandlersArray,
                                aDefaultApp, aAction,
                                NS_ConvertUTF16toUTF8(aMimeType));
     return true;
@@ -319,12 +279,12 @@ AndroidBridge::GetHandlersForURL(const nsAString& aURL,
         return false;
 
     JNIEnv* const env = arr.Env();
-    jsize len = env->GetArrayLength(arr.Get());
+    size_t len = arr->Length();
 
     if (!aHandlersArray)
         return len > 0;
 
-    getHandlersFromStringArray(env, arr.Get(), len, aHandlersArray,
+    getHandlersFromStringArray(env, arr, len, aHandlersArray,
                                aDefaultApp, aAction);
     return true;
 }
@@ -358,7 +318,7 @@ AndroidBridge::GetClipboardText(nsAString& aText)
 {
     ALOG_BRIDGE("AndroidBridge::GetClipboardText");
 
-    auto text = Clipboard::GetText();
+    auto text = Clipboard::GetText(GeckoAppShell::GetApplicationContext());
 
     if (text) {
         aText = text->ToString();
@@ -450,7 +410,7 @@ AndroidBridge::Vibrate(const nsTArray<uint32_t>& aPattern)
     }
     env->ReleaseLongArrayElements(array, elts, 0);
 
-    GeckoAppShell::Vibrate(LongArray::Ref::From(array), -1 /* don't repeat */);
+    GeckoAppShell::Vibrate(jni::LongArray::Ref::From(array), -1 /* don't repeat */);
 }
 
 void
@@ -559,14 +519,14 @@ AndroidBridge::GetStaticStringField(const char *className, const char *fieldName
     if (!jstr)
         return false;
 
-    result.Assign(nsJNIString(jstr, jEnv));
+    result.Assign(jni::String::Ref::From(jstr)->ToString());
     return true;
 }
 
 namespace mozilla {
     class TracerRunnable : public Runnable{
     public:
-        TracerRunnable() {
+        TracerRunnable() : Runnable("TracerRunnable") {
             mTracerLock = new Mutex("TracerRunnable");
             mTracerCondVar = new CondVar(*mTracerLock, "TracerRunnable");
             mMainThread = do_GetMainThread();
@@ -688,36 +648,9 @@ AndroidBridge::GetCurrentNetworkInformation(hal::NetworkInformation* aNetworkInf
 
 jobject
 AndroidBridge::GetGlobalContextRef() {
-    if (sGlobalContext) {
-        return sGlobalContext;
-    }
-
-    JNIEnv* const env = GetEnvForThread();
-    AutoLocalJNIFrame jniFrame(env, 4);
-
-    auto context = GeckoAppShell::GetContext();
-    if (!context) {
-        ALOG_BRIDGE("%s: Could not GetContext()", __FUNCTION__);
-        return 0;
-    }
-    jclass contextClass = env->FindClass("android/content/Context");
-    if (!contextClass) {
-        ALOG_BRIDGE("%s: Could not find Context class.", __FUNCTION__);
-        return 0;
-    }
-    jmethodID mid = env->GetMethodID(contextClass, "getApplicationContext",
-                                     "()Landroid/content/Context;");
-    if (!mid) {
-        ALOG_BRIDGE("%s: Could not find getApplicationContext.", __FUNCTION__);
-        return 0;
-    }
-    jobject appContext = env->CallObjectMethod(context.Get(), mid);
-    if (!appContext) {
-        ALOG_BRIDGE("%s: getApplicationContext failed.", __FUNCTION__);
-        return 0;
-    }
-
-    sGlobalContext = env->NewGlobalRef(appContext);
+    // The context object can change, so get a fresh copy every time.
+    auto context = GeckoAppShell::GetApplicationContext();
+    sGlobalContext = jni::Object::GlobalRef(context).Forget();
     MOZ_ASSERT(sGlobalContext);
     return sGlobalContext;
 }
@@ -898,7 +831,7 @@ AndroidBridge::PumpMessageLoop()
     JNIEnv* const env = jni::GetGeckoThreadEnv();
 
     if (mMessageQueueMessages) {
-        auto msg = Object::LocalRef::Adopt(env,
+        auto msg = jni::Object::LocalRef::Adopt(env,
                 env->GetObjectField(mMessageQueue.Get(),
                                     mMessageQueueMessages));
         // if queue.mMessages is null, queue.next() will block, which we don't
@@ -910,7 +843,7 @@ AndroidBridge::PumpMessageLoop()
         }
     }
 
-    auto msg = Object::LocalRef::Adopt(
+    auto msg = jni::Object::LocalRef::Adopt(
             env, env->CallObjectMethod(mMessageQueue.Get(), mMessageQueueNext));
     if (!msg) {
         return false;
@@ -940,8 +873,8 @@ __attribute__ ((visibility("default")))
 jobject JNICALL
 Java_org_mozilla_gecko_GeckoAppShell_allocateDirectBuffer(JNIEnv *env, jclass, jlong size);
 
-static jni::DependentRef<java::GeckoLayerClient>
-GetJavaLayerClient(mozIDOMWindowProxy* aWindow)
+static RefPtr<nsWindow>
+GetWidget(mozIDOMWindowProxy* aWindow)
 {
     MOZ_ASSERT(aWindow);
 
@@ -950,156 +883,52 @@ GetJavaLayerClient(mozIDOMWindowProxy* aWindow)
             widget::WidgetUtils::DOMWindowToWidget(domWindow);
     MOZ_ASSERT(widget);
 
-    return static_cast<nsWindow*>(widget.get())->GetLayerClient();
+    return RefPtr<nsWindow>(static_cast<nsWindow*>(widget.get()));
 }
 
 void
 AndroidBridge::ContentDocumentChanged(mozIDOMWindowProxy* aWindow)
 {
-    auto layerClient = GetJavaLayerClient(aWindow);
-    if (!layerClient) {
-        return;
+    auto widget = GetWidget(aWindow);
+    if (widget) {
+        widget->SetContentDocumentDisplayed(false);
     }
-    layerClient->ContentDocumentChanged();
 }
 
 bool
 AndroidBridge::IsContentDocumentDisplayed(mozIDOMWindowProxy* aWindow)
 {
-    auto layerClient = GetJavaLayerClient(aWindow);
-    if (!layerClient) {
-        return false;
+    auto widget = GetWidget(aWindow);
+    if (widget) {
+        return widget->IsContentDocumentDisplayed();
     }
-    return layerClient->IsContentDocumentDisplayed();
+    return false;
 }
 
-class AndroidBridge::DelayedTask
-{
-    using TimeStamp = mozilla::TimeStamp;
-    using TimeDuration = mozilla::TimeDuration;
-
-public:
-    DelayedTask(already_AddRefed<nsIRunnable> aTask)
-        : mTask(aTask)
-        , mRunTime() // Null timestamp representing no delay.
-    {}
-
-    DelayedTask(already_AddRefed<nsIRunnable> aTask, int aDelayMs)
-        : mTask(aTask)
-        , mRunTime(TimeStamp::Now() + TimeDuration::FromMilliseconds(aDelayMs))
-    {}
-
-    bool IsEarlierThan(const DelayedTask& aOther) const
-    {
-        if (mRunTime) {
-            return aOther.mRunTime ? mRunTime < aOther.mRunTime : false;
-        }
-        // In the case of no delay, we're earlier if aOther has a delay.
-        // Otherwise, we're not earlier, to maintain task order.
-        return !!aOther.mRunTime;
-    }
-
-    int64_t MillisecondsToRunTime() const
-    {
-        if (mRunTime) {
-            return int64_t((mRunTime - TimeStamp::Now()).ToMilliseconds());
-        }
-        return 0;
-    }
-
-    already_AddRefed<nsIRunnable> TakeTask()
-    {
-        return mTask.forget();
-    }
-
-private:
-    nsCOMPtr<nsIRunnable> mTask;
-    const TimeStamp mRunTime;
-};
-
-
-void
-AndroidBridge::PostTaskToUiThread(already_AddRefed<nsIRunnable> aTask, int aDelayMs)
-{
-    // add the new task into the mUiTaskQueue, sorted with
-    // the earliest task first in the queue
-    size_t i;
-    DelayedTask newTask(aDelayMs ? DelayedTask(mozilla::Move(aTask), aDelayMs)
-                                 : DelayedTask(mozilla::Move(aTask)));
-
-    {
-        MutexAutoLock lock(mUiTaskQueueLock);
-
-        for (i = 0; i < mUiTaskQueue.Length(); i++) {
-            if (newTask.IsEarlierThan(mUiTaskQueue[i])) {
-                mUiTaskQueue.InsertElementAt(i, mozilla::Move(newTask));
-                break;
-            }
-        }
-
-        if (i == mUiTaskQueue.Length()) {
-            // We didn't insert the task, which means we should append it.
-            mUiTaskQueue.AppendElement(mozilla::Move(newTask));
-        }
-    }
-
-    if (i == 0) {
-        // if we're inserting it at the head of the queue, notify Java because
-        // we need to get a callback at an earlier time than the last scheduled
-        // callback
-        GeckoThread::RequestUiThreadCallback(int64_t(aDelayMs));
-    }
-}
-
-int64_t
-AndroidBridge::RunDelayedUiThreadTasks()
-{
-    MutexAutoLock lock(mUiTaskQueueLock);
-
-    while (!mUiTaskQueue.IsEmpty()) {
-        const int64_t timeLeft = mUiTaskQueue[0].MillisecondsToRunTime();
-        if (timeLeft > 0) {
-            // this task (and therefore all remaining tasks)
-            // have not yet reached their runtime. return the
-            // time left until we should be called again
-            return timeLeft;
-        }
-
-        // Retrieve task before unlocking/running.
-        nsCOMPtr<nsIRunnable> nextTask(mUiTaskQueue[0].TakeTask());
-        mUiTaskQueue.RemoveElementAt(0);
-
-        // Unlock to allow posting new tasks reentrantly.
-        MutexAutoUnlock unlock(mUiTaskQueueLock);
-        nextTask->Run();
-    }
-    return -1;
-}
-
-Object::LocalRef AndroidBridge::ChannelCreate(Object::Param stream) {
-    JNIEnv* const env = GetEnvForThread();
-    auto rv = Object::LocalRef::Adopt(env, env->CallStaticObjectMethod(
+jni::Object::LocalRef AndroidBridge::ChannelCreate(jni::Object::Param stream) {
+    JNIEnv* const env = jni::GetEnvForThread();
+    auto rv = jni::Object::LocalRef::Adopt(env, env->CallStaticObjectMethod(
             sBridge->jChannels, sBridge->jChannelCreate, stream.Get()));
     MOZ_CATCH_JNI_EXCEPTION(env);
     return rv;
 }
 
-void AndroidBridge::InputStreamClose(Object::Param obj) {
-    JNIEnv* const env = GetEnvForThread();
+void AndroidBridge::InputStreamClose(jni::Object::Param obj) {
+    JNIEnv* const env = jni::GetEnvForThread();
     env->CallVoidMethod(obj.Get(), sBridge->jClose);
     MOZ_CATCH_JNI_EXCEPTION(env);
 }
 
-uint32_t AndroidBridge::InputStreamAvailable(Object::Param obj) {
-    JNIEnv* const env = GetEnvForThread();
+uint32_t AndroidBridge::InputStreamAvailable(jni::Object::Param obj) {
+    JNIEnv* const env = jni::GetEnvForThread();
     auto rv = env->CallIntMethod(obj.Get(), sBridge->jAvailable);
     MOZ_CATCH_JNI_EXCEPTION(env);
     return rv;
 }
 
-nsresult AndroidBridge::InputStreamRead(Object::Param obj, char *aBuf, uint32_t aCount, uint32_t *aRead) {
-    JNIEnv* const env = GetEnvForThread();
-    auto arr = ByteBuffer::New(aBuf, aCount);
+nsresult AndroidBridge::InputStreamRead(jni::Object::Param obj, char *aBuf, uint32_t aCount, uint32_t *aRead) {
+    JNIEnv* const env = jni::GetEnvForThread();
+    auto arr = jni::ByteBuffer::New(aBuf, aCount);
     jint read = env->CallIntMethod(obj.Get(), sBridge->jByteBufferRead, arr.Get());
 
     if (env->ExceptionCheck()) {

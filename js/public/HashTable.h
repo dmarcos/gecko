@@ -582,24 +582,16 @@ class HashSet
 //     h.add(p, k);
 //   }
 
-// Pointer hashing policy that strips the lowest zeroBits when calculating the
-// hash to improve key distribution.
-template <typename Key, size_t zeroBits>
+// Pointer hashing policy that uses HashGeneric() to create good hashes for
+// pointers.  Note that we don't shift out the lowest k bits to generate a
+// good distribution for arena allocated pointers.
+template <typename Key>
 struct PointerHasher
 {
     typedef Key Lookup;
     static HashNumber hash(const Lookup& l) {
-        size_t word = reinterpret_cast<size_t>(l) >> zeroBits;
-        static_assert(sizeof(HashNumber) == 4,
-                      "subsequent code assumes a four-byte hash");
-#if JS_BITS_PER_WORD == 32
-        return HashNumber(word);
-#else
-        static_assert(sizeof(word) == 8,
-                      "unexpected word size, new hashing strategy required to "
-                      "properly incorporate all bits");
-        return HashNumber((word >> 32) ^ word);
-#endif
+        size_t word = reinterpret_cast<size_t>(l);
+        return mozilla::HashGeneric(word);
     }
     static bool match(const Key& k, const Lookup& l) {
         return k == l;
@@ -633,7 +625,7 @@ struct DefaultHasher
 // Specialize hashing policy for pointer types. It assumes that the type is
 // at least word-aligned. For types with smaller size use PointerHasher.
 template <class T>
-struct DefaultHasher<T*> : PointerHasher<T*, mozilla::tl::FloorLog2<sizeof(void*)>::value>
+struct DefaultHasher<T*> : PointerHasher<T*>
 {};
 
 // Specialize hashing policy for mozilla::UniquePtr to proxy the UniquePtr's
@@ -642,7 +634,7 @@ template <class T, class D>
 struct DefaultHasher<mozilla::UniquePtr<T, D>>
 {
     using Lookup = mozilla::UniquePtr<T, D>;
-    using PtrHasher = PointerHasher<T*, mozilla::tl::FloorLog2<sizeof(void*)>::value>;
+    using PtrHasher = PointerHasher<T*>;
 
     static HashNumber hash(const Lookup& l) {
         return PtrHasher::hash(l.get());
@@ -915,11 +907,11 @@ class HashTable : private AllocPolicy
         {}
 
         bool isValid() const {
-            return !entry_;
+            return !!entry_;
         }
 
         bool found() const {
-            if (isValid())
+            if (!isValid())
                 return false;
 #ifdef JS_DEBUG
             MOZ_ASSERT(generation == table_->generation());
@@ -1070,13 +1062,21 @@ class HashTable : private AllocPolicy
         bool rekeyed;
         bool removed;
 
-        /* Not copyable. */
+        // Enum is movable but not copyable.
         Enum(const Enum&) = delete;
         void operator=(const Enum&) = delete;
 
       public:
-        template<class Map> explicit
-        Enum(Map& map) : Range(map.all()), table_(map.impl), rekeyed(false), removed(false) {}
+        template<class Map>
+        explicit Enum(Map& map)
+          : Range(map.all()), table_(map.impl), rekeyed(false), removed(false) {}
+
+        MOZ_IMPLICIT Enum(Enum&& other)
+          : Range(other), table_(other.table_), rekeyed(other.rekeyed), removed(other.removed)
+        {
+            other.rekeyed = false;
+            other.removed = false;
+        }
 
         // Removes the |front()| element from the table, leaving |front()|
         // invalid until the next call to |popFront()|. For example:
@@ -1605,6 +1605,7 @@ class HashTable : private AllocPolicy
     {
         METER(stats.rehashes++);
         removedCount = 0;
+        gen++;
         for (size_t i = 0; i < capacity(); ++i)
             table[i].unsetCollision();
 
@@ -1771,9 +1772,15 @@ class HashTable : private AllocPolicy
         if (!EnsureHash<HashPolicy>(l))
             return AddPtr();
         HashNumber keyHash = prepareHash(l);
-        Entry& entry = lookup(l, keyHash, sCollisionBit);
-        AddPtr p(entry, *this, keyHash);
+        // Calling constructor in return statement here avoid excess copying
+        // when build with Visual Studio 2015 and 2017, but it triggers a bug in
+        // gcc which is fixed in gcc-6. See bug 1385181.
+#if MOZ_IS_GCC && __GNUC__ < 6
+        AddPtr p(lookup(l, keyHash, sCollisionBit), *this, keyHash);
         return p;
+#else
+        return AddPtr(lookup(l, keyHash, sCollisionBit), *this, keyHash);
+#endif
     }
 
     template <typename... Args>
@@ -1781,12 +1788,18 @@ class HashTable : private AllocPolicy
     {
         mozilla::ReentrancyGuard g(*this);
         MOZ_ASSERT(table);
+        MOZ_ASSERT_IF(p.isValid(), p.table_ == this);
         MOZ_ASSERT(!p.found());
         MOZ_ASSERT(!(p.keyHash & sCollisionBit));
 
         // Check for error from ensureHash() here.
-        if (p.isValid())
+        if (!p.isValid())
             return false;
+
+        MOZ_ASSERT(p.generation == generation());
+#ifdef JS_DEBUG
+        MOZ_ASSERT(p.mutationCount == mutationCount);
+#endif
 
         // Changing an entry from removed to live does not affect whether we
         // are overloaded and can be handled separately.
@@ -1851,7 +1864,7 @@ class HashTable : private AllocPolicy
     MOZ_MUST_USE bool relookupOrAdd(AddPtr& p, const Lookup& l, Args&&... args)
     {
         // Check for error from ensureHash() here.
-        if (p.isValid())
+        if (!p.isValid())
             return false;
 
 #ifdef JS_DEBUG
@@ -1871,6 +1884,7 @@ class HashTable : private AllocPolicy
         MOZ_ASSERT(table);
         mozilla::ReentrancyGuard g(*this);
         MOZ_ASSERT(p.found());
+        MOZ_ASSERT(p.generation == generation());
         remove(*p.entry_);
         checkUnderloaded();
     }
@@ -1880,6 +1894,7 @@ class HashTable : private AllocPolicy
         MOZ_ASSERT(table);
         mozilla::ReentrancyGuard g(*this);
         MOZ_ASSERT(p.found());
+        MOZ_ASSERT(p.generation == generation());
         typename HashTableEntry<T>::NonConstT t(mozilla::Move(*p));
         HashPolicy::setKey(t, const_cast<Key&>(k));
         remove(*p.entry_);

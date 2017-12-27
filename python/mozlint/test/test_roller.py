@@ -2,9 +2,12 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 import os
 import sys
 
+import mozunit
 import pytest
 
 from mozlint import ResultContainer
@@ -14,7 +17,7 @@ from mozlint.errors import LintersNotConfigured, LintException
 here = os.path.abspath(os.path.dirname(__file__))
 
 
-linters = ('string.lint', 'regex.lint', 'external.lint')
+linters = ('string.yml', 'regex.yml', 'external.yml')
 
 
 def test_roll_no_linters_configured(lint, files):
@@ -42,7 +45,7 @@ def test_roll_successful(lint, linters, files):
 
 
 def test_roll_catch_exception(lint, lintdir, files):
-    lint.read(os.path.join(lintdir, 'raises.lint'))
+    lint.read(os.path.join(lintdir, 'raises.yml'))
 
     # suppress printed traceback from test output
     old_stderr = sys.stderr
@@ -63,14 +66,14 @@ def test_roll_with_excluded_path(lint, linters, files):
 
 
 def test_roll_with_invalid_extension(lint, lintdir, filedir):
-    lint.read(os.path.join(lintdir, 'external.lint'))
+    lint.read(os.path.join(lintdir, 'external.yml'))
     result = lint.roll(os.path.join(filedir, 'foobar.py'))
     assert len(result) == 0
     assert lint.failed == []
 
 
 def test_roll_with_failure_code(lint, lintdir, files):
-    lint.read(os.path.join(lintdir, 'badreturncode.lint'))
+    lint.read(os.path.join(lintdir, 'badreturncode.yml'))
 
     assert lint.failed is None
     result = lint.roll(files)
@@ -79,4 +82,4 @@ def test_roll_with_failure_code(lint, lintdir, files):
 
 
 if __name__ == '__main__':
-    sys.exit(pytest.main(['--verbose', __file__]))
+    mozunit.main()

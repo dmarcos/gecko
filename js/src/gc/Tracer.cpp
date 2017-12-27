@@ -7,11 +7,8 @@
 #include "gc/Tracer.h"
 
 #include "mozilla/DebugOnly.h"
-#include "mozilla/SizePrintfMacros.h"
 
-#include "jsapi.h"
 #include "jsfun.h"
-#include "jsgc.h"
 #include "jsprf.h"
 #include "jsscript.h"
 #include "jsutil.h"
@@ -96,7 +93,7 @@ JS::CallbackTracer::getTracingEdgeName(char* buffer, size_t bufferSize)
         return;
     }
     if (contextIndex_ != InvalidIndex) {
-        snprintf(buffer, bufferSize, "%s[%" PRIuSIZE "]", contextName_, contextIndex_);
+        snprintf(buffer, bufferSize, "%s[%zu]", contextName_, contextIndex_);
         return;
     }
     snprintf(buffer, bufferSize, "%s", contextName_);
@@ -113,8 +110,13 @@ JS::TraceChildren(JSTracer* trc, GCCellPtr thing)
 
 struct TraceChildrenFunctor {
     template <typename T>
-    void operator()(JSTracer* trc, void* thing) {
-        static_cast<T*>(thing)->traceChildren(trc);
+    void operator()(JSTracer* trc, void* thingArg) {
+        T* thing = static_cast<T*>(thingArg);
+        MOZ_ASSERT_IF(thing->runtimeFromAnyThread() != trc->runtime(),
+            ThingIsPermanentAtomOrWellKnownSymbol(thing) ||
+            thing->zoneFromAnyThread()->isSelfHostingZone());
+
+        thing->traceChildren(trc);
     }
 };
 
@@ -331,26 +333,6 @@ JS_GetTraceThingInfo(char* buf, size_t bufsize, JSTracer* trc, void* thing,
         return;
 
     switch (kind) {
-      case JS::TraceKind::Object:
-      {
-        name = static_cast<JSObject*>(thing)->getClass()->name;
-        break;
-      }
-
-      case JS::TraceKind::Script:
-        name = "script";
-        break;
-
-      case JS::TraceKind::String:
-        name = ((JSString*)thing)->isDependent()
-               ? "substring"
-               : "string";
-        break;
-
-      case JS::TraceKind::Symbol:
-        name = "symbol";
-        break;
-
       case JS::TraceKind::BaseShape:
         name = "base_shape";
         break;
@@ -363,12 +345,44 @@ JS_GetTraceThingInfo(char* buf, size_t bufsize, JSTracer* trc, void* thing,
         name = "lazyscript";
         break;
 
+      case JS::TraceKind::Null:
+        name = "null_pointer";
+        break;
+
+      case JS::TraceKind::Object:
+      {
+        name = static_cast<JSObject*>(thing)->getClass()->name;
+        break;
+      }
+
+      case JS::TraceKind::ObjectGroup:
+        name = "object_group";
+        break;
+
+      case JS::TraceKind::RegExpShared:
+        name = "reg_exp_shared";
+        break;
+
+      case JS::TraceKind::Scope:
+        name = "scope";
+        break;
+
+      case JS::TraceKind::Script:
+        name = "script";
+        break;
+
       case JS::TraceKind::Shape:
         name = "shape";
         break;
 
-      case JS::TraceKind::ObjectGroup:
-        name = "object_group";
+      case JS::TraceKind::String:
+        name = ((JSString*)thing)->isDependent()
+               ? "substring"
+               : "string";
+        break;
+
+      case JS::TraceKind::Symbol:
+        name = "symbol";
         break;
 
       default:
@@ -407,7 +421,7 @@ JS_GetTraceThingInfo(char* buf, size_t bufsize, JSTracer* trc, void* thing,
           case JS::TraceKind::Script:
           {
             JSScript* script = static_cast<JSScript*>(thing);
-            snprintf(buf, bufsize, " %s:%" PRIuSIZE, script->filename(), script->lineno());
+            snprintf(buf, bufsize, " %s:%zu", script->filename(), script->lineno());
             break;
           }
 
@@ -422,7 +436,7 @@ JS_GetTraceThingInfo(char* buf, size_t bufsize, JSTracer* trc, void* thing,
                 bool willFit = str->length() + strlen("<length > ") + strlen(header) +
                                CountDecimalDigits(str->length()) < bufsize;
 
-                n = snprintf(buf, bufsize, "<%slength %" PRIuSIZE "%s> ",
+                n = snprintf(buf, bufsize, "<%slength %zu%s> ",
                              header, str->length(),
                              willFit ? "" : " (truncated)");
                 buf += n;
@@ -430,7 +444,7 @@ JS_GetTraceThingInfo(char* buf, size_t bufsize, JSTracer* trc, void* thing,
 
                 PutEscapedString(buf, bufsize, &str->asLinear(), 0);
             } else {
-                snprintf(buf, bufsize, "<rope: length %" PRIuSIZE ">", str->length());
+                snprintf(buf, bufsize, "<rope: length %zu>", str->length());
             }
             break;
           }
@@ -452,6 +466,13 @@ JS_GetTraceThingInfo(char* buf, size_t bufsize, JSTracer* trc, void* thing,
             break;
           }
 
+          case JS::TraceKind::Scope:
+          {
+            js::Scope* scope = static_cast<js::Scope*>(thing);
+            snprintf(buf, bufsize, " %s", js::ScopeKindString(scope->kind()));
+            break;
+          }
+
           default:
             break;
         }
@@ -462,3 +483,10 @@ JS_GetTraceThingInfo(char* buf, size_t bufsize, JSTracer* trc, void* thing,
 JS::CallbackTracer::CallbackTracer(JSContext* cx, WeakMapTraceKind weakTraceKind)
   : CallbackTracer(cx->runtime(), weakTraceKind)
 {}
+
+uint32_t
+JSTracer::gcNumberForMarking() const
+{
+    MOZ_ASSERT(isMarkingTracer());
+    return runtime()->gc.gcNumber();
+}

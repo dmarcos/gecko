@@ -68,7 +68,7 @@ static constexpr nsAttrValue::EnumTable kKindTable[] = {
 
 // Invalid values are treated as "metadata" in ParseAttribute, but if no value
 // at all is specified, it's treated as "subtitles" in GetKind
-static constexpr const nsAttrValue::EnumTable* kKindTableInvalidValueDefault = &kKindTable[4];
+static const nsAttrValue::EnumTable* const kKindTableInvalidValueDefault = &kKindTable[4];
 
 class WindowDestroyObserver final : public nsIObserver
 {
@@ -146,14 +146,11 @@ HTMLTrackElement::~HTMLTrackElement()
 
 NS_IMPL_ELEMENT_CLONE(HTMLTrackElement)
 
-NS_IMPL_ADDREF_INHERITED(HTMLTrackElement, Element)
-NS_IMPL_RELEASE_INHERITED(HTMLTrackElement, Element)
-
 NS_IMPL_CYCLE_COLLECTION_INHERITED(HTMLTrackElement, nsGenericHTMLElement,
                                    mTrack, mMediaParent, mListener)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(HTMLTrackElement)
-NS_INTERFACE_MAP_END_INHERITING(nsGenericHTMLElement)
+NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED_0(HTMLTrackElement,
+                                               nsGenericHTMLElement)
 
 void
 HTMLTrackElement::GetKind(DOMString& aKind) const
@@ -219,8 +216,9 @@ HTMLTrackElement::CreateTextTrack()
 
 bool
 HTMLTrackElement::ParseAttribute(int32_t aNamespaceID,
-                                 nsIAtom* aAttribute,
+                                 nsAtom* aAttribute,
                                  const nsAString& aValue,
+                                 nsIPrincipal* aMaybeScriptedPrincipal,
                                  nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None && aAttribute == nsGkAtoms::kind) {
@@ -233,6 +231,7 @@ HTMLTrackElement::ParseAttribute(int32_t aNamespaceID,
   return nsGenericHTMLElement::ParseAttribute(aNamespaceID,
                                               aAttribute,
                                               aValue,
+                                              aMaybeScriptedPrincipal,
                                               aResult);
 }
 
@@ -265,7 +264,10 @@ void
 HTMLTrackElement::DispatchLoadResource()
 {
   if (!mLoadResourceDispatched) {
-    RefPtr<Runnable> r = NewRunnableMethod(this, &HTMLTrackElement::LoadResource);
+    RefPtr<Runnable> r =
+      NewRunnableMethod("dom::HTMLTrackElement::LoadResource",
+                        this,
+                        &HTMLTrackElement::LoadResource);
     nsContentUtils::RunInStableState(r.forget());
     mLoadResourceDispatched = true;
   }
@@ -437,13 +439,12 @@ HTMLTrackElement::DispatchTrackRunnable(const nsString& aEventName)
   if (!doc) {
     return;
   }
-  nsCOMPtr<nsIRunnable> runnable =
-    NewRunnableMethod
-      <const nsString>(this,
-                       &HTMLTrackElement::DispatchTrustedEvent,
-                       aEventName);
-  doc->Dispatch("HTMLTrackElement::DispatchTrackRunnable",
-                TaskCategory::Other, runnable.forget());
+  nsCOMPtr<nsIRunnable> runnable = NewRunnableMethod<const nsString>(
+    "dom::HTMLTrackElement::DispatchTrustedEvent",
+    this,
+    &HTMLTrackElement::DispatchTrustedEvent,
+    aEventName);
+  doc->Dispatch(TaskCategory::Other, runnable.forget());
 }
 
 void

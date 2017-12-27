@@ -133,10 +133,6 @@ return {
         return elts;
     },
 
-    graphExpression: reject,
-    graphIndexExpression: reject,
-    comprehensionExpression: reject,
-    generatorExpression: reject,
     yieldExpression: reject,
 
     emptyStatement: () => ["EmptyStmt", {}],
@@ -178,10 +174,8 @@ return {
     returnStatement: function(expr) {
         return expr ? ["ReturnStmt", {}, expr] : ["ReturnStmt", {}];
     },
-    tryStatement: function(body, catches, fin) {
-        if (catches.length > 1)
-            throw new SyntaxError("multiple catch clauses not supported");
-        var node = ["TryStmt", body, catches[0] || ["Empty"]];
+    tryStatement: function(body, handler, fin) {
+        var node = ["TryStmt", body, handler];
         if (fin)
             node.push(fin);
         return node;
@@ -198,13 +192,10 @@ return {
             stmts.unshift("DefaultCase", {});
         return stmts;
     },
-    catchClause: function(param, guard, body) {
-        if (guard)
-            throw new SyntaxError("catch guards not supported");
+    catchClause: function(param, body) {
         param[0] = "IdPatt";
         return ["CatchClause", {}, param, body];
     },
-    comprehensionBlock: reject,
 
     arrayPattern: reject,
     objectPattern: reject,

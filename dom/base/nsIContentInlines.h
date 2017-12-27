@@ -10,6 +10,8 @@
 #include "nsIContent.h"
 #include "nsIDocument.h"
 #include "nsContentUtils.h"
+#include "nsAtom.h"
+#include "nsIFrame.h"
 #include "mozilla/dom/Element.h"
 
 inline bool
@@ -22,6 +24,28 @@ inline bool
 nsIContent::IsInChromeDocument() const
 {
   return nsContentUtils::IsChromeDoc(OwnerDoc());
+}
+
+inline void
+nsIContent::SetPrimaryFrame(nsIFrame* aFrame)
+{
+  MOZ_ASSERT(IsInUncomposedDoc() || IsInShadowTree(), "This will end badly!");
+  NS_PRECONDITION(!aFrame || !mPrimaryFrame || aFrame == mPrimaryFrame,
+                  "Losing track of existing primary frame");
+
+  if (aFrame) {
+    if (MOZ_LIKELY(!IsHTMLElement(nsGkAtoms::area)) ||
+        aFrame->GetContent() == this) {
+      aFrame->SetIsPrimaryFrame(true);
+    }
+  } else if (nsIFrame* currentPrimaryFrame = GetPrimaryFrame()) {
+    if (MOZ_LIKELY(!IsHTMLElement(nsGkAtoms::area)) ||
+        currentPrimaryFrame->GetContent() == this) {
+      currentPrimaryFrame->SetIsPrimaryFrame(false);
+    }
+  }
+
+  mPrimaryFrame = aFrame;
 }
 
 inline mozilla::dom::ShadowRoot* nsIContent::GetShadowRoot() const
@@ -51,17 +75,21 @@ static inline bool FlattenedTreeParentIsParent(const nsINode* aNode)
   }
 
   // Check if we want the flattened parent for style, and the node is the root
-  // of a native anonymous content subtree parented to the document's root element.
-  if (Type == nsIContent::eForStyle && aNode->HasFlag(NODE_IS_NATIVE_ANONYMOUS_ROOT) &&
+  // of a native anonymous content subtree parented to the document's root
+  // element.
+  if (Type == nsIContent::eForStyle &&
+      aNode->HasFlag(NODE_IS_NATIVE_ANONYMOUS_ROOT) &&
       aNode->OwnerDoc()->GetRootElement() == aNode->GetParentNode())
   {
     return false;
   }
 
-  // Check if the node is an explicit child of an element with a shadow root,
-  // re-bound to an insertion point.
+  // Check if the node is an explicit child of an element with a shadow root or
+  // an element with an XBL binding, which may be re-bound to an insertion
+  // point, or not be bound to any, and thus won't appear on the flattened tree
+  // at all.
   nsIContent* parent = aNode->GetParent();
-  if (parent && parent->GetShadowRoot()) {
+  if (parent && (parent->GetShadowRoot() || parent->GetXBLBinding())) {
     return false;
   }
 
@@ -94,10 +122,27 @@ nsIContent::GetFlattenedTreeParent() const
   return (parent && parent->IsContent()) ? parent->AsContent() : nullptr;
 }
 
+inline bool
+nsIContent::IsEventAttributeName(nsAtom* aName)
+{
+  const char16_t* name = aName->GetUTF16String();
+  if (name[0] != 'o' || name[1] != 'n') {
+    return false;
+  }
+
+  return IsEventAttributeNameInternal(aName);
+}
+
 inline nsINode*
 nsINode::GetFlattenedTreeParentNodeForStyle() const
 {
   return ::GetFlattenedTreeParentNode<nsIContent::eForStyle>(this);
+}
+
+inline bool
+nsINode::NodeOrAncestorHasDirAuto() const
+{
+  return AncestorHasDirAuto() || (IsElement() && AsElement()->HasDirAuto());
 }
 
 #endif // nsIContentInlines_h

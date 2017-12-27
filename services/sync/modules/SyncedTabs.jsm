@@ -11,7 +11,6 @@ const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://services-sync/main.js");
 Cu.import("resource://gre/modules/Preferences.jsm");
@@ -41,29 +40,23 @@ const TOPIC_TABS_CHANGED = "services.sync.tabs.changed";
 // of tabs "fresh enough" and don't force a new sync.
 const TABS_FRESH_ENOUGH_INTERVAL = 30;
 
-let log = Log.repository.getLogger("Sync.RemoteTabs");
-// A new scope to do the logging thang...
-(function() {
-  let level = Preferences.get("services.sync.log.logger.tabs");
-  if (level) {
-    let appender = new Log.DumpAppender();
-    log.level = appender.level = Log.Level[level] || Log.Level.Debug;
-    log.addAppender(appender);
-  }
-})();
-
+XPCOMUtils.defineLazyGetter(this, "log", function() {
+  let log = Log.repository.getLogger("Sync.RemoteTabs");
+  log.manageLevelFromPref("services.sync.log.logger.tabs");
+  return log;
+});
 
 // A private singleton that does the work.
 let SyncedTabsInternal = {
   /* Make a "tab" record. Returns a promise */
-  _makeTab: Task.async(function* (client, tab, url, showRemoteIcons) {
+  async _makeTab(client, tab, url, showRemoteIcons) {
     let icon;
     if (showRemoteIcons) {
       icon = tab.icon;
     }
     if (!icon) {
       try {
-        icon = (yield PlacesUtils.promiseFaviconLinkUrl(url)).spec;
+        icon = (await PlacesUtils.promiseFaviconLinkUrl(url)).spec;
       } catch (ex) { /* no favicon avaiable */ }
     }
     if (!icon) {
@@ -77,10 +70,10 @@ let SyncedTabsInternal = {
       client: client.id,
       lastUsed: tab.lastUsed,
     };
-  }),
+  },
 
   /* Make a "client" record. Returns a promise for consistency with _makeTab */
-  _makeClient: Task.async(function* (client) {
+  async _makeClient(client) {
     return {
       id: client.id,
       type: "client",
@@ -89,14 +82,14 @@ let SyncedTabsInternal = {
       lastModified: client.lastModified * 1000, // sec to ms
       tabs: []
     };
-  }),
+  },
 
   _tabMatchesFilter(tab, filter) {
     let reFilter = new RegExp(escapeRegExp(filter), "i");
     return tab.url.match(reFilter) || tab.title.match(reFilter);
   },
 
-  getTabClients: Task.async(function* (filter) {
+  async getTabClients(filter) {
     log.info("Generating tab list with filter", filter);
     let result = [];
 
@@ -111,37 +104,26 @@ let SyncedTabsInternal = {
 
     let engine = Weave.Service.engineManager.get("tabs");
 
-    let seenURLs = new Set();
     let ntabs = 0;
 
     for (let client of Object.values(engine.getAllClients())) {
       if (!Weave.Service.clientsEngine.remoteClientExists(client.id)) {
         continue;
       }
-      let clientRepr = yield this._makeClient(client);
+      let clientRepr = await this._makeClient(client);
       log.debug("Processing client", clientRepr);
 
       for (let tab of client.tabs) {
         let url = tab.urlHistory[0];
-        log.debug("remote tab", url);
-        // Note there are some issues with tracking "seen" tabs, including:
-        // * We really can't return the entire urlHistory record as we are
-        //   only checking the first entry - others might be different.
-        // * We don't update the |lastUsed| timestamp to reflect the
-        //   most-recently-seen time.
-        // In a followup we should consider simply dropping this |seenUrls|
-        // check and return duplicate records - it seems the user will be more
-        // confused by tabs not showing up on a device (because it was detected
-        // as a dupe so it only appears on a different device) than being
-        // confused by seeing the same tab on different clients.
-        if (!url || seenURLs.has(url)) {
+        log.trace("remote tab", url);
+
+        if (!url) {
           continue;
         }
-        let tabRepr = yield this._makeTab(client, tab, url, showRemoteIcons);
+        let tabRepr = await this._makeTab(client, tab, url, showRemoteIcons);
         if (filter && !this._tabMatchesFilter(tabRepr, filter)) {
           continue;
         }
-        seenURLs.add(url);
         clientRepr.tabs.push(tabRepr);
       }
       // We return all clients, even those without tabs - the consumer should
@@ -151,16 +133,16 @@ let SyncedTabsInternal = {
     }
     log.info(`Final tab list has ${result.length} clients with ${ntabs} tabs.`);
     return result;
-  }),
+  },
 
-  syncTabs(force) {
+  async syncTabs(force) {
     if (!force) {
       // Don't bother refetching tabs if we already did so recently
       let lastFetch = Preferences.get("services.sync.lastTabFetch", 0);
       let now = Math.floor(Date.now() / 1000);
       if (now - lastFetch < TABS_FRESH_ENOUGH_INTERVAL) {
         log.info("_refetchTabs was done recently, do not doing it again");
-        return Promise.resolve(false);
+        return false;
       }
     }
 
@@ -168,23 +150,17 @@ let SyncedTabsInternal = {
     // of a login failure.
     if (Weave.Status.checkSetup() == Weave.CLIENT_NOT_CONFIGURED) {
       log.info("Sync client is not configured, so not attempting a tab sync");
-      return Promise.resolve(false);
+      return false;
     }
     // Ask Sync to just do the tabs engine if it can.
-    // Sync is currently synchronous, so do it after an event-loop spin to help
-    // keep the UI responsive.
-    return new Promise((resolve, reject) => {
-      Services.tm.dispatchToMainThread(() => {
-        try {
-          log.info("Doing a tab sync.");
-          Weave.Service.sync(["tabs"]);
-          resolve(true);
-        } catch (ex) {
-          log.error("Sync failed", ex);
-          reject(ex);
-        }
-      });
-    });
+    try {
+      log.info("Doing a tab sync.");
+      await Weave.Service.sync({why: "tabs", engines: ["tabs"]});
+      return true;
+    } catch (ex) {
+      log.error("Sync failed", ex);
+      throw ex;
+    }
   },
 
   observe(subject, topic, data) {
@@ -211,6 +187,14 @@ let SyncedTabsInternal = {
       default:
         break;
     }
+  },
+
+  get loginFailed() {
+    if (!weaveXPCService.ready) {
+      log.debug("Sync isn't yet ready; assuming the login didn't fail");
+      return false;
+    }
+    return Weave.Status.login == Weave.LOGIN_FAILED_LOGIN_REJECTED;
   },
 
   // Returns true if Sync is configured to Sync tabs, false otherwise
@@ -255,6 +239,11 @@ this.SyncedTabs = {
   // are waiting for that first sync to complete.
   get hasSyncedThisSession() {
     return this._internal.hasSyncedThisSession;
+  },
+
+  // Returns true if Sync is in a "need to reauthenticate" state.
+  get loginFailed() {
+    return this._internal.loginFailed;
   },
 
   // Return a promise that resolves with an array of client records, each with

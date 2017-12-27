@@ -28,19 +28,27 @@ struct DOMPointInit;
 class DOMMatrixReadOnly : public nsWrapperCache
 {
 public:
-  explicit DOMMatrixReadOnly(nsISupports* aParent)
-    : mParent(aParent), mMatrix2D(new gfx::Matrix())
+  DOMMatrixReadOnly(nsISupports* aParent, bool aIsServo)
+    : mParent(aParent), mMatrix2D(new gfx::Matrix()), mIsServo(aIsServo)
   {
   }
 
   DOMMatrixReadOnly(nsISupports* aParent, const DOMMatrixReadOnly& other)
-    : mParent(aParent)
+    : mParent(aParent), mIsServo(other.mIsServo)
   {
     if (other.mMatrix2D) {
       mMatrix2D = new gfx::Matrix(*other.mMatrix2D);
     } else {
       mMatrix3D = new gfx::Matrix4x4(*other.mMatrix3D);
     }
+  }
+
+  DOMMatrixReadOnly(nsISupports* aParent,
+                    const gfx::Matrix4x4& aMatrix,
+                    bool aIsServo)
+    : mParent(aParent), mIsServo(aIsServo)
+  {
+    mMatrix3D = new gfx::Matrix4x4(aMatrix);
   }
 
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(DOMMatrixReadOnly)
@@ -122,7 +130,7 @@ public:
   already_AddRefed<DOMMatrix> Inverse() const;
 
   bool                        Is2D() const;
-  bool                        Identity() const;
+  bool                        IsIdentity() const;
   already_AddRefed<DOMPoint>  TransformPoint(const DOMPointInit& aPoint) const;
   void                        ToFloat32Array(JSContext* aCx,
                                              JS::MutableHandle<JSObject*> aResult,
@@ -135,6 +143,7 @@ protected:
   nsCOMPtr<nsISupports>     mParent;
   nsAutoPtr<gfx::Matrix>    mMatrix2D;
   nsAutoPtr<gfx::Matrix4x4> mMatrix3D;
+  bool mIsServo;
 
   virtual ~DOMMatrixReadOnly() {}
 
@@ -147,12 +156,16 @@ private:
 class DOMMatrix : public DOMMatrixReadOnly
 {
 public:
-  explicit DOMMatrix(nsISupports* aParent)
-    : DOMMatrixReadOnly(aParent)
+  DOMMatrix(nsISupports* aParent, bool aIsServo)
+    : DOMMatrixReadOnly(aParent, aIsServo)
   {}
 
   DOMMatrix(nsISupports* aParent, const DOMMatrixReadOnly& other)
     : DOMMatrixReadOnly(aParent, other)
+  {}
+
+  DOMMatrix(nsISupports* aParent, const gfx::Matrix4x4& aMatrix, bool aIsServo)
+    : DOMMatrixReadOnly(aParent, aMatrix, aIsServo)
   {}
 
   static already_AddRefed<DOMMatrix>

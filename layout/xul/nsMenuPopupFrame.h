@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,7 +13,7 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/gfx/Types.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsGkAtoms.h"
 #include "nsCOMPtr.h"
 #include "nsMenuFrame.h"
@@ -138,8 +139,10 @@ class nsXULPopupShownEvent : public mozilla::Runnable,
                              public nsIDOMEventListener
 {
 public:
-  nsXULPopupShownEvent(nsIContent *aPopup, nsPresContext* aPresContext)
-    : mPopup(aPopup), mPresContext(aPresContext)
+  nsXULPopupShownEvent(nsIContent* aPopup, nsPresContext* aPresContext)
+    : mozilla::Runnable("nsXULPopupShownEvent")
+    , mPopup(aPopup)
+    , mPresContext(aPresContext)
   {
   }
 
@@ -161,9 +164,8 @@ class nsMenuPopupFrame final : public nsBoxFrame, public nsMenuParent,
                                public nsIReflowCallback
 {
 public:
-  NS_DECL_QUERYFRAME_TARGET(nsMenuPopupFrame)
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsMenuPopupFrame)
 
   explicit nsMenuPopupFrame(nsStyleContext* aContext);
 
@@ -186,17 +188,17 @@ public:
 
   /*
    * When this popup is open, should clicks outside of it be consumed?
-   * Return true if the popup should rollup on an outside click, 
+   * Return true if the popup should rollup on an outside click,
    * but consume that click so it can't be used for anything else.
-   * Return false to allow clicks outside the popup to activate content 
+   * Return false to allow clicks outside the popup to activate content
    * even when the popup is open.
    * ---------------------------------------------------------------------
-   * 
+   *
    * Should clicks outside of a popup be eaten?
    *
    *       Menus     Autocomplete     Comboboxes
    * Mac     Eat           No              Eat
-   * Win     No            No              Eat     
+   * Win     No            No              Eat
    * Unix    Eat           No              Eat
    *
    */
@@ -220,10 +222,12 @@ public:
                     nsIFrame*         aPrevInFlow) override;
 
   virtual nsresult AttributeChanged(int32_t aNameSpaceID,
-                                    nsIAtom* aAttribute,
+                                    nsAtom* aAttribute,
                                     int32_t aModType) override;
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
+
+  bool HasRemoteContent() const;
 
   // returns true if the popup is a panel with the noautohide attribute set to
   // true. These panels do not roll up automatically.
@@ -231,10 +235,13 @@ public:
 
   nsPopupLevel PopupLevel() const
   {
-    return PopupLevel(IsNoAutoHide()); 
+    return PopupLevel(IsNoAutoHide());
   }
 
-  void EnsureWidget();
+  // Ensure that a widget has already been created for this view, and create
+  // one if it hasn't. If aRecreate is true, destroys any existing widget and
+  // creates a new one, regardless of whether one has already been created.
+  void EnsureWidget(bool aRecreate = false);
 
   nsresult CreateWidgetForView(nsView* aView);
   uint8_t GetShadowStyle();
@@ -242,7 +249,9 @@ public:
   virtual void SetInitialChildList(ChildListID  aListID,
                                    nsFrameList& aChildList) override;
 
-  virtual bool IsLeaf() const override;
+  virtual bool IsLeafDynamic() const override;
+
+  virtual void UpdateWidgetProperties() override;
 
   // layout, position and display the popup as needed
   void LayoutPopup(nsBoxLayoutState& aState, nsIFrame* aParentMenu,
@@ -336,8 +345,6 @@ public:
   static bool IsWithinIncrementalTime(DOMTimeStamp time) {
     return !sTimeoutOfIncrementalSearch || time - sLastKeyTime <= sTimeoutOfIncrementalSearch;
   }
-
-  virtual nsIAtom* GetType() const override { return nsGkAtoms::menuPopupFrame; }
 
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override
@@ -484,7 +491,7 @@ protected:
   //   aOffsetForContextMenu - the additional offset to add for context menus
   //   aFlip - how to flip or resize the popup when there isn't space
   //   aFlipSide - pointer to where current flip mode is stored
-  nscoord FlipOrResize(nscoord& aScreenPoint, nscoord aSize, 
+  nscoord FlipOrResize(nscoord& aScreenPoint, nscoord aSize,
                        nscoord aScreenBegin, nscoord aScreenEnd,
                        nscoord aAnchorBegin, nscoord aAnchorEnd,
                        nscoord aMarginBegin, nscoord aMarginEnd,
@@ -606,19 +613,22 @@ protected:
       mAnchor(nullptr),
       mSizedToPopup(false)
     {}
-    void MarkPosted(nsIFrame* aAnchor, bool aSizedToPopup) {
+    void MarkPosted(nsIFrame* aAnchor, bool aSizedToPopup, bool aIsOpenChanged) {
       mPosted = true;
       mAnchor = aAnchor;
       mSizedToPopup = aSizedToPopup;
+      mIsOpenChanged = aIsOpenChanged;
     }
     void Clear() {
       mPosted = false;
       mAnchor = nullptr;
       mSizedToPopup = false;
+      mIsOpenChanged = false;
     }
     bool mPosted;
     nsIFrame* mAnchor;
     bool mSizedToPopup;
+    bool mIsOpenChanged;
   };
   ReflowCallbackData mReflowCallbackData;
 
@@ -634,9 +644,19 @@ protected:
   bool mIsMenuLocked; // Should events inside this menu be ignored?
   bool mMouseTransparent; // True if this is a popup is transparent to mouse events
 
+  // True if this popup has been offset due to moving off / near the edge of the screen.
+  // (This is useful for ensuring that a move, which can't offset the popup, doesn't undo
+  // a previously set offset.)
+  bool mIsOffset;
+
   // the flip modes that were used when the popup was opened
   bool mHFlip;
   bool mVFlip;
+
+  // When POPUPPOSITION_SELECTION is used, this indicates the vertical offset that the
+  // original selected item was. This needs to be used in case the popup gets changed
+  // so that we can keep the popup at the same vertical offset.
+  nscoord mPositionedOffset;
 
   // How the popup is anchored.
   MenuPopupAnchorType mAnchorType;

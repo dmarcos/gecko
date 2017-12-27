@@ -19,7 +19,6 @@
 #include "nsEditorSpellCheck.h"
 #include "nsError.h"                    // for NS_ERROR_NOT_INITIALIZED, etc
 #include "nsIContent.h"                 // for nsIContent
-#include "nsIContentPrefService.h"      // for nsIContentPrefService, etc
 #include "nsIContentPrefService2.h"     // for nsIContentPrefService2, etc
 #include "nsIDOMDocument.h"             // for nsIDOMDocument
 #include "nsIDOMElement.h"              // for nsIDOMElement
@@ -34,6 +33,7 @@
 #include "nsITextServicesDocument.h"    // for nsITextServicesDocument
 #include "nsITextServicesFilter.h"      // for nsITextServicesFilter
 #include "nsIURI.h"                     // for nsIURI
+#include "nsThreadUtils.h"              // for GetMainThreadSerialEventTarget
 #include "nsVariant.h"                  // for nsIWritableVariant, etc
 #include "nsLiteralString.h"            // for NS_LITERAL_STRING, etc
 #include "nsMemory.h"                   // for nsMemory
@@ -155,30 +155,70 @@ private:
 };
 NS_IMPL_ISUPPORTS(DictionaryFetcher, nsIContentPrefCallback2)
 
+class ContentPrefInitializerRunnable final : public Runnable
+{
+public:
+  ContentPrefInitializerRunnable(nsIEditor* aEditor,
+                                 nsIContentPrefCallback2* aCallback)
+    : Runnable("ContentPrefInitializerRunnable")
+    , mEditor(aEditor)
+    , mCallback(aCallback)
+  {
+  }
+
+  NS_IMETHOD Run() override
+  {
+    if (mEditor->AsEditorBase()->Destroyed()) {
+      mCallback->HandleError(NS_ERROR_NOT_AVAILABLE);
+      return NS_OK;
+    }
+
+    nsCOMPtr<nsIContentPrefService2> contentPrefService =
+      do_GetService(NS_CONTENT_PREF_SERVICE_CONTRACTID);
+    if (NS_WARN_IF(!contentPrefService)) {
+      mCallback->HandleError(NS_ERROR_NOT_AVAILABLE);
+      return NS_OK;
+    }
+
+    nsCOMPtr<nsIURI> docUri;
+    nsresult rv = GetDocumentURI(mEditor, getter_AddRefs(docUri));
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      mCallback->HandleError(rv);
+      return NS_OK;
+    }
+
+    nsAutoCString docUriSpec;
+    rv = docUri->GetSpec(docUriSpec);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      mCallback->HandleError(rv);
+      return NS_OK;
+    }
+
+    nsCOMPtr<nsILoadContext> loadContext = GetLoadContext(mEditor);
+    rv = contentPrefService->GetByDomainAndName(
+                               NS_ConvertUTF8toUTF16(docUriSpec),
+                               CPS_PREF_NAME, loadContext,
+                               mCallback);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      mCallback->HandleError(rv);
+      return NS_OK;
+    }
+    return NS_OK;
+  }
+
+private:
+  nsCOMPtr<nsIEditor> mEditor;
+  nsCOMPtr<nsIContentPrefCallback2> mCallback;
+};
+
 NS_IMETHODIMP
 DictionaryFetcher::Fetch(nsIEditor* aEditor)
 {
   NS_ENSURE_ARG_POINTER(aEditor);
 
-  nsresult rv;
-
-  nsCOMPtr<nsIURI> docUri;
-  rv = GetDocumentURI(aEditor, getter_AddRefs(docUri));
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  nsAutoCString docUriSpec;
-  rv = docUri->GetSpec(docUriSpec);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  nsCOMPtr<nsIContentPrefService2> contentPrefService =
-    do_GetService(NS_CONTENT_PREF_SERVICE_CONTRACTID);
-  NS_ENSURE_TRUE(contentPrefService, NS_ERROR_NOT_AVAILABLE);
-
-  nsCOMPtr<nsILoadContext> loadContext = GetLoadContext(aEditor);
-  rv = contentPrefService->GetByDomainAndName(NS_ConvertUTF8toUTF16(docUriSpec),
-                                              CPS_PREF_NAME, loadContext,
-                                              this);
-  NS_ENSURE_SUCCESS(rv, rv);
+  nsCOMPtr<nsIRunnable> runnable =
+     new ContentPrefInitializerRunnable(aEditor, this);
+  NS_IdleDispatchToCurrentThread(runnable.forget(), 1000);
 
   return NS_OK;
 }
@@ -300,7 +340,10 @@ class CallbackCaller final : public Runnable
 {
 public:
   explicit CallbackCaller(nsIEditorSpellCheckCallback* aCallback)
-    : mCallback(aCallback) {}
+    : mozilla::Runnable("CallbackCaller")
+    , mCallback(aCallback)
+  {
+  }
 
   ~CallbackCaller()
   {
@@ -357,20 +400,11 @@ nsEditorSpellCheck::InitSpellChecker(nsIEditor* aEditor, bool aEnableSelectionCh
     }
     RefPtr<Selection> selection = domSelection->AsSelection();
 
-    int32_t count = 0;
-
-    rv = selection->GetRangeCount(&count);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    if (count > 0) {
+    if (selection->RangeCount()) {
       RefPtr<nsRange> range = selection->GetRangeAt(0);
       NS_ENSURE_STATE(range);
 
-      bool collapsed = false;
-      rv = range->GetCollapsed(&collapsed);
-      NS_ENSURE_SUCCESS(rv, rv);
-
-      if (!collapsed) {
+      if (!range->Collapsed()) {
         // We don't want to touch the range in the selection,
         // so create a new copy of it.
 
@@ -406,8 +440,7 @@ nsEditorSpellCheck::InitSpellChecker(nsIEditor* aEditor, bool aEnableSelectionCh
     // discard the failure.  Do it asynchronously so that the caller is always
     // guaranteed async behavior.
     RefPtr<CallbackCaller> caller = new CallbackCaller(aCallback);
-    rv = doc->Dispatch("nsEditorSpellCheck::CallbackCaller",
-                       TaskCategory::Other, caller.forget());
+    rv = doc->Dispatch(TaskCategory::Other, caller.forget());
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
@@ -415,75 +448,69 @@ nsEditorSpellCheck::InitSpellChecker(nsIEditor* aEditor, bool aEnableSelectionCh
 }
 
 NS_IMETHODIMP
-nsEditorSpellCheck::GetNextMisspelledWord(char16_t **aNextMisspelledWord)
+nsEditorSpellCheck::GetNextMisspelledWord(nsAString& aNextMisspelledWord)
 {
   NS_ENSURE_TRUE(mSpellChecker, NS_ERROR_NOT_INITIALIZED);
-
-  nsAutoString nextMisspelledWord;
 
   DeleteSuggestedWordList();
   // Beware! This may flush notifications via synchronous
   // ScrollSelectionIntoView.
-  nsresult rv = mSpellChecker->NextMisspelledWord(nextMisspelledWord,
-                                                  &mSuggestedWordList);
-
-  *aNextMisspelledWord = ToNewUnicode(nextMisspelledWord);
-  return rv;
+  return mSpellChecker->NextMisspelledWord(aNextMisspelledWord,
+                                           &mSuggestedWordList);
 }
 
 NS_IMETHODIMP
-nsEditorSpellCheck::GetSuggestedWord(char16_t **aSuggestedWord)
+nsEditorSpellCheck::GetSuggestedWord(nsAString& aSuggestedWord)
 {
-  nsAutoString word;
   // XXX This is buggy if mSuggestedWordList.Length() is over INT32_MAX.
   if (mSuggestedWordIndex < static_cast<int32_t>(mSuggestedWordList.Length())) {
-    *aSuggestedWord = ToNewUnicode(mSuggestedWordList[mSuggestedWordIndex]);
+    aSuggestedWord = mSuggestedWordList[mSuggestedWordIndex];
     mSuggestedWordIndex++;
   } else {
     // A blank string signals that there are no more strings
-    *aSuggestedWord = ToNewUnicode(EmptyString());
+    aSuggestedWord.Truncate();
   }
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsEditorSpellCheck::CheckCurrentWord(const char16_t *aSuggestedWord,
+nsEditorSpellCheck::CheckCurrentWord(const nsAString& aSuggestedWord,
                                      bool *aIsMisspelled)
 {
   NS_ENSURE_TRUE(mSpellChecker, NS_ERROR_NOT_INITIALIZED);
 
   DeleteSuggestedWordList();
-  return mSpellChecker->CheckWord(nsDependentString(aSuggestedWord),
+  return mSpellChecker->CheckWord(aSuggestedWord,
                                   aIsMisspelled, &mSuggestedWordList);
 }
 
 NS_IMETHODIMP
-nsEditorSpellCheck::CheckCurrentWordNoSuggest(const char16_t *aSuggestedWord,
+nsEditorSpellCheck::CheckCurrentWordNoSuggest(const nsAString& aSuggestedWord,
                                               bool *aIsMisspelled)
 {
   NS_ENSURE_TRUE(mSpellChecker, NS_ERROR_NOT_INITIALIZED);
 
-  return mSpellChecker->CheckWord(nsDependentString(aSuggestedWord),
+  return mSpellChecker->CheckWord(aSuggestedWord,
                                   aIsMisspelled, nullptr);
 }
 
 NS_IMETHODIMP
-nsEditorSpellCheck::ReplaceWord(const char16_t *aMisspelledWord,
-                                const char16_t *aReplaceWord,
+nsEditorSpellCheck::ReplaceWord(const nsAString& aMisspelledWord,
+                                const nsAString& aReplaceWord,
                                 bool             allOccurrences)
 {
   NS_ENSURE_TRUE(mSpellChecker, NS_ERROR_NOT_INITIALIZED);
 
-  return mSpellChecker->Replace(nsDependentString(aMisspelledWord),
-                                nsDependentString(aReplaceWord), allOccurrences);
+  return mSpellChecker->Replace(aMisspelledWord,
+                                aReplaceWord, allOccurrences);
 }
 
 NS_IMETHODIMP
-nsEditorSpellCheck::IgnoreWordAllOccurrences(const char16_t *aWord)
+nsEditorSpellCheck::IgnoreWordAllOccurrences(const nsAString& aWord)
 {
   NS_ENSURE_TRUE(mSpellChecker, NS_ERROR_NOT_INITIALIZED);
 
-  return mSpellChecker->IgnoreAll(nsDependentString(aWord));
+  return mSpellChecker->IgnoreAll(aWord);
 }
 
 NS_IMETHODIMP
@@ -498,34 +525,34 @@ nsEditorSpellCheck::GetPersonalDictionary()
 }
 
 NS_IMETHODIMP
-nsEditorSpellCheck::GetPersonalDictionaryWord(char16_t **aDictionaryWord)
+nsEditorSpellCheck::GetPersonalDictionaryWord(nsAString& aDictionaryWord)
 {
   // XXX This is buggy if mDictionaryList.Length() is over INT32_MAX.
   if (mDictionaryIndex < static_cast<int32_t>(mDictionaryList.Length())) {
-    *aDictionaryWord = ToNewUnicode(mDictionaryList[mDictionaryIndex]);
+    aDictionaryWord = mDictionaryList[mDictionaryIndex];
     mDictionaryIndex++;
   } else {
     // A blank string signals that there are no more strings
-    *aDictionaryWord = ToNewUnicode(EmptyString());
+    aDictionaryWord.Truncate();
   }
 
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsEditorSpellCheck::AddWordToDictionary(const char16_t *aWord)
+nsEditorSpellCheck::AddWordToDictionary(const nsAString& aWord)
 {
   NS_ENSURE_TRUE(mSpellChecker, NS_ERROR_NOT_INITIALIZED);
 
-  return mSpellChecker->AddWordToPersonalDictionary(nsDependentString(aWord));
+  return mSpellChecker->AddWordToPersonalDictionary(aWord);
 }
 
 NS_IMETHODIMP
-nsEditorSpellCheck::RemoveWordFromDictionary(const char16_t *aWord)
+nsEditorSpellCheck::RemoveWordFromDictionary(const nsAString& aWord)
 {
   NS_ENSURE_TRUE(mSpellChecker, NS_ERROR_NOT_INITIALIZED);
 
-  return mSpellChecker->RemoveWordFromPersonalDictionary(nsDependentString(aWord));
+  return mSpellChecker->RemoveWordFromPersonalDictionary(aWord);
 }
 
 NS_IMETHODIMP
@@ -628,11 +655,17 @@ nsEditorSpellCheck::SetCurrentDictionary(const nsAString& aDictionary)
       // Also store it in as a preference, so we can use it as a fallback.
       // We don't want this for mail composer because it uses
       // "spellchecker.dictionary" as a preference.
-      Preferences::SetString("spellchecker.dictionary", aDictionary);
+      //
+      // XXX: Prefs can only be set in the parent process, so this condition is
+      // necessary to stop libpref from throwing errors. But this should
+      // probably be handled in a better way.
+      if (XRE_IsParentProcess()) {
+        Preferences::SetString("spellchecker.dictionary", aDictionary);
 #ifdef DEBUG_DICT
-      printf("***** Storing spellchecker.dictionary |%s|\n",
-             NS_ConvertUTF16toUTF8(aDictionary).get());
+        printf("***** Possibly storing spellchecker.dictionary |%s|\n",
+               NS_ConvertUTF16toUTF8(aDictionary).get());
 #endif
+      }
     }
   }
   return mSpellChecker->SetCurrentDictionary(aDictionary);
@@ -768,7 +801,9 @@ nsEditorSpellCheck::DictionaryFetched(DictionaryFetcher* aFetcher)
     // SetCurrentDictionary was called after the fetch started.  Don't overwrite
     // that dictionary with the fetched one.
     EndUpdateDictionary();
-    aFetcher->mCallback->EditorSpellCheckDone();
+    if (aFetcher->mCallback) {
+      aFetcher->mCallback->EditorSpellCheckDone();
+    }
     return NS_OK;
   }
 
@@ -817,7 +852,9 @@ nsEditorSpellCheck::DictionaryFetched(DictionaryFetcher* aFetcher)
   nsresult rv = mSpellChecker->GetDictionaryList(&dictList);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     EndUpdateDictionary();
-    aFetcher->mCallback->EditorSpellCheckDone();
+    if (aFetcher->mCallback) {
+      aFetcher->mCallback->EditorSpellCheckDone();
+    }
     return rv;
   }
 
@@ -837,7 +874,7 @@ nsEditorSpellCheck::DictionaryFetched(DictionaryFetcher* aFetcher)
       RefPtr<nsEditorSpellCheck> self = this;
       RefPtr<DictionaryFetcher> fetcher = aFetcher;
       mSpellChecker->SetCurrentDictionaryFromList(tryDictList)->Then(
-        AbstractThread::MainThread(),
+        GetMainThreadSerialEventTarget(),
         __func__,
         [self, fetcher]() {
 #ifdef DEBUG_DICT
@@ -849,7 +886,9 @@ nsEditorSpellCheck::DictionaryFetched(DictionaryFetcher* aFetcher)
           self->DeleteSuggestedWordList();
 
           self->EndUpdateDictionary();
-          fetcher->mCallback->EditorSpellCheckDone();
+          if (fetcher->mCallback) {
+            fetcher->mCallback->EditorSpellCheckDone();
+          }
         },
         [self, fetcher]() {
           // May be dictionary was uninstalled ?
@@ -878,7 +917,9 @@ nsEditorSpellCheck::SetFallbackDictionary(DictionaryFetcher* aFetcher)
   nsresult rv = mSpellChecker->GetDictionaryList(&dictList);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     EndUpdateDictionary();
-    aFetcher->mCallback->EditorSpellCheckDone();
+    if (aFetcher->mCallback) {
+      aFetcher->mCallback->EditorSpellCheckDone();
+    }
     return;
   }
 
@@ -893,7 +934,7 @@ nsEditorSpellCheck::SetFallbackDictionary(DictionaryFetcher* aFetcher)
 
   // Get the preference value.
   nsAutoString preferredDict;
-  preferredDict = Preferences::GetLocalizedString("spellchecker.dictionary");
+  Preferences::GetLocalizedString("spellchecker.dictionary", preferredDict);
 
   if (!dictName.IsEmpty()) {
     // RFC 5646 explicitly states that matches should be case-insensitive.
@@ -972,7 +1013,9 @@ nsEditorSpellCheck::SetFallbackDictionary(DictionaryFetcher* aFetcher)
            NS_ConvertUTF16toUTF8(currentDictionary).get());
 #endif
     EndUpdateDictionary();
-    aFetcher->mCallback->EditorSpellCheckDone();
+    if (aFetcher->mCallback) {
+      aFetcher->mCallback->EditorSpellCheckDone();
+    }
     return;
   }
 
@@ -1014,7 +1057,7 @@ nsEditorSpellCheck::SetFallbackDictionary(DictionaryFetcher* aFetcher)
   RefPtr<nsEditorSpellCheck> self = this;
   RefPtr<DictionaryFetcher> fetcher = aFetcher;
   mSpellChecker->SetCurrentDictionaryFromList(tryDictList)->Then(
-    AbstractThread::MainThread(),
+    GetMainThreadSerialEventTarget(),
     __func__,
     [self, fetcher]() {
       // If an error was thrown while setting the dictionary, just
@@ -1023,6 +1066,8 @@ nsEditorSpellCheck::SetFallbackDictionary(DictionaryFetcher* aFetcher)
       // the dialog if it is wrong.
       self->DeleteSuggestedWordList();
       self->EndUpdateDictionary();
-      fetcher->mCallback->EditorSpellCheckDone();
+      if (fetcher->mCallback) {
+        fetcher->mCallback->EditorSpellCheckDone();
+      }
     });
 }

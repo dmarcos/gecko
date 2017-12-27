@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -24,7 +25,7 @@ already_AddRefed<nsBoxLayout> NS_NewGridRowLeafLayout()
 {
   RefPtr<nsBoxLayout> layout = new nsGridRowLeafLayout();
   return layout.forget();
-} 
+}
 
 nsGridRowLeafLayout::nsGridRowLeafLayout():nsGridRowLayout()
 {
@@ -44,7 +45,7 @@ nsGridRowLeafLayout::GetXULPrefSize(nsIFrame* aBox, nsBoxLayoutState& aState)
   // If we are not in a grid. Then we just work like a box. But if we are in a grid
   // ask the grid for our size.
   if (!grid) {
-    return nsGridRowLayout::GetXULPrefSize(aBox, aState); 
+    return nsGridRowLayout::GetXULPrefSize(aBox, aState);
   }
   else {
     return grid->GetPrefRowSize(aState, index, isHorizontal);
@@ -60,7 +61,7 @@ nsGridRowLeafLayout::GetXULMinSize(nsIFrame* aBox, nsBoxLayoutState& aState)
   bool isHorizontal = IsXULHorizontal(aBox);
 
   if (!grid)
-    return nsGridRowLayout::GetXULMinSize(aBox, aState); 
+    return nsGridRowLayout::GetXULMinSize(aBox, aState);
   else {
     nsSize minSize = grid->GetMinRowSize(aState, index, isHorizontal);
     AddBorderAndPadding(aBox, minSize);
@@ -76,7 +77,7 @@ nsGridRowLeafLayout::GetXULMaxSize(nsIFrame* aBox, nsBoxLayoutState& aState)
   bool isHorizontal = IsXULHorizontal(aBox);
 
   if (!grid)
-    return nsGridRowLayout::GetXULMaxSize(aBox, aState); 
+    return nsGridRowLayout::GetXULMaxSize(aBox, aState);
   else {
     nsSize maxSize;
     maxSize = grid->GetMaxRowSize(aState, index, isHorizontal);
@@ -110,22 +111,22 @@ nsGridRowLeafLayout::PopulateBoxSizes(nsIFrame* aBox, nsBoxLayoutState& aState, 
   // and make them match or rows.
   if (grid) {
     nsGridRow* column;
-    int32_t count = grid->GetColumnCount(isHorizontal); 
+    int32_t count = grid->GetColumnCount(isHorizontal);
     nsBoxSize* start = nullptr;
     nsBoxSize* last = nullptr;
     nsBoxSize* current = nullptr;
     nsIFrame* child = nsBox::GetChildXULBox(aBox);
     for (int i=0; i < count; i++)
     {
-      column = grid->GetColumnAt(i,isHorizontal); 
+      column = grid->GetColumnAt(i,isHorizontal);
 
       // make sure the value was computed before we use it.
       // !isHorizontal is passed in to invert the behavior of these methods.
       nscoord pref =
         grid->GetPrefRowHeight(aState, i, !isHorizontal); // GetPrefColumnWidth
-      nscoord min = 
+      nscoord min =
         grid->GetMinRowHeight(aState, i, !isHorizontal);  // GetMinColumnWidth
-      nscoord max = 
+      nscoord max =
         grid->GetMaxRowHeight(aState, i, !isHorizontal);  // GetMaxColumnWidth
       nscoord flex = grid->GetRowFlex(i, !isHorizontal);  // GetColumnFlex
       nscoord left  = 0;
@@ -136,7 +137,7 @@ nsGridRowLeafLayout::PopulateBoxSizes(nsIFrame* aBox, nsBoxLayoutState& aState, 
       nscoord topMargin = column->mTopMargin;
       nscoord bottomMargin = column->mBottomMargin;
 
-      if (box) 
+      if (box)
         collapsed = box->IsXULCollapsed();
 
       pref = pref - (left + right);
@@ -165,7 +166,7 @@ nsGridRowLeafLayout::PopulateBoxSizes(nsIFrame* aBox, nsBoxLayoutState& aState, 
         offset += border;
 
         // subtract from out left and right
-        if (i == firstIndex) 
+        if (i == firstIndex)
         {
           if (isHorizontal)
            left -= offset.left;
@@ -181,11 +182,11 @@ nsGridRowLeafLayout::PopulateBoxSizes(nsIFrame* aBox, nsBoxLayoutState& aState, 
            right -= offset.bottom;
         }
       }
-    
-      // initialize the box size here 
+
+      // initialize the box size here
       max = std::max(min, max);
       pref = nsBox::BoundsCheck(min, pref, max);
-   
+
       current = new (aState) nsBoxSize();
       current->pref = pref;
       current->min = min;
@@ -216,11 +217,11 @@ nsGridRowLeafLayout::PopulateBoxSizes(nsIFrame* aBox, nsBoxLayoutState& aState, 
 
 void
 nsGridRowLeafLayout::ComputeChildSizes(nsIFrame* aBox,
-                           nsBoxLayoutState& aState, 
-                           nscoord& aGivenSize, 
-                           nsBoxSize* aBoxSizes, 
+                           nsBoxLayoutState& aState,
+                           nscoord& aGivenSize,
+                           nsBoxSize* aBoxSizes,
                            nsComputedBoxSize*& aComputedBoxSizes)
-{ 
+{
   // see if we are in a scrollable frame. If we are then there could be scrollbars present
   // if so we need to subtract them out to make sure our columns line up.
   if (aBox) {
@@ -264,14 +265,14 @@ nsGridRowLeafLayout::ComputeChildSizes(nsIFrame* aBox,
         last = s;
         s = s->next;
       }
-  
-      if (last) 
-        last->size -= diff;                         
+
+      if (last)
+        last->size -= diff;
 
       return;
     }
   }
-      
+
   nsSprocketLayout::ComputeChildSizes(aBox, aState, aGivenSize, aBoxSizes, aComputedBoxSizes);
 
 }
@@ -308,7 +309,7 @@ nsGridRowLeafLayout::CountRowsColumns(nsIFrame* aBox, int32_t& aRowCount, int32_
     }
 
     // if our count is greater than the current column count
-    if (columnCount > aComputedColumnCount) 
+    if (columnCount > aComputedColumnCount)
       aComputedColumnCount = columnCount;
 
     aRowCount++;

@@ -9,7 +9,6 @@ this.EXPORTED_SYMBOLS = ["Screenshot"];
 const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/osfile.jsm");
@@ -65,11 +64,11 @@ this.Screenshot = {
   },
 
   // Capture the whole screen using an external application.
-  captureExternal(filename) {
+  async captureExternal(filename) {
     let imagePath = this._buildImagePath(filename);
-    return this._screenshotFunction(imagePath).then(() => {
-      log.debug("saved screenshot: " + filename);
-    });
+    await this._screenshotFunction(imagePath);
+    log.debug("saved screenshot: " + filename);
+    return imagePath;
   },
 
   // helpers
@@ -91,7 +90,7 @@ this.Screenshot = {
     });
   },
 
-  _screenshotOSX: Task.async(function*(filename) {
+  async _screenshotOSX(filename) {
     let screencapture = (windowID = null) => {
       return new Promise((resolve, reject) => {
         // Get the screencapture executable
@@ -103,12 +102,6 @@ this.Screenshot = {
 
         // Run the process.
         let args = ["-x", "-t", "png"];
-        // Darwin version number for OS X 10.6 is 10.x
-        if (windowID && Services.sysinfo.getProperty("version").indexOf("10.") !== 0) {
-          // Capture only that window on 10.7+
-          args.push("-l");
-          args.push(windowID);
-        }
         args.push(filename);
         process.runAsync(args, args.length, this._processObserver(resolve, reject));
       });
@@ -135,10 +128,10 @@ this.Screenshot = {
       });
     };
 
-    yield promiseWindowID();
-    let windowID = yield readWindowID();
-    yield screencapture(windowID);
-  }),
+    await promiseWindowID();
+    let windowID = await readWindowID();
+    await screencapture(windowID);
+  },
 
   _screenshotLinux(filename) {
     return new Promise((resolve, reject) => {

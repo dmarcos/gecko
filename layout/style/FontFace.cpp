@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,6 +13,9 @@
 #include "mozilla/dom/TypedArray.h"
 #include "mozilla/dom/UnionTypes.h"
 #include "mozilla/CycleCollectedJSContext.h"
+#include "mozilla/ServoCSSParser.h"
+#include "mozilla/ServoStyleSet.h"
+#include "mozilla/ServoUtils.h"
 #include "nsCSSFontFaceRule.h"
 #include "nsCSSParser.h"
 #include "nsIDocument.h"
@@ -106,12 +110,17 @@ FontFace::FontFace(nsISupports* aParent, FontFaceSet* aFontFaceSet)
   , mSourceBuffer(nullptr)
   , mSourceBufferLength(0)
   , mFontFaceSet(aFontFaceSet)
+  , mUnicodeRangeDirty(true)
   , mInFontFaceSet(false)
 {
 }
 
 FontFace::~FontFace()
 {
+  // Assert that we don't drop any FontFace objects during a Servo traversal,
+  // since PostTraversalTask objects can hold raw pointers to FontFaces.
+  MOZ_ASSERT(!ServoStyleSet::IsInServoTraversal());
+
   SetUserFontEntry(nullptr);
 
   if (mSourceBuffer) {
@@ -131,6 +140,7 @@ LoadStateToStatus(gfxUserFontEntry::UserFontLoadState aLoadState)
   switch (aLoadState) {
     case gfxUserFontEntry::UserFontLoadState::STATUS_NOT_LOADED:
       return FontFaceLoadStatus::Unloaded;
+    case gfxUserFontEntry::UserFontLoadState::STATUS_LOAD_PENDING:
     case gfxUserFontEntry::UserFontLoadState::STATUS_LOADING:
       return FontFaceLoadStatus::Loading;
     case gfxUserFontEntry::UserFontLoadState::STATUS_LOADED:
@@ -357,6 +367,8 @@ FontFace::Status()
 Promise*
 FontFace::Load(ErrorResult& aRv)
 {
+  MOZ_ASSERT(NS_IsMainThread());
+
   mFontFaceSet->FlushUserFontSet();
 
   EnsurePromise();
@@ -414,6 +426,8 @@ FontFace::DoLoad()
 Promise*
 FontFace::GetLoaded(ErrorResult& aRv)
 {
+  MOZ_ASSERT(NS_IsMainThread());
+
   mFontFaceSet->FlushUserFontSet();
 
   EnsurePromise();
@@ -429,6 +443,8 @@ FontFace::GetLoaded(ErrorResult& aRv)
 void
 FontFace::SetStatus(FontFaceLoadStatus aStatus)
 {
+  AssertIsMainThreadOrServoFontMetricsLocked();
+
   if (mStatus == aStatus) {
     return;
   }
@@ -454,7 +470,7 @@ FontFace::SetStatus(FontFaceLoadStatus aStatus)
 
   if (mStatus == FontFaceLoadStatus::Loaded) {
     if (mLoaded) {
-      mLoaded->MaybeResolve(this);
+      DoResolve();
     }
   } else if (mStatus == FontFaceLoadStatus::Error) {
     if (mSourceType == eSourceType_Buffer) {
@@ -465,13 +481,39 @@ FontFace::SetStatus(FontFaceLoadStatus aStatus)
   }
 }
 
+void
+FontFace::DoResolve()
+{
+  AssertIsMainThreadOrServoFontMetricsLocked();
+
+  if (ServoStyleSet* ss = ServoStyleSet::Current()) {
+    // See comments in Gecko_GetFontMetrics.
+    ss->AppendTask(PostTraversalTask::ResolveFontFaceLoadedPromise(this));
+    return;
+  }
+
+  mLoaded->MaybeResolve(this);
+}
+
+void
+FontFace::DoReject(nsresult aResult)
+{
+  AssertIsMainThreadOrServoFontMetricsLocked();
+
+  if (ServoStyleSet* ss = ServoStyleSet::Current()) {
+    // See comments in Gecko_GetFontMetrics.
+    ss->AppendTask(PostTraversalTask::RejectFontFaceLoadedPromise(this, aResult));
+    return;
+  }
+
+  mLoaded->MaybeReject(aResult);
+}
+
 bool
 FontFace::ParseDescriptor(nsCSSFontDesc aDescID,
                           const nsAString& aString,
                           nsCSSValue& aResult)
 {
-  nsCSSParser parser;
-
   nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(mParent);
   nsCOMPtr<nsIPrincipal> principal = global->PrincipalOrNull();
 
@@ -479,6 +521,12 @@ FontFace::ParseDescriptor(nsCSSFontDesc aDescID,
   nsCOMPtr<nsIURI> docURI = window->GetDocumentURI();
   nsCOMPtr<nsIURI> base = window->GetDocBaseURI();
 
+  if (mFontFaceSet->Document()->IsStyledByServo()) {
+    RefPtr<URLExtraData> url = new URLExtraData(base, docURI, principal);
+    return ServoCSSParser::ParseFontDescriptor(aDescID, aString, url, aResult);
+  }
+
+  nsCSSParser parser;
   if (!parser.ParseFontFaceDescriptor(aDescID, aString,
                                       docURI, // aSheetURL
                                       base,
@@ -509,6 +557,10 @@ FontFace::SetDescriptor(nsCSSFontDesc aFontDesc,
   }
 
   mDescriptors->Get(aFontDesc) = parsedValue;
+
+  if (aFontDesc == eCSSFontDesc_UnicodeRange) {
+    mUnicodeRangeDirty = true;
+  }
 
   // XXX Setting descriptors doesn't actually have any effect on FontFace
   // objects that have started loading or have already been loaded.
@@ -611,7 +663,7 @@ FontFace::GetDesc(nsCSSFontDesc aDescID,
                                                   nsCSSProps::kFontDisplayKTable),
                        aResult);
   } else {
-    value.AppendToString(aPropID, aResult, nsCSSValue::eNormalized);
+    value.AppendToString(aPropID, aResult);
   }
 }
 
@@ -732,8 +784,10 @@ FontFace::RemoveFontFaceSet(FontFaceSet* aFontFaceSet)
 void
 FontFace::Reject(nsresult aResult)
 {
+  AssertIsMainThreadOrServoFontMetricsLocked();
+
   if (mLoaded) {
-    mLoaded->MaybeReject(aResult);
+    DoReject(aResult);
   } else if (mLoadedRejection == NS_OK) {
     mLoadedRejection = aResult;
   }
@@ -742,6 +796,8 @@ FontFace::Reject(nsresult aResult)
 void
 FontFace::EnsurePromise()
 {
+  MOZ_ASSERT(NS_IsMainThread());
+
   if (mLoaded) {
     return;
   }
@@ -761,6 +817,35 @@ FontFace::EnsurePromise()
       mLoaded->MaybeReject(mLoadedRejection);
     }
   }
+}
+
+gfxCharacterMap*
+FontFace::GetUnicodeRangeAsCharacterMap()
+{
+  if (!mUnicodeRangeDirty) {
+    return mUnicodeRange;
+  }
+
+  nsCSSValue val;
+  GetDesc(eCSSFontDesc_UnicodeRange, val);
+
+  if (val.GetUnit() == eCSSUnit_Array) {
+    mUnicodeRange = new gfxCharacterMap();
+    const nsCSSValue::Array& sources = *val.GetArrayValue();
+    MOZ_ASSERT(sources.Count() % 2 == 0,
+               "odd number of entries in a unicode-range: array");
+
+    for (uint32_t i = 0; i < sources.Count(); i += 2) {
+      uint32_t min = sources[i].GetIntValue();
+      uint32_t max = sources[i+1].GetIntValue();
+      mUnicodeRange->SetRange(min, max);
+    }
+  } else {
+    mUnicodeRange = nullptr;
+  }
+
+  mUnicodeRangeDirty = false;
+  return mUnicodeRange;
 }
 
 // -- FontFace::Entry --------------------------------------------------------

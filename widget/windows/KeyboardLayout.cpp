@@ -12,9 +12,7 @@
 #include "mozilla/TextEvents.h"
 
 #include "nsAlgorithm.h"
-#ifdef MOZ_CRASHREPORTER
 #include "nsExceptionHandler.h"
-#endif
 #include "nsGkAtoms.h"
 #include "nsIIdleServiceInternal.h"
 #include "nsIWindowsRegKey.h"
@@ -657,49 +655,6 @@ ToString(const ModifierKeyState& aModifierKeyState)
 // in metrofx after preventDefault is called on keydown events.
 static uint32_t sUniqueKeyEventId = 0;
 
-struct DeadKeyEntry
-{
-  char16_t BaseChar;
-  char16_t CompositeChar;
-};
-
-
-class DeadKeyTable
-{
-  friend class KeyboardLayout;
-
-  uint16_t mEntries;
-  // KeyboardLayout::AddDeadKeyTable() will allocate as many entries as
-  // required.  It is the only way to create new DeadKeyTable instances.
-  DeadKeyEntry mTable[1];
-
-  void Init(const DeadKeyEntry* aDeadKeyArray, uint32_t aEntries)
-  {
-    mEntries = aEntries;
-    memcpy(mTable, aDeadKeyArray, aEntries * sizeof(DeadKeyEntry));
-  }
-
-  static uint32_t SizeInBytes(uint32_t aEntries)
-  {
-    return offsetof(DeadKeyTable, mTable) + aEntries * sizeof(DeadKeyEntry);
-  }
-
-public:
-  uint32_t Entries() const
-  {
-    return mEntries;
-  }
-
-  bool IsEqual(const DeadKeyEntry* aDeadKeyArray, uint32_t aEntries) const
-  {
-    return (mEntries == aEntries &&
-            !memcmp(mTable, aDeadKeyArray,
-                    aEntries * sizeof(DeadKeyEntry)));
-  }
-
-  char16_t GetCompositeChar(char16_t aBaseChar) const;
-};
-
 
 /*****************************************************************************
  * mozilla::widget::ModifierKeyState
@@ -1021,12 +976,6 @@ VirtualKey::ShiftStateToModifiers(ShiftState aShiftState)
     modifiers |= MODIFIER_ALTGRAPH;
   }
   return modifiers;
-}
-
-inline char16_t
-VirtualKey::GetCompositeChar(ShiftState aShiftState, char16_t aBaseChar) const
-{
-  return mShiftStates[aShiftState].DeadKey.Table->GetCompositeChar(aBaseChar);
 }
 
 const DeadKeyTable*
@@ -1468,7 +1417,7 @@ NativeKey::InitWithKeyChar()
       MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
         ("%p   NativeKey::InitWithKeyChar(), removed char message, %s",
          this, ToString(charMsg).get()));
-      NS_WARN_IF(charMsg.hwnd != mMsg.hwnd);
+      Unused << NS_WARN_IF(charMsg.hwnd != mMsg.hwnd);
       mFollowingCharMsgs.AppendElement(charMsg);
     }
   }
@@ -1975,7 +1924,7 @@ NativeKey::MaybeInitPluginEventOfKeyEvent(WidgetKeyboardEvent& aKeyEvent,
 bool
 NativeKey::DispatchCommandEvent(uint32_t aEventCommand) const
 {
-  nsCOMPtr<nsIAtom> command;
+  RefPtr<nsAtom> command;
   switch (aEventCommand) {
     case APPCOMMAND_BROWSER_BACKWARD:
       command = nsGkAtoms::Back;
@@ -2518,7 +2467,8 @@ NativeKey::HandleCharMessage(const MSG& aCharMsg,
     *aEventDispatched = false;
   }
 
-  if (IsCharOrSysCharMessage(mMsg) && IsAnotherInstanceRemovingCharMessage()) {
+  if ((IsCharOrSysCharMessage(mMsg) || IsEnterKeyPressCharMessage(mMsg)) &&
+      IsAnotherInstanceRemovingCharMessage()) {
     MOZ_LOG(sNativeKeyLogger, LogLevel::Warning,
       ("%p   NativeKey::HandleCharMessage(), WARNING, does nothing because "
        "the message should be handled in another instance removing this "
@@ -2547,7 +2497,9 @@ NativeKey::HandleCharMessage(const MSG& aCharMsg,
   // When a control key is inputted by a key, it should be handled without
   // WM_*CHAR messages at receiving WM_*KEYDOWN message.  So, when we receive
   // WM_*CHAR message directly, we see a control character here.
-  if (IsControlCharMessage(aCharMsg)) {
+  // Note that when the char is '\r', it means that the char message should
+  // cause "Enter" keypress event for inserting a line break.
+  if (IsControlCharMessage(aCharMsg) && !IsEnterKeyPressCharMessage(aCharMsg)) {
     // In this case, we don't need to dispatch eKeyPress event because:
     // 1. We're the only browser which dispatches "keypress" event for
     //    non-printable characters (Although, both Chrome and Edge dispatch
@@ -2574,7 +2526,11 @@ NativeKey::HandleCharMessage(const MSG& aCharMsg,
 
   // First, handle normal text input or non-printable key case here.
   WidgetKeyboardEvent keypressEvent(true, eKeyPress, mWidget);
-  keypressEvent.mCharCode = static_cast<uint32_t>(aCharMsg.wParam);
+  if (IsEnterKeyPressCharMessage(aCharMsg)) {
+    keypressEvent.mKeyCode = NS_VK_RETURN;
+  } else {
+    keypressEvent.mCharCode = static_cast<uint32_t>(aCharMsg.wParam);
+  }
   nsresult rv = mDispatcher->BeginNativeInputTransaction();
   if (NS_WARN_IF(NS_FAILED(rv))) {
     MOZ_LOG(sNativeKeyLogger, LogLevel::Error,
@@ -2738,8 +2694,6 @@ NativeKey::NeedsToHandleWithoutFollowingCharMessages() const
   return mIsPrintableKey;
 }
 
-#ifdef MOZ_CRASHREPORTER
-
 static nsCString
 GetResultOfInSendMessageEx()
 {
@@ -2771,8 +2725,6 @@ GetResultOfInSendMessageEx()
   }
   return result;
 }
-
-#endif // #ifdef MOZ_CRASHREPORTER
 
 bool
 NativeKey::MayBeSameCharMessage(const MSG& aCharMsg1,
@@ -3017,7 +2969,6 @@ NativeKey::GetFollowingCharMessage(MSG& aCharMsg)
     }
 
     if (doCrash) {
-#ifdef MOZ_CRASHREPORTER
       nsPrintfCString info("\nPeekMessage() failed to remove char message! "
                            "\nActive keyboard layout=0x%08X (%s), "
                            "\nHandling message: %s, InSendMessageEx()=%s, "
@@ -3043,7 +2994,7 @@ NativeKey::GetFollowingCharMessage(MSG& aCharMsg)
         CrashReporter::AppendAppNotesToCrashReport(
           NS_LITERAL_CSTRING("\nThere is no message in any window"));
       }
-#endif // #ifdef MOZ_CRASHREPORTER
+
       MOZ_CRASH("We lost the following char message");
     }
 
@@ -3162,7 +3113,6 @@ NativeKey::GetFollowingCharMessage(MSG& aCharMsg)
        "nextKeyMsg=%s, kFoundCharMsg=%s",
        this, ToString(removedMsg).get(), ToString(nextKeyMsg).get(),
        ToString(kFoundCharMsg).get()));
-#ifdef MOZ_CRASHREPORTER
     nsPrintfCString info("\nPeekMessage() removed unexpcted char message! "
                          "\nActive keyboard layout=0x%08X (%s), "
                          "\nHandling message: %s, InSendMessageEx()=%s, "
@@ -3200,14 +3150,13 @@ NativeKey::GetFollowingCharMessage(MSG& aCharMsg)
       CrashReporter::AppendAppNotesToCrashReport(
         NS_LITERAL_CSTRING("\nThere is no key message in any windows."));
     }
-#endif // #ifdef MOZ_CRASHREPORTER
+
     MOZ_CRASH("PeekMessage() removed unexpected message");
   }
   MOZ_LOG(sNativeKeyLogger, LogLevel::Error,
     ("%p   NativeKey::GetFollowingCharMessage(), FAILED, removed messages "
      "are all WM_NULL, nextKeyMsg=%s",
      this, ToString(nextKeyMsg).get()));
-#ifdef MOZ_CRASHREPORTER
   nsPrintfCString info("\nWe lost following char message! "
                        "\nActive keyboard layout=0x%08X (%s), "
                        "\nHandling message: %s, InSendMessageEx()=%s, \n"
@@ -3218,7 +3167,6 @@ NativeKey::GetFollowingCharMessage(MSG& aCharMsg)
                        GetResultOfInSendMessageEx().get(),
                        ToString(kFoundCharMsg).get());
   CrashReporter::AppendAppNotesToCrashReport(info);
-#endif // #ifdef MOZ_CRASHREPORTER
   MOZ_CRASH("We lost the following char message");
   return false;
 }
@@ -4573,7 +4521,7 @@ KeyboardLayout::GetDeadKeyCombinations(uint8_t aDeadKey,
                   break;
                 }
                 default:
-                  NS_WARN_IF("File a bug for this dead-key handling!");
+                  NS_WARNING("File a bug for this dead-key handling!");
                   deadKeyActive = false;
                   break;
               }

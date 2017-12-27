@@ -4,6 +4,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+with Files("**"):
+    BUG_COMPONENT = ("Firefox", "Theme")
+
 toolkit = CONFIG['MOZ_WIDGET_TOOLKIT']
 
 if toolkit == 'cocoa':
@@ -12,3 +15,12 @@ elif toolkit in ('gtk2', 'gtk3'):
     DIRS += ['linux']
 else:
     DIRS += ['windows']
+
+with Files('osx/**'):
+    SCHEDULES.exclusive = ['macosx']
+
+with Files('linux/**'):
+    SCHEDULES.exclusive = ['linux']
+
+with Files('windows/**'):
+    SCHEDULES.exclusive = ['windows']

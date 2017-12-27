@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 sw=2 et tw=78: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -33,7 +33,6 @@
 #include "nsTextFragment.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/LookAndFeel.h"
-#include "mozilla/dom/Selection.h"
 #include "nsIBidiKeyboard.h"
 #include "nsContentUtils.h"
 
@@ -42,9 +41,12 @@ using namespace mozilla::dom;
 using namespace mozilla::gfx;
 
 // The bidi indicator hangs off the caret to one side, to show which
-// direction the typing is in. It needs to be at least 2x2 to avoid looking like 
+// direction the typing is in. It needs to be at least 2x2 to avoid looking like
 // an insignificant dot
 static const int32_t kMinBidiIndicatorPixels = 2;
+
+// The default caret blinking rate (in ms of blinking interval)
+static const uint32_t kDefaultCaretBlinkRate = 500;
 
 /**
  * Find the first frame in an in-order traversal of the frame subtree rooted
@@ -56,7 +58,7 @@ static nsIFrame*
 CheckForTrailingTextFrameRecursive(nsIFrame* aFrame, nsIFrame* aStopAtFrame)
 {
   if (aFrame == aStopAtFrame ||
-      ((aFrame->GetType() == nsGkAtoms::textFrame &&
+      ((aFrame->IsTextFrame() &&
        (static_cast<nsTextFrame*>(aFrame))->IsAtEndOfLine())))
     return aFrame;
   if (!aFrame->IsFrameOfType(nsIFrame::eLineParticipant))
@@ -104,7 +106,7 @@ AdjustCaretFrameForLineEnd(nsIFrame** aFrame, int32_t* aOffset)
     if (r)
     {
       *aFrame = r;
-      NS_ASSERTION(r->GetType() == nsGkAtoms::textFrame, "Expected text frame");
+      NS_ASSERTION(r->IsTextFrame(), "Expected text frame");
       *aOffset = (static_cast<nsTextFrame*>(r))->GetContentEnd();
       return;
     }
@@ -120,6 +122,7 @@ IsBidiUI()
 nsCaret::nsCaret()
 : mOverrideOffset(0)
 , mBlinkCount(-1)
+, mBlinkRate(0)
 , mHideCount(0)
 , mIsBlinkOn(false)
 , mVisible(false)
@@ -164,7 +167,7 @@ nsresult nsCaret::Init(nsIPresShell *inPresShell)
   if (privateSelection)
     privateSelection->AddSelectionListener(this);
   mDomSelectionWeak = do_GetWeakReference(domSelection);
-  
+
   return NS_OK;
 }
 
@@ -209,7 +212,7 @@ void nsCaret::Terminate()
 {
   // this doesn't erase the caret if it's drawn. Should it? We might not have
   // a good drawing environment during teardown.
-  
+
   StopBlinking();
   mBlinkTimer = nullptr;
 
@@ -237,7 +240,7 @@ void nsCaret::SetSelection(nsISelection *aDOMSel)
   MOZ_ASSERT(aDOMSel);
   mDomSelectionWeak = do_GetWeakReference(aDOMSel);   // weak reference to pres shell
   ResetBlinking();
-  SchedulePaint();
+  SchedulePaint(aDOMSel);
 }
 
 void nsCaret::SetVisible(bool inMakeVisible)
@@ -246,30 +249,6 @@ void nsCaret::SetVisible(bool inMakeVisible)
   mIgnoreUserModify = mVisible;
   ResetBlinking();
   SchedulePaint();
-}
-
-bool nsCaret::IsVisible()
-{
-  if (!mVisible || mHideCount) {
-    return false;
-  }
-
-  if (!mShowDuringSelection) {
-    Selection* selection = GetSelectionInternal();
-    if (!selection) {
-      return false;
-    }
-    bool isCollapsed;
-    if (NS_FAILED(selection->GetIsCollapsed(&isCollapsed)) || !isCollapsed) {
-      return false;
-    }
-  }
-
-  if (IsMenuPopupHidingCaret()) {
-    return false;
-  }
-
-  return true;
 }
 
 void nsCaret::AddForceHide()
@@ -374,8 +353,8 @@ nsCaret::GetGeometryForFrame(nsIFrame* aFrame,
 
   // Clamp the inline-position to be within our scroll frame. If we don't, then
   // it clips us, and we don't appear at all. See bug 335560.
-  nsIFrame *scrollFrame =
-    nsLayoutUtils::GetClosestFrameOfType(aFrame, nsGkAtoms::scrollFrame);
+  nsIFrame* scrollFrame =
+    nsLayoutUtils::GetClosestFrameOfType(aFrame, LayoutFrameType::Scroll);
   if (scrollFrame) {
     // First, use the scrollFrame to get at the scrollable view that we're in.
     nsIScrollableFrame *sf = do_QueryFrame(scrollFrame);
@@ -460,9 +439,14 @@ nsCaret::GetSelectionInternal()
   return domSelection ? domSelection->AsSelection() : nullptr;
 }
 
-void nsCaret::SchedulePaint()
+void nsCaret::SchedulePaint(nsISelection* aSelection)
 {
-  Selection* selection = GetSelectionInternal();
+  Selection* selection;
+  if (aSelection) {
+    selection = aSelection->AsSelection();
+  } else {
+    selection = GetSelectionInternal();
+  }
   nsINode* focusNode;
   if (mOverrideContent) {
     focusNode = mOverrideContent;
@@ -483,7 +467,7 @@ void nsCaret::SchedulePaint()
   f->SchedulePaint();
 }
 
-void nsCaret::SetVisibilityDuringSelection(bool aVisibility) 
+void nsCaret::SetVisibilityDuringSelection(bool aVisibility)
 {
   mShowDuringSelection = aVisibility;
   SchedulePaint();
@@ -550,10 +534,9 @@ nsCaret::GetPaintGeometry(nsRect* aRect)
 
   // If the offset falls outside of the frame, then don't paint the caret.
   int32_t startOffset, endOffset;
-  if (frame->GetType() == nsGkAtoms::textFrame &&
+  if (frame->IsTextFrame() &&
       (NS_FAILED(frame->GetOffsets(startOffset, endOffset)) ||
-      startOffset > frameOffset ||
-      endOffset < frameOffset)) {
+       startOffset > frameOffset || endOffset < frameOffset)) {
     return nullptr;
   }
 
@@ -606,7 +589,11 @@ NS_IMETHODIMP
 nsCaret::NotifySelectionChanged(nsIDOMDocument *, nsISelection *aDomSel,
                                 int16_t aReason)
 {
-  if ((aReason & nsISelectionListener::MOUSEUP_REASON) || !IsVisible())//this wont do
+  // Note that aDomSel, per the comment below may not be the same as our
+  // selection, but that's OK since if that is the case, it wouldn't have
+  // mattered what IsVisible() returns here, so we just opt for checking
+  // the selection later down below.
+  if ((aReason & nsISelectionListener::MOUSEUP_REASON) || !IsVisible(aDomSel))//this wont do
     return NS_OK;
 
   nsCOMPtr<nsISelection> domSel(do_QueryReferent(mDomSelectionWeak));
@@ -623,7 +610,7 @@ nsCaret::NotifySelectionChanged(nsIDOMDocument *, nsISelection *aDomSel,
     return NS_OK;
 
   ResetBlinking();
-  SchedulePaint();
+  SchedulePaint(aDomSel);
 
   return NS_OK;
 }
@@ -637,17 +624,31 @@ void nsCaret::ResetBlinking()
     return;
   }
 
+  uint32_t blinkRate = static_cast<uint32_t>(
+    LookAndFeel::GetInt(LookAndFeel::eIntID_CaretBlinkTime,
+                        kDefaultCaretBlinkRate));
+  if (mBlinkRate == blinkRate) {
+    // If the rate hasn't changed, then there is nothing to do.
+    return;
+  }
+  mBlinkRate = blinkRate;
+
   if (mBlinkTimer) {
     mBlinkTimer->Cancel();
   } else {
-    nsresult  err;
-    mBlinkTimer = do_CreateInstance("@mozilla.org/timer;1", &err);
-    if (NS_FAILED(err))
+    nsIEventTarget* target = nullptr;
+    if (nsCOMPtr<nsIPresShell> presShell = do_QueryReferent(mPresShell)) {
+      if (nsCOMPtr<nsIDocument> doc = presShell->GetDocument()) {
+        target = doc->EventTargetFor(TaskCategory::Other);
+      }
+    }
+
+    mBlinkTimer = NS_NewTimer(target);
+    if (!mBlinkTimer) {
       return;
+    }
   }
 
-  uint32_t blinkRate = static_cast<uint32_t>(
-    LookAndFeel::GetInt(LookAndFeel::eIntID_CaretBlinkTime, 500));
   if (blinkRate > 0) {
     mBlinkCount = Preferences::GetInt("ui.caretBlinkCount", -1);
     mBlinkTimer->InitWithNamedFuncCallback(CaretBlinkCallback, this, blinkRate,
@@ -661,6 +662,7 @@ void nsCaret::StopBlinking()
   if (mBlinkTimer)
   {
     mBlinkTimer->Cancel();
+    mBlinkRate = 0;
   }
 }
 
@@ -696,7 +698,7 @@ nsCaret::GetCaretFrameForNodeOffset(nsFrameSelection*    aFrameSelection,
   // that text frame instead. This way, the caret will be positioned as if
   // trailing whitespace was not trimmed.
   AdjustCaretFrameForLineEnd(&theFrame, &theFrameOffset);
-  
+
   // Mamdouh : modification of the caret to work at rtl and ltr with Bidi
   //
   // Direction Style from visibility->mDirection
@@ -722,7 +724,7 @@ nsCaret::GetCaretFrameForNodeOffset(nsFrameSelection*    aFrameSelection,
     {
       nsPrevNextBidiLevels levels = aFrameSelection->
         GetPrevNextBidiLevels(aContentNode, aOffset, false);
-    
+
       /* Boundary condition, we need to know the Bidi levels of the characters before and after the caret */
       if (levels.mFrameBefore || levels.mFrameAfter)
       {
@@ -749,7 +751,7 @@ nsCaret::GetCaretFrameForNodeOffset(nsFrameSelection*    aFrameSelection,
                 theFrame->GetOffsets(start, end);
                 theFrameOffset = end;
               }
-              else 
+              else
               {
                 // if there is no frameBefore, we must be at the beginning of the line
                 // so we stay with the current frame.
@@ -784,7 +786,7 @@ nsCaret::GetCaretFrameForNodeOffset(nsFrameSelection*    aFrameSelection,
                 theFrame->GetOffsets(start, end);
                 theFrameOffset = start;
               }
-              else 
+              else
               {
                 // if there is no frameAfter, we must be at the end of the line
                 // so we stay with the current frame.
@@ -872,7 +874,7 @@ bool nsCaret::IsMenuPopupHidingCaret()
   if (popups.Length() == 0)
     return false; // No popups, so caret can't be hidden by them.
 
-  // Get the selection focus content, that's where the caret would 
+  // Get the selection focus content, that's where the caret would
   // go if it was drawn.
   nsCOMPtr<nsIDOMNode> node;
   nsCOMPtr<nsISelection> domSelection = do_QueryReferent(mDomSelectionWeak);

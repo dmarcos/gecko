@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=99: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,7 +11,7 @@
 
 #include "FrameMetrics.h"               // for FrameMetrics, etc
 #include "mozilla/EventForwards.h"      // for WidgetInputEvent, nsEventStatus
-#include "mozilla/layers/APZUtils.h"    // for HitTestResult
+#include "mozilla/layers/APZUtils.h"    // for TouchBehaviorFlags, etc
 #include "nsTArrayForwardDeclare.h"     // for nsTArray, nsTArray_Impl, etc
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "Units.h"                      // for CSSPoint, CSSRect, etc
@@ -20,6 +20,8 @@ namespace mozilla {
 class InputData;
 
 namespace layers {
+
+class KeyboardMap;
 
 enum AllowedTouchBehavior {
   NONE =               0,
@@ -105,6 +107,11 @@ public:
       uint64_t* aOutInputBlockId);
 
   /**
+   * Set the keyboard shortcuts to use for translating keyboard events.
+   */
+  virtual void SetKeyboardMap(const KeyboardMap& aKeyboardMap) = 0;
+
+  /**
    * Kicks an animation to zoom to a rect. This may be either a zoom out or zoom
    * in. The actual animation is done on the compositor thread after being set
    * up. |aRect| must be given in CSS pixels, relative to the document.
@@ -150,21 +157,6 @@ public:
       const ScrollableLayerGuid& aGuid,
       const Maybe<ZoomConstraints>& aConstraints) = 0;
 
-  /**
-   * Cancels any currently running animation. Note that all this does is set the
-   * state of the AsyncPanZoomController back to NOTHING, but it is the
-   * animation's responsibility to check this before advancing.
-   */
-  virtual void CancelAnimation(const ScrollableLayerGuid &aGuid) = 0;
-
-  /**
-   * Adjusts the root APZC to compensate for a shift in the surface. See the
-   * documentation on AsyncPanZoomController::AdjustScrollForSurfaceShift for
-   * some more details. This is only currently needed due to surface shifts
-   * caused by the dynamic toolbar on Android.
-   */
-  virtual void AdjustScrollForSurfaceShift(const ScreenPoint& aShift) = 0;
-
   virtual void SetDPI(float aDpiValue) = 0;
 
   /**
@@ -184,6 +176,12 @@ public:
       const ScrollableLayerGuid& aGuid,
       const AsyncDragMetrics& aDragMetrics) = 0;
 
+  virtual bool StartAutoscroll(
+      const ScrollableLayerGuid& aGuid,
+      const ScreenPoint& aAnchorLocation) = 0;
+
+  virtual void StopAutoscroll(const ScrollableLayerGuid& aGuid) = 0;
+
   /**
    * Function used to disable LongTap gestures.
    *
@@ -200,13 +198,22 @@ public:
    */
   virtual void ProcessTouchVelocity(uint32_t aTimestampMs, float aSpeedY) = 0;
 
+  // Returns whether or not a wheel event action will be (or was) performed by
+  // APZ. If this returns true, the event must not perform a synchronous
+  // scroll.
+  //
+  // Even if this returns false, all wheel events in APZ-aware widgets must
+  // be sent through APZ so they are transformed correctly for TabParent.
+  static bool WillHandleWheelEvent(WidgetWheelEvent* aEvent);
+
 protected:
 
   // Methods to help process WidgetInputEvents (or manage conversion to/from InputData)
 
-  virtual void TransformEventRefPoint(
+  virtual void ProcessUnhandledEvent(
       LayoutDeviceIntPoint* aRefPoint,
-      ScrollableLayerGuid* aOutTargetGuid) = 0;
+      ScrollableLayerGuid* aOutTargetGuid,
+      uint64_t* aOutFocusSequenceNumber) = 0;
 
   virtual void UpdateWheelTransaction(
       LayoutDeviceIntPoint aRefPoint,

@@ -15,7 +15,7 @@ var intervalID;
 function test() {
   waitForExplicitFinish();
 
-  gBrowser.selectedTab = gBrowser.addTab();
+  gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
   gBrowser.selectedBrowser.addEventListener("load", test1Setup, true);
   content.location = testPage;
 }
@@ -71,9 +71,9 @@ function test2Setup() {
   var contentAreaContextMenu = document.getElementById("contentAreaContextMenu");
   var contextMenu = new nsContextMenu(contentAreaContextMenu);
 
-  gBrowser.tabContainer.addEventListener("TabOpen", function(event) {
+  gBrowser.tabContainer.addEventListener("TabOpen", function listener(event) {
     test2tab = event.target;
-    gBrowser.tabContainer.removeEventListener("TabOpen", arguments.callee);
+    gBrowser.tabContainer.removeEventListener("TabOpen", listener);
   });
   contextMenu.openFrameInTab();
   ok(test2tab, "openFrameInTab() opened a tab");
@@ -84,6 +84,7 @@ function test2Setup() {
 }
 
 function testOpenFrameInTab() {
+  /* eslint-disable mozilla/no-cpows-in-tests */
   if (gBrowser.contentDocument.location.href == "about:blank")
     // Wait another cycle
     return;
@@ -92,6 +93,7 @@ function testOpenFrameInTab() {
 
   // We should now have the error page in a new, active tab.
   is(gBrowser.contentDocument.location.href, invalidPage, "New tab should have page url, not about:neterror");
+  /* eslint-enable mozilla/no-cpows-in-tests */
 
   // Clear up the new tab, and punt to test 3
   gBrowser.removeCurrentTab();
@@ -107,10 +109,10 @@ function test3Setup() {
   var contentAreaContextMenu = document.getElementById("contentAreaContextMenu");
   var contextMenu = new nsContextMenu(contentAreaContextMenu);
 
-  Services.ww.registerNotification(function(aSubject, aTopic, aData) {
+  Services.ww.registerNotification(function notification(aSubject, aTopic, aData) {
     if (aTopic == "domwindowopened")
       test3window = aSubject;
-    Services.ww.unregisterNotification(arguments.callee);
+    Services.ww.unregisterNotification(notification);
   });
 
   contextMenu.openFrame();

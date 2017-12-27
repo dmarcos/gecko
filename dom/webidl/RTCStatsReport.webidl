@@ -11,6 +11,7 @@
 enum RTCStatsType {
   "inbound-rtp",
   "outbound-rtp",
+  "csrc",
   "session",
   "track",
   "transport",
@@ -58,6 +59,7 @@ dictionary RTCInboundRTPStreamStats : RTCRTPStreamStats {
 
   // Video decoder measurement, not present in RTCP case
   unsigned long discardedPackets;
+  unsigned long framesDecoded;
 };
 
 dictionary RTCOutboundRTPStreamStats : RTCRTPStreamStats {
@@ -95,6 +97,11 @@ dictionary RTCMediaStreamStats : RTCStats {
   sequence<DOMString> trackIds;   // Note: stats object ids, not track.id
 };
 
+dictionary RTCRTPContributingSourceStats : RTCStats {
+  unsigned long contributorSsrc;
+  DOMString     inboundRtpStreamId;
+};
+
 dictionary RTCTransportStats: RTCStats {
   unsigned long bytesSent;
   unsigned long bytesReceived;
@@ -118,13 +125,18 @@ enum RTCStatsIceCandidatePairState {
 };
 
 dictionary RTCIceCandidatePairStats : RTCStats {
-  DOMString componentId;
+  DOMString transportId;
   DOMString localCandidateId;
   DOMString remoteCandidateId;
   RTCStatsIceCandidatePairState state;
   unsigned long long priority;
-  boolean readable;
   boolean nominated;
+  boolean writable;
+  boolean readable;
+  unsigned long long bytesSent;
+  unsigned long long bytesReceived;
+  DOMHighResTimeStamp lastPacketSentTimestamp;
+  DOMHighResTimeStamp lastPacketReceivedTimestamp;
   boolean selected;
 };
 
@@ -157,22 +169,27 @@ dictionary RTCCodecStats : RTCStats {
 // to be received from c++
 
 dictionary RTCStatsReportInternal {
-  DOMString                           pcid = "";
-  sequence<RTCInboundRTPStreamStats>  inboundRTPStreamStats;
-  sequence<RTCOutboundRTPStreamStats> outboundRTPStreamStats;
-  sequence<RTCMediaStreamTrackStats>  mediaStreamTrackStats;
-  sequence<RTCMediaStreamStats>       mediaStreamStats;
-  sequence<RTCTransportStats>         transportStats;
-  sequence<RTCIceComponentStats>      iceComponentStats;
-  sequence<RTCIceCandidatePairStats>  iceCandidatePairStats;
-  sequence<RTCIceCandidateStats>      iceCandidateStats;
-  sequence<RTCCodecStats>             codecStats;
-  DOMString                           localSdp;
-  DOMString                           remoteSdp;
-  DOMHighResTimeStamp                 timestamp;
-  unsigned long                       iceRestarts;
-  unsigned long                       iceRollbacks;
-  boolean                             closed; // Is the PC now closed
+  DOMString                               pcid = "";
+  sequence<RTCInboundRTPStreamStats>      inboundRTPStreamStats;
+  sequence<RTCOutboundRTPStreamStats>     outboundRTPStreamStats;
+  sequence<RTCRTPContributingSourceStats> rtpContributingSourceStats;
+  sequence<RTCMediaStreamTrackStats>      mediaStreamTrackStats;
+  sequence<RTCMediaStreamStats>           mediaStreamStats;
+  sequence<RTCTransportStats>             transportStats;
+  sequence<RTCIceComponentStats>          iceComponentStats;
+  sequence<RTCIceCandidatePairStats>      iceCandidatePairStats;
+  sequence<RTCIceCandidateStats>          iceCandidateStats;
+  sequence<RTCCodecStats>                 codecStats;
+  DOMString                               localSdp;
+  DOMString                               remoteSdp;
+  DOMHighResTimeStamp                     timestamp;
+  unsigned long                           iceRestarts;
+  unsigned long                           iceRollbacks;
+  boolean                                 offerer; // Is the PC the offerer
+  boolean                                 closed; // Is the PC now closed
+  sequence<RTCIceCandidateStats>          trickledIceCandidateStats;
+  sequence<DOMString>                     rawLocalCandidates;
+  sequence<DOMString>                     rawRemoteCandidates;
 };
 
 [Pref="media.peerconnection.enabled",

@@ -50,6 +50,7 @@ static const char kPrefDisableIPv6[]         = "network.dns.disableIPv6";
 static const char kPrefDisablePrefetch[]     = "network.dns.disablePrefetch";
 static const char kPrefBlockDotOnion[]       = "network.dns.blockDotOnion";
 static const char kPrefDnsLocalDomains[]     = "network.dns.localDomains";
+static const char kPrefDnsForceResolve[]     = "network.dns.forceResolve";
 static const char kPrefDnsOfflineLocalhost[] = "network.dns.offline-localhost";
 static const char kPrefDnsNotifyResolution[] = "network.dns.notifyResolution";
 
@@ -156,7 +157,7 @@ nsDNSRecord::GetNextAddr(uint16_t port, NetAddr *addr)
             // attempt to reresolve it failed.
             return NS_ERROR_NOT_AVAILABLE;
         }
-        memcpy(addr, mHostRecord->addr, sizeof(NetAddr));
+        memcpy(addr, mHostRecord->addr.get(), sizeof(NetAddr));
         mDone = true;
     }
 
@@ -201,7 +202,7 @@ nsDNSRecord::GetAddresses(nsTArray<NetAddr> & aAddressArray)
             return NS_ERROR_NOT_AVAILABLE;
         }
         NetAddr *addr = aAddressArray.AppendElement(NetAddr());
-        memcpy(addr, mHostRecord->addr, sizeof(NetAddr));
+        memcpy(addr, mHostRecord->addr.get(), sizeof(NetAddr));
         if (addr->raw.family == AF_INET) {
             addr->inet.port = 0;
         } else if (addr->raw.family == AF_INET6) {
@@ -294,8 +295,6 @@ nsDNSRecord::ReportUnusable(uint16_t aPort)
 class nsDNSAsyncRequest final : public nsResolveHostCallback
                               , public nsICancelable
 {
-    ~nsDNSAsyncRequest() = default;
-
 public:
     NS_DECL_THREADSAFE_ISUPPORTS
     NS_DECL_NSICANCELABLE
@@ -315,7 +314,7 @@ public:
         , mAF(af)
         , mNetworkInterface(netInterface) {}
 
-    void OnLookupComplete(nsHostResolver *, nsHostRecord *, nsresult) override;
+    void OnResolveHostComplete(nsHostResolver *, nsHostRecord *, nsresult) override;
     // Returns TRUE if the DNS listener arg is the same as the member listener
     // Used in Cancellations to remove DNS requests associated with a
     // particular hostname and nsIDNSListener
@@ -330,12 +329,16 @@ public:
     uint16_t                 mFlags;
     uint16_t                 mAF;
     nsCString                mNetworkInterface;
+private:
+    virtual ~nsDNSAsyncRequest() = default;
 };
 
+NS_IMPL_ISUPPORTS(nsDNSAsyncRequest, nsICancelable)
+
 void
-nsDNSAsyncRequest::OnLookupComplete(nsHostResolver *resolver,
-                                    nsHostRecord   *hostRecord,
-                                    nsresult        status)
+nsDNSAsyncRequest::OnResolveHostComplete(nsHostResolver *resolver,
+                                         nsHostRecord   *hostRecord,
+                                         nsresult        status)
 {
     // need to have an owning ref when we issue the callback to enable
     // the caller to be able to addref/release multiple times without
@@ -348,10 +351,6 @@ nsDNSAsyncRequest::OnLookupComplete(nsHostResolver *resolver,
 
     mListener->OnLookupComplete(this, rec, status);
     mListener = nullptr;
-
-    // release the reference to ourselves that was added before we were
-    // handed off to the host resolver.
-    NS_RELEASE_THIS();
 }
 
 bool
@@ -379,8 +378,6 @@ nsDNSAsyncRequest::SizeOfIncludingThis(MallocSizeOf mallocSizeOf) const
     return n;
 }
 
-NS_IMPL_ISUPPORTS(nsDNSAsyncRequest, nsICancelable)
-
 NS_IMETHODIMP
 nsDNSAsyncRequest::Cancel(nsresult reason)
 {
@@ -392,16 +389,17 @@ nsDNSAsyncRequest::Cancel(nsresult reason)
 
 //-----------------------------------------------------------------------------
 
-class nsDNSSyncRequest : public nsResolveHostCallback
+class nsDNSSyncRequest
+    : public nsResolveHostCallback
 {
+    NS_DECL_THREADSAFE_ISUPPORTS
 public:
     explicit nsDNSSyncRequest(PRMonitor *mon)
         : mDone(false)
         , mStatus(NS_OK)
         , mMonitor(mon) {}
-    virtual ~nsDNSSyncRequest() = default;
 
-    void OnLookupComplete(nsHostResolver *, nsHostRecord *, nsresult) override;
+    void OnResolveHostComplete(nsHostResolver *, nsHostRecord *, nsresult) override;
     bool EqualsAsyncListener(nsIDNSListener *aListener) override;
     size_t SizeOfIncludingThis(mozilla::MallocSizeOf) const override;
 
@@ -410,13 +408,17 @@ public:
     RefPtr<nsHostRecord> mHostRecord;
 
 private:
+    virtual ~nsDNSSyncRequest() = default;
+
     PRMonitor             *mMonitor;
 };
 
+NS_IMPL_ISUPPORTS0(nsDNSSyncRequest)
+
 void
-nsDNSSyncRequest::OnLookupComplete(nsHostResolver *resolver,
-                                   nsHostRecord   *hostRecord,
-                                   nsresult        status)
+nsDNSSyncRequest::OnResolveHostComplete(nsHostResolver *resolver,
+                                        nsHostRecord   *hostRecord,
+                                        nsresult        status)
 {
     // store results, and wake up nsDNSService::Resolve to process results.
     PR_EnterMonitor(mMonitor);
@@ -452,9 +454,10 @@ nsDNSSyncRequest::SizeOfIncludingThis(MallocSizeOf mallocSizeOf) const
 class NotifyDNSResolution: public Runnable
 {
 public:
-    explicit NotifyDNSResolution(const nsACString &aHostname)
-        : mHostname(aHostname)
-    {
+  explicit NotifyDNSResolution(const nsACString& aHostname)
+    : mozilla::Runnable("NotifyDNSResolution")
+    , mHostname(aHostname)
+  {
     }
 
     NS_IMETHOD Run() override
@@ -482,6 +485,7 @@ nsDNSService::nsDNSService()
     , mFirstTime(true)
     , mNotifyResolution(false)
     , mOfflineLocalhost(false)
+    , mForceResolveOn(false)
 {
 }
 
@@ -496,7 +500,7 @@ NS_IMPL_ISUPPORTS(nsDNSService, nsIDNSService, nsPIDNSService, nsIObserver,
  ******************************************************************************/
 static nsDNSService *gDNSService;
 
-nsIDNSService*
+already_AddRefed<nsIDNSService>
 nsDNSService::GetXPCOMSingleton()
 {
     if (IsNeckoChild()) {
@@ -506,25 +510,23 @@ nsDNSService::GetXPCOMSingleton()
     return GetSingleton();
 }
 
-nsDNSService*
+already_AddRefed<nsDNSService>
 nsDNSService::GetSingleton()
 {
     NS_ASSERTION(!IsNeckoChild(), "not a parent process");
 
     if (gDNSService) {
-        NS_ADDREF(gDNSService);
-        return gDNSService;
+        return do_AddRef(gDNSService);
     }
 
-    gDNSService = new nsDNSService();
-    if (gDNSService) {
-        NS_ADDREF(gDNSService);
-        if (NS_FAILED(gDNSService->Init())) {
-              NS_RELEASE(gDNSService);
-        }
+    auto dns = MakeRefPtr<nsDNSService>();
+    gDNSService = dns.get();
+    if (NS_FAILED(dns->Init())) {
+        gDNSService = nullptr;
+        return nullptr;
     }
 
-    return gDNSService;
+    return dns.forget();
 }
 
 NS_IMETHODIMP
@@ -544,8 +546,9 @@ nsDNSService::Init()
     int      proxyType        = nsIProtocolProxyService::PROXYCONFIG_DIRECT;
     bool     notifyResolution = false;
 
-    nsAdoptingCString ipv4OnlyDomains;
-    nsAdoptingCString localDomains;
+    nsAutoCString ipv4OnlyDomains;
+    nsAutoCString localDomains;
+    nsAutoCString forceResolve;
 
     // read prefs
     nsCOMPtr<nsIPrefBranch> prefs = do_GetService(NS_PREFSERVICE_CONTRACTID);
@@ -560,8 +563,9 @@ nsDNSService::Init()
 
         // ASSUMPTION: pref branch does not modify out params on failure
         prefs->GetBoolPref(kPrefDisableIPv6, &disableIPv6);
-        prefs->GetCharPref(kPrefIPv4OnlyDomains, getter_Copies(ipv4OnlyDomains));
-        prefs->GetCharPref(kPrefDnsLocalDomains, getter_Copies(localDomains));
+        prefs->GetCharPref(kPrefIPv4OnlyDomains, ipv4OnlyDomains);
+        prefs->GetCharPref(kPrefDnsLocalDomains, localDomains);
+        prefs->GetCharPref(kPrefDnsForceResolve, forceResolve);
         prefs->GetBoolPref(kPrefDnsOfflineLocalhost, &offlineLocalhost);
         prefs->GetBoolPref(kPrefDisablePrefetch, &disablePrefetch);
         prefs->GetBoolPref(kPrefBlockDotOnion, &blockDotOnion);
@@ -579,6 +583,7 @@ nsDNSService::Init()
             prefs->AddObserver(kPrefDnsCacheGrace, this, false);
             prefs->AddObserver(kPrefIPv4OnlyDomains, this, false);
             prefs->AddObserver(kPrefDnsLocalDomains, this, false);
+            prefs->AddObserver(kPrefDnsForceResolve, this, false);
             prefs->AddObserver(kPrefDisableIPv6, this, false);
             prefs->AddObserver(kPrefDnsOfflineLocalhost, this, false);
             prefs->AddObserver(kPrefDisablePrefetch, this, false);
@@ -612,16 +617,18 @@ nsDNSService::Init()
         MutexAutoLock lock(mLock);
         mResolver = res;
         mIDN = idn;
-        mIPv4OnlyDomains = ipv4OnlyDomains; // exchanges buffer ownership
+        mIPv4OnlyDomains = ipv4OnlyDomains;
         mOfflineLocalhost = offlineLocalhost;
         mDisableIPv6 = disableIPv6;
         mBlockDotOnion = blockDotOnion;
+        mForceResolve = forceResolve;
+        mForceResolveOn = !mForceResolve.IsEmpty();
 
-        // Disable prefetching either by explicit preference or if a manual proxy is configured 
+        // Disable prefetching either by explicit preference or if a manual proxy is configured
         mDisablePrefetch = disablePrefetch || (proxyType == nsIProtocolProxyService::PROXYCONFIG_MANUAL);
 
         mLocalDomains.Clear();
-        if (localDomains) {
+        if (!localDomains.IsVoid()) {
             nsCCharSeparatedTokenizer tokenizer(localDomains, ',',
                                                 nsCCharSeparatedTokenizer::SEPARATOR_OPTIONAL);
 
@@ -706,6 +713,15 @@ nsDNSService::PreprocessHostname(bool              aLocalDomain,
         return NS_OK;
     }
 
+    if (mForceResolveOn) {
+        MutexAutoLock lock(mLock);
+        if (!aInput.LowerCaseEqualsASCII("localhost") &&
+            !aInput.LowerCaseEqualsASCII("127.0.0.1")) {
+            aACE.Assign(mForceResolve);
+            return NS_OK;
+        }
+    }
+
     if (!aIDN || IsASCII(aInput)) {
         aACE = aInput;
         return NS_OK;
@@ -783,7 +799,7 @@ NS_IMETHODIMP
 nsDNSService::AsyncResolveExtendedNative(const nsACString        &aHostname,
                                          uint32_t                 flags,
                                          const nsACString        &aNetworkInterface,
-                                         nsIDNSListener          *listener,
+                                         nsIDNSListener          *aListener,
                                          nsIEventTarget          *target_,
                                          const OriginAttributes  &aOriginAttributes,
                                          nsICancelable          **result)
@@ -793,6 +809,7 @@ nsDNSService::AsyncResolveExtendedNative(const nsACString        &aHostname,
     RefPtr<nsHostResolver> res;
     nsCOMPtr<nsIIDNService> idn;
     nsCOMPtr<nsIEventTarget> target = target_;
+    nsCOMPtr<nsIDNSListener> listener = aListener;
     bool localDomain = false;
     {
         MutexAutoLock lock(mLock);
@@ -826,9 +843,7 @@ nsDNSService::AsyncResolveExtendedNative(const nsACString        &aHostname,
     // make sure JS callers get notification on the main thread
     nsCOMPtr<nsIXPConnectWrappedJS> wrappedListener = do_QueryInterface(listener);
     if (wrappedListener && !target) {
-        nsCOMPtr<nsIThread> mainThread;
-        NS_GetMainThread(getter_AddRefs(mainThread));
-        target = do_QueryInterface(mainThread);
+        target = GetMainThreadEventTarget();
     }
 
     if (target) {
@@ -837,21 +852,16 @@ nsDNSService::AsyncResolveExtendedNative(const nsACString        &aHostname,
 
     uint16_t af = GetAFForLookup(hostname, flags);
 
-    auto *req =
+    MOZ_ASSERT(listener);
+    RefPtr<nsDNSAsyncRequest> req =
         new nsDNSAsyncRequest(res, hostname, aOriginAttributes, listener, flags, af,
                               aNetworkInterface);
     if (!req)
         return NS_ERROR_OUT_OF_MEMORY;
-    NS_ADDREF(*result = req);
 
-    // addref for resolver; will be released when OnLookupComplete is called.
-    NS_ADDREF(req);
     rv = res->ResolveHost(req->mHost.get(), req->mOriginAttributes, flags, af,
                           req->mNetworkInterface.get(), req);
-    if (NS_FAILED(rv)) {
-        NS_RELEASE(req);
-        NS_RELEASE(*result);
-    }
+    req.forget(result);
     return rv;
 }
 
@@ -977,6 +987,29 @@ nsDNSService::ResolveNative(const nsACString        &aHostname,
                             const OriginAttributes  &aOriginAttributes,
                             nsIDNSRecord           **result)
 {
+    // Synchronous resolution is not available on the main thread.
+    if (NS_IsMainThread()) {
+        return NS_ERROR_NOT_AVAILABLE;
+    }
+
+    return ResolveInternal(aHostname, flags, aOriginAttributes, result);
+}
+
+nsresult
+nsDNSService::DeprecatedSyncResolve(const nsACString        &aHostname,
+                                    uint32_t                 flags,
+                                    const OriginAttributes  &aOriginAttributes,
+                                    nsIDNSRecord           **result)
+{
+    return ResolveInternal(aHostname, flags, aOriginAttributes, result);
+}
+
+nsresult
+nsDNSService::ResolveInternal(const nsACString        &aHostname,
+                              uint32_t                 flags,
+                              const OriginAttributes  &aOriginAttributes,
+                              nsIDNSRecord           **result)
+{
     // grab reference to global host resolver and IDN service.  beware
     // simultaneous shutdown!!
     RefPtr<nsHostResolver> res;
@@ -1013,31 +1046,29 @@ nsDNSService::ResolveNative(const nsACString        &aHostname,
     // on the same thread.  so, our mutex needs to be re-entrant.  in other words,
     // we need to use a monitor! ;-)
     //
-    
+
     PRMonitor *mon = PR_NewMonitor();
     if (!mon)
         return NS_ERROR_OUT_OF_MEMORY;
 
     PR_EnterMonitor(mon);
-    nsDNSSyncRequest syncReq(mon);
+    RefPtr<nsDNSSyncRequest> syncReq = new nsDNSSyncRequest(mon);
 
     uint16_t af = GetAFForLookup(hostname, flags);
 
-    rv = res->ResolveHost(hostname.get(), aOriginAttributes, flags, af, "", &syncReq);
+    rv = res->ResolveHost(hostname.get(), aOriginAttributes, flags, af, "", syncReq);
     if (NS_SUCCEEDED(rv)) {
         // wait for result
-        while (!syncReq.mDone)
+        while (!syncReq->mDone) {
             PR_Wait(mon, PR_INTERVAL_NO_TIMEOUT);
+        }
 
-        if (NS_FAILED(syncReq.mStatus))
-            rv = syncReq.mStatus;
-        else {
-            NS_ASSERTION(syncReq.mHostRecord, "no host record");
-            auto *rec = new nsDNSRecord(syncReq.mHostRecord);
-            if (!rec)
-                rv = NS_ERROR_OUT_OF_MEMORY;
-            else
-                NS_ADDREF(*result = rec);
+        if (NS_FAILED(syncReq->mStatus)) {
+            rv = syncReq->mStatus;
+        } else {
+            NS_ASSERTION(syncReq->mHostRecord, "no host record");
+            RefPtr<nsDNSRecord> rec = new nsDNSRecord(syncReq->mHostRecord);
+            rec.forget(result);
         }
     }
 
@@ -1113,7 +1144,7 @@ nsDNSService::GetAFForLookup(const nsACString &host, uint32_t flags)
 
         // see if host is in one of the IPv4-only domains
         domain = mIPv4OnlyDomains.BeginReading();
-        domainEnd = mIPv4OnlyDomains.EndReading(); 
+        domainEnd = mIPv4OnlyDomains.EndReading();
 
         nsACString::const_iterator hostStart;
         host.BeginReading(hostStart);

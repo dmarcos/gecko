@@ -20,6 +20,8 @@ public:
   Create(nsTArray<nsCOMPtr<nsIPrincipal>>& aWhiteList,
          const mozilla::OriginAttributes& aAttrs);
 
+  static PrincipalKind Kind() { return eExpandedPrincipal; }
+
   NS_DECL_NSIEXPANDEDPRINCIPAL
   NS_DECL_NSISERIALIZABLE
 
@@ -32,8 +34,12 @@ public:
   NS_IMETHOD SetDomain(nsIURI* aDomain) override;
   NS_IMETHOD GetBaseDomain(nsACString& aBaseDomain) override;
   NS_IMETHOD GetAddonId(nsAString& aAddonId) override;
-  virtual bool AddonHasPermission(const nsAString& aPerm) override;
+  virtual bool AddonHasPermission(const nsAtom* aPerm) override;
   virtual nsresult GetScriptLocation(nsACString &aStr) override;
+
+  // Returns the principal to inherit when this principal requests the given
+  // URL. See BasePrincipal::PrincipalToInherit.
+  nsIPrincipal* PrincipalToInherit(nsIURI* aRequestedURI = nullptr);
 
 protected:
   explicit ExpandedPrincipal(nsTArray<nsCOMPtr<nsIPrincipal>> &aWhiteList);

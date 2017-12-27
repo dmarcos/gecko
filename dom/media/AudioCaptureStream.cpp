@@ -30,8 +30,11 @@ namespace mozilla
 // We are mixing to mono until PeerConnection can accept stereo
 static const uint32_t MONO = 1;
 
-AudioCaptureStream::AudioCaptureStream(TrackID aTrackId, AbstractThread* aMainThread)
-  : ProcessedMediaStream(aMainThread), mTrackId(aTrackId), mStarted(false), mTrackCreated(false)
+AudioCaptureStream::AudioCaptureStream(TrackID aTrackId)
+  : ProcessedMediaStream()
+  , mTrackId(aTrackId)
+  , mStarted(false)
+  , mTrackCreated(false)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_COUNT_CTOR(AudioCaptureStream);
@@ -157,7 +160,6 @@ AudioCaptureStream::MixerCallback(AudioDataValue* aMixedBuffer,
   chunk.mBuffer = new mozilla::SharedChannelArrayBuffer<AudioDataValue>(&output);
   chunk.mDuration = aFrames;
   chunk.mBufferFormat = aFormat;
-  chunk.mVolume = 1.0f;
   chunk.mChannelData.SetLength(MONO);
   for (uint32_t channel = 0; channel < aChannels; channel++) {
     chunk.mChannelData[channel] = bufferPtrs[channel];

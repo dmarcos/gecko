@@ -44,8 +44,6 @@ const Ci = Components.interfaces;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
 Cu.import("resource://gre/modules/Services.jsm", this);
 
-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-  "resource://gre/modules/Promise.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PromiseUtils",
   "resource://gre/modules/PromiseUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Task",
@@ -67,9 +65,10 @@ Object.defineProperty(this, "gCrashReporter", {
 });
 
 // `true` if this is a content process, `false` otherwise.
-// It would be nicer to go through `Services.appInfo`, but some tests need to be
+// It would be nicer to go through `Services.appinfo`, but some tests need to be
 // able to replace that field with a custom implementation before it is first
 // called.
+// eslint-disable-next-line mozilla/use-services
 const isContent = Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime).processType == Ci.nsIXULRuntime.PROCESS_TYPE_CONTENT;
 
 // Display timeout warnings after 10 seconds
@@ -275,7 +274,7 @@ function looseTimer(delay) {
   let DELAY_BEAT = 1000;
   let timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
   let beats = Math.ceil(delay / DELAY_BEAT);
-  let deferred = Promise.defer();
+  let deferred = PromiseUtils.defer();
   timer.initWithCallback(function() {
     if (beats <= 0) {
       deferred.resolve();
@@ -322,7 +321,12 @@ function getOrigin(topFrame, filename = null, lineNumber = null, stack = null) {
         frames.push(frame.filename + ":" + frame.name + ":" + frame.lineNumber);
         frame = frame.caller;
       }
-      stack = Task.Debugging.generateReadableStack(frames.join("\n")).split("\n");
+      stack = frames.join("\n");
+      // Avoid loading Task.jsm if there's no task on the stack.
+      if (stack.includes("/Task.jsm:")) {
+        stack = Task.Debugging.generateReadableStack(stack);
+      }
+      stack = stack.split("\n");
     }
 
     return {
@@ -335,7 +339,7 @@ function getOrigin(topFrame, filename = null, lineNumber = null, stack = null) {
       filename: "<internal error: could not get origin>",
       lineNumber: -1,
       stack: "<internal error: could not get origin>",
-    }
+    };
   }
 }
 
@@ -701,7 +705,7 @@ function Barrier(name) {
             } catch (ex) {
               reject(ex);
             }
-          }
+          };
         });
       } else {
         // If `condition` is not a function, `trigger` is not particularly
@@ -711,7 +715,7 @@ function Barrier(name) {
       }
 
       // Make sure that `promise` never rejects.
-      promise = promise.then(null, error => {
+      promise = promise.catch(error => {
         let msg = `A blocker encountered an error while we were waiting.
           Blocker:  ${ name }
           Phase: ${ this._name }
@@ -852,7 +856,7 @@ Barrier.prototype = Object.freeze({
     // Now, wait
     let promise = this._waitForMe.wait();
 
-    promise = promise.then(null, function onError(error) {
+    promise = promise.catch(function onError(error) {
       // I don't think that this can happen.
       // However, let's be overcautious with async/shutdown error reporting.
       let msg = "An uncaught error appeared while completing the phase." +
@@ -919,7 +923,7 @@ Barrier.prototype = Object.freeze({
       // battery-sucking) situation is report the issue and crash.
       timeToCrash = looseTimer(crashAfterMS);
       timeToCrash.promise.then(
-        function onTimeout() {
+        () => {
           // Report the problem as best as we can, then crash.
           let state = this.state;
 
@@ -957,7 +961,7 @@ Barrier.prototype = Object.freeze({
             break;
           }
           gDebug.abort(filename, lineNumber);
-        }.bind(this),
+        },
         function onSatisfied() {
           // The promise has been rejected, which means that we have satisfied
           // all completion conditions.
@@ -1000,7 +1004,6 @@ Barrier.prototype = Object.freeze({
 if (!isContent) {
   this.AsyncShutdown.profileChangeTeardown = getPhase("profile-change-teardown");
   this.AsyncShutdown.profileBeforeChange = getPhase("profile-before-change");
-  this.AsyncShutdown.placesClosingInternalConnection = getPhase("places-will-close-connection");
   this.AsyncShutdown.sendTelemetry = getPhase("profile-before-change-telemetry");
 }
 

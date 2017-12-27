@@ -23,14 +23,10 @@ SVGStyleElement::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto)
 //----------------------------------------------------------------------
 // nsISupports methods
 
-NS_IMPL_ADDREF_INHERITED(SVGStyleElement, SVGStyleElementBase)
-NS_IMPL_RELEASE_INHERITED(SVGStyleElement, SVGStyleElementBase)
-
-NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(SVGStyleElement)
-  NS_INTERFACE_TABLE_INHERITED(SVGStyleElement,
-                               nsIStyleSheetLinkingElement,
-                               nsIMutationObserver)
-NS_INTERFACE_TABLE_TAIL_INHERITING(SVGStyleElementBase)
+NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(SVGStyleElement,
+                                             SVGStyleElementBase,
+                                             nsIStyleSheetLinkingElement,
+                                             nsIMutationObserver)
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(SVGStyleElement)
 
@@ -78,7 +74,8 @@ SVGStyleElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
   NS_ENSURE_SUCCESS(rv, rv);
 
   void (SVGStyleElement::*update)() = &SVGStyleElement::UpdateStyleSheetInternal;
-  nsContentUtils::AddScriptRunner(NewRunnableMethod(this, update));
+  nsContentUtils::AddScriptRunner(
+    NewRunnableMethod("dom::SVGStyleElement::BindToTree", this, update));
 
   return rv;
 }
@@ -93,18 +90,20 @@ SVGStyleElement::UnbindFromTree(bool aDeep, bool aNullParent)
 }
 
 nsresult
-SVGStyleElement::SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                         nsIAtom* aPrefix, const nsAString& aValue,
+SVGStyleElement::SetAttr(int32_t aNameSpaceID, nsAtom* aName,
+                         nsAtom* aPrefix, const nsAString& aValue,
+                         nsIPrincipal* aSubjectPrincipal,
                          bool aNotify)
 {
   nsresult rv = SVGStyleElementBase::SetAttr(aNameSpaceID, aName, aPrefix,
-                                             aValue, aNotify);
+                                             aValue, aSubjectPrincipal, aNotify);
   if (NS_SUCCEEDED(rv) && aNameSpaceID == kNameSpaceID_None) {
     if (aName == nsGkAtoms::title ||
         aName == nsGkAtoms::media ||
         aName == nsGkAtoms::type) {
       UpdateStyleSheetInternal(nullptr, nullptr, true);
-    } else if (aName == nsGkAtoms::scoped) {
+    } else if (aName == nsGkAtoms::scoped &&
+               OwnerDoc()->IsScopedStyleEnabled()) {
       UpdateStyleSheetScopedness(true);
     }
   }
@@ -113,7 +112,7 @@ SVGStyleElement::SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
 }
 
 nsresult
-SVGStyleElement::UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
+SVGStyleElement::UnsetAttr(int32_t aNameSpaceID, nsAtom* aAttribute,
                            bool aNotify)
 {
   nsresult rv = SVGStyleElementBase::UnsetAttr(aNameSpaceID, aAttribute,
@@ -123,7 +122,8 @@ SVGStyleElement::UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
         aAttribute == nsGkAtoms::media ||
         aAttribute == nsGkAtoms::type) {
       UpdateStyleSheetInternal(nullptr, nullptr, true);
-    } else if (aAttribute == nsGkAtoms::scoped) {
+    } else if (aAttribute == nsGkAtoms::scoped &&
+               OwnerDoc()->IsScopedStyleEnabled()) {
       UpdateStyleSheetScopedness(false);
     }
   }
@@ -133,8 +133,9 @@ SVGStyleElement::UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
 
 bool
 SVGStyleElement::ParseAttribute(int32_t aNamespaceID,
-                                nsIAtom* aAttribute,
+                                nsAtom* aAttribute,
                                 const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None &&
@@ -144,7 +145,7 @@ SVGStyleElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return SVGStyleElementBase::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                             aResult);
+                                             aMaybeScriptedPrincipal, aResult);
 }
 
 //----------------------------------------------------------------------
@@ -161,8 +162,7 @@ SVGStyleElement::CharacterDataChanged(nsIDocument* aDocument,
 void
 SVGStyleElement::ContentAppended(nsIDocument* aDocument,
                                  nsIContent* aContainer,
-                                 nsIContent* aFirstNewContent,
-                                 int32_t aNewIndexInContainer)
+                                 nsIContent* aFirstNewContent)
 {
   ContentChanged(aContainer);
 }
@@ -170,8 +170,7 @@ SVGStyleElement::ContentAppended(nsIDocument* aDocument,
 void
 SVGStyleElement::ContentInserted(nsIDocument* aDocument,
                                  nsIContent* aContainer,
-                                 nsIContent* aChild,
-                                 int32_t aIndexInContainer)
+                                 nsIContent* aChild)
 {
   ContentChanged(aChild);
 }
@@ -180,7 +179,6 @@ void
 SVGStyleElement::ContentRemoved(nsIDocument* aDocument,
                                 nsIContent* aContainer,
                                 nsIContent* aChild,
-                                int32_t aIndexInContainer,
                                 nsIContent* aPreviousSibling)
 {
   ContentChanged(aChild);
@@ -260,9 +258,10 @@ SVGStyleElement::SetTitle(const nsAString& aTitle, ErrorResult& rv)
 // nsStyleLinkElement methods
 
 already_AddRefed<nsIURI>
-SVGStyleElement::GetStyleSheetURL(bool* aIsInline)
+SVGStyleElement::GetStyleSheetURL(bool* aIsInline, nsIPrincipal** aTriggeringPrincipal)
 {
   *aIsInline = true;
+  *aTriggeringPrincipal = nullptr;
   return nullptr;
 }
 
@@ -290,9 +289,8 @@ SVGStyleElement::GetStyleSheetInfo(nsAString& aTitle,
     aType.AssignLiteral("text/css");
   }
 
-  *aIsScoped = HasAttr(kNameSpaceID_None, nsGkAtoms::scoped);
-
-  return;
+  *aIsScoped = HasAttr(kNameSpaceID_None, nsGkAtoms::scoped) &&
+               OwnerDoc()->IsScopedStyleEnabled();
 }
 
 CORSMode

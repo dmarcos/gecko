@@ -46,8 +46,9 @@ namespace mozilla {
 LazyLogModule gTrackUnionStreamLog("TrackUnionStream");
 #define STREAM_LOG(type, msg) MOZ_LOG(gTrackUnionStreamLog, type, msg)
 
-TrackUnionStream::TrackUnionStream(AbstractThread* aMainThread) :
-  ProcessedMediaStream(aMainThread), mNextAvailableTrackID(1)
+TrackUnionStream::TrackUnionStream()
+  : ProcessedMediaStream()
+  , mNextAvailableTrackID(1)
 {
 }
 
@@ -57,13 +58,13 @@ TrackUnionStream::TrackUnionStream(AbstractThread* aMainThread) :
     for (int32_t i = mTrackMap.Length() - 1; i >= 0; --i) {
       if (mTrackMap[i].mInputPort == aPort) {
         STREAM_LOG(LogLevel::Debug, ("TrackUnionStream %p removing trackmap entry %d", this, i));
-        EndTrack(i);
         nsTArray<RefPtr<DirectMediaStreamTrackListener>> listeners(
           mTrackMap[i].mOwnedDirectListeners);
         for (auto listener : listeners) {
           // Remove listeners while the entry still exists.
           RemoveDirectTrackListenerImpl(listener, mTrackMap[i].mOutputTrackID);
         }
+        EndTrack(i);
         mTrackMap.RemoveElementAt(i);
       }
     }
@@ -173,7 +174,7 @@ TrackUnionStream::TrackUnionStream(AbstractThread* aMainThread) :
     TrackID id;
     if (IsTrackIDExplicit(id = aPort->GetDestinationTrackId())) {
       MOZ_ASSERT(id >= mNextAvailableTrackID &&
-                 mUsedTracks.BinaryIndexOf(id) == mUsedTracks.NoIndex,
+                 !mUsedTracks.ContainsSorted(id),
                  "Desired destination id taken. Only provide a destination ID "
                  "if you can assure its availability, or we may not be able "
                  "to bind to the correct DOM-side track.");
@@ -190,7 +191,7 @@ TrackUnionStream::TrackUnionStream(AbstractThread* aMainThread) :
       mUsedTracks.InsertElementSorted(id);
     } else if ((id = aTrack->GetID()) &&
                id > mNextAvailableTrackID &&
-               mUsedTracks.BinaryIndexOf(id) == mUsedTracks.NoIndex) {
+               !mUsedTracks.ContainsSorted(id)) {
       // Input id available. Mark it used in mUsedTracks.
       mUsedTracks.InsertElementSorted(id);
     } else {
@@ -310,6 +311,7 @@ TrackUnionStream::TrackUnionStream(AbstractThread* aMainThread) :
           aInputTrack->GetEnd() <= inputEnd) {
         inputTrackEndPoint = aInputTrack->GetEnd();
         *aOutputTrackFinished = true;
+        break;
       }
 
       if (interval.mStart >= interval.mEnd) {
@@ -321,7 +323,6 @@ TrackUnionStream::TrackUnionStream(AbstractThread* aMainThread) :
       StreamTime outputStart = outputTrack->GetEnd();
 
       if (interval.mInputIsBlocked) {
-        // Maybe the input track ended?
         segment->AppendNullData(ticks);
         STREAM_LOG(LogLevel::Verbose, ("TrackUnionStream %p appending %lld ticks of null data to track %d",
                    this, (long long)ticks, outputTrack->GetID()));

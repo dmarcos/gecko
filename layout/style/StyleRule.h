@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,9 +13,10 @@
 #define mozilla_css_StyleRule_h__
 
 #include "mozilla/Attributes.h"
-#include "mozilla/MemoryReporting.h"
-#include "mozilla/UniquePtr.h"
 #include "mozilla/BindingStyleRule.h"
+#include "mozilla/MemoryReporting.h"
+#include "mozilla/StyleSetHandle.h"
+#include "mozilla/UniquePtr.h"
 
 #include "nsString.h"
 #include "nsCOMPtr.h"
@@ -22,7 +24,7 @@
 #include "nsIStyleRule.h"
 #include "nsICSSStyleRuleDOMWrapper.h"
 
-class nsIAtom;
+class nsAtom;
 struct nsCSSSelectorList;
 
 namespace mozilla {
@@ -32,7 +34,7 @@ class CSSStyleSheet;
 
 struct nsAtomList {
 public:
-  explicit nsAtomList(nsIAtom* aAtom);
+  explicit nsAtomList(nsAtom* aAtom);
   explicit nsAtomList(const nsString& aAtomValue);
   ~nsAtomList(void);
 
@@ -41,7 +43,7 @@ public:
 
   size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
-  nsCOMPtr<nsIAtom> mAtom;
+  RefPtr<nsAtom> mAtom;
   nsAtomList*       mNext;
 private:
   nsAtomList* Clone(bool aDeep) const;
@@ -107,11 +109,11 @@ public:
   };
 
   nsAttrSelector(int32_t aNameSpace, const nsString& aAttr);
-  nsAttrSelector(int32_t aNameSpace, const nsString& aAttr, uint8_t aFunction, 
+  nsAttrSelector(int32_t aNameSpace, const nsString& aAttr, uint8_t aFunction,
                  const nsString& aValue,
                  ValueCaseSensitivity aValueCaseSensitivity);
-  nsAttrSelector(int32_t aNameSpace, nsIAtom* aLowercaseAttr, 
-                 nsIAtom* aCasedAttr, uint8_t aFunction, 
+  nsAttrSelector(int32_t aNameSpace, nsAtom* aLowercaseAttr,
+                 nsAtom* aCasedAttr, uint8_t aFunction,
                  const nsString& aValue,
                  ValueCaseSensitivity aValueCaseSensitivity);
   ~nsAttrSelector(void);
@@ -129,8 +131,8 @@ public:
 
   nsString        mValue;
   nsAttrSelector* mNext;
-  nsCOMPtr<nsIAtom> mLowercaseAttr;
-  nsCOMPtr<nsIAtom> mCasedAttr;
+  RefPtr<nsAtom> mLowercaseAttr;
+  RefPtr<nsAtom> mCasedAttr;
   int32_t         mNameSpace;
   uint8_t         mFunction;
   ValueCaseSensitivity mValueCaseSensitivity;
@@ -225,8 +227,8 @@ public:
   // but in case-insensitive documents (HTML) mLowercaseTag is lowercase.
   // Also, for pseudo-elements mCasedTag will be null but mLowercaseTag
   // contains their name.
-  nsCOMPtr<nsIAtom> mLowercaseTag;
-  nsCOMPtr<nsIAtom> mCasedTag;
+  RefPtr<nsAtom> mLowercaseTag;
+  RefPtr<nsAtom> mCasedTag;
   nsAtomList*     mIDList;
   nsAtomList*     mClassList;
   nsPseudoClassList* mPseudoClassList; // atom for the pseudo, string for
@@ -251,7 +253,11 @@ private:
  * items (where each |nsCSSSelectorList| object's |mSelectors| has
  * an |mNext| for the P or H1).  We represent them as linked lists.
  */
-class inDOMUtils;
+namespace mozilla {
+namespace css {
+class StyleRule;
+} // namespace css
+} // namespace mozilla
 
 struct nsCSSSelectorList {
   nsCSSSelectorList(void);
@@ -291,7 +297,7 @@ struct nsCSSSelectorList {
   int32_t            mWeight;
   nsCSSSelectorList* mNext;
 protected:
-  friend class inDOMUtils;
+  friend class mozilla::css::StyleRule;
   nsCSSSelectorList* Clone(bool aDeep) const;
 
 private:
@@ -326,17 +332,28 @@ public:
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(StyleRule, Rule)
-  virtual bool IsCCLeaf() const override;
+  bool IsCCLeaf() const override;
 
   NS_DECL_NSIDOMCSSSTYLERULE
 
   // nsICSSStyleRuleDOMWrapper
-  NS_IMETHOD GetCSSStyleRule(StyleRule **aResult) override;
+  NS_IMETHOD GetCSSStyleRule(BindingStyleRule **aResult) override;
+
+  uint32_t GetSelectorCount() override;
+  nsresult GetSelectorText(uint32_t aSelectorIndex,
+                                   nsAString& aText) override;
+  nsresult GetSpecificity(uint32_t aSelectorIndex,
+                          uint64_t* aSpecificity) override;
+  nsresult SelectorMatchesElement(dom::Element* aElement,
+                                  uint32_t aSelectorIndex,
+                                  const nsAString& aPseudo,
+                                  bool* aMatches) override;
+  mozilla::NotNull<DeclarationBlock*> GetDeclarationBlock() const override;
 
   // WebIDL interface
   uint16_t Type() const override;
   void GetCssTextImpl(nsAString& aCssText) const override;
-  virtual nsICSSDeclaration* Style() override;
+  nsICSSDeclaration* Style() override;
 
   // null for style attribute
   nsCSSSelectorList* Selector() { return mSelector; }
@@ -345,7 +362,7 @@ public:
 
   void SetDeclaration(Declaration* aDecl);
 
-  virtual int32_t GetType() const override;
+  int32_t GetType() const override;
   using Rule::GetType;
 
   CSSStyleSheet* GetStyleSheet() const
@@ -354,13 +371,13 @@ public:
     return sheet ? sheet->AsGecko() : nullptr;
   }
 
-  virtual already_AddRefed<Rule> Clone() const override;
+  already_AddRefed<Rule> Clone() const override;
 
 #ifdef DEBUG
-  virtual void List(FILE* out = stdout, int32_t aIndent = 0) const override;
+  void List(FILE* out = stdout, int32_t aIndent = 0) const override;
 #endif
 
-  virtual size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const override;
+  size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const override;
 
 private:
   ~StyleRule();
@@ -368,6 +385,9 @@ private:
   // Drop our references to mDeclaration and mRule, and let them know we're
   // doing that.
   void DropReferences();
+
+  nsCSSSelectorList*
+  GetSelectorAtIndex(uint32_t aIndex, ErrorResult& rv);
 
 private:
   nsCSSSelectorList*      mSelector; // null for style attribute

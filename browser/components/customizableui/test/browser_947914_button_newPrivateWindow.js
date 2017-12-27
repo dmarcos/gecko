@@ -4,10 +4,14 @@
 
 "use strict";
 
-add_task(function*() {
+add_task(async function() {
   info("Check private browsing button existence and functionality");
+  CustomizableUI.addWidgetToArea("privatebrowsing-button", CustomizableUI.AREA_FIXED_OVERFLOW_PANEL);
+  registerCleanupFunction(() => CustomizableUI.reset());
 
-  yield PanelUI.show();
+  await waitForOverflowButtonShown();
+
+  await document.getElementById("nav-bar").overflowable.show();
   info("Menu panel was opened");
 
   let windowWasHandled = false;
@@ -25,7 +29,7 @@ add_task(function*() {
         }, {once: true});
       }
     }
-  }
+  };
 
   Services.ww.registerNotification(observerWindowOpened);
 
@@ -34,8 +38,8 @@ add_task(function*() {
   privateBrowsingButton.click();
 
   try {
-    yield waitForCondition(() => windowWasHandled);
-    yield promiseWindowClosed(privateWindow);
+    await waitForCondition(() => windowWasHandled);
+    await promiseWindowClosed(privateWindow);
     info("The new private window was closed");
   } catch (e) {
     ok(false, "The new private browser window was not properly handled");

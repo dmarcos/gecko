@@ -1,10 +1,13 @@
 
 // Set some prefs that apply to all the tests in this file
-add_task(function* setup() {
-  yield SpecialPowers.pushPrefEnv({set: [
+add_task(async function setup() {
+  await SpecialPowers.pushPrefEnv({set: [
     // We don't have pre-pinned certificates for the local mochitest server
     ["extensions.install.requireBuiltInCerts", false],
     ["extensions.update.requireBuiltInCerts", false],
+
+    // Don't require the extensions to be signed
+    ["xpinstall.signatures.required", false],
 
     // Point updates to the local mochitest server
     ["extensions.update.url", `${BASE}/browser_webext_update.json`],
@@ -57,3 +60,8 @@ add_task(() => testUpdateNoPrompt("browser_legacy.xpi",
 // are added.
 add_task(() => testUpdateNoPrompt("browser_webext_update_perms1.xpi",
                                   "update_perms@tests.mozilla.org"));
+
+// Test that an update that narrows origin permissions is just applied without
+// showing a notification promt
+add_task(() => testUpdateNoPrompt("browser_webext_update_origins1.xpi",
+                                  "update_origins@tests.mozilla.org"));

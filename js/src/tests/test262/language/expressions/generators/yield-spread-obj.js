@@ -2,16 +2,17 @@
 // - src/generators/yield-spread-obj.case
 // - src/generators/default/expression.template
 /*---
-description: Use yield value in a object spread position (Generator expression)
+description: Use yield value in a object spread position (Unnamed generator expression)
 esid: prod-GeneratorExpression
-features: [object-spread]
+features: [object-spread, generators]
 flags: [generated]
 includes: [compareArray.js]
 info: |
     14.4 Generator Function Definitions
 
     GeneratorExpression:
-      function * BindingIdentifier[+Yield, ~Await]opt ( FormalParameters[+Yield, ~Await] ) { GeneratorBody }
+      function * BindingIdentifier opt ( FormalParameters ) { GeneratorBody }
+
 
     Spread Properties
 

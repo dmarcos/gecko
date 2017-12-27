@@ -9,6 +9,7 @@
 #include "nsISupportsPrimitives.h"
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/EventStateManager.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Unused.h"
 #include "nsContentUtils.h"
@@ -16,6 +17,8 @@
 using mozilla::ipc::Shmem;
 using mozilla::dom::TabChild;
 using mozilla::dom::OptionalShmem;
+using mozilla::LayoutDeviceIntRect;
+using mozilla::Maybe;
 
 NS_IMPL_ISUPPORTS_INHERITED0(nsDragServiceProxy, nsBaseDragService)
 
@@ -55,9 +58,16 @@ nsDragServiceProxy::InvokeDragSessionImpl(nsIArray* aArrayTransferables,
       if (dataSurface) {
         size_t length;
         int32_t stride;
-        Shmem surfaceData;
-        nsContentUtils::GetSurfaceData(dataSurface, &length, &stride, child,
-                                       &surfaceData);
+        Maybe<Shmem> maybeShm = nsContentUtils::GetSurfaceData(dataSurface,
+                                                               &length,
+                                                               &stride,
+                                                               child);
+        if (maybeShm.isNothing()) {
+          return NS_ERROR_FAILURE;
+        }
+
+        auto surfaceData = maybeShm.value();
+
         // Save the surface data to shared memory.
         if (!surfaceData.IsReadable() || !surfaceData.get<char>()) {
           NS_WARNING("Failed to create shared memory for drag session.");
@@ -78,4 +88,22 @@ nsDragServiceProxy::InvokeDragSessionImpl(nsIArray* aArrayTransferables,
                                                   mozilla::void_t(), 0, 0, dragRect);
   StartDragSession();
   return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDragServiceProxy::StartDragSession()
+{
+  // Normally, OS stops firing input events when a drag operation starts. But
+  // there may be some pending input events queued in the content process. We
+  // have to suppress them since spec says that input events must be suppressed
+  // when there is a dnd session.
+  EventStateManager::SuppressInputEvents();
+  return nsBaseDragService::StartDragSession();
+}
+
+NS_IMETHODIMP
+nsDragServiceProxy::EndDragSession(bool aDoneDrag, uint32_t aKeyModifiers)
+{
+  EventStateManager::UnsuppressInputEvents();
+  return nsBaseDragService::EndDragSession(aDoneDrag, aKeyModifiers);
 }

@@ -23,19 +23,18 @@ const TEST_HOST = "mochi.test:8888";
  */
 var addTab = function (url, win) {
   info("Adding a new tab with URL: '" + url + "'");
-  let def = defer();
 
-  let targetWindow = win || window;
-  let targetBrowser = targetWindow.gBrowser;
+  return new Promise(resolve => {
+    let targetWindow = win || window;
+    let targetBrowser = targetWindow.gBrowser;
 
-  let tab = targetBrowser.selectedTab = targetBrowser.addTab(url);
-  BrowserTestUtils.browserLoaded(targetBrowser.selectedBrowser)
-    .then(function () {
-      info("URL '" + url + "' loading complete");
-      def.resolve(tab);
-    });
-
-  return def.promise;
+    let tab = targetBrowser.selectedTab = targetBrowser.addTab(url);
+    BrowserTestUtils.browserLoaded(targetBrowser.selectedBrowser)
+      .then(function () {
+        info("URL '" + url + "' loading complete");
+        resolve(tab);
+      });
+  });
 };
 
 /**
@@ -43,19 +42,13 @@ var addTab = function (url, win) {
  * @param {String} url The url to be loaded in the current tab.
  * @return a promise that resolves when the page has fully loaded.
  */
-var navigateTo = Task.async(function* (url) {
+var navigateTo = function (url) {
   info(`Navigating to ${url}`);
   let browser = gBrowser.selectedBrowser;
 
-  let navigating = defer();
-  browser.addEventListener("load", function () {
-    navigating.resolve();
-  }, {capture: true, once: true});
-
   browser.loadURI(url);
-
-  yield navigating.promise;
-});
+  return BrowserTestUtils.browserLoaded(browser);
+};
 
 var navigateToAndWaitForStyleSheets = Task.async(function* (url, ui) {
   let onReset = ui.once("stylesheets-reset");
@@ -83,6 +76,10 @@ var openStyleEditor = Task.async(function* (tab) {
   let toolbox = yield gDevTools.showToolbox(target, "styleeditor");
   let panel = toolbox.getPanel("styleeditor");
   let ui = panel.UI;
+
+  // The stylesheet list appears with an animation. Let this animation finish.
+  let animations = ui._root.getAnimations({subtree: true});
+  yield Promise.all(animations.map(a => a.finished));
 
   return { toolbox, panel, ui };
 });

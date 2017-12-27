@@ -3,18 +3,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // For SIMD
-#![feature(cfg_target_feature)]
-#![cfg_attr(any(target_os = "linux", target_os = "android"), feature(heap_api))]
-
-#![cfg_attr(any(target_os = "linux", target_os = "android"), feature(alloc))]
-#![feature(box_syntax)]
-#![feature(range_contains)]
-#![feature(unique)]
+#![cfg_attr(feature = "unstable", feature(cfg_target_feature))]
 
 #![deny(unsafe_code)]
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-extern crate alloc;
 
 extern crate app_units;
 #[macro_use]
@@ -33,45 +24,48 @@ extern crate bitflags;
 extern crate euclid;
 extern crate fnv;
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(target_os = "linux")]
 extern crate fontconfig;
 extern crate fontsan;
-#[cfg(any(target_os = "linux", target_os = "android"))]
-extern crate freetype;
+#[cfg(any(target_os = "linux", target_os = "android"))] extern crate freetype;
+#[cfg(any(target_os = "linux", target_os = "android"))] extern crate servo_allocator;
 extern crate gfx_traits;
 
 // Eventually we would like the shaper to be pluggable, as many operating systems have their own
 // shapers. For now, however, this is a hard dependency.
 extern crate harfbuzz_sys as harfbuzz;
 
-extern crate heapsize;
-#[macro_use] extern crate heapsize_derive;
 extern crate ipc_channel;
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;
 #[macro_use]
 extern crate log;
+#[cfg_attr(target_os = "windows", macro_use)]
+extern crate malloc_size_of;
+#[macro_use] extern crate malloc_size_of_derive;
 extern crate msg;
 extern crate net_traits;
 extern crate ordered_float;
 extern crate range;
-#[cfg(target_os = "macos")]
-extern crate serde;
-#[macro_use]
-extern crate serde_derive;
+#[macro_use] extern crate serde;
+extern crate servo_arc;
 extern crate servo_geometry;
 extern crate servo_url;
 #[macro_use] extern crate servo_atoms;
+#[cfg(feature = "unstable")]
 #[cfg(any(target_feature = "sse2", target_feature = "neon"))]
 extern crate simd;
 extern crate smallvec;
 extern crate style;
 extern crate style_traits;
 extern crate time;
+extern crate unicode_bidi;
 extern crate unicode_script;
-extern crate webrender_traits;
+extern crate webrender_api;
 extern crate xi_unicode;
+#[cfg(target_os = "android")]
+extern crate xml5ever;
 
 #[deny(unsafe_code)]
 pub mod display_list;

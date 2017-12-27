@@ -23,6 +23,37 @@
       ]
     },
     {
+      'target_name': 'gcm-aes-x86_c_lib',
+      'type': 'static_library',
+      'sources': [
+        'gcm-x86.c', 'aes-x86.c'
+      ],
+      'dependencies': [
+        '<(DEPTH)/exports.gyp:nss_exports'
+      ],
+      # Enable isa option for pclmul and aes-ni; supported since gcc 4.4.
+      # This is only supported by x84/x64. It's not needed for Windows,
+      # unless clang-cl is used.
+      'cflags_mozilla': [
+        '-mpclmul', '-maes'
+      ],
+      'conditions': [
+        [ 'OS=="linux" or OS=="android" or OS=="dragonfly" or OS=="freebsd" or OS=="netbsd" or OS=="openbsd"', {
+          'cflags': [
+            '-mpclmul', '-maes'
+          ],
+        }],
+        # macOS build doesn't use cflags.
+        [ 'OS=="mac"', {
+          'xcode_settings': {
+            'OTHER_CFLAGS': [
+              '-mpclmul', '-maes'
+            ],
+          },
+        }]
+      ]
+    },
+    {
       'target_name': 'freebl',
       'type': 'static_library',
       'sources': [
@@ -45,6 +76,11 @@
         '<(DEPTH)/exports.gyp:nss_exports',
       ],
       'conditions': [
+        [ 'target_arch=="ia32" or target_arch=="x64"', {
+          'dependencies': [
+            'gcm-aes-x86_c_lib'
+          ],
+        }],
         [ 'OS=="linux"', {
           'defines!': [
             'FREEBL_NO_DEPEND',
@@ -76,6 +112,11 @@
         '<(DEPTH)/exports.gyp:nss_exports',
       ],
       'conditions': [
+        [ 'target_arch=="ia32" or target_arch=="x64"', {
+          'dependencies': [
+            'gcm-aes-x86_c_lib'
+          ]
+        }],
         [ 'OS!="linux" and OS!="android"', {
           'conditions': [
             [ 'moz_fold_libs==0', {
@@ -142,7 +183,8 @@
   'target_defaults': {
     'include_dirs': [
       'mpi',
-      'ecl'
+      'ecl',
+      'verified',
     ],
     'defines': [
       'SHLIB_SUFFIX=\"<(dll_suffix)\"',
@@ -153,13 +195,20 @@
       'MP_API_COMPATIBLE'
     ],
     'conditions': [
+      [ 'OS=="mac"', {
+        'xcode_settings': {
+          # I'm not sure since when this is supported.
+          # But I hope that doesn't matter. We also assume this is x86/x64.
+          'OTHER_CFLAGS': [
+            '-std=gnu99',
+          ],
+        },
+      }],
       [ 'OS=="win" and target_arch=="ia32"', {
         'msvs_settings': {
           'VCCLCompilerTool': {
             #TODO: -Ox optimize flags
             'PreprocessorDefinitions': [
-              'NSS_X86_OR_X64',
-              'NSS_X86',
               'MP_ASSEMBLY_MULTIPLY',
               'MP_ASSEMBLY_SQUARE',
               'MP_ASSEMBLY_DIV_2DX1D',
@@ -176,9 +225,7 @@
           'VCCLCompilerTool': {
             #TODO: -Ox optimize flags
             'PreprocessorDefinitions': [
-              'NSS_USE_64',
-              'NSS_X86_OR_X64',
-              'NSS_X64',
+              # Should be copied to mingw defines below
               'MP_IS_LITTLE_ENDIAN',
               'NSS_BEVAND_ARCFOUR',
               'MPI_AMD64',
@@ -190,33 +237,42 @@
           },
         },
       }],
+      [ 'cc_use_gnu_ld==1 and OS=="win" and target_arch=="x64"', {
+        'defines': [
+          'MP_IS_LITTLE_ENDIAN',
+          'NSS_BEVAND_ARCFOUR',
+          'MPI_AMD64',
+          'MP_ASSEMBLY_MULTIPLY',
+          'NSS_USE_COMBA',
+          'USE_HW_AES',
+          'INTEL_GCM',
+         ],
+      }],
       [ 'OS!="win"', {
         'conditions': [
-          [ 'target_arch=="x64"', {
+          [ 'target_arch=="x64" or target_arch=="arm64" or target_arch=="aarch64"', {
             'defines': [
-              'NSS_USE_64',
-              'NSS_X86_OR_X64',
-              'NSS_X64',
               # The Makefile does version-tests on GCC, but we're not doing that here.
               'HAVE_INT128_SUPPORT',
             ],
           }, {
-            'sources': [
-              'ecl/uint128.c',
-            ],
-          }],
-          [ 'target_arch=="ia32"', {
             'defines': [
-              'NSS_X86_OR_X64',
-              'NSS_X86',
+              'KRML_NOUINT128',
             ],
           }],
+        ],
+      }, {
+        'defines': [
+          'KRML_NOUINT128',
         ],
       }],
       [ 'OS=="linux"', {
         'defines': [
           'FREEBL_LOWHASH',
           'FREEBL_NO_DEPEND',
+        ],
+        'cflags': [
+          '-std=gnu99',
         ],
       }],
       [ 'OS=="linux" or OS=="android"', {
@@ -251,11 +307,7 @@
               'MP_ASSEMBLY_SQUARE',
               'MP_USE_UINT_DIGIT',
               'SHA_NO_LONG_LONG',
-            ],
-          }],
-          [ 'target_arch=="arm64" or target_arch=="aarch64"', {
-            'defines': [
-              'NSS_USE_64',
+              'ARMHF',
             ],
           }],
         ],

@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -23,6 +24,7 @@
 #include "mozilla/layers/CompositorTypes.h"  // for TextureInfo, etc
 #include "mozilla/layers/LayersMessages.h" // for TileDescriptor
 #include "mozilla/layers/LayersTypes.h" // for TextureDumpMode
+#include "mozilla/layers/PaintThread.h" // for CapturedTiledPaintState
 #include "mozilla/layers/TextureClient.h"
 #include "mozilla/layers/TextureClientPool.h"
 #include "ClientLayerManager.h"
@@ -40,6 +42,13 @@ namespace layers {
 
 class ClientTiledPaintedLayer;
 class ClientLayerManager;
+
+enum class TilePaintFlags : uint8_t {
+  None = 0x0,
+  Async = 0x1,
+  Progressive = 0x2,
+};
+MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(TilePaintFlags)
 
 /**
  * Represent a single tile in tiled buffer. The buffer keeps tiles,
@@ -121,7 +130,10 @@ struct TileClient
                                const nsIntRegion& aDirtyRegion,
                                gfxContentType aContent, SurfaceMode aMode,
                                nsIntRegion& aAddPaintedRegion,
-                               RefPtr<TextureClient>* aTextureClientOnWhite);
+                               TilePaintFlags aFlags,
+                               RefPtr<TextureClient>* aTextureClientOnWhite,
+                               std::vector<CapturedTiledPaintState::Copy>* aCopies,
+                               std::vector<RefPtr<TextureClient>>* aClients);
 
   void DiscardFrontBuffer();
 
@@ -158,7 +170,10 @@ private:
   // Copies dirty pixels from the front buffer into the back buffer,
   // and records the copied region in aAddPaintedRegion.
   void ValidateBackBufferFromFront(const nsIntRegion &aDirtyRegion,
-                                   nsIntRegion& aAddPaintedRegion);
+                                   nsIntRegion& aAddPaintedRegion,
+                                   TilePaintFlags aFlags,
+                                   std::vector<CapturedTiledPaintState::Copy>* aCopies,
+                                   std::vector<RefPtr<TextureClient>>* aClients);
 };
 
 /**
@@ -293,12 +308,13 @@ public:
                    const nsIntRegion& aDirtyRegion,
                    LayerManager::DrawPaintedLayerCallback aCallback,
                    void* aCallbackData,
-                   bool aIsProgressive = false) = 0;
+                   TilePaintFlags aFlags) = 0;
 
   virtual bool SupportsProgressiveUpdate() = 0;
-  virtual bool ProgressiveUpdate(nsIntRegion& aValidRegion,
-                         nsIntRegion& aInvalidRegion,
+  virtual bool ProgressiveUpdate(const nsIntRegion& aValidRegion,
+                         const nsIntRegion& aInvalidRegion,
                          const nsIntRegion& aOldValidRegion,
+                         nsIntRegion& aOutDrawnRegion,
                          BasicTiledLayerPaintData* aPaintData,
                          LayerManager::DrawPaintedLayerCallback aCallback,
                          void* aCallbackData) = 0;
@@ -348,16 +364,19 @@ public:
                    const nsIntRegion& aDirtyRegion,
                    LayerManager::DrawPaintedLayerCallback aCallback,
                    void* aCallbackData,
-                   bool aIsProgressive = false) override;
+                   TilePaintFlags aFlags = TilePaintFlags::None) override;
 
   virtual bool SupportsProgressiveUpdate() override { return true; }
   /**
    * Performs a progressive update of a given tiled buffer.
    * See ComputeProgressiveUpdateRegion below for parameter documentation.
+   * aOutDrawnRegion is an outparameter that contains the region that was
+   * drawn, and which can now be added to the layer's valid region.
    */
-  bool ProgressiveUpdate(nsIntRegion& aValidRegion,
-                         nsIntRegion& aInvalidRegion,
+  bool ProgressiveUpdate(const nsIntRegion& aValidRegion,
+                         const nsIntRegion& aInvalidRegion,
                          const nsIntRegion& aOldValidRegion,
+                         nsIntRegion& aOutDrawnRegion,
                          BasicTiledLayerPaintData* aPaintData,
                          LayerManager::DrawPaintedLayerCallback aCallback,
                          void* aCallbackData) override;
@@ -400,18 +419,20 @@ public:
       return;
     }
 
-    Update(nsIntRegion(), nsIntRegion(), nsIntRegion());
+    Update(nsIntRegion(), nsIntRegion(), nsIntRegion(), TilePaintFlags::None);
     mResolution = aResolution;
   }
 
 protected:
   bool ValidateTile(TileClient& aTile,
                     const nsIntPoint& aTileRect,
-                    const nsIntRegion& dirtyRect);
-  
+                    nsIntRegion& aDirtyRegion,
+                    TilePaintFlags aFlags);
+
   void Update(const nsIntRegion& aNewValidRegion,
               const nsIntRegion& aPaintRegion,
-              const nsIntRegion& aDirtyRegion);
+              const nsIntRegion& aDirtyRegion,
+              TilePaintFlags aFlags);
 
   TileClient GetPlaceholderTile() const { return TileClient(); }
 
@@ -425,8 +446,14 @@ private:
   nsIntRegion mNewValidRegion;
 
   SharedFrameMetricsHelper*  mSharedFrameMetricsHelper;
-  // When using Moz2D's CreateTiledDrawTarget we maintain a list of gfx::Tiles
-  std::vector<gfx::Tile> mMoz2DTiles;
+
+  // Parameters that are collected during Update for a paint before they
+  // are either executed or replayed on the paint thread.
+  std::vector<gfx::Tile> mPaintTiles;
+  std::vector<RefPtr<TextureClient>> mPaintTilesTextureClients;
+  std::vector<CapturedTiledPaintState::Copy> mPaintCopies;
+  std::vector<CapturedTiledPaintState::Clear> mPaintClears;
+
   /**
    * While we're adding tiles, this is used to keep track of the position of
    * the top-left of the top-left-most tile.  When we come to wrap the tiles in

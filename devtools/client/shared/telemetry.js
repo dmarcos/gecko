@@ -17,6 +17,8 @@ function Telemetry() {
   this.toolOpened = this.toolOpened.bind(this);
   this.toolClosed = this.toolClosed.bind(this);
   this.log = this.log.bind(this);
+  this.logScalar = this.logScalar.bind(this);
+  this.logKeyedScalar = this.logKeyedScalar.bind(this);
   this.logOncePerBrowserVersion = this.logOncePerBrowserVersion.bind(this);
   this.destroy = this.destroy.bind(this);
 
@@ -138,13 +140,16 @@ Telemetry.prototype = {
       histogram: "DEVTOOLS_PICKER_EYEDROPPER_OPENED_COUNT",
     },
     toolbareyedropper: {
-      histogram: "DEVTOOLS_TOOLBAR_EYEDROPPER_OPENED_COUNT",
+      scalar: "devtools.toolbar.eyedropper.opened",
     },
     copyuniquecssselector: {
-      histogram: "DEVTOOLS_COPY_UNIQUE_CSS_SELECTOR_OPENED_COUNT",
+      scalar: "devtools.copy.unique.css.selector.opened",
     },
     copyfullcssselector: {
-      histogram: "DEVTOOLS_COPY_FULL_CSS_SELECTOR_OPENED_COUNT",
+      scalar: "devtools.copy.full.css.selector.opened",
+    },
+    copyxpath: {
+      scalar: "devtools.copy.xpath.opened",
     },
     developertoolbar: {
       histogram: "DEVTOOLS_DEVELOPERTOOLBAR_OPENED_COUNT",
@@ -158,13 +163,6 @@ Telemetry.prototype = {
       histogram: "DEVTOOLS_WEBIDE_OPENED_COUNT",
       timerHistogram: "DEVTOOLS_WEBIDE_TIME_ACTIVE_SECONDS"
     },
-    webideProjectEditor: {
-      histogram: "DEVTOOLS_WEBIDE_PROJECT_EDITOR_OPENED_COUNT",
-      timerHistogram: "DEVTOOLS_WEBIDE_PROJECT_EDITOR_TIME_ACTIVE_SECONDS"
-    },
-    webideProjectEditorSave: {
-      histogram: "DEVTOOLS_WEBIDE_PROJECT_EDITOR_SAVE_COUNT",
-    },
     webideNewProject: {
       histogram: "DEVTOOLS_WEBIDE_NEW_PROJECT_COUNT",
     },
@@ -175,11 +173,14 @@ Telemetry.prototype = {
       histogram: "DEVTOOLS_CUSTOM_OPENED_COUNT",
       timerHistogram: "DEVTOOLS_CUSTOM_TIME_ACTIVE_SECONDS"
     },
-    reloadAddonInstalled: {
-      histogram: "DEVTOOLS_RELOAD_ADDON_INSTALLED_COUNT",
+    gridInspectorShowGridAreasOverlayChecked: {
+      scalar: "devtools.grid.showGridAreasOverlay.checked",
     },
-    reloadAddonReload: {
-      histogram: "DEVTOOLS_RELOAD_ADDON_RELOAD_COUNT",
+    gridInspectorShowGridLineNumbersChecked: {
+      scalar: "devtools.grid.showGridLineNumbers.checked",
+    },
+    gridInspectorShowInfiniteLinesChecked: {
+      scalar: "devtools.grid.showInfiniteLines.checked",
     },
   },
 
@@ -198,6 +199,9 @@ Telemetry.prototype = {
     }
     if (charts.timerHistogram) {
       this.startTimer(charts.timerHistogram);
+    }
+    if (charts.scalar) {
+      this.logScalar(charts.scalar, 1);
     }
   },
 
@@ -260,14 +264,74 @@ Telemetry.prototype = {
    *         Value to store.
    */
   log: function (histogramId, value) {
-    if (histogramId) {
-      try {
-        let histogram = Services.telemetry.getHistogramById(histogramId);
-        histogram.add(value);
-      } catch (e) {
-        dump("Warning: An attempt was made to write to the " + histogramId +
-             " histogram, which is not defined in Histograms.json\n");
+    if (!histogramId) {
+      return;
+    }
+
+    try {
+      let histogram = Services.telemetry.getHistogramById(histogramId);
+      histogram.add(value);
+    } catch (e) {
+      dump(`Warning: An attempt was made to write to the ${histogramId} ` +
+           `histogram, which is not defined in Histograms.json\n`);
+    }
+  },
+
+  /**
+   * Log a value to a scalar.
+   *
+   * @param  {String} scalarId
+   *         Scalar in which the data is to be stored.
+   * @param  value
+   *         Value to store.
+   */
+  logScalar: function (scalarId, value) {
+    if (!scalarId) {
+      return;
+    }
+
+    try {
+      if (isNaN(value)) {
+        dump(`Warning: An attempt was made to write a non-numeric value ` +
+             `${value} to the ${scalarId} scalar. Only numeric values are ` +
+             `allowed.`);
+
+        return;
       }
+      Services.telemetry.scalarSet(scalarId, value);
+    } catch (e) {
+      dump(`Warning: An attempt was made to write to the ${scalarId} ` +
+           `scalar, which is not defined in Scalars.yaml\n`);
+    }
+  },
+
+  /**
+   * Log a value to a keyed count scalar.
+   *
+   * @param  {String} scalarId
+   *         Scalar in which the data is to be stored.
+   * @param  {String} key
+   *         The key within the  scalar.
+   * @param  value
+   *         Value to store.
+   */
+  logKeyedScalar: function (scalarId, key, value) {
+    if (!scalarId) {
+      return;
+    }
+
+    try {
+      if (isNaN(value)) {
+        dump(`Warning: An attempt was made to write a non-numeric value ` +
+             `${value} to the ${scalarId} scalar. Only numeric values are ` +
+             `allowed.`);
+
+        return;
+      }
+      Services.telemetry.keyedScalarAdd(scalarId, key, value);
+    } catch (e) {
+      dump(`Warning: An attempt was made to write to the ${scalarId} ` +
+           `scalar, which is not defined in Scalars.yaml\n`);
     }
   },
 
@@ -292,8 +356,8 @@ Telemetry.prototype = {
           histogram.add(key, value);
         }
       } catch (e) {
-        dump("Warning: An attempt was made to write to the " + histogramId +
-             " histogram, which is not defined in Histograms.json\n");
+        dump(`Warning: An attempt was made to write to the ${histogramId} ` +
+             `histogram, which is not defined in Histograms.json\n`);
       }
     }
   },

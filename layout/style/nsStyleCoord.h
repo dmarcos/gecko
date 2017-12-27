@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -214,6 +215,18 @@ public:
     return static_cast<Calc*>(aValue.mPointer);
   }
 
+  // Compute the value that IsCalcUnit().
+  // @note the caller is expected to handle percentage of an indefinite size
+  // and NOT call this method with aPercentageBasis == NS_UNCONSTRAINEDSIZE.
+  // @note the return value may be negative, e.g. for "calc(a - b%)"
+  nscoord ComputeComputedCalc(nscoord aPercentageBasis) const;
+
+  // Compute the value that is either a coord, a percent, or a calc expression.
+  // @note the caller is expected to handle percentage of an indefinite size
+  // and NOT call this method with aPercentageBasis == NS_UNCONSTRAINEDSIZE.
+  // @note the return value may be negative, e.g. for "calc(a - b%)"
+  nscoord ComputeCoordPercentCalc(nscoord aPercentageBasis) const;
+
   nscoord     GetCoordValue() const;
   int32_t     GetIntValue() const;
   float       GetPercentValue() const;
@@ -224,7 +237,6 @@ public:
   double      GetAngleValueInRadians() const;
   float       GetFlexFractionValue() const;
   Calc*       GetCalcValue() const;
-  uint32_t    HashValue(uint32_t aHash) const;
   template<typename T,
            typename = typename std::enable_if<std::is_enum<T>::value>::type>
   T GetEnumValue() const

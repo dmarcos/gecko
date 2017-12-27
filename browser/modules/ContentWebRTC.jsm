@@ -34,20 +34,20 @@ this.ContentWebRTC = {
   observe(aSubject, aTopic, aData) {
     switch (aTopic) {
       case "getUserMedia:request":
-	handleGUMRequest(aSubject, aTopic, aData);
-	break;
+        handleGUMRequest(aSubject, aTopic, aData);
+        break;
       case "recording-device-stopped":
-	handleGUMStop(aSubject, aTopic, aData);
-	break;
+        handleGUMStop(aSubject, aTopic, aData);
+        break;
       case "PeerConnection:request":
-	handlePCRequest(aSubject, aTopic, aData);
-	break;
+        handlePCRequest(aSubject, aTopic, aData);
+        break;
       case "recording-device-events":
-	updateIndicators(aSubject, aTopic, aData);
-	break;
+        updateIndicators(aSubject, aTopic, aData);
+        break;
       case "recording-window-ended":
-	removeBrowserSpecificIndicator(aSubject, aTopic, aData);
-	break;
+        removeBrowserSpecificIndicator(aSubject, aTopic, aData);
+        break;
     }
   },
 
@@ -216,6 +216,7 @@ function prompt(aContentWindow, aWindowID, aCallID, aConstraints, aDevices, aSec
   let request = {
     callID: aCallID,
     windowID: aWindowID,
+    origin: aContentWindow.origin,
     documentURI: aContentWindow.document.documentURI,
     secure: aSecure,
     requestTypes,
@@ -290,9 +291,7 @@ function updateIndicators(aSubject, aTopic, aData) {
     showScreenSharingIndicator: ""
   };
 
-  let cpmm = Cc["@mozilla.org/childprocessmessagemanager;1"]
-               .getService(Ci.nsIMessageSender);
-  cpmm.sendAsyncMessage("webrtc:UpdatingIndicators");
+  Services.cpmm.sendAsyncMessage("webrtc:UpdatingIndicators");
 
   // If several iframes in the same page use media streams, it's possible to
   // have the same top level window several times. We use a Set to avoid
@@ -331,7 +330,7 @@ function updateIndicators(aSubject, aTopic, aData) {
     mm.sendAsyncMessage("webrtc:UpdateBrowserIndicators", tabState);
   }
 
-  cpmm.sendAsyncMessage("webrtc:UpdateGlobalIndicators", state);
+  Services.cpmm.sendAsyncMessage("webrtc:UpdateGlobalIndicators", state);
 }
 
 function removeBrowserSpecificIndicator(aSubject, aTopic, aData) {

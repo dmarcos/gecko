@@ -11,8 +11,12 @@ requireHacker.global_hook("default", path => {
       return `const ReactDOM = require('devtools/client/shared/vendor/react-dom'); module.exports = ReactDOM`;
     case "react-dom/server":
       return `const ReactDOMServer = require('devtools/client/shared/vendor/react-dom-server'); module.exports = ReactDOMServer`;
+    // TODO: Enzyme uses the require paths to choose which adapters are
+    // needed... we need to use react-addons-test-utils instead of
+    // react-dom/test-utils as the path until we upgrade to React 16+
+    // https://bugzil.la/1416824
     case "react-addons-test-utils":
-      return `const React = require('devtools/client/shared/vendor/react-dev'); module.exports = React.addons.TestUtils`;
+      return `const ReactDOM = require('devtools/client/shared/vendor/react-dom'); module.exports = ReactDOM.TestUtils`;
     case "react-redux":
       return `const ReactRedux = require('devtools/client/shared/vendor/react-redux'); module.exports = ReactRedux`;
     // Use react-dev. This would be handled by browserLoader in Firefox.
@@ -27,8 +31,6 @@ requireHacker.global_hook("default", path => {
   // Some modules depend on Chrome APIs which don't work in mocha. When such a module
   // is required, replace it with a mock version.
   switch (path) {
-    case "devtools/client/webconsole/utils":
-      return `module.exports = require("devtools/client/webconsole/new-console-output/test/fixtures/WebConsoleUtils")`;
     case "devtools/shared/l10n":
       return `module.exports = require("devtools/client/webconsole/new-console-output/test/fixtures/LocalizationHelper")`;
     case "devtools/shared/plural-form":
@@ -36,8 +38,10 @@ requireHacker.global_hook("default", path => {
     case "Services":
     case "Services.default":
       return `module.exports = require("devtools/client/webconsole/new-console-output/test/fixtures/Services")`;
-    case "devtools/shared/client/main":
-      return `module.exports = require("devtools/client/webconsole/new-console-output/test/fixtures/ObjectClient")`;
+    case "devtools/shared/client/object-client":
+      return `() => {}`;
+    case "devtools/client/netmonitor/src/components/TabboxPanel":
+      return "{}";
   }
   return undefined;
 });

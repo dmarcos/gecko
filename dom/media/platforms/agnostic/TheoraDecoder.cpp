@@ -10,11 +10,17 @@
 #include "gfx2DGlue.h"
 #include "mozilla/PodOperations.h"
 #include "nsError.h"
+#include "ImageContainer.h"
 
 #include <algorithm>
 
 #undef LOG
-#define LOG(arg, ...) MOZ_LOG(gMediaDecoderLog, mozilla::LogLevel::Debug, ("TheoraDecoder(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
+#define LOG(arg, ...)                                                          \
+  DDMOZ_LOG(gMediaDecoderLog,                                                  \
+            mozilla::LogLevel::Debug,                                          \
+            "::%s: " arg,                                                      \
+            __func__,                                                          \
+            ##__VA_ARGS__)
 
 namespace mozilla {
 
@@ -38,7 +44,8 @@ ogg_packet InitTheoraPacket(const unsigned char* aData, size_t aLength,
 }
 
 TheoraDecoder::TheoraDecoder(const CreateDecoderParams& aParams)
-  : mImageContainer(aParams.mImageContainer)
+  : mImageAllocator(aParams.mKnowsCompositor)
+  , mImageContainer(aParams.mImageContainer)
   , mTaskQueue(aParams.mTaskQueue)
   , mTheoraSetupInfo(nullptr)
   , mTheoraDecoderContext(nullptr)
@@ -80,23 +87,34 @@ TheoraDecoder::Init()
   if (!XiphExtradataToHeaders(headers, headerLens,
       mInfo.mCodecSpecificConfig->Elements(),
       mInfo.mCodecSpecificConfig->Length())) {
-    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
+    return InitPromise::CreateAndReject(
+      MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                  RESULT_DETAIL("Could not get theora header.")),
+      __func__);
   }
   for (size_t i = 0; i < headers.Length(); i++) {
     if (NS_FAILED(DoDecodeHeader(headers[i], headerLens[i]))) {
-      return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR,
-                                          __func__);
+      return InitPromise::CreateAndReject(
+        MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                    RESULT_DETAIL("Could not decode theora header.")),
+        __func__);
     }
   }
   if (mPacketCount != 3) {
-    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
+    return InitPromise::CreateAndReject(
+      MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                  RESULT_DETAIL("Packet count is wrong.")),
+      __func__);
   }
 
   mTheoraDecoderContext = th_decode_alloc(&mTheoraInfo, mTheoraSetupInfo);
   if (mTheoraDecoderContext) {
     return InitPromise::CreateAndResolve(TrackInfo::kVideoTrack, __func__);
   } else {
-    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
+    return InitPromise::CreateAndReject(
+      MediaResult(NS_ERROR_OUT_OF_MEMORY,
+                  RESULT_DETAIL("Could not allocate theora decoder.")),
+      __func__);
   }
 
 }
@@ -133,7 +151,8 @@ TheoraDecoder::ProcessDecode(MediaRawData* aSample)
 
   bool bos = mPacketCount == 0;
   ogg_packet pkt = InitTheoraPacket(
-    aData, aLength, bos, false, aSample->mTimecode, mPacketCount++);
+    aData, aLength, bos, false,
+    aSample->mTimecode.ToMicroseconds(), mPacketCount++);
 
   int ret = th_decode_packetin(mTheoraDecoderContext, &pkt, nullptr);
   if (ret == 0 || ret == TH_DUPFRAME) {
@@ -177,7 +196,8 @@ TheoraDecoder::ProcessDecode(MediaRawData* aSample)
                                    aSample->mKeyframe,
                                    aSample->mTimecode,
                                    mInfo.ScaledImageRect(mTheoraInfo.frame_width,
-                                                         mTheoraInfo.frame_height));
+                                                         mTheoraInfo.frame_height),
+                                   mImageAllocator);
     if (!v) {
       LOG(
         "Image allocation error source %ux%u display %ux%u picture %ux%u",

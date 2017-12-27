@@ -4,13 +4,16 @@
 
 <%namespace name="helpers" file="/helpers.mako.rs" />
 
-<%helpers:shorthand name="outline" sub_properties="outline-color outline-style outline-width"
+<%helpers:shorthand name="outline"
+                    sub_properties="outline-width outline-style outline-color"
+                    derive_serialize="True"
                     spec="https://drafts.csswg.org/css-ui/#propdef-outline">
     use properties::longhands::{outline_color, outline_width, outline_style};
     use values::specified;
     use parser::Parse;
 
-    pub fn parse_value(context: &ParserContext, input: &mut Parser) -> Result<Longhands, ()> {
+    pub fn parse_value<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
+                               -> Result<Longhands, ParseError<'i>> {
         let _unused = context;
         let mut color = None;
         let mut style = None;
@@ -18,7 +21,7 @@
         let mut any = false;
         loop {
             if color.is_none() {
-                if let Ok(value) = input.try(|i| specified::CSSColor::parse(context, i)) {
+                if let Ok(value) = input.try(|i| specified::Color::parse(context, i)) {
                     color = Some(value);
                     any = true;
                     continue
@@ -41,23 +44,13 @@
             break
         }
         if any {
-            Ok(Longhands {
+            Ok(expanded! {
                 outline_color: unwrap_or_initial!(outline_color, color),
                 outline_style: unwrap_or_initial!(outline_style, style),
                 outline_width: unwrap_or_initial!(outline_width, width),
             })
         } else {
-            Err(())
-        }
-    }
-
-    impl<'a> ToCss for LonghandsToSerialize<'a>  {
-        fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            try!(self.outline_width.to_css(dest));
-            try!(write!(dest, " "));
-            try!(self.outline_style.to_css(dest));
-            try!(write!(dest, " "));
-            self.outline_color.to_css(dest)
+            Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
         }
     }
 </%helpers:shorthand>
@@ -67,28 +60,36 @@
     '-moz-outline-radius-%s' % corner
     for corner in ['topleft', 'topright', 'bottomright', 'bottomleft']
 )}" products="gecko" spec="Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-outline-radius)">
-    use properties::shorthands;
-    use values::specified::basic_shape::serialize_radius_values;
+    use values::generics::rect::Rect;
+    use values::specified::border::BorderRadius;
+    use parser::Parse;
 
-    pub fn parse_value(context: &ParserContext, input: &mut Parser) -> Result<Longhands, ()> {
-        // Re-use border-radius parsing.
-        shorthands::border_radius::parse_value(context, input).map(|longhands| {
-            Longhands {
-                % for corner in ["top_left", "top_right", "bottom_right", "bottom_left"]:
-                _moz_outline_radius_${corner.replace("_", "")}: longhands.border_${corner}_radius,
-                % endfor
-            }
+    pub fn parse_value<'i, 't>(context: &ParserContext, input: &mut Parser<'i, 't>)
+                               -> Result<Longhands, ParseError<'i>> {
+        let radii = BorderRadius::parse(context, input)?;
+        Ok(expanded! {
+            _moz_outline_radius_topleft: radii.top_left,
+            _moz_outline_radius_topright: radii.top_right,
+            _moz_outline_radius_bottomright: radii.bottom_right,
+            _moz_outline_radius_bottomleft: radii.bottom_left,
         })
     }
 
     impl<'a> ToCss for LonghandsToSerialize<'a>  {
         fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
-            serialize_radius_values(dest,
-                &self._moz_outline_radius_topleft.0,
-                &self._moz_outline_radius_topright.0,
-                &self._moz_outline_radius_bottomright.0,
-                &self._moz_outline_radius_bottomleft.0,
-            )
+            use values::generics::border::BorderCornerRadius;
+
+            let LonghandsToSerialize {
+                _moz_outline_radius_topleft: &BorderCornerRadius(ref tl),
+                _moz_outline_radius_topright: &BorderCornerRadius(ref tr),
+                _moz_outline_radius_bottomright: &BorderCornerRadius(ref br),
+                _moz_outline_radius_bottomleft: &BorderCornerRadius(ref bl),
+            } = *self;
+
+            let widths = Rect::new(tl.width(), tr.width(), br.width(), bl.width());
+            let heights = Rect::new(tl.height(), tr.height(), br.height(), bl.height());
+
+            BorderRadius::serialize_rects(widths, heights, dest)
         }
     }
 </%helpers:shorthand>

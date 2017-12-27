@@ -9,11 +9,11 @@ this.EXPORTED_SYMBOLS = ["FinderIterator"];
 const { interfaces: Ci, classes: Cc, utils: Cu } = Components;
 
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "NLP", "resource://gre/modules/NLP.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Rect", "resource://gre/modules/Geometry.jsm");
 
 const kDebug = false;
 const kIterationSizeMax = 100;
@@ -36,7 +36,7 @@ this.FinderIterator = {
   running: false,
 
   // Expose `kIterationSizeMax` to the outside world for unit tests to use.
-  get kIterationSizeMax() { return kIterationSizeMax },
+  get kIterationSizeMax() { return kIterationSizeMax; },
 
   get params() {
     if (!this._currentParams && !this._previousParams)
@@ -354,7 +354,7 @@ this.FinderIterator = {
    *                                   to `true`.
    * @yield {nsIDOMRange}
    */
-  *_yieldResult(listener, rangeSource, window, withPause = true) {
+  async _yieldResult(listener, rangeSource, window, withPause = true) {
     // We keep track of the number of iterations to allow a short pause between
     // every `kIterationSizeMax` number of iterations.
     let iterCount = 0;
@@ -372,14 +372,14 @@ this.FinderIterator = {
       // Pass a flag that is `true` when we're returning the result from a
       // cached previous iteration.
       listener.onIteratorRangeFound(range, !this.running);
-      yield range;
+      await range;
 
       if (withPause && ++iterCount >= kIterationSizeMax) {
         iterCount = 0;
         // Make sure to save the current limit for later.
         this._listeners.set(listener, { limit, onEnd });
         // Sleep for the rest of this cycle.
-        yield new Promise(resolve => window.setTimeout(resolve, 0));
+        await new Promise(resolve => window.setTimeout(resolve, 0));
         // After a sleep, the set of ranges may have updated.
         ranges = rangeSource.slice(0, limit > -1 ? limit : undefined);
       }
@@ -406,15 +406,15 @@ this.FinderIterator = {
    *                                for access to `setTimeout`
    * @yield {nsIDOMRange}
    */
-  _yieldPreviousResult: Task.async(function* (listener, window) {
+  async _yieldPreviousResult(listener, window) {
     this._notifyListeners("start", this.params, [listener]);
     this._catchingUp.add(listener);
-    yield* this._yieldResult(listener, this._previousRanges, window);
+    await this._yieldResult(listener, this._previousRanges, window);
     this._catchingUp.delete(listener);
     let { onEnd } = this._listeners.get(listener);
     if (onEnd)
       onEnd();
-  }),
+  },
 
   /**
    * Internal; iterate over the set of already found ranges. Meanwhile it'll
@@ -426,12 +426,12 @@ this.FinderIterator = {
    *                                for access to `setTimeout`
    * @yield {nsIDOMRange}
    */
-  _yieldIntermediateResult: Task.async(function* (listener, window) {
+  async _yieldIntermediateResult(listener, window) {
     this._notifyListeners("start", this.params, [listener]);
     this._catchingUp.add(listener);
-    yield* this._yieldResult(listener, this.ranges, window, false);
+    await this._yieldResult(listener, this.ranges, window, false);
     this._catchingUp.delete(listener);
-  }),
+  },
 
   /**
    * Internal; see the documentation of the start() method above.
@@ -442,7 +442,7 @@ this.FinderIterator = {
    *                               it's supposed to still continue after a pause.
    * @yield {nsIDOMRange}
    */
-  _findAllRanges: Task.async(function* (finder, spawnId) {
+  async _findAllRanges(finder, spawnId) {
     if (this._timeout) {
       if (this._timer)
         clearTimeout(this._timer);
@@ -457,7 +457,7 @@ this.FinderIterator = {
         timeout *= 4;
       else if (searchTerm.length == 2)
         timeout *= 2;
-      yield new Promise(resolve => {
+      await new Promise(resolve => {
         this._runningFindResolver = resolve;
         this._timer = setTimeout(resolve, timeout);
       });
@@ -506,12 +506,12 @@ this.FinderIterator = {
           this._listeners.set(listener, { limit, onEnd });
         }
 
-        yield range;
+        await range;
 
         if (++iterCount >= kIterationSizeMax) {
           iterCount = 0;
           // Sleep for the rest of this cycle.
-          yield new Promise(resolve => window.setTimeout(resolve, 0));
+          await new Promise(resolve => window.setTimeout(resolve, 0));
         }
       }
     }
@@ -519,7 +519,7 @@ this.FinderIterator = {
     // When the iterating has finished, make sure we reset and save the state
     // properly.
     this.stop(true);
-  }),
+  },
 
   /**
    * Internal; basic wrapper around nsIFind that provides a generator yielding
@@ -533,7 +533,7 @@ this.FinderIterator = {
    * @param {nsIDOMWindow} window                The window to search in
    * @yield {nsIDOMRange}
    */
-  *_iterateDocument({ caseSensitive, entireWord, word }, window) {
+  * _iterateDocument({ caseSensitive, entireWord, word }, window) {
     let doc = window.document;
     let body = (doc instanceof Ci.nsIDOMHTMLDocument && doc.body) ?
                doc.body : doc.documentElement;
@@ -580,17 +580,13 @@ this.FinderIterator = {
 
     // Casting `window.frames` to an Iterator doesn't work, so we're stuck with
     // a plain, old for-loop.
+    let dwu = window.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils);
     for (let i = 0, l = window.frames.length; i < l; ++i) {
       let frame = window.frames[i];
-      // Don't count matches in hidden frames.
+      // Don't count matches in hidden frames; get the frame element rect and
+      // check if it's empty. We shan't flush!
       let frameEl = frame && frame.frameElement;
-      if (!frameEl)
-        continue;
-      // Construct a range around the frame element to check its visiblity.
-      let range = window.document.createRange();
-      range.setStart(frameEl, 0);
-      range.setEnd(frameEl, 0);
-      if (!finder._fastFind.isRangeVisible(range, this._getDocShell(range), true))
+      if (!frameEl || Rect.fromRect(dwu.getBoundsWithoutFlushing(frameEl)).isEmpty())
         continue;
       // All conditions pass, so push the current frame and its children on the
       // stack.

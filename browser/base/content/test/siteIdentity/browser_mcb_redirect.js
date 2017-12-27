@@ -57,9 +57,11 @@ const PREF_ACTIVE = "security.mixed_content.block_active_content";
 const PREF_DISPLAY = "security.mixed_content.block_display_content";
 const HTTPS_TEST_ROOT = getRootDirectory(gTestPath).replace("chrome://mochitests/content", "https://example.com");
 const HTTP_TEST_ROOT = getRootDirectory(gTestPath).replace("chrome://mochitests/content", "http://example.com");
+const PREF_INSECURE_ICON = "security.insecure_connection_icon.enabled";
 
 var origBlockActive;
 var origBlockDisplay;
+var origInsecurePref;
 var gTestBrowser = null;
 
 // ------------------------ Helper Functions ---------------------
@@ -68,6 +70,7 @@ registerCleanupFunction(function() {
   // Set preferences back to their original values
   Services.prefs.setBoolPref(PREF_ACTIVE, origBlockActive);
   Services.prefs.setBoolPref(PREF_DISPLAY, origBlockDisplay);
+  Services.prefs.setBoolPref(PREF_INSECURE_ICON, origInsecurePref);
 
   // Make sure we are online again
   Services.io.offline = false;
@@ -82,17 +85,27 @@ function cleanUpAfterTests() {
 // ------------------------ Test 1 ------------------------------
 
 function test1() {
+  Services.prefs.setBoolPref(PREF_INSECURE_ICON, false);
+
   var url = HTTPS_TEST_ROOT + "test_mcb_redirect.html";
   BrowserTestUtils.loadURI(gTestBrowser, url);
   BrowserTestUtils.browserLoaded(gTestBrowser).then(checkUIForTest1);
 }
 
-function checkUIForTest1() {
-  assertMixedContentBlockingState(gTestBrowser, {activeLoaded: false, activeBlocked: true, passiveLoaded: false});
+function testInsecure1() {
+  Services.prefs.setBoolPref(PREF_INSECURE_ICON, true);
 
-  ContentTask.spawn(gTestBrowser, null, function* () {
+  var url = HTTPS_TEST_ROOT + "test_mcb_redirect.html";
+  BrowserTestUtils.loadURI(gTestBrowser, url);
+  BrowserTestUtils.browserLoaded(gTestBrowser).then(checkUIForTest1);
+}
+
+async function checkUIForTest1() {
+  await assertMixedContentBlockingState(gTestBrowser, {activeLoaded: false, activeBlocked: true, passiveLoaded: false});
+
+  ContentTask.spawn(gTestBrowser, null, async function() {
     var expected = "script blocked";
-    yield ContentTaskUtils.waitForCondition(
+    await ContentTaskUtils.waitForCondition(
       () => content.document.getElementById("mctestdiv").innerHTML == expected,
       "OK: Expected result in innerHTML for Test1!");
   }).then(test2);
@@ -106,12 +119,12 @@ function test2() {
   BrowserTestUtils.browserLoaded(gTestBrowser).then(checkUIForTest2);
 }
 
-function checkUIForTest2() {
-  assertMixedContentBlockingState(gTestBrowser, {activeLoaded: false, activeBlocked: false, passiveLoaded: false});
+async function checkUIForTest2() {
+  await assertMixedContentBlockingState(gTestBrowser, {activeLoaded: false, activeBlocked: false, passiveLoaded: false});
 
-  ContentTask.spawn(gTestBrowser, null, function* () {
+  ContentTask.spawn(gTestBrowser, null, async function() {
     var expected = "script executed";
-    yield ContentTaskUtils.waitForCondition(
+    await ContentTaskUtils.waitForCondition(
       () => content.document.getElementById("mctestdiv").innerHTML == expected,
       "OK: Expected result in innerHTML for Test2!");
   }).then(test3);
@@ -127,9 +140,9 @@ function test3() {
 }
 
 function checkLoadEventForTest3() {
-  ContentTask.spawn(gTestBrowser, null, function* () {
-    var expected = "image blocked"
-    yield ContentTaskUtils.waitForCondition(
+  ContentTask.spawn(gTestBrowser, null, async function() {
+    var expected = "image blocked";
+    await ContentTaskUtils.waitForCondition(
       () => content.document.getElementById("mctestdiv").innerHTML == expected,
       "OK: Expected result in innerHTML for Test3!");
   }).then(test4);
@@ -145,9 +158,9 @@ function test4() {
 }
 
 function checkLoadEventForTest4() {
-  ContentTask.spawn(gTestBrowser, null, function* () {
-    var expected = "image loaded"
-    yield ContentTaskUtils.waitForCondition(
+  ContentTask.spawn(gTestBrowser, null, async function() {
+    var expected = "image loaded";
+    await ContentTaskUtils.waitForCondition(
       () => content.document.getElementById("mctestdiv").innerHTML == expected,
       "OK: Expected result in innerHTML for Test4!");
   }).then(test5);
@@ -168,9 +181,9 @@ function test5() {
 }
 
 function checkLoadEventForTest5() {
-  ContentTask.spawn(gTestBrowser, null, function* () {
-    var expected = "image loaded"
-    yield ContentTaskUtils.waitForCondition(
+  ContentTask.spawn(gTestBrowser, null, async function() {
+    var expected = "image loaded";
+    await ContentTaskUtils.waitForCondition(
       () => content.document.getElementById("mctestdiv").innerHTML == expected,
       "OK: Expected result in innerHTML for Test5!");
   }).then(() => {
@@ -195,9 +208,9 @@ function test6() {
 }
 
 function checkLoadEventForTest6() {
-  ContentTask.spawn(gTestBrowser, null, function* () {
-    var expected = "image blocked"
-    yield ContentTaskUtils.waitForCondition(
+  ContentTask.spawn(gTestBrowser, null, async function() {
+    var expected = "image blocked";
+    await ContentTaskUtils.waitForCondition(
       () => content.document.getElementById("mctestdiv").innerHTML == expected,
       "OK: Expected result in innerHTML for Test6!");
   }).then(() => {
@@ -216,9 +229,9 @@ function test7() {
 }
 
 function checkLoadEventForTest7() {
-  ContentTask.spawn(gTestBrowser, null, function* () {
-    var expected = "image loaded"
-    yield ContentTaskUtils.waitForCondition(
+  ContentTask.spawn(gTestBrowser, null, async function() {
+    var expected = "image loaded";
+    await ContentTaskUtils.waitForCondition(
       () => content.document.getElementById("mctestdiv").innerHTML == expected,
       "OK: Expected result in innerHTML for Test7!");
   }).then(test8);
@@ -238,9 +251,9 @@ function test8() {
 }
 
 function checkLoadEventForTest8() {
-  ContentTask.spawn(gTestBrowser, null, function* () {
-    var expected = "image loaded"
-    yield ContentTaskUtils.waitForCondition(
+  ContentTask.spawn(gTestBrowser, null, async function() {
+    var expected = "image loaded";
+    await ContentTaskUtils.waitForCondition(
       () => content.document.getElementById("mctestdiv").innerHTML == expected,
       "OK: Expected result in innerHTML for Test8!");
   }).then(() => {
@@ -264,9 +277,9 @@ function test9() {
 }
 
 function checkLoadEventForTest9() {
-  ContentTask.spawn(gTestBrowser, null, function* () {
-    var expected = "image blocked"
-    yield ContentTaskUtils.waitForCondition(
+  ContentTask.spawn(gTestBrowser, null, async function() {
+    var expected = "image blocked";
+    await ContentTaskUtils.waitForCondition(
       () => content.document.getElementById("mctestdiv").innerHTML == expected,
       "OK: Expected result in innerHTML for Test9!");
   }).then(() => {
@@ -285,10 +298,11 @@ function test() {
   // Store original preferences so we can restore settings after testing
   origBlockActive = Services.prefs.getBoolPref(PREF_ACTIVE);
   origBlockDisplay = Services.prefs.getBoolPref(PREF_DISPLAY);
+  origInsecurePref = Services.prefs.getBoolPref(PREF_INSECURE_ICON);
   Services.prefs.setBoolPref(PREF_ACTIVE, true);
   Services.prefs.setBoolPref(PREF_DISPLAY, true);
 
-  var newTab = gBrowser.addTab();
+  var newTab = BrowserTestUtils.addTab(gBrowser);
   gBrowser.selectedTab = newTab;
   gTestBrowser = gBrowser.selectedBrowser;
   newTab.linkedBrowser.stop();

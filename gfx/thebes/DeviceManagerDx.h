@@ -35,6 +35,10 @@ struct IDirectDraw7;
 
 namespace mozilla {
 class ScopedGfxFeatureReporter;
+namespace layers {
+class DeviceAttachmentsD3D11;
+class MLGDevice;
+} // namespace layers
 
 namespace gfx {
 class FeatureState;
@@ -53,12 +57,15 @@ public:
 
   RefPtr<ID3D11Device> GetCompositorDevice();
   RefPtr<ID3D11Device> GetContentDevice();
+  RefPtr<ID3D11Device> GetVRDevice();
   RefPtr<ID3D11Device> CreateDecoderDevice();
+  RefPtr<layers::MLGDevice> GetMLGDevice();
   IDirectDraw7* GetDirectDraw();
 
   unsigned GetCompositorFeatureLevel() const;
   bool TextureSharingWorks();
   bool IsWARP();
+  bool CanUseNV12();
 
   // Returns true if we can create a texture with
   // D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX and also
@@ -67,8 +74,15 @@ public:
   // need to avoid it.
   bool CanInitializeKeyedMutexTextures();
 
+  // Intel devices on older windows versions seem to occasionally have
+  // stability issues when supplying InitData to CreateTexture2D.
+  bool HasCrashyInitData();
+
   bool CreateCompositorDevices();
   void CreateContentDevices();
+
+  void GetCompositorDevices(RefPtr<ID3D11Device>* aOutDevice,
+                            RefPtr<layers::DeviceAttachmentsD3D11>* aOutAttachments);
 
   void ImportDeviceInfo(const D3D11DeviceStatus& aDeviceStatus);
   void ExportDeviceInfo(D3D11DeviceStatus* aOut);
@@ -91,9 +105,12 @@ public:
   // Note: these set the cached device reset reason, which will be picked up
   // on the next frame.
   void ForceDeviceReset(ForcedDeviceResetReason aReason);
-  void NotifyD3D9DeviceReset();
 
 private:
+  // Pre-load any compositor resources that are expensive, and are needed when we
+  // attempt to create a compositor.
+  static void PreloadAttachmentsOnCompositorThread();
+
   IDXGIAdapter1 *GetDXGIAdapter();
 
   void DisableD3D11AfterCrash();
@@ -106,6 +123,8 @@ private:
       RefPtr<ID3D11Device>& aOutDevice);
 
   void CreateWARPCompositorDevice();
+  void CreateMLGDevice();
+  bool CreateVRDevice();
 
   mozilla::gfx::FeatureStatus CreateContentDevice();
 
@@ -137,7 +156,10 @@ private:
   RefPtr<IDXGIAdapter1> mAdapter;
   RefPtr<ID3D11Device> mCompositorDevice;
   RefPtr<ID3D11Device> mContentDevice;
+  RefPtr<ID3D11Device> mVRDevice;
   RefPtr<ID3D11Device> mDecoderDevice;
+  RefPtr<layers::DeviceAttachmentsD3D11> mCompositorAttachments;
+  RefPtr<layers::MLGDevice> mMLGDevice;
   bool mCompositorDeviceSupportsVideo;
 
   Maybe<D3D11DeviceStatus> mDeviceStatus;

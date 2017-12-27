@@ -18,6 +18,7 @@
 #include "js/Vector.h"
 #include "threading/ProtectedData.h"
 #include "vm/ErrorReporting.h"
+#include "vm/MallocProvider.h"
 #include "vm/Runtime.h"
 
 #ifdef _MSC_VER
@@ -33,7 +34,7 @@ class AutoCompartment;
 
 namespace jit {
 class JitContext;
-class DebugModeOSRVolatileJitFrameIterator;
+class DebugModeOSRVolatileJitFrameIter;
 } // namespace jit
 
 typedef HashSet<Shape*> ShapeSet;
@@ -67,6 +68,10 @@ class MOZ_RAII AutoCycleDetector
 struct AutoResolving;
 
 struct HelperThread;
+
+using JobQueue = GCVector<JSObject*, 0, SystemAllocPolicy>;
+
+class AutoLockForExclusiveAccess;
 
 void ReportOverRecursed(JSContext* cx, unsigned errorNumber);
 
@@ -138,10 +143,7 @@ struct JSContext : public JS::RootingContext,
     /* Clear the pending exception (if any) due to OOM. */
     void recoverFromOutOfMemory();
 
-    inline void updateMallocCounter(size_t nbytes) {
-        // Note: this is racy.
-        runtime()->updateMallocCounter(zone(), nbytes);
-    }
+    void updateMallocCounter(size_t nbytes);
 
     void reportAllocationOverflow() {
         js::ReportAllocationOverflow(this);
@@ -201,10 +203,14 @@ struct JSContext : public JS::RootingContext,
 #endif
 
   private:
-    // If |c| or |oldCompartment| is the atoms compartment, the
-    // |exclusiveAccessLock| must be held.
-    inline void enterCompartment(JSCompartment* c,
-                                 const js::AutoLockForExclusiveAccess* maybeLock = nullptr);
+    // We distinguish between entering the atoms compartment and all other
+    // compartments. Entering the atoms compartment requires a lock. Also, we
+    // don't call enterZoneGroup when entering the atoms compartment since that
+    // can induce GC hazards.
+    inline void enterNonAtomsCompartment(JSCompartment* c);
+    inline void enterAtomsCompartment(JSCompartment* c,
+                                      const js::AutoLockForExclusiveAccess& lock);
+
     friend class js::AutoCompartment;
 
   public:
@@ -285,27 +291,35 @@ struct JSContext : public JS::RootingContext,
     void addPendingOutOfMemory();
 
     JSRuntime* runtime() { return runtime_; }
+    const JSRuntime* runtime() const { return runtime_; }
 
-    static size_t offsetOfActivation() {
-        return offsetof(JSContext, activation_);
-    }
-    static size_t offsetOfWasmActivation() {
-        return offsetof(JSContext, wasmActivationStack_);
-    }
-    static size_t offsetOfProfilingActivation() {
-        return offsetof(JSContext, profilingActivation_);
-     }
     static size_t offsetOfCompartment() {
         return offsetof(JSContext, compartment_);
     }
 
     friend class JS::AutoSaveExceptionState;
-    friend class js::jit::DebugModeOSRVolatileJitFrameIterator;
+    friend class js::jit::DebugModeOSRVolatileJitFrameIter;
     friend void js::ReportOverRecursed(JSContext*, unsigned errorNumber);
+
+    // Returns to the embedding to allow other cooperative threads to run. We
+    // may do this if we need access to a ZoneGroup that is in use by another
+    // thread.
+    void yieldToEmbedding() {
+        (*yieldCallback_)(this);
+    }
+
+    void setYieldCallback(js::YieldCallback callback) {
+        yieldCallback_ = callback;
+    }
 
   private:
     static JS::Error reportedError;
     static JS::OOM reportedOOM;
+
+    // This callback is used to ask the embedding to allow other cooperative
+    // threads to run. We may do this if we need access to a ZoneGroup that is
+    // in use by another thread.
+    js::ThreadLocalData<js::YieldCallback> yieldCallback_;
 
   public:
     inline JS::Result<> boolToResult(bool ok);
@@ -349,25 +363,29 @@ struct JSContext : public JS::RootingContext,
     js::Activation* volatile profilingActivation_;
 
   public:
-    /* See WasmActivation comment. */
-    js::WasmActivation* volatile wasmActivationStack_;
-
-    js::WasmActivation* wasmActivationStack() const {
-        return wasmActivationStack_;
-    }
-    static js::WasmActivation* innermostWasmActivation() {
-        return js::TlsContext.get()->wasmActivationStack_;
-    }
-
     js::Activation* activation() const {
         return activation_;
     }
+    static size_t offsetOfActivation() {
+        return offsetof(JSContext, activation_);
+    }
+
     js::Activation* profilingActivation() const {
         return profilingActivation_;
     }
-    void* addressOfProfilingActivation() {
-        return (void*) &profilingActivation_;
+    static size_t offsetOfProfilingActivation() {
+        return offsetof(JSContext, profilingActivation_);
     }
+
+    static size_t offsetOfJitActivation() {
+        return offsetof(JSContext, jitActivation);
+    }
+
+#ifdef DEBUG
+    static size_t offsetOfInUnsafeCallWithABI() {
+        return offsetof(JSContext, inUnsafeCallWithABI);
+    }
+#endif
 
   private:
     /* Space for interpreter frames. */
@@ -397,9 +415,6 @@ struct JSContext : public JS::RootingContext,
      */
     js::ThreadLocalData<js::EnterDebuggeeNoExecute*> noExecuteDebuggerTop;
 
-    // Set when handling a segfault in the wasm signal handler.
-    bool handlingSegFault;
-
     js::ThreadLocalData<js::ActivityCallback> activityCallback;
     js::ThreadLocalData<void*>                activityCallbackArg;
     void triggerActivityCallback(bool active);
@@ -409,6 +424,8 @@ struct JSContext : public JS::RootingContext,
 
 #ifdef DEBUG
     js::ThreadLocalData<unsigned> checkRequestDepth;
+    js::ThreadLocalData<uint32_t> inUnsafeCallWithABI;
+    js::ThreadLocalData<bool> hasAutoUnsafeCallWithABI;
 #endif
 
 #ifdef JS_SIMULATOR
@@ -446,10 +463,6 @@ struct JSContext : public JS::RootingContext,
      * in non-exposed debugging facilities.
      */
     js::ThreadLocalData<int32_t> suppressGC;
-
-    // In some cases, invoking GC barriers (incremental or otherwise) will break
-    // things. These barriers assert if this flag is set.
-    js::ThreadLocalData<bool> allowGCBarriers;
 
 #ifdef DEBUG
     // Whether this thread is actively Ion compiling.
@@ -544,6 +557,10 @@ struct JSContext : public JS::RootingContext,
     // exclusive threads are running.
     js::ThreadLocalData<unsigned> keepAtoms;
 
+    bool canCollectAtoms() const {
+        return !keepAtoms && !runtime()->hasHelperThreadZones();
+    }
+
   private:
     // Pools used for recycling name maps and vectors when parsing and
     // emitting bytecode. Purged on GC when there are no active script
@@ -575,6 +592,12 @@ struct JSContext : public JS::RootingContext,
         suppressProfilerSampling = false;
     }
 
+  private:
+    /* Gecko profiling metadata */
+    js::UnprotectedData<js::GeckoProfilerThread> geckoProfiler_;
+  public:
+    js::GeckoProfilerThread& geckoProfiler() { return geckoProfiler_.ref(); }
+
 #if defined(XP_DARWIN)
     js::wasm::MachExceptionHandler wasmMachExceptionHandler;
 #endif
@@ -588,13 +611,6 @@ struct JSContext : public JS::RootingContext,
     const js::LifoAlloc& tempLifoAlloc() const { return tempLifoAlloc_.ref(); }
 
     js::ThreadLocalData<uint32_t> debuggerMutations;
-
-    /*
-     * The propertyRemovals counter is incremented for every JSObject::clear,
-     * and for each JSObject::remove method call that frees a slot in the given
-     * object. See js_NativeGet and js_NativeSet in jsobj.cpp.
-     */
-    js::ThreadLocalData<uint32_t> propertyRemovals;
 
     // Cache for jit::GetPcScript().
     js::ThreadLocalData<js::jit::PcScriptCache*> ionPcScriptCache;
@@ -620,7 +636,8 @@ struct JSContext : public JS::RootingContext,
 
     // A stack of live iterators that need to be updated in case of debug mode
     // OSR.
-    js::ThreadLocalData<js::jit::DebugModeOSRVolatileJitFrameIterator*> liveVolatileJitFrameIterators_;
+    js::ThreadLocalData<js::jit::DebugModeOSRVolatileJitFrameIter*>
+        liveVolatileJitFrameIter_;
 
   public:
     js::ThreadLocalData<int32_t> reportGranularity;  /* see vm/Probes.h */
@@ -653,16 +670,6 @@ struct JSContext : public JS::RootingContext,
     void resetJitStackLimit();
 
   public:
-    /*
-     * Return:
-     * - The newest scripted frame's version, if there is such a frame.
-     * - The version from the compartment.
-     * - The default version.
-     *
-     * Note: if this ever shows up in a profile, just add caching!
-     */
-    JSVersion findVersion();
-
     JS::ContextOptions& options() {
         return options_.ref();
     }
@@ -794,6 +801,7 @@ struct JSContext : public JS::RootingContext,
     js::ThreadLocalData<bool> interruptCallbackDisabled;
 
     mozilla::Atomic<uint32_t, mozilla::Relaxed> interrupt_;
+    mozilla::Atomic<uint32_t, mozilla::Relaxed> interruptRegExpJit_;
 
     enum InterruptMode {
         RequestInterruptUrgent,
@@ -884,16 +892,31 @@ struct JSContext : public JS::RootingContext,
         ionReturnOverride_ = v;
     }
 
-    /*
-     * If Baseline or Ion code is on the stack, and has called into C++, this
-     * will be aligned to an exit frame.
-     */
-    js::ThreadLocalData<uint8_t*> jitTop;
-
     mozilla::Atomic<uintptr_t, mozilla::Relaxed> jitStackLimit;
 
     // Like jitStackLimit, but not reset to trigger interrupts.
     js::ThreadLocalData<uintptr_t> jitStackLimitNoInterrupt;
+
+    // Promise callbacks.
+    js::ThreadLocalData<JSGetIncumbentGlobalCallback> getIncumbentGlobalCallback;
+    js::ThreadLocalData<JSEnqueuePromiseJobCallback> enqueuePromiseJobCallback;
+    js::ThreadLocalData<void*> enqueuePromiseJobCallbackData;
+
+    // Queue of pending jobs as described in ES2016 section 8.4.
+    // Only used if internal job queue handling was activated using
+    // `js::UseInternalJobQueues`.
+    js::ThreadLocalData<JS::PersistentRooted<js::JobQueue>*> jobQueue;
+    js::ThreadLocalData<bool> drainingJobQueue;
+    js::ThreadLocalData<bool> stopDrainingJobQueue;
+
+    js::ThreadLocalData<JSPromiseRejectionTrackerCallback> promiseRejectionTrackerCallback;
+    js::ThreadLocalData<void*> promiseRejectionTrackerCallbackData;
+
+    JSObject* getIncumbentGlobal(JSContext* cx);
+    bool enqueuePromiseJob(JSContext* cx, js::HandleFunction job, js::HandleObject promise,
+                           js::HandleObject incumbentGlobal);
+    void addUnhandledRejectedPromise(JSContext* cx, js::HandleObject promise);
+    void removeUnhandledRejectedPromise(JSContext* cx, js::HandleObject promise);
 }; /* struct JSContext */
 
 inline JS::Result<>
@@ -990,7 +1013,7 @@ SelfHostedFunction(JSContext* cx, HandlePropertyName propName);
 #ifdef va_start
 extern bool
 ReportErrorVA(JSContext* cx, unsigned flags, const char* format,
-              ErrorArgumentsType argumentsType, va_list ap);
+              ErrorArgumentsType argumentsType, va_list ap) MOZ_FORMAT_PRINTF(3, 0);
 
 extern bool
 ReportErrorNumberVA(JSContext* cx, unsigned flags, JSErrorCallback callback,
@@ -1156,9 +1179,6 @@ class AutoAssertNoException
     }
 };
 
-/* Exposed intrinsics for the JITs. */
-bool intrinsic_IsSuspendedStarGenerator(JSContext* cx, unsigned argc, Value* vp);
-
 class MOZ_RAII AutoLockForExclusiveAccess
 {
     JSRuntime* runtime;
@@ -1217,8 +1237,8 @@ class MOZ_RAII AutoKeepAtoms
 
         JSRuntime* rt = cx->runtime();
         if (!cx->helperThread()) {
-            if (rt->gc.fullGCForAtomsRequested() && !cx->keepAtoms)
-                rt->gc.triggerFullGCForAtoms();
+            if (rt->gc.fullGCForAtomsRequested() && cx->canCollectAtoms())
+                rt->gc.triggerFullGCForAtoms(cx);
         }
     }
 };
@@ -1251,6 +1271,23 @@ class MOZ_RAII AutoEnterIonCompilation
     }
 
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
+};
+
+// Should be used in functions called directly from JIT code (with
+// masm.callWithABI) to assert invariants in debug builds.
+class MOZ_RAII AutoUnsafeCallWithABI
+{
+#ifdef DEBUG
+    JSContext* cx_;
+    bool nested_;
+#endif
+    JS::AutoCheckCannotGC nogc;
+
+  public:
+#ifdef DEBUG
+    AutoUnsafeCallWithABI();
+    ~AutoUnsafeCallWithABI();
+#endif
 };
 
 namespace gc {

@@ -32,15 +32,11 @@ public:
                            gfxImageFormat aFormat) override;
     
     virtual gfxImageFormat GetOffscreenFormat() override { return mOffscreenFormat; }
-    
-    already_AddRefed<mozilla::gfx::ScaledFont>
-      GetScaledFontForFont(mozilla::gfx::DrawTarget* aTarget, gfxFont *aFont) override;
 
     // to support IPC font list (sharing between chrome and content)
     void GetSystemFontList(InfallibleTArray<FontListEntry>* retValue);
 
     // platform implementations of font functions
-    virtual bool IsFontFormatSupported(nsIURI *aFontURI, uint32_t aFormatFlags) override;
     virtual gfxPlatformFontList* CreatePlatformFontList() override;
 
     virtual void GetCommonFallbackFonts(uint32_t aCh, uint32_t aNextCh,
@@ -58,10 +54,6 @@ public:
     virtual bool RequiresLinearZoom() override;
 
     FT_Library GetFTLibrary() override;
-
-    virtual bool CanRenderContentToDataSurface() const override {
-      return true;
-    }
 
     virtual already_AddRefed<mozilla::gfx::VsyncSource> CreateHardwareVsyncSource() override;
 

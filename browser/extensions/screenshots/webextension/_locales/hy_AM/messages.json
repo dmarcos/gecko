@@ -3,10 +3,10 @@
     "message": "Ստացեք հոլովակներ և էկրանի հանույթներ վեբից և պահպանեք դանք ժամանակավոր կամ մշտապես:"
   },
   "addonAuthorsList": {
-    "message": "Mozilla <screenshots-feedback@mozilla.org>"
+    "message": "Mozilla <screenshots-feedback@mozilla.com>"
   },
   "contextMenuLabel": {
-    "message": "Ստանալ էկրանի պատկերը"
+    "message": "Ստանալ էկրանի հանույթը"
   },
   "myShotsLink": {
     "message": "Իմ պատկերները"
@@ -56,40 +56,55 @@
     "message": "Մենք չենք կարող պահպանել ձեր պատկերը, քանի որ խնդիր կա Firefox Screenshots ծառայության հետ: Փորձեք ավելի ուշ:"
   },
   "unshootablePageErrorTitle": {
-    "message": "Հնարավոր չէ ստանալ էկրանի պատկերը:"
+    "message": "Հնարավոր չէ ստանալ էկրանի հանույթը:"
   },
   "unshootablePageErrorDetails": {
-    "message": "Սա ստանդարտ վեբ էջ չէ, ուստի դուք չեք կարող ստանալ դրա պատկերը:"
+    "message": "Սա ստանդարտ վեբ էջ չէ, ուստի դուք չեք կարող ստանալ դրա հանույթը:"
   },
   "selfScreenshotErrorTitle": {
-    "message": "Դուք չեք կարող ստանալ Firefox Screenshots-ի էջի պատկերը:"
+    "message": "Դուք չեք կարող ստանալ Firefox Screenshots-ի էջի հանույթը:"
+  },
+  "emptySelectionErrorTitle": {
+    "message": "Ընտրվածը քիչ է"
+  },
+  "privateWindowErrorTitle": {
+    "message": "Էկրանի հանույթը անջատած է Գաղտնի Դիտարկման կերպում:"
+  },
+  "privateWindowErrorDetails": {
+    "message": "Ներողություն անհարմարության համար: Մենք աշխատում ենք այս յուրահատկության վրա:"
   },
   "genericErrorTitle": {
     "message": "Firefox Screenshots-ը գնաց գլխիվայր:"
   },
   "genericErrorDetails": {
-    "message": "Մենք վստահ չենք, թե ինչ է տեղի ունեցնել: Կրկին փորձեք կամ փորձեք ստանալ մեկ այլ էջի պատկերը:"
+    "message": "Մենք վստահ չենք, թե ինչ է տեղի ունեցնել: Կրկին փորձեք կամ փորձեք ստանալ մեկ այլ էջի հանույթ:"
   },
-  "tourBodyOne": {
-    "message": "Ստացեք, պահպանեք և համօգտագործեք էկրանի հանույթները՝ առանց Firefox-ը լքելու: "
+  "tourBodyIntro": {
+    "message": "Ստացեք, պահպանեք և համօգտագործեք էկրանի հանույթները՝ առանց Firefox-ը լքելու:"
   },
-  "tourHeaderTwo": {
+  "tourHeaderPageAction": {
+    "message": "Պահպանելու նոր ճանապարհ"
+  },
+  "tourBodyPageAction": {
+    "message": "Ընդարձակել էջի գործույթների ցանկը հասցեի գոտիում՝ ցանկացած ժամանակ էկրանի հանույթը ստանալու համար:"
+  },
+  "tourHeaderClickAndDrag": {
     "message": "Ստացեք միայն այն, ինչ Ձեզ պետք է:"
   },
-  "tourBodyTwo": {
+  "tourBodyClickAndDrag": {
     "message": "Սեղմեք և քաշեք՝ ստանալու համար միայն էջի մի մասը: Նաև կարող եք վրայով անցկացնել՝ գունանշելու համար ընտրումը:"
   },
-  "tourHeaderThree": {
-    "message": "Ինչպես որ հավանում եք այն"
-  },
-  "tourBodyThree": {
-    "message": "Պահպանեք ձեր եզրատած որոշ պատկերներ վեբում՝ դրանք հեշտությամբ համօգտագործելու կամ ներբեռնելու համար ձեր համակարգչում: Նաև կարող եք սեղմել Իմ պատկերները՝ գտնելու ձեր բոլոր ֆայլերը:"
-  },
-  "tourHeaderFour": {
+  "tourHeaderFullPage": {
     "message": "Ստանալ պատուհանը կամ ամբողջ էջեր"
   },
-  "tourBodyFour": {
+  "tourBodyFullPage": {
     "message": "Ընտրեք կոճակները վերևի աջ մասում՝ տեսանելի հատվածը ստանալու համար պատուհանում կամ ամբողջ էջը ստանալու համար:"
+  },
+  "tourHeaderDownloadUpload": {
+    "message": "Ինչպես որ հավանում եք այն"
+  },
+  "tourBodyDownloadUpload": {
+    "message": "Պահպանեք ձեր եզրատած որոշ պատկերներ վեբում՝ դրանք հեշտությամբ համօգտագործելու կամ ներբեռնելու համար ձեր համակարգչում: Նաև կարող եք սեղմել Իմ պատկերները՝ գտնելու ձեր բոլոր ֆայլերը:"
   },
   "tourSkip": {
     "message": "Բաց թողնել"
@@ -102,5 +117,25 @@
   },
   "tourDone": {
     "message": "Պատրաստ է"
+  },
+  "termsAndPrivacyNotice2": {
+    "message": "Firefox Screenshots-ը օգտագործելով՝ դուք ընդունեւմ եք $TERMSANDPRIVACYNOTICETERMSLINK$ը և $TERMSANDPRIVACYNOTICEPRIVACYLINK$ը:",
+    "placeholders": {
+      "termsandprivacynoticetermslink": {
+        "content": "$1"
+      },
+      "termsandprivacynoticeprivacylink": {
+        "content": "$2"
+      }
+    }
+  },
+  "termsAndPrivacyNoticeTermsLink": {
+    "message": "Պայմաններ"
+  },
+  "termsAndPrivacyNoticyPrivacyLink": {
+    "message": "Գաղտնիության ծանուցում"
+  },
+  "libraryLabel": {
+    "message": "Էկրանի հանույթներ"
   }
 }

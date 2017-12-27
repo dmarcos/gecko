@@ -2,8 +2,6 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
-Cu.import("resource://testing-common/MockRegistrar.jsm");
-
 const WindowWatcher = {
   openWindow(aParent, aUrl, aName, aFeatures, aArgs) {
     check_showUpdateAvailable();
@@ -38,7 +36,7 @@ function run_test() {
   let windowMediatorCID =
     MockRegistrar.register("@mozilla.org/appshell/window-mediator;1",
                            WindowMediator);
-  do_register_cleanup(() => {
+  registerCleanupFunction(() => {
     MockRegistrar.unregister(windowWatcherCID);
     MockRegistrar.unregister(windowMediatorCID);
   });
@@ -55,12 +53,12 @@ function run_test() {
                                             "detailsURL=\"" + URL_HOST +
                                             "\"></update>\n");
   gAUS.notify(null);
-  do_execute_soon(check_test);
+  executeSoon(check_test);
 }
 
 function check_test() {
   if (Services.prefs.prefHasUserValue(PREF_APP_UPDATE_BACKGROUNDERRORS)) {
-    do_execute_soon(check_test);
+    executeSoon(check_test);
     return;
   }
   Assert.ok(true,

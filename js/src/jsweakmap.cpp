@@ -14,7 +14,6 @@
 #include "jsobj.h"
 #include "jswrapper.h"
 
-#include "js/GCAPI.h"
 #include "vm/GlobalObject.h"
 
 #include "jsobjinlines.h"
@@ -32,7 +31,7 @@ WeakMapBase::WeakMapBase(JSObject* memOf, Zone* zone)
 
 WeakMapBase::~WeakMapBase()
 {
-    MOZ_ASSERT(CurrentThreadIsGCSweeping());
+    MOZ_ASSERT(CurrentThreadIsGCSweeping() || CurrentThreadCanAccessZone(zone_));
 }
 
 void
@@ -97,7 +96,7 @@ WeakMapBase::sweepZone(JS::Zone* zone)
 void
 WeakMapBase::traceAllMappings(WeakMapTracer* tracer)
 {
-    JSRuntime* rt = tracer->context->runtime();
+    JSRuntime* rt = tracer->runtime;
     for (ZonesIter zone(rt, SkipAtoms); !zone.done(); zone.next()) {
         for (WeakMapBase* m : zone->gcWeakMapList()) {
             // The WeakMapTracer callback is not allowed to GC.
@@ -139,7 +138,7 @@ ObjectValueMap::findZoneEdges()
     JS::AutoSuppressGCAnalysis nogc;
     for (Range r = all(); !r.empty(); r.popFront()) {
         JSObject* key = r.front().key();
-        if (key->asTenured().isMarked(BLACK) && !key->asTenured().isMarked(GRAY))
+        if (key->asTenured().isMarkedBlack())
             continue;
         JSObject* delegate = getDelegate(key);
         if (!delegate)
@@ -197,7 +196,6 @@ ObjectWeakMap::clear()
 void
 ObjectWeakMap::trace(JSTracer* trc)
 {
-    MOZ_ASSERT(map.initialized());
     map.trace(trc);
 }
 

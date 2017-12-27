@@ -12,10 +12,12 @@ const Cc = Components.classes;
 const Ci = Components.interfaces;
 const Cu = Components.utils;
 
+Cu.import("resource://gre/modules/Services.jsm");
+
 this.InlineSpellChecker = function InlineSpellChecker(aEditor) {
   this.init(aEditor);
   this.mAddedWordStack = []; // We init this here to preserve it between init/uninit calls
-}
+};
 
 InlineSpellChecker.prototype = {
   // Call this function to initialize for a given editor
@@ -133,7 +135,7 @@ InlineSpellChecker.prototype = {
     var spellchecker = this.mRemote || this.mInlineSpellChecker.spellChecker;
     try {
       if (!this.mRemote && !spellchecker.CheckCurrentWord(this.mMisspelling))
-        return 0;  // word seems not misspelled after all (?)
+        return 0; // word seems not misspelled after all (?)
     } catch (e) {
         return 0;
     }
@@ -153,7 +155,7 @@ InlineSpellChecker.prototype = {
       item.setAttribute("value", suggestion);
       // this function thing is necessary to generate a callback with the
       // correct binding of "val" (the index in this loop).
-      var callback = function(me, val) { return function(evt) { me.replaceMisspelling(val); } };
+      var callback = function(me, val) { return function(evt) { me.replaceMisspelling(val); }; };
       item.addEventListener("command", callback(this, i), true);
       item.setAttribute("class", "spell-suggestion");
       menu.insertBefore(item, insertBefore);
@@ -233,7 +235,7 @@ InlineSpellChecker.prototype = {
             var spellcheckChangeEvent = new view.CustomEvent(
                   "spellcheck-changed", {detail: { dictionary: dictName}});
             menu.ownerDocument.dispatchEvent(spellcheckChangeEvent);
-          }
+          };
         };
         item.addEventListener("command", callback(this, i, sortedList[i].id), true);
       }
@@ -258,11 +260,9 @@ InlineSpellChecker.prototype = {
 
     if (!gLanguageBundle) {
       // Create the bundles for language and region names.
-      var bundleService = Components.classes["@mozilla.org/intl/stringbundle;1"]
-                                    .getService(Components.interfaces.nsIStringBundleService);
-      gLanguageBundle = bundleService.createBundle(
+      gLanguageBundle = Services.strings.createBundle(
           "chrome://global/locale/languageNames.properties");
-      gRegionBundle = bundleService.createBundle(
+      gRegionBundle = Services.strings.createBundle(
           "chrome://global/locale/regionNames.properties");
     }
 
@@ -508,7 +508,7 @@ RemoteSpellChecker.prototype = {
 
   GetSuggestedWord() {
     if (!this._suggestionGenerator) {
-      this._suggestionGenerator = (function*(spellInfo) {
+      this._suggestionGenerator = (function* (spellInfo) {
         for (let i of spellInfo.spellSuggestions)
           yield i;
       })(this._spellInfo);
@@ -522,7 +522,7 @@ RemoteSpellChecker.prototype = {
     return next.value;
   },
 
-  get currentDictionary() { return this._spellInfo.currentDictionary },
+  get currentDictionary() { return this._spellInfo.currentDictionary; },
   get dictionaryList() { return this._spellInfo.dictionaryList.slice(); },
 
   selectDictionary(index) {

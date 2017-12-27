@@ -8,10 +8,10 @@
 
 #include "mozilla/Attributes.h"
 #include "nsGenericHTMLElement.h"
-#include "nsIDOMHTMLSelectElement.h"
 #include "nsIConstraintValidation.h"
 
 #include "mozilla/dom/BindingDeclarations.h"
+#include "mozilla/dom/UnionTypes.h"
 #include "mozilla/dom/HTMLOptionsCollection.h"
 #include "mozilla/ErrorResult.h"
 #include "nsCheapSets.h"
@@ -120,7 +120,6 @@ private:
  * Implementation of &lt;select&gt;
  */
 class HTMLSelectElement final : public nsGenericHTMLFormElementWithState,
-                                public nsIDOMHTMLSelectElement,
                                 public nsIConstraintValidation
 {
 public:
@@ -134,12 +133,16 @@ public:
    *                (for JavaScript)
    *
    *  NOTIFY        whether to notify frames and such
+   *
+   *  NO_RESELECT   no need to select something after an option is deselected
+   *                (for reset)
    */
   enum OptionType {
     IS_SELECTED   = 1 << 0,
     CLEAR_ALL     = 1 << 1,
     SET_DISABLED  = 1 << 2,
-    NOTIFY        = 1 << 3
+    NOTIFY        = 1 << 3,
+    NO_RESELECT   = 1 << 4
   };
 
   using nsIConstraintValidation::GetValidationMessage;
@@ -159,9 +162,6 @@ public:
   {
     return true;
   }
-
-  // nsIDOMHTMLSelectElement
-  NS_DECL_NSIDOMHTMLSELECTELEMENT
 
   // WebIdl HTMLSelectElement
   bool Autofocus() const
@@ -200,14 +200,18 @@ public:
   {
     SetHTMLBoolAttr(nsGkAtoms::multiple, aVal, aRv);
   }
-  // Uses XPCOM GetName.
+
+  void GetName(DOMString& aValue)
+  {
+    GetHTMLAttr(nsGkAtoms::name, aValue);
+  }
   void SetName(const nsAString& aName, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::name, aName, aRv);
   }
   bool Required() const
   {
-    return GetBoolAttr(nsGkAtoms::required);
+    return State().HasState(NS_EVENT_STATE_REQUIRED);
   }
   void SetRequired(bool aVal, ErrorResult& aRv)
   {
@@ -222,7 +226,7 @@ public:
     SetUnsignedIntAttr(nsGkAtoms::size, aSize, 0, aRv);
   }
 
-  // Uses XPCOM GetType.
+  void GetType(nsAString& aValue);
 
   HTMLOptionsCollection* Options() const
   {
@@ -248,14 +252,14 @@ public:
   void Add(const HTMLOptionElementOrHTMLOptGroupElement& aElement,
            const Nullable<HTMLElementOrLong>& aBefore,
            ErrorResult& aRv);
-  // Uses XPCOM Remove.
+  void Remove(int32_t aIndex);
   void IndexedSetter(uint32_t aIndex, HTMLOptionElement* aOption,
                      ErrorResult& aRv)
   {
     mOptions->IndexedSetter(aIndex, aOption, aRv);
   }
 
-  static bool MatchSelectedOptions(Element* aElement, int32_t, nsIAtom*,
+  static bool MatchSelectedOptions(Element* aElement, int32_t, nsAtom*,
                                    void*);
 
   nsIHTMLCollection* SelectedOptions();
@@ -269,15 +273,11 @@ public:
     aRv = SetSelectedIndexInternal(aIdx, true);
   }
   void GetValue(DOMString& aValue);
-  // Uses XPCOM SetValue.
+  void SetValue(const nsAString& aValue);
 
-  // nsIConstraintValidation::WillValidate is fine.
-  // nsIConstraintValidation::Validity() is fine.
-  // nsIConstraintValidation::GetValidationMessage() is fine.
-  // nsIConstraintValidation::CheckValidity() is fine.
-  using nsIConstraintValidation::CheckValidity;
-  using nsIConstraintValidation::ReportValidity;
-  // nsIConstraintValidation::SetCustomValidity() is fine.
+  // Override SetCustomValidity so we update our state properly when it's called
+  // via bindings.
+  void SetCustomValidity(const nsAString& aError);
 
   using nsINode::Remove;
 
@@ -341,7 +341,7 @@ public:
    */
   NS_IMETHOD IsOptionDisabled(int32_t aIndex,
                               bool* aIsDisabled);
-  bool IsOptionDisabled(HTMLOptionElement* aOption);
+  bool IsOptionDisabled(HTMLOptionElement* aOption) const;
 
   /**
    * Sets multiple options (or just sets startIndex if select is single)
@@ -361,32 +361,20 @@ public:
                                  uint32_t aOptionsMask);
 
   /**
-   * Finds the index of a given option element
-   *
-   * @param aOption the option to get the index of
-   * @param aStartIndex the index to start looking at
-   * @param aForward TRUE to look forward, FALSE to look backward
-   * @return the option index
-   */
-  NS_IMETHOD GetOptionIndex(nsIDOMHTMLOptionElement* aOption,
-                            int32_t aStartIndex,
-                            bool aForward,
-                            int32_t* aIndex);
-
-  /**
    * Called when an attribute is about to be changed
    */
   virtual nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                                nsIContent* aBindingParent,
                                bool aCompileEventHandlers) override;
   virtual void UnbindFromTree(bool aDeep, bool aNullParent) override;
-  virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
+  virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsAtom* aName,
                                  const nsAttrValueOrString* aValue,
                                  bool aNotify) override;
-  virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                const nsAttrValue* aValue, bool aNotify) override;
-  virtual nsresult UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
-                             bool aNotify) override;
+  virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
+                                const nsAttrValue* aValue,
+                                const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
+                                bool aNotify) override;
 
   virtual void DoneAddingChildren(bool aHaveNotified) override;
   virtual bool IsDoneAddingChildren() override {
@@ -394,15 +382,17 @@ public:
   }
 
   virtual bool ParseAttribute(int32_t aNamespaceID,
-                                nsIAtom* aAttribute,
+                                nsAtom* aAttribute,
                                 const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 nsAttrValue& aResult) override;
   virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const override;
-  virtual nsChangeHint GetAttributeChangeHint(const nsIAtom* aAttribute,
+  virtual nsChangeHint GetAttributeChangeHint(const nsAtom* aAttribute,
                                               int32_t aModType) const override;
-  NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const override;
+  NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* aAttribute) const override;
 
-  virtual nsresult Clone(mozilla::dom::NodeInfo* aNodeInfo, nsINode** aResult) const override;
+  virtual nsresult Clone(mozilla::dom::NodeInfo* aNodeInfo, nsINode** aResult,
+                         bool aPreallocateChildren) const override;
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLSelectElement,
                                            nsGenericHTMLFormElementWithState)
@@ -441,6 +431,12 @@ public:
 
   bool OpenInParentProcess();
   void SetOpenInParentProcess(bool aVal);
+
+  void GetPreviewValue(nsAString& aValue)
+  {
+    aValue = mPreviewValue;
+  }
+  void SetPreviewValue(const nsAString& aValue);
 
 protected:
   virtual ~HTMLSelectElement();
@@ -517,7 +513,7 @@ protected:
 
   // nsIConstraintValidation
   void UpdateBarredFromConstraintValidation();
-  bool IsValueMissing();
+  bool IsValueMissing() const;
 
   /**
    * Get the index of the first option at, under or following the content in
@@ -606,6 +602,7 @@ protected:
   /** The options[] array */
   RefPtr<HTMLOptionsCollection> mOptions;
   nsContentUtils::AutocompleteAttrState mAutocompleteAttrState;
+  nsContentUtils::AutocompleteAttrState mAutocompleteInfoState;
   /** false if the parser is in the middle of adding children. */
   bool            mIsDoneAddingChildren;
   /** true if our disabled state has changed from the default **/
@@ -654,6 +651,11 @@ protected:
    * The live list of selected options.
   */
   RefPtr<nsContentList> mSelectedOptions;
+
+  /**
+   * The current displayed preview text.
+  */
+  nsString  mPreviewValue;
 
 private:
   static void MapAttributesIntoRule(const nsMappedAttributes* aAttributes,

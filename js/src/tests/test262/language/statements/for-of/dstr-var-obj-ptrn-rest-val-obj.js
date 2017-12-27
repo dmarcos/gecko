@@ -5,7 +5,7 @@
 description: Rest object contains just unextracted data (for-of statement)
 esid: sec-for-in-and-for-of-statements-runtime-semantics-labelledevaluation
 es6id: 13.7.5.11
-features: [destructuring-binding]
+features: [object-rest, destructuring-binding]
 flags: [generated]
 includes: [propertyHelper.js]
 info: |
@@ -38,19 +38,22 @@ info: |
 var iterCount = 0;
 
 for (var {a, b, ...rest} of [{x: 1, y: 2, a: 5, b: 3}]) {
-  assert.sameValue(rest.x, 1);
-  assert.sameValue(rest.y, 2);
   assert.sameValue(rest.a, undefined);
   assert.sameValue(rest.b, undefined);
 
-  verifyEnumerable(rest, "x");
-  verifyWritable(rest, "x");
-  verifyConfigurable(rest, "x");
+  verifyProperty(rest, "x", {
+    enumerable: true,
+    writable: true,
+    configurable: true,
+    value: 1
+  });
 
-  verifyEnumerable(rest, "y");
-  verifyWritable(rest, "y");
-  verifyConfigurable(rest, "y");
-
+  verifyProperty(rest, "y", {
+    enumerable: true,
+    writable: true,
+    configurable: true,
+    value: 2
+  });
 
   iterCount += 1;
 }

@@ -13,15 +13,15 @@
 
 
 namespace mozilla {
-class StyleAnimationValue;
+struct AnimationValue;
 namespace layers {
 class Animation;
 
 typedef InfallibleTArray<layers::Animation> AnimationArray;
 
 struct AnimData {
-  InfallibleTArray<mozilla::StyleAnimationValue> mStartValues;
-  InfallibleTArray<mozilla::StyleAnimationValue> mEndValues;
+  InfallibleTArray<mozilla::AnimationValue> mStartValues;
+  InfallibleTArray<mozilla::AnimationValue> mEndValues;
   InfallibleTArray<Maybe<mozilla::ComputedTimingFunction>> mFunctions;
 };
 
@@ -73,8 +73,20 @@ private:
   AnimatedValue() = delete;
 };
 
-// CompositorAnimationStorage stores the layer animations and animated value
-// after sampling based on an unique id (CompositorAnimationsId)
+// CompositorAnimationStorage stores the animations and animated values
+// keyed by a CompositorAnimationsId. The "animations" are a representation of
+// an entire animation over time, while the "animated values" are values sampled
+// from the animations at a particular point in time.
+//
+// There is one CompositorAnimationStorage per CompositorBridgeParent (i.e.
+// one per browser window), and the CompositorAnimationsId key is unique within
+// a particular CompositorAnimationStorage instance.
+//
+// Each layer which has animations gets a CompositorAnimationsId key, and reuses
+// that key during its lifetime. Likewise, in layers-free webrender, a display
+// item that is animated (e.g. nsDisplayTransform) gets a CompositorAnimationsId
+// key and reuses that key (it persists the key via the frame user-data
+// mechanism).
 class CompositorAnimationStorage final
 {
   typedef nsClassHashtable<nsUint64HashKey, AnimatedValue> AnimatedValueTable;
@@ -84,12 +96,19 @@ class CompositorAnimationStorage final
 public:
 
   /**
-   * Set the animation transform based on the unique id
+   * Set the animation transform based on the unique id and also
+   * set up |aFrameTransform| and |aData| for OMTA testing
    */
   void SetAnimatedValue(uint64_t aId,
                         gfx::Matrix4x4&& aTransformInDevSpace,
                         gfx::Matrix4x4&& aFrameTransform,
                         const TransformData& aData);
+
+  /**
+   * Set the animation transform in device pixel based on the unique id
+   */
+  void SetAnimatedValue(uint64_t aId,
+                        gfx::Matrix4x4&& aTransformInDevSpace);
 
   /**
    * Set the animation opacity based on the unique id
@@ -102,6 +121,33 @@ public:
   AnimatedValue* GetAnimatedValue(const uint64_t& aId) const;
 
   /**
+   * Like GetAnimatedValue(), but ensures the value is an opacity and returns
+   * the float value if possible, or Nothing() otherwise.
+   */
+  Maybe<float> GetAnimationOpacity(const uint64_t& aId) const;
+
+  /**
+   * Like GetAnimatedValue(), but ensures the value is a transform and returns
+   * the transform matrix if possible, or Nothing() otherwise. It also does
+   * some post-processing on the transform matrix as well. See the comments
+   * inside the function for details.
+   */
+  Maybe<gfx::Matrix4x4> GetAnimationTransform(const uint64_t& aId) const;
+
+  /**
+   * Return the iterator of animated value table
+   */
+  AnimatedValueTable::Iterator ConstAnimatedValueTableIter() const
+  {
+    return mAnimatedValues.ConstIter();
+  }
+
+  uint32_t AnimatedValueCount() const
+  {
+    return mAnimatedValues.Count();
+  }
+
+  /**
    * Set the animations based on the unique id
    */
   void SetAnimations(uint64_t aId, const AnimationArray& aAnimations);
@@ -112,33 +158,79 @@ public:
   AnimationArray* GetAnimations(const uint64_t& aId) const;
 
   /**
+   * Return the iterator of animations table
+   */
+  AnimationsTable::Iterator ConstAnimationsTableIter() const
+  {
+    return mAnimations.ConstIter();
+  }
+
+  uint32_t AnimationsCount() const
+  {
+    return mAnimations.Count();
+  }
+
+  /**
    * Clear AnimatedValues and Animations data
    */
   void Clear();
+  void ClearById(const uint64_t& aId);
 
 private:
-  ~CompositorAnimationStorage() { Clear(); };
+  ~CompositorAnimationStorage() { };
 
 private:
   AnimatedValueTable mAnimatedValues;
   AnimationsTable mAnimations;
 };
 
+/**
+ * This utility class allows reusing code between the webrender and
+ * non-webrender compositor-side implementations. It provides
+ * utility functions for sampling animations at particular timestamps.
+ */
 class AnimationHelper
 {
 public:
+
+  /**
+   * Sample animations based on a given time stamp for a element(layer) with
+   * its animation data.
+   * Returns true if there exists compositor animation, and stores corresponding
+   * animated value in |aAnimationValue|.
+   */
   static bool
-  SampleAnimationForEachNode(TimeStamp aPoint,
+  SampleAnimationForEachNode(TimeStamp aTime,
                              AnimationArray& aAnimations,
                              InfallibleTArray<AnimData>& aAnimationData,
-                             StyleAnimationValue& aAnimationValue,
+                             AnimationValue& aAnimationValue,
                              bool& aHasInEffectAnimations);
-
+  /**
+   * Populates AnimData stuctures into |aAnimData| and |aBaseAnimationStyle|
+   * based on |aAnimations|.
+   */
   static void
   SetAnimations(AnimationArray& aAnimations,
                 InfallibleTArray<AnimData>& aAnimData,
-                StyleAnimationValue& aBaseAnimationStyle);
+                AnimationValue& aBaseAnimationStyle);
+
+  /**
+   * Get a unique id to represent the compositor animation between child
+   * and parent side. This id will be used as a key to store animation
+   * data in the CompositorAnimationStorage per compositor.
+   * Each layer on the content side calls this when it gets new animation
+   * data.
+   */
   static uint64_t GetNextCompositorAnimationsId();
+
+  /**
+   * Sample animation based a given time stamp |aTime| and the animation
+   * data inside CompositorAnimationStorage |aStorage|. The animated values
+   * after sampling will be stored in CompositorAnimationStorage as well.
+   */
+  static void
+  SampleAnimations(CompositorAnimationStorage* aStorage,
+                   TimeStamp aTime);
 };
 
 } // namespace layers

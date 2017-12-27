@@ -11,11 +11,11 @@ var toolbox, tab1, tab2;
 
 function test() {
   addTab(TEST_URL).then(tab => {
-    tab2 = gBrowser.addTab();
+    tab2 = BrowserTestUtils.addTab(gBrowser);
     let target = TargetFactory.forTab(tab);
     gDevTools.showToolbox(target)
              .then(testBottomHost, console.error)
-             .then(null, console.error);
+             .catch(console.error);
   });
 }
 
@@ -30,7 +30,7 @@ function testBottomHost(aToolbox) {
     executeSoon(function () {
       is(gBrowser.selectedTab, tab1, "Correct tab was selected after calling raise");
 
-      toolbox.switchHost(Toolbox.HostType.WINDOW).then(testWindowHost).then(null, console.error);
+      toolbox.switchHost(Toolbox.HostType.WINDOW).then(testWindowHost).catch(console.error);
     });
   });
 }

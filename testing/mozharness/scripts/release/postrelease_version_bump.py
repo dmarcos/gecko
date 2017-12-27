@@ -10,11 +10,13 @@
 A script to increase in-tree version number after shipping a release.
 """
 
+from distutils.version import StrictVersion
 import os
 import sys
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(sys.path[0])))
 from mozharness.base.vcs.vcsbase import MercurialScript
+from mozharness.base.vcs.mercurial import MercurialVCS
 from mozharness.mozilla.buildbot import BuildbotMixin
 from mozharness.mozilla.repo_manipulation import MercurialRepoManipulationMixin
 
@@ -151,24 +153,57 @@ class PostReleaseVersionBump(MercurialScript, BuildbotMixin,
         return ["-e", hg_ssh_opts, "-r", "."]
 
     def pull(self):
+        dirs = self.query_abs_dirs()
+        # bug 1417697 - clone default first, then pull to get the revision.
+        # This to deal with relbranches, which don't show up in mozilla-unified.
         super(PostReleaseVersionBump, self).pull(
                 repos=self.query_repos())
+        vcs_obj = MercurialVCS(log_obj=self.log_obj, config=self.config)
+        vcs_obj.pull(
+            self.config['repo']['repo'],
+            dirs['abs_gecko_dir'],
+            update_dest=False,
+            revision=self.config['revision']
+        )
 
     def bump_postrelease(self, *args, **kwargs):
         """Bump version"""
         dirs = self.query_abs_dirs()
         for f in self.config["version_files"]:
-            curr_version = self.get_version(dirs['abs_gecko_dir'], f["file"])
-            next_version = self.config['next_version'].split('.')
+            curr_version = ".".join(self.get_version(dirs['abs_gecko_dir'], f["file"]))
+            next_version = self.config['next_version']
 
-            if next_version <= curr_version:
+            if StrictVersion(next_version) < StrictVersion(curr_version):
                 self.warning("Version bumping skipped due to conflicting values")
                 continue
+            elif StrictVersion(next_version) == StrictVersion(curr_version):
+                self.info("Version bumping skipped due to unchanged values")
+                continue
             else:
-                curr_version = ".".join(curr_version)
-                next_version = ".".join(next_version)
                 self.replace(os.path.join(dirs['abs_gecko_dir'], f["file"]),
                              curr_version, self.config["next_version"])
+
+    def check_tags(self, tag_names):
+        dirs = self.query_abs_dirs()
+        existing_tags = self.query_existing_tags(cwd=dirs['abs_gecko_dir'])
+        tags = []
+        for tag in tag_names:
+            if tag in existing_tags:
+                if self.config['revision'] == existing_tags[tag]:
+                    self.info(
+                        "Tag {} already exists on revision {}. Skipping...".format(
+                            tag, self.config['revision']
+                        )
+                    )
+                    continue
+                else:
+                    self.warning(
+                        "Tag {} exists on mismatched revision {}! Retagging...".format(
+                            tag, existing_tags[tag]
+                        )
+                    )
+            tags.append(tag)
+        return tags
 
     def tag(self):
         dirs = self.query_abs_dirs()
@@ -178,6 +213,10 @@ class PostReleaseVersionBump(MercurialScript, BuildbotMixin,
                          version=self.config["version"].replace(".", "_"),
                          build_number=self.config["build_number"])
                 for t in tags]
+        tags = self.check_tags(tags)
+        if not tags:
+            self.info("No unique tags to add; skipping tagging.")
+            return
         message = "No bug - Tagging {revision} with {tags} a=release CLOSED TREE"
         message = message.format(
             revision=self.config["revision"],
@@ -185,6 +224,7 @@ class PostReleaseVersionBump(MercurialScript, BuildbotMixin,
         self.hg_tag(cwd=dirs["abs_gecko_dir"], tags=tags,
                     revision=self.config["revision"], message=message,
                     user=self.config["hg_user"], force=True)
+
 
 # __main__ {{{1
 if __name__ == '__main__':

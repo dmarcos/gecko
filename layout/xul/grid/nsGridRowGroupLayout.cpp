@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,7 +13,7 @@
 
 
 /*
- * The nsGridRowGroupLayout implements the <rows> or <columns> tag in a grid. 
+ * The nsGridRowGroupLayout implements the <rows> or <columns> tag in a grid.
  */
 
 #include "nsGridRowGroupLayout.h"
@@ -28,7 +29,7 @@ already_AddRefed<nsBoxLayout> NS_NewGridRowGroupLayout()
 {
   RefPtr<nsBoxLayout> layout = new nsGridRowGroupLayout();
   return layout.forget();
-} 
+}
 
 nsGridRowGroupLayout::nsGridRowGroupLayout():nsGridRowLayout(), mRowCount(0)
 {
@@ -62,13 +63,13 @@ nsGridRowGroupLayout::AddWidth(nsSize& aSize, nscoord aSize2, bool aIsHorizontal
 
 nsSize
 nsGridRowGroupLayout::GetXULPrefSize(nsIFrame* aBox, nsBoxLayoutState& aState)
-{ 
-  nsSize vpref = nsGridRowLayout::GetXULPrefSize(aBox, aState); 
+{
+  nsSize vpref = nsGridRowLayout::GetXULPrefSize(aBox, aState);
 
 
- /* It is possible that we could have some extra columns. This is when less columns in XUL were 
-  * defined that needed. And example might be a grid with 3 defined columns but a row with 4 cells in 
-  * it. We would need an extra column to make the grid work. But because that extra column does not 
+ /* It is possible that we could have some extra columns. This is when less columns in XUL were
+  * defined that needed. And example might be a grid with 3 defined columns but a row with 4 cells in
+  * it. We would need an extra column to make the grid work. But because that extra column does not
   * have a box associated with it we must add its size in manually. Remember we could have extra rows
   * as well.
   */
@@ -76,7 +77,7 @@ nsGridRowGroupLayout::GetXULPrefSize(nsIFrame* aBox, nsBoxLayoutState& aState)
   int32_t index = 0;
   nsGrid* grid = GetGrid(aBox, &index);
 
-  if (grid) 
+  if (grid)
   {
     // make sure we add in extra columns sizes as well
     bool isHorizontal = IsXULHorizontal(aBox);
@@ -97,12 +98,12 @@ nsGridRowGroupLayout::GetXULPrefSize(nsIFrame* aBox, nsBoxLayoutState& aState)
 nsSize
 nsGridRowGroupLayout::GetXULMaxSize(nsIFrame* aBox, nsBoxLayoutState& aState)
 {
- nsSize maxSize = nsGridRowLayout::GetXULMaxSize(aBox, aState); 
+ nsSize maxSize = nsGridRowLayout::GetXULMaxSize(aBox, aState);
 
   int32_t index = 0;
   nsGrid* grid = GetGrid(aBox, &index);
 
-  if (grid) 
+  if (grid)
   {
     // make sure we add in extra columns sizes as well
     bool isHorizontal = IsXULHorizontal(aBox);
@@ -123,12 +124,12 @@ nsGridRowGroupLayout::GetXULMaxSize(nsIFrame* aBox, nsBoxLayoutState& aState)
 nsSize
 nsGridRowGroupLayout::GetXULMinSize(nsIFrame* aBox, nsBoxLayoutState& aState)
 {
-  nsSize minSize = nsGridRowLayout::GetXULMinSize(aBox, aState); 
+  nsSize minSize = nsGridRowLayout::GetXULMinSize(aBox, aState);
 
   int32_t index = 0;
   nsGrid* grid = GetGrid(aBox, &index);
 
-  if (grid) 
+  if (grid)
   {
     // make sure we add in extra columns sizes as well
     bool isHorizontal = IsXULHorizontal(aBox);
@@ -136,7 +137,7 @@ nsGridRowGroupLayout::GetXULMinSize(nsIFrame* aBox, nsBoxLayoutState& aState)
     int32_t start = grid->GetColumnCount(isHorizontal) - grid->GetExtraColumnCount(isHorizontal);
     for (int32_t i=0; i < extraColumns; i++)
     {
-      nscoord min = 
+      nscoord min =
         grid->GetMinRowHeight(aState, i+start, !isHorizontal); // GetMinColumnWidth
       AddWidth(minSize, min, isHorizontal);
     }
@@ -166,7 +167,7 @@ nsGridRowGroupLayout::DirtyRows(nsIFrame* aBox, nsBoxLayoutState& aState)
 
       // walk into other monuments
       nsIGridPart* monument = nsGrid::GetPartFromBox(deepChild);
-      if (monument) 
+      if (monument)
         monument->DirtyRows(deepChild, aState);
 
       child = nsBox::GetNextXULBox(child);
@@ -184,7 +185,7 @@ nsGridRowGroupLayout::CountRowsColumns(nsIFrame* aBox, int32_t& aRowCount, int32
     nsIFrame* child = nsBox::GetChildXULBox(aBox);
 
     while(child) {
-      
+
       // first see if it is a scrollframe. If so walk down into it and get the scrolled child
       nsIFrame* deepChild = nsGrid::GetScrolledBox(child);
 
@@ -210,16 +211,16 @@ nsGridRowGroupLayout::CountRowsColumns(nsIFrame* aBox, int32_t& aRowCount, int32
 /**
  * Fill out the given row structure recursively
  */
-int32_t 
+int32_t
 nsGridRowGroupLayout::BuildRows(nsIFrame* aBox, nsGridRow* aRows)
-{ 
+{
   int32_t rowCount = 0;
 
   if (aBox) {
     nsIFrame* child = nsBox::GetChildXULBox(aBox);
 
     while(child) {
-      
+
       // first see if it is a scrollframe. If so walk down into it and get the scrolled child
       nsIFrame* deepChild = nsGrid::GetScrolledBox(child);
 
@@ -249,7 +250,7 @@ nsGridRowGroupLayout::GetTotalMargin(nsIFrame* aBox, bool aIsHorizontal)
   // group have border and padding added to the total margin
 
   nsMargin margin = nsGridRowLayout::GetTotalMargin(aBox, aIsHorizontal);
-  
+
   // make sure we have the scrollframe on the outside if it has one.
   // that's where the border is.
   aBox = nsGrid::GetScrollBox(aBox);

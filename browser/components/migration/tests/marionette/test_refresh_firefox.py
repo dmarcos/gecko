@@ -7,6 +7,8 @@ from marionette_driver.errors import NoAlertPresentException
 
 
 class TestFirefoxRefresh(MarionetteTestCase):
+    _sandbox = "firefox-refresh"
+
     _username = "marionette-test-login"
     _password = "marionette-test-password"
     _bookmarkURL = "about:mozilla"
@@ -23,6 +25,9 @@ class TestFirefoxRefresh(MarionetteTestCase):
     _formHistoryFieldName = "some-very-unique-marionette-only-firefox-reset-field"
     _formHistoryValue = "special-pumpkin-value"
 
+    _formAutofillAvailable = False
+    _formAutofillAddressGuid = None
+
     _expectedURLs = ["about:robots", "about:mozilla"]
 
     def savePassword(self):
@@ -37,15 +42,23 @@ class TestFirefoxRefresh(MarionetteTestCase):
             "password"
           );
           Services.logins.addLogin(myLogin)
-        """, script_args=[self._username, self._password])
+        """, script_args=(self._username, self._password))
 
-    def createBookmark(self):
+    def createBookmarkInMenu(self):
         self.marionette.execute_script("""
           let url = arguments[0];
           let title = arguments[1];
           PlacesUtils.bookmarks.insertBookmark(PlacesUtils.bookmarks.bookmarksMenuFolder,
             makeURI(url), 0, title);
-        """, script_args=[self._bookmarkURL, self._bookmarkText])
+        """, script_args=(self._bookmarkURL, self._bookmarkText))
+
+    def createBookmarksOnToolbar(self):
+        self.marionette.execute_script("""
+          for (let i = 1; i <= 5; i++) {
+            PlacesUtils.bookmarks.insertBookmark(PlacesUtils.toolbarFolderId,
+              makeURI(`about:rights?p=${i}`), 0, `Bookmark ${i}`);
+          }
+        """)
 
     def createHistory(self):
         error = self.runAsyncCode("""
@@ -71,7 +84,7 @@ class TestFirefoxRefresh(MarionetteTestCase):
               },
             }
           );
-        """, script_args=[self._historyURL, self._historyTitle])
+        """, script_args=(self._historyURL, self._historyTitle))
         if error:
             print error
 
@@ -95,9 +108,31 @@ class TestFirefoxRefresh(MarionetteTestCase):
               }
             }
           });
-        """, script_args=[self._formHistoryFieldName, self._formHistoryValue])
+        """, script_args=(self._formHistoryFieldName, self._formHistoryValue))
         if error:
           print error
+
+    def createFormAutofill(self):
+        if not self._formAutofillAvailable:
+            return
+        self._formAutofillAddressGuid = self.runAsyncCode("""
+          const TEST_ADDRESS_1 = {
+            "given-name": "John",
+            "additional-name": "R.",
+            "family-name": "Smith",
+            organization: "World Wide Web Consortium",
+            "street-address": "32 Vassar Street\\\nMIT Room 32-G524",
+            "address-level2": "Cambridge",
+            "address-level1": "MA",
+            "postal-code": "02139",
+            country: "US",
+            tel: "+15195555555",
+            email: "user@example.com",
+          };
+          return global.profileStorage.initialize().then(() => {
+            return global.profileStorage.addresses.add(TEST_ADDRESS_1);
+          }).then(marionetteScriptFinished);
+        """)
 
     def createCookie(self):
         self.runCode("""
@@ -105,7 +140,7 @@ class TestFirefoxRefresh(MarionetteTestCase):
           let expireTime = Math.floor(Date.now() / 1000) + 15 * 60;
           Services.cookies.add(arguments[0], arguments[1], arguments[2], arguments[3],
                                true, false, false, expireTime);
-        """, script_args=[self._cookieHost, self._cookiePath, self._cookieName, self._cookieValue])
+        """, script_args=(self._cookieHost, self._cookiePath, self._cookieName, self._cookieValue))
 
     def createSession(self):
         self.runAsyncCode("""
@@ -142,7 +177,18 @@ class TestFirefoxRefresh(MarionetteTestCase):
               gBrowser.removeTab(tab);
             }
           }
-        """, script_args=[self._expectedURLs])
+        """, script_args=(self._expectedURLs,))
+
+    def createSync(self):
+        # This script will write an entry to the login manager and create
+        # a signedInUser.json in the profile dir.
+        self.runAsyncCode("""
+          Cu.import("resource://gre/modules/FxAccountsStorage.jsm");
+          let storage = new FxAccountsStorageManager();
+          let data = {email: "test@test.com", uid: "uid", keyFetchToken: "top-secret"};
+          storage.initialize(data);
+          storage.finalize().then(marionetteScriptFinished);
+        """);
 
     def checkPassword(self):
         loginInfo = self.marionette.execute_script("""
@@ -159,46 +205,42 @@ class TestFirefoxRefresh(MarionetteTestCase):
         loginCount = self.marionette.execute_script("""
           return Services.logins.getAllLogins().length;
         """)
-        self.assertEqual(loginCount, 1, "No other logins are present")
+        # Note that we expect 2 logins - one from us, one from sync.
+        self.assertEqual(loginCount, 2, "No other logins are present")
 
-    def checkBookmark(self):
+    def checkBookmarkInMenu(self):
         titleInBookmarks = self.marionette.execute_script("""
           let url = arguments[0];
           let bookmarkIds = PlacesUtils.bookmarks.getBookmarkIdsForURI(makeURI(url), {}, {});
           return bookmarkIds.length == 1 ? PlacesUtils.bookmarks.getItemTitle(bookmarkIds[0]) : "";
-        """, script_args=[self._bookmarkURL])
+        """, script_args=(self._bookmarkURL,))
         self.assertEqual(titleInBookmarks, self._bookmarkText)
 
+    def checkBookmarkToolbarVisibility(self):
+        toolbarVisible = self.marionette.execute_script("""
+          const BROWSER_DOCURL = "chrome://browser/content/browser.xul";
+          let xulStore = Cc["@mozilla.org/xul/xulstore;1"].getService(Ci.nsIXULStore);
+          return xulStore.getValue(BROWSER_DOCURL, "PersonalToolbar", "collapsed")
+        """)
+        self.assertEqual(toolbarVisible, "false")
+
     def checkHistory(self):
-        historyResults = self.runAsyncCode("""
-          let placeInfos = [];
-          PlacesUtils.asyncHistory.getPlacesInfo(makeURI(arguments[0]), {
-            handleError(resultCode, place) {
-              placeInfos = null;
-              marionetteScriptFinished("Unexpected error in fetching visit: " + resultCode);
-            },
-            handleResult(placeInfo) {
-              placeInfos.push(placeInfo);
-            },
-            handleCompletion() {
-              if (placeInfos) {
-                if (!placeInfos.length) {
-                  marionetteScriptFinished("No visits found");
-                } else {
-                  marionetteScriptFinished(placeInfos);
-                }
-              }
-            },
+        historyResult = self.runAsyncCode("""
+          PlacesUtils.history.fetch(arguments[0]).then(pageInfo => {
+            if (!pageInfo) {
+              marionetteScriptFinished("No visits found");
+            } else {
+              marionetteScriptFinished(pageInfo);
+            }
+          }).catch(e => {
+            marionetteScriptFinished("Unexpected error in fetching page: " + e);
           });
-        """, script_args=[self._historyURL])
-        if type(historyResults) == str:
-            self.fail(historyResults)
+        """, script_args=(self._historyURL,))
+        if type(historyResult) == str:
+            self.fail(historyResult)
             return
 
-        historyCount = len(historyResults)
-        self.assertEqual(historyCount, 1, "Should have exactly 1 entry for URI, got %d" % historyCount)
-        if historyCount == 1:
-            self.assertEqual(historyResults[0]['title'], self._historyTitle)
+        self.assertEqual(historyResult['title'], self._historyTitle)
 
     def checkFormHistory(self):
         formFieldResults = self.runAsyncCode("""
@@ -214,7 +256,7 @@ class TestFirefoxRefresh(MarionetteTestCase):
               marionetteScriptFinished(results);
             },
           });
-        """, script_args=[self._formHistoryFieldName])
+        """, script_args=(self._formHistoryFieldName,))
         if type(formFieldResults) == str:
             self.fail(formFieldResults)
             return
@@ -236,6 +278,25 @@ class TestFirefoxRefresh(MarionetteTestCase):
         """)
         self.assertEqual(formHistoryCount, 1, "There should be only 1 entry in the form history")
 
+    def checkFormAutofill(self):
+        if not self._formAutofillAvailable:
+            return
+
+        formAutofillResults = self.runAsyncCode("""
+          return global.profileStorage.initialize().then(() => {
+            return global.profileStorage.addresses.getAll()
+          }).then(marionetteScriptFinished);
+        """,)
+        if type(formAutofillResults) == str:
+            self.fail(formAutofillResults)
+            return
+
+        formAutofillAddressCount = len(formAutofillResults)
+        self.assertEqual(formAutofillAddressCount, 1, "Should have exactly 1 saved address, got %d" % formAutofillAddressCount)
+        if formAutofillAddressCount == 1:
+            self.assertEqual(formAutofillResults[0]['guid'], self._formAutofillAddressGuid)
+
+
     def checkCookie(self):
         cookieInfo = self.runCode("""
           try {
@@ -256,7 +317,7 @@ class TestFirefoxRefresh(MarionetteTestCase):
           } catch (ex) {
             return "got exception trying to fetch cookie: " + ex;
           }
-        """, script_args=[self._cookieHost])
+        """, script_args=(self._cookieHost,))
         if not isinstance(cookieInfo, dict):
             self.fail(cookieInfo)
             return
@@ -303,37 +364,88 @@ class TestFirefoxRefresh(MarionetteTestCase):
         """)
         self.assertSequenceEqual(tabURIs, self._expectedURLs)
 
+    def checkSync(self, hasMigrated):
+        result = self.runAsyncCode("""
+          Cu.import("resource://gre/modules/FxAccountsStorage.jsm");
+          let prefs = new global.Preferences("services.sync.");
+          let storage = new FxAccountsStorageManager();
+          let result = {};
+          storage.initialize();
+          storage.getAccountData().then(data => {
+            result.accountData = data;
+            return storage.finalize();
+          }).then(() => {
+            result.prefUsername = prefs.get("username");
+            marionetteScriptFinished(result);
+          }).catch(err => {
+            marionetteScriptFinished(err.toString());
+          });
+        """);
+        if type(result) != dict:
+            self.fail(result)
+            return
+        self.assertEqual(result["accountData"]["email"], "test@test.com");
+        self.assertEqual(result["accountData"]["uid"], "uid");
+        self.assertEqual(result["accountData"]["keyFetchToken"], "top-secret");
+        if hasMigrated:
+          # This test doesn't actually configure sync itself, so the username
+          # pref only exists after migration.
+          self.assertEqual(result["prefUsername"], "test@test.com");
+
     def checkProfile(self, hasMigrated=False):
         self.checkPassword()
-        self.checkBookmark()
+        self.checkBookmarkInMenu()
         self.checkHistory()
         self.checkFormHistory()
+        self.checkFormAutofill()
         self.checkCookie()
+        self.checkSync(hasMigrated);
         if hasMigrated:
+            self.checkBookmarkToolbarVisibility()
             self.checkSession()
 
     def createProfileData(self):
         self.savePassword()
-        self.createBookmark()
+        self.createBookmarkInMenu()
+        self.createBookmarksOnToolbar()
         self.createHistory()
         self.createFormHistory()
+        self.createFormAutofill()
         self.createCookie()
         self.createSession()
+        self.createSync()
 
     def setUpScriptData(self):
         self.marionette.set_context(self.marionette.CONTEXT_CHROME)
-        self.marionette.execute_script("""
+        self.runCode("""
+          window.global = {};
           global.LoginInfo = Components.Constructor("@mozilla.org/login-manager/loginInfo;1", "nsILoginInfo", "init");
           global.profSvc = Cc["@mozilla.org/toolkit/profile-service;1"].getService(Ci.nsIToolkitProfileService);
           global.Preferences = Cu.import("resource://gre/modules/Preferences.jsm", {}).Preferences;
           global.FormHistory = Cu.import("resource://gre/modules/FormHistory.jsm", {}).FormHistory;
-        """, new_sandbox=False, sandbox='system')
+        """)
+        self._formAutofillAvailable = self.runCode("""
+          try {
+            global.profileStorage = Cu.import("resource://formautofill/ProfileStorage.jsm", {}).profileStorage;
+          } catch(e) {
+            return false;
+          }
+          return true;
+        """)
 
     def runCode(self, script, *args, **kwargs):
-        return self.marionette.execute_script(script, new_sandbox=False, sandbox='system', *args, **kwargs)
+        return self.marionette.execute_script(script,
+                                              new_sandbox=False,
+                                              sandbox=self._sandbox,
+                                              *args,
+                                              **kwargs)
 
     def runAsyncCode(self, script, *args, **kwargs):
-        return self.marionette.execute_async_script(script, new_sandbox=False, sandbox='system', *args, **kwargs)
+        return self.marionette.execute_async_script(script,
+                                                    new_sandbox=False,
+                                                    sandbox=self._sandbox,
+                                                    *args,
+                                                    **kwargs)
 
     def setUp(self):
         MarionetteTestCase.setUp(self)
@@ -374,7 +486,7 @@ class TestFirefoxRefresh(MarionetteTestCase):
               let profile = global.profSvc.getProfileByName(name);
               profile.remove(false)
               global.profSvc.flush();
-            """, script_args=[self.profileNameToRemove])
+            """, script_args=(self.profileNameToRemove,))
             # And delete all the files.
             shutil.rmtree(self.reset_profile_path, ignore_errors=False, onerror=handleRemoveReadonly)
 
@@ -390,19 +502,17 @@ class TestFirefoxRefresh(MarionetteTestCase):
 
           // Now add the reset parameters:
           let env = Cc["@mozilla.org/process/environment;1"].getService(Ci.nsIEnvironment);
-          let allMarionettePrefs = Services.prefs.getChildList("marionette.");
+          let prefsToKeep = Array.from(Services.prefs.getChildList("marionette."));
+          prefsToKeep.push("datareporting.policy.dataSubmissionPolicyBypassNotification");
           let prefObj = {};
-          for (let pref of allMarionettePrefs) {
-            let prefSuffix = pref.substr("marionette.".length);
-            let prefVal = global.Preferences.get(pref);
-            prefObj[prefSuffix] = prefVal;
+          for (let pref of prefsToKeep) {
+            prefObj[pref] = global.Preferences.get(pref);
           }
-          let marionetteInfo = JSON.stringify(prefObj);
-          env.set("MOZ_MARIONETTE_PREF_STATE_ACROSS_RESTARTS", marionetteInfo);
+          env.set("MOZ_MARIONETTE_PREF_STATE_ACROSS_RESTARTS", JSON.stringify(prefObj));
           env.set("MOZ_RESET_PROFILE_RESTART", "1");
           env.set("XRE_PROFILE_PATH", arguments[0]);
           env.set("XRE_PROFILE_NAME", profileName);
-        """, script_args=[self.marionette.instance.profile.profile, profileName])
+        """, script_args=(self.marionette.instance.profile.profile, profileName,))
 
         profileLeafName = os.path.basename(os.path.normpath(self.marionette.instance.profile.profile))
 
@@ -429,7 +539,7 @@ class TestFirefoxRefresh(MarionetteTestCase):
           container.append(dirName);
           container.append(arguments[0]);
           return container.path;
-        """, script_args = [profileLeafName])
+        """, script_args=(profileLeafName,))
 
         self.assertTrue(os.path.isdir(self.reset_profile_path), "Reset profile path should be present")
         self.assertTrue(os.path.isdir(self.desktop_backup_path), "Backup profile path should be present")

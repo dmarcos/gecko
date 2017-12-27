@@ -16,9 +16,10 @@ Services.prefs.setBoolPref("devtools.debugger.log", false);
 
 var { BrowserToolboxProcess } = Cu.import("resource://devtools/client/framework/ToolboxProcess.jsm", {});
 var { DebuggerServer } = require("devtools/server/main");
-var { DebuggerClient, ObjectClient } = require("devtools/shared/client/main");
+var { DebuggerClient } = require("devtools/shared/client/debugger-client");
+var ObjectClient = require("devtools/shared/client/object-client");
 var { AddonManager } = Cu.import("resource://gre/modules/AddonManager.jsm", {});
-var EventEmitter = require("devtools/shared/event-emitter");
+var EventEmitter = require("devtools/shared/old-event-emitter");
 var { Toolbox } = require("devtools/client/framework/toolbox");
 
 const chromeRegistry = Cc["@mozilla.org/chrome/chrome-registry;1"].getService(Ci.nsIChromeRegistry);
@@ -52,8 +53,12 @@ registerCleanupFunction(function* () {
   DebuggerServer.destroy();
 
   // Debugger tests use a lot of memory, so force a GC to help fragmentation.
-  info("Forcing GC after debugger test.");
-  Cu.forceGC();
+  info("Forcing GC/CC after debugger test.");
+  yield new Promise(resolve => {
+    Cu.forceGC();
+    Cu.forceCC();
+    Cu.schedulePreciseGC(resolve);
+  });
 });
 
 // Import the GCLI test helper
@@ -562,7 +567,7 @@ let initDebugger = Task.async(function*(urlOrTab, options) {
   }
   info("Debugee tab added successfully: " + urlOrTab);
 
-  let debuggee = tab.linkedBrowser.contentWindow.wrappedJSObject;
+  let debuggee = tab.linkedBrowser.contentWindowAsCPOW.wrappedJSObject;
   let target = TargetFactory.forTab(tab);
 
   let toolbox = yield gDevTools.showToolbox(target, "jsdebugger");
@@ -622,10 +627,8 @@ AddonDebugger.prototype = {
   init: Task.async(function* (aAddonId) {
     info("Initializing an addon debugger panel.");
 
-    if (!DebuggerServer.initialized) {
-      DebuggerServer.init();
-      DebuggerServer.addBrowserActors();
-    }
+    DebuggerServer.init();
+    DebuggerServer.registerAllActors();
     DebuggerServer.allowChromeProcess = true;
 
     this.frame = document.createElement("iframe");
@@ -1219,10 +1222,6 @@ function source(sourceClient) {
 // console if necessary.  This cleans up the split console pref so
 // it won't pollute other tests.
 function getSplitConsole(toolbox, win) {
-  registerCleanupFunction(() => {
-    Services.prefs.clearUserPref("devtools.toolbox.splitconsoleEnabled");
-  });
-
   if (!win) {
     win = toolbox.win;
   }
@@ -1319,10 +1318,8 @@ function waitForDispatch(panel, type, eventRepeat = 1) {
 }
 
 function* initWorkerDebugger(TAB_URL, WORKER_URL) {
-  if (!DebuggerServer.initialized) {
-    DebuggerServer.init();
-    DebuggerServer.addBrowserActors();
-  }
+  DebuggerServer.init();
+  DebuggerServer.registerAllActors();
 
   let client = new DebuggerClient(DebuggerServer.connectPipe());
   yield connect(client);

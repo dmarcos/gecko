@@ -2,7 +2,7 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-function* runTests(options) {
+async function runTests(options) {
   async function background(getTests) {
     async function checkDetails(expecting, tabId) {
       let title = await browser.browserAction.getTitle({tabId});
@@ -124,7 +124,9 @@ function* runTests(options) {
   }
 
   let awaitFinish = new Promise(resolve => {
-    extension.onMessage("nextTest", (expecting, testsRemaining) => {
+    extension.onMessage("nextTest", async (expecting, testsRemaining) => {
+      await promiseAnimationFrame();
+
       checkDetails(expecting);
 
       if (testsRemaining) {
@@ -135,15 +137,15 @@ function* runTests(options) {
     });
   });
 
-  yield extension.startup();
+  await extension.startup();
 
-  yield awaitFinish;
+  await awaitFinish;
 
-  yield extension.unload();
+  await extension.unload();
 }
 
-add_task(function* testTabSwitchContext() {
-  yield runTests({
+add_task(async function testTabSwitchContext() {
+  await runTests({
     manifest: {
       "browser_action": {
         "default_icon": "default.png",
@@ -212,6 +214,12 @@ add_task(function* testTabSwitchContext() {
          "title": "Default Title 2",
          "badge": "d2",
          "badgeBackgroundColor": [0, 0xff, 0, 0xff]},
+        {"icon": browser.runtime.getURL("default-2.png"),
+         "popup": browser.runtime.getURL("default-2.html"),
+         "title": "Default Title 2",
+         "badge": "d2",
+         "badgeBackgroundColor": [0, 0xff, 0, 0xff],
+         "disabled": false},
       ];
 
       return [
@@ -249,20 +257,6 @@ add_task(function* testTabSwitchContext() {
           await expectDefaults(details[0]);
           expect(details[2]);
         },
-        expect => {
-          browser.test.log("Navigate to a new page. Expect no changes.");
-
-          // TODO: This listener should not be necessary, but the |tabs.update|
-          // callback currently fires too early in e10s windows.
-          browser.tabs.onUpdated.addListener(function listener(tabId, changed) {
-            if (tabId == tabs[1] && changed.url) {
-              browser.tabs.onUpdated.removeListener(listener);
-              expect(details[2]);
-            }
-          });
-
-          browser.tabs.update(tabs[1], {url: "about:blank?1"});
-        },
         async expect => {
           browser.test.log("Switch back to the first tab. Expect previously set properties.");
           await browser.tabs.update(tabs[0], {active: true});
@@ -294,6 +288,18 @@ add_task(function* testTabSwitchContext() {
           await expectDefaults(details[3]);
           expect(details[2]);
         },
+        expect => {
+          browser.test.log("Navigate to a new page. Expect defaults.");
+
+          browser.tabs.onUpdated.addListener(function listener(tabId, changed) {
+            if (tabId == tabs[1] && changed.url) {
+              browser.tabs.onUpdated.removeListener(listener);
+              expect(details[6]);
+            }
+          });
+
+          browser.tabs.update(tabs[1], {url: "about:blank?1"});
+        },
         async expect => {
           browser.test.log("Delete tab, switch back to tab 1. Expect previous results again.");
           await browser.tabs.remove(tabs[1]);
@@ -315,8 +321,8 @@ add_task(function* testTabSwitchContext() {
   });
 });
 
-add_task(function* testDefaultTitle() {
-  yield runTests({
+add_task(async function testDefaultTitle() {
+  await runTests({
     manifest: {
       "name": "Foo Extension",
 
@@ -331,7 +337,7 @@ add_task(function* testDefaultTitle() {
       "icon.png": imageBuffer,
     },
 
-    getTests: function(tabs, expectDefaults) {
+    getTests: function(tabs, expectGlobals) {
       const DEFAULT_BADGE_COLOR = [0xd9, 0, 0, 255];
 
       let details = [
@@ -350,47 +356,228 @@ add_task(function* testDefaultTitle() {
          "badge": "",
          "badgeBackgroundColor": DEFAULT_BADGE_COLOR,
          "icon": browser.runtime.getURL("icon.png")},
-        {"title": "",
-         "popup": "",
-         "badge": "",
-         "badgeBackgroundColor": DEFAULT_BADGE_COLOR,
-         "icon": browser.runtime.getURL("icon.png")},
       ];
 
       return [
         async expect => {
-          browser.test.log("Initial state. Expect extension title as default title.");
+          browser.test.log("Initial state. Expect default title as global title.");
 
-          await expectDefaults(details[0]);
+          await expectGlobals(details[0]);
           expect(details[0]);
         },
         async expect => {
-          browser.test.log("Change the title. Expect new title.");
+          browser.test.log("Change the tab title. Expect new title.");
           browser.browserAction.setTitle({tabId: tabs[0], title: "Foo Title"});
 
-          await expectDefaults(details[0]);
+          await expectGlobals(details[0]);
           expect(details[1]);
         },
         async expect => {
-          browser.test.log("Change the default. Expect same properties.");
+          browser.test.log("Change the global title. Expect same properties.");
           browser.browserAction.setTitle({title: "Bar Title"});
 
-          await expectDefaults(details[2]);
+          await expectGlobals(details[2]);
           expect(details[1]);
         },
         async expect => {
-          browser.test.log("Clear the title. Expect new default title.");
-          browser.browserAction.setTitle({tabId: tabs[0], title: ""});
+          browser.test.log("Clear the tab title. Expect new global title.");
+          browser.browserAction.setTitle({tabId: tabs[0], title: null});
 
-          await expectDefaults(details[2]);
+          await expectGlobals(details[2]);
           expect(details[2]);
         },
         async expect => {
-          browser.test.log("Set default title to null string. Expect null string from API, extension title in UI.");
-          browser.browserAction.setTitle({title: ""});
+          browser.test.log("Clear the global title. Expect default title.");
+          browser.browserAction.setTitle({title: null});
 
-          await expectDefaults(details[3]);
+          await expectGlobals(details[0]);
+          expect(details[0]);
+        },
+        async expect => {
+          browser.test.assertRejects(
+            browser.browserAction.setPopup({popup: "about:addons"}),
+            /Access denied for URL about:addons/,
+            "unable to set popup to about:addons");
+
+          await expectGlobals(details[0]);
+          expect(details[0]);
+        },
+      ];
+    },
+  });
+});
+
+add_task(async function testBadgeColorPersistence() {
+  const extension = ExtensionTestUtils.loadExtension({
+    background() {
+      browser.test.onMessage.addListener((msg, arg) => {
+        browser.browserAction[msg](arg);
+      });
+    },
+    manifest: {
+      browser_action: {},
+    },
+  });
+  await extension.startup();
+
+  function getBadgeForWindow(win) {
+    const widget = getBrowserActionWidget(extension).forWindow(win).node;
+    return document.getAnonymousElementByAttribute(widget, "class", "toolbarbutton-badge");
+  }
+
+  let badge = getBadgeForWindow(window);
+  const badgeChanged = new Promise((resolve) => {
+    const observer = new MutationObserver(() => resolve());
+    observer.observe(badge, {attributes: true, attributeFilter: ["style"]});
+  });
+
+  extension.sendMessage("setBadgeText", {text: "hi"});
+  extension.sendMessage("setBadgeBackgroundColor", {color: [0, 255, 0, 255]});
+
+  await badgeChanged;
+
+  is(badge.value, "hi", "badge text is set in first window");
+  is(badge.style.backgroundColor, "rgb(0, 255, 0)", "badge color is set in first window");
+
+  let windowOpenedPromise = BrowserTestUtils.waitForNewWindow();
+  let win = OpenBrowserWindow();
+  await windowOpenedPromise;
+
+  badge = getBadgeForWindow(win);
+  is(badge.value, "hi", "badge text is set in new window");
+  is(badge.style.backgroundColor, "rgb(0, 255, 0)", "badge color is set in new window");
+
+  await BrowserTestUtils.closeWindow(win);
+  await extension.unload();
+});
+
+add_task(async function testPropertyRemoval() {
+  await runTests({
+    manifest: {
+      "browser_action": {
+        "default_icon": "default.png",
+        "default_popup": "default.html",
+        "default_title": "Default Title",
+      },
+    },
+
+    "files": {
+      "default.png": imageBuffer,
+      "i1.png": imageBuffer,
+      "i2.png": imageBuffer,
+      "i3.png": imageBuffer,
+    },
+
+    getTests: function(tabs, expectGlobals) {
+      let contextUri = browser.runtime.getURL("_generated_background_page.html");
+      let details = [
+        {"icon": browser.runtime.getURL("default.png"),
+         "popup": browser.runtime.getURL("default.html"),
+         "title": "Default Title",
+         "badge": "",
+         "badgeBackgroundColor": [0xd9, 0x00, 0x00, 0xFF]},
+        {"icon": browser.runtime.getURL("i1.png"),
+         "popup": browser.runtime.getURL("p1.html"),
+         "title": "t1",
+         "badge": "b1",
+         "badgeBackgroundColor": [0x11, 0x11, 0x11, 0xFF]},
+        {"icon": browser.runtime.getURL("i2.png"),
+         "popup": browser.runtime.getURL("p2.html"),
+         "title": "t2",
+         "badge": "b2",
+         "badgeBackgroundColor": [0x22, 0x22, 0x22, 0xFF]},
+        {"icon": contextUri,
+         "popup": "",
+         "title": "",
+         "badge": "",
+         "badgeBackgroundColor": [0x11, 0x11, 0x11, 0xFF]},
+        {"icon": contextUri,
+         "popup": "",
+         "title": "",
+         "badge": "",
+         "badgeBackgroundColor": [0x22, 0x22, 0x22, 0xFF]},
+        {"icon": browser.runtime.getURL("i3.png"),
+         "popup": browser.runtime.getURL("p3.html"),
+         "title": "t3",
+         "badge": "b3",
+         "badgeBackgroundColor": [0x33, 0x33, 0x33, 0xFF]},
+      ];
+
+      return [
+        async expect => {
+          browser.test.log("Initial state, expect default properties.");
+          await expectGlobals(details[0]);
+          expect(details[0]);
+        },
+        async expect => {
+          browser.test.log("Set global values, expect the new values.");
+          browser.browserAction.setIcon({path: "i1.png"});
+          browser.browserAction.setPopup({popup: "p1.html"});
+          browser.browserAction.setTitle({title: "t1"});
+          browser.browserAction.setBadgeText({text: "b1"});
+          browser.browserAction.setBadgeBackgroundColor({color: "#111"});
+          await expectGlobals(details[1]);
+          expect(details[1]);
+        },
+        async expect => {
+          browser.test.log("Set tab values, expect the new values.");
+          let tabId = tabs[0];
+          browser.browserAction.setIcon({tabId, path: "i2.png"});
+          browser.browserAction.setPopup({tabId, popup: "p2.html"});
+          browser.browserAction.setTitle({tabId, title: "t2"});
+          browser.browserAction.setBadgeText({tabId, text: "b2"});
+          browser.browserAction.setBadgeBackgroundColor({tabId, color: "#222"});
+          await expectGlobals(details[1]);
+          expect(details[2]);
+        },
+        async expect => {
+          browser.test.log("Set empty tab values, expect empty values except for bgcolor.");
+          let tabId = tabs[0];
+          browser.browserAction.setIcon({tabId, path: ""});
+          browser.browserAction.setPopup({tabId, popup: ""});
+          browser.browserAction.setTitle({tabId, title: ""});
+          browser.browserAction.setBadgeText({tabId, text: ""});
+          browser.browserAction.setBadgeBackgroundColor({tabId, color: ""});
+          await expectGlobals(details[1]);
           expect(details[3]);
+        },
+        async expect => {
+          browser.test.log("The invalid color removed tab bgcolor, restore previous tab bgcolor.");
+          let tabId = tabs[0];
+          browser.browserAction.setBadgeBackgroundColor({tabId, color: "#222"});
+          await expectGlobals(details[1]);
+          expect(details[4]);
+        },
+        async expect => {
+          browser.test.log("Remove tab values, expect global values.");
+          let tabId = tabs[0];
+          browser.browserAction.setIcon({tabId, path: null});
+          browser.browserAction.setPopup({tabId, popup: null});
+          browser.browserAction.setTitle({tabId, title: null});
+          browser.browserAction.setBadgeText({tabId, text: null});
+          browser.browserAction.setBadgeBackgroundColor({tabId, color: null});
+          await expectGlobals(details[1]);
+          expect(details[1]);
+        },
+        async expect => {
+          browser.test.log("Change global values, expect the new values.");
+          browser.browserAction.setIcon({path: "i3.png"});
+          browser.browserAction.setPopup({popup: "p3.html"});
+          browser.browserAction.setTitle({title: "t3"});
+          browser.browserAction.setBadgeText({text: "b3"});
+          browser.browserAction.setBadgeBackgroundColor({color: "#333"});
+          await expectGlobals(details[5]);
+          expect(details[5]);
+        },
+        async expect => {
+          browser.test.log("Remove global values, expect defaults.");
+          browser.browserAction.setIcon({path: null});
+          browser.browserAction.setPopup({popup: null});
+          browser.browserAction.setBadgeText({text: null});
+          browser.browserAction.setTitle({title: null});
+          browser.browserAction.setBadgeBackgroundColor({color: null});
+          await expectGlobals(details[0]);
+          expect(details[0]);
         },
       ];
     },

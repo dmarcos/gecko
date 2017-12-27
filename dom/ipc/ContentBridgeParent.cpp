@@ -7,7 +7,6 @@
 #include "mozilla/dom/ContentBridgeParent.h"
 #include "mozilla/dom/TabParent.h"
 #include "mozilla/jsipc/CrossProcessObjectWrappers.h"
-#include "mozilla/dom/ipc/MemoryStreamParent.h"
 #include "nsXULAppAPI.h"
 #include "nsIObserverService.h"
 #include "base/task.h"
@@ -23,6 +22,7 @@ NS_IMPL_ISUPPORTS(ContentBridgeParent,
                   nsIObserver)
 
 ContentBridgeParent::ContentBridgeParent()
+  : mIsForJSPlugin(false)
 {}
 
 ContentBridgeParent::~ContentBridgeParent()
@@ -36,7 +36,10 @@ ContentBridgeParent::ActorDestroy(ActorDestroyReason aWhy)
   if (os) {
     os->RemoveObserver(this, "content-child-shutdown");
   }
-  MessageLoop::current()->PostTask(NewRunnableMethod(this, &ContentBridgeParent::DeferredDestroy));
+  MessageLoop::current()->PostTask(
+    NewRunnableMethod("dom::ContentBridgeParent::DeferredDestroy",
+                      this,
+                      &ContentBridgeParent::DeferredDestroy));
 }
 
 /*static*/ ContentBridgeParent*
@@ -88,13 +91,6 @@ ContentBridgeParent::RecvAsyncMessage(const nsString& aMsg,
                                             aPrincipal, aData);
 }
 
-PBlobParent*
-ContentBridgeParent::SendPBlobConstructor(PBlobParent* actor,
-                                          const BlobConstructorParams& params)
-{
-  return PContentBridgeParent::SendPBlobConstructor(actor, params);
-}
-
 PBrowserParent*
 ContentBridgeParent::SendPBrowserConstructor(PBrowserParent* aActor,
                                              const TabId& aTabId,
@@ -119,28 +115,26 @@ ContentBridgeParent::SendPParentToChildStreamConstructor(PParentToChildStreamPar
   return PContentBridgeParent::SendPParentToChildStreamConstructor(aActor);
 }
 
-PBlobParent*
-ContentBridgeParent::AllocPBlobParent(const BlobConstructorParams& aParams)
+PIPCBlobInputStreamParent*
+ContentBridgeParent::SendPIPCBlobInputStreamConstructor(PIPCBlobInputStreamParent* aActor,
+                                                        const nsID& aID,
+                                                        const uint64_t& aSize)
 {
-  return nsIContentParent::AllocPBlobParent(aParams);
+  return
+    PContentBridgeParent::SendPIPCBlobInputStreamConstructor(aActor, aID, aSize);
+}
+
+PIPCBlobInputStreamParent*
+ContentBridgeParent::AllocPIPCBlobInputStreamParent(const nsID& aID,
+                                                    const uint64_t& aSize)
+{
+  return nsIContentParent::AllocPIPCBlobInputStreamParent(aID, aSize);
 }
 
 bool
-ContentBridgeParent::DeallocPBlobParent(PBlobParent* aActor)
+ContentBridgeParent::DeallocPIPCBlobInputStreamParent(PIPCBlobInputStreamParent* aActor)
 {
-  return nsIContentParent::DeallocPBlobParent(aActor);
-}
-
-PMemoryStreamParent*
-ContentBridgeParent::AllocPMemoryStreamParent(const uint64_t& aSize)
-{
-  return nsIContentParent::AllocPMemoryStreamParent(aSize);
-}
-
-bool
-ContentBridgeParent::DeallocPMemoryStreamParent(PMemoryStreamParent* aActor)
-{
-  return nsIContentParent::DeallocPMemoryStreamParent(aActor);
+  return nsIContentParent::DeallocPIPCBlobInputStreamParent(aActor);
 }
 
 mozilla::jsipc::PJavaScriptParent *
@@ -177,12 +171,31 @@ ContentBridgeParent::DeallocPBrowserParent(PBrowserParent* aParent)
   return nsIContentParent::DeallocPBrowserParent(aParent);
 }
 
+mozilla::ipc::IPCResult
+ContentBridgeParent::RecvPBrowserConstructor(PBrowserParent* actor,
+                                             const TabId& tabId,
+                                             const TabId& sameTabGroupAs,
+                                             const IPCTabContext& context,
+                                             const uint32_t& chromeFlags,
+                                             const ContentParentId& cpId,
+                                             const bool& isForBrowser)
+{
+  return nsIContentParent::RecvPBrowserConstructor(actor,
+                                                   tabId,
+                                                   sameTabGroupAs,
+                                                   context,
+                                                   chromeFlags,
+                                                   cpId,
+                                                   isForBrowser);
+}
+
 void
 ContentBridgeParent::NotifyTabDestroyed()
 {
   int32_t numLiveTabs = ManagedPBrowserParent().Count();
   if (numLiveTabs == 1) {
-    MessageLoop::current()->PostTask(NewRunnableMethod(this, &ContentBridgeParent::Close));
+    MessageLoop::current()->PostTask(NewRunnableMethod(
+      "dom::ContentBridgeParent::Close", this, &ContentBridgeParent::Close));
   }
 }
 

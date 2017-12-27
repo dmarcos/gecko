@@ -14,7 +14,7 @@
 
 #include "nsAttrValue.h"
 #include "nsAttrValueInlines.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsUnicharUtils.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/ServoBindingTypes.h"
@@ -60,7 +60,7 @@ MiscContainer::GetString(nsAString& aString) const
     return true;
   }
 
-  nsIAtom* atom = static_cast<nsIAtom*>(ptr);
+  nsAtom* atom = static_cast<nsAtom*>(ptr);
   if (!atom) {
     return false;
   }
@@ -145,7 +145,7 @@ nsAttrValue::nsAttrValue(const nsAString& aValue)
   SetTo(aValue);
 }
 
-nsAttrValue::nsAttrValue(nsIAtom* aValue)
+nsAttrValue::nsAttrValue(nsAtom* aValue)
     : mBits(0)
 {
   SetTo(aValue);
@@ -186,25 +186,6 @@ nsAttrValue::Shutdown()
   sEnumTableArray = nullptr;
 }
 
-nsAttrValue::ValueType
-nsAttrValue::Type() const
-{
-  switch (BaseType()) {
-    case eIntegerBase:
-    {
-      return static_cast<ValueType>(mBits & NS_ATTRVALUE_INTEGERTYPE_MASK);
-    }
-    case eOtherBase:
-    {
-      return GetMiscContainer()->mType;
-    }
-    default:
-    {
-      return static_cast<ValueType>(static_cast<uint16_t>(BaseType()));
-    }
-  }
-}
-
 void
 nsAttrValue::Reset()
 {
@@ -232,7 +213,7 @@ nsAttrValue::Reset()
     }
     case eAtomBase:
     {
-      nsIAtom* atom = GetAtomValue();
+      nsAtom* atom = GetAtomValue();
       NS_RELEASE(atom);
 
       break;
@@ -271,7 +252,7 @@ nsAttrValue::SetTo(const nsAttrValue& aOther)
     case eAtomBase:
     {
       ResetIfSet();
-      nsIAtom* atom = aOther.GetAtomValue();
+      nsAtom* atom = aOther.GetAtomValue();
       NS_ADDREF(atom);
       SetPtrValueAndType(atom, eAtomBase);
       return;
@@ -280,7 +261,7 @@ nsAttrValue::SetTo(const nsAttrValue& aOther)
     {
       ResetIfSet();
       mBits = aOther.mBits;
-      return;      
+      return;
     }
   }
 
@@ -368,7 +349,7 @@ nsAttrValue::SetTo(const nsAttrValue& aOther)
         eStringBase) {
       static_cast<nsStringBuffer*>(otherPtr)->AddRef();
     } else {
-      static_cast<nsIAtom*>(otherPtr)->AddRef();
+      static_cast<nsAtom*>(otherPtr)->AddRef();
     }
     cont->mStringBits = otherCont->mStringBits;
   }
@@ -388,7 +369,7 @@ nsAttrValue::SetTo(const nsAString& aValue)
 }
 
 void
-nsAttrValue::SetTo(nsIAtom* aValue)
+nsAttrValue::SetTo(nsAtom* aValue)
 {
   ResetIfSet();
   if (aValue) {
@@ -606,7 +587,7 @@ nsAttrValue::ToString(nsAString& aResult) const
     }
     case eAtom:
     {
-      nsIAtom *atom = static_cast<nsIAtom*>(GetPtr());
+      nsAtom *atom = static_cast<nsAtom*>(GetPtr());
       atom->ToString(aResult);
 
       break;
@@ -745,7 +726,7 @@ nsAttrValue::ToString(nsAString& aResult) const
   }
 }
 
-already_AddRefed<nsIAtom>
+already_AddRefed<nsAtom>
 nsAttrValue::GetAsAtom() const
 {
   switch (Type()) {
@@ -754,7 +735,7 @@ nsAttrValue::GetAsAtom() const
 
     case eAtom:
       {
-        nsCOMPtr<nsIAtom> atom = GetAtomValue();
+        RefPtr<nsAtom> atom = GetAtomValue();
         return atom.forget();
       }
 
@@ -830,18 +811,18 @@ nsAttrValue::GetAtomCount() const
   return 0;
 }
 
-nsIAtom*
+nsAtom*
 nsAttrValue::AtomAt(int32_t aIndex) const
 {
   NS_PRECONDITION(aIndex >= 0, "Index must not be negative");
   NS_PRECONDITION(GetAtomCount() > uint32_t(aIndex), "aIndex out of range");
-  
+
   if (BaseType() == eAtomBase) {
     return GetAtomValue();
   }
 
   NS_ASSERTION(Type() == eAtomArray, "GetAtomCount must be confused");
-  
+
   return GetAtomArrayValue()->ElementAt(aIndex);
 }
 
@@ -913,7 +894,7 @@ nsAttrValue::HashValue() const
     {
       uint32_t hash = 0;
       uint32_t count = cont->mValue.mAtomArray->Length();
-      for (nsCOMPtr<nsIAtom> *cur = cont->mValue.mAtomArray->Elements(),
+      for (RefPtr<nsAtom> *cur = cont->mValue.mAtomArray->Elements(),
                              *end = cur + count;
            cur != end; ++cur) {
         hash = AddToHash(hash, cur->get());
@@ -1086,10 +1067,10 @@ nsAttrValue::Equals(const nsAString& aValue,
     }
     case eAtomBase:
       if (aCaseSensitive == eCaseMatters) {
-        return static_cast<nsIAtom*>(GetPtr())->Equals(aValue);
+        return static_cast<nsAtom*>(GetPtr())->Equals(aValue);
       }
       return nsContentUtils::EqualsIgnoreASCIICase(
-          nsDependentAtomString(static_cast<nsIAtom*>(GetPtr())),
+          nsDependentAtomString(static_cast<nsAtom*>(GetPtr())),
           aValue);
     default:
       break;
@@ -1102,7 +1083,7 @@ nsAttrValue::Equals(const nsAString& aValue,
 }
 
 bool
-nsAttrValue::Equals(nsIAtom* aValue, nsCaseTreatment aCaseSensitive) const
+nsAttrValue::Equals(nsAtom* aValue, nsCaseTreatment aCaseSensitive) const
 {
   if (aCaseSensitive != eCaseMatters) {
     // Need a better way to handle this!
@@ -1110,7 +1091,7 @@ nsAttrValue::Equals(nsIAtom* aValue, nsCaseTreatment aCaseSensitive) const
     aValue->ToString(value);
     return Equals(value, aCaseSensitive);
   }
-  
+
   switch (BaseType()) {
     case eStringBase:
     {
@@ -1124,7 +1105,7 @@ nsAttrValue::Equals(nsIAtom* aValue, nsCaseTreatment aCaseSensitive) const
     }
     case eAtomBase:
     {
-      return static_cast<nsIAtom*>(GetPtr()) == aValue;
+      return static_cast<nsAtom*>(GetPtr()) == aValue;
     }
     default:
       break;
@@ -1166,12 +1147,12 @@ nsAttrValue::EqualsAsStrings(const nsAttrValue& aOther) const
 }
 
 bool
-nsAttrValue::Contains(nsIAtom* aValue, nsCaseTreatment aCaseSensitive) const
+nsAttrValue::Contains(nsAtom* aValue, nsCaseTreatment aCaseSensitive) const
 {
   switch (BaseType()) {
     case eAtomBase:
     {
-      nsIAtom* atom = GetAtomValue();
+      nsAtom* atom = GetAtomValue();
 
       if (aCaseSensitive == eCaseMatters) {
         return aValue == atom;
@@ -1193,7 +1174,7 @@ nsAttrValue::Contains(nsIAtom* aValue, nsCaseTreatment aCaseSensitive) const
 
         nsDependentAtomString val1(aValue);
 
-        for (nsCOMPtr<nsIAtom> *cur = array->Elements(),
+        for (RefPtr<nsAtom> *cur = array->Elements(),
                                *end = cur + array->Length();
              cur != end; ++cur) {
           // For performance reasons, don't do a full on unicode case
@@ -1212,7 +1193,7 @@ nsAttrValue::Contains(nsIAtom* aValue, nsCaseTreatment aCaseSensitive) const
 }
 
 struct AtomArrayStringComparator {
-  bool Equals(nsIAtom* atom, const nsAString& string) const {
+  bool Equals(nsAtom* atom, const nsAString& string) const {
     return atom->Equals(string);
   }
 };
@@ -1223,7 +1204,7 @@ nsAttrValue::Contains(const nsAString& aValue) const
   switch (BaseType()) {
     case eAtomBase:
     {
-      nsIAtom* atom = GetAtomValue();
+      nsAtom* atom = GetAtomValue();
       return atom->Equals(aValue);
     }
     default:
@@ -1243,7 +1224,7 @@ nsAttrValue::ParseAtom(const nsAString& aValue)
 {
   ResetIfSet();
 
-  nsCOMPtr<nsIAtom> atom = NS_Atomize(aValue);
+  RefPtr<nsAtom> atom = NS_Atomize(aValue);
   if (atom) {
     SetPtrValueAndType(atom.forget().take(), eAtomBase);
   }
@@ -1256,7 +1237,7 @@ nsAttrValue::ParseAtomArray(const nsAString& aValue)
   aValue.BeginReading(iter);
   aValue.EndReading(end);
   bool hasSpace = false;
-  
+
   // skip initial whitespace
   while (iter != end && nsContentUtils::IsHTMLWhitespace(*iter)) {
     hasSpace = true;
@@ -1275,7 +1256,7 @@ nsAttrValue::ParseAtomArray(const nsAString& aValue)
     ++iter;
   } while (iter != end && !nsContentUtils::IsHTMLWhitespace(*iter));
 
-  nsCOMPtr<nsIAtom> classAtom = NS_AtomizeMainThread(Substring(start, iter));
+  RefPtr<nsAtom> classAtom = NS_AtomizeMainThread(Substring(start, iter));
   if (!classAtom) {
     Reset();
     return;
@@ -1291,7 +1272,7 @@ nsAttrValue::ParseAtomArray(const nsAString& aValue)
     // we only found one classname and there was no whitespace so
     // don't bother storing a list
     ResetIfSet();
-    nsIAtom* atom = nullptr;
+    nsAtom* atom = nullptr;
     classAtom.swap(atom);
     SetPtrValueAndType(atom, eAtomBase);
     return;
@@ -1302,8 +1283,8 @@ nsAttrValue::ParseAtomArray(const nsAString& aValue)
   }
 
   AtomArray* array = GetAtomArrayValue();
-  
-  if (!array->AppendElement(classAtom)) {
+
+  if (!array->AppendElement(Move(classAtom))) {
     Reset();
     return;
   }
@@ -1318,7 +1299,7 @@ nsAttrValue::ParseAtomArray(const nsAString& aValue)
 
     classAtom = NS_AtomizeMainThread(Substring(start, iter));
 
-    if (!array->AppendElement(classAtom)) {
+    if (!array->AppendElement(Move(classAtom))) {
       Reset();
       return;
     }
@@ -1330,7 +1311,6 @@ nsAttrValue::ParseAtomArray(const nsAString& aValue)
   }
 
   SetMiscAtomOrString(&aValue);
-  return;
 }
 
 void
@@ -1534,6 +1514,40 @@ nsAttrValue::ParseIntWithFallback(const nsAString& aString, int32_t aDefault,
   SetIntValueAndType(val, eInteger, nonStrict ? &aString : nullptr);
 }
 
+void
+nsAttrValue::ParseClampedNonNegativeInt(const nsAString& aString,
+                                        int32_t aDefault, int32_t aMin,
+                                        int32_t aMax)
+{
+  ResetIfSet();
+
+  nsContentUtils::ParseHTMLIntegerResultFlags result;
+  int32_t val = nsContentUtils::ParseHTMLInteger(aString, &result);
+  bool nonStrict = (result & nsContentUtils::eParseHTMLInteger_IsPercent) ||
+                   (result & nsContentUtils::eParseHTMLInteger_NonStandard) ||
+                   (result & nsContentUtils::eParseHTMLInteger_DidNotConsumeAllInput);
+
+  if (result & nsContentUtils::eParseHTMLInteger_ErrorOverflow) {
+    if (result & nsContentUtils::eParseHTMLInteger_Negative) {
+      val = aDefault;
+    } else {
+      val = aMax;
+    }
+    nonStrict = true;
+  } else if ((result & nsContentUtils::eParseHTMLInteger_Error) || val < 0) {
+    val = aDefault;
+    nonStrict = true;
+  } else if (val < aMin) {
+    val = aMin;
+    nonStrict = true;
+  } else if (val > aMax) {
+    val = aMax;
+    nonStrict = true;
+  }
+
+  SetIntValueAndType(val, eInteger, nonStrict ? &aString : nullptr);
+}
+
 bool
 nsAttrValue::ParseNonNegativeIntValue(const nsAString& aString)
 {
@@ -1678,12 +1692,11 @@ nsAttrValue::LoadImage(nsIDocument* aDocument)
   MiscContainer* cont = GetMiscContainer();
   mozilla::css::URLValue* url = cont->mValue.mURL;
 
-  NS_ASSERTION(!url->mString.IsEmpty(),
+  NS_ASSERTION(!url->IsStringEmpty(),
                "How did we end up with an empty string for eURL");
 
   mozilla::css::ImageValue* image =
-    new css::ImageValue(url->GetURI(), url->mString,
-                        do_AddRef(url->mExtraData), aDocument);
+      mozilla::css::ImageValue::CreateFromURLValue(url, aDocument);
 
   NS_ADDREF(image);
   cont->mValue.mImage = image;
@@ -1693,6 +1706,7 @@ nsAttrValue::LoadImage(nsIDocument* aDocument)
 
 bool
 nsAttrValue::ParseStyleAttribute(const nsAString& aString,
+                                 nsIPrincipal* aMaybeScriptedPrincipal,
                                  nsStyledElement* aElement)
 {
   nsIDocument* ownerDoc = aElement->OwnerDoc();
@@ -1703,11 +1717,19 @@ nsAttrValue::ParseStyleAttribute(const nsAString& aString,
   NS_ASSERTION(aElement->NodePrincipal() == ownerDoc->NodePrincipal(),
                "This is unexpected");
 
+  nsCOMPtr<nsIPrincipal> principal = (
+      aMaybeScriptedPrincipal ? aMaybeScriptedPrincipal
+                              : aElement->NodePrincipal());
+
   // If the (immutable) document URI does not match the element's base URI
   // (the common case is that they do match) do not cache the rule.  This is
   // because the results of the CSS parser are dependent on these URIs, and we
   // do not want to have to account for the URIs in the hash lookup.
-  bool cachingAllowed = sheet && baseURI == docURI;
+  // Similarly, if the triggering principal does not match the node principal,
+  // do not cache the rule, since the principal will be encoded in any parsed
+  // URLs in the rule.
+  bool cachingAllowed = (sheet && baseURI == docURI &&
+                         principal == aElement->NodePrincipal());
   if (cachingAllowed) {
     MiscContainer* cont = sheet->LookupStyleAttr(aString);
     if (cont) {
@@ -1721,13 +1743,15 @@ nsAttrValue::ParseStyleAttribute(const nsAString& aString,
   RefPtr<DeclarationBlock> decl;
   if (ownerDoc->GetStyleBackendType() == StyleBackendType::Servo) {
     RefPtr<URLExtraData> data = new URLExtraData(baseURI, docURI,
-                                                 aElement->NodePrincipal());
-    decl = ServoDeclarationBlock::FromCssText(aString, data);
+                                                 principal);
+    decl = ServoDeclarationBlock::FromCssText(aString, data,
+                                              ownerDoc->GetCompatibilityMode(),
+                                              ownerDoc->CSSLoader());
   } else {
     css::Loader* cssLoader = ownerDoc->CSSLoader();
     nsCSSParser cssParser(cssLoader);
     decl = cssParser.ParseStyleAttribute(aString, docURI, baseURI,
-                                         aElement->NodePrincipal());
+                                         principal);
   }
   if (!decl) {
     return false;
@@ -1762,7 +1786,7 @@ nsAttrValue::SetMiscAtomOrString(const nsAString* aValue)
                  "Empty string?");
     MiscContainer* cont = GetMiscContainer();
     if (len <= NS_ATTRVALUE_MAX_STRINGLENGTH_ATOM) {
-      nsCOMPtr<nsIAtom> atom = NS_AtomizeMainThread(*aValue);
+      RefPtr<nsAtom> atom = NS_AtomizeMainThread(*aValue);
       if (atom) {
         cont->mStringBits =
           reinterpret_cast<uintptr_t>(atom.forget().take()) | eAtomBase;
@@ -1786,7 +1810,7 @@ nsAttrValue::ResetMiscAtomOrString()
         eStringBase) {
       static_cast<nsStringBuffer*>(ptr)->Release();
     } else {
-      static_cast<nsIAtom*>(ptr)->Release();
+      static_cast<nsAtom*>(ptr)->Release();
     }
     cont->mStringBits = 0;
   }
@@ -1964,7 +1988,7 @@ nsAttrValue::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
         // need a way to call the Servo heap_size_of function.
         //n += container->mCSSDeclaration->SizeOfIncludingThis(aMallocSizeOf);
       } else if (Type() == eAtomArray && container->mValue.mAtomArray) {
-        // Don't measure each nsIAtom, they are measured separatly.
+        // Don't measure each nsAtom, they are measured separatly.
         n += container->mValue.mAtomArray->ShallowSizeOfIncludingThis(aMallocSizeOf);
       }
       break;

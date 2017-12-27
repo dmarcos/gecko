@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,7 +18,7 @@
 nsListItemFrame::nsListItemFrame(nsStyleContext* aContext,
                                  bool aIsRoot,
                                  nsBoxLayout* aLayoutManager)
-  : nsGridRowLeafFrame(aContext, aIsRoot, aLayoutManager) 
+  : nsGridRowLeafFrame(aContext, aIsRoot, aLayoutManager, kClassID)
 {
 }
 
@@ -28,7 +29,7 @@ nsListItemFrame::~nsListItemFrame()
 nsSize
 nsListItemFrame::GetXULPrefSize(nsBoxLayoutState& aState)
 {
-  nsSize size = nsBoxFrame::GetXULPrefSize(aState);  
+  nsSize size = nsBoxFrame::GetXULPrefSize(aState);
   DISPLAY_PREF_SIZE(this, size);
 
   // guarantee that our preferred height doesn't exceed the standard
@@ -39,7 +40,6 @@ nsListItemFrame::GetXULPrefSize(nsBoxLayoutState& aState)
 
 void
 nsListItemFrame::BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
-                                             const nsRect&           aDirtyRect,
                                              const nsDisplayListSet& aLists)
 {
   if (aBuilder->IsForEventDelivery()) {
@@ -47,8 +47,8 @@ nsListItemFrame::BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
                                nsGkAtoms::_true, eCaseMatters))
       return;
   }
-  
-  nsGridRowLeafFrame::BuildDisplayListForChildren(aBuilder, aDirtyRect, aLists);
+
+  nsGridRowLeafFrame::BuildDisplayListForChildren(aBuilder, aLists);
 }
 
 // Creation Routine ///////////////////////////////////////////////////////////////////////
@@ -62,7 +62,7 @@ NS_NewListItemFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
   if (!layout) {
     return nullptr;
   }
-  
+
   return new (aPresShell) nsListItemFrame(aContext, false, layout);
 }
 

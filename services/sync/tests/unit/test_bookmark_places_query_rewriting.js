@@ -2,13 +2,12 @@
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
 _("Rewrite place: URIs.");
-Cu.import("resource://gre/modules/PlacesUtils.jsm");
 Cu.import("resource://services-sync/engines/bookmarks.js");
 Cu.import("resource://services-sync/service.js");
 Cu.import("resource://services-sync/util.js");
 
-var engine = new BookmarksEngine(Service);
-var store = engine._store;
+let engine = new BookmarksEngine(Service);
+let store = engine._store;
 
 function makeTagRecord(id, uri) {
   let tagRecord = new BookmarkQuery("bookmarks", id);
@@ -21,7 +20,7 @@ function makeTagRecord(id, uri) {
   return tagRecord;
 }
 
-function run_test() {
+add_task(async function run_test() {
   initTestLogging("Trace");
   Log.repository.getLogger("Sync.Engine.Bookmarks").level = Log.Level.Trace;
   Log.repository.getLogger("Sync.Store.Bookmarks").level = Log.Level.Trace;
@@ -31,30 +30,28 @@ function run_test() {
 
   _("Type: " + tagRecord.type);
   _("Folder name: " + tagRecord.folderName);
-  store.applyIncoming(tagRecord);
+  await store.applyIncoming(tagRecord);
 
-  let tags = PlacesUtils.getFolderContents(PlacesUtils.tagsFolderId).root;
-  let tagID;
-  try {
-    for (let i = 0; i < tags.childCount; ++i) {
-      let child = tags.getChild(i);
-      if (child.title == "bar") {
-        tagID = child.itemId;
-      }
-    }
-  } finally {
-    tags.containerOpen = false;
-  }
+  let tagID = -1;
+  let db = await PlacesUtils.promiseDBConnection();
+  let rows = await db.execute(`
+    SELECT id FROM moz_bookmarks
+    WHERE parent = :tagsFolderId AND
+          title = :title`,
+    { tagsFolderId: PlacesUtils.tagsFolderId,
+      title: "bar" });
+  equal(rows.length, 1);
+  tagID = rows[0].getResultByName("id");
 
   _("Tag ID: " + tagID);
-  let insertedRecord = store.createRecord("abcdefabcdef", "bookmarks");
-  do_check_eq(insertedRecord.bmkUri, uri.replace("499", tagID));
+  let insertedRecord = await store.createRecord("abcdefabcdef", "bookmarks");
+  Assert.equal(insertedRecord.bmkUri, uri.replace("499", tagID));
 
   _("... but not if the type is wrong.");
   let wrongTypeURI = "place:folder=499&type=2&queryType=1";
   let wrongTypeRecord = makeTagRecord("fedcbafedcba", wrongTypeURI);
-  store.applyIncoming(wrongTypeRecord);
+  await store.applyIncoming(wrongTypeRecord);
 
-  insertedRecord = store.createRecord("fedcbafedcba", "bookmarks");
-  do_check_eq(insertedRecord.bmkUri, wrongTypeURI);
-}
+  insertedRecord = await store.createRecord("fedcbafedcba", "bookmarks");
+  Assert.equal(insertedRecord.bmkUri, wrongTypeURI);
+});

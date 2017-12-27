@@ -9,6 +9,7 @@
 #include "nsIObserver.h"
 #include "nsString.h"
 #include "nsTArray.h"
+#include "nsWeakReference.h"
 
 #include "mozILocaleService.h"
 
@@ -21,6 +22,36 @@ namespace intl {
  * It's intended to be the core place for collecting available and
  * requested languages and negotiating them to produce a fallback
  * chain of locales for the application.
+ *
+ * Client / Server
+ *
+ * LocaleService may operate in one of two modes:
+ *
+ *   server
+ *     in the server mode, LocaleService is collecting and negotiating
+ *     languages. It also subscribes to relevant observers.
+ *     There should be at most one server per application instance.
+ *
+ *   client
+ *     in the client mode, LocaleService is not responsible for collecting
+ *     or reacting to any system changes. It still distributes information
+ *     about locales, but internally, it gets information from the server instance
+ *     instead of collecting it on its own.
+ *     This prevents any data desynchronization and minimizes the cost
+ *     of running the service.
+ *
+ *   In both modes, all get* methods should work the same way and all
+ *   static methods are available.
+ *
+ *   In the server mode, other components may inform LocaleService about their
+ *   status either via calls to set* methods or via observer events.
+ *   In the client mode, only the process communication should provide data
+ *   to the LocaleService.
+ *
+ *   At the moment desktop apps use the parent process in the server mode, and
+ *   content processes in the client mode.
+ *
+ * Locale / Language
  *
  * The terms `Locale ID` and `Language ID` are used slightly differently
  * by different organizations. Mozilla uses the term `Language ID` to describe
@@ -38,7 +69,8 @@ namespace intl {
  * but we negotiate between languages etc.
  */
 class LocaleService : public mozILocaleService,
-                      public nsIObserver
+                      public nsIObserver,
+                      public nsSupportsWeakReference
 {
 public:
   NS_DECL_ISUPPORTS
@@ -56,6 +88,8 @@ public:
     Matching,
     Lookup
   };
+
+  explicit LocaleService(bool aIsServer);
 
   /**
    * Create (if necessary) and return a raw pointer to the singleton instance.
@@ -93,6 +127,38 @@ public:
    */
   void GetAppLocalesAsLangTags(nsTArray<nsCString>& aRetVal);
   void GetAppLocalesAsBCP47(nsTArray<nsCString>& aRetVal);
+
+
+  /**
+   * Returns a list of locales to use for any regional specific operations
+   * like date formatting, calendars, unit formatting etc.
+   *
+   * The result is a ordered list of valid locale IDs and it should be
+   * used for all APIs that accept list of locales, like ECMA402 and L10n APIs.
+   *
+   * This API always returns at least one locale.
+   *
+   * Example: ["en-US", "de", "pl", "sr-Cyrl", "zh-Hans-HK"]
+   *
+   * Usage:
+   *   nsTArray<nsCString> rgLocales;
+   *   LocaleService::GetInstance()->GetRegionalPrefsLocales(rgLocales);
+   *
+   * (See mozILocaleService.idl for a JS-callable version of this.)
+   */
+  void GetRegionalPrefsLocales(nsTArray<nsCString>& aRetVal);
+
+  /**
+   * This method should only be called in the client mode.
+   *
+   * It replaces all the language negotiation and is supposed to be called
+   * in order to bring the client LocaleService in sync with the server
+   * LocaleService.
+   *
+   * Currently, it's called by the IPC code.
+   */
+  void AssignAppLocales(const nsTArray<nsCString>& aAppLocales);
+  void AssignRequestedLocales(const nsTArray<nsCString>& aRequestedLocales);
 
   /**
    * Returns a list of locales that the user requested the app to be
@@ -135,12 +201,21 @@ public:
   bool GetAvailableLocales(nsTArray<nsCString>& aRetVal);
 
   /**
-   * Triggers a refresh of the language negotiation process.
+   * Those three functions allow to trigger cache invalidation on one of the
+   * three cached values.
+   *
+   * In most cases, the functions will be called by the observer in
+   * LocaleService itself, but in a couple special cases, we have the
+   * other component call this manually instead of sending a global event.
    *
    * If the result differs from the previous list, it will additionally
-   * trigger a global event "intl:app-locales-changed".
+   * trigger a corresponding event
+   *
+   * This code should be called only in the server mode..
    */
-  void Refresh();
+  void AvailableLocalesChanged();
+  void RequestedLocalesChanged();
+  void LocalesChanged();
 
   /**
    * Negotiates the best locales out of an ordered list of requested locales and
@@ -175,6 +250,8 @@ public:
   static bool LanguagesMatch(const nsCString& aRequested,
                              const nsCString& aAvailable);
 
+  bool IsServer();
+
 private:
   /**
    * Locale object, a BCP47-style tag decomposed into subtags for
@@ -194,7 +271,9 @@ private:
     void SetVariantRange();
     void SetRegionRange();
 
-    bool AddLikelySubtags(); // returns false if nothing changed
+    // returns false if nothing changed
+    bool AddLikelySubtags();
+    bool AddLikelySubtagsWithoutRegion();
 
     const nsCString& AsString() const {
       return mLocaleStr;
@@ -214,6 +293,8 @@ private:
     nsCString mScript;
     nsCString mRegion;
     nsCString mVariant;
+
+    bool AddLikelySubtagsForLocale(const nsACString& aLocale);
   };
 
   void FilterMatches(const nsTArray<nsCString>& aRequested,
@@ -225,7 +306,11 @@ private:
 
   virtual ~LocaleService();
 
+  nsAutoCStringN<16>  mDefaultLocale;
   nsTArray<nsCString> mAppLocales;
+  nsTArray<nsCString> mRequestedLocales;
+  nsTArray<nsCString> mAvailableLocales;
+  const bool mIsServer;
 
   static StaticRefPtr<LocaleService> sInstance;
 };

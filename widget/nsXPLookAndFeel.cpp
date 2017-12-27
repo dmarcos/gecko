@@ -19,6 +19,7 @@
 #include "mozilla/widget/WidgetMessageUtils.h"
 
 #include "gfxPlatform.h"
+#include "gfxPrefs.h"
 #include "qcms.h"
 
 #ifdef DEBUG
@@ -116,14 +117,23 @@ nsLookAndFeelIntPref nsXPLookAndFeel::sIntPrefs[] =
   { "ui.tooltipDelay",
     eIntID_TooltipDelay,
     false, 0 },
-  { "ui.physicalHomeButton",
-    eIntID_PhysicalHomeButton,
-    false, 0 },
   { "ui.contextMenuOffsetVertical",
     eIntID_ContextMenuOffsetVertical,
     false, 0 },
   { "ui.contextMenuOffsetHorizontal",
     eIntID_ContextMenuOffsetHorizontal,
+    false, 0 },
+  { "ui.GtkCSDAvailable",
+    eIntID_GTKCSDAvailable,
+    false, 0 },
+  { "ui.GtkCSDMinimizeButton",
+    eIntID_GTKCSDMinimizeButton,
+    false, 0 },
+  { "ui.GtkCSDMaximizeButton",
+    eIntID_GTKCSDMaximizeButton,
+    false, 0 },
+  { "ui.GtkCSDCloseButton",
+    eIntID_GTKCSDCloseButton,
     false, 0 }
 };
 
@@ -143,11 +153,11 @@ nsLookAndFeelFloatPref nsXPLookAndFeel::sFloatPrefs[] =
 
 // This array MUST be kept in the same order as the color list in LookAndFeel.h.
 /* XXX If you add any strings longer than
- * "ui.IMESelectedConvertedTextBackground"
+ * "ui.-moz-mac-active-source-list-selection"
  * to the following array then you MUST update the
  * sizes of the sColorPrefs array in nsXPLookAndFeel.h
  */
-const char nsXPLookAndFeel::sColorPrefs[][38] =
+const char nsXPLookAndFeel::sColorPrefs[][41] =
 {
   "ui.windowBackground",
   "ui.windowForeground",
@@ -236,6 +246,17 @@ const char nsXPLookAndFeel::sColorPrefs[][38] =
   "ui.-moz-mac-menutextselect",
   "ui.-moz_mac_disabledtoolbartext",
   "ui.-moz-mac-secondaryhighlight",
+  "ui.-moz-mac-vibrancy-light",
+  "ui.-moz-mac-vibrancy-dark",
+  "ui.-moz-mac-vibrant-titlebar-light",
+  "ui.-moz-mac-vibrant-titlebar-dark",
+  "ui.-moz-mac-menupopup",
+  "ui.-moz-mac-menuitem",
+  "ui.-moz-mac-active-menuitem",
+  "ui.-moz-mac-source-list",
+  "ui.-moz-mac-source-list-selection",
+  "ui.-moz-mac-active-source-list-selection",
+  "ui.-moz-mac-tooltip",
   "ui.-moz-win-mediatext",
   "ui.-moz-win-communicationstext",
   "ui.-moz-nativehyperlinktext",
@@ -333,7 +354,7 @@ void
 nsXPLookAndFeel::ColorPrefChanged (unsigned int index, const char *prefName)
 {
   nsAutoString colorStr;
-  nsresult rv = Preferences::GetString(prefName, &colorStr);
+  nsresult rv = Preferences::GetString(prefName, colorStr);
   if (NS_FAILED(rv)) {
     return;
   }
@@ -387,7 +408,7 @@ void
 nsXPLookAndFeel::InitColorFromPref(int32_t i)
 {
   nsAutoString colorStr;
-  nsresult rv = Preferences::GetString(sColorPrefs[i], &colorStr);
+  nsresult rv = Preferences::GetString(sColorPrefs[i], colorStr);
   if (NS_FAILED(rv) || colorStr.IsEmpty()) {
     return;
   }
@@ -657,6 +678,31 @@ nsXPLookAndFeel::GetStandinForNativeColor(ColorID aID)
       result = NS_RGB(0x3F, 0x3F, 0x3F); break;
     case eColorID__moz_mac_secondaryhighlight:
       result = NS_RGB(0xD4, 0xD4, 0xD4); break;
+    case eColorID__moz_mac_vibrancy_light:
+    case eColorID__moz_mac_vibrant_titlebar_light:
+      result = NS_RGB(0xf7, 0xf7, 0xf7); break;
+    case eColorID__moz_mac_vibrancy_dark:
+    case eColorID__moz_mac_vibrant_titlebar_dark:
+      result = NS_RGB(0x28, 0x28, 0x28); break;
+    case eColorID__moz_mac_menupopup:
+      result = NS_RGB(0xe6, 0xe6, 0xe6); break;
+    case eColorID__moz_mac_menuitem:
+      result = NS_RGB(0xe6, 0xe6, 0xe6); break;
+    case eColorID__moz_mac_active_menuitem:
+      result = NS_RGB(0x0a, 0x64, 0xdc); break;
+    case eColorID__moz_mac_source_list:
+      result = NS_RGB(0xf7, 0xf7, 0xf7); break;
+    case eColorID__moz_mac_source_list_selection:
+      result = NS_RGB(0xc8, 0xc8, 0xc8); break;
+    case eColorID__moz_mac_active_source_list_selection:
+      result = NS_RGB(0x0a, 0x64, 0xdc); break;
+    case eColorID__moz_mac_tooltip:
+      result = NS_RGB(0xf7, 0xf7, 0xf7); break;
+    case eColorID__moz_win_accentcolor:
+      // Seems to be the default color (hardcoded because of bug 1065998)
+      result = NS_RGB(0x9E, 0x9E, 0x9E); break;
+    case eColorID__moz_win_accentcolortext:
+      result = NS_RGB(0x00, 0x00, 0x00); break;
     case eColorID__moz_win_mediatext:
       result = NS_RGB(0xFF, 0xFF, 0xFF); break;
     case eColorID__moz_win_communicationstext:
@@ -820,21 +866,25 @@ nsXPLookAndFeel::GetColorImpl(ColorID aID, bool aUseStandinsForNativeColors,
   }
 
   if (sUseNativeColors && NS_SUCCEEDED(NativeGetColor(aID, aResult))) {
-    if ((gfxPlatform::GetCMSMode() == eCMSMode_All) &&
-         !IsSpecialColor(aID, aResult)) {
-      qcms_transform *transform = gfxPlatform::GetCMSInverseRGBTransform();
-      if (transform) {
-        uint8_t color[3];
-        color[0] = NS_GET_R(aResult);
-        color[1] = NS_GET_G(aResult);
-        color[2] = NS_GET_B(aResult);
-        qcms_transform_data(transform, color, color, 1);
-        aResult = NS_RGB(color[0], color[1], color[2]);
-      }
-    }
-
     if (!mozilla::ServoStyleSet::IsInServoTraversal()) {
       MOZ_ASSERT(NS_IsMainThread());
+      // Make sure the preferences are initialized. In the normal run,
+      // they would already be, because gfxPlatform would have been created,
+      // but with some addon, that is not the case. See Bug 1357307.
+      gfxPrefs::GetSingleton();
+      if ((gfxPlatform::GetCMSMode() == eCMSMode_All) &&
+           !IsSpecialColor(aID, aResult)) {
+        qcms_transform *transform = gfxPlatform::GetCMSInverseRGBTransform();
+        if (transform) {
+          uint8_t color[3];
+          color[0] = NS_GET_R(aResult);
+          color[1] = NS_GET_G(aResult);
+          color[2] = NS_GET_B(aResult);
+          qcms_transform_data(transform, color, color, 1);
+          aResult = NS_RGB(color[0], color[1], color[2]);
+        }
+      }
+
       CACHE_COLOR(aID, aResult);
     }
     return NS_OK;
@@ -978,6 +1028,13 @@ void
 LookAndFeel::Refresh()
 {
   nsLookAndFeel::GetInstance()->RefreshImpl();
+}
+
+// static
+void
+LookAndFeel::NativeInit()
+{
+  nsLookAndFeel::GetInstance()->NativeInit();
 }
 
 // static

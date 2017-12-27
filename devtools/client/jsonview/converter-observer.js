@@ -73,6 +73,9 @@ JsonViewSniffer.prototype = {
     if (request instanceof Ci.nsIChannel) {
       // JSON View is enabled only for top level loads only.
       if (!this.isTopLevelLoad(request)) {
+        if (request.contentType === JSON_VIEW_MIME_TYPE) {
+          return "application/json";
+        }
         return "";
       }
       try {
@@ -87,8 +90,7 @@ JsonViewSniffer.prototype = {
       // Check the response content type and if it's a valid type
       // such as application/json or application/manifest+json
       // change it to new internal type consumed by JSON View.
-      const JSON_TYPES = ["application/json", "application/manifest+json"];
-      if (JSON_TYPES.includes(request.contentType)) {
+      if (/^application\/(?:.+\+)?json$/.test(request.contentType)) {
         return JSON_VIEW_MIME_TYPE;
       }
     }
@@ -105,7 +107,7 @@ const JsonSnifferFactory = {
     if (outer) {
       throw Cr.NS_ERROR_NO_AGGREGATION;
     }
-    return new JsonViewSniffer();
+    return new JsonViewSniffer().QueryInterface(iid);
   }
 };
 
@@ -119,7 +121,7 @@ const JsonViewFactory = {
     if (outer) {
       throw Cr.NS_ERROR_NO_AGGREGATION;
     }
-    return JsonViewService.createInstance();
+    return JsonViewService.createInstance().QueryInterface(iid);
   }
 };
 

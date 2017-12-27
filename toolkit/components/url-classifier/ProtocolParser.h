@@ -7,8 +7,7 @@
 #define ProtocolParser_h__
 
 #include "HashStore.h"
-#include "nsICryptoHMAC.h"
-#include "safebrowsing.pb.h"
+#include "chromium/safebrowsing.pb.h"
 
 namespace mozilla {
 namespace safebrowsing {
@@ -27,8 +26,6 @@ public:
   virtual ~ProtocolParser();
 
   nsresult Status() const { return mUpdateStatus; }
-
-  nsresult Init(nsICryptoHash* aHasher);
 
 #ifdef MOZ_SAFEBROWSING_DUMP_FAILED_UPDATES
   virtual nsCString GetRawTableUpdates() const { return mPending; }
@@ -73,7 +70,6 @@ protected:
   nsTArray<TableUpdate*> mTableUpdates;
 
   nsTArray<ForwardedUpdate> mForwards;
-  nsCOMPtr<nsICryptoHash> mCryptoHash;
 
   // The table names that were requested from the client.
   nsTArray<nsCString> mRequestedTables;

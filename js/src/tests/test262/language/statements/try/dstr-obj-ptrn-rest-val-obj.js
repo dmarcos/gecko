@@ -5,7 +5,7 @@
 description: Rest object contains just unextracted data (try statement)
 esid: sec-runtime-semantics-catchclauseevaluation
 es6id: 13.15.7
-features: [destructuring-binding]
+features: [object-rest, destructuring-binding]
 flags: [generated]
 includes: [propertyHelper.js]
 info: |
@@ -22,19 +22,22 @@ var ranCatch = false;
 try {
   throw {x: 1, y: 2, a: 5, b: 3};
 } catch ({a, b, ...rest}) {
-  assert.sameValue(rest.x, 1);
-  assert.sameValue(rest.y, 2);
   assert.sameValue(rest.a, undefined);
   assert.sameValue(rest.b, undefined);
 
-  verifyEnumerable(rest, "x");
-  verifyWritable(rest, "x");
-  verifyConfigurable(rest, "x");
+  verifyProperty(rest, "x", {
+    enumerable: true,
+    writable: true,
+    configurable: true,
+    value: 1
+  });
 
-  verifyEnumerable(rest, "y");
-  verifyWritable(rest, "y");
-  verifyConfigurable(rest, "y");
-
+  verifyProperty(rest, "y", {
+    enumerable: true,
+    writable: true,
+    configurable: true,
+    value: 2
+  });
   ranCatch = true;
 }
 

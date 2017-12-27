@@ -4,10 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const EXCLUDE_FROM_BACKUP_ANNO = "places/excludeFromBackup";
 // Menu, Toolbar, Unsorted, Tags, Mobile
 const PLACES_ROOTS_COUNT  = 5;
-var tests = [];
 
 /*
 
@@ -27,7 +25,7 @@ var test = {
     // check initial size
     var rootNode = PlacesUtils.getFolderContents(PlacesUtils.placesRootId,
                                                  false, false).root;
-    do_check_eq(rootNode.childCount, PLACES_ROOTS_COUNT );
+    Assert.equal(rootNode.childCount, PLACES_ROOTS_COUNT );
     rootNode.containerOpen = false;
 
     var idx = PlacesUtils.bookmarks.DEFAULT_INDEX;
@@ -49,7 +47,7 @@ var test = {
                                               idx, "exclude uri");
     // Annotate the bookmark for exclusion.
     PlacesUtils.annotations.setItemAnnotation(exItemId,
-                                              EXCLUDE_FROM_BACKUP_ANNO, 1, 0,
+                                              PlacesUtils.EXCLUDE_FROM_BACKUP_ANNO, 1, 0,
                                               PlacesUtils.annotations.EXPIRE_NEVER);
 
     // create a root to be exclude
@@ -59,7 +57,7 @@ var test = {
                                                    this._excludeRootTitle, idx);
     // Annotate the root for exclusion.
     PlacesUtils.annotations.setItemAnnotation(this._excludeRootId,
-                                              EXCLUDE_FROM_BACKUP_ANNO, 1, 0,
+                                              PlacesUtils.EXCLUDE_FROM_BACKUP_ANNO, 1, 0,
                                               PlacesUtils.annotations.EXPIRE_NEVER);
     // add a test bookmark exclude by exclusion of its parent
     PlacesUtils.bookmarks.insertBookmark(this._excludeRootId,
@@ -74,67 +72,71 @@ var test = {
     if (!aEmptyBookmarks) {
       // since restore does not remove backup exclude items both
       // roots should still exist.
-      do_check_eq(rootNode.childCount, PLACES_ROOTS_COUNT + 2);
+      Assert.equal(rootNode.childCount, PLACES_ROOTS_COUNT + 2);
       // open exclude root and check it still contains one item
       var restoreRootIndex = PLACES_ROOTS_COUNT;
       var excludeRootIndex = PLACES_ROOTS_COUNT + 1;
       var excludeRootNode = rootNode.getChild(excludeRootIndex);
-      do_check_eq(this._excludeRootTitle, excludeRootNode.title);
+      Assert.equal(this._excludeRootTitle, excludeRootNode.title);
       excludeRootNode.QueryInterface(Ci.nsINavHistoryQueryResultNode);
       excludeRootNode.containerOpen = true;
-      do_check_eq(excludeRootNode.childCount, 1);
+      Assert.equal(excludeRootNode.childCount, 1);
       var excludeRootChildNode = excludeRootNode.getChild(0);
-      do_check_eq(excludeRootChildNode.uri, this._restoreRootExcludeURI.spec);
+      Assert.equal(excludeRootChildNode.uri, this._restoreRootExcludeURI.spec);
       excludeRootNode.containerOpen = false;
     } else {
       // exclude root should not exist anymore
-      do_check_eq(rootNode.childCount, PLACES_ROOTS_COUNT + 1);
+      Assert.equal(rootNode.childCount, PLACES_ROOTS_COUNT + 1);
       restoreRootIndex = PLACES_ROOTS_COUNT;
     }
 
     var restoreRootNode = rootNode.getChild(restoreRootIndex);
-    do_check_eq(this._restoreRootTitle, restoreRootNode.title);
+    Assert.equal(this._restoreRootTitle, restoreRootNode.title);
     restoreRootNode.QueryInterface(Ci.nsINavHistoryQueryResultNode);
     restoreRootNode.containerOpen = true;
-    do_check_eq(restoreRootNode.childCount, 1);
+    Assert.equal(restoreRootNode.childCount, 1);
     var restoreRootChildNode = restoreRootNode.getChild(0);
-    do_check_eq(restoreRootChildNode.uri, this._restoreRootURI.spec);
+    Assert.equal(restoreRootChildNode.uri, this._restoreRootURI.spec);
     restoreRootNode.containerOpen = false;
 
     rootNode.containerOpen = false;
   }
-}
+};
 
-function run_test() {
-  run_next_test();
-}
+// make json file
+var jsonFile;
 
-add_task(function*() {
-  // make json file
-  let jsonFile = OS.Path.join(OS.Constants.Path.profileDir, "bookmarks.json");
+add_task(async function setup() {
+  jsonFile = OS.Path.join(OS.Constants.Path.profileDir, "bookmarks.json");
+});
 
+add_task(async function test_export_import_excluded_file() {
   // populate db
   test.populate();
 
-  yield BookmarkJSONUtils.exportToFile(jsonFile);
+  await BookmarkJSONUtils.exportToFile(jsonFile);
 
   // restore json file
-  yield BookmarkJSONUtils.importFromFile(jsonFile, true);
+  info("Restoring json file");
+  await BookmarkJSONUtils.importFromFile(jsonFile, true);
 
   // validate without removing all bookmarks
   // restore do not remove backup exclude entries
+  info("Validating...");
   test.validate(false);
+});
 
+add_task(async function test_clearing_then_importing() {
   // cleanup
-  yield PlacesUtils.bookmarks.eraseEverything();
+  await PlacesUtils.bookmarks.eraseEverything();
   // manually remove the excluded root
   PlacesUtils.bookmarks.removeItem(test._excludeRootId);
   // restore json file
-  yield BookmarkJSONUtils.importFromFile(jsonFile, true);
+  await BookmarkJSONUtils.importFromFile(jsonFile, true);
 
   // validate after a complete bookmarks cleanup
   test.validate(true);
 
   // clean up
-  yield OS.File.remove(jsonFile);
+  await OS.File.remove(jsonFile);
 });

@@ -56,7 +56,7 @@ var pktApi = (function() {
      */
 
     // Base url for all api calls
-    var pocketAPIhost = Services.prefs.getCharPref("extensions.pocket.api");    // api.getpocket.com
+    var pocketAPIhost = Services.prefs.getCharPref("extensions.pocket.api"); // api.getpocket.com
     var pocketSiteHost = Services.prefs.getCharPref("extensions.pocket.site"); // getpocket.com
     var baseAPIUrl = "https://" + pocketAPIhost + "/v3";
 
@@ -88,7 +88,7 @@ var pktApi = (function() {
                 }
             }
         return out;
-    }
+    };
 
     var parseJSON = function(jsonString) {
         try {
@@ -155,9 +155,7 @@ var pktApi = (function() {
      *  The return format: { cookieName:cookieValue, cookieName:cookieValue, ... }
     */
     function getCookiesFromPocket() {
-
-        var cookieManager = Cc["@mozilla.org/cookiemanager;1"].getService(Ci.nsICookieManager2);
-        var pocketCookies = cookieManager.getCookiesFromHost(pocketSiteHost, {});
+        var pocketCookies = Services.cookies.getCookiesFromHost(pocketSiteHost, {});
         var cookies = {};
         while (pocketCookies.hasMoreElements()) {
             var cookie = pocketCookies.getNext().QueryInterface(Ci.nsICookie2);
@@ -174,12 +172,12 @@ var pktApi = (function() {
         var pocketCookies = getCookiesFromPocket();
 
         // If no cookie was found just return undefined
-        if (typeof pocketCookies["ftv1"] === "undefined") {
+        if (typeof pocketCookies.ftv1 === "undefined") {
             return undefined;
         }
 
         // Check if a new user logged in in the meantime and clearUserData if so
-        var sessionId = pocketCookies["fsv1"];
+        var sessionId = pocketCookies.fsv1;
         var lastSessionId = getSetting("fsv1");
         if (sessionId !== lastSessionId) {
             clearUserData();
@@ -187,7 +185,7 @@ var pktApi = (function() {
         }
 
         // Return access token
-        return pocketCookies["ftv1"];
+        return pocketCookies.ftv1;
     }
 
     /**
@@ -199,7 +197,7 @@ var pktApi = (function() {
         if (typeof premiumStatus === "undefined") {
             // Premium status is not in settings try get it from cookie
             var pocketCookies = getCookiesFromPocket();
-            premiumStatus = pocketCookies["ps"];
+            premiumStatus = pocketCookies.ps;
         }
         return premiumStatus;
     }
@@ -514,10 +512,10 @@ var pktApi = (function() {
         var tagsFromSettings = function() {
             var tagsJSON = getSetting("tags");
             if (typeof tagsJSON !== "undefined") {
-                return JSON.parse(tagsJSON)
+                return JSON.parse(tagsJSON);
             }
             return [];
-        }
+        };
 
         var sortedUsedTagsFromSettings = function() {
             // Get and Sort used tags
@@ -548,7 +546,7 @@ var pktApi = (function() {
             }
 
             return usedTags;
-        }
+        };
 
         if (callback) {
             var tags = tagsFromSettings();
@@ -604,7 +602,7 @@ var pktApi = (function() {
      * Helper function to get current signup AB group the user is in
      */
     function getSignupPanelTabTestVariant() {
-        return getMultipleTestOption("panelSignUp", {control: 1, v1: 8, v2: 1 })
+        return getMultipleTestOption("panelSignUp", {control: 1, v1: 8, v2: 1 });
     }
 
     function getMultipleTestOption(testName, testOptions) {

@@ -35,7 +35,7 @@ class gfxFontEntry;
 class gfxPlatformFontList;
 class gfxTextRun;
 class nsIURI;
-class nsIAtom;
+class nsAtom;
 class nsIObserver;
 class SRGBOverrideObserver;
 class gfxTextPerfMetrics;
@@ -64,7 +64,7 @@ BackendTypeBit(BackendType b)
 
 } // namespace gfx
 namespace dom {
-class FontFamilyListEntry;
+class SystemFontListEntry;
 }
 } // namespace mozilla
 
@@ -116,6 +116,8 @@ GetBackendName(mozilla::gfx::BackendType aBackend)
         return "recording";
       case mozilla::gfx::BackendType::DIRECT2D1_1:
         return "direct2d 1.1";
+      case mozilla::gfx::BackendType::WEBRENDER_TEXT:
+        return "webrender text";
       case mozilla::gfx::BackendType::NONE:
         return "none";
       case mozilla::gfx::BackendType::BACKEND_LAST:
@@ -189,6 +191,8 @@ public:
      */
     static void InitNullMetadata();
 
+    static int32_t MaxTextureSize();
+    static int32_t MaxAllocSize();
     static void InitMoz2DLogging();
 
     static bool IsHeadless();
@@ -227,21 +231,20 @@ public:
      * aIsPlugin is used to tell the backend that they can optimize this surface
      * specifically because it's used for a plugin. This is mostly for Skia.
      */
-    static already_AddRefed<SourceSurface>
-      GetSourceSurfaceForSurface(mozilla::gfx::DrawTarget *aTarget,
-                                 gfxASurface *aSurface,
-                                 bool aIsPlugin = false);
+    static already_AddRefed<SourceSurface> GetSourceSurfaceForSurface(
+      RefPtr<mozilla::gfx::DrawTarget> aTarget,
+      gfxASurface* aSurface,
+      bool aIsPlugin = false);
 
     static void ClearSourceSurfaceForSurface(gfxASurface *aSurface);
 
     static already_AddRefed<DataSourceSurface>
         GetWrappedDataSourceSurface(gfxASurface *aSurface);
 
-    virtual already_AddRefed<mozilla::gfx::ScaledFont>
-      GetScaledFontForFont(mozilla::gfx::DrawTarget* aTarget, gfxFont *aFont);
-
-    already_AddRefed<DrawTarget>
-      CreateOffscreenContentDrawTarget(const mozilla::gfx::IntSize& aSize, mozilla::gfx::SurfaceFormat aFormat);
+    already_AddRefed<DrawTarget> CreateOffscreenContentDrawTarget(
+      const mozilla::gfx::IntSize& aSize,
+      mozilla::gfx::SurfaceFormat aFormat,
+      bool aFallback = false);
 
     already_AddRefed<DrawTarget>
       CreateOffscreenCanvasDrawTarget(const mozilla::gfx::IntSize& aSize, mozilla::gfx::SurfaceFormat aFormat);
@@ -251,20 +254,10 @@ public:
 
     static already_AddRefed<DrawTarget>
       CreateDrawTargetForData(unsigned char* aData,
-                              const mozilla::gfx::IntSize& aSize, 
+                              const mozilla::gfx::IntSize& aSize,
                               int32_t aStride,
                               mozilla::gfx::SurfaceFormat aFormat,
                               bool aUninitialized = false);
-
-    /**
-     * Returns true if rendering to data surfaces produces the same results as
-     * rendering to offscreen surfaces on this platform, making it safe to
-     * render content to data surfaces. This is generally false on platforms
-     * which use different backends for each type of DrawTarget.
-     */
-    virtual bool CanRenderContentToDataSurface() const {
-      return false;
-    }
 
     /**
      * Returns true if we should use Azure to render content with aTarget. For
@@ -329,17 +322,17 @@ public:
      * that correspond to the given language group or generic font family
      * (or both, or neither).
      */
-    virtual nsresult GetFontList(nsIAtom *aLangGroup,
+    virtual nsresult GetFontList(nsAtom *aLangGroup,
                                  const nsACString& aGenericFamily,
                                  nsTArray<nsString>& aListOfFonts);
 
     /**
-     * Fill aFontFamilies with a list of FontFamilyListEntry records for the
+     * Fill aFontList with a list of SystemFontListEntry records for the
      * available fonts on the platform; used to pass the list from chrome to
-     * content process. Currently implemented only on MacOSX.
+     * content process. Currently implemented only on MacOSX and Linux.
      */
-    virtual void GetSystemFontFamilyList(
-      InfallibleTArray<mozilla::dom::FontFamilyListEntry>* aFontFamilies)
+    virtual void ReadSystemFontList(
+      InfallibleTArray<mozilla::dom::SystemFontListEntry>* aFontList)
     { }
 
     /**
@@ -382,7 +375,7 @@ public:
                     gfxTextPerfMetrics* aTextPerf,
                     gfxUserFontSet *aUserFontSet,
                     gfxFloat aDevToCssSize) = 0;
-                                          
+
     /**
      * Look up a local platform font using the full font face name.
      * (Needed to support @font-face src local().)
@@ -469,8 +462,10 @@ public:
      */
     bool UseGraphiteShaping();
 
-    // check whether format is supported on a platform or not (if unclear, returns true)
-    virtual bool IsFontFormatSupported(nsIURI *aFontURI, uint32_t aFormatFlags) { return false; }
+    // Check whether format is supported on a platform (if unclear, returns true).
+    // Default implementation checks for "common" formats that we support across
+    // all platforms, but individual platform implementations may override.
+    virtual bool IsFontFormatSupported(uint32_t aFormatFlags);
 
     virtual bool DidRenderingDeviceReset(DeviceResetReason* aResetReason = nullptr) { return false; }
 
@@ -554,6 +549,14 @@ public:
 
     int32_t GetBidiNumeralOption();
 
+    /**
+     * This is a bit ugly, but useful... force all presContexts to reflow,
+     * by toggling a preference that they observe. This is used when
+     * something about platform settings changes that might have an effect
+     * on layout, such as font rendering settings that influence metrics.
+     */
+    static void ForceGlobalReflow();
+
     static void
     FlushFontAndWordCaches();
 
@@ -568,7 +571,7 @@ public:
      * it would measure if rendered on-screen.  Guaranteed to return a
      * non-null and valid DrawTarget.
      */
-    mozilla::gfx::DrawTarget* ScreenReferenceDrawTarget() { return mScreenReferenceDrawTarget; }
+    RefPtr<mozilla::gfx::DrawTarget> ScreenReferenceDrawTarget();
 
     virtual mozilla::gfx::SurfaceFormat Optimal2DFormatForContent(gfxContentType aContent);
 
@@ -590,17 +593,9 @@ public:
      */
     mozilla::layers::DiagnosticTypes GetLayerDiagnosticTypes();
 
-    static mozilla::gfx::IntRect FrameCounterBounds() {
-      int bits = 16;
-      int sizeOfBit = 3;
-      return mozilla::gfx::IntRect(0, 0, bits * sizeOfBit, sizeOfBit);
-    }
-
     mozilla::gl::SkiaGLGlue* GetSkiaGLGlue();
     void PurgeSkiaGPUCache();
     static void PurgeSkiaFontCache();
-
-    virtual bool IsInGonkEmulator() const { return false; }
 
     static bool UsesOffMainThreadCompositing();
 
@@ -646,6 +641,8 @@ public:
     }
     bool SupportsApzTouchInput() const;
     bool SupportsApzDragInput() const;
+    bool SupportsApzKeyboardInput() const;
+    bool SupportsApzAutoscrolling() const;
 
     virtual void FlushContentDrawing() {}
 
@@ -781,9 +778,6 @@ protected:
      */
     static mozilla::gfx::BackendType BackendTypeForName(const nsCString& aName);
 
-    static already_AddRefed<mozilla::gfx::ScaledFont>
-      GetScaledFontForFontWithCairoSkia(mozilla::gfx::DrawTarget* aTarget, gfxFont* aFont);
-
     virtual bool CanUseHardwareVideoDecoding();
 
     int8_t  mAllowDownloadableFonts;
@@ -792,7 +786,7 @@ protected:
 
     int8_t  mBidiNumeralOption;
 
-    // whether to always search font cmaps globally 
+    // whether to always search font cmaps globally
     // when doing system font fallback
     int8_t  mFallbackUsesCmaps;
 
@@ -839,6 +833,7 @@ private:
     void InitCompositorAccelerationPrefs();
     void InitGPUProcessPrefs();
     void InitWebRenderConfig();
+    void InitOMTPConfig();
 
     static bool IsDXInterop2Blocked();
 

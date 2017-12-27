@@ -24,17 +24,25 @@
 #include "nsITokenDialogs.h"
 #include "nsIUploadChannel.h"
 #include "nsIWebProgressListener.h"
+#include "nsNSSCertHelper.h"
 #include "nsNSSCertificate.h"
 #include "nsNSSComponent.h"
 #include "nsNSSIOLayer.h"
 #include "nsNetUtil.h"
 #include "nsProtectedAuthThread.h"
 #include "nsProxyRelease.h"
+#include "nsStringStream.h"
 #include "pkix/pkixtypes.h"
 #include "ssl.h"
 #include "sslproto.h"
 
+#include "TrustOverrideUtils.h"
+#include "TrustOverride-SymantecData.inc"
+#include "TrustOverride-AppleGoogleData.inc"
+
+
 using namespace mozilla;
+using namespace mozilla::pkix;
 using namespace mozilla::psm;
 
 extern LazyLogModule gPIPNSSLog;
@@ -61,14 +69,15 @@ public:
   NS_IMETHOD Run();
 
   RefPtr<nsNSSHttpRequestSession> mRequestSession;
-  
+
   RefPtr<nsHTTPListener> mListener;
   bool mResponsibleForDoneSignal;
   TimeStamp mStartTime;
 };
 
 nsHTTPDownloadEvent::nsHTTPDownloadEvent()
-:mResponsibleForDoneSignal(true)
+  : mozilla::Runnable("nsHTTPDownloadEvent")
+  , mResponsibleForDoneSignal(true)
 {
 }
 
@@ -133,15 +142,14 @@ nsHTTPDownloadEvent::Run()
   if (mRequestSession->mHasPostData)
   {
     nsCOMPtr<nsIInputStream> uploadStream;
-    rv = NS_NewPostDataStream(getter_AddRefs(uploadStream),
-                              false,
-                              mRequestSession->mPostData);
+    rv = NS_NewCStringInputStream(getter_AddRefs(uploadStream),
+                                  mRequestSession->mPostData);
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsCOMPtr<nsIUploadChannel> uploadChannel(do_QueryInterface(chan));
     NS_ENSURE_STATE(uploadChannel);
 
-    rv = uploadChannel->SetUploadStream(uploadStream, 
+    rv = uploadChannel->SetUploadStream(uploadStream,
                                         mRequestSession->mPostContentType,
                                         -1);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -173,7 +181,7 @@ nsHTTPDownloadEvent::Run()
   NS_ADDREF(mListener->mLoadGroup);
   mListener->mLoadGroupOwnerThread = PR_GetCurrentThread();
 
-  rv = NS_NewStreamLoader(getter_AddRefs(mListener->mLoader), 
+  rv = NS_NewStreamLoader(getter_AddRefs(mListener->mLoader),
                           mListener);
 
   if (NS_SUCCEEDED(rv)) {
@@ -196,6 +204,7 @@ nsHTTPDownloadEvent::Run()
 struct nsCancelHTTPDownloadEvent : Runnable {
   RefPtr<nsHTTPListener> mListener;
 
+  nsCancelHTTPDownloadEvent() : Runnable("nsCancelHTTPDownloadEvent") {}
   NS_IMETHOD Run() override {
     mListener->FreeLoadGroup(true);
     mListener = nullptr;
@@ -428,7 +437,7 @@ nsNSSHttpRequestSession::internal_send_receive_attempt(bool &retryable_error,
       wait_interval = PR_MicrosecondsToInterval(50);
     }
     else
-    { 
+    {
       // On a secondary thread, it's fine to wait some more for
       // for the condition variable.
       wait_interval = PR_MillisecondsToInterval(250);
@@ -439,8 +448,8 @@ nsNSSHttpRequestSession::internal_send_receive_attempt(bool &retryable_error,
       if (running_on_main_thread)
       {
         // Networking runs on the main thread, which we happen to block here.
-        // Processing events will allow the OCSP networking to run while we 
-        // are waiting. Thanks a lot to Darin Fisher for rewriting the 
+        // Processing events will allow the OCSP networking to run while we
+        // are waiting. Thanks a lot to Darin Fisher for rewriting the
         // thread manager. Thanks a lot to Christian Biesinger who
         // made me aware of this possibility. (kaie)
 
@@ -544,7 +553,9 @@ nsNSSHttpRequestSession::~nsNSSHttpRequestSession()
 }
 
 nsHTTPListener::nsHTTPListener()
-: mResultData(nullptr),
+: mHttpRequestSucceeded(false),
+  mHttpResponseCode(0),
+  mResultData(nullptr),
   mResultLen(0),
   mLock("nsHTTPListener.mLock"),
   mCondition(mLock, "nsHTTPListener.mCondition"),
@@ -565,7 +576,8 @@ nsHTTPListener::~nsHTTPListener()
   }
 
   if (mLoader) {
-    NS_ReleaseOnMainThread(mLoader.forget());
+    NS_ReleaseOnMainThreadSystemGroup("nsHTTPListener::mLoader",
+                                      mLoader.forget());
   }
 }
 
@@ -612,7 +624,7 @@ nsHTTPListener::OnStreamComplete(nsIStreamLoader* aLoader,
   nsCOMPtr<nsIHttpChannel> hchan;
 
   nsresult rv = aLoader->GetRequest(getter_AddRefs(req));
-  
+
   if (NS_FAILED(aStatus))
   {
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
@@ -681,16 +693,16 @@ ShowProtectedAuthPrompt(PK11SlotInfo* slot, nsIInterfaceRequestor *ir)
       NS_ADDREF(protectedAuthRunnable);
 
       protectedAuthRunnable->SetParams(slot);
-      
+
       nsCOMPtr<nsIProtectedAuthThread> runnable = do_QueryInterface(protectedAuthRunnable);
       if (runnable)
       {
         nsrv = dialogs->DisplayProtectedAuth(ir, runnable);
-              
+
         // We call join on the thread,
         // so we can be sure that no simultaneous access will happen.
         protectedAuthRunnable->Join();
-              
+
         if (NS_SUCCEEDED(nsrv))
         {
           SECStatus rv = protectedAuthRunnable->GetResult();
@@ -720,7 +732,7 @@ class PK11PasswordPromptRunnable : public SyncRunnableBase
                                  , public nsNSSShutDownObject
 {
 public:
-  PK11PasswordPromptRunnable(PK11SlotInfo* slot, 
+  PK11PasswordPromptRunnable(PK11SlotInfo* slot,
                              nsIInterfaceRequestor* ir)
     : mResult(nullptr),
       mSlot(slot),
@@ -752,8 +764,6 @@ PK11PasswordPromptRunnable::~PK11PasswordPromptRunnable()
 void
 PK11PasswordPromptRunnable::RunOnTargetThread()
 {
-  static NS_DEFINE_CID(kNSSComponentCID, NS_NSSCOMPONENT_CID);
-
   nsNSSShutDownPreventionLock locker;
   if (isAlreadyShutDown()) {
     return;
@@ -780,25 +790,23 @@ PK11PasswordPromptRunnable::RunOnTargetThread()
     return;
   }
 
-  nsCOMPtr<nsINSSComponent> nssComponent(do_GetService(kNSSComponentCID));
-  if (!nssComponent) {
-    return;
-  }
-
-  NS_ConvertUTF8toUTF16 tokenName(PK11_GetTokenName(mSlot));
-  const char16_t* formatStrings[] = {
-    tokenName.get(),
-  };
   nsAutoString promptString;
-  rv = nssComponent->PIPBundleFormatStringFromName("CertPassPrompt",
-                                                   formatStrings,
-                                                   ArrayLength(formatStrings),
-                                                   promptString);
+  if (PK11_IsInternal(mSlot)) {
+    rv = GetPIPNSSBundleString("CertPassPromptDefault", promptString);
+  } else {
+    NS_ConvertUTF8toUTF16 tokenName(PK11_GetTokenName(mSlot));
+    const char16_t* formatStrings[] = {
+      tokenName.get(),
+    };
+    rv = PIPBundleFormatStringFromName("CertPassPrompt", formatStrings,
+                                       ArrayLength(formatStrings),
+                                       promptString);
+  }
   if (NS_FAILED(rv)) {
     return;
   }
 
-  nsXPIDLString password;
+  nsString password;
   // |checkState| is unused because |checkMsg| (the argument just before it) is
   // null, but XPConnect requires it to point to a valid bool nonetheless.
   bool checkState = false;
@@ -821,6 +829,99 @@ PK11PasswordPrompt(PK11SlotInfo* slot, PRBool /*retry*/, void* arg)
                                    static_cast<nsIInterfaceRequestor*>(arg)));
   runnable->DispatchToMainThreadAndWait();
   return runnable->mResult;
+}
+
+static nsCString
+getKeaGroupName(uint32_t aKeaGroup)
+{
+  nsCString groupName;
+  switch (aKeaGroup) {
+    case ssl_grp_ec_secp256r1:
+      groupName = NS_LITERAL_CSTRING("P256");
+      break;
+    case ssl_grp_ec_secp384r1:
+      groupName = NS_LITERAL_CSTRING("P384");
+      break;
+    case ssl_grp_ec_secp521r1:
+      groupName = NS_LITERAL_CSTRING("P521");
+      break;
+    case ssl_grp_ec_curve25519:
+      groupName = NS_LITERAL_CSTRING("x25519");
+      break;
+    case ssl_grp_ffdhe_2048:
+      groupName = NS_LITERAL_CSTRING("FF 2048");
+      break;
+    case ssl_grp_ffdhe_3072:
+      groupName = NS_LITERAL_CSTRING("FF 3072");
+      break;
+    case ssl_grp_none:
+      groupName = NS_LITERAL_CSTRING("none");
+      break;
+    case ssl_grp_ffdhe_custom:
+      groupName = NS_LITERAL_CSTRING("custom");
+      break;
+    // All other groups are not enabled in Firefox. See namedGroups in
+    // nsNSSIOLayer.cpp.
+    default:
+      // This really shouldn't happen!
+      MOZ_ASSERT_UNREACHABLE("Invalid key exchange group.");
+      groupName = NS_LITERAL_CSTRING("unknown group");
+  }
+  return groupName;
+}
+
+static nsCString
+getSignatureName(uint32_t aSignatureScheme)
+{
+  nsCString signatureName;
+  switch (aSignatureScheme) {
+    case ssl_sig_none:
+      signatureName = NS_LITERAL_CSTRING("none");
+      break;
+    case ssl_sig_rsa_pkcs1_sha1:
+      signatureName = NS_LITERAL_CSTRING("RSA-PKCS1-SHA1");
+      break;
+    case ssl_sig_rsa_pkcs1_sha256:
+      signatureName = NS_LITERAL_CSTRING("RSA-PKCS1-SHA256");
+      break;
+    case ssl_sig_rsa_pkcs1_sha384:
+      signatureName = NS_LITERAL_CSTRING("RSA-PKCS1-SHA384");
+      break;
+    case  ssl_sig_rsa_pkcs1_sha512:
+      signatureName = NS_LITERAL_CSTRING("RSA-PKCS1-SHA512");
+      break;
+    case ssl_sig_ecdsa_secp256r1_sha256:
+      signatureName = NS_LITERAL_CSTRING("ECDSA-P256-SHA256");
+      break;
+    case ssl_sig_ecdsa_secp384r1_sha384:
+      signatureName = NS_LITERAL_CSTRING("ECDSA-P384-SHA384");
+      break;
+    case ssl_sig_ecdsa_secp521r1_sha512:
+      signatureName = NS_LITERAL_CSTRING("ECDSA-P521-SHA512");
+      break;
+    case ssl_sig_rsa_pss_sha256:
+      signatureName = NS_LITERAL_CSTRING("RSA-PSS-SHA256");
+      break;
+    case ssl_sig_rsa_pss_sha384:
+      signatureName = NS_LITERAL_CSTRING("RSA-PSS-SHA384");
+      break;
+    case ssl_sig_rsa_pss_sha512:
+      signatureName = NS_LITERAL_CSTRING("RSA-PSS-SHA512");
+      break;
+    case ssl_sig_ecdsa_sha1:
+      signatureName = NS_LITERAL_CSTRING("ECDSA-SHA1");
+      break;
+    case ssl_sig_rsa_pkcs1_sha1md5:
+      signatureName = NS_LITERAL_CSTRING("RSA-PKCS1-SHA1MD5");
+      break;
+    // All other groups are not enabled in Firefox. See sEnabledSignatureSchemes
+    // in nsNSSIOLayer.cpp.
+    default:
+      // This really shouldn't happen!
+      MOZ_ASSERT_UNREACHABLE("Invalid signature scheme.");
+      signatureName = NS_LITERAL_CSTRING("unknown signature");
+  }
+  return signatureName;
 }
 
 // call with shutdown prevention lock held
@@ -849,6 +950,9 @@ PreliminaryHandshakeDone(PRFileDesc* fd)
       status->mHaveCipherSuiteAndProtocol = true;
       status->mCipherSuite = channelInfo.cipherSuite;
       status->mProtocolVersion = channelInfo.protocolVersion & 0xFF;
+      status->mKeaGroup.Assign(getKeaGroupName(channelInfo.keaGroup));
+      status->mSignatureSchemeName.Assign(
+        getSignatureName(channelInfo.signatureScheme));
       infoObject->SetKEAUsed(channelInfo.keaType);
       infoObject->SetKEAKeyBits(channelInfo.keaKeyBits);
       infoObject->SetMACAlgorithmUsed(cipherInfo.macAlgorithm);
@@ -1117,7 +1221,7 @@ DetermineEVAndCTStatusAndSetNewCert(RefPtr<nsSSLStatus> sslStatus,
 
   SECOidTag evOidPolicy;
   CertificateTransparencyInfo certificateTransparencyInfo;
-  UniqueCERTCertList unusedBuiltChain;
+  UniqueCERTCertList builtChain;
   const bool saveIntermediates = false;
   mozilla::pkix::Result rv = certVerifier->VerifySSLServerCert(
     cert,
@@ -1125,8 +1229,8 @@ DetermineEVAndCTStatusAndSetNewCert(RefPtr<nsSSLStatus> sslStatus,
     sctsFromTLSExtension,
     mozilla::pkix::Now(),
     infoObject,
-    infoObject->GetHostNameRaw(),
-    unusedBuiltChain,
+    infoObject->GetHostName(),
+    builtChain,
     saveIntermediates,
     flags,
     infoObject->GetOriginAttributes(),
@@ -1151,7 +1255,78 @@ DetermineEVAndCTStatusAndSetNewCert(RefPtr<nsSSLStatus> sslStatus,
 
   if (rv == Success) {
     sslStatus->SetCertificateTransparencyInfo(certificateTransparencyInfo);
+    sslStatus->SetSucceededCertChain(Move(builtChain));
   }
+}
+
+static nsresult
+IsCertificateDistrustImminent(nsIX509CertList* aCertList,
+                              /* out */ bool& aResult) {
+  if (!aCertList) {
+    return NS_ERROR_INVALID_POINTER;
+  }
+
+  nsCOMPtr<nsIX509Cert> rootCert;
+  nsCOMPtr<nsIX509CertList> intCerts;
+  nsCOMPtr<nsIX509Cert> eeCert;
+
+  RefPtr<nsNSSCertList> certList = aCertList->GetCertList();
+  nsresult rv = certList->SegmentCertificateChain(rootCert, intCerts, eeCert);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  // We need to verify the age of the end entity
+  nsCOMPtr<nsIX509CertValidity> validity;
+  rv = eeCert->GetValidity(getter_AddRefs(validity));
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  PRTime notBefore;
+  rv = validity->GetNotBefore(&notBefore);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  // PRTime is microseconds since the epoch, whereas JS time is milliseconds.
+  // (new Date("2016-06-01T00:00:00Z")).getTime() * 1000
+  static const PRTime JUNE_1_2016 = 1464739200000000;
+
+  // If the end entity's notBefore date is after 2016-06-01, this algorithm
+  // doesn't apply, so exit false before we do any iterating
+  if (notBefore >= JUNE_1_2016) {
+    aResult = false;
+    return NS_OK;
+  }
+
+  // We need an owning handle when calling nsIX509Cert::GetCert().
+  UniqueCERTCertificate nssRootCert(rootCert->GetCert());
+  // If the root is not one of the Symantec roots, exit false
+  if (!CertDNIsInList(nssRootCert.get(), RootSymantecDNs)) {
+    aResult = false;
+    return NS_OK;
+  }
+
+  // Look for one of the intermediates to be in the whitelist
+  bool foundInWhitelist = false;
+  RefPtr<nsNSSCertList> intCertList = intCerts->GetCertList();
+
+  intCertList->ForEachCertificateInChain(
+    [&foundInWhitelist] (nsCOMPtr<nsIX509Cert> aCert, bool aHasMore,
+                         /* out */ bool& aContinue) {
+      // We need an owning handle when calling nsIX509Cert::GetCert().
+      UniqueCERTCertificate nssCert(aCert->GetCert());
+      if (CertDNIsInList(nssCert.get(), RootAppleAndGoogleDNs)) {
+        foundInWhitelist = true;
+        aContinue = false;
+      }
+      return NS_OK;
+  });
+
+  // If this chain did not match the whitelist, exit true
+  aResult = !foundInWhitelist;
+  return NS_OK;
 }
 
 void HandshakeCallback(PRFileDesc* fd, void* client_data) {
@@ -1303,6 +1478,18 @@ void HandshakeCallback(PRFileDesc* fd, void* client_data) {
            ("HandshakeCallback KEEPING existing cert\n"));
   } else {
     DetermineEVAndCTStatusAndSetNewCert(status, fd, infoObject);
+  }
+
+  nsCOMPtr<nsIX509CertList> succeededCertChain;
+  // This always returns NS_OK, but the list could be empty. This is a
+  // best-effort check for now. Bug 731478 will reduce the incidence of empty
+  // succeeded cert chains through better caching.
+  Unused << status->GetSucceededCertChain(getter_AddRefs(succeededCertChain));
+  bool distrustImminent;
+  nsresult srv = IsCertificateDistrustImminent(succeededCertChain,
+                                               distrustImminent);
+  if (NS_SUCCEEDED(srv) && distrustImminent) {
+    state |= nsIWebProgressListener::STATE_CERT_DISTRUST_IMMINENT;
   }
 
   bool domainMismatch;

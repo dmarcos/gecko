@@ -41,29 +41,45 @@ interface PeerConnectionImpl  {
 
   /* Adds the tracks created by GetUserMedia */
   [Throws]
-  void addTrack(MediaStreamTrack track, MediaStream... streams);
-  [Throws]
   void removeTrack(MediaStreamTrack track);
   [Throws]
-  void insertDTMF(RTCRtpSender sender, DOMString tones,
+  TransceiverImpl createTransceiverImpl(DOMString kind,
+                                        MediaStreamTrack? track);
+  [Throws]
+  boolean checkNegotiationNeeded();
+  [Throws]
+  void insertDTMF(TransceiverImpl transceiver, DOMString tones,
                   optional unsigned long duration = 100,
                   optional unsigned long interToneGap = 70);
   [Throws]
   DOMString getDTMFToneBuffer(RTCRtpSender sender);
+  sequence<RTCRtpSourceEntry> getRtpSources(MediaStreamTrack track,
+                                            DOMHighResTimeStamp rtpSourceNow);
+  DOMHighResTimeStamp getNowInRtpSourceReferenceTime();
+
   [Throws]
-  void replaceTrack(MediaStreamTrack thisTrack, MediaStreamTrack withTrack);
-  [Throws]
-  void setParameters(MediaStreamTrack track,
-                     optional RTCRtpParameters parameters);
-  [Throws]
-  RTCRtpParameters getParameters(MediaStreamTrack track);
+  void replaceTrackNoRenegotiation(TransceiverImpl transceiverImpl,
+                                   MediaStreamTrack? withTrack);
   [Throws]
   void closeStreams();
 
-  sequence<MediaStream> getLocalStreams();
-  sequence<MediaStream> getRemoteStreams();
+  void addRIDExtension(MediaStreamTrack recvTrack, unsigned short extensionId);
+  void addRIDFilter(MediaStreamTrack recvTrack, DOMString rid);
 
-  void selectSsrc(MediaStreamTrack recvTrack, unsigned short ssrcIndex);
+  // Inserts CSRC data for the RtpSourceObserver for testing
+  void insertAudioLevelForContributingSource(MediaStreamTrack recvTrack,
+                                             unsigned long source,
+                                             DOMHighResTimeStamp timestamp,
+                                             boolean hasLevel,
+                                             byte level);
+
+  void enablePacketDump(unsigned long level,
+                        mozPacketDumpType type,
+                        boolean sending);
+
+  void disablePacketDump(unsigned long level,
+                         mozPacketDumpType type,
+                         boolean sending);
 
   /* As the ICE candidates roll in this one should be called each time
    * in order to keep the candidate list up-to-date for the next SDP-related
@@ -88,7 +104,11 @@ interface PeerConnectionImpl  {
   [Constant]
   readonly attribute DOMString fingerprint;
   readonly attribute DOMString localDescription;
+  readonly attribute DOMString currentLocalDescription;
+  readonly attribute DOMString pendingLocalDescription;
   readonly attribute DOMString remoteDescription;
+  readonly attribute DOMString currentRemoteDescription;
+  readonly attribute DOMString pendingRemoteDescription;
 
   readonly attribute PCImplIceConnectionState iceConnectionState;
   readonly attribute PCImplIceGatheringState iceGatheringState;

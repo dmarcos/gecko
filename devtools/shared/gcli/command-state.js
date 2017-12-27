@@ -4,11 +4,9 @@
 
 "use strict";
 
-const EventEmitter = require("devtools/shared/event-emitter");
+const EventEmitter = require("devtools/shared/old-event-emitter");
 
-loader.lazyRequireGetter(this, "getBrowserForTab", "sdk/tabs/utils", true);
-
-const getTargetId = ({tab}) => getBrowserForTab(tab).outerWindowID;
+const getTargetId = ({tab}) => tab.linkedBrowser.outerWindowID;
 const enabledCommands = new Map();
 
 /**

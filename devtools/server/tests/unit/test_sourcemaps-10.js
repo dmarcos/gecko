@@ -25,10 +25,10 @@ function run_test() {
         promise.resolve(define_code())
           .then(run_code)
           .then(test_frame_location)
-          .then(null, error => {
+          .catch(error => {
             dump(error + "\n");
             dump(error.stack);
-            do_check_true(false);
+            Assert.ok(false);
           })
           .then(() => {
             finishClient(gClient);
@@ -61,7 +61,7 @@ function define_code() {
 }
 
 function run_code() {
-  const d = promise.defer();
+  const d = defer();
   gClient.addOneTimeListener("paused", function (event, packet) {
     d.resolve(packet);
     gThreadClient.resume();
@@ -71,7 +71,7 @@ function run_code() {
 }
 
 function test_frame_location({ frame: { where: { source, line, column } } }) {
-  do_check_eq(source.url, "http://example.com/www/js/c.js");
-  do_check_eq(line, 2);
-  do_check_eq(column, 0);
+  Assert.equal(source.url, "http://example.com/www/js/c.js");
+  Assert.equal(line, 2);
+  Assert.equal(column, 0);
 }

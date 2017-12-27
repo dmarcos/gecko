@@ -1,4 +1,5 @@
-/* vim: set shiftwidth=2 tabstop=8 autoindent cindent expandtab: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -82,7 +83,7 @@ nsStyleDisplay::IsBlockInside(const nsIFrame* aContextFrame) const
 {
   NS_ASSERTION(aContextFrame->StyleDisplay() == this, "unexpected aContextFrame");
   if (nsSVGUtils::IsInSVGTextSubtree(aContextFrame)) {
-    return aContextFrame->GetType() == nsGkAtoms::blockFrame;
+    return aContextFrame->IsBlockFrame();
   }
   return IsBlockInsideStyle();
 }
@@ -92,7 +93,7 @@ nsStyleDisplay::IsBlockOutside(const nsIFrame* aContextFrame) const
 {
   NS_ASSERTION(aContextFrame->StyleDisplay() == this, "unexpected aContextFrame");
   if (nsSVGUtils::IsInSVGTextSubtree(aContextFrame)) {
-    return aContextFrame->GetType() == nsGkAtoms::blockFrame;
+    return aContextFrame->IsBlockFrame();
   }
   return IsBlockOutsideStyle();
 }
@@ -102,7 +103,7 @@ nsStyleDisplay::IsInlineOutside(const nsIFrame* aContextFrame) const
 {
   NS_ASSERTION(aContextFrame->StyleDisplay() == this, "unexpected aContextFrame");
   if (nsSVGUtils::IsInSVGTextSubtree(aContextFrame)) {
-    return aContextFrame->GetType() != nsGkAtoms::blockFrame;
+    return !aContextFrame->IsBlockFrame();
   }
   return IsInlineOutsideStyle();
 }
@@ -112,7 +113,7 @@ nsStyleDisplay::IsOriginalDisplayInlineOutside(const nsIFrame* aContextFrame) co
 {
   NS_ASSERTION(aContextFrame->StyleDisplay() == this, "unexpected aContextFrame");
   if (nsSVGUtils::IsInSVGTextSubtree(aContextFrame)) {
-    return aContextFrame->GetType() != nsGkAtoms::blockFrame;
+    return !aContextFrame->IsBlockFrame();
   }
   return IsOriginalDisplayInlineOutsideStyle();
 }
@@ -123,8 +124,8 @@ nsStyleDisplay::GetDisplay(const nsIFrame* aContextFrame) const
   NS_ASSERTION(aContextFrame->StyleDisplay() == this, "unexpected aContextFrame");
   if (nsSVGUtils::IsInSVGTextSubtree(aContextFrame) &&
       mDisplay != mozilla::StyleDisplay::None) {
-    return aContextFrame->GetType() == nsGkAtoms::blockFrame ?
-             mozilla::StyleDisplay::Block : mozilla::StyleDisplay::Inline;
+    return aContextFrame->IsBlockFrame() ? mozilla::StyleDisplay::Block
+                                         : mozilla::StyleDisplay::Inline;
   }
   return mDisplay;
 }

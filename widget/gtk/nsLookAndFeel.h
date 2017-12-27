@@ -14,11 +14,14 @@
 
 struct _GtkStyle;
 
-class nsLookAndFeel: public nsXPLookAndFeel {
+class nsLookAndFeel final : public nsXPLookAndFeel
+{
 public:
     nsLookAndFeel();
     virtual ~nsLookAndFeel();
 
+    virtual void NativeInit() final;
+    virtual void RefreshImpl();
     virtual nsresult NativeGetColor(ColorID aID, nscolor &aResult);
     virtual nsresult GetIntImpl(IntID aID, int32_t &aResult);
     virtual nsresult GetFloatImpl(FloatID aID, float &aResult);
@@ -26,14 +29,12 @@ public:
                              gfxFontStyle& aFontStyle,
                              float aDevPixPerCSSPixel);
 
-    virtual void RefreshImpl();
     virtual char16_t GetPasswordCharacterImpl();
     virtual bool GetEchoPasswordImpl();
 
+    bool IsCSDAvailable() const { return mCSDAvailable; }
+
 protected:
-#if (MOZ_WIDGET_GTK == 2)
-    struct _GtkStyle *mStyle;
-#endif
 
     // Cached fonts
     bool mDefaultFontCached;
@@ -50,37 +51,43 @@ protected:
     gfxFontStyle mMenuFontStyle;
 
     // Cached colors
-    nscolor sInfoBackground;
-    nscolor sInfoText;
-    nscolor sMenuBackground;
-    nscolor sMenuBarText;
-    nscolor sMenuBarHoverText;
-    nscolor sMenuText;
-    nscolor sMenuTextInactive;
-    nscolor sMenuHover;
-    nscolor sMenuHoverText;
-    nscolor sButtonText;
-    nscolor sButtonHoverText;
-    nscolor sButtonBackground;
-    nscolor sFrameOuterLightBorder;
-    nscolor sFrameInnerDarkBorder;
-    nscolor sOddCellBackground;
-    nscolor sNativeHyperLinkText;
-    nscolor sComboBoxText;
-    nscolor sComboBoxBackground;
-    nscolor sMozFieldText;
-    nscolor sMozFieldBackground;
-    nscolor sMozWindowText;
-    nscolor sMozWindowBackground;
-    nscolor sTextSelectedText;
-    nscolor sTextSelectedBackground;
-    nscolor sMozScrollbar;
-#if (MOZ_WIDGET_GTK == 3)
-    nscolor sInfoBarText;
-#endif
-    char16_t sInvisibleCharacter;
-    float   sCaretRatio;
-    bool    sMenuSupportsDrag;
+    nscolor mInfoBackground;
+    nscolor mInfoText;
+    nscolor mMenuBackground;
+    nscolor mMenuBarText;
+    nscolor mMenuBarHoverText;
+    nscolor mMenuText;
+    nscolor mMenuTextInactive;
+    nscolor mMenuHover;
+    nscolor mMenuHoverText;
+    nscolor mButtonDefault;
+    nscolor mButtonText;
+    nscolor mButtonHoverText;
+    nscolor mButtonHoverFace;
+    nscolor mFrameOuterLightBorder;
+    nscolor mFrameInnerDarkBorder;
+    nscolor mOddCellBackground;
+    nscolor mNativeHyperLinkText;
+    nscolor mComboBoxText;
+    nscolor mComboBoxBackground;
+    nscolor mMozFieldText;
+    nscolor mMozFieldBackground;
+    nscolor mMozWindowText;
+    nscolor mMozWindowBackground;
+    nscolor mMozWindowActiveBorder;
+    nscolor mMozWindowInactiveBorder;
+    nscolor mMozWindowInactiveCaption;
+    nscolor mTextSelectedText;
+    nscolor mTextSelectedBackground;
+    nscolor mMozScrollbar;
+    nscolor mInfoBarText;
+    char16_t mInvisibleCharacter;
+    float   mCaretRatio;
+    bool    mMenuSupportsDrag;
+    bool    mCSDAvailable;
+    bool    mCSDMaximizeButton;
+    bool    mCSDMinimizeButton;
+    bool    mCSDCloseButton;
     bool    mInitialized;
 
     void EnsureInit();

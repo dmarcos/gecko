@@ -10,8 +10,7 @@ this.EXPORTED_SYMBOLS = [ "YandexTranslator" ];
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://gre/modules/Promise.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
+Cu.import("resource://gre/modules/PromiseUtils.jsm");
 Cu.import("resource://services-common/utils.js");
 Cu.import("resource://gre/modules/Http.jsm");
 
@@ -77,9 +76,9 @@ this.YandexTranslator.prototype = {
    *                             task is finished.
    */
   translate() {
-    return Task.spawn(function *() {
+    return (async () => {
       let currentIndex = 0;
-      this._onFinishedDeferred = Promise.defer();
+      this._onFinishedDeferred = PromiseUtils.defer();
 
       // Let's split the document into various requests to be sent to
       // Yandex's Translation API.
@@ -88,7 +87,7 @@ this.YandexTranslator.prototype = {
         // let's take the opportunity of the chunkification process to
         // allow for the event loop to attend other pending events
         // before we continue.
-        yield CommonUtils.laterTickResolvingPromise();
+        await CommonUtils.laterTickResolvingPromise();
 
         // Determine the data for the next request.
         let request = this._generateNextTranslationRequest(currentIndex);
@@ -109,7 +108,7 @@ this.YandexTranslator.prototype = {
       }
 
       return this._onFinishedDeferred.promise;
-    }.bind(this));
+    })();
   },
 
   /**
@@ -196,7 +195,7 @@ this.YandexTranslator.prototype = {
         Services.console.logStringMessage("YandexTranslator: Result is " + result.code);
         return false;
       }
-      results = result.text
+      results = result.text;
     } catch (e) {
       return false;
     }
@@ -293,7 +292,7 @@ YandexRequest.prototype = {
    * Initiates the request
    */
   fireRequest() {
-    return Task.spawn(function *() {
+    return (async () => {
       // Prepare URL.
       let url = getUrlParam("https://translate.yandex.net/api/v1.5/tr.json/translate",
                             "browser.translation.yandex.translateURLOverride");
@@ -312,22 +311,22 @@ YandexRequest.prototype = {
       }
 
       // Set up request options.
-      let deferred = Promise.defer();
-      let options = {
-        onLoad: (function(responseText, xhr) {
-          deferred.resolve(this);
-        }).bind(this),
-        onError(e, responseText, xhr) {
-          deferred.reject(xhr);
-        },
-        postData: params
-      };
+      return new Promise((resolve, reject) => {
+        let options = {
+          onLoad: (responseText, xhr) => {
+            resolve(this);
+          },
+          onError(e, responseText, xhr) {
+            reject(xhr);
+          },
+          postData: params
+        };
 
-      // Fire the request.
-      this.networkRequest = httpRequest(url, options);
+        // Fire the request.
+        this.networkRequest = httpRequest(url, options);
 
-      return deferred.promise;
-    }.bind(this));
+      });
+    })();
   }
 };
 

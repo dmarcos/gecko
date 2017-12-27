@@ -59,12 +59,13 @@ static WebRtcTraceCallback gWebRtcCallback;
 // For LOG()
 static mozilla::StaticAutoPtr<LogSinkImpl> sSink;
 
-void GetWebRtcLogPrefs(uint32_t *aTraceMask, nsACString* aLogFile, nsACString *aAECLogDir, bool *aMultiLog)
+void
+GetWebRtcLogPrefs(uint32_t *aTraceMask, nsACString& aLogFile,
+                  bool *aMultiLog)
 {
   *aMultiLog = mozilla::Preferences::GetBool("media.webrtc.debug.multi_log");
   *aTraceMask = mozilla::Preferences::GetUint("media.webrtc.debug.trace_mask");
   mozilla::Preferences::GetCString("media.webrtc.debug.log_file", aLogFile);
-  mozilla::Preferences::GetCString("media.webrtc.debug.aec_log_dir", aAECLogDir);
   webrtc::Trace::set_aec_debug_size(mozilla::Preferences::GetUint("media.webrtc.debug.aec_dump_max_size"));
 }
 
@@ -121,7 +122,7 @@ CheckOverrides(uint32_t *aTraceMask, nsACString *aLogFile, bool *aMultiLog)
 }
 
 void ConfigWebRtcLog(mozilla::LogLevel level, uint32_t trace_mask,
-                     nsCString &aLogFile, nsCString &aAECLogDir, bool multi_log)
+                     nsCString &aLogFile, bool multi_log)
 {
   if (gWebRtcTraceLoggingOn) {
     return;
@@ -132,10 +133,6 @@ void ConfigWebRtcLog(mozilla::LogLevel level, uint32_t trace_mask,
   aLogFile.Assign(default_log_name);
 #else
 
-  // always capture LOG(...) << ... logging in webrtc.org code to nspr logs
-  if (!sSink) {
-    sSink = new LogSinkImpl();
-  }
   rtc::LoggingSeverity log_level;
   switch (level) {
     case mozilla::LogLevel::Verbose:
@@ -158,17 +155,32 @@ void ConfigWebRtcLog(mozilla::LogLevel level, uint32_t trace_mask,
       MOZ_ASSERT(false);
       break;
   }
-  rtc::LogMessage::AddLogToStream(sSink, log_level);
+  rtc::LogMessage::LogToDebug(log_level);
+  if (level != mozilla::LogLevel::Disabled) {
+    // always capture LOG(...) << ... logging in webrtc.org code to nspr logs
+    if (!sSink) {
+      sSink = new LogSinkImpl();
+      rtc::LogMessage::AddLogToStream(sSink, log_level);
+      // it's ok if this leaks to program end
+    }
+  } else if (sSink) {
+    rtc::LogMessage::RemoveLogToStream(sSink);
+    sSink = nullptr;
+  }
 
   webrtc::Trace::set_level_filter(trace_mask);
   if (trace_mask != 0) {
     // default WEBRTC_TRACE logs to a rotating file, but allow redirecting to nspr
     // XXX always redirect in e10s if the sandbox blocks file access, or somehow proxy
-    if (aLogFile.EqualsLiteral("nspr")) {
+    if (aLogFile.EqualsLiteral("nspr") || aLogFile.EqualsLiteral("moz_log")) {
+      rtc::LogMessage::SetLogToStderr(false);
       webrtc::Trace::SetTraceCallback(&gWebRtcCallback);
     } else {
+      rtc::LogMessage::SetLogToStderr(true);
       webrtc::Trace::SetTraceFile(aLogFile.get(), multi_log);
     }
+  } else {
+    rtc::LogMessage::SetLogToStderr(false);
   }
 
   if (aLogFile.IsEmpty()) {
@@ -185,7 +197,6 @@ void ConfigWebRtcLog(mozilla::LogLevel level, uint32_t trace_mask,
     // Capture the final choice for the trace setting.
     mozilla::Preferences::SetCString("media.webrtc.debug.log_file", aLogFile);
   }
-  return;
 }
 
 void StartWebRtcLog(uint32_t log_level)
@@ -205,17 +216,15 @@ void StartWebRtcLog(uint32_t log_level)
   uint32_t trace_mask = 0;
   bool multi_log = false;
   nsAutoCString log_file;
-  nsAutoCString aec_log_dir;
 
-  GetWebRtcLogPrefs(&trace_mask, &log_file, &aec_log_dir, &multi_log);
+  GetWebRtcLogPrefs(&trace_mask, log_file, &multi_log);
   mozilla::LogLevel level = CheckOverrides(&trace_mask, &log_file, &multi_log);
 
   if (trace_mask == 0) {
     trace_mask = log_level;
   }
 
-  ConfigWebRtcLog(level, trace_mask, log_file, aec_log_dir, multi_log);
-  return;
+  ConfigWebRtcLog(level, trace_mask, log_file, multi_log);
 
 }
 
@@ -228,14 +237,14 @@ void EnableWebRtcLog()
   uint32_t trace_mask = 0;
   bool multi_log = false;
   nsAutoCString log_file;
-  nsAutoCString aec_log_dir;
 
-  GetWebRtcLogPrefs(&trace_mask, &log_file, &aec_log_dir, &multi_log);
+  GetWebRtcLogPrefs(&trace_mask, log_file, &multi_log);
   mozilla::LogLevel level = CheckOverrides(&trace_mask, &log_file, &multi_log);
-  ConfigWebRtcLog(level, trace_mask, log_file, aec_log_dir, multi_log);
-  return;
+  ConfigWebRtcLog(level, trace_mask, log_file, multi_log);
 }
 
+// Called when we destroy the singletons from PeerConnectionCtx or if the
+// user changes logging in about:webrtc
 void StopWebRtcLog()
 {
   // TODO(NG) strip/fix gWebRtcTraceLoggingOn which is never set to true
@@ -248,48 +257,42 @@ void StopWebRtcLog()
   }
 }
 
-void ConfigAecLog(nsCString &aAECLogDir) {
+nsCString ConfigAecLog() {
+  nsCString aecLogDir;
   if (webrtc::Trace::aec_debug()) {
-    return;
+    return EmptyCString();
   }
 #if defined(ANDROID)
-  // For AEC, do not use a default value: force the user to specify a directory.
-  if (aAECLogDir.IsEmpty()) {
-    aAECLogDir.Assign(default_tmp_dir);
-  }
+  aecLogDir.Assign(default_tmp_dir);
 #else
-  if (aAECLogDir.IsEmpty()) {
-    nsCOMPtr<nsIFile> tempDir;
-    nsresult rv = NS_GetSpecialDirectory(NS_OS_TEMP_DIR, getter_AddRefs(tempDir));
-    if (NS_SUCCEEDED(rv)) {
-      if (aAECLogDir.IsEmpty()) {
-        tempDir->GetNativePath(aAECLogDir);
-      }
-    }
+  nsCOMPtr<nsIFile> tempDir;
+  nsresult rv = NS_GetSpecialDirectory(NS_OS_TEMP_DIR, getter_AddRefs(tempDir));
+  if (NS_SUCCEEDED(rv)) {
+    tempDir->GetNativePath(aecLogDir);
   }
 #endif
-  webrtc::Trace::set_aec_debug_filename(aAECLogDir.get());
-  if (XRE_IsParentProcess()) {
-    // Capture the final choice for the aec_log_dir setting.
-    mozilla::Preferences::SetCString("media.webrtc.debug.aec_log_dir", aAECLogDir);
-  }
+  webrtc::Trace::set_aec_debug_filename(aecLogDir.get());
+
+  return aecLogDir;
 }
 
-void StartAecLog()
+nsCString StartAecLog()
 {
+  nsCString aecLogDir;
   if (webrtc::Trace::aec_debug()) {
-    return;
+    return EmptyCString();
   }
   uint32_t trace_mask = 0;
   bool multi_log = false;
   nsAutoCString log_file;
-  nsAutoCString aec_log_dir;
 
-  GetWebRtcLogPrefs(&trace_mask, &log_file, &aec_log_dir, &multi_log);
+  GetWebRtcLogPrefs(&trace_mask, log_file, &multi_log);
   CheckOverrides(&trace_mask, &log_file, &multi_log);
-  ConfigAecLog(aec_log_dir);
+  aecLogDir = ConfigAecLog();
 
   webrtc::Trace::set_aec_debug(true);
+
+  return aecLogDir;
 }
 
 void StopAecLog()

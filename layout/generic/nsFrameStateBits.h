@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -140,7 +141,7 @@ FRAME_STATE_BIT(Generic, 14, NS_FRAME_INDEPENDENT_SELECTION)
 // If this bit is set, the frame is part of the mangled frame hierarchy
 // that results when an inline has been split because of a nested block.
 // See the comments in nsCSSFrameConstructor::ConstructInline for
-// more details.
+// more details.  (this is only set on nsBlockFrame/nsInlineFrame frames)
 FRAME_STATE_BIT(Generic, 15, NS_FRAME_PART_OF_IBSPLIT)
 
 // If this bit is set, then transforms (e.g. CSS or SVG transforms) are allowed
@@ -270,8 +271,12 @@ FRAME_STATE_BIT(Generic, 54, NS_FRAME_HAS_LAYER_ACTIVITY_PROPERTY)
 // a stylo tree traversal.
 FRAME_STATE_BIT(Generic, 55, NS_FRAME_OWNS_ANON_BOXES)
 
-// Frame has properties in the nsIFrame::Properties() hash.
-FRAME_STATE_BIT(Generic, 56, NS_FRAME_HAS_PROPERTIES)
+// Frame maybe has a counter-reset/increment style
+FRAME_STATE_BIT(Generic, 56, NS_FRAME_HAS_CSS_COUNTER_STYLE)
+
+// The display list of the frame can be handled by the shortcut for
+// COMMON CASE.
+FRAME_STATE_BIT(Generic, 57, NS_FRAME_SIMPLE_DISPLAYLIST)
 
 // Set for all descendants of MathML sub/supscript elements (other than the
 // base frame) to indicate that the SSTY font feature should be used.
@@ -315,11 +320,14 @@ FRAME_STATE_GROUP(FlexContainer, nsFlexContainerFrame)
 FRAME_STATE_BIT(FlexContainer, 20, NS_STATE_FLEX_NORMAL_FLOW_CHILDREN_IN_CSS_ORDER)
 
 // Set for a flex container that is emulating a legacy
-// 'display:-webkit-{inline-}box' container.
-FRAME_STATE_BIT(FlexContainer, 21, NS_STATE_FLEX_IS_LEGACY_WEBKIT_BOX)
+// 'display:-webkit-{inline-}box' or 'display:-moz-{inline-}box' container.
+FRAME_STATE_BIT(FlexContainer, 21, NS_STATE_FLEX_IS_EMULATING_LEGACY_BOX)
+
+// True iff computed flex values should be generated on the next reflow
+FRAME_STATE_BIT(FlexContainer, 22, NS_STATE_FLEX_GENERATE_COMPUTED_VALUES)
 
 // True if the container has no flex items; may lie if there is a pending reflow
-FRAME_STATE_BIT(FlexContainer, 22, NS_STATE_FLEX_SYNTHESIZE_BASELINE)
+FRAME_STATE_BIT(FlexContainer, 23, NS_STATE_FLEX_SYNTHESIZE_BASELINE)
 
 // == Frame state bits that apply to grid container frames ====================
 
@@ -386,6 +394,10 @@ FRAME_STATE_BIT(SVG, 23, NS_STATE_SVG_POSITIONING_MAY_USE_PERCENTAGES)
 
 FRAME_STATE_BIT(SVG, 24, NS_STATE_SVG_TEXT_IN_REFLOW)
 
+// Set on SVGTextFrame frames when they need a
+// TextNodeCorrespondenceRecorder::RecordCorrespondence call
+// to update the cached nsTextNode indexes that they correspond to.
+FRAME_STATE_BIT(SVG, 25, NS_STATE_SVG_TEXT_CORRESPONDENCE_DIRTY)
 
 // == Frame state bits that apply to text frames ==============================
 
@@ -548,17 +560,6 @@ FRAME_STATE_BIT(Block, 62, BULLET_FRAME_HAS_FONT_INFLATION)
 FRAME_STATE_BIT(Block, 63, BULLET_FRAME_IMAGE_LOADING)
 
 
-// == Frame state bits that apply to scroll frames ============================
-
-FRAME_STATE_GROUP(Scroll, nsIScrollableFrame)
-
-// When set, the next scroll operation on the scrollframe will invalidate its
-// entire contents. Useful for text-overflow.
-// This bit is cleared after each time the scrollframe is scrolled. Whoever
-// needs to set it should set it again on each paint.
-FRAME_STATE_BIT(Scroll, 20, NS_SCROLLFRAME_INVALIDATE_CONTENTS_ON_SCROLL)
-
-
 // == Frame state bits that apply to image frames =============================
 
 FRAME_STATE_GROUP(Image, nsImageFrame)
@@ -620,6 +621,10 @@ FRAME_STATE_BIT(Placeholder, 24, PLACEHOLDER_FOR_TOPLAYER)
 // resolve the actual static position using the alignment properties.
 FRAME_STATE_BIT(Placeholder, 25, PLACEHOLDER_STATICPOS_NEEDS_CSSALIGN)
 
+// Are all earlier frames on the same block line empty?
+FRAME_STATE_BIT(Placeholder, 26, PLACEHOLDER_LINE_IS_EMPTY_SO_FAR)
+// Does the above bit have a valid value?
+FRAME_STATE_BIT(Placeholder, 27, PLACEHOLDER_HAVE_LINE_IS_EMPTY_SO_FAR)
 
 // == Frame state bits that apply to table cell frames ========================
 

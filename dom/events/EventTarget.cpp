@@ -7,10 +7,25 @@
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/dom/EventTarget.h"
 #include "mozilla/dom/EventTargetBinding.h"
+#include "mozilla/dom/ConstructibleEventTarget.h"
+#include "nsIGlobalObject.h"
 #include "nsThreadUtils.h"
 
 namespace mozilla {
 namespace dom {
+
+/* static */
+already_AddRefed<EventTarget>
+EventTarget::Constructor(const GlobalObject& aGlobal, ErrorResult& aRv)
+{
+  nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(aGlobal.GetAsSupports());
+  if (!global) {
+    aRv.Throw(NS_ERROR_UNEXPECTED);
+    return nullptr;
+  }
+  RefPtr<EventTarget> target = new ConstructibleEventTarget(global);
+  return target.forget();
+}
 
 void
 EventTarget::RemoveEventListener(const nsAString& aType,
@@ -25,7 +40,7 @@ EventTarget::RemoveEventListener(const nsAString& aType,
 }
 
 EventHandlerNonNull*
-EventTarget::GetEventHandler(nsIAtom* aType, const nsAString& aTypeString)
+EventTarget::GetEventHandler(nsAtom* aType, const nsAString& aTypeString)
 {
   EventListenerManager* elm = GetExistingListenerManager();
   return elm ? elm->GetEventHandler(aType, aTypeString) : nullptr;
@@ -41,7 +56,7 @@ EventTarget::SetEventHandler(const nsAString& aType,
     return;
   }
   if (NS_IsMainThread()) {
-    nsCOMPtr<nsIAtom> type = NS_Atomize(aType);
+    RefPtr<nsAtom> type = NS_Atomize(aType);
     SetEventHandler(type, EmptyString(), aHandler);
     return;
   }
@@ -51,10 +66,24 @@ EventTarget::SetEventHandler(const nsAString& aType,
 }
 
 void
-EventTarget::SetEventHandler(nsIAtom* aType, const nsAString& aTypeString,
+EventTarget::SetEventHandler(nsAtom* aType, const nsAString& aTypeString,
                              EventHandlerNonNull* aHandler)
 {
   GetOrCreateListenerManager()->SetEventHandler(aType, aTypeString, aHandler);
+}
+
+bool
+EventTarget::HasNonSystemGroupListenersForUntrustedKeyEvents() const
+{
+  EventListenerManager* elm = GetExistingListenerManager();
+  return elm && elm->HasNonSystemGroupListenersForUntrustedKeyEvents();
+}
+
+bool
+EventTarget::HasNonPassiveNonSystemGroupListenersForUntrustedKeyEvents() const
+{
+  EventListenerManager* elm = GetExistingListenerManager();
+  return elm && elm->HasNonPassiveNonSystemGroupListenersForUntrustedKeyEvents();
 }
 
 bool

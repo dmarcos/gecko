@@ -11,7 +11,7 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(JSON_CUSTOM_MIME_URL);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let { L10N } = windowRequire("devtools/client/netmonitor/src/utils/l10n");
   let {
@@ -19,7 +19,7 @@ add_task(function* () {
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   let wait = waitForNetworkEvents(monitor, 1);
   yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
@@ -27,10 +27,15 @@ add_task(function* () {
   });
   yield wait;
 
+  let requestItem = document.querySelector(".request-list-item");
+  let requestsListStatus = requestItem.querySelector(".requests-list-status");
+  EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+  yield waitUntil(() => requestsListStatus.title);
+
   verifyRequestItemTarget(
     document,
-    getDisplayedRequests(gStore.getState()),
-    getSortedRequests(gStore.getState()).get(0),
+    getDisplayedRequests(store.getState()),
+    getSortedRequests(store.getState()).get(0),
     "GET",
     CONTENT_TYPE_SJS + "?fmt=json-custom-mime",
     {
@@ -42,7 +47,7 @@ add_task(function* () {
       time: true
     });
 
-  wait = waitForDOM(document, "#response-panel");
+  wait = waitForDOM(document, "#response-panel .CodeMirror-code");
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector(".network-details-panel-toggle"));
   EventUtils.sendMouseEvent({ type: "click" },
@@ -61,13 +66,13 @@ add_task(function* () {
     let jsonView = tabpanel.querySelector(".tree-section .treeLabel") || {};
     is(jsonView.textContent === L10N.getStr("jsonScopeName"), true,
       "The response json view has the intended visibility.");
-    is(tabpanel.querySelector(".CodeMirror-code") === null, true,
-      "The response editor doesn't have the intended visibility.");
+    is(tabpanel.querySelector(".CodeMirror-code") === null, false,
+      "The response editor has the intended visibility.");
     is(tabpanel.querySelector(".response-image-box") === null, true,
       "The response image box doesn't have the intended visibility.");
 
-    is(tabpanel.querySelectorAll(".tree-section").length, 1,
-      "There should be 1 tree sections displayed in this tabpanel.");
+    is(tabpanel.querySelectorAll(".tree-section").length, 2,
+      "There should be 2 tree sections displayed in this tabpanel.");
     is(tabpanel.querySelectorAll(".treeRow:not(.tree-section)").length, 1,
       "There should be 1 json properties displayed in this tabpanel.");
     is(tabpanel.querySelectorAll(".empty-notice").length, 0,

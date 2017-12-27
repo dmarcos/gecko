@@ -37,6 +37,7 @@ public:
   virtual void SetAttribute(SdpAttribute* attr) override;
   virtual void RemoveAttribute(AttributeType type) override;
   virtual void Clear() override;
+  virtual uint32_t Count() const override;
 
   virtual const SdpConnectionAttribute& GetConnection() const override;
   virtual const SdpFingerprintAttributeList& GetFingerprint() const
@@ -65,7 +66,8 @@ public:
   virtual const SdpRtcpFbAttributeList& GetRtcpFb() const override;
   virtual const SdpRtpmapAttributeList& GetRtpmap() const override;
   virtual const SdpSctpmapAttributeList& GetSctpmap() const override;
-  virtual unsigned int GetSctpPort() const override;
+  virtual uint32_t GetSctpPort() const override;
+  virtual uint32_t GetMaxMessageSize() const override;
 
   // These attributes are effectively simple types, so we'll make life
   // easy by just returning their value.

@@ -1,8 +1,8 @@
-/* globals browser, catcher */
+/* globals catcher */
 
 "use strict";
 
-this.deviceInfo = (function () {
+this.deviceInfo = (function() {
   let manifest = browser.runtime.getManifest();
 
   let platformInfo = {};
@@ -11,9 +11,9 @@ this.deviceInfo = (function () {
   }));
 
   return function deviceInfo() {
-    let match = navigator.userAgent.match(/Chrom(?:e|ium)\/([0-9\.]+)/);
+    let match = navigator.userAgent.match(/Chrom(?:e|ium)\/([0-9.]{1,1000})/);
     let chromeVersion = match ? match[1] : null;
-    match = navigator.userAgent.match(/Firefox\/([0-9\.]+)/);
+    match = navigator.userAgent.match(/Firefox\/([0-9.]{1,1000})/);
     let firefoxVersion = match ? match[1] : null;
     let appName = chromeVersion ? "chrome" : "firefox";
 
@@ -23,8 +23,8 @@ this.deviceInfo = (function () {
       architecture: platformInfo.arch,
       version: firefoxVersion || chromeVersion,
       // These don't seem to apply to Chrome:
-      //build: system.build,
-      //platformVersion: system.platformVersion,
+      // build: system.build,
+      // platformVersion: system.platformVersion,
       userAgent: navigator.userAgent,
       appVendor: appName,
       appName

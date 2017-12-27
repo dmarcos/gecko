@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,7 +8,7 @@
 
   Eric D Vaughan
   This class lays out its children either vertically or horizontally
- 
+
 **/
 
 #ifndef nsScrollbarButtonFrame_h___
@@ -18,16 +19,16 @@
 #include "nsITimer.h"
 #include "nsRepeatService.h"
 
-class nsScrollbarButtonFrame : public nsButtonBoxFrame
+class nsScrollbarButtonFrame final : public nsButtonBoxFrame
 {
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsScrollbarButtonFrame)
 
   explicit nsScrollbarButtonFrame(nsStyleContext* aContext):
-    nsButtonBoxFrame(aContext), mCursorOnThis(false) {}
+    nsButtonBoxFrame(aContext, kClassID), mCursorOnThis(false) {}
 
   // Overrides
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
 
   friend nsIFrame* NS_NewScrollbarButtonFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
@@ -35,8 +36,8 @@ public:
                                mozilla::WidgetGUIEvent* aEvent,
                                nsEventStatus* aEventStatus) override;
 
-  static nsresult GetChildWithTag(nsIAtom* atom, nsIFrame* start, nsIFrame*& result);
-  static nsresult GetParentWithTag(nsIAtom* atom, nsIFrame* start, nsIFrame*& result);
+  static nsresult GetChildWithTag(nsAtom* atom, nsIFrame* start, nsIFrame*& result);
+  static nsresult GetParentWithTag(nsAtom* atom, nsIFrame* start, nsIFrame*& result);
 
   bool HandleButtonPress(nsPresContext* aPresContext,
                          mozilla::WidgetGUIEvent* aEvent,
@@ -76,7 +77,7 @@ protected:
   static void Notify(void* aData) {
     static_cast<nsScrollbarButtonFrame*>(aData)->Notify();
   }
-  
+
   bool mCursorOnThis;
 };
 

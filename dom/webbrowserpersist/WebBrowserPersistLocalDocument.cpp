@@ -6,9 +6,14 @@
 #include "WebBrowserPersistLocalDocument.h"
 #include "WebBrowserPersistDocumentParent.h"
 
+#include "mozilla/dom/HTMLAnchorElement.h"
+#include "mozilla/dom/HTMLAreaElement.h"
 #include "mozilla/dom/HTMLInputElement.h"
+#include "mozilla/dom/HTMLLinkElement.h"
+#include "mozilla/dom/HTMLObjectElement.h"
+#include "mozilla/dom/HTMLOptionElement.h"
 #include "mozilla/dom/HTMLSharedElement.h"
-#include "mozilla/dom/HTMLSharedObjectElement.h"
+#include "mozilla/dom/HTMLTextAreaElement.h"
 #include "mozilla/dom/TabParent.h"
 #include "nsComponentManagerUtils.h"
 #include "nsContentUtils.h"
@@ -20,24 +25,9 @@
 #include "nsIDOMAttr.h"
 #include "nsIDOMComment.h"
 #include "nsIDOMDocument.h"
-#include "nsIDOMHTMLAnchorElement.h"
-#include "nsIDOMHTMLAppletElement.h"
-#include "nsIDOMHTMLAreaElement.h"
-#include "nsIDOMHTMLBaseElement.h"
-#include "nsIDOMHTMLCollection.h"
 #include "nsIDOMHTMLDocument.h"
-#include "nsIDOMHTMLEmbedElement.h"
-#include "nsIDOMHTMLFrameElement.h"
-#include "nsIDOMHTMLIFrameElement.h"
-#include "nsIDOMHTMLImageElement.h"
 #include "nsIDOMHTMLInputElement.h"
-#include "nsIDOMHTMLLinkElement.h"
 #include "nsIDOMHTMLMediaElement.h"
-#include "nsIDOMHTMLObjectElement.h"
-#include "nsIDOMHTMLOptionElement.h"
-#include "nsIDOMHTMLScriptElement.h"
-#include "nsIDOMHTMLSourceElement.h"
-#include "nsIDOMHTMLTextAreaElement.h"
 #include "nsIDOMMozNamedAttrMap.h"
 #include "nsIDOMNode.h"
 #include "nsIDOMNodeFilter.h"
@@ -137,7 +127,7 @@ WebBrowserPersistLocalDocument::GetContentType(nsACString& aContentType)
 NS_IMETHODIMP
 WebBrowserPersistLocalDocument::GetCharacterSet(nsACString& aCharSet)
 {
-    aCharSet = GetCharacterSet();
+    GetCharacterSet()->Name(aCharSet);
     return NS_OK;
 }
 
@@ -236,7 +226,7 @@ WebBrowserPersistLocalDocument::GetHistory()
     return history.forget();
 }
 
-const nsCString&
+NotNull<const Encoding*>
 WebBrowserPersistLocalDocument::GetCharacterSet() const
 {
     return mDocument->GetDocumentCharacterSet();
@@ -254,7 +244,6 @@ WebBrowserPersistLocalDocument::GetBaseURI() const
 {
     return mDocument->GetBaseURI();
 }
-
 
 namespace {
 
@@ -294,10 +283,6 @@ private:
                              const char* aAttribute,
                              const char* aNamespaceURI = "");
     nsresult OnWalkSubframe(nsIDOMNode* aNode);
-
-    bool IsFlagSet(uint32_t aFlag) const {
-        return mParent->GetPersistFlags() & aFlag;
-    }
 
     ~ResourceReader();
 
@@ -402,7 +387,7 @@ ResourceReader::OnWalkURI(const nsACString& aURISpec)
 
     rv = NS_NewURI(getter_AddRefs(uri),
                    aURISpec,
-                   mParent->GetCharacterSet().get(),
+                   mParent->GetCharacterSet(),
                    mCurrentBaseURI);
     NS_ENSURE_SUCCESS(rv, rv);
     return OnWalkURI(uri);
@@ -493,8 +478,7 @@ ResourceReader::OnWalkDOMNode(nsIDOMNode* aNode)
     }
 
     // Test the node to see if it's an image, frame, iframe, css, js
-    nsCOMPtr<nsIDOMHTMLImageElement> nodeAsImage = do_QueryInterface(aNode);
-    if (nodeAsImage) {
+    if (content->IsHTMLElement(nsGkAtoms::img)) {
         return OnWalkAttribute(aNode, "src");
     }
 
@@ -506,8 +490,8 @@ ResourceReader::OnWalkDOMNode(nsIDOMNode* aNode)
     if (nodeAsMedia) {
         return OnWalkAttribute(aNode, "src");
     }
-    nsCOMPtr<nsIDOMHTMLSourceElement> nodeAsSource = do_QueryInterface(aNode);
-    if (nodeAsSource) {
+
+    if (content->IsHTMLElement(nsGkAtoms::source)) {
         return OnWalkAttribute(aNode, "src");
     }
 
@@ -527,8 +511,7 @@ ResourceReader::OnWalkDOMNode(nsIDOMNode* aNode)
         return OnWalkAttribute(aNode, "background");
     }
 
-    nsCOMPtr<nsIDOMHTMLScriptElement> nodeAsScript = do_QueryInterface(aNode);
-    if (nodeAsScript) {
+    if (content->IsHTMLElement(nsGkAtoms::script)) {
         return OnWalkAttribute(aNode, "src");
     }
 
@@ -536,57 +519,19 @@ ResourceReader::OnWalkDOMNode(nsIDOMNode* aNode)
         return OnWalkAttribute(aNode, "href", "http://www.w3.org/1999/xlink");
     }
 
-    nsCOMPtr<nsIDOMHTMLEmbedElement> nodeAsEmbed = do_QueryInterface(aNode);
-    if (nodeAsEmbed) {
+    if (content->IsHTMLElement(nsGkAtoms::embed)) {
         return OnWalkAttribute(aNode, "src");
     }
 
-    nsCOMPtr<nsIDOMHTMLObjectElement> nodeAsObject = do_QueryInterface(aNode);
-    if (nodeAsObject) {
+    if (content->IsHTMLElement(nsGkAtoms::object)) {
         return OnWalkAttribute(aNode, "data");
     }
 
-    nsCOMPtr<nsIDOMHTMLAppletElement> nodeAsApplet = do_QueryInterface(aNode);
-    if (nodeAsApplet) {
-        // For an applet, relative URIs are resolved relative to the
-        // codebase (which is resolved relative to the base URI).
-        nsCOMPtr<nsIURI> oldBase = mCurrentBaseURI;
-        nsAutoString codebase;
-        rv = nodeAsApplet->GetCodeBase(codebase);
-        NS_ENSURE_SUCCESS(rv, rv);
-        if (!codebase.IsEmpty()) {
-            nsCOMPtr<nsIURI> baseURI;
-            rv = NS_NewURI(getter_AddRefs(baseURI), codebase,
-                           mParent->GetCharacterSet().get(), mCurrentBaseURI);
-            NS_ENSURE_SUCCESS(rv, rv);
-            if (baseURI) {
-                mCurrentBaseURI = baseURI;
-                // Must restore this before returning (or ENSURE'ing).
-            }
-        }
-
-        // We only store 'code' locally if there is no 'archive',
-        // otherwise we assume the archive file(s) contains it (bug 430283).
-        nsAutoCString archiveAttr;
-        rv = ExtractAttribute(aNode, "archive", "", archiveAttr);
-        if (NS_SUCCEEDED(rv)) {
-            if (!archiveAttr.IsEmpty()) {
-                rv = OnWalkURI(archiveAttr);
-            } else {
-                rv = OnWalkAttribute(aNode, "core");
-            }
-        }
-
-        // restore the base URI we really want to have
-        mCurrentBaseURI = oldBase;
-        return rv;
-    }
-
-    nsCOMPtr<nsIDOMHTMLLinkElement> nodeAsLink = do_QueryInterface(aNode);
-    if (nodeAsLink) {
+    if (auto nodeAsLink = dom::HTMLLinkElement::FromContent(content)) {
         // Test if the link has a rel value indicating it to be a stylesheet
         nsAutoString linkRel;
-        if (NS_SUCCEEDED(nodeAsLink->GetRel(linkRel)) && !linkRel.IsEmpty()) {
+        nodeAsLink->GetRel(linkRel);
+        if (!linkRel.IsEmpty()) {
             nsReadingIterator<char16_t> start;
             nsReadingIterator<char16_t> end;
             nsReadingIterator<char16_t> current;
@@ -621,14 +566,12 @@ ResourceReader::OnWalkDOMNode(nsIDOMNode* aNode)
         return NS_OK;
     }
 
-    nsCOMPtr<nsIDOMHTMLFrameElement> nodeAsFrame = do_QueryInterface(aNode);
-    if (nodeAsFrame) {
+    if (content->IsHTMLElement(nsGkAtoms::frame)) {
         return OnWalkSubframe(aNode);
     }
 
-    nsCOMPtr<nsIDOMHTMLIFrameElement> nodeAsIFrame = do_QueryInterface(aNode);
-    if (nodeAsIFrame && !(mPersistFlags &
-                          IWBP::PERSIST_FLAGS_IGNORE_IFRAMES)) {
+    if (content->IsHTMLElement(nsGkAtoms::iframe) &&
+        !(mPersistFlags & IWBP::PERSIST_FLAGS_IGNORE_IFRAMES)) {
         return OnWalkSubframe(aNode);
     }
 
@@ -722,7 +665,7 @@ PersistNodeFixup::FixupURI(nsAString &aURI)
     // get the current location of the file (absolutized)
     nsCOMPtr<nsIURI> uri;
     nsresult rv = NS_NewURI(getter_AddRefs(uri), aURI,
-                            mParent->GetCharacterSet().get(), mCurrentBaseURI);
+                            mParent->GetCharacterSet(), mCurrentBaseURI);
     NS_ENSURE_SUCCESS(rv, rv);
     nsAutoCString spec;
     rv = uri->GetSpec(spec);
@@ -809,7 +752,7 @@ PersistNodeFixup::FixupAnchor(nsIDOMNode *aNode)
         // Make a new URI to replace the current one
         nsCOMPtr<nsIURI> newURI;
         rv = NS_NewURI(getter_AddRefs(newURI), oldCValue,
-                       mParent->GetCharacterSet().get(), relativeURI);
+                       mParent->GetCharacterSet(), relativeURI);
         if (NS_SUCCEEDED(rv) && newURI) {
             newURI->SetUserPass(EmptyCString());
             nsAutoCString uriSpec;
@@ -954,40 +897,41 @@ PersistNodeFixup::FixupNode(nsIDOMNode *aNodeIn,
         return NS_OK;
     }
 
-    // BASE elements are replaced by a comment so relative links are not hosed.
-    if (!IsFlagSet(IWBP::PERSIST_FLAGS_NO_BASE_TAG_MODIFICATIONS)) {
-        nsCOMPtr<nsIDOMHTMLBaseElement> nodeAsBase = do_QueryInterface(aNodeIn);
-        if (nodeAsBase) {
-            nsCOMPtr<nsIDOMDocument> ownerDocument;
-            auto* base = static_cast<dom::HTMLSharedElement*>(nodeAsBase.get());
-            base->GetOwnerDocument(getter_AddRefs(ownerDocument));
-            if (ownerDocument) {
-                nsAutoString href;
-                base->GetHref(href); // Doesn't matter if this fails
-                nsCOMPtr<nsIDOMComment> comment;
-                nsAutoString commentText;
-                commentText.AssignLiteral(" base ");
-                if (!href.IsEmpty()) {
-                    commentText += NS_LITERAL_STRING("href=\"") + href
-                                   + NS_LITERAL_STRING("\" ");
-                }
-                rv = ownerDocument->CreateComment(commentText,
-                                                  getter_AddRefs(comment));
-                if (comment) {
-                    return CallQueryInterface(comment, aNodeOut);
-                }
-            }
-            return NS_OK;
-        }
-    }
-
     nsCOMPtr<nsIContent> content = do_QueryInterface(aNodeIn);
     if (!content) {
         return NS_OK;
     }
 
+    // BASE elements are replaced by a comment so relative links are not hosed.
+    if (!IsFlagSet(IWBP::PERSIST_FLAGS_NO_BASE_TAG_MODIFICATIONS) &&
+        content->IsHTMLElement(nsGkAtoms::base)) {
+        nsCOMPtr<nsIDOMDocument> ownerDocument;
+        // Base uses HTMLSharedElement, which would be awkward to implement
+        // FromContent on, since it represents multiple elements. Since we've
+        // already checked IsHTMLElement here, just cast as we were doing.
+        auto* base = static_cast<dom::HTMLSharedElement*>(content.get());
+        base->GetOwnerDocument(getter_AddRefs(ownerDocument));
+        if (ownerDocument) {
+            nsAutoString href;
+            base->GetHref(href); // Doesn't matter if this fails
+            nsCOMPtr<nsIDOMComment> comment;
+            nsAutoString commentText;
+            commentText.AssignLiteral(" base ");
+            if (!href.IsEmpty()) {
+                commentText += NS_LITERAL_STRING("href=\"") + href
+                    + NS_LITERAL_STRING("\" ");
+            }
+            rv = ownerDocument->CreateComment(commentText,
+                                              getter_AddRefs(comment));
+            if (comment) {
+                return CallQueryInterface(comment, aNodeOut);
+            }
+        }
+        return NS_OK;
+    }
+
     // Fix up href and file links in the elements
-    nsCOMPtr<nsIDOMHTMLAnchorElement> nodeAsAnchor = do_QueryInterface(aNodeIn);
+    RefPtr<dom::HTMLAnchorElement> nodeAsAnchor = dom::HTMLAnchorElement::FromContent(content);
     if (nodeAsAnchor) {
         rv = GetNodeToFixup(aNodeIn, aNodeOut);
         if (NS_SUCCEEDED(rv) && *aNodeOut) {
@@ -996,7 +940,7 @@ PersistNodeFixup::FixupNode(nsIDOMNode *aNodeIn,
         return rv;
     }
 
-    nsCOMPtr<nsIDOMHTMLAreaElement> nodeAsArea = do_QueryInterface(aNodeIn);
+    RefPtr<dom::HTMLAreaElement> nodeAsArea = dom::HTMLAreaElement::FromContent(content);
     if (nodeAsArea) {
         rv = GetNodeToFixup(aNodeIn, aNodeOut);
         if (NS_SUCCEEDED(rv) && *aNodeOut) {
@@ -1037,8 +981,7 @@ PersistNodeFixup::FixupNode(nsIDOMNode *aNodeIn,
         return rv;
     }
 
-    nsCOMPtr<nsIDOMHTMLImageElement> nodeAsImage = do_QueryInterface(aNodeIn);
-    if (nodeAsImage) {
+    if (content->IsHTMLElement(nsGkAtoms::img)) {
         rv = GetNodeToFixup(aNodeIn, aNodeOut);
         if (NS_SUCCEEDED(rv) && *aNodeOut) {
             // Disable image loads
@@ -1062,8 +1005,7 @@ PersistNodeFixup::FixupNode(nsIDOMNode *aNodeIn,
         return rv;
     }
 
-    nsCOMPtr<nsIDOMHTMLSourceElement> nodeAsSource = do_QueryInterface(aNodeIn);
-    if (nodeAsSource) {
+    if (content->IsHTMLElement(nsGkAtoms::source)) {
         rv = GetNodeToFixup(aNodeIn, aNodeOut);
         if (NS_SUCCEEDED(rv) && *aNodeOut) {
             FixupAttribute(*aNodeOut, "src");
@@ -1086,8 +1028,7 @@ PersistNodeFixup::FixupNode(nsIDOMNode *aNodeIn,
         return rv;
     }
 
-    nsCOMPtr<nsIDOMHTMLScriptElement> nodeAsScript = do_QueryInterface(aNodeIn);
-    if (nodeAsScript) {
+    if (content->IsHTMLElement(nsGkAtoms::script)) {
         rv = GetNodeToFixup(aNodeIn, aNodeOut);
         if (NS_SUCCEEDED(rv) && *aNodeOut) {
             FixupAttribute(*aNodeOut, "src");
@@ -1103,8 +1044,7 @@ PersistNodeFixup::FixupNode(nsIDOMNode *aNodeIn,
         return rv;
     }
 
-        nsCOMPtr<nsIDOMHTMLEmbedElement> nodeAsEmbed = do_QueryInterface(aNodeIn);
-    if (nodeAsEmbed) {
+    if (content->IsHTMLElement(nsGkAtoms::embed)) {
         rv = GetNodeToFixup(aNodeIn, aNodeOut);
         if (NS_SUCCEEDED(rv) && *aNodeOut) {
             FixupAttribute(*aNodeOut, "src");
@@ -1112,8 +1052,7 @@ PersistNodeFixup::FixupNode(nsIDOMNode *aNodeIn,
         return rv;
     }
 
-    nsCOMPtr<nsIDOMHTMLObjectElement> nodeAsObject = do_QueryInterface(aNodeIn);
-    if (nodeAsObject) {
+    if (content->IsHTMLElement(nsGkAtoms::object)) {
         rv = GetNodeToFixup(aNodeIn, aNodeOut);
         if (NS_SUCCEEDED(rv) && *aNodeOut) {
             FixupAttribute(*aNodeOut, "data");
@@ -1121,40 +1060,7 @@ PersistNodeFixup::FixupNode(nsIDOMNode *aNodeIn,
         return rv;
     }
 
-    nsCOMPtr<nsIDOMHTMLAppletElement> nodeAsApplet = do_QueryInterface(aNodeIn);
-    if (nodeAsApplet) {
-        rv = GetNodeToFixup(aNodeIn, aNodeOut);
-        if (NS_SUCCEEDED(rv) && *aNodeOut) {
-            nsCOMPtr<nsIDOMHTMLAppletElement> newApplet =
-                do_QueryInterface(*aNodeOut);
-            // For an applet, relative URIs are resolved relative to the
-            // codebase (which is resolved relative to the base URI).
-            nsCOMPtr<nsIURI> oldBase = mCurrentBaseURI;
-            nsAutoString codebase;
-            nodeAsApplet->GetCodeBase(codebase);
-            if (!codebase.IsEmpty()) {
-                nsCOMPtr<nsIURI> baseURI;
-                NS_NewURI(getter_AddRefs(baseURI), codebase,
-                          mParent->GetCharacterSet().get(), mCurrentBaseURI);
-                if (baseURI) {
-                    mCurrentBaseURI = baseURI;
-                }
-            }
-            // Unset the codebase too, since we'll correctly relativize the
-            // code and archive paths.
-            IgnoredErrorResult ignored;
-            static_cast<dom::HTMLSharedObjectElement*>(newApplet.get())->
-              RemoveAttribute(NS_LITERAL_STRING("codebase"), ignored);
-            FixupAttribute(*aNodeOut, "code");
-            FixupAttribute(*aNodeOut, "archive");
-            // restore the base URI we really want to have
-            mCurrentBaseURI = oldBase;
-        }
-        return rv;
-    }
-
-    nsCOMPtr<nsIDOMHTMLLinkElement> nodeAsLink = do_QueryInterface(aNodeIn);
-    if (nodeAsLink) {
+    if (content->IsHTMLElement(nsGkAtoms::link)) {
         rv = GetNodeToFixup(aNodeIn, aNodeOut);
         if (NS_SUCCEEDED(rv) && *aNodeOut) {
             // First see if the link represents linked content
@@ -1169,8 +1075,7 @@ PersistNodeFixup::FixupNode(nsIDOMNode *aNodeIn,
         return rv;
     }
 
-    nsCOMPtr<nsIDOMHTMLFrameElement> nodeAsFrame = do_QueryInterface(aNodeIn);
-    if (nodeAsFrame) {
+    if (content->IsHTMLElement(nsGkAtoms::frame)) {
         rv = GetNodeToFixup(aNodeIn, aNodeOut);
         if (NS_SUCCEEDED(rv) && *aNodeOut) {
             FixupAttribute(*aNodeOut, "src");
@@ -1178,8 +1083,7 @@ PersistNodeFixup::FixupNode(nsIDOMNode *aNodeIn,
         return rv;
     }
 
-    nsCOMPtr<nsIDOMHTMLIFrameElement> nodeAsIFrame = do_QueryInterface(aNodeIn);
-    if (nodeAsIFrame) {
+    if (content->IsHTMLElement(nsGkAtoms::iframe)) {
         rv = GetNodeToFixup(aNodeIn, aNodeOut);
         if (NS_SUCCEEDED(rv) && *aNodeOut) {
             FixupAttribute(*aNodeOut, "src");
@@ -1232,7 +1136,8 @@ PersistNodeFixup::FixupNode(nsIDOMNode *aNodeIn,
                 case NS_FORM_INPUT_RADIO:
                     {
                         bool checked = nodeAsInput->Checked();
-                        outElt->SetDefaultChecked(checked);
+                        IgnoredErrorResult ignored;
+                        outElt->SetDefaultChecked(checked, ignored);
                     }
                     break;
                 default:
@@ -1242,7 +1147,7 @@ PersistNodeFixup::FixupNode(nsIDOMNode *aNodeIn,
         return rv;
     }
 
-    nsCOMPtr<nsIDOMHTMLTextAreaElement> nodeAsTextArea = do_QueryInterface(aNodeIn);
+    dom::HTMLTextAreaElement* nodeAsTextArea = dom::HTMLTextAreaElement::FromContent(content);
     if (nodeAsTextArea) {
         rv = GetNodeToFixup(aNodeIn, aNodeOut);
         if (NS_SUCCEEDED(rv) && *aNodeOut) {
@@ -1257,14 +1162,15 @@ PersistNodeFixup::FixupNode(nsIDOMNode *aNodeIn,
         return rv;
     }
 
-    nsCOMPtr<nsIDOMHTMLOptionElement> nodeAsOption = do_QueryInterface(aNodeIn);
+    dom::HTMLOptionElement* nodeAsOption = dom::HTMLOptionElement::FromContent(content);
     if (nodeAsOption) {
         rv = GetNodeToFixup(aNodeIn, aNodeOut);
         if (NS_SUCCEEDED(rv) && *aNodeOut) {
-            nsCOMPtr<nsIDOMHTMLOptionElement> outElt = do_QueryInterface(*aNodeOut);
-            bool selected;
-            nodeAsOption->GetSelected(&selected);
-            outElt->SetDefaultSelected(selected);
+            nsCOMPtr<nsIContent> outContent = do_QueryInterface(*aNodeOut);
+            dom::HTMLOptionElement* outElt = dom::HTMLOptionElement::FromContent(outContent);
+            bool selected = nodeAsOption->Selected();
+            IgnoredErrorResult ignored;
+            outElt->SetDefaultSelected(selected, ignored);
         }
         return rv;
     }
@@ -1337,12 +1243,6 @@ ConvertEncoderFlags(uint32_t aEncoderFlags)
         encoderFlags |= nsIDocumentEncoder::OutputAbsoluteLinks;
     if (aEncoderFlags & nsIWebBrowserPersist::ENCODE_FLAGS_ENCODE_BASIC_ENTITIES)
         encoderFlags |= nsIDocumentEncoder::OutputEncodeBasicEntities;
-    if (aEncoderFlags & nsIWebBrowserPersist::ENCODE_FLAGS_ENCODE_LATIN1_ENTITIES)
-        encoderFlags |= nsIDocumentEncoder::OutputEncodeLatin1Entities;
-    if (aEncoderFlags & nsIWebBrowserPersist::ENCODE_FLAGS_ENCODE_HTML_ENTITIES)
-        encoderFlags |= nsIDocumentEncoder::OutputEncodeHTMLEntities;
-    if (aEncoderFlags & nsIWebBrowserPersist::ENCODE_FLAGS_ENCODE_W3C_ENTITIES)
-        encoderFlags |= nsIDocumentEncoder::OutputEncodeW3CEntities;
     if (aEncoderFlags & nsIWebBrowserPersist::ENCODE_FLAGS_CR_LINEBREAKS)
         encoderFlags |= nsIDocumentEncoder::OutputCRLineBreak;
     if (aEncoderFlags & nsIWebBrowserPersist::ENCODE_FLAGS_LF_LINEBREAKS)

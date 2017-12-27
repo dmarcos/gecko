@@ -28,24 +28,33 @@ public:
   virtual void Shutdown() override;
 
   virtual ipc::IPCResult
-  RecvParentCOMProxy(const IAccessibleHolder& aParentCOMProxy) override;
+    RecvParentCOMProxy(const IDispatchHolder& aParentCOMProxy) override;
   virtual ipc::IPCResult
     RecvEmulatedWindow(const WindowsHandle& aEmulatedWindowHandle,
-                       const IAccessibleHolder& aEmulatedWindowCOMProxy) override;
+                       const IDispatchHolder& aEmulatedWindowCOMProxy) override;
+  virtual ipc::IPCResult
+    RecvRestoreFocus() override;
 
   HWND GetNativeWindowHandle() const;
-  IAccessible* GetEmulatedWindowIAccessible() const { return mEmulatedWindowProxy.get(); }
+  IDispatch* GetEmulatedWindowIAccessible() const { return mEmulatedWindowProxy.get(); }
 
-  IAccessible* GetParentIAccessible() const { return mParentProxy.get(); }
+  IDispatch* GetParentIAccessible() const { return mParentProxy.get(); }
 
   bool SendEvent(const uint64_t& aID, const uint32_t& type);
   bool SendHideEvent(const uint64_t& aRootID, const bool& aFromUser);
   bool SendStateChangeEvent(const uint64_t& aID, const uint64_t& aState,
                             const bool& aEnabled);
   bool SendCaretMoveEvent(const uint64_t& aID, const int32_t& aOffset);
+  bool SendCaretMoveEvent(const uint64_t& aID,
+                          const LayoutDeviceIntRect& aCaretRect,
+                          const int32_t& aOffset);
+  bool SendFocusEvent(const uint64_t& aID);
+  bool SendFocusEvent(const uint64_t& aID,
+                      const LayoutDeviceIntRect& aCaretRect);
   bool SendTextChangeEvent(const uint64_t& aID, const nsString& aStr,
                            const int32_t& aStart, const uint32_t& aLen,
-                           const bool& aIsInsert, const bool& aFromUser);
+                           const bool& aIsInsert, const bool& aFromUser,
+                           const bool aDoSyncCheck = true);
   bool SendSelectionEvent(const uint64_t& aID, const uint64_t& aWidgetID,
                           const uint32_t& aType);
   bool SendRoleChangedEvent(const uint32_t& aRole);
@@ -64,6 +73,8 @@ private:
 
   bool IsConstructedInParentProcess() const { return mIsRemoteConstructed; }
   void SetConstructedInParentProcess() { mIsRemoteConstructed = true; }
+
+  LayoutDeviceIntRect GetCaretRectFor(const uint64_t& aID);
 
   /**
    * DocAccessibleChild should not fire events until it has asynchronously
@@ -100,7 +111,8 @@ private:
     SerializedShow(DocAccessibleChild* aTarget,
                    ShowEventData& aEventData, bool aFromUser)
       : DeferredEvent(aTarget)
-      , mEventData(aEventData.ID(), aEventData.Idx(), nsTArray<AccessibleData>())
+      , mEventData(aEventData.ID(), aEventData.Idx(),
+                   nsTArray<AccessibleData>(), aEventData.EventSuppressed())
       , mFromUser(aFromUser)
     {
       // Since IPDL doesn't generate a move constructor for ShowEventData,
@@ -159,19 +171,39 @@ private:
   struct SerializedCaretMove final : public DeferredEvent
   {
     SerializedCaretMove(DocAccessibleChild* aTarget, uint64_t aID,
-                        int32_t aOffset)
+                        const LayoutDeviceIntRect& aCaretRect, int32_t aOffset)
       : DeferredEvent(aTarget)
       , mID(aID)
+      , mCaretRect(aCaretRect)
       , mOffset(aOffset)
     {}
 
     void Dispatch(DocAccessibleChild* aIPCDoc) override
     {
-      Unused << aIPCDoc->SendCaretMoveEvent(mID, mOffset);
+      Unused << aIPCDoc->SendCaretMoveEvent(mID, mCaretRect, mOffset);
     }
 
-    uint64_t  mID;
-    int32_t   mOffset;
+    uint64_t            mID;
+    LayoutDeviceIntRect mCaretRect;
+    int32_t             mOffset;
+  };
+
+  struct SerializedFocus final : public DeferredEvent
+  {
+    SerializedFocus(DocAccessibleChild* aTarget, uint64_t aID,
+                    const LayoutDeviceIntRect& aCaretRect)
+      : DeferredEvent(aTarget)
+      , mID(aID)
+      , mCaretRect(aCaretRect)
+    {}
+
+    void Dispatch(DocAccessibleChild* aIPCDoc) override
+    {
+      Unused << aIPCDoc->SendFocusEvent(mID, mCaretRect);
+    }
+
+    uint64_t            mID;
+    LayoutDeviceIntRect mCaretRect;
   };
 
   struct SerializedTextChange final : public DeferredEvent
@@ -191,7 +223,7 @@ private:
     void Dispatch(DocAccessibleChild* aIPCDoc) override
     {
       Unused << aIPCDoc->SendTextChangeEvent(mID, mStr, mStart, mLen, mIsInsert,
-                                             mFromUser);
+                                             mFromUser, false);
     }
 
     uint64_t  mID;
@@ -314,8 +346,8 @@ private:
   };
 
   bool mIsRemoteConstructed;
-  mscom::ProxyUniquePtr<IAccessible> mParentProxy;
-  mscom::ProxyUniquePtr<IAccessible> mEmulatedWindowProxy;
+  mscom::ProxyUniquePtr<IDispatch> mParentProxy;
+  mscom::ProxyUniquePtr<IDispatch> mEmulatedWindowProxy;
   nsTArray<UniquePtr<DeferredEvent>> mDeferredEvents;
   HWND mEmulatedWindowHandle;
 };

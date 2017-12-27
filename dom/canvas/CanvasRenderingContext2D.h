@@ -27,11 +27,11 @@
 #include "nsLayoutUtils.h"
 #include "mozilla/EnumeratedArray.h"
 #include "FilterSupport.h"
-#include "nsSVGEffects.h"
+#include "SVGObserverUtils.h"
 #include "Layers.h"
 #include "nsBidi.h"
 
-class nsGlobalWindow;
+class nsGlobalWindowInner;
 class nsXULElement;
 
 namespace mozilla {
@@ -40,8 +40,8 @@ class SourceSurface;
 } // namespace gl
 
 namespace dom {
-class HTMLImageElementOrHTMLCanvasElementOrHTMLVideoElementOrImageBitmap;
-typedef HTMLImageElementOrHTMLCanvasElementOrHTMLVideoElementOrImageBitmap CanvasImageSource;
+class HTMLImageElementOrSVGImageElementOrHTMLCanvasElementOrHTMLVideoElementOrImageBitmap;
+typedef HTMLImageElementOrSVGImageElementOrHTMLCanvasElementOrHTMLVideoElementOrImageBitmap CanvasImageSource;
 class ImageData;
 class StringOrCanvasGradientOrCanvasPattern;
 class OwningStringOrCanvasGradientOrCanvasPattern;
@@ -204,10 +204,10 @@ public:
   bool DrawCustomFocusRing(mozilla::dom::Element& aElement);
   void Clip(const CanvasWindingRule& aWinding);
   void Clip(const CanvasPath& aPath, const CanvasWindingRule& aWinding);
-  bool IsPointInPath(double aX, double aY, const CanvasWindingRule& aWinding);
-  bool IsPointInPath(const CanvasPath& aPath, double aX, double aY, const CanvasWindingRule& aWinding);
-  bool IsPointInStroke(double aX, double aY);
-  bool IsPointInStroke(const CanvasPath& aPath, double aX, double aY);
+  bool IsPointInPath(JSContext* aCx, double aX, double aY, const CanvasWindingRule& aWinding);
+  bool IsPointInPath(JSContext* aCx, const CanvasPath& aPath, double aX, double aY, const CanvasWindingRule& aWinding);
+  bool IsPointInStroke(JSContext* aCx, double aX, double aY);
+  bool IsPointInStroke(JSContext* aCx, const CanvasPath& aPath, double aX, double aY);
   void FillText(const nsAString& aText, double aX, double aY,
                 const Optional<double>& aMaxWidth,
                 mozilla::ErrorResult& aError);
@@ -408,7 +408,7 @@ public:
     }
   }
 
-  void DrawWindow(nsGlobalWindow& aWindow, double aX, double aY,
+  void DrawWindow(nsGlobalWindowInner& aWindow, double aX, double aY,
                   double aW, double aH,
                   const nsAString& aBgColor, uint32_t aFlags,
                   mozilla::ErrorResult& aError);
@@ -461,13 +461,18 @@ public:
     return mTarget->Snapshot();
   }
 
-  NS_IMETHOD SetIsOpaque(bool aIsOpaque) override;
+  virtual void SetIsOpaque(bool aIsOpaque) override;
   bool GetIsOpaque() override { return mOpaque; }
   NS_IMETHOD Reset() override;
   already_AddRefed<Layer> GetCanvasLayer(nsDisplayListBuilder* aBuilder,
                                          Layer* aOldLayer,
-                                         LayerManager* aManager,
-                                         bool aMirror = false) override;
+                                         LayerManager* aManager) override;
+
+  bool UpdateWebRenderCanvasData(nsDisplayListBuilder* aBuilder,
+                                 WebRenderCanvasData* aCanvasData) override;
+
+  bool InitializeCanvasRenderer(nsDisplayListBuilder* aBuilder,
+                                CanvasRenderer* aRenderer) override;
   virtual bool ShouldForceInactiveLayer(LayerManager* aManager) override;
   void MarkContextClean() override;
   void MarkContextCleanForFrameCapture() override;
@@ -578,7 +583,7 @@ protected:
     * The number of living nsCanvasRenderingContexts.  When this goes down to
     * 0, we free the premultiply and unpremultiply tables, if they exist.
     */
-  static uint32_t sNumLivingContexts;
+  static uintptr_t sNumLivingContexts;
 
   static mozilla::gfx::DrawTarget* sErrorTarget;
 
@@ -1073,7 +1078,7 @@ protected:
     nsTArray<ClipState> clipsAndTransforms;
 
     RefPtr<gfxFontGroup> fontGroup;
-    nsCOMPtr<nsIAtom> fontLanguage;
+    RefPtr<nsAtom> fontLanguage;
     nsFont fontFont;
 
     EnumeratedArray<Style, Style::MAX, RefPtr<CanvasGradient>> gradientStyles;
@@ -1165,6 +1170,8 @@ protected:
   friend struct CanvasBidiProcessor;
   friend class CanvasDrawObserver;
 };
+
+size_t BindingJSObjectMallocBytes(CanvasRenderingContext2D* aContext);
 
 } // namespace dom
 } // namespace mozilla

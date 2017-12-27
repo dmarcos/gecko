@@ -1,7 +1,5 @@
 import os
 
-MOZ_OBJDIR = 'obj-firefox'
-
 config = {
     'default_actions': [
         'clobber',
@@ -12,7 +10,6 @@ config = {
         'upload-files',
         'sendchange',
         'check-test',
-        # 'generate-build-stats',
         'update',  # decided by query_is_nightly()
     ],
     'stage_platform': 'linux64-ccov',
@@ -23,10 +20,9 @@ config = {
     #### 64 bit build specific #####
     'env': {
         'MOZBUILD_STATE_PATH': os.path.join(os.getcwd(), '.mozbuild'),
-        'MOZ_AUTOMATION': '1',
         'DISPLAY': ':2',
         'HG_SHARE_BASE_DIR': '/builds/hg-shared',
-        'MOZ_OBJDIR': 'obj-firefox',
+        'MOZ_OBJDIR': '%(abs_obj_dir)s',
         'TINDERBOX_OUTPUT': '1',
         'TOOLTOOL_CACHE': '/builds/tooltool_cache',
         'TOOLTOOL_HOME': '/builds',
@@ -36,10 +32,10 @@ config = {
         'CCACHE_UMASK': '002',
         'LC_ALL': 'C',
         ## 64 bit specific
-        'PATH': '/tools/buildbot/bin:/usr/local/bin:/usr/lib64/ccache:/bin:\
+        'PATH': '/usr/local/bin:/usr/lib64/ccache:/bin:\
 /usr/bin:/usr/local/sbin:/usr/sbin:/sbin:/tools/git/bin:/tools/python27/bin:\
 /tools/python27-mercurial/bin:/home/cltbld/bin',
     },
-    'src_mozconfig': 'browser/config/mozconfigs/linux64/code-coverage',
+    'mozconfig_variant': 'code-coverage',
     #######################
 }

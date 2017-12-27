@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -232,6 +233,12 @@ class nsCSSScanner {
   uint32_t GetTokenEndOffset() const
   { return mOffset; }
 
+  const nsAString& GetSourceMapURL() const
+  { return mSourceMapURL; }
+
+  const nsAString& GetSourceURL() const
+  { return mSourceURL; }
+
   // Get the text of the line containing the first character of
   // the most recently processed token.
   nsDependentSubstring GetCurrentLine() const;
@@ -327,6 +334,7 @@ protected:
   void AdvanceLine();
 
   void SkipWhitespace();
+  bool CheckCommentDirective(const nsAString& aDirective);
   void SkipComment();
 
   bool GatherEscape(nsString& aOutput, bool aInString);
@@ -361,6 +369,9 @@ protected:
   bool mRecording;
   bool mSeenBadToken;
   bool mSeenVariableReference;
+
+  nsString mSourceMapURL;
+  nsString mSourceURL;
 };
 
 // Token for the grid-template-areas micro-syntax

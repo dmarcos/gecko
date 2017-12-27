@@ -7,13 +7,14 @@ registerCleanupFunction(function() {
     gBrowser.removeTab(gBrowser.tabs[1]);
 });
 
-add_task(function*() {
-  let prefs = yield openPreferencesViaOpenPreferencesAPI("panePrivacy", {leaveOpen: true});
+add_task(async function() {
+  let prefs = await openPreferencesViaOpenPreferencesAPI("panePrivacy", {leaveOpen: true});
   is(prefs.selectedPane, "panePrivacy", "Privacy pane was selected");
 
+  // eslint-disable-next-line mozilla/no-cpows-in-tests
   let doc = gBrowser.contentDocument;
-  let notificationsDoNotDisturbRow = doc.getElementById("notificationsDoNotDisturbRow");
-  if (notificationsDoNotDisturbRow.hidden) {
+  let notificationsDoNotDisturbBox = doc.getElementById("notificationsDoNotDisturbBox");
+  if (notificationsDoNotDisturbBox.hidden) {
     todo(false, "Do not disturb is not available on this platform");
     return;
   }
@@ -32,13 +33,13 @@ add_task(function*() {
   ok(!checkbox.checked, "Checkbox should not be checked by default");
   ok(!alertService.manualDoNotDisturb, "Do not disturb should be off by default");
 
-  let checkboxChanged = waitForEvent(checkbox, "command")
+  let checkboxChanged = waitForEvent(checkbox, "command");
   checkbox.click();
-  yield checkboxChanged;
+  await checkboxChanged;
   ok(alertService.manualDoNotDisturb, "Do not disturb should be enabled when checked");
 
-  checkboxChanged = waitForEvent(checkbox, "command")
+  checkboxChanged = waitForEvent(checkbox, "command");
   checkbox.click();
-  yield checkboxChanged;
+  await checkboxChanged;
   ok(!alertService.manualDoNotDisturb, "Do not disturb should be disabled when unchecked");
 });

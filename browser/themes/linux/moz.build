@@ -8,4 +8,5 @@ DIRS += ['communicator']
 
 JAR_MANIFESTS += ['jar.mn']
 
-include('../tab-svgs.mozbuild')
+DEFINES['MENUBAR_CAN_AUTOHIDE'] = 1
+

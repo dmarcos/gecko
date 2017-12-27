@@ -89,36 +89,43 @@ add_task(function* () {
   // page has actually made at least one request.
   let { tab, monitor } = yield initNetMonitor(SIMPLE_URL);
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire, connector } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
+
   let wait = waitForNetworkEvents(monitor, EXPECTED_REQUESTS.length);
   tab.linkedBrowser.loadURI(CAUSE_URL);
   yield wait;
 
-  is(gStore.getState().requests.requests.size, EXPECTED_REQUESTS.length,
+  let requests = getSortedRequests(store.getState());
+  yield Promise.all(requests.map(requestItem =>
+    connector.requestData(requestItem.id, "stackTrace")));
+
+  is(store.getState().requests.requests.size, EXPECTED_REQUESTS.length,
     "All the page events should be recorded.");
 
-  EXPECTED_REQUESTS.forEach((spec, i) => {
+  EXPECTED_REQUESTS.forEach(async (spec, i) => {
     let { method, url, causeType, causeUri, stack } = spec;
 
-    let requestItem = getSortedRequests(gStore.getState()).get(i);
+    let requestItem = getSortedRequests(store.getState()).get(i);
     verifyRequestItemTarget(
       document,
-      getDisplayedRequests(gStore.getState()),
+      getDisplayedRequests(store.getState()),
       requestItem,
       method,
       url,
       { cause: { type: causeType, loadingDocumentUri: causeUri } }
     );
 
-    let { stacktrace } = requestItem.cause;
+    let stacktrace = requestItem.stacktrace;
     let stackLen = stacktrace ? stacktrace.length : 0;
+
+    await waitUntil(() => !!requestItem.stacktrace);
 
     if (stack) {
       ok(stacktrace, `Request #${i} has a stacktrace`);
@@ -148,7 +155,7 @@ add_task(function* () {
     document.querySelector("#requests-list-cause-button"));
   let expectedOrder = EXPECTED_REQUESTS.map(r => r.causeType).sort();
   expectedOrder.forEach((expectedCause, i) => {
-    const cause = getSortedRequests(gStore.getState()).get(i).cause.type;
+    const cause = getSortedRequests(store.getState()).get(i).cause.type;
     is(cause, expectedCause, `The request #${i} has the expected cause after sorting`);
   });
 

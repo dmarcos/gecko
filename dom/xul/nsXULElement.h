@@ -16,7 +16,7 @@
 #include "mozilla/Attributes.h"
 #include "nsIDOMEvent.h"
 #include "nsIServiceManager.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "mozilla/dom/NodeInfo.h"
 #include "nsIControllers.h"
 #include "nsIDOMElement.h"
@@ -29,6 +29,7 @@
 #include "nsLayoutCID.h"
 #include "nsAttrAndChildArray.h"
 #include "nsGkAtoms.h"
+#include "nsStringFwd.h"
 #include "nsStyledElement.h"
 #include "nsIFrameLoader.h"
 #include "nsFrameLoader.h" // Needed because we return an
@@ -39,9 +40,9 @@
 #include "mozilla/dom/DOMRect.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/DOMString.h"
+#include "mozilla/dom/FromParser.h"
 
 class nsIDocument;
-class nsString;
 class nsXULPrototypeDocument;
 
 class nsIObjectInputStream;
@@ -212,7 +213,7 @@ class XULDocument;
 class nsXULPrototypeScript : public nsXULPrototypeNode
 {
 public:
-    nsXULPrototypeScript(uint32_t aLineNo, uint32_t version);
+    explicit nsXULPrototypeScript(uint32_t aLineNo);
     virtual ~nsXULPrototypeScript();
 
     virtual nsresult Serialize(nsIObjectOutputStream* aStream,
@@ -269,7 +270,6 @@ public:
     bool                     mSrcLoading;
     bool                     mOutOfLine;
     mozilla::dom::XULDocument* mSrcLoadWaiters;   // [OWNER] but not COMPtr
-    uint32_t                 mLangVersion;
 private:
     JS::Heap<JSScript*>      mScriptObject;
 };
@@ -389,9 +389,9 @@ public:
     virtual bool IsFocusableInternal(int32_t* aTabIndex, bool aWithMouse) override;
 
     NS_IMETHOD WalkContentStyleRules(nsRuleWalker* aRuleWalker) override;
-    virtual nsChangeHint GetAttributeChangeHint(const nsIAtom* aAttribute,
+    virtual nsChangeHint GetAttributeChangeHint(const nsAtom* aAttribute,
                                                 int32_t aModType) const override;
-    NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const override;
+    NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* aAttribute) const override;
 
     // XUL element methods
     /**
@@ -414,7 +414,8 @@ public:
     // nsIDOMXULElement
     NS_DECL_NSIDOMXULELEMENT
 
-    virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
+    virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+                           bool aPreallocateChildren) const override;
     virtual mozilla::EventStates IntrinsicState() const override;
 
     nsresult GetFrameLoaderXPCOM(nsIFrameLoader** aFrameLoader);
@@ -433,19 +434,19 @@ public:
 
     virtual nsIDOMNode* AsDOMNode() override { return this; }
 
-    virtual bool IsEventAttributeName(nsIAtom* aName) override;
+    virtual bool IsEventAttributeNameInternal(nsAtom* aName) override;
 
     typedef mozilla::dom::DOMString DOMString;
-    void GetXULAttr(nsIAtom* aName, DOMString& aResult) const
+    void GetXULAttr(nsAtom* aName, DOMString& aResult) const
     {
         GetAttr(kNameSpaceID_None, aName, aResult);
     }
-    void SetXULAttr(nsIAtom* aName, const nsAString& aValue,
+    void SetXULAttr(nsAtom* aName, const nsAString& aValue,
                     mozilla::ErrorResult& aError)
     {
         SetAttr(aName, aValue, aError);
     }
-    void SetXULBoolAttr(nsIAtom* aName, bool aValue)
+    void SetXULBoolAttr(nsAtom* aName, bool aValue)
     {
         if (aValue) {
             SetAttr(kNameSpaceID_None, aName, NS_LITERAL_STRING("true"), true);
@@ -663,6 +664,14 @@ public:
     {
         SetXULAttr(nsGkAtoms::statustext, aValue, rv);
     }
+    void GetSrc(DOMString& aValue) const
+    {
+        GetXULAttr(nsGkAtoms::src, aValue);
+    }
+    void SetSrc(const nsAString& aValue, mozilla::ErrorResult& rv)
+    {
+        SetXULAttr(nsGkAtoms::src, aValue, rv);
+    }
     bool AllowEvents() const
     {
         return BoolAttrIsTrue(nsGkAtoms::allowevents);
@@ -722,20 +731,7 @@ protected:
     // Helper routine that crawls a parent chain looking for a tree element.
     NS_IMETHOD GetParentTree(nsIDOMXULMultiSelectControlElement** aTreeElement);
 
-    nsresult AddPopupListener(nsIAtom* aName);
-
-    class nsXULSlots : public mozilla::dom::Element::nsDOMSlots
-    {
-    public:
-        nsXULSlots();
-        virtual ~nsXULSlots();
-
-        void Traverse(nsCycleCollectionTraversalCallback &cb);
-
-        nsCOMPtr<nsISupports> mFrameLoaderOrOpener;
-    };
-
-    virtual nsINode::nsSlots* CreateSlots() override;
+    nsresult AddPopupListener(nsAtom* aName);
 
     nsresult LoadSrc();
 
@@ -750,21 +746,25 @@ protected:
      */
     nsresult MakeHeavyweight(nsXULPrototypeElement* aPrototype);
 
-    virtual nsresult BeforeSetAttr(int32_t aNamespaceID, nsIAtom* aName,
+    virtual nsresult BeforeSetAttr(int32_t aNamespaceID, nsAtom* aName,
                                    const nsAttrValueOrString* aValue,
                                    bool aNotify) override;
-    virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsIAtom* aName,
-                                  const nsAttrValue* aValue, bool aNotify) override;
+    virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
+                                  const nsAttrValue* aValue,
+                                  const nsAttrValue* aOldValue,
+                                  nsIPrincipal* aSubjectPrincipal,
+                                  bool aNotify) override;
 
     virtual void UpdateEditableState(bool aNotify) override;
 
     virtual bool ParseAttribute(int32_t aNamespaceID,
-                                  nsIAtom* aAttribute,
+                                  nsAtom* aAttribute,
                                   const nsAString& aValue,
+                                  nsIPrincipal* aMaybeScriptedPrincipal,
                                   nsAttrValue& aResult) override;
 
     virtual mozilla::EventListenerManager*
-      GetEventListenerManagerForAttr(nsIAtom* aAttrName,
+      GetEventListenerManagerForAttr(nsAtom* aAttrName,
                                      bool* aDefer) override;
 
     /**
@@ -772,7 +772,7 @@ protected:
      */
     void AddListenerFor(const nsAttrName& aName,
                         bool aCompileEventHandlers);
-    void MaybeAddPopupListener(nsIAtom* aLocalName);
+    void MaybeAddPopupListener(nsAtom* aLocalName);
 
     nsIWidget* GetWindowWidget();
 
@@ -792,17 +792,18 @@ protected:
     // Internal accessor. This shadows the 'Slots', and returns
     // appropriate value.
     nsIControllers *Controllers() {
-      nsDOMSlots* slots = GetExistingDOMSlots();
-      return slots ? slots->mControllers : nullptr;
+      nsExtendedDOMSlots* slots = GetExistingExtendedDOMSlots();
+      return slots ? slots->mControllers.get() : nullptr;
     }
 
     void UnregisterAccessKey(const nsAString& aOldValue);
-    bool BoolAttrIsTrue(nsIAtom* aName) const;
+    bool BoolAttrIsTrue(nsAtom* aName) const;
 
     friend nsresult
-    NS_NewXULElement(mozilla::dom::Element** aResult, mozilla::dom::NodeInfo *aNodeInfo);
+    NS_NewXULElement(mozilla::dom::Element** aResult, mozilla::dom::NodeInfo *aNodeInfo,
+                     mozilla::dom::FromParser aFromParser, const nsAString* aIs);
     friend void
-    NS_TrustedNewXULElement(nsIContent** aResult, mozilla::dom::NodeInfo *aNodeInfo);
+    NS_TrustedNewXULElement(mozilla::dom::Element** aResult, mozilla::dom::NodeInfo *aNodeInfo);
 
     static already_AddRefed<nsXULElement>
     Create(nsXULPrototypeElement* aPrototype, mozilla::dom::NodeInfo *aNodeInfo,

@@ -52,7 +52,7 @@ nsNSSDialogs::Init()
   nsCOMPtr<nsIStringBundleService> service =
            do_GetService(NS_STRINGBUNDLE_CONTRACTID, &rv);
   if (NS_FAILED(rv)) return rv;
-  
+
   rv = service->CreateBundle(PIPSTRING_BUNDLE_URL,
                              getter_AddRefs(mPIPStringBundle));
   return rv;
@@ -110,13 +110,13 @@ nsNSSDialogs::ConfirmDownloadCACert(nsIInterfaceRequestor* ctx,
     return NS_ERROR_FAILURE;
   }
 
-  nsresult rv = argArray->AppendElement(cert, false);
+  nsresult rv = argArray->AppendElement(cert);
   if (NS_FAILED(rv)) {
     return rv;
   }
 
   nsCOMPtr<nsIWritablePropertyBag2> retVals = new nsHashPropertyBag();
-  rv = argArray->AppendElement(retVals, false);
+  rv = argArray->AppendElement(retVals);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -153,16 +153,9 @@ nsNSSDialogs::ConfirmDownloadCACert(nsIInterfaceRequestor* ctx,
   if (NS_FAILED(rv)) {
     return rv;
   }
-  bool trustForObjSign = false;
-  rv = retVals->GetPropertyAsBool(NS_LITERAL_STRING("trustForObjSign"),
-                                  &trustForObjSign);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
 
   *trust |= trustForSSL ? nsIX509CertDB::TRUSTED_SSL : 0;
   *trust |= trustForEmail ? nsIX509CertDB::TRUSTED_EMAIL : 0;
-  *trust |= trustForObjSign ? nsIX509CertDB::TRUSTED_OBJSIGN : 0;
 
   return NS_OK;
 }
@@ -194,7 +187,7 @@ nsNSSDialogs::ChooseCertificate(nsIInterfaceRequestor* ctx,
   if (NS_FAILED(rv)) {
     return rv;
   }
-  rv = argArray->AppendElement(hostnameVariant, false);
+  rv = argArray->AppendElement(hostnameVariant);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -204,7 +197,7 @@ nsNSSDialogs::ChooseCertificate(nsIInterfaceRequestor* ctx,
   if (NS_FAILED(rv)) {
     return rv;
   }
-  rv = argArray->AppendElement(organizationVariant, false);
+  rv = argArray->AppendElement(organizationVariant);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -214,7 +207,7 @@ nsNSSDialogs::ChooseCertificate(nsIInterfaceRequestor* ctx,
   if (NS_FAILED(rv)) {
     return rv;
   }
-  rv = argArray->AppendElement(issuerOrgVariant, false);
+  rv = argArray->AppendElement(issuerOrgVariant);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -224,18 +217,18 @@ nsNSSDialogs::ChooseCertificate(nsIInterfaceRequestor* ctx,
   if (NS_FAILED(rv)) {
     return rv;
   }
-  rv = argArray->AppendElement(portVariant, false);
+  rv = argArray->AppendElement(portVariant);
   if (NS_FAILED(rv)) {
     return rv;
   }
 
-  rv = argArray->AppendElement(certList, false);
+  rv = argArray->AppendElement(certList);
   if (NS_FAILED(rv)) {
     return rv;
   }
 
   nsCOMPtr<nsIWritablePropertyBag2> retVals = new nsHashPropertyBag();
-  rv = argArray->AppendElement(retVals, false);
+  rv = argArray->AppendElement(retVals);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -320,7 +313,7 @@ nsNSSDialogs::GetPKCS12FilePassword(nsIInterfaceRequestor* ctx,
 
   nsAutoString msg;
   nsresult rv = mPIPStringBundle->GetStringFromName(
-    u"getPKCS12FilePasswordMessage", getter_Copies(msg));
+    "getPKCS12FilePasswordMessage", msg);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -358,7 +351,7 @@ nsNSSDialogs::ViewCert(nsIInterfaceRequestor* ctx, nsIX509Cert* cert)
 }
 
 NS_IMETHODIMP
-nsNSSDialogs::DisplayGeneratingKeypairInfo(nsIInterfaceRequestor *aCtx, nsIKeygenThread *runnable) 
+nsNSSDialogs::DisplayGeneratingKeypairInfo(nsIInterfaceRequestor *aCtx, nsIKeygenThread *runnable)
 {
   nsresult rv;
 
@@ -423,21 +416,21 @@ nsNSSDialogs::DisplayProtectedAuth(nsIInterfaceRequestor *aCtx, nsIProtectedAuth
     // in the window because protected authentication is interruptible
     // from user interface and changing nsNSSDialogHelper's static variable
     // would not be thread-safe
-    
+
     nsresult rv = NS_ERROR_FAILURE;
-    
+
     // Get the parent window for the dialog
     nsCOMPtr<mozIDOMWindowProxy> parent = do_GetInterface(aCtx);
-    
-    nsCOMPtr<nsIWindowWatcher> windowWatcher = 
+
+    nsCOMPtr<nsIWindowWatcher> windowWatcher =
         do_GetService("@mozilla.org/embedcomp/window-watcher;1", &rv);
     if (NS_FAILED(rv))
         return rv;
-    
+
     if (!parent) {
         windowWatcher->GetActiveWindow(getter_AddRefs(parent));
     }
-    
+
     nsCOMPtr<mozIDOMWindowProxy> newWindow;
     rv = windowWatcher->OpenWindow(parent,
         "chrome://pippki/content/protectedAuth.xul",
@@ -445,6 +438,6 @@ nsNSSDialogs::DisplayProtectedAuth(nsIInterfaceRequestor *aCtx, nsIProtectedAuth
         "centerscreen,chrome,modal,titlebar,close=no",
         runnable,
         getter_AddRefs(newWindow));
-    
+
     return rv;
 }

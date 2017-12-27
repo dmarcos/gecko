@@ -2,89 +2,43 @@
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
 Cu.import("resource://gre/modules/PlacesDBUtils.jsm");
-Cu.import("resource://gre/modules/PlacesUtils.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://services-common/utils.js");
 Cu.import("resource://services-sync/engines.js");
 Cu.import("resource://services-sync/constants.js");
 Cu.import("resource://services-sync/engines/history.js");
 Cu.import("resource://services-sync/service.js");
 Cu.import("resource://services-sync/util.js");
 
-Service.engineManager.clear();
-Service.engineManager.register(HistoryEngine);
-var engine = Service.engineManager.get("history");
-var tracker = engine._tracker;
+let engine;
+let tracker;
 
-// Don't write out by default.
-tracker.persistChangedIDs = false;
-
-// Places notifies history observers asynchronously, so `addVisits` might return
-// before the tracker receives the notification. This helper registers an
-// observer that resolves once the expected notification fires.
-async function promiseVisit(expectedType, expectedURI) {
-  return new Promise(resolve => {
-    function done(type, uri) {
-      if (uri.equals(expectedURI) && type == expectedType) {
-        PlacesUtils.history.removeObserver(observer);
-        resolve();
-      }
-    }
-    let observer = {
-      onVisit(uri) {
-        done("added", uri);
-      },
-      onBeginUpdateBatch() {},
-      onEndUpdateBatch() {},
-      onTitleChanged() {},
-      onFrecencyChanged() {},
-      onManyFrecenciesChanged() {},
-      onDeleteURI(uri) {
-        done("removed", uri);
-      },
-      onClearHistory() {},
-      onPageChanged() {},
-      onDeleteVisits() {},
-    };
-    PlacesUtils.history.addObserver(observer);
-  });
-}
-
-async function addVisit(suffix, referrer = null, transition = PlacesUtils.history.TRANSITION_LINK) {
-  let uriString = "http://getfirefox.com/" + suffix;
-  let uri = Utils.makeURI(uriString);
-  _("Adding visit for URI " + uriString);
-
-  let visitAddedPromise = promiseVisit("added", uri);
-  await PlacesTestUtils.addVisits({
-    uri,
-    visitDate: Date.now() * 1000,
-    transition,
-    referrer,
-  });
-  await visitAddedPromise;
-
-  return uri;
-}
-
-function run_test() {
+add_task(async function setup() {
   initTestLogging("Trace");
   Log.repository.getLogger("Sync.Tracker.History").level = Log.Level.Trace;
-  run_next_test();
-}
+
+  Service.engineManager.clear();
+  await Service.engineManager.register(HistoryEngine);
+  engine = Service.engineManager.get("history");
+  tracker = engine._tracker;
+
+  // Don't write out by default.
+  tracker.persistChangedIDs = false;
+});
 
 async function verifyTrackerEmpty() {
-  let changes = engine.pullNewChanges();
+  let changes = await engine.pullNewChanges();
   do_check_empty(changes);
   equal(tracker.score, 0);
 }
 
 async function verifyTrackedCount(expected) {
-  let changes = engine.pullNewChanges();
+  let changes = await engine.pullNewChanges();
   do_check_attribute_count(changes, expected);
 }
 
 async function verifyTrackedItems(tracked) {
-  let changes = engine.pullNewChanges();
+  let changes = await engine.pullNewChanges();
   let trackedIDs = new Set(Object.keys(changes));
   for (let guid of tracked) {
     ok(guid in changes, `${guid} should be tracked`);
@@ -117,7 +71,7 @@ async function cleanup() {
 add_task(async function test_empty() {
   _("Verify we've got an empty, disabled tracker to work with.");
   await verifyTrackerEmpty();
-  do_check_false(tracker._isTracking);
+  Assert.ok(!tracker._isTracking);
 
   await cleanup();
 });
@@ -157,7 +111,7 @@ add_task(async function test_start_tracking() {
 
   _("Score updated in test_start_tracking.");
   await verifyTrackedCount(1);
-  do_check_eq(tracker.score, SCORE_INCREMENT_SMALL);
+  Assert.equal(tracker.score, SCORE_INCREMENT_SMALL);
 
   await savePromise;
 
@@ -170,7 +124,7 @@ add_task(async function test_start_tracking_twice() {
   await startTracking();
   await addVisit("start_tracking_twice1");
   await verifyTrackedCount(1);
-  do_check_eq(tracker.score, SCORE_INCREMENT_SMALL);
+  Assert.equal(tracker.score, SCORE_INCREMENT_SMALL);
 
   _("Notifying twice won't do any harm.");
   await startTracking();
@@ -180,7 +134,7 @@ add_task(async function test_start_tracking_twice() {
 
   _("Score updated in test_start_tracking_twice.");
   await verifyTrackedCount(2);
-  do_check_eq(tracker.score, 2 * SCORE_INCREMENT_SMALL);
+  Assert.equal(tracker.score, 2 * SCORE_INCREMENT_SMALL);
 
   await cleanup();
 });
@@ -190,8 +144,8 @@ add_task(async function test_track_delete() {
 
   // This isn't present because we weren't tracking when it was visited.
   await addVisit("track_delete");
-  let uri = Utils.makeURI("http://getfirefox.com/track_delete");
-  let guid = engine._store.GUIDForUri(uri);
+  let uri = CommonUtils.makeURI("http://getfirefox.com/track_delete");
+  let guid = await engine._store.GUIDForUri(uri.spec);
   await verifyTrackerEmpty();
 
   await startTracking();
@@ -201,7 +155,7 @@ add_task(async function test_track_delete() {
   await Promise.all([scorePromise, visitRemovedPromise]);
 
   await verifyTrackedItems([guid]);
-  do_check_eq(tracker.score, SCORE_INCREMENT_XLARGE);
+  Assert.equal(tracker.score, SCORE_INCREMENT_XLARGE);
 
   await cleanup();
 });
@@ -209,7 +163,7 @@ add_task(async function test_track_delete() {
 add_task(async function test_dont_track_expiration() {
   _("Expirations are not tracked.");
   let uriToRemove = await addVisit("to_remove");
-  let guidToRemove = engine._store.GUIDForUri(uriToRemove);
+  let guidToRemove = await engine._store.GUIDForUri(uriToRemove.spec);
 
   await resetTracker();
   await verifyTrackerEmpty();
@@ -258,31 +212,45 @@ add_task(async function test_stop_tracking_twice() {
   await cleanup();
 });
 
+add_task(async function test_filter_file_uris() {
+  await startTracking();
+
+  let uri = CommonUtils.makeURI("file:///Users/eoger/tps/config.json");
+  let visitAddedPromise = promiseVisit("added", uri);
+  await PlacesTestUtils.addVisits({
+    uri,
+    visitDate: Date.now() * 1000,
+    transition: PlacesUtils.history.TRANSITION_LINK
+  });
+  await visitAddedPromise;
+
+  await verifyTrackerEmpty();
+  await stopTracking();
+  await cleanup();
+});
+
 add_task(async function test_filter_hidden() {
   await startTracking();
 
   _("Add visit; should be hidden by the redirect");
   let hiddenURI = await addVisit("hidden");
-  let hiddenGUID = engine._store.GUIDForUri(hiddenURI);
+  let hiddenGUID = await engine._store.GUIDForUri(hiddenURI.spec);
   _(`Hidden visit GUID: ${hiddenGUID}`);
 
   _("Add redirect visit; should be tracked");
-  let trackedURI = await addVisit("redirect", hiddenURI,
+  let trackedURI = await addVisit("redirect", hiddenURI.spec,
     PlacesUtils.history.TRANSITION_REDIRECT_PERMANENT);
-  let trackedGUID = engine._store.GUIDForUri(trackedURI);
+  let trackedGUID = await engine._store.GUIDForUri(trackedURI.spec);
   _(`Tracked visit GUID: ${trackedGUID}`);
 
   _("Add visit for framed link; should be ignored");
   let embedURI = await addVisit("framed_link", null,
     PlacesUtils.history.TRANSITION_FRAMED_LINK);
-  let embedGUID = engine._store.GUIDForUri(embedURI);
+  let embedGUID = await engine._store.GUIDForUri(embedURI.spec);
   _(`Framed link visit GUID: ${embedGUID}`);
 
   _("Run Places maintenance to mark redirect visit as hidden");
-  let maintenanceFinishedPromise =
-    promiseOneObserver("places-maintenance-finished");
-  PlacesDBUtils.maintenanceOnIdle();
-  await maintenanceFinishedPromise;
+  await PlacesDBUtils.maintenanceOnIdle();
 
   await verifyTrackedItems([trackedGUID]);
 

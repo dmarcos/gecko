@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim:cindent:tabstop=2:expandtab:shiftwidth=2:
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -30,7 +30,6 @@ class CSSRuleListImpl;
 class nsCSSRuleProcessor;
 class nsIURI;
 class nsMediaQueryResultCacheKey;
-class nsStyleSet;
 class nsPresContext;
 class nsXMLNameSpaceMap;
 
@@ -59,7 +58,7 @@ struct CSSStyleSheetInner : public StyleSheetInfo
                      CSSStyleSheet* aPrimarySheet);
   ~CSSStyleSheetInner();
 
-  CSSStyleSheetInner* CloneFor(CSSStyleSheet* aPrimarySheet);
+  StyleSheetInfo* CloneFor(StyleSheet* aPrimarySheet) override;
   void RemoveSheet(StyleSheet* aSheet) override;
 
   void RebuildNameSpaces();
@@ -102,8 +101,6 @@ public:
 
   bool HasRules() const;
 
-  // Find the ID of the owner inner window.
-  uint64_t FindOwningWindowInnerID() const;
 #ifdef DEBUG
   void List(FILE* out = stdout, int32_t aIndent = 0) const override;
 #endif
@@ -114,42 +111,21 @@ public:
   int32_t StyleRuleCount() const;
   css::Rule* GetStyleRuleAt(int32_t aIndex) const;
 
-  void SetOwnerRule(css::ImportRule* aOwnerRule) { mOwnerRule = aOwnerRule; /* Not ref counted */ }
-  css::ImportRule* GetOwnerRule() const { return mOwnerRule; }
-  // Workaround overloaded-virtual warning in GCC.
-  using StyleSheet::GetOwnerRule;
-
   nsXMLNameSpaceMap* GetNameSpaceMap() const {
     return Inner()->mNameSpaceMap;
   }
 
-  virtual already_AddRefed<StyleSheet> Clone(StyleSheet* aCloneParent,
-    css::ImportRule* aCloneOwnerRule,
+  already_AddRefed<StyleSheet> Clone(StyleSheet* aCloneParent,
+    dom::CSSImportRule* aCloneOwnerRule,
     nsIDocument* aCloneDocument,
     nsINode* aCloneOwningNode) const final;
-
-  bool IsModified() const final { return mDirty; }
-
-  void SetModifiedByChildRule() {
-    NS_ASSERTION(mDirty,
-                 "sheet must be marked dirty before handing out child rules");
-    DidDirty();
-  }
 
   nsresult AddRuleProcessor(nsCSSRuleProcessor* aProcessor);
   nsresult DropRuleProcessor(nsCSSRuleProcessor* aProcessor);
 
-  void AddStyleSet(nsStyleSet* aStyleSet);
-  void DropStyleSet(nsStyleSet* aStyleSet);
-
   // nsICSSLoaderObserver interface
   NS_IMETHOD StyleSheetLoaded(StyleSheet* aSheet, bool aWasAlternate,
                               nsresult aStatus) override;
-
-  void EnsureUniqueInner();
-
-  // Append all of this sheet's child sheets to aArray.
-  void AppendAllChildSheets(nsTArray<CSSStyleSheet*>& aArray);
 
   bool UseForPresentation(nsPresContext* aPresContext,
                             nsMediaQueryResultCacheKey& aKey) const;
@@ -168,19 +144,12 @@ public:
   dom::Element* GetScopeElement() const { return mScopeElement; }
   void SetScopeElement(dom::Element* aScopeElement);
 
-  // WebIDL CSSStyleSheet API
-  // Can't be inline because we can't include ImportRule here.  And can't be
-  // called GetOwnerRule because that would be ambiguous with the ImportRule
-  // version.
-  css::Rule* GetDOMOwnerRule() const final;
-
-  void WillDirty();
-  void DidDirty();
+  void DidDirty() override;
 
 private:
   CSSStyleSheet(const CSSStyleSheet& aCopy,
                 CSSStyleSheet* aParentToUse,
-                css::ImportRule* aOwnerRuleToUse,
+                dom::CSSImportRule* aOwnerRuleToUse,
                 nsIDocument* aDocumentToUse,
                 nsINode* aOwningNodeToUse);
 
@@ -189,6 +158,8 @@ private:
 
 protected:
   virtual ~CSSStyleSheet();
+
+  void LastRelease();
 
   void ClearRuleCascades();
 
@@ -210,7 +181,7 @@ protected:
 
 protected:
   // Internal methods which do not have security check and completeness check.
-  dom::CSSRuleList* GetCssRulesInternal(ErrorResult& aRv);
+  dom::CSSRuleList* GetCssRulesInternal();
   uint32_t InsertRuleInternal(const nsAString& aRule,
                               uint32_t aIndex, ErrorResult& aRv);
   void DeleteRuleInternal(uint32_t aIndex, ErrorResult& aRv);
@@ -220,15 +191,11 @@ protected:
 
   void EnabledStateChangedInternal();
 
-  css::ImportRule*      mOwnerRule; // weak ref
-
   RefPtr<CSSRuleListImpl> mRuleCollection;
-  bool                  mDirty; // has been modified 
   bool                  mInRuleProcessorCache;
   RefPtr<dom::Element> mScopeElement;
 
   AutoTArray<nsCSSRuleProcessor*, 8>* mRuleProcessors;
-  nsTArray<nsStyleSet*> mStyleSets;
 
   friend class mozilla::StyleSheet;
   friend class ::nsCSSRuleProcessor;

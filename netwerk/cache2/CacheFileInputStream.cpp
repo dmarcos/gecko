@@ -131,7 +131,7 @@ CacheFileInputStream::ReadSegments(nsWriteSegmentFun aWriter, void *aClosure,
   LOG(("CacheFileInputStream::ReadSegments() [this=%p, count=%d]",
        this, aCount));
 
-  nsresult rv;
+  nsresult rv = NS_OK;
 
   *_retval = 0;
 
@@ -145,8 +145,9 @@ CacheFileInputStream::ReadSegments(nsWriteSegmentFun aWriter, void *aClosure,
     LOG(("CacheFileInputStream::ReadSegments() - Stream is closed. [this=%p, "
          "status=0x%08" PRIx32 "]", this, static_cast<uint32_t>(mStatus)));
 
-    if NS_FAILED(mStatus)
+    if (NS_FAILED(mStatus)) {
       return mStatus;
+    }
 
     return NS_OK;
   }
@@ -163,6 +164,10 @@ CacheFileInputStream::ReadSegments(nsWriteSegmentFun aWriter, void *aClosure,
       } else {
         return NS_BASE_STREAM_WOULD_BLOCK;
       }
+    }
+
+    if (aCount == 0) {
+      break;
     }
 
     CacheFileChunkReadHandle hnd = mChunk->GetReadHandle();
@@ -197,16 +202,11 @@ CacheFileInputStream::ReadSegments(nsWriteSegmentFun aWriter, void *aClosure,
         aCount -= read;
 
         if (!mClosed) {
-          if (hnd.DataSize() != mChunk->DataSize()) {
-            // New data was written to this chunk while the lock was released.
-            continue;
-          }
-
           // The last chunk is released after the caller closes this stream.
           EnsureCorrectChunk(false);
 
           if (mChunk && aCount) {
-            // We have the next chunk! Go on.
+            // Check whether there is more data available to read.
             continue;
           }
         }
@@ -219,7 +219,7 @@ CacheFileInputStream::ReadSegments(nsWriteSegmentFun aWriter, void *aClosure,
 
       rv = NS_OK;
     } else {
-      if (mFile->OutputStreamExists(mAlternativeData)) {
+      if (*_retval == 0 && mFile->OutputStreamExists(mAlternativeData)) {
         rv = NS_BASE_STREAM_WOULD_BLOCK;
       } else {
         rv = NS_OK;
@@ -604,7 +604,14 @@ CacheFileInputStream::CanRead(CacheFileChunkReadHandle *aHandle)
   MOZ_ASSERT(mChunk);
   MOZ_ASSERT(mPos / kChunkSize == mChunk->Index());
 
-  int64_t retval = aHandle->Offset() + aHandle->DataSize() - mPos;
+  int64_t retval = aHandle->Offset() + aHandle->DataSize();
+
+  if (!mAlternativeData && mFile->mAltDataOffset != -1 &&
+      mFile->mAltDataOffset < retval) {
+    retval = mFile->mAltDataOffset;
+  }
+
+  retval -= mPos;
   if (retval <= 0 && NS_FAILED(mChunk->GetStatus())) {
     CloseWithStatusLocked(mChunk->GetStatus());
   }
@@ -630,12 +637,13 @@ CacheFileInputStream::NotifyListener()
     if (!mCallbackTarget) {
       LOG(("CacheFileInputStream::NotifyListener() - Cannot get Cache I/O "
            "thread! Using main thread for callback."));
-      mCallbackTarget = do_GetMainThread();
+      mCallbackTarget = GetMainThreadEventTarget();
     }
   }
 
   nsCOMPtr<nsIInputStreamCallback> asyncCallback =
-    NS_NewInputStreamReadyEvent(mCallback, mCallbackTarget);
+    NS_NewInputStreamReadyEvent("CacheFileInputStream::NotifyListener",
+                                mCallback, mCallbackTarget);
 
   mCallback = nullptr;
   mCallbackTarget = nullptr;

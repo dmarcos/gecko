@@ -69,7 +69,8 @@ SpeechSynthesisChild::AllocPSpeechSynthesisRequestChild(const nsString& aText,
                                                         const nsString& aUri,
                                                         const float& aVolume,
                                                         const float& aRate,
-                                                        const float& aPitch)
+                                                        const float& aPitch,
+                                                        const bool& aIsChrome)
 {
   MOZ_CRASH("Caller is supposed to manually construct a request!");
 }
@@ -159,27 +160,13 @@ SpeechSynthesisRequestChild::RecvOnMark(const nsString& aName,
 
 // SpeechTaskChild
 
-SpeechTaskChild::SpeechTaskChild(SpeechSynthesisUtterance* aUtterance)
-  : nsSpeechTask(aUtterance)
+SpeechTaskChild::SpeechTaskChild(SpeechSynthesisUtterance* aUtterance, bool aIsChrome)
+  : nsSpeechTask(aUtterance, aIsChrome)
 {
 }
 
 NS_IMETHODIMP
-SpeechTaskChild::Setup(nsISpeechTaskCallback* aCallback,
-                       uint32_t aChannels, uint32_t aRate, uint8_t argc)
-{
-  MOZ_CRASH("Should never be called from child");
-}
-
-NS_IMETHODIMP
-SpeechTaskChild::SendAudio(JS::Handle<JS::Value> aData, JS::Handle<JS::Value> aLandmarks,
-                           JSContext* aCx)
-{
-  MOZ_CRASH("Should never be called from child");
-}
-
-NS_IMETHODIMP
-SpeechTaskChild::SendAudioNative(int16_t* aData, uint32_t aDataLen)
+SpeechTaskChild::Setup(nsISpeechTaskCallback* aCallback)
 {
   MOZ_CRASH("Should never be called from child");
 }

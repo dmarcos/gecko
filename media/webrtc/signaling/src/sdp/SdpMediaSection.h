@@ -96,8 +96,8 @@ public:
                         uint32_t clockrate, uint16_t channels) = 0;
   virtual void ClearCodecs() = 0;
 
-  virtual void AddDataChannel(const std::string& name,
-                              uint16_t port, uint16_t streams) = 0;
+  virtual void AddDataChannel(const std::string& name, uint16_t port,
+                              uint16_t streams, uint32_t message_size) = 0;
 
   size_t
   GetLevel() const
@@ -108,19 +108,19 @@ public:
   inline bool
   IsReceiving() const
   {
-    return GetDirectionAttribute().mValue & sdp::kRecv;
+    return GetDirection() & sdp::kRecv;
   }
 
   inline bool
   IsSending() const
   {
-    return GetDirectionAttribute().mValue & sdp::kSend;
+    return GetDirection() & sdp::kSend;
   }
 
   inline void
   SetReceiving(bool receiving)
   {
-    auto direction = GetDirectionAttribute().mValue;
+    auto direction = GetDirection();
     if (direction & sdp::kSend) {
       SetDirection(receiving ?
                    SdpDirectionAttribute::kSendrecv :
@@ -135,7 +135,7 @@ public:
   inline void
   SetSending(bool sending)
   {
-    auto direction = GetDirectionAttribute().mValue;
+    auto direction = GetDirection();
     if (direction & sdp::kRecv) {
       SetDirection(sending ?
                    SdpDirectionAttribute::kSendrecv :
@@ -152,12 +152,18 @@ public:
     GetAttributeList().SetAttribute(new SdpDirectionAttribute(direction));
   }
 
+  inline SdpDirectionAttribute::Direction GetDirection() const
+  {
+    return GetDirectionAttribute().mValue;
+  }
+
   const SdpFmtpAttributeList::Parameters* FindFmtp(const std::string& pt) const;
   void SetFmtp(const SdpFmtpAttributeList::Fmtp& fmtp);
   void RemoveFmtp(const std::string& pt);
   const SdpRtpmapAttributeList::Rtpmap* FindRtpmap(const std::string& pt) const;
   const SdpSctpmapAttributeList::Sctpmap* GetSctpmap() const;
-  int GetSctpPort() const;
+  uint32_t GetSctpPort() const;
+  bool GetMaxMessageSize(uint32_t* size) const;
   bool HasRtcpFb(const std::string& pt,
                  SdpRtcpFbAttributeList::Type type,
                  const std::string& subType) const;

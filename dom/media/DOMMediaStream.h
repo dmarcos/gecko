@@ -27,12 +27,10 @@
 namespace mozilla {
 
 class AbstractThread;
-class DOMHwMediaStream;
 class DOMLocalMediaStream;
 class DOMMediaStream;
 class MediaStream;
 class MediaInputPort;
-class DirectMediaStreamListener;
 class MediaStreamGraph;
 class ProcessedMediaStream;
 
@@ -362,6 +360,9 @@ public:
 
   double CurrentTime();
 
+  static already_AddRefed<dom::Promise>
+  CountUnderlyingStreams(const dom::GlobalObject& aGlobal, ErrorResult& aRv);
+
   void GetId(nsAString& aID) const;
 
   void GetAudioTracks(nsTArray<RefPtr<AudioStreamTrack> >& aTracks) const;
@@ -449,16 +450,6 @@ public:
   virtual MediaStream* GetCameraStream() const { return nullptr; }
 
   /**
-   * Allows users to get access to media data without going through graph
-   * queuing. Returns a bool to let us know if direct data will be delivered.
-   */
-  bool AddDirectListener(DirectMediaStreamListener *aListener);
-  void RemoveDirectListener(DirectMediaStreamListener *aListener);
-
-  virtual DOMLocalMediaStream* AsDOMLocalMediaStream() { return nullptr; }
-  virtual DOMHwMediaStream* AsDOMHwMediaStream() { return nullptr; }
-
-  /**
    * Legacy method that returns true when the playback stream has finished.
    */
   bool IsFinished() const;
@@ -467,6 +458,8 @@ public:
    * Becomes inactive only when the playback stream has finished.
    */
   void SetInactiveOnFinish();
+
+  TrackRate GraphRate();
 
   /**
    * Returns a principal indicating who may access this stream. The stream contents
@@ -589,8 +582,6 @@ public:
   // UnregisterTrackListener before being destroyed, so we don't hold on to
   // a dead pointer. Main thread only.
   void UnregisterTrackListener(TrackListener* aListener);
-
-  AbstractThread* AbstractMainThread() const { return mAbstractMainThread; }
 
 protected:
   virtual ~DOMMediaStream();
@@ -756,7 +747,6 @@ private:
   nsCOMPtr<nsIPrincipal> mVideoPrincipal;
   nsTArray<dom::PrincipalChangeObserver<DOMMediaStream>*> mPrincipalChangeObservers;
   CORSMode mCORSMode;
-  const RefPtr<AbstractThread> mAbstractMainThread;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(DOMMediaStream,
@@ -829,40 +819,6 @@ private:
   // If this object wraps a stream owned by an AudioNode, we need to ensure that
   // the node isn't cycle-collected too early.
   RefPtr<AudioNode> mStreamNode;
-};
-
-class DOMHwMediaStream : public DOMLocalMediaStream
-{
-  typedef mozilla::gfx::IntSize IntSize;
-  typedef layers::OverlayImage OverlayImage;
-#ifdef MOZ_WIDGET_GONK
-  typedef layers::OverlayImage::Data Data;
-#endif
-
-public:
-  explicit DOMHwMediaStream(nsPIDOMWindowInner* aWindow);
-
-  static already_AddRefed<DOMHwMediaStream> CreateHwStream(nsPIDOMWindowInner* aWindow,
-                                                           OverlayImage* aImage = nullptr);
-  virtual DOMHwMediaStream* AsDOMHwMediaStream() override { return this; }
-  int32_t RequestOverlayId();
-  void SetOverlayId(int32_t aOverlayId);
-  void SetImageSize(uint32_t width, uint32_t height);
-  void SetOverlayImage(OverlayImage* aImage);
-
-protected:
-  ~DOMHwMediaStream();
-
-private:
-  void Init(MediaStream* aStream, OverlayImage* aImage);
-
-#ifdef MOZ_WIDGET_GONK
-  const int DEFAULT_IMAGE_ID = 0x01;
-  const int DEFAULT_IMAGE_WIDTH = 400;
-  const int DEFAULT_IMAGE_HEIGHT = 300;
-  RefPtr<OverlayImage> mOverlayImage;
-  PrincipalHandle mPrincipalHandle;
-#endif
 };
 
 } // namespace mozilla

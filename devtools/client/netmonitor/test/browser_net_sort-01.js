@@ -17,7 +17,7 @@ add_task(function* () {
   // of the heavy dom manipulation associated with sorting.
   requestLongerTimeout(2);
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let {
     getDisplayedRequests,
@@ -25,7 +25,7 @@ add_task(function* () {
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   // Loading the frame script and preparing the xhr request URLs so we can
   // generate some requests later.
@@ -54,21 +54,21 @@ add_task(function* () {
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector(".network-details-panel-toggle"));
 
-  isnot(getSelectedRequest(gStore.getState()), undefined,
+  isnot(getSelectedRequest(store.getState()), undefined,
     "There should be a selected item in the requests menu.");
-  is(getSelectedIndex(gStore.getState()), 0,
+  is(getSelectedIndex(store.getState()), 0,
     "The first item should be selected in the requests menu.");
   is(!!document.querySelector(".network-details-panel"), true,
     "The network details panel should be visible after toggle button was pressed.");
 
   testHeaders();
-  testContents([0, 2, 4, 3, 1], 0);
+  yield testContents([0, 2, 4, 3, 1], 0);
 
   info("Testing status sort, ascending.");
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector("#requests-list-status-button"));
   testHeaders("status", "ascending");
-  testContents([0, 1, 2, 3, 4], 0);
+  yield testContents([0, 1, 2, 3, 4], 0);
 
   info("Performing more requests.");
   wait = waitForNetworkEvents(monitor, 5);
@@ -77,13 +77,13 @@ add_task(function* () {
 
   info("Testing status sort again, ascending.");
   testHeaders("status", "ascending");
-  testContents([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 0);
+  yield testContents([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 0);
 
   info("Testing status sort, descending.");
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector("#requests-list-status-button"));
   testHeaders("status", "descending");
-  testContents([9, 8, 7, 6, 5, 4, 3, 2, 1, 0], 9);
+  yield testContents([9, 8, 7, 6, 5, 4, 3, 2, 1, 0], 9);
 
   info("Performing more requests.");
   wait = waitForNetworkEvents(monitor, 5);
@@ -92,19 +92,19 @@ add_task(function* () {
 
   info("Testing status sort again, descending.");
   testHeaders("status", "descending");
-  testContents([14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0], 14);
+  yield testContents([14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0], 14);
 
   info("Testing status sort yet again, ascending.");
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector("#requests-list-status-button"));
   testHeaders("status", "ascending");
-  testContents([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14], 0);
+  yield testContents([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14], 0);
 
   info("Testing status sort yet again, descending.");
   EventUtils.sendMouseEvent({ type: "click" },
     document.querySelector("#requests-list-status-button"));
   testHeaders("status", "descending");
-  testContents([14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0], 14);
+  yield testContents([14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0], 14);
 
   return teardown(monitor);
 
@@ -117,15 +117,19 @@ add_task(function* () {
       if (header != target) {
         ok(!header.hasAttribute("data-sorted"),
           "The " + header.id + " header does not have a 'data-sorted' attribute.");
-        ok(!header.getAttribute("title"),
-          "The " + header.id + " header does not have a 'title' attribute.");
+        ok(!header.getAttribute("title").includes(L10N.getStr("networkMenu.sortedAsc")) &&
+          !header.getAttribute("title").includes(L10N.getStr("networkMenu.sortedDesc")),
+          "The " + header.id +
+          " header does not include any sorting in the 'title' attribute.");
       } else {
         is(header.getAttribute("data-sorted"), direction,
           "The " + header.id + " header has a correct 'data-sorted' attribute.");
-        is(header.getAttribute("title"), direction == "ascending"
+        const sorted = direction == "ascending"
           ? L10N.getStr("networkMenu.sortedAsc")
-          : L10N.getStr("networkMenu.sortedDesc"),
-          "The " + header.id + " header has a correct 'title' attribute.");
+          : L10N.getStr("networkMenu.sortedDesc");
+        ok(header.getAttribute("title").includes(sorted),
+          "The " + header.id +
+          " header includes the used sorting in the 'title' attribute.");
       }
     }
   }
@@ -137,33 +141,41 @@ add_task(function* () {
     return getSortedRequests(state).findIndex(r => r.id === state.requests.selectedId);
   }
 
-  function testContents(order, selection) {
-    isnot(getSelectedRequest(gStore.getState()), undefined,
+  function* testContents(order, selection) {
+    isnot(getSelectedRequest(store.getState()), undefined,
       "There should still be a selected item after sorting.");
-    is(getSelectedIndex(gStore.getState()), selection,
+    is(getSelectedIndex(store.getState()), selection,
       "The first item should be still selected after sorting.");
     is(!!document.querySelector(".network-details-panel"), true,
       "The network details panel should still be visible after sorting.");
 
-    is(getSortedRequests(gStore.getState()).length, order.length,
+    is(getSortedRequests(store.getState()).length, order.length,
       "There should be a specific number of items in the requests menu.");
-    is(getDisplayedRequests(gStore.getState()).length, order.length,
+    is(getDisplayedRequests(store.getState()).length, order.length,
       "There should be a specific number of visbile items in the requests menu.");
     is(document.querySelectorAll(".request-list-item").length, order.length,
       "The visible items in the requests menu are, in fact, visible!");
 
+    let requestItems = document.querySelectorAll(".request-list-item");
+    for (let requestItem of requestItems) {
+      requestItem.scrollIntoView();
+      let requestsListStatus = requestItem.querySelector(".requests-list-status");
+      EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+      yield waitUntil(() => requestsListStatus.title);
+    }
+
     for (let i = 0, len = order.length / 5; i < len; i++) {
       verifyRequestItemTarget(
         document,
-        getDisplayedRequests(gStore.getState()),
-        getSortedRequests(gStore.getState()).get(order[i]),
+        getDisplayedRequests(store.getState()),
+        getSortedRequests(store.getState()).get(order[i]),
         "GET1", SORTING_SJS + "?index=1", {
           fuzzyUrl: true,
           status: 101,
           statusText: "Meh",
           type: "1",
           fullMimeType: "text/1",
-          transferred: L10N.getStr("networkMenu.sizeUnavailable"),
+          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 198),
           size: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 0),
           time: true
         });
@@ -171,15 +183,15 @@ add_task(function* () {
     for (let i = 0, len = order.length / 5; i < len; i++) {
       verifyRequestItemTarget(
         document,
-        getDisplayedRequests(gStore.getState()),
-        getSortedRequests(gStore.getState()).get(order[i + len]),
+        getDisplayedRequests(store.getState()),
+        getSortedRequests(store.getState()).get(order[i + len]),
         "GET2", SORTING_SJS + "?index=2", {
           fuzzyUrl: true,
           status: 200,
           statusText: "Meh",
           type: "2",
           fullMimeType: "text/2",
-          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 19),
+          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 217),
           size: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 19),
           time: true
         });
@@ -187,15 +199,15 @@ add_task(function* () {
     for (let i = 0, len = order.length / 5; i < len; i++) {
       verifyRequestItemTarget(
         document,
-        getDisplayedRequests(gStore.getState()),
-        getSortedRequests(gStore.getState()).get(order[i + len * 2]),
+        getDisplayedRequests(store.getState()),
+        getSortedRequests(store.getState()).get(order[i + len * 2]),
         "GET3", SORTING_SJS + "?index=3", {
           fuzzyUrl: true,
           status: 300,
           statusText: "Meh",
           type: "3",
           fullMimeType: "text/3",
-          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 29),
+          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 227),
           size: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 29),
           time: true
         });
@@ -203,15 +215,15 @@ add_task(function* () {
     for (let i = 0, len = order.length / 5; i < len; i++) {
       verifyRequestItemTarget(
         document,
-        getDisplayedRequests(gStore.getState()),
-        getSortedRequests(gStore.getState()).get(order[i + len * 3]),
+        getDisplayedRequests(store.getState()),
+        getSortedRequests(store.getState()).get(order[i + len * 3]),
         "GET4", SORTING_SJS + "?index=4", {
           fuzzyUrl: true,
           status: 400,
           statusText: "Meh",
           type: "4",
           fullMimeType: "text/4",
-          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 39),
+          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 237),
           size: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 39),
           time: true
         });
@@ -219,15 +231,15 @@ add_task(function* () {
     for (let i = 0, len = order.length / 5; i < len; i++) {
       verifyRequestItemTarget(
         document,
-        getDisplayedRequests(gStore.getState()),
-        getSortedRequests(gStore.getState()).get(order[i + len * 4]),
+        getDisplayedRequests(store.getState()),
+        getSortedRequests(store.getState()).get(order[i + len * 4]),
         "GET5", SORTING_SJS + "?index=5", {
           fuzzyUrl: true,
           status: 500,
           statusText: "Meh",
           type: "5",
           fullMimeType: "text/5",
-          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 49),
+          transferred: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 247),
           size: L10N.getFormatStrWithNumbers("networkMenu.sizeB", 49),
           time: true
         });

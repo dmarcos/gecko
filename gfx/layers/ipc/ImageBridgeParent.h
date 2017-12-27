@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -50,9 +51,15 @@ protected:
 public:
   ~ImageBridgeParent();
 
+  /**
+   * Creates the globals of ImageBridgeParent.
+   */
+  static void Setup();
+
   static ImageBridgeParent* CreateSameProcess();
   static bool CreateForGPUProcess(Endpoint<PImageBridgeParent>&& aEndpoint);
   static bool CreateForContent(Endpoint<PImageBridgeParent>&& aEndpoint);
+  static void Shutdown();
 
   virtual ShmemAllocator* AsShmemAllocator() override { return this; }
 
@@ -77,11 +84,13 @@ public:
   virtual PTextureParent* AllocPTextureParent(const SurfaceDescriptor& aSharedData,
                                               const LayersBackend& aLayersBackend,
                                               const TextureFlags& aFlags,
-                                              const uint64_t& aSerial) override;
+                                              const uint64_t& aSerial,
+                                              const wr::MaybeExternalImageId& aExternalImageId) override;
   virtual bool DeallocPTextureParent(PTextureParent* actor) override;
 
   virtual mozilla::ipc::IPCResult RecvNewCompositable(const CompositableHandle& aHandle,
-                                                      const TextureInfo& aInfo) override;
+                                                      const TextureInfo& aInfo,
+                                                      const LayersBackend& aLayersBackend) override;
   virtual mozilla::ipc::IPCResult RecvReleaseCompositable(const CompositableHandle& aHandle) override;
 
   PMediaSystemResourceManagerParent* AllocPMediaSystemResourceManagerParent() override;
@@ -106,13 +115,7 @@ public:
 
   virtual bool IsSameProcess() const override;
 
-  using CompositableParentManager::SetAboutToSendAsyncMessages;
-  static void SetAboutToSendAsyncMessages(base::ProcessId aChildProcessId);
-
-  using CompositableParentManager::SendPendingAsyncMessages;
-  static void SendPendingAsyncMessages(base::ProcessId aChildProcessId);
-
-  static ImageBridgeParent* GetInstance(ProcessId aId);
+  static already_AddRefed<ImageBridgeParent> GetInstance(ProcessId aId);
 
   static bool NotifyImageComposites(nsTArray<ImageCompositeNotificationInfo>& aNotifications);
 
@@ -121,11 +124,11 @@ public:
   virtual bool IPCOpen() const override { return !mClosed; }
 
 protected:
-  void OnChannelConnected(int32_t pid) override;
-
   void Bind(Endpoint<PImageBridgeParent>&& aEndpoint);
 
 private:
+  static void ShutdownInternal();
+
   void DeferredDestroy();
   MessageLoop* mMessageLoop;
   // This keeps us alive until ActorDestroy(), at which point we do a
@@ -138,9 +141,8 @@ private:
   /**
    * Map of all living ImageBridgeParent instances
    */
-  static std::map<base::ProcessId, ImageBridgeParent*> sImageBridges;
-
-  static MessageLoop* sMainLoop;
+  typedef std::map<base::ProcessId, ImageBridgeParent*> ImageBridgeMap;
+  static ImageBridgeMap sImageBridges;
 
   RefPtr<CompositorThreadHolder> mCompositorThreadHolder;
 };

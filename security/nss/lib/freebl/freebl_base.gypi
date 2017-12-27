@@ -8,8 +8,10 @@
     'alghmac.c',
     'arcfive.c',
     'arcfour.c',
+    'blake2b.c',
     'camellia.c',
     'chacha20poly1305.c',
+    'crypto_primitives.c',
     'ctr.c',
     'cts.c',
     'des.c',
@@ -33,6 +35,7 @@
     'ecl/ecp_jm.c',
     'ecl/ecp_mont.c',
     'fipsfreebl.c',
+    'blinit.c',
     'freeblver.c',
     'gcm.c',
     'hmacct.c',
@@ -97,15 +100,11 @@
       ],
     }],
     [ 'OS=="win"', {
-      'sources': [
-        #TODO: building with mingw should not need this.
-        'ecl/uint128.c',
-      ],
       'libraries': [
         'advapi32.lib',
       ],
       'conditions': [
-        [ 'target_arch=="x64"', {
+        [ 'cc_use_gnu_ld!=1 and target_arch=="x64"', {
           'sources': [
             'arcfour-amd64-masm.asm',
             'mpi/mpi_amd64.c',
@@ -114,7 +113,8 @@
             'intel-aes-x64-masm.asm',
             'intel-gcm-x64-masm.asm',
           ],
-        }, {
+        }],
+	      [ 'cc_use_gnu_ld!=1 and target_arch!="x64"', {
           # not x64
           'sources': [
             'mpi/mpi_x86_asm.c',
@@ -130,29 +130,53 @@
         }],
       ],
     }],
-    ['target_arch=="ia32" or target_arch=="x64"', {
+    ['target_arch=="ia32" or target_arch=="x64" or target_arch=="arm64" or target_arch=="aarch64"', {
       'sources': [
-        # All intel architectures get the 64 bit version
+        # All intel and 64-bit ARM architectures get the 64 bit version.
         'ecl/curve25519_64.c',
+        'verified/Hacl_Curve25519.c',
+        'verified/FStar.c',
       ],
     }, {
       'sources': [
-        # All non intel architectures get the generic 32 bit implementation (slow!)
+        # All other architectures get the generic 32 bit implementation (slow!)
         'ecl/curve25519_32.c',
       ],
     }],
-    #TODO uint128.c
     [ 'disable_chachapoly==0', {
       'conditions': [
-        [ 'OS!="win" and target_arch=="x64"', {
-          'sources': [
-            'chacha20_vec.c',
-            'poly1305-donna-x64-sse2-incremental-source.c',
+        [ 'OS!="win"', {
+          'conditions': [
+            [ 'target_arch=="x64"', {
+              'sources': [
+                'chacha20_vec.c',
+                'verified/Hacl_Poly1305_64.c',
+              ],
+            }, {
+              # !Windows & !x64
+              'conditions': [
+                [ 'target_arch=="arm64" or target_arch=="aarch64"', {
+                  'sources': [
+                    'chacha20.c',
+                    'verified/Hacl_Chacha20.c',
+                    'verified/Hacl_Poly1305_64.c',
+                  ],
+                }, {
+                  # !Windows & !x64 & !arm64 & !aarch64
+                  'sources': [
+                    'chacha20.c',
+                    'verified/Hacl_Chacha20.c',
+                    'poly1305.c',
+                  ],
+                }],
+              ],
+            }],
           ],
         }, {
-          # not x64
+          # Windows
           'sources': [
             'chacha20.c',
+            'verified/Hacl_Chacha20.c',
             'poly1305.c',
           ],
         }],

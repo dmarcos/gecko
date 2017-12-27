@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -342,9 +343,11 @@ NS_HSL2RGB(float h, float s, float l)
     m2 = l + s - l*s;
   }
   m1 = l*2 - m2;
-  r = uint8_t(255 * HSL_HueToRGB(m1, m2, h + 1.0f/3.0f));
-  g = uint8_t(255 * HSL_HueToRGB(m1, m2, h));
-  b = uint8_t(255 * HSL_HueToRGB(m1, m2, h - 1.0f/3.0f));
+  // We round, not floor, because that's how we handle
+  // percentage RGB values.
+  r = ClampColor(255 * HSL_HueToRGB(m1, m2, h + 1.0f/3.0f));
+  g = ClampColor(255 * HSL_HueToRGB(m1, m2, h));
+  b = ClampColor(255 * HSL_HueToRGB(m1, m2, h - 1.0f/3.0f));
   return NS_RGB(r, g, b);  
 }
 

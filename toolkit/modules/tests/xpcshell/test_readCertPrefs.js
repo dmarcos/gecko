@@ -6,10 +6,6 @@ Components.utils.import("resource://gre/modules/CertUtils.jsm");
 
 const PREF_PREFIX = "certutils.certs.";
 
-function run_test() {
-  run_next_test();
-}
-
 function resetPrefs() {
   var prefs = Services.prefs.getChildList(PREF_PREFIX);
   prefs.forEach(Services.prefs.clearUserPref);
@@ -30,14 +26,14 @@ function attributes_match(aCert, aExpected) {
 }
 
 function test_results(aCerts, aExpected) {
-  do_check_eq(aCerts.length, aExpected.length);
+  Assert.equal(aCerts.length, aExpected.length);
 
   for (var i = 0; i < aCerts.length; i++) {
     if (!attributes_match(aCerts[i], aExpected[i])) {
       dump("Attributes for certificate " + (i + 1) + " did not match expected attributes\n");
       dump("Saw: " + aCerts[i].toSource() + "\n");
       dump("Expected: " + aExpected[i].toSource() + "\n");
-      do_check_true(false);
+      Assert.ok(false);
     }
   }
 }

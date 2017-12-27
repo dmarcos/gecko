@@ -2782,15 +2782,7 @@ s_mp_pad(mp_int *mp, mp_size min)
 void
 s_mp_setz(mp_digit *dp, mp_size count)
 {
-#if MP_MEMSET == 0
-    int ix;
-
-    for (ix = 0; ix < count; ix++)
-        dp[ix] = 0;
-#else
     memset(dp, 0, count * sizeof(mp_digit));
-#endif
-
 } /* end s_mp_setz() */
 
 /* }}} */
@@ -2801,14 +2793,7 @@ s_mp_setz(mp_digit *dp, mp_size count)
 void
 s_mp_copy(const mp_digit *sp, mp_digit *dp, mp_size count)
 {
-#if MP_MEMCPY == 0
-    int ix;
-
-    for (ix = 0; ix < count; ix++)
-        dp[ix] = sp[ix];
-#else
     memcpy(dp, sp, count * sizeof(mp_digit));
-#endif
 } /* end s_mp_copy() */
 
 /* }}} */
@@ -2859,6 +2844,9 @@ void
 s_mp_exch(mp_int *a, mp_int *b)
 {
     mp_int tmp;
+    if (!a || !b) {
+        return;
+    }
 
     tmp = *a;
     *a = *b;
@@ -4086,7 +4074,7 @@ s_mpv_sqr_add_prop(const mp_digit *pa, mp_size a_len, mp_digit *ps)
 }
 #endif
 
-#if (defined(MP_NO_MP_WORD) || defined(MP_NO_DIV_WORD)) && !defined(MP_ASSEMBLY_DIV_2DX1D)
+#if !defined(MP_ASSEMBLY_DIV_2DX1D)
 /*
 ** Divide 64-bit (Nhi,Nlo) by 32-bit divisor, which must be normalized
 ** so its high bit is 1.   This code is from NSPR.
@@ -4164,11 +4152,7 @@ mp_err s_mp_div(mp_int *rem,  /* i: dividend, o: remainder */
                 mp_int *quot) /* i: 0;        o: quotient  */
 {
     mp_int part, t;
-#if !defined(MP_NO_MP_WORD) && !defined(MP_NO_DIV_WORD)
-    mp_word q_msd;
-#else
     mp_digit q_msd;
-#endif
     mp_err res;
     mp_digit d;
     mp_digit div_msd;
@@ -4213,7 +4197,7 @@ mp_err s_mp_div(mp_int *rem,  /* i: dividend, o: remainder */
         MP_USED(&part) = MP_USED(div);
 
         /* We have now truncated the part of the remainder to the same length as
-     * the divisor. If part is smaller than div, extend part by one digit. */
+         * the divisor. If part is smaller than div, extend part by one digit. */
         if (s_mp_cmp(&part, div) < 0) {
             --unusedRem;
 #if MP_ARGCHK == 2
@@ -4230,18 +4214,12 @@ mp_err s_mp_div(mp_int *rem,  /* i: dividend, o: remainder */
         div_msd = MP_DIGIT(div, MP_USED(div) - 1);
         if (!partExtended) {
             /* In this case, q_msd /= div_msd is always 1. First, since div_msd is
-       * normalized to have the high bit set, 2*div_msd > MP_DIGIT_MAX. Since
-       * we didn't extend part, q_msd >= div_msd. Therefore we know that
-       * div_msd <= q_msd <= MP_DIGIT_MAX < 2*div_msd. Dividing by div_msd we
-       * get 1 <= q_msd/div_msd < 2. So q_msd /= div_msd must be 1. */
+             * normalized to have the high bit set, 2*div_msd > MP_DIGIT_MAX. Since
+             * we didn't extend part, q_msd >= div_msd. Therefore we know that
+             * div_msd <= q_msd <= MP_DIGIT_MAX < 2*div_msd. Dividing by div_msd we
+             * get 1 <= q_msd/div_msd < 2. So q_msd /= div_msd must be 1. */
             q_msd = 1;
         } else {
-#if !defined(MP_NO_MP_WORD) && !defined(MP_NO_DIV_WORD)
-            q_msd = (q_msd << MP_DIGIT_BIT) | MP_DIGIT(&part, MP_USED(&part) - 2);
-            q_msd /= div_msd;
-            if (q_msd == RADIX)
-                --q_msd;
-#else
             if (q_msd == div_msd) {
                 q_msd = MP_DIGIT_MAX;
             } else {
@@ -4249,7 +4227,6 @@ mp_err s_mp_div(mp_int *rem,  /* i: dividend, o: remainder */
                 MP_CHECKOK(s_mpv_div_2dx1d(q_msd, MP_DIGIT(&part, MP_USED(&part) - 2),
                                            div_msd, &q_msd, &r));
             }
-#endif
         }
 #if MP_ARGCHK == 2
         assert(q_msd > 0); /* This case should never occur any more. */
@@ -4259,15 +4236,15 @@ mp_err s_mp_div(mp_int *rem,  /* i: dividend, o: remainder */
 
         /* See what that multiplies out to                   */
         mp_copy(div, &t);
-        MP_CHECKOK(s_mp_mul_d(&t, (mp_digit)q_msd));
+        MP_CHECKOK(s_mp_mul_d(&t, q_msd));
 
         /*
-       If it's too big, back it off.  We should not have to do this
-       more than once, or, in rare cases, twice.  Knuth describes a
-       method by which this could be reduced to a maximum of once, but
-       I didn't implement that here.
-     * When using s_mpv_div_2dx1d, we may have to do this 3 times.
-     */
+           If it's too big, back it off.  We should not have to do this
+           more than once, or, in rare cases, twice.  Knuth describes a
+           method by which this could be reduced to a maximum of once, but
+           I didn't implement that here.
+           When using s_mpv_div_2dx1d, we may have to do this 3 times.
+         */
         for (i = 4; s_mp_cmp(&t, &part) > 0 && i > 0; --i) {
             --q_msd;
             MP_CHECKOK(s_mp_sub(&t, div)); /* t -= div */
@@ -4282,11 +4259,11 @@ mp_err s_mp_div(mp_int *rem,  /* i: dividend, o: remainder */
         s_mp_clamp(rem);
 
         /*
-      Include the digit in the quotient.  We allocated enough memory
-      for any quotient we could ever possibly get, so we should not
-      have to check for failures here
-     */
-        MP_DIGIT(quot, unusedRem) = (mp_digit)q_msd;
+          Include the digit in the quotient.  We allocated enough memory
+          for any quotient we could ever possibly get, so we should not
+          have to check for failures here
+         */
+        MP_DIGIT(quot, unusedRem) = q_msd;
     }
 
     /* Denormalize remainder                */

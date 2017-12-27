@@ -19,11 +19,11 @@ with Files('mobile*'):
 with Files('ua-update.json.in'):
     BUG_COMPONENT = ('Firefox for Android', 'General')
 
-with Files('assets/**'):
-    BUG_COMPONENT = ('Firefox for Android', 'General')
-
 with Files('omnijar/**'):
     BUG_COMPONENT = ('Firefox for Android', 'Build Config & IDE Support')
+
+with Files('src/main/**'):
+    BUG_COMPONENT = ('Firefox for Android', 'General')
 
 with Files('src/androidTest/**'):
     BUG_COMPONENT = ('Firefox for Android', 'Testing')
@@ -34,7 +34,7 @@ with Files('src/test/**'):
 for var in ('APP_NAME', 'APP_VERSION'):
     DEFINES[var] = CONFIG['MOZ_%s' % var]
 
-for var in ('MOZ_UPDATER', 'MOZ_APP_UA_NAME', 'ANDROID_PACKAGE_NAME'):
+for var in ('MOZ_UPDATER', 'MOZ_APP_UA_NAME', 'ANDROID_PACKAGE_NAME', 'CPU_ARCH'):
     DEFINES[var] = CONFIG[var]
 
 for var in ('MOZ_ANDROID_GCM', ):
@@ -55,3 +55,8 @@ JS_PREFERENCE_PP_FILES += [
 FINAL_TARGET_PP_FILES += [
   'ua-update.json.in',
 ]
+
+if CONFIG['MOZ_ANDROID_GOOGLE_VR']:
+    FINAL_TARGET_FILES += [
+        '/' + CONFIG['MOZ_ANDROID_GOOGLE_VR_LIBS'] + 'libgvr.so',
+    ]

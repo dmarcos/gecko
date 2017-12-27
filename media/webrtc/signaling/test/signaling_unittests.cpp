@@ -418,10 +418,6 @@ TestObserver::OnStateChange(PCObserverStateType state_type, ER&, void*)
         << PCImplIceGatheringStateStrings[int(goticegathering)]
         << std::endl;
     break;
-  case PCObserverStateType::SdpState:
-    std::cout << "SDP State: " << std::endl;
-    // NS_ENSURE_SUCCESS(rv, rv);
-    break;
   case PCObserverStateType::SignalingState:
     MOZ_ASSERT(NS_IsMainThread());
     rv = pc->SignalingState(&gotsignaling);
@@ -694,7 +690,7 @@ class PCDispatchWrapper : public nsSupportsWeakReference
   }
 
   NS_IMETHODIMP Initialize(TestObserver* aObserver,
-                           nsGlobalWindow* aWindow,
+                           nsGlobalWindowInner* aWindow,
                            const PeerConnectionConfiguration& aConfiguration,
                            nsIThread* aThread) {
     nsresult rv;
@@ -3670,7 +3666,7 @@ int main(int argc, char **argv) {
   // Here we handle the event queue for dispatches to the main thread
   // When the GTest thread is complete it will send one more dispatch
   // with gTestsComplete == true.
-  while (!gTestsComplete && NS_ProcessNextEvent());
+  SpinEventLoopUntil([&]() { return gTestsComplete; });
 
   gGtestThread->Shutdown();
 

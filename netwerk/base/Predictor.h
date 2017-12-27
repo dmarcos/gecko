@@ -66,7 +66,7 @@ public:
                                  uint32_t httpStatus,
                                  nsHttpRequestHead &requestHead,
                                  nsHttpResponseHead *reqponseHead,
-                                 nsILoadContextInfo *lci);
+                                 nsILoadContextInfo *lci, bool isTracking);
 
 private:
   virtual ~Predictor();
@@ -139,10 +139,14 @@ private:
     NS_DECL_NSICACHEENTRYMETADATAVISITOR
 
     CacheabilityAction(nsIURI *targetURI, uint32_t httpStatus,
-                       const nsCString &method, Predictor *predictor)
+                       const nsCString &method, bool isTracking, bool couldVary,
+                       bool isNoStore, Predictor *predictor)
       :mTargetURI(targetURI)
       ,mHttpStatus(httpStatus)
       ,mMethod(method)
+      ,mIsTracking(isTracking)
+      ,mCouldVary(couldVary)
+      ,mIsNoStore(isNoStore)
       ,mPredictor(predictor)
     { }
 
@@ -152,6 +156,9 @@ private:
     nsCOMPtr<nsIURI> mTargetURI;
     uint32_t mHttpStatus;
     nsCString mMethod;
+    bool mIsTracking;
+    bool mCouldVary;
+    bool mIsNoStore;
     RefPtr<Predictor> mPredictor;
     nsTArray<nsCString> mKeysToCheck;
     nsTArray<nsCString> mValuesToCheck;
@@ -327,11 +334,22 @@ private:
                             uint32_t lastLoad, uint32_t loadCount,
                             int32_t globalDegradation, bool fullUri);
 
+  enum PrefetchIgnoreReason {
+    PREFETCH_OK,
+    NOT_FULL_URI,
+    NO_REFERRER,
+    MISSED_A_LOAD,
+    PREFETCH_DISABLED,
+    PREFETCH_DISABLED_VIA_COUNT,
+    CONFIDENCE_TOO_LOW
+  };
+
   // Used to prepare any necessary prediction for a resource on a page
   //   * confidence - value calculated by CalculateConfidence for this resource
   //   * flags - the flags taken from the resource
-  //   * uri - the URI of the resource
-  void SetupPrediction(int32_t confidence, uint32_t flags, nsIURI *uri);
+  //   * uri - the ascii spec of the URI of the resource
+  void SetupPrediction(int32_t confidence, uint32_t flags, const nsCString &uri,
+                       PrefetchIgnoreReason reason);
 
   // Used to kick off a prefetch from RunPredictions if necessary
   //   * uri - the URI to prefetch
@@ -409,11 +427,11 @@ private:
   // Used to parse the data we store in cache metadata
   //   * key - the cache metadata key
   //   * value - the cache metadata value
-  //   * uri - (out) the URI this metadata entry was about
+  //   * uri - (out) the ascii spec of the URI this metadata entry was about
   //   * hitCount - (out) the number of times this URI has been seen
   //   * lastHit - (out) timestamp of the last time this URI was seen
   //   * flags - (out) flags for this metadata entry
-  bool ParseMetaDataEntry(const char *key, const char *value, nsIURI **uri,
+  bool ParseMetaDataEntry(const char *key, const char *value, nsCString &uri,
                           uint32_t &hitCount, uint32_t &lastHit,
                           uint32_t &flags);
 
@@ -422,7 +440,9 @@ private:
   // and httpStatus is the status code we got while loading targetURI.
   void UpdateCacheabilityInternal(nsIURI *sourceURI, nsIURI *targetURI,
                                   uint32_t httpStatus, const nsCString &method,
-                                  const OriginAttributes& originAttributes);
+                                  const OriginAttributes& originAttributes,
+                                  bool isTracking, bool couldVary,
+                                  bool isNoStore);
 
   // Make sure our prefs are in their expected range of values
   void SanitizePrefs();

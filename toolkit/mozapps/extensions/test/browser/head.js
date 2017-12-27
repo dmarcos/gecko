@@ -18,13 +18,6 @@ var pathParts = gTestPath.split("/");
 // Drop the test filename
 pathParts.splice(pathParts.length - 1, pathParts.length);
 
-var gTestInWindow = /-window$/.test(pathParts[pathParts.length - 1]);
-
-// Drop the UI type
-if (gTestInWindow) {
-  pathParts.splice(pathParts.length - 1, pathParts.length);
-}
-
 const RELATIVE_DIR = pathParts.slice(4).join("/") + "/";
 
 const TESTROOT = "http://example.com/" + RELATIVE_DIR;
@@ -43,7 +36,6 @@ const PREF_UI_LASTCATEGORY = "extensions.ui.lastCategory";
 const MANAGER_URI = "about:addons";
 const INSTALL_URI = "chrome://mozapps/content/xpinstall/xpinstallConfirm.xul";
 const PREF_LOGGING_ENABLED = "extensions.logging.enabled";
-const PREF_SEARCH_MAXRESULTS = "extensions.getAddons.maxResults";
 const PREF_STRICT_COMPAT = "extensions.strictCompatibility";
 
 var PREF_CHECK_COMPATIBILITY;
@@ -64,8 +56,6 @@ var gPendingTests = [];
 var gTestsRun = 0;
 var gTestStart = null;
 
-var gUseInContentUI = !gTestInWindow && ("switchToTabHavingURI" in window);
-
 var gRestorePrefs = [{name: PREF_LOGGING_ENABLED},
                      {name: PREF_CUSTOM_XPINSTALL_CONFIRMATION_UI},
                      {name: "extensions.webservice.discoverURL"},
@@ -75,11 +65,8 @@ var gRestorePrefs = [{name: PREF_LOGGING_ENABLED},
                      {name: "extensions.update.autoUpdateDefault"},
                      {name: "extensions.getAddons.get.url"},
                      {name: "extensions.getAddons.getWithPerformance.url"},
-                     {name: "extensions.getAddons.search.browseURL"},
-                     {name: "extensions.getAddons.search.url"},
                      {name: "extensions.getAddons.cache.enabled"},
                      {name: "devtools.chrome.enabled"},
-                     {name: PREF_SEARCH_MAXRESULTS},
                      {name: PREF_STRICT_COMPAT},
                      {name: PREF_CHECK_COMPATIBILITY}];
 
@@ -193,7 +180,7 @@ function log_exceptions(aCallback, ...aArgs) {
 
 function log_callback(aPromise, aCallback) {
   aPromise.then(aCallback)
-    .then(null, e => info("Exception thrown: " + e));
+    .catch(e => info("Exception thrown: " + e));
   return aPromise;
 }
 
@@ -228,7 +215,7 @@ function run_next_test() {
   executeSoon(() => log_exceptions(test));
 }
 
-var get_tooltip_info = Task.async(function*(addon) {
+var get_tooltip_info = async function(addon) {
   let managerWindow = addon.ownerGlobal;
 
   // The popup code uses a triggering event's target to set the
@@ -241,13 +228,13 @@ var get_tooltip_info = Task.async(function*(addon) {
 
   let promise = BrowserTestUtils.waitForEvent(tooltip, "popupshown");
   tooltip.openPopup(nameNode, "after_start", 0, 0, false, false, event);
-  yield promise;
+  await promise;
 
   let tiptext = tooltip.label;
 
   promise = BrowserTestUtils.waitForEvent(tooltip, "popuphidden");
   tooltip.hidePopup();
-  yield promise;
+  await promise;
 
   let expectedName = addon.getAttribute("name");
   ok(tiptext.substring(0, expectedName.length), expectedName,
@@ -263,7 +250,7 @@ var get_tooltip_info = Task.async(function*(addon) {
     name: tiptext.substring(0, expectedName.length),
     version: tiptext.substring(expectedName.length + 1)
   };
-});
+};
 
 function get_addon_file_url(aFilename) {
   try {
@@ -292,9 +279,7 @@ function get_current_view(aManager) {
 function get_test_items_in_list(aManager) {
   var tests = "@tests.mozilla.org";
 
-  let view = get_current_view(aManager);
-  let listid = view.id == "search-view" ? "search-list" : "addon-list";
-  let item = aManager.document.getElementById(listid).firstChild;
+  let item = aManager.document.getElementById("addon-list").firstChild;
   let items = [];
 
   while (item) {
@@ -313,9 +298,7 @@ function get_test_items_in_list(aManager) {
 
 function check_all_in_list(aManager, aIds, aIgnoreExtras) {
   var doc = aManager.document;
-  var view = get_current_view(aManager);
-  var listid = view.id == "search-view" ? "search-list" : "addon-list";
-  var list = doc.getElementById(listid);
+  var list = doc.getElementById("addon-list");
 
   var inlist = [];
   var node = list.firstChild;
@@ -343,9 +326,7 @@ function get_addon_element(aManager, aId) {
   var doc = aManager.document;
   var view = get_current_view(aManager);
   var listid = "addon-list";
-  if (view.id == "search-view")
-    listid = "search-list";
-  else if (view.id == "updates-view")
+  if (view.id == "updates-view")
     listid = "updates-list";
   var list = doc.getElementById(listid);
 
@@ -407,28 +388,20 @@ function open_manager(aView, aCallback, aLoadCallback, aLongerTimeout) {
       }, aManagerWindow);
     }
 
-    if (gUseInContentUI) {
-      info("Loading manager window in tab");
-      Services.obs.addObserver(function(aSubject, aTopic, aData) {
-        Services.obs.removeObserver(arguments.callee, aTopic);
-        if (aSubject.location.href != MANAGER_URI) {
-          info("Ignoring load event for " + aSubject.location.href);
-          return;
-        }
-        setup_manager(aSubject);
-      }, "EM-loaded");
+    info("Loading manager window in tab");
+    Services.obs.addObserver(function observer(aSubject, aTopic, aData) {
+      Services.obs.removeObserver(observer, aTopic);
+      if (aSubject.location.href != MANAGER_URI) {
+        info("Ignoring load event for " + aSubject.location.href);
+        return;
+      }
+      setup_manager(aSubject);
+    }, "EM-loaded");
 
-      gBrowser.selectedTab = gBrowser.addTab();
-      switchToTabHavingURI(MANAGER_URI, true);
-    } else {
-      info("Loading manager window in dialog");
-      Services.obs.addObserver(function(aSubject, aTopic, aData) {
-        Services.obs.removeObserver(arguments.callee, aTopic);
-        setup_manager(aSubject);
-      }, "EM-loaded");
-
-      openDialog(MANAGER_URI);
-    }
+    gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
+    switchToTabHavingURI(MANAGER_URI, true, {
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+    });
   });
 
   // The promise resolves with the manager window, so it is passed to the callback
@@ -442,10 +415,10 @@ function close_manager(aManagerWindow, aCallback, aLongerTimeout) {
     ok(aManagerWindow != null, "Should have an add-ons manager window to close");
     is(aManagerWindow.location, MANAGER_URI, "Should be closing window with correct URI");
 
-    aManagerWindow.addEventListener("unload", function() {
+    aManagerWindow.addEventListener("unload", function listener() {
       try {
         dump("Manager window unload handler\n");
-        this.removeEventListener("unload", arguments.callee);
+        this.removeEventListener("unload", listener);
         resolve();
       } catch (e) {
         reject(e);
@@ -485,9 +458,6 @@ function wait_for_window_open(aCallback) {
 
     onCloseWindow(aWindow) {
     },
-
-    onWindowTitleChange(aWindow, aTitle) {
-    }
   });
 }
 
@@ -628,7 +598,7 @@ CategoryUtilities.prototype = {
   openType(aCategoryType, aCallback) {
     return this.open(this.get(aCategoryType), aCallback);
   }
-}
+};
 
 function CertOverrideListener(host, bits) {
   this.host = host;
@@ -660,7 +630,7 @@ CertOverrideListener.prototype = {
     cos.rememberValidityOverride(this.host, -1, cert, this.bits, false);
     return true;
   }
-}
+};
 
 // Add overrides for the bad certificates
 function addCertOverride(host, bits) {
@@ -749,7 +719,7 @@ MockProvider.prototype = {
     let requiresRestart = (aAddon.operationsRequiringRestart &
                            AddonManager.OP_NEEDS_RESTART_INSTALL) != 0;
     AddonManagerPrivate.callInstallListeners("onExternalInstall", null, aAddon,
-                                             oldAddon, requiresRestart)
+                                             oldAddon, requiresRestart);
   },
 
   /**

@@ -50,7 +50,6 @@ VideoFrame::CreateBlackImage(const gfx::IntSize& aSize)
     LayerManager::CreateImageContainer(ImageContainer::ASYNCHRONOUS);
   RefPtr<PlanarYCbCrImage> image = container->CreatePlanarYCbCrImage();
   if (!image) {
-    MOZ_ASSERT(false);
     return nullptr;
   }
 
@@ -82,18 +81,11 @@ VideoFrame::CreateBlackImage(const gfx::IntSize& aSize)
 
   // Copies data, so we can free data.
   if (!image->CopyData(data)) {
-    MOZ_ASSERT(false);
     return nullptr;
   }
 
   return image.forget();
 }
-
-VideoChunk::VideoChunk()
-{}
-
-VideoChunk::~VideoChunk()
-{}
 
 void
 VideoSegment::AppendFrame(already_AddRefed<Image>&& aImage,
@@ -113,6 +105,10 @@ VideoSegment::AppendFrame(already_AddRefed<Image>&& aImage,
 
 VideoSegment::VideoSegment()
   : MediaSegmentBase<VideoSegment, VideoChunk>(VIDEO)
+{}
+
+VideoSegment::VideoSegment(VideoSegment&& aSegment)
+  : MediaSegmentBase<VideoSegment, VideoChunk>(Move(aSegment))
 {}
 
 VideoSegment::~VideoSegment()

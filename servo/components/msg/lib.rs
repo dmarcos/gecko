@@ -6,10 +6,10 @@
 
 #[macro_use]
 extern crate bitflags;
-extern crate heapsize;
-#[macro_use] extern crate heapsize_derive;
-#[macro_use]
-extern crate serde_derive;
-extern crate webrender_traits;
+#[macro_use] extern crate malloc_size_of;
+#[macro_use] extern crate malloc_size_of_derive;
+extern crate nonzero;
+#[macro_use] extern crate serde;
+extern crate webrender_api;
 
 pub mod constellation_msg;

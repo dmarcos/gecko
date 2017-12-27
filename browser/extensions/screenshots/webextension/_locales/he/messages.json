@@ -3,7 +3,7 @@
     "message": "יצירת צילומי מסך של דפי אינטרנט ושמירה שלהם באופן זמני או קבוע."
   },
   "addonAuthorsList": {
-    "message": "Mozilla <screenshots-feedback@mozilla.org>"
+    "message": "Mozilla <screenshots-feedback@mozilla.com>"
   },
   "contextMenuLabel": {
     "message": "צילום מסך"
@@ -64,31 +64,75 @@
   "selfScreenshotErrorTitle": {
     "message": "לא ניתן לצלם את הדף של Firefox Screenshot עצמו!"
   },
+  "emptySelectionErrorTitle": {
+    "message": "הבחירה שלך קטנה מידי"
+  },
+  "privateWindowErrorTitle": {
+    "message": "‏Screenshots מנוטרל במצב גלישה פרטית"
+  },
+  "privateWindowErrorDetails": {
+    "message": "מצטערים על אי הנוחות. אנחנו עובדים על תכונה זו בגרסאות עתידיות."
+  },
   "genericErrorTitle": {
     "message": "אויש! Firefox Screenshots ירד מהפסים."
   },
   "genericErrorDetails": {
     "message": "אנחנו לא בטוחים מה קרה פה הרגע. אכפת לך לנסות שוב או לצלם דף אחר?"
   },
-  "tourBodyOne": {
+  "tourBodyIntro": {
     "message": "צילום, שמירה ושיתוף של צילומי מסך מבלי לעזוב את Firefox."
   },
-  "tourHeaderTwo": {
+  "tourHeaderPageAction": {
+    "message": "דרך חדשה לשמירה"
+  },
+  "tourHeaderClickAndDrag": {
     "message": "לצלם רק את מה שנחוץ לך"
   },
-  "tourBodyTwo": {
+  "tourBodyClickAndDrag": {
     "message": "ניתן ללחוץ ולגרור כדי לצלם רק מקטע מהעמוד. ניתן גם לרחף מעל כדי לסמן את הבחירה שלך."
   },
-  "tourHeaderThree": {
-    "message": "לפי טעמך"
-  },
-  "tourBodyThree": {
-    "message": "שמירת הצילומים החתוכים שלך לאחסון מקוון לצורך שיתוף פשוט יותר, או להוריד אותם למחשב שלך. ניתן גם ללחוץ על כפתור הצילומים שלי כדי למצוא את כל הצילומים שצילמת."
-  },
-  "tourHeaderFour": {
+  "tourHeaderFullPage": {
     "message": "לצלם חלונות או דפים שלמים"
   },
-  "tourBodyFour": {
-    "message": "נא לבחור בכפתורים שבחלק העליון כדי לצלם את האזור הגלוי בחלון או לצלם את הדף כולו."
+  "tourBodyFullPage": {
+    "message": "בחרו בכפתורים שבחלק העליון כדי לצלם את האזור הגלוי בחלון או כדי לצלם את הדף כולו."
+  },
+  "tourHeaderDownloadUpload": {
+    "message": "לפי טעמך"
+  },
+  "tourBodyDownloadUpload": {
+    "message": "שמירת הצילומים החתוכים שלך לאחסון מקוון לצורך שיתוף פשוט יותר, או להוריד אותם למחשב שלך. ניתן גם ללחוץ על כפתור הצילומים שלי כדי למצוא את כל הצילומים שצילמת."
+  },
+  "tourSkip": {
+    "message": "דילוג"
+  },
+  "tourNext": {
+    "message": "השקופית הבאה"
+  },
+  "tourPrevious": {
+    "message": "השקופית הקודמת"
+  },
+  "tourDone": {
+    "message": "סיום"
+  },
+  "termsAndPrivacyNotice2": {
+    "message": "השימוש ב־Firefox Screenshots מהווה הסכמה ל$TERMSANDPRIVACYNOTICETERMSLINK$ ול$TERMSANDPRIVACYNOTICEPRIVACYLINK$ שלנו.",
+    "placeholders": {
+      "termsandprivacynoticetermslink": {
+        "content": "$1"
+      },
+      "termsandprivacynoticeprivacylink": {
+        "content": "$2"
+      }
+    }
+  },
+  "termsAndPrivacyNoticeTermsLink": {
+    "message": "תנאים"
+  },
+  "termsAndPrivacyNoticyPrivacyLink": {
+    "message": "הצהרת פרטיות"
+  },
+  "libraryLabel": {
+    "message": "צילומי מסך"
   }
 }

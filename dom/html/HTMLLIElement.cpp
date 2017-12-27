@@ -22,13 +22,9 @@ HTMLLIElement::~HTMLLIElement()
 {
 }
 
-NS_IMPL_ISUPPORTS_INHERITED(HTMLLIElement, nsGenericHTMLElement,
-                            nsIDOMHTMLLIElement)
+NS_IMPL_ISUPPORTS_INHERITED0(HTMLLIElement, nsGenericHTMLElement)
 
 NS_IMPL_ELEMENT_CLONE(HTMLLIElement)
-
-NS_IMPL_STRING_ATTR(HTMLLIElement, Type, type)
-NS_IMPL_INT_ATTR(HTMLLIElement, Value, value)
 
 // values that are handled case-insensitively
 static const nsAttrValue::EnumTable kUnorderedListItemTypeTable[] = {
@@ -51,8 +47,9 @@ static const nsAttrValue::EnumTable kOrderedListItemTypeTable[] = {
 
 bool
 HTMLLIElement::ParseAttribute(int32_t aNamespaceID,
-                              nsIAtom* aAttribute,
+                              nsAtom* aAttribute,
                               const nsAString& aValue,
+                              nsIPrincipal* aMaybeScriptedPrincipal,
                               nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None) {
@@ -67,7 +64,7 @@ HTMLLIElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                              aResult);
+                                              aMaybeScriptedPrincipal, aResult);
 }
 
 void
@@ -87,7 +84,7 @@ HTMLLIElement::MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
 }
 
 NS_IMETHODIMP_(bool)
-HTMLLIElement::IsAttributeMapped(const nsIAtom* aAttribute) const
+HTMLLIElement::IsAttributeMapped(const nsAtom* aAttribute) const
 {
   static const MappedAttributeEntry attributes[] = {
     { &nsGkAtoms::type },

@@ -2,8 +2,10 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-add_task(function* testExecuteScript() {
-  let {ExtensionManagement} = Cu.import("resource://gre/modules/ExtensionManagement.jsm", {});
+XPCOMUtils.defineLazyPreferenceGetter(this, "useRemoteWebExtensions",
+                                      "extensions.webextensions.remote", false);
+
+add_task(async function testExecuteScript() {
   let {MessageChannel} = Cu.import("resource://gre/modules/MessageChannel.jsm", {});
 
   function countMM(messageManagerMap) {
@@ -35,7 +37,7 @@ add_task(function* testExecuteScript() {
 
   const BASE = "http://mochi.test:8888/browser/browser/components/extensions/test/browser/";
   const URL = BASE + "file_iframe_document.html";
-  let tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, URL, true);
+  let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, URL, true);
 
   async function background() {
     try {
@@ -246,18 +248,18 @@ add_task(function* testExecuteScript() {
     },
   });
 
-  yield extension.startup();
+  await extension.startup();
 
-  yield extension.awaitFinish("executeScript");
+  await extension.awaitFinish("executeScript");
 
-  yield extension.unload();
+  await extension.unload();
 
-  yield BrowserTestUtils.removeTab(tab);
+  await BrowserTestUtils.removeTab(tab);
 
   // Make sure that we're not holding on to references to closed message
   // managers.
   is(countMM(MessageChannel.messageManagers), messageManagersSize, "Message manager count");
-  if (!ExtensionManagement.useRemoteWebExtensions) {
+  if (!useRemoteWebExtensions) {
     is(countMM(MessageChannel.responseManagers), responseManagersSize, "Response manager count");
   }
   is(MessageChannel.pendingResponses.size, 0, "Pending response count");

@@ -8,7 +8,7 @@
 #define nsJSUtils_h__
 
 /**
- * This is not a generated file. It contains common utility functions 
+ * This is not a generated file. It contains common utility functions
  * invoked from the JavaScript code generated from IDL interfaces.
  * The goal of the utility functions is to cut down on the size of
  * the generated code itself.
@@ -70,7 +70,7 @@ public:
   class MOZ_STACK_CLASS ExecutionContext {
 #ifdef MOZ_GECKO_PROFILER
     // Register stack annotations for the Gecko profiler.
-    mozilla::SamplerStackFrameRAII mSamplerRAII;
+    mozilla::AutoProfilerLabel mAutoProfilerLabel;
 #endif
 
     JSContext* mCx;
@@ -94,6 +94,9 @@ public:
 
     // Should the result be serialized before being returned.
     bool mCoerceToString;
+
+    // Encode the bytecode before it is being executed.
+    bool mEncodeBytecode;
 
 #ifdef DEBUG
     // Should we set the return value.
@@ -124,6 +127,15 @@ public:
       return *this;
     }
 
+    // When set, this flag records and encodes the bytecode as soon as it is
+    // being compiled, and before it is being executed. The bytecode can then be
+    // requested by using |JS::FinishIncrementalEncoding| with the mutable
+    // handle |aScript| argument of |CompileAndExec| or |JoinAndExec|.
+    ExecutionContext& SetEncodeBytecode(bool aEncodeBytecode) {
+      mEncodeBytecode = aEncodeBytecode;
+      return *this;
+    }
+
     // Set the scope chain in which the code should be executed.
     void SetScopeChain(const JS::AutoObjectVector& aScopeChain);
 
@@ -140,20 +152,31 @@ public:
     ExtractReturnValue(JS::MutableHandle<JS::Value> aRetValue);
 
     // After getting a notification that an off-thread compilation terminated,
-    // this function will synchronize the result by moving it to the main thread
-    // before starting the execution of the script.
+    // this function will take the result of the parser by moving it to the main
+    // thread before starting the execution of the script.
     //
     // The compiled script would be returned in the |aScript| out-param.
-    MOZ_MUST_USE nsresult SyncAndExec(void **aOffThreadToken,
+    MOZ_MUST_USE nsresult JoinAndExec(void **aOffThreadToken,
                                       JS::MutableHandle<JSScript*> aScript);
 
     // Compile a script contained in a SourceBuffer, and execute it.
     nsresult CompileAndExec(JS::CompileOptions& aCompileOptions,
-                            JS::SourceBufferHolder& aSrcBuf);
+                            JS::SourceBufferHolder& aSrcBuf,
+                            JS::MutableHandle<JSScript*> aScript);
 
     // Compile a script contained in a string, and execute it.
     nsresult CompileAndExec(JS::CompileOptions& aCompileOptions,
                             const nsAString& aScript);
+
+    // Decode a script contained in a buffer, and execute it.
+    MOZ_MUST_USE nsresult DecodeAndExec(JS::CompileOptions& aCompileOptions,
+                                        mozilla::Vector<uint8_t>& aBytecodeBuf,
+                                        size_t aBytecodeIndex);
+
+    // After getting a notification that an off-thread decoding terminated, this
+    // function will get the result of the decoder by moving it to the main
+    // thread before starting the execution of the script.
+    MOZ_MUST_USE nsresult DecodeJoinAndExec(void **aOffThreadToken);
   };
 
   static nsresult CompileModule(JSContext* aCx,
@@ -162,11 +185,11 @@ public:
                                 JS::CompileOptions &aCompileOptions,
                                 JS::MutableHandle<JSObject*> aModule);
 
-  static nsresult ModuleDeclarationInstantiation(JSContext* aCx,
-                                                 JS::Handle<JSObject*> aModule);
+  static nsresult ModuleInstantiate(JSContext* aCx,
+                                    JS::Handle<JSObject*> aModule);
 
-  static nsresult ModuleEvaluation(JSContext* aCx,
-                                   JS::Handle<JSObject*> aModule);
+  static nsresult ModuleEvaluate(JSContext* aCx,
+                                 JS::Handle<JSObject*> aModule);
 
   // Returns false if an exception got thrown on aCx.  Passing a null
   // aElement is allowed; that wil produce an empty aScopeChain.

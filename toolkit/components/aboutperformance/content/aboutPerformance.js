@@ -10,7 +10,6 @@ var { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
 const { PerformanceStats } = Cu.import("resource://gre/modules/PerformanceStats.jsm", {});
 const { Services } = Cu.import("resource://gre/modules/Services.jsm", {});
-const { Task } = Cu.import("resource://gre/modules/Task.jsm", {});
 const { ObjectUtils } = Cu.import("resource://gre/modules/ObjectUtils.jsm", {});
 const { Memory } = Cu.import("resource://gre/modules/Memory.jsm", {});
 const { DownloadUtils } = Cu.import("resource://gre/modules/DownloadUtils.jsm", {});
@@ -130,7 +129,7 @@ let tabFinder = {
 function wait(ms = 0) {
   try {
     let resolve;
-    let p = new Promise(resolve_ => { resolve = resolve_ });
+    let p = new Promise(resolve_ => { resolve = resolve_; });
     setTimeout(resolve, ms);
     return p;
   } catch (e) {
@@ -390,15 +389,15 @@ var State = {
    *
    * @return {Promise}
    */
-  update: Task.async(function*() {
+  async update() {
     // If the buffer is empty, add one value for bootstraping purposes.
     if (this._buffer.length == 0) {
       if (this._oldest) {
         throw new Error("Internal Error, we shouldn't have a `_oldest` value yet.");
       }
-      this._latest = this._oldest = yield this._monitor.promiseSnapshot();
+      this._latest = this._oldest = await this._monitor.promiseSnapshot();
       this._buffer.push(this._oldest);
-      yield wait(BUFFER_SAMPLING_RATE_MS * 1.1);
+      await wait(BUFFER_SAMPLING_RATE_MS * 1.1);
     }
 
 
@@ -408,7 +407,7 @@ var State = {
     let latestInBuffer = this._buffer[this._buffer.length - 1];
     let deltaT = now - latestInBuffer.date;
     if (deltaT > BUFFER_SAMPLING_RATE_MS) {
-      this._latest = yield this._monitor.promiseSnapshot();
+      this._latest = await this._monitor.promiseSnapshot();
       this._buffer.push(this._latest);
     }
 
@@ -417,7 +416,7 @@ var State = {
     if (oldestInBuffer.date + BUFFER_DURATION_MS < this._latest.date) {
       this._buffer.shift();
     }
-  }),
+  },
 
   /**
    * @return {Promise}
@@ -441,7 +440,7 @@ var State = {
    *  duration: number of milliseconds
    * }}
    */
-  _promiseDeltaSince: Task.async(function*(oldest) {
+  async _promiseDeltaSince(oldest) {
     let current = this._latest;
     if (!oldest) {
       throw new TypeError();
@@ -469,7 +468,7 @@ var State = {
     for (let kind of ["webpages"]) {
       for (let [key, value] of current[kind]) {
         let item = ObjectUtils.strict(new Delta(value.subtract(oldest[kind].get(key)), kind, current.date, oldFirstSeen, oldAlerts));
-        yield item.promiseInit();
+        await item.promiseInit();
 
         if (!item.show) {
           continue;
@@ -487,7 +486,7 @@ var State = {
     this._firstSeen = cleanedUpFirstSeen;
     this._alerts = cleanedUpAlerts;
     return result;
-  }),
+  },
 };
 
 var View = {
@@ -553,7 +552,7 @@ var View = {
       toAdd.push(cachedElements);
       cachedElements.eltTitle.textContent = delta.readableName;
       cachedElements.eltName.textContent = `Full name: ${delta.fullName}.`;
-      cachedElements.eltLoaded.textContent = `Measure start: ${Math.round(delta.age / 1000)} seconds ago.`
+      cachedElements.eltLoaded.textContent = `Measure start: ${Math.round(delta.age / 1000)} seconds ago.`;
 
       let processes = delta.diff.processes.map(proc => `${proc.processId} (${proc.isChildProcess ? "child" : "parent"})`);
       cachedElements.eltProcess.textContent = `Processes: ${processes.join(", ")}`;
@@ -585,7 +584,7 @@ var View = {
 
           let describeFrequency;
           if (frequency <= MAX_FREQUENCY_FOR_NO_IMPACT) {
-            describeFrequency = `has no impact on the performance of ${BRAND_NAME}.`
+            describeFrequency = `has no impact on the performance of ${BRAND_NAME}.`;
           } else {
             let describeImpact;
             if (frequency <= MAX_FREQUENCY_FOR_RARE) {
@@ -600,10 +599,10 @@ var View = {
             }
             // At this stage, `sum != 0`
             if (delta.alerts[1] / sum > MIN_PROPORTION_FOR_MAJOR_IMPACT) {
-              describeImpact = "When this happens, the slowdown is generally important."
+              describeImpact = "When this happens, the slowdown is generally important.";
               impact *= 2;
             } else {
-              describeImpact = "When this happens, the slowdown is generally noticeable."
+              describeImpact = "When this happens, the slowdown is generally noticeable.";
             }
 
             eltImpact.textContent = ` ${describeFrequency} ${describeImpact}`;
@@ -783,31 +782,31 @@ var Control = {
     this._initAutorefresh();
     this._initDisplayMode();
   },
-  update: Task.async(function*() {
+  async update() {
     let mode = this._displayMode;
     if (this._autoRefreshInterval || !State._buffer[0]) {
       // Update the state only if we are not on pause.
-      yield State.update();
+      await State.update();
     }
-    yield wait(0);
-    let state = yield (mode == MODE_GLOBAL ?
+    await wait(0);
+    let state = await (mode == MODE_GLOBAL ?
       State.promiseDeltaSinceStartOfTime() :
       State.promiseDeltaSinceStartOfBuffer());
 
     for (let category of ["webpages"]) {
-      yield wait(0);
-      yield View.updateCategory(state[category], category, category, mode);
+      await wait(0);
+      await View.updateCategory(state[category], category, category, mode);
     }
-    yield wait(0);
+    await wait(0);
 
     // Make sure that we do not keep obsolete stuff around.
     View.DOMCache.trimTo(state.deltas);
 
-    yield wait(0);
+    await wait(0);
 
     // Inform watchers
     Services.obs.notifyObservers(null, UPDATE_COMPLETE_TOPIC, mode);
-  }),
+  },
   _setOptions(options) {
     dump(`about:performance _setOptions ${JSON.stringify(options)}\n`);
     let eltRefresh = document.getElementById("check-autorefresh");
@@ -834,7 +833,7 @@ var Control = {
         window.clearInterval(this._autoRefreshInterval);
         this._autoRefreshInterval = null;
       }
-    }
+    };
 
     let eltRefresh = document.getElementById("check-autorefresh");
     eltRefresh.addEventListener("change", () => onRefreshChange(true));
@@ -979,7 +978,7 @@ var SubprocessMonitor = {
   },
 };
 
-var go = Task.async(function*() {
+var go = async function() {
 
   SubprocessMonitor.init();
   Control.init();
@@ -993,7 +992,7 @@ var go = Task.async(function*() {
   Services.obs.addObserver(testUpdate, TEST_DRIVER_TOPIC);
   window.addEventListener("unload", () => Services.obs.removeObserver(testUpdate, TEST_DRIVER_TOPIC));
 
-  yield Control.update();
-  yield wait(BUFFER_SAMPLING_RATE_MS * 1.1);
-  yield Control.update();
-});
+  await Control.update();
+  await wait(BUFFER_SAMPLING_RATE_MS * 1.1);
+  await Control.update();
+};

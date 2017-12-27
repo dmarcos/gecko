@@ -1,14 +1,23 @@
-use bindgen::{Builder, CodegenConfig, builder};
+use bindgen::{Builder, CodegenConfig, RUST_TARGET_STRINGS, RustTarget, builder};
 use clap::{App, Arg};
 use std::fs::File;
-use std::io::{self, Error, ErrorKind};
+use std::io::{self, Error, ErrorKind, Write, stderr};
+use std::path::PathBuf;
+use std::str::FromStr;
 
 /// Construct a new [`Builder`](./struct.Builder.html) from command line flags.
-pub fn builder_from_flags<I>
-    (args: I)
-     -> Result<(Builder, Box<io::Write>, bool), io::Error>
-    where I: Iterator<Item = String>,
+pub fn builder_from_flags<I>(
+    args: I,
+) -> Result<(Builder, Box<io::Write>, bool), io::Error>
+where
+    I: Iterator<Item = String>,
 {
+    let rust_target_help = format!(
+        "Version of the Rust compiler to target. Valid options are: {:?}. Defaults to {:?}.",
+        RUST_TARGET_STRINGS,
+        String::from(RustTarget::default())
+    );
+
     let matches = App::new("bindgen")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Generates Rust bindings from C/C++ headers.")
@@ -25,21 +34,35 @@ pub fn builder_from_flags<I>
                 .takes_value(true)
                 .multiple(true)
                 .number_of_values(1),
-            Arg::with_name("constified-enum")
-                .long("constified-enum")
-                .help("Mark any enum whose name matches <regex> as a set of \
-                       constants instead of an enumeration.")
+            Arg::with_name("rustified-enum")
+                .long("rustified-enum")
+                .help("Mark any enum whose name matches <regex> as a Rust enum \
+                       instead of a set of constants.")
+                .value_name("regex")
+                .takes_value(true)
+                .multiple(true)
+                .number_of_values(1),
+            Arg::with_name("constified-enum-module")
+                .long("constified-enum-module")
+                .help("Mark any enum whose name matches <regex> as a module of \
+                       constants instead of just constants.")
                 .value_name("regex")
                 .takes_value(true)
                 .multiple(true)
                 .number_of_values(1),
             Arg::with_name("blacklist-type")
                 .long("blacklist-type")
-                .help("Mark a type as hidden.")
+                .help("Mark <type> as hidden.")
                 .value_name("type")
                 .takes_value(true)
                 .multiple(true)
                 .number_of_values(1),
+            Arg::with_name("no-layout-tests")
+                .long("no-layout-tests")
+                .help("Avoid generating layout tests for any type."),
+            Arg::with_name("no-derive-copy")
+                .long("no-derive-copy")
+                .help("Avoid deriving Copy on any type."),
             Arg::with_name("no-derive-debug")
                 .long("no-derive-debug")
                 .help("Avoid deriving Debug on any type."),
@@ -47,19 +70,50 @@ pub fn builder_from_flags<I>
                 .long("no-derive-default")
                 .hidden(true)
                 .help("Avoid deriving Default on any type."),
+            Arg::with_name("impl-debug")
+                .long("impl-debug")
+                .help("Create Debug implementation, if it can not be derived \
+                       automatically."),
+            Arg::with_name("impl-partialeq")
+                .long("impl-partialeq")
+                .help("Create PartialEq implementation, if it can not be derived \
+                       automatically."),
             Arg::with_name("with-derive-default")
                 .long("with-derive-default")
-                .help("Deriving Default on any type."),
+                .help("Derive Default on any type."),
+            Arg::with_name("with-derive-hash")
+                .long("with-derive-hash")
+                .help("Derive hash on any type."),
+            Arg::with_name("with-derive-partialeq")
+                .long("with-derive-partialeq")
+                .help("Derive partialeq on any type."),
+            Arg::with_name("with-derive-partialord")
+                .long("with-derive-partialord")
+                .help("Derive partialord on any type."),
+            Arg::with_name("with-derive-eq")
+                .long("with-derive-eq")
+                .help("Derive eq on any type. Enable this option also \
+                       enables --with-derive-partialeq"),
+            Arg::with_name("with-derive-ord")
+                .long("with-derive-ord")
+                .help("Derive ord on any type. Enable this option also \
+                       enables --with-derive-partialord"),
             Arg::with_name("no-doc-comments")
                 .long("no-doc-comments")
                 .help("Avoid including doc comments in the output, see: \
-                      https://github.com/servo/rust-bindgen/issues/426"),
+                      https://github.com/rust-lang-nursery/rust-bindgen/issues/426"),
             Arg::with_name("no-recursive-whitelist")
                 .long("no-recursive-whitelist")
-                .help("Avoid whitelisting types recursively"),
+                .help("Disable whitelisting types recursively. This will cause \
+                       bindgen to emit Rust code that won't compile! See the \
+                       `bindgen::Builder::whitelist_recursively` method's \
+                       documentation for details."),
             Arg::with_name("objc-extern-crate")
                 .long("objc-extern-crate")
-                .help("Use extern crate instead of use for objc"),
+                .help("Use extern crate instead of use for objc."),
+            Arg::with_name("distrust-clang-mangling")
+                .long("distrust-clang-mangling")
+                .help("Do not trust the libclang-provided mangling"),
             Arg::with_name("builtins")
                 .long("builtins")
                 .help("Output bindings for builtin definitions, e.g. \
@@ -70,14 +124,12 @@ pub fn builder_from_flags<I>
                       ::std::os::raw.")
                 .value_name("prefix")
                 .takes_value(true),
+            Arg::with_name("time-phases")
+                .long("time-phases")
+                .help("Time the different bindgen phases and print to stderr"),
             // All positional arguments after the end of options marker, `--`
             Arg::with_name("clang-args")
                 .multiple(true),
-            Arg::with_name("dummy-uses")
-                .long("dummy-uses")
-                .help("For testing purposes, generate a C/C++ file containing \
-                       dummy uses of all types defined in the input header.")
-                .takes_value(true),
             Arg::with_name("emit-clang-ast")
                 .long("emit-clang-ast")
                 .help("Output the Clang AST for debugging purposes."),
@@ -94,7 +146,9 @@ pub fn builder_from_flags<I>
                 .help("Enable support for C++ namespaces."),
             Arg::with_name("disable-name-namespacing")
                 .long("disable-name-namespacing")
-                .help("Disable name namespacing if namespaces are disabled."),
+                .help("Disable namespacing via mangling, causing bindgen to \
+                       generate names like \"Baz\" instead of \"foo_bar_Baz\" \
+                       for an input name \"foo::bar::Baz\"."),
             Arg::with_name("framework")
                 .long("framework-link")
                 .help("Link to framework.")
@@ -107,9 +161,9 @@ pub fn builder_from_flags<I>
                        is useful when you only care about struct layouts."),
             Arg::with_name("generate")
                 .long("generate")
-                .help("Generate a given kind of items, split by commas. \
-                       Valid values are \"functions\",\"types\", \"vars\" and \
-                       \"methods\".")
+                .help("Generate only given items, split by commas. \
+                       Valid values are \"functions\",\"types\", \"vars\", \
+                       \"methods\", \"constructors\" and \"destructors\".")
                 .takes_value(true),
             Arg::with_name("ignore-methods")
                 .long("ignore-methods")
@@ -123,14 +177,17 @@ pub fn builder_from_flags<I>
                 .number_of_values(1),
             Arg::with_name("no-convert-floats")
                 .long("no-convert-floats")
-                .help("Don't automatically convert floats to f32/f64."),
-            Arg::with_name("no-unstable-rust")
-                .long("no-unstable-rust")
-                .help("Do not generate unstable Rust code.")
+                .help("Do not automatically convert floats to f32/f64."),
+            Arg::with_name("no-prepend-enum-name")
+                .long("no-prepend-enum-name")
+                .help("Do not prepend the enum name to bitfield or constant variants."),
+            Arg::with_name("unstable-rust")
+                .long("unstable-rust")
+                .help("Generate unstable Rust code (deprecated; use --rust-target instead).")
                 .multiple(true), // FIXME: Pass legacy test suite
             Arg::with_name("opaque-type")
                 .long("opaque-type")
-                .help("Mark a type as opaque.")
+                .help("Mark <type> as opaque.")
                 .value_name("type")
                 .takes_value(true)
                 .multiple(true)
@@ -146,6 +203,10 @@ pub fn builder_from_flags<I>
                 .takes_value(true)
                 .multiple(true)
                 .number_of_values(1),
+            Arg::with_name("rust-target")
+                .long("rust-target")
+                .help(&rust_target_help)
+                .takes_value(true),
             Arg::with_name("static")
                 .long("static-link")
                 .help("Link to static library.")
@@ -171,6 +232,9 @@ pub fn builder_from_flags<I>
                 .takes_value(true)
                 .multiple(true)
                 .number_of_values(1),
+            Arg::with_name("generate-inline-functions")
+                .long("generate-inline-functions")
+                .help("Generate inline functions."),
             Arg::with_name("whitelist-type")
                 .long("whitelist-type")
                 .help("Whitelist the type. Other non-whitelisted types will \
@@ -190,7 +254,51 @@ pub fn builder_from_flags<I>
                 .number_of_values(1),
             Arg::with_name("verbose")
                 .long("verbose")
-                .help("Print verbose error messages"),
+                .help("Print verbose error messages."),
+            Arg::with_name("dump-preprocessed-input")
+                .long("dump-preprocessed-input")
+                .help("Preprocess and dump the input header files to disk. \
+                       Useful when debugging bindgen, using C-Reduce, or when \
+                       filing issues. The resulting file will be named \
+                       something like `__bindgen.i` or `__bindgen.ii`."),
+            Arg::with_name("no-rustfmt-bindings")
+                .long("no-rustfmt-bindings")
+                .help("Do not format the generated bindings with rustfmt."),
+            Arg::with_name("rustfmt-bindings")
+                .long("rustfmt-bindings")
+                .help("Format the generated bindings with rustfmt. DEPRECATED: \
+                       --rustfmt-bindings is now enabled by default. Disable \
+                       with --no-rustfmt-bindings."),
+            Arg::with_name("rustfmt-configuration-file")
+                .long("rustfmt-configuration-file")
+                .help("The absolute path to the rustfmt configuration file. \
+                       The configuration file will be used for formatting the bindings. \
+                       This parameter is incompatible with --no-rustfmt-bindings.")
+                .value_name("path")
+                .takes_value(true)
+                .multiple(false)
+                .number_of_values(1),
+            Arg::with_name("no-partialeq")
+                .long("no-partialeq")
+                .help("Avoid deriving PartialEq for types matching <regex>.")
+                .value_name("regex")
+                .takes_value(true)
+                .multiple(true)
+                .number_of_values(1),
+            Arg::with_name("no-copy")
+                .long("no-copy")
+                .help("Avoid deriving Copy for types matching <regex>.")
+                .value_name("regex")
+                .takes_value(true)
+                .multiple(true)
+                .number_of_values(1),
+            Arg::with_name("no-hash")
+                .long("no-hash")
+                .help("Avoid deriving Hash for types matching <regex>.")
+                .value_name("regex")
+                .takes_value(true)
+                .multiple(true)
+                .number_of_values(1),
         ]) // .args()
         .get_matches_from(args);
 
@@ -202,21 +310,38 @@ pub fn builder_from_flags<I>
         return Err(Error::new(ErrorKind::Other, "Header not found"));
     }
 
+    if matches.is_present("unstable-rust") {
+        builder = builder.rust_target(RustTarget::Nightly);
+        writeln!(
+            &mut stderr(),
+            "warning: the `--unstable-rust` option is deprecated"
+        ).expect("Unable to write error message");
+    }
+
+    if let Some(rust_target) = matches.value_of("rust-target") {
+        builder = builder.rust_target(RustTarget::from_str(rust_target)?);
+    }
+
     if let Some(bitfields) = matches.values_of("bitfield-enum") {
         for regex in bitfields {
             builder = builder.bitfield_enum(regex);
         }
     }
 
-    if let Some(bitfields) = matches.values_of("constified-enum") {
-        for regex in bitfields {
-            builder = builder.constified_enum(regex);
+    if let Some(rustifieds) = matches.values_of("rustified-enum") {
+        for regex in rustifieds {
+            builder = builder.rustified_enum(regex);
         }
     }
 
+    if let Some(constified_mods) = matches.values_of("constified-enum-module") {
+        for regex in constified_mods {
+            builder = builder.constified_enum_module(regex);
+        }
+    }
     if let Some(hidden_types) = matches.values_of("blacklist-type") {
         for ty in hidden_types {
-            builder = builder.hide_type(ty);
+            builder = builder.blacklist_type(ty);
         }
     }
 
@@ -224,24 +349,64 @@ pub fn builder_from_flags<I>
         builder = builder.emit_builtins();
     }
 
+    if matches.is_present("no-layout-tests") {
+        builder = builder.layout_tests(false);
+    }
+
+    if matches.is_present("no-derive-copy") {
+        builder = builder.derive_copy(false);
+    }
+
     if matches.is_present("no-derive-debug") {
         builder = builder.derive_debug(false);
+    }
+
+    if matches.is_present("impl-debug") {
+        builder = builder.impl_debug(true);
+    }
+
+    if matches.is_present("impl-partialeq") {
+        builder = builder.impl_partialeq(true);
     }
 
     if matches.is_present("with-derive-default") {
         builder = builder.derive_default(true);
     }
 
+    if matches.is_present("with-derive-hash") {
+        builder = builder.derive_hash(true);
+    }
+
+    if matches.is_present("with-derive-partialeq") {
+        builder = builder.derive_partialeq(true);
+    }
+
+    if matches.is_present("with-derive-partialord") {
+        builder = builder.derive_partialord(true);
+    }
+
+    if matches.is_present("with-derive-eq") {
+        builder = builder.derive_eq(true);
+    }
+
+    if matches.is_present("with-derive-ord") {
+        builder = builder.derive_ord(true);
+    }
+
     if matches.is_present("no-derive-default") {
         builder = builder.derive_default(false);
     }
 
-    if let Some(prefix) = matches.value_of("ctypes-prefix") {
-        builder = builder.ctypes_prefix(prefix);
+    if matches.is_present("no-prepend-enum-name") {
+        builder = builder.prepend_enum_name(false);
     }
 
-    if let Some(dummy) = matches.value_of("dummy-uses") {
-        builder = builder.dummy_uses(dummy);
+    if matches.is_present("time-phases") {
+        builder = builder.time_phases(true);
+    }
+
+    if let Some(prefix) = matches.value_of("ctypes-prefix") {
+        builder = builder.ctypes_prefix(prefix);
     }
 
     if let Some(links) = matches.values_of("dynamic") {
@@ -258,9 +423,13 @@ pub fn builder_from_flags<I>
                 "types" => config.types = true,
                 "vars" => config.vars = true,
                 "methods" => config.methods = true,
-                _ => {
-                    return Err(Error::new(ErrorKind::Other,
-                                          "Unknown generate item"));
+                "constructors" => config.constructors = true,
+                "destructors" => config.destructors = true,
+                otherwise => {
+                    return Err(Error::new(
+                        ErrorKind::Other,
+                        format!("Unknown generate item: {}", otherwise),
+                    ));
                 }
             }
         }
@@ -301,10 +470,6 @@ pub fn builder_from_flags<I>
         builder = builder.ignore_methods();
     }
 
-    if matches.is_present("no-unstable-rust") {
-        builder = builder.no_unstable_rust();
-    }
-
     if matches.is_present("no-convert-floats") {
         builder = builder.no_convert_floats();
     }
@@ -315,6 +480,10 @@ pub fn builder_from_flags<I>
 
     if matches.is_present("no-recursive-whitelist") {
         builder = builder.whitelist_recursively(false);
+    }
+
+    if matches.is_present("objc-extern-crate") {
+        builder = builder.objc_extern_crate(true);
     }
 
     if let Some(opaque_types) = matches.values_of("opaque-type") {
@@ -339,25 +508,33 @@ pub fn builder_from_flags<I>
         builder = builder.use_core();
     }
 
+    if matches.is_present("distrust-clang-mangling") {
+        builder = builder.trust_clang_mangling(false);
+    }
+
     if matches.is_present("conservative-inline-namespaces") {
         builder = builder.conservative_inline_namespaces();
     }
 
+    if matches.is_present("generate-inline-functions") {
+        builder = builder.generate_inline_functions(true);
+    }
+
     if let Some(whitelist) = matches.values_of("whitelist-function") {
         for regex in whitelist {
-            builder = builder.whitelisted_function(regex);
+            builder = builder.whitelist_function(regex);
         }
     }
 
     if let Some(whitelist) = matches.values_of("whitelist-type") {
         for regex in whitelist {
-            builder = builder.whitelisted_type(regex);
+            builder = builder.whitelist_type(regex);
         }
     }
 
     if let Some(whitelist) = matches.values_of("whitelist-var") {
         for regex in whitelist {
-            builder = builder.whitelisted_var(regex);
+            builder = builder.whitelist_var(regex);
         }
     }
 
@@ -373,6 +550,60 @@ pub fn builder_from_flags<I>
     } else {
         Box::new(io::BufWriter::new(io::stdout())) as Box<io::Write>
     };
+
+    if matches.is_present("dump-preprocessed-input") {
+        builder.dump_preprocessed_input()?;
+    }
+
+    let no_rustfmt_bindings = matches.is_present("no-rustfmt-bindings");
+    if no_rustfmt_bindings {
+        builder = builder.rustfmt_bindings(false);
+    }
+
+    if let Some(path_str) = matches.value_of("rustfmt-configuration-file") {
+        let path = PathBuf::from(path_str);
+
+        if no_rustfmt_bindings {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "Cannot supply both --rustfmt-configuration-file and --no-rustfmt-bindings"
+            ));
+        }
+
+        if !path.is_absolute() {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "--rustfmt-configuration--file needs to be an absolute path!",
+            ));
+        }
+
+        if path.to_str().is_none() {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "--rustfmt-configuration-file contains non-valid UTF8 characters.",
+            ));
+        }
+
+        builder = builder.rustfmt_configuration_file(Some(path));
+    }
+
+    if let Some(no_partialeq) = matches.values_of("no-partialeq") {
+        for regex in no_partialeq {
+            builder = builder.no_partialeq(String::from(regex));
+        }
+    }
+
+    if let Some(no_copy) = matches.values_of("no-copy") {
+        for regex in no_copy {
+            builder = builder.no_copy(String::from(regex));
+        }
+    }
+
+    if let Some(no_hash) = matches.values_of("no-hash") {
+        for regex in no_hash {
+            builder = builder.no_hash(String::from(regex));
+        }
+    }
 
     let verbose = matches.is_present("verbose");
 

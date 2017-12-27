@@ -133,16 +133,23 @@ enum class OpKind {
     TeeGlobal,
     Call,
     CallIndirect,
+    OldCallDirect,
     OldCallIndirect,
     Return,
     If,
     Else,
     End,
+    Wait,
+    Wake,
     AtomicLoad,
     AtomicStore,
     AtomicBinOp,
     AtomicCompareExchange,
-    AtomicExchange,
+    OldAtomicLoad,
+    OldAtomicStore,
+    OldAtomicBinOp,
+    OldAtomicCompareExchange,
+    OldAtomicExchange,
     ExtractLane,
     ReplaceLane,
     Swizzle,
@@ -158,7 +165,7 @@ enum class OpKind {
 // Return the OpKind for a given Op. This is used for sanity-checking that
 // API users use the correct read function for a given Op.
 OpKind
-Classify(Op op);
+Classify(OpBytes op);
 #endif
 
 // Common fields for linear memory access.
@@ -310,7 +317,9 @@ class MOZ_STACK_CLASS OpIter : private Policy
     Vector<TypeAndValue<Value>, 8, SystemAllocPolicy> valueStack_;
     Vector<ControlStackEntry<ControlItem>, 8, SystemAllocPolicy> controlStack_;
 
-    DebugOnly<Op> op_;
+#ifdef DEBUG
+    OpBytes op_;
+#endif
     size_t offsetOfLastReadOp_;
 
     MOZ_MUST_USE bool readFixedU8(uint8_t* out) {
@@ -379,6 +388,7 @@ class MOZ_STACK_CLASS OpIter : private Policy
     }
 
     MOZ_MUST_USE bool readLinearMemoryAddress(uint32_t byteSize, LinearMemoryAddress<Value>* addr);
+    MOZ_MUST_USE bool readLinearMemoryAddressAligned(uint32_t byteSize, LinearMemoryAddress<Value>* addr);
     MOZ_MUST_USE bool readBlockType(ExprType* expr);
     MOZ_MUST_USE bool popCallArgs(const ValTypeVector& expectedTypes, Vector<Value, 8, SystemAllocPolicy>* values);
 
@@ -426,9 +436,15 @@ class MOZ_STACK_CLASS OpIter : private Policy
   public:
     typedef Vector<Value, 8, SystemAllocPolicy> ValueVector;
 
+#ifdef DEBUG
     explicit OpIter(const ModuleEnvironment& env, Decoder& decoder)
-      : d_(decoder), env_(env), op_(Op::Limit), offsetOfLastReadOp_(0)
+      : d_(decoder), env_(env), op_(OpBytes(Op::Limit)), offsetOfLastReadOp_(0)
     {}
+#else
+    explicit OpIter(const ModuleEnvironment& env, Decoder& decoder)
+      : d_(decoder), env_(env), offsetOfLastReadOp_(0)
+    {}
+#endif
 
     // Return the decoding byte offset.
     uint32_t currentOffset() const {
@@ -459,7 +475,7 @@ class MOZ_STACK_CLASS OpIter : private Policy
     MOZ_MUST_USE bool fail(const char* msg) MOZ_COLD;
 
     // Report an unrecognized opcode.
-    MOZ_MUST_USE bool unrecognizedOpcode(uint32_t expr) MOZ_COLD;
+    MOZ_MUST_USE bool unrecognizedOpcode(const OpBytes* expr) MOZ_COLD;
 
     // Return whether the innermost block has a polymorphic base of its stack.
     // Ideally this accessor would be removed; consider using something else.
@@ -470,7 +486,7 @@ class MOZ_STACK_CLASS OpIter : private Policy
     // ------------------------------------------------------------------------
     // Decoding and validation interface.
 
-    MOZ_MUST_USE bool readOp(uint16_t* op);
+    MOZ_MUST_USE bool readOp(OpBytes* op);
     MOZ_MUST_USE bool readFunctionStart(ExprType ret);
     MOZ_MUST_USE bool readFunctionEnd(const uint8_t* bodyEnd);
     MOZ_MUST_USE bool readReturn(Value* value);
@@ -521,23 +537,47 @@ class MOZ_STACK_CLASS OpIter : private Policy
     MOZ_MUST_USE bool readB32x4Const(I32x4* i32x4);
     MOZ_MUST_USE bool readCall(uint32_t* calleeIndex, ValueVector* argValues);
     MOZ_MUST_USE bool readCallIndirect(uint32_t* sigIndex, Value* callee, ValueVector* argValues);
+    MOZ_MUST_USE bool readOldCallDirect(uint32_t numFuncImports, uint32_t* funcIndex,
+                                        ValueVector* argValues);
     MOZ_MUST_USE bool readOldCallIndirect(uint32_t* sigIndex, Value* callee, ValueVector* argValues);
+    MOZ_MUST_USE bool readWake(LinearMemoryAddress<Value>* addr, Value* count);
+    MOZ_MUST_USE bool readWait(LinearMemoryAddress<Value>* addr,
+                               ValType resultType,
+                               uint32_t byteSize,
+                               Value* value,
+                               Value* timeout);
     MOZ_MUST_USE bool readAtomicLoad(LinearMemoryAddress<Value>* addr,
-                                     Scalar::Type* viewType);
+                                     ValType resultType,
+                                     uint32_t byteSize);
     MOZ_MUST_USE bool readAtomicStore(LinearMemoryAddress<Value>* addr,
-                                      Scalar::Type* viewType,
+                                      ValType resultType,
+                                      uint32_t byteSize,
                                       Value* value);
-    MOZ_MUST_USE bool readAtomicBinOp(LinearMemoryAddress<Value>* addr,
-                                      Scalar::Type* viewType,
-                                      jit::AtomicOp* op,
-                                      Value* value);
-    MOZ_MUST_USE bool readAtomicCompareExchange(LinearMemoryAddress<Value>* addr,
-                                                Scalar::Type* viewType,
-                                                Value* oldValue,
-                                                Value* newValue);
-    MOZ_MUST_USE bool readAtomicExchange(LinearMemoryAddress<Value>* addr,
+    MOZ_MUST_USE bool readAtomicRMW(LinearMemoryAddress<Value>* addr,
+                                    ValType resultType,
+                                    uint32_t byteSize,
+                                    Value* value);
+    MOZ_MUST_USE bool readAtomicCmpXchg(LinearMemoryAddress<Value>* addr,
+                                        ValType resultType,
+                                        uint32_t byteSize,
+                                        Value* oldValue,
+                                        Value* newValue);
+    MOZ_MUST_USE bool readOldAtomicLoad(LinearMemoryAddress<Value>* addr,
+                                        Scalar::Type* viewType);
+    MOZ_MUST_USE bool readOldAtomicStore(LinearMemoryAddress<Value>* addr,
                                          Scalar::Type* viewType,
-                                         Value* newValue);
+                                         Value* value);
+    MOZ_MUST_USE bool readOldAtomicBinOp(LinearMemoryAddress<Value>* addr,
+                                         Scalar::Type* viewType,
+                                         jit::AtomicOp* op,
+                                         Value* value);
+    MOZ_MUST_USE bool readOldAtomicCompareExchange(LinearMemoryAddress<Value>* addr,
+                                                   Scalar::Type* viewType,
+                                                   Value* oldValue,
+                                                   Value* newValue);
+    MOZ_MUST_USE bool readOldAtomicExchange(LinearMemoryAddress<Value>* addr,
+                                            Scalar::Type* viewType,
+                                            Value* newValue);
     MOZ_MUST_USE bool readSimdComparison(ValType simdType, Value* lhs,
                                          Value* rhs);
     MOZ_MUST_USE bool readSimdShiftByScalar(ValType simdType, Value* lhs,
@@ -559,8 +599,8 @@ class MOZ_STACK_CLASS OpIter : private Policy
 
     // At a location where readOp is allowed, peek at the next opcode
     // without consuming it or updating any internal state.
-    // Never fails: returns uint16_t(Op::Limit) if it can't read.
-    uint16_t peekOp();
+    // Never fails: returns uint16_t(Op::Limit) in op->b0 if it can't read.
+    void peekOp(OpBytes* op);
 
     // ------------------------------------------------------------------------
     // Stack management.
@@ -599,9 +639,10 @@ class MOZ_STACK_CLASS OpIter : private Policy
 
 template <typename Policy>
 inline bool
-OpIter<Policy>::unrecognizedOpcode(uint32_t expr)
+OpIter<Policy>::unrecognizedOpcode(const OpBytes* expr)
 {
-    UniqueChars error(JS_smprintf("unrecognized opcode: %x", expr));
+    UniqueChars error(JS_smprintf("unrecognized opcode: %x %x", expr->b0,
+                                  IsPrefixByte(expr->b0) ? expr->b1 : 0));
     if (!error)
         return false;
 
@@ -830,7 +871,7 @@ OpIter<Policy>::readBlockType(ExprType* type)
 
 template <typename Policy>
 inline bool
-OpIter<Policy>::readOp(uint16_t* op)
+OpIter<Policy>::readOp(OpBytes* op)
 {
     MOZ_ASSERT(!controlStack_.empty());
 
@@ -839,24 +880,23 @@ OpIter<Policy>::readOp(uint16_t* op)
     if (MOZ_UNLIKELY(!d_.readOp(op)))
         return fail("unable to read opcode");
 
-    op_ = Op(*op);  // debug-only
+#ifdef DEBUG
+    op_ = *op;
+#endif
 
     return true;
 }
 
 template <typename Policy>
-inline uint16_t
-OpIter<Policy>::peekOp()
+inline void
+OpIter<Policy>::peekOp(OpBytes* op)
 {
     const uint8_t* pos = d_.currentPosition();
-    uint16_t op;
 
-    if (MOZ_UNLIKELY(!d_.readOp(&op)))
-        op = uint16_t(Op::Limit);
+    if (MOZ_UNLIKELY(!d_.readOp(op)))
+        op->b0 = uint16_t(Op::Limit);
 
     d_.rollbackPosition(pos);
-
-    return op;
 }
 
 template <typename Policy>
@@ -865,7 +905,7 @@ OpIter<Policy>::readFunctionStart(ExprType ret)
 {
     MOZ_ASSERT(valueStack_.empty());
     MOZ_ASSERT(controlStack_.empty());
-    MOZ_ASSERT(Op(op_) == Op::Limit);
+    MOZ_ASSERT(op_.b0 == uint16_t(Op::Limit));
 
     return pushControl(LabelKind::Block, ret);
 }
@@ -880,7 +920,9 @@ OpIter<Policy>::readFunctionEnd(const uint8_t* bodyEnd)
     if (!controlStack_.empty())
         return fail("unbalanced function body control flow");
 
-    op_ = Op::Limit;
+#ifdef DEBUG
+    op_ = OpBytes(Op::Limit);
+#endif
     valueStack_.clear();
     return true;
 }
@@ -1081,6 +1123,9 @@ OpIter<Policy>::readBrTable(Uint32Vector* depths, uint32_t* defaultDepth,
     if (!readVarU32(&tableLength))
         return fail("unable to read br_table table length");
 
+    if (tableLength > MaxBrTableElems)
+        return fail("br_table too big");
+
     if (!popWithType(ValType::I32, index))
         return false;
 
@@ -1211,6 +1256,19 @@ OpIter<Policy>::readLinearMemoryAddress(uint32_t byteSize, LinearMemoryAddress<V
 
 template <typename Policy>
 inline bool
+OpIter<Policy>::readLinearMemoryAddressAligned(uint32_t byteSize, LinearMemoryAddress<Value>* addr)
+{
+    if (!readLinearMemoryAddress(byteSize, addr))
+        return false;
+
+    if (addr->align != byteSize)
+        return fail("not natural alignment");
+
+    return true;
+}
+
+template <typename Policy>
+inline bool
 OpIter<Policy>::readLoad(ValType resultType, uint32_t byteSize, LinearMemoryAddress<Value>* addr)
 {
     MOZ_ASSERT(Classify(op_) == OpKind::Load);
@@ -1274,11 +1332,11 @@ OpIter<Policy>::readCurrentMemory()
     if (!env_.usesMemory())
         return fail("can't touch memory without memory");
 
-    uint32_t flags;
-    if (!readVarU32(&flags))
+    uint8_t flags;
+    if (!readFixedU8(&flags))
         return false;
 
-    if (flags != uint32_t(MemoryTableFlags::Default))
+    if (flags != uint8_t(MemoryTableFlags::Default))
         return fail("unexpected flags");
 
     return push(ValType::I32);
@@ -1293,11 +1351,11 @@ OpIter<Policy>::readGrowMemory(Value* input)
     if (!env_.usesMemory())
         return fail("can't touch memory without memory");
 
-    uint32_t flags;
-    if (!readVarU32(&flags))
+    uint8_t flags;
+    if (!readFixedU8(&flags))
         return false;
 
-    if (flags != uint32_t(MemoryTableFlags::Default))
+    if (flags != uint8_t(MemoryTableFlags::Default))
         return fail("unexpected flags");
 
     if (!popWithType(ValType::I32, input))
@@ -1591,17 +1649,44 @@ OpIter<Policy>::readCallIndirect(uint32_t* sigIndex, Value* callee, ValueVector*
     if (*sigIndex >= env_.numSigs())
         return fail("signature index out of range");
 
-    uint32_t flags;
-    if (!readVarU32(&flags))
+    uint8_t flags;
+    if (!readFixedU8(&flags))
         return false;
 
-    if (flags != uint32_t(MemoryTableFlags::Default))
+    if (flags != uint8_t(MemoryTableFlags::Default))
         return fail("unexpected flags");
 
     if (!popWithType(ValType::I32, callee))
         return false;
 
     const Sig& sig = env_.sigs[*sigIndex];
+
+    if (!popCallArgs(sig.args(), argValues))
+        return false;
+
+    return push(sig.ret());
+}
+
+template <typename Policy>
+inline bool
+OpIter<Policy>::readOldCallDirect(uint32_t numFuncImports, uint32_t* funcIndex,
+                                  ValueVector* argValues)
+{
+    MOZ_ASSERT(Classify(op_) == OpKind::OldCallDirect);
+
+    uint32_t funcDefIndex;
+    if (!readVarU32(&funcDefIndex))
+        return fail("unable to read call function index");
+
+    if (UINT32_MAX - funcDefIndex < numFuncImports)
+        return fail("callee index out of range");
+
+    *funcIndex = numFuncImports + funcDefIndex;
+
+    if (*funcIndex >= env_.funcSigs.length())
+        return fail("callee index out of range");
+
+    const Sig& sig = *env_.funcSigs[*funcIndex];
 
     if (!popCallArgs(sig.args(), argValues))
         return false;
@@ -1637,9 +1722,135 @@ OpIter<Policy>::readOldCallIndirect(uint32_t* sigIndex, Value* callee, ValueVect
 
 template <typename Policy>
 inline bool
-OpIter<Policy>::readAtomicLoad(LinearMemoryAddress<Value>* addr, Scalar::Type* viewType)
+OpIter<Policy>::readWake(LinearMemoryAddress<Value>* addr, Value* count)
+{
+    MOZ_ASSERT(Classify(op_) == OpKind::Wake);
+
+    if (!env_.usesSharedMemory())
+        return fail("can't touch memory with atomic operations without shared memory");
+
+    if (!popWithType(ValType::I32, count))
+        return false;
+
+    uint32_t byteSize = 4;      // Per spec; smallest WAIT is i32.
+
+    if (!readLinearMemoryAddressAligned(byteSize, addr))
+        return false;
+
+    infalliblePush(ValType::I32);
+    return true;
+}
+
+template <typename Policy>
+inline bool
+OpIter<Policy>::readWait(LinearMemoryAddress<Value>* addr,
+                         ValType valueType,
+                         uint32_t byteSize,
+                         Value* value,
+                         Value* timeout)
+{
+    MOZ_ASSERT(Classify(op_) == OpKind::Wait);
+
+    if (!env_.usesSharedMemory())
+        return fail("can't touch memory with atomic operations without shared memory");
+
+    if (!popWithType(ValType::I64, timeout))
+        return false;
+
+    if (!popWithType(valueType, value))
+        return false;
+
+    if (!readLinearMemoryAddressAligned(byteSize, addr))
+        return false;
+
+    infalliblePush(ValType::I32);
+    return true;
+}
+
+template <typename Policy>
+inline bool
+OpIter<Policy>::readAtomicLoad(LinearMemoryAddress<Value>* addr, ValType resultType,
+                               uint32_t byteSize)
 {
     MOZ_ASSERT(Classify(op_) == OpKind::AtomicLoad);
+
+    if (!env_.usesSharedMemory())
+        return fail("can't touch memory with atomic operations without shared memory");
+
+    if (!readLinearMemoryAddressAligned(byteSize, addr))
+        return false;
+
+    infalliblePush(resultType);
+    return true;
+}
+
+template <typename Policy>
+inline bool
+OpIter<Policy>::readAtomicStore(LinearMemoryAddress<Value>* addr, ValType resultType,
+                                uint32_t byteSize, Value* value)
+{
+    MOZ_ASSERT(Classify(op_) == OpKind::AtomicStore);
+
+    if (!env_.usesSharedMemory())
+        return fail("can't touch memory with atomic operations without shared memory");
+
+    if (!popWithType(resultType, value))
+        return false;
+
+    if (!readLinearMemoryAddressAligned(byteSize, addr))
+        return false;
+
+    return true;
+}
+
+template <typename Policy>
+inline bool
+OpIter<Policy>::readAtomicRMW(LinearMemoryAddress<Value>* addr, ValType resultType,
+                              uint32_t byteSize, Value* value)
+{
+    MOZ_ASSERT(Classify(op_) == OpKind::AtomicBinOp);
+
+    if (!env_.usesSharedMemory())
+        return fail("can't touch memory with atomic operations without shared memory");
+
+    if (!popWithType(resultType, value))
+        return false;
+
+    if (!readLinearMemoryAddressAligned(byteSize, addr))
+        return false;
+
+    infalliblePush(resultType);
+    return true;
+}
+
+template <typename Policy>
+inline bool
+OpIter<Policy>::readAtomicCmpXchg(LinearMemoryAddress<Value>* addr, ValType resultType,
+                                  uint32_t byteSize, Value* oldValue, Value* newValue)
+{
+    MOZ_ASSERT(Classify(op_) == OpKind::AtomicCompareExchange);
+
+    if (!env_.usesSharedMemory())
+        return fail("can't touch memory with atomic operations without shared memory");
+
+    if (!popWithType(resultType, newValue))
+        return false;
+
+    if (!popWithType(resultType, oldValue))
+        return false;
+
+    if (!readLinearMemoryAddressAligned(byteSize, addr))
+        return false;
+
+    infalliblePush(resultType);
+    return true;
+}
+
+template <typename Policy>
+inline bool
+OpIter<Policy>::readOldAtomicLoad(LinearMemoryAddress<Value>* addr, Scalar::Type* viewType)
+{
+    MOZ_ASSERT(Classify(op_) == OpKind::OldAtomicLoad);
 
     if (!readAtomicViewType(viewType))
         return false;
@@ -1654,10 +1865,10 @@ OpIter<Policy>::readAtomicLoad(LinearMemoryAddress<Value>* addr, Scalar::Type* v
 
 template <typename Policy>
 inline bool
-OpIter<Policy>::readAtomicStore(LinearMemoryAddress<Value>* addr, Scalar::Type* viewType,
-                                Value* value)
+OpIter<Policy>::readOldAtomicStore(LinearMemoryAddress<Value>* addr, Scalar::Type* viewType,
+                                   Value* value)
 {
-    MOZ_ASSERT(Classify(op_) == OpKind::AtomicStore);
+    MOZ_ASSERT(Classify(op_) == OpKind::OldAtomicStore);
 
     if (!readAtomicViewType(viewType))
         return false;
@@ -1675,10 +1886,10 @@ OpIter<Policy>::readAtomicStore(LinearMemoryAddress<Value>* addr, Scalar::Type* 
 
 template <typename Policy>
 inline bool
-OpIter<Policy>::readAtomicBinOp(LinearMemoryAddress<Value>* addr, Scalar::Type* viewType,
-                                jit::AtomicOp* op, Value* value)
+OpIter<Policy>::readOldAtomicBinOp(LinearMemoryAddress<Value>* addr, Scalar::Type* viewType,
+                                   jit::AtomicOp* op, Value* value)
 {
-    MOZ_ASSERT(Classify(op_) == OpKind::AtomicBinOp);
+    MOZ_ASSERT(Classify(op_) == OpKind::OldAtomicBinOp);
 
     if (!readAtomicViewType(viewType))
         return false;
@@ -1699,10 +1910,11 @@ OpIter<Policy>::readAtomicBinOp(LinearMemoryAddress<Value>* addr, Scalar::Type* 
 
 template <typename Policy>
 inline bool
-OpIter<Policy>::readAtomicCompareExchange(LinearMemoryAddress<Value>* addr, Scalar::Type* viewType,
-                                          Value* oldValue, Value* newValue)
+OpIter<Policy>::readOldAtomicCompareExchange(LinearMemoryAddress<Value>* addr,
+                                             Scalar::Type* viewType, Value* oldValue,
+                                             Value* newValue)
 {
-    MOZ_ASSERT(Classify(op_) == OpKind::AtomicCompareExchange);
+    MOZ_ASSERT(Classify(op_) == OpKind::OldAtomicCompareExchange);
 
     if (!readAtomicViewType(viewType))
         return false;
@@ -1723,10 +1935,10 @@ OpIter<Policy>::readAtomicCompareExchange(LinearMemoryAddress<Value>* addr, Scal
 
 template <typename Policy>
 inline bool
-OpIter<Policy>::readAtomicExchange(LinearMemoryAddress<Value>* addr, Scalar::Type* viewType,
-                                   Value* value)
+OpIter<Policy>::readOldAtomicExchange(LinearMemoryAddress<Value>* addr, Scalar::Type* viewType,
+                                      Value* value)
 {
-    MOZ_ASSERT(Classify(op_) == OpKind::AtomicExchange);
+    MOZ_ASSERT(Classify(op_) == OpKind::OldAtomicExchange);
 
     if (!readAtomicViewType(viewType))
         return false;

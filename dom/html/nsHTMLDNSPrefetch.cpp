@@ -51,7 +51,7 @@ nsHTMLDNSPrefetch::Initialize()
     NS_WARNING("Initialize() called twice");
     return NS_OK;
   }
-  
+
   sPrefetches = new nsHTMLDNSPrefetch::nsDeferrals();
   NS_ADDREF(sPrefetches);
 
@@ -62,16 +62,16 @@ nsHTMLDNSPrefetch::Initialize()
 
   Preferences::AddBoolVarCache(&sDisablePrefetchHTTPSPref,
                                "network.dns.disablePrefetchFromHTTPS");
-  
+
   // Default is false, so we need an explicit call to prime the cache.
-  sDisablePrefetchHTTPSPref = 
+  sDisablePrefetchHTTPSPref =
     Preferences::GetBool("network.dns.disablePrefetchFromHTTPS", true);
-  
+
   NS_IF_RELEASE(sDNSService);
   nsresult rv;
   rv = CallGetService(kDNSServiceCID, &sDNSService);
   if (NS_FAILED(rv)) return rv;
-  
+
   if (IsNeckoChild())
     NeckoChild::InitNeckoChild();
 
@@ -90,7 +90,7 @@ nsHTMLDNSPrefetch::Shutdown()
   NS_IF_RELEASE(sDNSService);
   NS_IF_RELEASE(sPrefetches);
   NS_IF_RELEASE(sDNSListener);
-  
+
   return NS_OK;
 }
 
@@ -247,6 +247,15 @@ nsHTMLDNSPrefetch::CancelPrefetchLow(const nsAString &hostname,
                         aReason);
 }
 
+void
+nsHTMLDNSPrefetch::LinkDestroyed(Link* aLink)
+{
+  MOZ_ASSERT(aLink->IsInDNSPrefetch());
+  if (sPrefetches) {
+    // Clean up all the possible links at once.
+    sPrefetches->RemoveUnboundLinks();
+  }
+}
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -269,7 +278,7 @@ nsHTMLDNSPrefetch::nsDeferrals::nsDeferrals()
     mActiveLoaderCount(0),
     mTimerArmed(false)
 {
-  mTimer = do_CreateInstance("@mozilla.org/timer;1");
+  mTimer = NS_NewTimer();;
 }
 
 nsHTMLDNSPrefetch::nsDeferrals::~nsDeferrals()
@@ -291,6 +300,9 @@ void
 nsHTMLDNSPrefetch::nsDeferrals::Flush()
 {
   while (mHead != mTail) {
+    if (mEntries[mTail].mElement) {
+      mEntries[mTail].mElement->ClearIsInDNSPrefetch();
+    }
     mEntries[mTail].mElement = nullptr;
     mTail = (mTail + 1) & sMaxDeferredMask;
   }
@@ -306,9 +318,10 @@ nsHTMLDNSPrefetch::nsDeferrals::Add(uint16_t flags, Link *aElement)
 
   if (((mHead + 1) & sMaxDeferredMask) == mTail)
     return NS_ERROR_DNS_LOOKUP_QUEUE_FULL;
-    
+
+  aElement->SetIsInDNSPrefetch();
   mEntries[mHead].mFlags = flags;
-  mEntries[mHead].mElement = do_GetWeakReference(aElement);
+  mEntries[mHead].mElement = aElement;
   mHead = (mHead + 1) & sMaxDeferredMask;
 
   if (!mActiveLoaderCount && !mTimerArmed && mTimer) {
@@ -316,7 +329,7 @@ nsHTMLDNSPrefetch::nsDeferrals::Add(uint16_t flags, Link *aElement)
     mTimer->InitWithNamedFuncCallback(Tick, this, 2000, nsITimer::TYPE_ONE_SHOT,
                                       "nsHTMLDNSPrefetch::nsDeferrals::Tick");
   }
-  
+
   return NS_OK;
 }
 
@@ -328,9 +341,9 @@ nsHTMLDNSPrefetch::nsDeferrals::SubmitQueue()
   if (!sDNSService) return;
 
   while (mHead != mTail) {
-    nsCOMPtr<nsIContent> content = do_QueryReferent(mEntries[mTail].mElement);
-    if (content) {
-      nsCOMPtr<Link> link = do_QueryInterface(content);
+    nsCOMPtr<Link> link = mEntries[mTail].mElement;
+    if (link) {
+      link->ClearIsInDNSPrefetch();
       // Only prefetch here if request was deferred and deferral not cancelled
       if (link && link->HasDeferredDNSPrefetchRequest()) {
         nsCOMPtr<nsIURI> hrefURI(link ? link->GetURI() : nullptr);
@@ -387,8 +400,8 @@ nsHTMLDNSPrefetch::nsDeferrals::SubmitQueue()
 void
 nsHTMLDNSPrefetch::nsDeferrals::Activate()
 {
-  // Register as an observer for the document loader  
-  nsCOMPtr<nsIWebProgress> progress = 
+  // Register as an observer for the document loader
+  nsCOMPtr<nsIWebProgress> progress =
     do_GetService(NS_DOCUMENTLOADER_SERVICE_CONTRACTID);
   if (progress)
     progress->AddProgressListener(this, nsIWebProgress::NOTIFY_STATE_DOCUMENT);
@@ -400,36 +413,50 @@ nsHTMLDNSPrefetch::nsDeferrals::Activate()
     observerService->AddObserver(this, "xpcom-shutdown", true);
 }
 
+void
+nsHTMLDNSPrefetch::nsDeferrals::RemoveUnboundLinks()
+{
+  uint16_t tail = mTail;
+  while (mHead != tail) {
+    if (mEntries[tail].mElement &&
+        !mEntries[tail].mElement->GetElement()->IsInComposedDoc()) {
+      mEntries[tail].mElement->ClearIsInDNSPrefetch();
+      mEntries[tail].mElement = nullptr;
+    }
+    tail = (tail + 1) & sMaxDeferredMask;
+  }
+}
+
 // nsITimer related method
 
-void 
+void
 nsHTMLDNSPrefetch::nsDeferrals::Tick(nsITimer *aTimer, void *aClosure)
 {
   nsHTMLDNSPrefetch::nsDeferrals *self = (nsHTMLDNSPrefetch::nsDeferrals *) aClosure;
 
   NS_ASSERTION(NS_IsMainThread(), "nsDeferrals::Tick must be on main thread");
   NS_ASSERTION(self->mTimerArmed, "Timer is not armed");
-  
+
   self->mTimerArmed = false;
 
   // If the queue is not submitted here because there are outstanding pages being loaded,
-  // there is no need to rearm the timer as the queue will be submtited when those 
+  // there is no need to rearm the timer as the queue will be submtited when those
   // loads complete.
-  if (!self->mActiveLoaderCount) 
+  if (!self->mActiveLoaderCount)
     self->SubmitQueue();
 }
 
 //////////// nsIWebProgressListener methods
 
-NS_IMETHODIMP 
-nsHTMLDNSPrefetch::nsDeferrals::OnStateChange(nsIWebProgress* aWebProgress, 
-                                              nsIRequest *aRequest, 
-                                              uint32_t progressStateFlags, 
+NS_IMETHODIMP
+nsHTMLDNSPrefetch::nsDeferrals::OnStateChange(nsIWebProgress* aWebProgress,
+                                              nsIRequest *aRequest,
+                                              uint32_t progressStateFlags,
                                               nsresult aStatus)
 {
   // The FIFO has no lock, so it can only be accessed on main thread
   NS_ASSERTION(NS_IsMainThread(), "nsDeferrals::OnStateChange must be on main thread");
-  
+
   if (progressStateFlags & STATE_IS_DOCUMENT) {
     if (progressStateFlags & STATE_STOP) {
 
@@ -444,16 +471,16 @@ nsHTMLDNSPrefetch::nsDeferrals::OnStateChange(nsIWebProgress* aWebProgress,
     else if (progressStateFlags & STATE_START)
       mActiveLoaderCount++;
   }
-            
+
   return NS_OK;
 }
 
 NS_IMETHODIMP
 nsHTMLDNSPrefetch::nsDeferrals::OnProgressChange(nsIWebProgress *aProgress,
-                                                 nsIRequest *aRequest, 
-                                                 int32_t curSelfProgress, 
-                                                 int32_t maxSelfProgress, 
-                                                 int32_t curTotalProgress, 
+                                                 nsIRequest *aRequest,
+                                                 int32_t curSelfProgress,
+                                                 int32_t maxSelfProgress,
+                                                 int32_t curTotalProgress,
                                                  int32_t maxTotalProgress)
 {
   return NS_OK;
@@ -468,7 +495,7 @@ nsHTMLDNSPrefetch::nsDeferrals::OnLocationChange(nsIWebProgress* aWebProgress,
   return NS_OK;
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsHTMLDNSPrefetch::nsDeferrals::OnStatusChange(nsIWebProgress* aWebProgress,
                                                nsIRequest* aRequest,
                                                nsresult aStatus,
@@ -477,9 +504,9 @@ nsHTMLDNSPrefetch::nsDeferrals::OnStatusChange(nsIWebProgress* aWebProgress,
   return NS_OK;
 }
 
-NS_IMETHODIMP 
-nsHTMLDNSPrefetch::nsDeferrals::OnSecurityChange(nsIWebProgress *aWebProgress, 
-                                                 nsIRequest *aRequest, 
+NS_IMETHODIMP
+nsHTMLDNSPrefetch::nsDeferrals::OnSecurityChange(nsIWebProgress *aWebProgress,
+                                                 nsIRequest *aRequest,
                                                  uint32_t state)
 {
   return NS_OK;
@@ -494,6 +521,6 @@ nsHTMLDNSPrefetch::nsDeferrals::Observe(nsISupports *subject,
 {
   if (!strcmp(topic, "xpcom-shutdown"))
     Flush();
-  
+
   return NS_OK;
 }

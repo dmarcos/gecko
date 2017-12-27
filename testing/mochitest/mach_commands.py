@@ -107,7 +107,7 @@ class MochitestRunner(MozbuildObject):
         if test_objects:
             return test_objects
 
-        from mozbuild.testing import TestResolver
+        from moztest.resolve import TestResolver
         resolver = self._spawn(TestResolver)
         tests = list(resolver.resolve_tests(paths=test_paths, cwd=cwd))
         return tests
@@ -116,7 +116,7 @@ class MochitestRunner(MozbuildObject):
         """Runs a mochitest.
 
         suite is the type of mochitest to run. It can be one of ('plain',
-        'chrome', 'browser', 'a11y', 'jetpack-package', 'jetpack-addon').
+        'chrome', 'browser', 'a11y').
         """
         # runtests.py is ambiguous, so we load the file/module manually.
         if 'mochitest' not in sys.modules:
@@ -171,6 +171,10 @@ class MochitestRunner(MozbuildObject):
             imp.load_module('runtestsremote', fh, path,
                             ('.py', 'r', imp.PY_SOURCE))
         import runtestsremote
+
+        from mozrunner.devices.android_device import get_adb_path
+        if not kwargs['adbPath']:
+            kwargs['adbPath'] = get_adb_path(self)
 
         options = Namespace(**kwargs)
 
@@ -282,6 +286,9 @@ class MachCommands(MachCommandBase):
              parser=setup_argument_parser)
     def run_mochitest_general(self, flavor=None, test_objects=None, resolve_tests=True, **kwargs):
         from mochitest_options import ALL_FLAVORS
+        from mozlog.commandline import log_formatters
+        from mozlog.handlers import StreamHandler, LogLevelFilter
+        from mozlog.structuredlog import StructuredLogger
 
         buildapp = None
         for app in SUPPORTED_APPS:
@@ -299,6 +306,15 @@ class MachCommands(MachCommandBase):
                     break
         else:
             flavors = [f for f, v in ALL_FLAVORS.iteritems() if buildapp in v['enabled_apps']]
+
+        if not kwargs.get('log'):
+            # Create shared logger
+            formatter = log_formatters[self._mach_context.settings['test']['format']][0]()
+            formatter.summary_on_shutdown = True
+
+            level = self._mach_context.settings['test']['level']
+            kwargs['log'] = StructuredLogger('mach-mochitest')
+            kwargs['log'].add_handler(StreamHandler(sys.stdout, LogLevelFilter(formatter, level)))
 
         from mozbuild.controller.building import BuildDriver
         self._ensure_state_subdir_exists('.')
@@ -411,7 +427,14 @@ class MachCommands(MachCommandBase):
             if result:
                 overall = result
 
-        # TODO consolidate summaries from all suites
+            # Halt tests on keyboard interrupt
+            if result == -1:
+                break
+
+        # Only shutdown the logger if we created it
+        if kwargs['log'].name == 'mach-mochitest':
+            kwargs['log'].shutdown()
+
         return overall
 
 
@@ -439,7 +462,7 @@ class RobocopCommands(MachCommandBase):
         test_paths = kwargs['test_paths']
         kwargs['test_paths'] = []
 
-        from mozbuild.testing import TestResolver
+        from moztest.resolve import TestResolver
         resolver = self._spawn(TestResolver)
         tests = list(resolver.resolve_tests(paths=test_paths, cwd=self._mach_context.cwd,
                                             flavor='instrumentation', subsuite='robocop'))
@@ -451,8 +474,11 @@ class RobocopCommands(MachCommandBase):
                 sorted(list(test_paths)))))
             return 1
 
-        from mozrunner.devices.android_device import grant_runtime_permissions
+        from mozrunner.devices.android_device import grant_runtime_permissions, get_adb_path
         grant_runtime_permissions(self)
+
+        if not kwargs['adbPath']:
+            kwargs['adbPath'] = get_adb_path(self)
 
         mochitest = self._spawn(MochitestRunner)
         return mochitest.run_robocop_test(self._mach_context, tests, 'robocop', **kwargs)
@@ -498,12 +524,4 @@ class DeprecatedCommands(MachCommandBase):
 
     @Command('mochitest-a11y', category='testing', conditions=[REMOVED])
     def mochitest_a11y(self):
-        pass
-
-    @Command('jetpack-addon', category='testing', conditions=[REMOVED])
-    def jetpack_addon(self):
-        pass
-
-    @Command('jetpack-package', category='testing', conditions=[REMOVED])
-    def jetpack_package(self):
         pass

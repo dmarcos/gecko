@@ -15,7 +15,7 @@ var promise = require("promise");
 var defer = require("devtools/shared/defer");
 var Services = require("Services");
 var { DebuggerServer } = require("devtools/server/main");
-var { DebuggerClient } = require("devtools/shared/client/main");
+var { DebuggerClient } = require("devtools/shared/client/debugger-client");
 var DevToolsUtils = require("devtools/shared/DevToolsUtils");
 var flags = require("devtools/shared/flags");
 var { Task } = require("devtools/shared/task");
@@ -28,9 +28,10 @@ var { require: browserRequire } = BrowserLoader({
   window
 });
 
-let ReactDOM = browserRequire("devtools/client/shared/vendor/react-dom");
 let React = browserRequire("devtools/client/shared/vendor/react");
-var TestUtils = React.addons.TestUtils;
+let ReactDOM = browserRequire("devtools/client/shared/vendor/react-dom");
+let dom = browserRequire("devtools/client/shared/vendor/react-dom-factories");
+let TestUtils = ReactDOM.TestUtils;
 
 var EXAMPLE_URL = "http://example.com/browser/browser/devtools/shared/test/";
 
@@ -200,7 +201,7 @@ function renderComponent(component, props) {
   // By default, renderIntoDocument() won't work for stateless components, but
   // it will work if the stateless component is wrapped in a stateful one.
   // See https://github.com/facebook/react/issues/4839
-  const wrappedEl = React.DOM.span({}, [el]);
+  const wrappedEl = dom.span({}, [el]);
   const renderedComponent = TestUtils.renderIntoDocument(wrappedEl);
   return ReactDOM.findDOMNode(renderedComponent).children[0];
 }
@@ -210,4 +211,26 @@ function shallowRenderComponent(component, props) {
   const renderer = TestUtils.createRenderer();
   renderer.render(el, {});
   return renderer.getRenderOutput();
+}
+
+/**
+ * Creates a React Component for testing
+ *
+ * @param {string} factory - factory object of the component to be created
+ * @param {object} props - React props for the component
+ * @returns {object} - container Node, Object with React component
+ * and querySelector function with $ as name.
+ */
+async function createComponentTest(factory, props) {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+
+  const component = ReactDOM.render(factory(props), container);
+  await forceRender(component);
+
+  return {
+    container,
+    component,
+    $: (s) => container.querySelector(s),
+  };
 }

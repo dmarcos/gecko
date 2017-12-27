@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -45,6 +47,24 @@ struct SelectionDetails
   mozilla::UniquePtr<SelectionDetails> mNext;
 };
 
+struct SelectionCustomColors
+{
+#ifdef NS_BUILD_REFCNT_LOGGING
+  SelectionCustomColors()
+  {
+    MOZ_COUNT_CTOR(SelectionCustomColors);
+  }
+  ~SelectionCustomColors()
+  {
+    MOZ_COUNT_DTOR(SelectionCustomColors);
+  }
+#endif
+  mozilla::Maybe<nscolor> mForegroundColor;
+  mozilla::Maybe<nscolor> mBackgroundColor;
+  mozilla::Maybe<nscolor> mAltForegroundColor;
+  mozilla::Maybe<nscolor> mAltBackgroundColor;
+};
+
 class nsIPresShell;
 
 /** PeekOffsetStruct is used to group various arguments (both input and output)
@@ -76,11 +96,11 @@ struct MOZ_STACK_CLASS nsPeekOffsetStruct
 
   // mDirection: eDirPrevious or eDirNext.
   //             * Note for visual bidi movement:
-  //             eDirPrevious means 'left-then-up' if the containing block is LTR, 
+  //             eDirPrevious means 'left-then-up' if the containing block is LTR,
   //             'right-then-up' if it is RTL.
-  //             eDirNext means 'right-then-down' if the containing block is LTR, 
+  //             eDirNext means 'right-then-down' if the containing block is LTR,
   //             'left-then-down' if it is RTL.
-  //             Between paragraphs, eDirPrevious means "go to the visual end of the 
+  //             Between paragraphs, eDirPrevious means "go to the visual end of the
   //             previous paragraph", and eDirNext means "go to the visual beginning
   //             of the next paragraph".
   //             Used with: eSelectCharacter, eSelectWord, eSelectLine, eSelectParagraph.
@@ -89,14 +109,14 @@ struct MOZ_STACK_CLASS nsPeekOffsetStruct
   // mStartOffset: Offset into the content of the current frame where the peek starts.
   //               Used with: eSelectCharacter, eSelectWord
   int32_t mStartOffset;
-  
+
   // mDesiredPos: The desired inline coordinate for the caret
   //              (one of .x or .y will be used, depending on line's writing mode)
   //              Used with: eSelectLine.
   nsPoint mDesiredPos;
 
   // mWordMovementType: An enum that determines whether to prefer the start or end of a word
-  //                    or to use the default beahvior, which is a combination of 
+  //                    or to use the default beahvior, which is a combination of
   //                    direction and the platform-based pref
   //                    "layout.word_select.eat_space_to_next_word"
   mozilla::EWordMovementType mWordMovementType;
@@ -134,7 +154,7 @@ struct MOZ_STACK_CLASS nsPeekOffsetStruct
 
   // mAttachForward: When the result position is between two frames,
   //                 indicates which of the two frames the caret should be painted in.
-  //                 false means "the end of the frame logically before the caret", 
+  //                 false means "the end of the frame logically before the caret",
   //                 true means "the beginning of the frame logically after the caret".
   //                 Used with: eSelectLine, eSelectBeginLine, eSelectEndLine.
   mozilla::CaretAssociationHint mAttach;
@@ -177,18 +197,20 @@ public:
   typedef mozilla::CaretAssociationHint CaretAssociateHint;
 
   /*interfaces for addref and release and queryinterface*/
-  
+
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(nsFrameSelection)
   NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(nsFrameSelection)
 
-  /** Init will initialize the frame selector with the necessary pres shell to 
+  /** Init will initialize the frame selector with the necessary pres shell to
    *  be used by most of the methods
    *  @param aShell is the parameter to be used for most of the other calls for callbacks etc
    *  @param aLimiter limits the selection to nodes with aLimiter parents
+   *  @param aAccessibleCaretEnabled true if we should enable the accessible caret.
    */
-  void Init(nsIPresShell *aShell, nsIContent *aLimiter);
+  void Init(nsIPresShell *aShell, nsIContent *aLimiter,
+            bool aAccessibleCaretEnabled);
 
-  /** HandleClick will take the focus to the new frame at the new offset and 
+  /** HandleClick will take the focus to the new frame at the new offset and
    *  will either extend the selection from the old anchor, or replace the old anchor.
    *  the old anchor and focus position may also be used to deselect things
    *  @param aNewfocus is the content that wants the focus
@@ -196,9 +218,9 @@ public:
    *  @param aContentOffsetEnd is the content offset of the parent aNewFocus and is specified different
    *                           when you need to select to and include both start and end points
    *  @param aContinueSelection is the flag that tells the selection to keep the old anchor point or not.
-   *  @param aMultipleSelection will tell the frame selector to replace /or not the old selection. 
+   *  @param aMultipleSelection will tell the frame selector to replace /or not the old selection.
    *         cannot coexist with aContinueSelection
-   *  @param aHint will tell the selection which direction geometrically to actually show the caret on. 
+   *  @param aHint will tell the selection which direction geometrically to actually show the caret on.
    *         1 = end of this line 0 = beginning of this line
    */
   /*unsafe*/
@@ -215,7 +237,7 @@ public:
    *  @param aPoint is relative to aFrame
    */
   /*unsafe*/
-  void HandleDrag(nsIFrame *aFrame, nsPoint aPoint);
+  void HandleDrag(nsIFrame* aFrame, const nsPoint& aPoint);
 
   /** HandleTableSelection will set selection to a table, cell, etc
    *   depending on information contained in aFlags
@@ -298,8 +320,8 @@ public:
    *  @param aDelay is the timer's interval.
    */
   /*unsafe*/
-  nsresult StartAutoScrollTimer(nsIFrame *aFrame,
-                                nsPoint aPoint,
+  nsresult StartAutoScrollTimer(nsIFrame* aFrame,
+                                const nsPoint& aPoint,
                                 uint32_t aDelay);
 
   /** StopAutoScrollTimer stops any active auto scroll timer.
@@ -370,7 +392,7 @@ public:
   nsresult RepaintSelection(mozilla::SelectionType aSelectionType);
 
   /** GetFrameForNodeOffset given a node and its child offset, return the nsIFrame and
-   *  the offset into that frame. 
+   *  the offset into that frame.
    * @param aNode input parameter for the node to look at
    * @param aOffset offset into above node.
    * @param aReturnOffset will contain offset into frame.
@@ -381,10 +403,10 @@ public:
                                   int32_t*           aReturnOffset) const;
 
   /**
-   * Scrolling then moving caret placement code in common to text areas and 
+   * Scrolling then moving caret placement code in common to text areas and
    * content areas should be located in the implementer
-   * This method will accept the following parameters and perform the scroll 
-   * and caret movement.  It remains for the caller to call the final 
+   * This method will accept the following parameters and perform the scroll
+   * and caret movement.  It remains for the caller to call the final
    * ScrollCaretIntoView if that called wants to be sure the caret is always
    * visible.
    *
@@ -460,7 +482,7 @@ public:
    */
   /*unsafe*/
   nsresult WordExtendForDelete(bool aForward);
-  
+
   /** LineMove will generally be called from the nsiselectioncontroller implementations.
    *  the effect being the selection will move one line up or down.
    * @param aForward move forward in document.
@@ -475,7 +497,7 @@ public:
    * @param aExtend continue selection
    */
   /*unsafe*/
-  nsresult IntraLineMove(bool aForward, bool aExtend); 
+  nsresult IntraLineMove(bool aForward, bool aExtend);
 
   /** Select All will generally be called from the nsiselectioncontroller implementations.
    *  it will select the whole doc
@@ -523,7 +545,7 @@ public:
 
   /** Get the content node that limits the selection
    *  When searching up a nodes for parents, as in a text edit field
-   *    in an browser page, we must stop at this node else we reach into the 
+   *    in an browser page, we must stop at this node else we reach into the
    *    parent page, which is very bad!
    */
   nsIContent* GetLimiter() const { return mLimiter; }
@@ -532,12 +554,12 @@ public:
   /*unsafe*/
   void SetAncestorLimiter(nsIContent *aLimiter);
 
-  /** This will tell the frame selection that a double click has been pressed 
+  /** This will tell the frame selection that a double click has been pressed
    *  so it can track abort future drags if inside the same selection
    *  @aDoubleDown has the double click down happened
    */
   void SetMouseDoubleDown(bool aDoubleDown) { mMouseDoubleDownState = aDoubleDown; }
-  
+
   /** This will return whether the double down flag was set.
    *  @return whether the double down flag was set
    */
@@ -549,13 +571,13 @@ public:
    *  @param aNode is the node containing the selection
    *  @param aContentOffset is the offset of the selection in the node
    *  @param aJumpLines If true, look across line boundaries.
-   *                    If false, behave as if there were base-level frames at line edges.  
+   *                    If false, behave as if there were base-level frames at line edges.
    *
    *  @return A struct holding the before/after frame and the before/after level.
    *
    *  At the beginning and end of each line there is assumed to be a frame with
    *   Bidi level equal to the paragraph embedding level.
-   *  In these cases the before frame and after frame respectively will be 
+   *  In these cases the before frame and after frame respectively will be
    *   nullptr.
    */
   nsPrevNextBidiLevels GetPrevNextBidiLevels(nsIContent* aNode,
@@ -586,9 +608,9 @@ public:
    */
   nsresult MaintainSelection(nsSelectionAmount aAmount = eSelectNoAmount);
 
-  nsresult ConstrainFrameAndPointToAnchorSubtree(nsIFrame *aFrame,
-                                                 nsPoint& aPoint,
-                                                 nsIFrame **aRetFrame,
+  nsresult ConstrainFrameAndPointToAnchorSubtree(nsIFrame* aFrame,
+                                                 const nsPoint& aPoint,
+                                                 nsIFrame** aRetFrame,
                                                  nsPoint& aRetPoint);
 
   nsFrameSelection();
@@ -682,9 +704,6 @@ private:
   nsresult     UpdateSelectionCacheOnRepaintSelection(mozilla::dom::
                                                       Selection* aSel);
 
-  RefPtr<mozilla::dom::Selection>
-    mDomSelections[mozilla::kPresentSelectionTypeCount];
-
   // Table selection support.
   nsITableCellLayout* GetCellLayout(nsIContent *aCellContent) const;
 
@@ -710,50 +729,62 @@ private:
   nsIContent* IsInSameTable(nsIContent *aContent1, nsIContent *aContent2) const;
   // Might return null
   nsIContent* GetParentTable(nsIContent *aCellNode) const;
-  nsresult CreateAndAddRange(nsINode *aParentNode, int32_t aOffset);
+  nsresult CreateAndAddRange(nsINode* aContainer, int32_t aOffset);
+
+  ////////////BEGIN nsFrameSelection members
+
+  RefPtr<mozilla::dom::Selection>
+    mDomSelections[
+      sizeof(mozilla::kPresentSelectionTypes) / sizeof(mozilla::SelectionType)];
 
   nsCOMPtr<nsINode> mCellParent; //used to snap to table selection
   nsCOMPtr<nsIContent> mStartSelectedCell;
   nsCOMPtr<nsIContent> mEndSelectedCell;
   nsCOMPtr<nsIContent> mAppendStartSelectedCell;
   nsCOMPtr<nsIContent> mUnselectCellOnMouseUp;
-  int32_t  mSelectingTableCellMode;
-  int32_t  mSelectedCellIndex;
+  int32_t  mSelectingTableCellMode = 0;
+  int32_t  mSelectedCellIndex = 0;
 
   // maintain selection
   RefPtr<nsRange> mMaintainRange;
-  nsSelectionAmount mMaintainedAmount;
+  nsSelectionAmount mMaintainedAmount = eSelectNoAmount;
 
   //batching
-  int32_t mBatching;
-    
+  int32_t mBatching = 0;
+
   // Limit selection navigation to a child of this node.
   nsCOMPtr<nsIContent> mLimiter;
   // Limit selection navigation to a descendant of this node.
   nsCOMPtr<nsIContent> mAncestorLimiter;
 
-  nsIPresShell *mShell;
+  nsIPresShell* mShell = nullptr;
+  // Reason for notifications of selection changing.
+  int16_t mSelectionChangeReason = nsISelectionListener::NO_REASON;
+  // For visual display purposes.
+  int16_t mDisplaySelection = nsISelectionController::SELECTION_OFF;
 
-  int16_t mSelectionChangeReason; // reason for notifications of selection changing
-  int16_t mDisplaySelection; //for visual display purposes.
-
-  CaretAssociateHint mHint;   //hint to tell if the selection is at the end of this line or beginning of next
-  nsBidiLevel mCaretBidiLevel;
-  nsBidiLevel mKbdBidiLevel;
+  // Hint to tell if the selection is at the end of this line or beginning of next.
+  CaretAssociateHint mHint = mozilla::CARET_ASSOCIATE_BEFORE;
+  nsBidiLevel mCaretBidiLevel = BIDI_LEVEL_UNDEFINED;
+  nsBidiLevel mKbdBidiLevel = NSBIDI_LTR;
 
   nsPoint mDesiredPos;
-  uint32_t mDelayedMouseEventClickCount;
-  bool mDelayedMouseEventIsShift;
-  bool mDelayedMouseEventValid;
+  bool mDelayedMouseEventValid = false;
+  // These values are not used since they are only valid when
+  // mDelayedMouseEventValid is true, and setting mDelayedMouseEventValid
+  // always overrides these values.
+  uint32_t mDelayedMouseEventClickCount = 0;
+  bool mDelayedMouseEventIsShift = false;
 
-  bool mChangesDuringBatching;
-  bool mNotifyFrames;
-  bool mDragSelectingCells;
-  bool mDragState;   //for drag purposes
-  bool mMouseDoubleDownState; //has the doubleclick down happened
-  bool mDesiredPosSet;
+  bool mChangesDuringBatching = false;
+  bool mNotifyFrames = true;
+  bool mDragSelectingCells = false;
+  bool mDragState = false;   //for drag purposes
+  bool mMouseDoubleDownState = false; //has the doubleclick down happened
+  bool mDesiredPosSet = false;
+  bool mAccessibleCaretEnabled = false;
 
-  int8_t mCaretMovementStyle;
+  int8_t mCaretMovementStyle = 0;
 
   static bool sSelectionEventsEnabled;
   static bool sSelectionEventsOnTextControlsEnabled;

@@ -1,1 +1,0 @@
-export PATH=c:/Users/Diego Marcos\.cargo\bin:$PATH

@@ -29,9 +29,11 @@
 #include "jit/arm64/vixl/Debugger-vixl.h"
 #include "jit/arm64/vixl/Simulator-vixl.h"
 #include "jit/IonTypes.h"
+#include "js/Utility.h"
 #include "threading/LockGuard.h"
 #include "vm/Runtime.h"
-#include "wasm/WasmCode.h"
+#include "wasm/WasmInstance.h"
+#include "wasm/WasmSignalHandlers.h"
 
 js::jit::SimulatorProcess* js::jit::SimulatorProcess::singleton_ = nullptr;
 
@@ -42,8 +44,9 @@ using mozilla::DebugOnly;
 using js::jit::ABIFunctionType;
 using js::jit::SimulatorProcess;
 
-Simulator::Simulator(Decoder* decoder, FILE* stream)
-  : stream_(nullptr)
+Simulator::Simulator(JSContext* cx, Decoder* decoder, FILE* stream)
+  : cx_(cx)
+  , stream_(nullptr)
   , print_disasm_(nullptr)
   , instrumentation_(nullptr)
   , stack_(nullptr)
@@ -167,9 +170,9 @@ Simulator* Simulator::Create(JSContext* cx) {
   // FIXME: Note that it can't be stored in the SimulatorRuntime due to lifetime conflicts.
   Simulator *sim;
   if (getenv("USE_DEBUGGER") != nullptr)
-    sim = js_new<Debugger>(decoder, stdout);
+    sim = js_new<Debugger>(cx, decoder, stdout);
   else
-    sim = js_new<Simulator>(decoder, stdout);
+    sim = js_new<Simulator>(cx, decoder, stdout);
 
   // Check if Simulator:init ran out of memory.
   if (sim && sim->oom()) {
@@ -238,16 +241,25 @@ void Simulator::trigger_wasm_interrupt() {
 // the current PC may have advanced once since the signal handler's guard. So we
 // re-check here.
 void Simulator::handle_wasm_interrupt() {
-  void* pc = (void*)get_pc();
+  uint8_t* pc = (uint8_t*)get_pc();
   uint8_t* fp = (uint8_t*)xreg(30);
 
-  js::WasmActivation* activation = JSContext::innermostWasmActivation();
-  const js::wasm::Code* code = activation->compartment()->wasm.lookupCode(pc);
-  if (!code || !code->segment().containsFunctionPC(pc))
-    return;
+  const js::wasm::CodeSegment* cs = nullptr;
+  if (!js::wasm::InInterruptibleCode(cx_, pc, &cs))
+      return;
 
-  activation->startInterrupt(pc, fp);
-  set_pc((Instruction*)code->segment().interruptCode());
+  // fp can be null during the prologue/epilogue of the entry function.
+  if (!fp)
+      return;
+
+  JS::ProfilingFrameIterator::RegisterState state;
+  state.pc = pc;
+  state.fp = fp;
+  state.lr = (uint8_t*) xreg(30);
+  state.sp = (uint8_t*) xreg(31);
+  cx_->activation_->asJit()->startWasmInterrupt(state);
+
+  set_pc((Instruction*)cs->interruptCode());
 }
 
 
@@ -427,9 +439,12 @@ void Simulator::VisitException(const Instruction* instr) {
         case kCallRtRedirected:
           VisitCallRedirection(instr);
           return;
-        case kMarkStackPointer:
-          spStack_.append(xreg(31, Reg31IsStackPointer));
+        case kMarkStackPointer: {
+          js::AutoEnterOOMUnsafeRegion oomUnsafe;
+          if (!spStack_.append(xreg(31, Reg31IsStackPointer)))
+            oomUnsafe.crash("tracking stack for ARM64 simulator");
           return;
+        }
         case kCheckStackPointer: {
           int64_t current = xreg(31, Reg31IsStackPointer);
           int64_t expected = spStack_.popCopy();

@@ -1491,8 +1491,8 @@ nsCellMap::AppendCell(nsTableCellMap&   aMap,
     //the caller depends on the damageArea
     // The special case for zeroRowSpan is to adjust for the '2' in
     // GetRowSpanForNewCell.
-    uint32_t height = zeroRowSpan ? endRowIndex - aRowIndex  :
-                                    1 + endRowIndex - aRowIndex;
+    uint32_t height = std::min(zeroRowSpan ? rowSpan - 1 : rowSpan,
+                               GetRowCount() - aRowIndex);
     SetDamageArea(startColIndex, aRgFirstRowIndex + aRowIndex,
                   1 + endColIndex - startColIndex, height, aDamageArea);
   }
@@ -2431,9 +2431,8 @@ void nsCellMap::Dump(bool aIsBorderCollapse) const
       if (cd) {
         if (cd->IsOrig()) {
           nsTableCellFrame* cellFrame = cd->GetCellFrame();
-          int32_t cellFrameColIndex;
-          cellFrame->GetColIndex(cellFrameColIndex);
-          printf("C%d,%d=%p(%d)  ", rIndex, colIndex, (void*)cellFrame,
+          uint32_t cellFrameColIndex = cellFrame->ColIndex();
+          printf("C%d,%d=%p(%u)  ", rIndex, colIndex, (void*)cellFrame,
                  cellFrameColIndex);
           cellCount++;
         }
@@ -2520,8 +2519,7 @@ nsCellMap::GetCellInfoAt(const nsTableCellMap& aMap,
       cellFrame = GetCellFrame(aRowX, aColX, *data, true);
     }
     if (cellFrame && aColSpan) {
-      int32_t initialColIndex;
-      cellFrame->GetColIndex(initialColIndex);
+      uint32_t initialColIndex = cellFrame->ColIndex();
       *aColSpan = GetEffectiveColSpan(aMap, aRowX, initialColIndex);
     }
   }
@@ -2580,10 +2578,12 @@ void nsCellMap::DestroyCellData(CellData* aData)
   if (mIsBC) {
     BCCellData* bcData = static_cast<BCCellData*>(aData);
     bcData->~BCCellData();
-    mPresContext->FreeToShell(sizeof(BCCellData), bcData);
+    mPresContext->PresShell()->
+      FreeByObjectID(eArenaObjectID_BCCellData, bcData);
   } else {
     aData->~CellData();
-    mPresContext->FreeToShell(sizeof(CellData), aData);
+    mPresContext->PresShell()->
+      FreeByObjectID(eArenaObjectID_CellData, aData);
   }
 }
 
@@ -2591,7 +2591,8 @@ CellData* nsCellMap::AllocCellData(nsTableCellFrame* aOrigCell)
 {
   if (mIsBC) {
     BCCellData* data = (BCCellData*)
-      mPresContext->AllocateFromShell(sizeof(BCCellData));
+      mPresContext->PresShell()->
+        AllocateByObjectID(eArenaObjectID_BCCellData, sizeof(BCCellData));
     if (data) {
       new (data) BCCellData(aOrigCell);
     }
@@ -2599,7 +2600,8 @@ CellData* nsCellMap::AllocCellData(nsTableCellFrame* aOrigCell)
   }
 
   CellData* data = (CellData*)
-    mPresContext->AllocateFromShell(sizeof(CellData));
+    mPresContext->PresShell()->
+      AllocateByObjectID(eArenaObjectID_CellData, sizeof(CellData));
   if (data) {
     new (data) CellData(aOrigCell);
   }

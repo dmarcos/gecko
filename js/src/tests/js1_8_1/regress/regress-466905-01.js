@@ -16,15 +16,12 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
  
-  function f(a) { for each (let c in a) [(c > 5) ? 'A' : 'B']; }
+  function f(a) { for (let c of a) [(c > 5) ? 'A' : 'B']; }
   f([true, 8]);
   f([2]);
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

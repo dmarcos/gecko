@@ -19,6 +19,7 @@
 #include "npapi.h"
 
 class nsWindow;
+class nsWindowBase;
 
 namespace mozilla {
 namespace widget {
@@ -35,7 +36,7 @@ public:
   }
 
   explicit IMEContext(HWND aWnd);
-  explicit IMEContext(nsWindow* aWindow);
+  explicit IMEContext(nsWindowBase* aWindowBase);
 
   ~IMEContext()
   {
@@ -48,7 +49,7 @@ public:
   }
 
   void Init(HWND aWnd);
-  void Init(nsWindow* aWindow);
+  void Init(nsWindowBase* aWindowBase);
   void Clear();
 
   bool IsValid() const
@@ -156,15 +157,33 @@ public:
   static void DefaultProcOfPluginEvent(nsWindow* aWindow,
                                        const NPEvent* aEvent);
 
+#define DECL_IS_IME_ACTIVE(aReadableName)                                      \
+  static bool Is ## aReadableName ## Active();                                 \
+
+  // Japanese IMEs
+  DECL_IS_IME_ACTIVE(ATOK2006)
+  DECL_IS_IME_ACTIVE(ATOK2007)
+  DECL_IS_IME_ACTIVE(ATOK2008)
+  DECL_IS_IME_ACTIVE(ATOK2009)
+  DECL_IS_IME_ACTIVE(ATOK2010)
+  DECL_IS_IME_ACTIVE(GoogleJapaneseInput)
+  DECL_IS_IME_ACTIVE(Japanist2003)
+
+#undef DECL_IS_IME_ACTIVE
+
+  /**
+   * IsActiveIMEInBlockList() returns true if we know active keyboard layout's
+   * IME has some crash bugs or something which make some damage to us.  When
+   * this returns true, IMC shouldn't be associated with any windows.
+   */
+  static bool IsActiveIMEInBlockList();
+
 protected:
   static void EnsureHandlerInstance();
 
   static bool IsComposingOnOurEditor();
   static bool IsComposingOnPlugin();
   static bool IsComposingWindow(nsWindow* aWindow);
-
-  static bool IsJapanist2003Active();
-  static bool IsGoogleJapaneseInputActive();
 
   static bool ShouldDrawCompositionStringOurselves();
   static bool IsVerticalWritingSupported();
@@ -277,7 +296,7 @@ protected:
                           nsIWidget* aNewOriginWidget,
                           mozilla::LayoutDeviceIntRect& aOutRect);
 
-  bool ConvertToANSIString(const nsAFlatString& aStr,
+  bool ConvertToANSIString(const nsString& aStr,
                              UINT aCodePage,
                              nsACString& aANSIStr);
 

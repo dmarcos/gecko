@@ -32,7 +32,6 @@
 #include "nsIDocShellTreeOwner.h"
 #include "nsIThreadRetargetableStreamListener.h"
 
-#include "nsXPIDLString.h"
 #include "nsString.h"
 #include "nsThreadUtils.h"
 #include "nsReadableUtils.h"
@@ -403,27 +402,11 @@ nsresult nsDocumentOpenInfo::DispatchContent(nsIRequest *request, nsISupports * 
   uint32_t disposition;
   rv = aChannel->GetContentDisposition(&disposition);
 
-  bool allowContentDispositionToForceExternalHandling = true;
-
-#ifdef MOZ_B2G
-
-  // On B2G, OMA content files should never be handled by an external handler
-  // (even if the server specifies Content-Disposition: attachment) because the
-  // data should never be stored on an unencrypted form.
-  allowContentDispositionToForceExternalHandling =
-    !mContentType.LowerCaseEqualsASCII("application/vnd.oma.drm.message");
-
-#endif
-
-  if (NS_SUCCEEDED(rv) && (disposition == nsIChannel::DISPOSITION_ATTACHMENT) &&
-      allowContentDispositionToForceExternalHandling) {
+  if (NS_SUCCEEDED(rv) && disposition == nsIChannel::DISPOSITION_ATTACHMENT) {
     forceExternalHandling = true;
   }
 
   LOG(("  forceExternalHandling: %s", forceExternalHandling ? "yes" : "no"));
-
-  // The type or data the contentListener wants.
-  nsXPIDLCString desiredContentType;
 
   if (!forceExternalHandling)
   {
@@ -469,7 +452,7 @@ nsresult nsDocumentOpenInfo::DispatchContent(nsIRequest *request, nsISupports * 
       nsCOMPtr<nsICategoryManager> catman =
         do_GetService(NS_CATEGORYMANAGER_CONTRACTID);
       if (catman) {
-        nsXPIDLCString contractidString;
+        nsCString contractidString;
         rv = catman->GetCategoryEntry(NS_CONTENT_LISTENER_CATEGORYMANAGER_ENTRY,
                                       mContentType.get(),
                                       getter_Copies(contractidString));
@@ -477,9 +460,9 @@ nsresult nsDocumentOpenInfo::DispatchContent(nsIRequest *request, nsISupports * 
           LOG(("  Listener contractid for '%s' is '%s'",
                mContentType.get(), contractidString.get()));
 
-          listener = do_CreateInstance(contractidString);
+          listener = do_CreateInstance(contractidString.get());
           LOG(("  Listener from category manager: 0x%p", listener.get()));
-          
+
           if (listener && TryContentListener(listener, aChannel)) {
             LOG(("  Listener from category manager likes this type"));
             return NS_OK;
@@ -700,7 +683,7 @@ nsDocumentOpenInfo::TryContentListener(nsIURIContentListener* aListener,
   NS_PRECONDITION(aChannel, "Must have a channel");
   
   bool listenerWantsContent = false;
-  nsXPIDLCString typeToUse;
+  nsCString typeToUse;
   
   if (mFlags & nsIURILoader::IS_CONTENT_PREFERRED) {
     aListener->IsPreferred(mContentType.get(),

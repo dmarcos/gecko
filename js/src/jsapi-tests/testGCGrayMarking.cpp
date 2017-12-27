@@ -27,11 +27,8 @@ struct MapTypeToRootKind<js::ObjectWeakMap*> {
 };
 
 template <>
-struct GCPolicy<js::ObjectWeakMap*> {
-    static void trace(JSTracer* trc, js::ObjectWeakMap** tp, const char* name) {
-        (*tp)->trace(trc);
-    }
-};
+struct GCPolicy<js::ObjectWeakMap*> : public NonGCPointerPolicy<js::ObjectWeakMap*>
+{};
 
 } // namespace JS
 
@@ -45,6 +42,9 @@ BEGIN_TEST(testGCGrayMarking)
 {
     AutoNoAnalysisForTest disableAnalysis;
     AutoDisableCompactingGC disableCompactingGC(cx);
+#ifdef JS_GC_ZEAL
+    AutoLeaveZeal nozeal(cx);
+#endif /* JS_GC_ZEAL */
 
     CHECK(InitGlobals());
     JSAutoCompartment ac(cx, global1);
@@ -55,7 +55,6 @@ BEGIN_TEST(testGCGrayMarking)
         TestMarking() &&
         TestWeakMaps() &&
         TestUnassociatedWeakMaps() &&
-        TestWatchpoints() &&
         TestCCWs() &&
         TestGrayUnmarking();
 
@@ -432,63 +431,6 @@ TestUnassociatedWeakMaps()
 }
 
 bool
-TestWatchpoints()
-{
-    JSObject* watched = AllocPlainObject();
-    CHECK(watched);
-
-    JSObject* closure = AllocPlainObject();
-    CHECK(closure);
-
-    {
-        RootedObject obj(cx, watched);
-        RootedObject callable(cx, closure);
-        RootedId id(cx, INT_TO_JSID(0));
-        CHECK(JS_DefinePropertyById(cx, obj, id, JS::TrueHandleValue, 0));
-        CHECK(js::WatchGuts(cx, obj, id, callable));
-    }
-
-    // Test that a watchpoint marks the callable black if the watched object is
-    // black.
-
-    RootedObject blackRoot(cx, watched);
-    grayRoots.grayRoot1 = nullptr;
-    JS_GC(cx);
-    CHECK(IsMarkedBlack(watched));
-    CHECK(IsMarkedBlack(closure));
-
-    // Test that a watchpoint marks the callable gray if the watched object is
-    // gray.
-
-    blackRoot = nullptr;
-    grayRoots.grayRoot1 = watched;
-    JS_GC(cx);
-    CHECK(IsMarkedGray(watched));
-    CHECK(IsMarkedGray(closure));
-
-    // Test that ExposeToActiveJS *doesn't* unmark through watchpoints.  We
-    // could make this work, but it's currently handled by the CC fixup.
-
-    CHECK(IsMarkedGray(watched));
-    CHECK(IsMarkedGray(closure));
-    JS::ExposeObjectToActiveJS(watched);
-    CHECK(IsMarkedBlack(watched));
-    CHECK(IsMarkedGray(closure));
-
-    {
-        RootedObject obj(cx, watched);
-        RootedId id(cx, INT_TO_JSID(0));
-        CHECK(js::UnwatchGuts(cx, obj, id));
-    }
-
-    blackRoot = nullptr;
-    grayRoots.grayRoot1 = nullptr;
-    grayRoots.grayRoot2 = nullptr;
-
-    return true;
-}
-
-bool
 TestCCWs()
 {
     JSObject* target = AllocPlainObject();
@@ -587,19 +529,19 @@ TestGrayUnmarking()
     RootedObject blackRoot(cx, chain);
     JS_GC(cx);
     size_t count;
-    CHECK(IterateObjectChain(chain, ColorCheckFunctor(BLACK, &count)));
+    CHECK(IterateObjectChain(chain, ColorCheckFunctor(MarkColor::Black, &count)));
     CHECK(count == length);
 
     blackRoot = nullptr;
     grayRoots.grayRoot1 = chain;
     JS_GC(cx);
     CHECK(cx->runtime()->gc.areGrayBitsValid());
-    CHECK(IterateObjectChain(chain, ColorCheckFunctor(GRAY, &count)));
+    CHECK(IterateObjectChain(chain, ColorCheckFunctor(MarkColor::Gray, &count)));
     CHECK(count == length);
 
     JS::ExposeObjectToActiveJS(chain);
     CHECK(cx->runtime()->gc.areGrayBitsValid());
-    CHECK(IterateObjectChain(chain, ColorCheckFunctor(BLACK, &count)));
+    CHECK(IterateObjectChain(chain, ColorCheckFunctor(MarkColor::Black, &count)));
     CHECK(count == length);
 
     grayRoots.grayRoot1 = nullptr;
@@ -609,10 +551,10 @@ TestGrayUnmarking()
 
 struct ColorCheckFunctor
 {
-    uint32_t color;
+    MarkColor color;
     size_t& count;
 
-    ColorCheckFunctor(uint32_t colorArg, size_t* countArg)
+    ColorCheckFunctor(MarkColor colorArg, size_t* countArg)
       : color(colorArg), count(*countArg)
     {
         count = 0;
@@ -632,7 +574,7 @@ struct ColorCheckFunctor
 
         // Shapes and symbols are never marked gray.
         jsid id = shape->propid();
-        if (JSID_IS_GCTHING(id) && !CheckCellColor(JSID_TO_GCTHING(id).asCell(), BLACK))
+        if (JSID_IS_GCTHING(id) && !CheckCellColor(JSID_TO_GCTHING(id).asCell(), MarkColor::Black))
             return false;
 
         count++;
@@ -814,26 +756,26 @@ static bool
 IsMarkedBlack(Cell* cell)
 {
     TenuredCell* tc = &cell->asTenured();
-    return tc->isMarked(BLACK) && !tc->isMarked(GRAY);
+    return tc->isMarkedBlack();
 }
 
 static bool
 IsMarkedGray(Cell* cell)
 {
     TenuredCell* tc = &cell->asTenured();
-    bool isGray = tc->isMarked(GRAY);
-    MOZ_ASSERT_IF(isGray, tc->isMarked(BLACK));
+    bool isGray = tc->isMarkedGray();
+    MOZ_ASSERT_IF(isGray, tc->isMarkedAny());
     return isGray;
 }
 
 static bool
-CheckCellColor(Cell* cell, uint32_t color)
+CheckCellColor(Cell* cell, MarkColor color)
 {
-    MOZ_ASSERT(color == BLACK || color == GRAY);
-    if (color == BLACK && !IsMarkedBlack(cell)) {
+    MOZ_ASSERT(color == MarkColor::Black || color == MarkColor::Gray);
+    if (color == MarkColor::Black && !IsMarkedBlack(cell)) {
         printf("Found non-black cell: %p\n", cell);
         return false;
-    } else if (color == GRAY && !IsMarkedGray(cell)) {
+    } else if (color == MarkColor::Gray && !IsMarkedGray(cell)) {
         printf("Found non-gray cell: %p\n", cell);
         return false;
     }

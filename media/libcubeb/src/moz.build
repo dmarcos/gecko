@@ -12,7 +12,8 @@ SOURCES += [
     'cubeb.c',
     'cubeb_log.cpp',
     'cubeb_mixer.cpp',
-    'cubeb_panner.cpp'
+    'cubeb_panner.cpp',
+    'cubeb_strings.c'
 ]
 
 if CONFIG['MOZ_ALSA']:
@@ -31,8 +32,7 @@ if CONFIG['MOZ_PULSEAUDIO']:
         'cubeb_pulse.c',
     ]
     DEFINES['USE_PULSE'] = True
-    if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
-        DEFINES['DISABLE_LIBPULSE_DLOPEN'] = True
+    DEFINES['USE_PULSE_RUST'] = True
 
 if CONFIG['MOZ_JACK']:
     SOURCES += [
@@ -71,33 +71,22 @@ if CONFIG['OS_TARGET'] == 'WINNT':
     OS_LIBS += [
       "avrt",
     ]
-    if CONFIG['_MSC_VER']:
+    if CONFIG['CC_TYPE'] in ('msvc', 'clang-cl'):
         CXXFLAGS += ['-wd4005'] # C4005: '_USE_MATH_DEFINES' : macro redefinition
 
 if CONFIG['OS_TARGET'] == 'Android':
     SOURCES += ['cubeb_opensl.c']
     SOURCES += ['cubeb_resampler.cpp']
     DEFINES['USE_OPENSL'] = True
-    if CONFIG['MOZ_WIDGET_TOOLKIT'] != 'gonk':
-        SOURCES += [
-            'cubeb_audiotrack.c',
-        ]
-        DEFINES['USE_AUDIOTRACK'] = True
+    SOURCES += [
+        'cubeb_audiotrack.c',
+    ]
+    DEFINES['USE_AUDIOTRACK'] = True
 
 FINAL_LIBRARY = 'gkmedias'
-
-if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
-    if CONFIG['ANDROID_VERSION'] >= '17':
-        LOCAL_INCLUDES += [
-            '%' + '%s/frameworks/wilhelm/include' % CONFIG['ANDROID_SOURCE'],
-        ]
-    else:
-        LOCAL_INCLUDES += [
-            '%' + '%s/system/media/wilhelm/include' % CONFIG['ANDROID_SOURCE'],
-        ]
 
 CFLAGS += CONFIG['MOZ_ALSA_CFLAGS']
 CFLAGS += CONFIG['MOZ_PULSEAUDIO_CFLAGS']
 
 # We allow warnings for third-party code that can be updated from upstream.
-ALLOW_COMPILER_WARNINGS = True
+AllowCompilerWarnings()

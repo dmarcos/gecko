@@ -17,23 +17,15 @@
     </resources>
 
     <content sizetopopup="pref">
-      <xul:hbox class="autocomplete-textbox-container" flex="1" xbl:inherits="focused">
-        <children includes="image|deck|stack|box">
-          <xul:image class="autocomplete-icon" allowevents="true"/>
-        </children>
+      <children includes="image|deck|stack|box"/>
 
-        <xul:hbox anonid="textbox-input-box" class="textbox-input-box" flex="1" xbl:inherits="tooltiptext=inputtooltiptext">
-          <children/>
-          <html:input anonid="input" class="autocomplete-textbox textbox-input"
-                      allowevents="true"
-                      xbl:inherits="tooltiptext=inputtooltiptext,value,type=inputtype,maxlength,disabled,size,readonly,placeholder,tabindex,accesskey,mozactionhint"/>
-        </xul:hbox>
-        <children includes="hbox"/>
+      <xul:hbox anonid="textbox-input-box" class="textbox-input-box" flex="1" xbl:inherits="tooltiptext=inputtooltiptext">
+        <children/>
+        <html:input anonid="input" class="autocomplete-textbox textbox-input"
+                    allowevents="true"
+                    xbl:inherits="tooltiptext=inputtooltiptext,value,type=inputtype,maxlength,disabled,size,readonly,placeholder,tabindex,accesskey,mozactionhint"/>
       </xul:hbox>
-
-      <xul:dropmarker anonid="historydropmarker" class="autocomplete-history-dropmarker"
-                      allowevents="true"
-                      xbl:inherits="open,enablehistory,parentfocused=focused"/>
+      <children includes="hbox"/>
 
       <xul:popupset anonid="popupset" class="autocomplete-result-popupset"/>
 
@@ -401,23 +393,6 @@
 
       <method name="showHistoryPopup">
         <body><![CDATA[
-          // history dropmarker pushed state
-          function cleanup(popup) {
-            popup.removeEventListener("popupshowing", onShow);
-          }
-          function onShow(event) {
-            var popup = event.target, input = popup.input;
-            cleanup(popup);
-            input.setAttribute("open", "true");
-            function onHide() {
-              input.removeAttribute("open");
-              popup.removeEventListener("popuphiding", onHide);
-            }
-            popup.addEventListener("popuphiding", onHide);
-          }
-          this.popup.addEventListener("popupshowing", onShow);
-          setTimeout(cleanup, 1000, this.popup);
-
           // Store our "normal" maxRows on the popup, so that it can reset the
           // value when the popup is hidden.
           this.popup._normalMaxRows = this.maxRows;
@@ -437,10 +412,7 @@
 
       <method name="toggleHistoryPopup">
         <body><![CDATA[
-          // If this method is called on the same event tick as the popup gets
-          // hidden, do nothing to avoid re-opening the popup when the drop
-          // marker is clicked while the popup is still open.
-          if (!this.popup.isPopupHidingTick && !this.popup.popupOpen)
+          if (!this.popup.popupOpen)
             this.showHistoryPopup();
           else
             this.closePopup();
@@ -476,9 +448,10 @@
           if (aEvent.target.localName != "textbox")
             return true; // Let child buttons of autocomplete take input
 
-          // XXXpch this is so bogus...
-          if (aEvent.defaultPrevented)
+          // Re: urlbarDeferred, see the comment in urlbarBindings.xml.
+          if (aEvent.defaultPrevented && !aEvent.urlbarDeferred) {
             return false;
+          }
 
           var cancel = false;
 
@@ -911,7 +884,6 @@ extends="chrome://global/content/bindings/popup.xml#popup">
     <implementation implements="nsIAutoCompletePopup">
       <field name="mInput">null</field>
       <field name="mPopupOpen">false</field>
-      <field name="mIsPopupHidingTick">false</field>
 
       <!-- =================== nsIAutoCompletePopup =================== -->
 
@@ -923,9 +895,6 @@ extends="chrome://global/content/bindings/popup.xml#popup">
 
       <property name="popupOpen" readonly="true"
                 onget="return this.mPopupOpen;"/>
-
-      <property name="isPopupHidingTick" readonly="true"
-                onget="return this.mIsPopupHidingTick;"/>
 
       <method name="closePopup">
         <body>
@@ -1033,21 +1002,14 @@ extends="chrome://global/content/bindings/popup.xml#popup">
         this.removeAttribute("autocompleteinput");
         this.mPopupOpen = false;
 
-        // Prevent opening popup from historydropmarker mousedown handler
-        // on the same event tick the popup is hidden by the same mousedown
-        // event.
-        this.mIsPopupHidingTick = true;
-        setTimeout(() => {
-          this.mIsPopupHidingTick = false;
-        }, 0);
-
-        // Reset the maxRows property to the cached "normal" value, and reset
-        // _normalMaxRows so that we can detect whether it was set by the input
-        // when the popupshowing handler runs.
+        // Reset the maxRows property to the cached "normal" value (if there's
+        // any), and reset normalMaxRows so that we can detect whether it was set
+        // by the input when the popupshowing handler runs.
 
         // Null-check this.mInput; see bug 1017914
-        if (this.mInput)
+        if (this.mInput && this._normalMaxRows > 0) {
           this.mInput.maxRows = this._normalMaxRows;
+        }
         this._normalMaxRows = -1;
         // If the list was being navigated and then closed, make sure
         // we fire accessible focus event back to textbox
@@ -1091,7 +1053,7 @@ extends="chrome://global/content/bindings/popup.xml#popup">
           // more results than we can show at once.
           // maxResults is the maximum number of fetched results, maxRows is the
           // maximum number of rows we show at once, without a scrollbar.
-          if (this.maxResults > this.maxRows) {
+          if (this.mPopupOpen && this.maxResults > this.maxRows) {
             // when clearing the selection (val == -1, so selectedItem will be
             // null), we want to scroll back to the top.  see bug #406194
             this.richlistbox.ensureElementIsVisible(
@@ -1197,8 +1159,14 @@ extends="chrome://global/content/bindings/popup.xml#popup">
       <property name="maxResults" readonly="true">
         <getter>
           <![CDATA[
-            // this is how many richlistitems will be kept around
-            // (note, this getter may be overridden)
+            // This is how many richlistitems will be kept around.
+            // Note, this getter may be overridden, or instances
+            // can have the nomaxresults attribute set to have no
+            // limit.
+            if (this.getAttribute("nomaxresults") == "true") {
+              return Infinity;
+            }
+
             return 20;
           ]]>
         </getter>
@@ -1217,7 +1185,12 @@ extends="chrome://global/content/bindings/popup.xml#popup">
           <![CDATA[
             let existingItemsCount = this.richlistbox.childNodes.length;
             for (let i = this._matchCount; i < existingItemsCount; ++i) {
-              this.richlistbox.childNodes[i].collapsed = true;
+              let item = this.richlistbox.childNodes[i];
+
+              item.collapsed = true;
+              if (typeof item._onCollapse == "function") {
+                item._onCollapse();
+              }
             }
           ]]>
         </body>
@@ -1328,15 +1301,24 @@ extends="chrome://global/content/bindings/popup.xml#popup">
             if (itemExists) {
               item = this.richlistbox.childNodes[this._currentIndex];
 
-              originalValue = item.getAttribute("ac-value");
+              // Url may be a modified version of value, see _adjustACItem().
+              originalValue = item.getAttribute("url") || item.getAttribute("ac-value");
               originalText = item.getAttribute("ac-text");
               originalType = item.getAttribute("originaltype");
 
-              // All of types are reusable except for autofill-profile,
-              // which has different structure of <content> and overrides
-              // _adjustAcItem().
+              // The styles on the list which have different <content> structure and overrided
+              // _adjustAcItem() are unreusable.
+              const UNREUSEABLE_STYLES = [
+                "autofill-profile",
+                "autofill-footer",
+                "autofill-clear-button",
+                "autofill-insecureWarning",
+              ];
+              // Reuse the item when its style is exactly equal to the previous style or
+              // neither of their style are in the UNREUSEABLE_STYLES.
               reusable = originalType === style ||
-                         (style !== "autofill-profile" && originalType !== "autofill-profile");
+                !(UNREUSEABLE_STYLES.includes(style) || UNREUSEABLE_STYLES.includes(originalType));
+
             } else {
               // need to create a new item
               item = document.createElementNS("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul", "richlistitem");
@@ -1370,7 +1352,6 @@ extends="chrome://global/content/bindings/popup.xml#popup">
               if (typeof item._cleanup == "function") {
                 item._cleanup();
               }
-
               item.setAttribute("originaltype", style);
             }
 
@@ -1391,13 +1372,6 @@ extends="chrome://global/content/bindings/popup.xml#popup">
               this.richlistbox.appendChild(item);
             }
 
-            if (typeof item._onChanged == "function") {
-              // The binding may have not been applied yet.
-              setTimeout(() => {
-                item._onChanged();
-              }, 0);
-            }
-
             this._currentIndex++;
           }
 
@@ -1412,26 +1386,6 @@ extends="chrome://global/content/bindings/popup.xml#popup">
         ]]>
         </body>
       </method>
-
-      <!-- The x-coordinate relative to the leading edge of the window of the
-           items' site icons (favicons). -->
-      <property name="siteIconStart"
-                onget="return this._siteIconStart;">
-        <setter>
-          <![CDATA[
-          if (val != this._siteIconStart) {
-            this._siteIconStart = val;
-            for (let item of this.richlistbox.childNodes) {
-              let changed = item.adjustSiteIconStart(val);
-              if (changed) {
-                item.handleOverUnderflow();
-              }
-            }
-          }
-          return val;
-          ]]>
-        </setter>
-      </property>
 
       <property name="overflowPadding"
                 onget="return Number(this.getAttribute('overflowpadding'))"
@@ -1685,7 +1639,7 @@ extends="chrome://global/content/bindings/popup.xml#popup">
               this.getAttribute("title"),
               this.getAttribute("displayurl"),
             ];
-            let label = parts.filter(str => str).join(" ")
+            let label = parts.filter(str => str).join(" ");
 
             // allow consumers that have extended popups to override
             // the label values for the richlistitems
@@ -2061,20 +2015,6 @@ extends="chrome://global/content/bindings/popup.xml#popup">
         </body>
       </method>
 
-      <method name="_onChanged">
-        <body>
-          <![CDATA[
-            let popup = this.parentNode.parentNode;
-            let iconChanged = this.adjustSiteIconStart(popup._siteIconStart);
-
-            if (iconChanged) {
-              this.handleOverUnderflow();
-            }
-          ]]>
-        </body>
-      </method>
-
-
       <method name="_reuseAcItem">
         <body>
           <![CDATA[
@@ -2090,12 +2030,15 @@ extends="chrome://global/content/bindings/popup.xml#popup">
                 action.params.engineName == popup.overrideSearchEngineName) {
 
               this.collapsed = false;
-              // Call adjustSiteIconStart only after setting collapsed=
-              // false.  The calculations it does may be wrong otherwise.
-              this.adjustSiteIconStart(popup._siteIconStart);
+
               // The popup may have changed size between now and the last
               // time the item was shown, so always handle over/underflow.
-              this.handleOverUnderflow();
+              let dwu = window.getInterface(Ci.nsIDOMWindowUtils);
+              let popupWidth = dwu.getBoundsWithoutFlushing(this.parentNode).width;
+              if (!this._previousPopupWidth || this._previousPopupWidth != popupWidth) {
+                this._previousPopupWidth = popupWidth;
+                this.handleOverUnderflow();
+              }
 
               return true;
             }
@@ -2109,24 +2052,16 @@ extends="chrome://global/content/bindings/popup.xml#popup">
       <method name="_adjustAcItem">
         <body>
           <![CDATA[
-          this.setAttribute("url", this.getAttribute("ac-value"));
+          let originalUrl = this.getAttribute("ac-value");
+          let title = this.getAttribute("ac-comment");
+          this.setAttribute("url", originalUrl);
           this.setAttribute("image", this.getAttribute("ac-image"));
-          this.setAttribute("title", this.getAttribute("ac-comment"));
+          this.setAttribute("title", title);
           this.setAttribute("text", this.getAttribute("ac-text"));
 
           let popup = this.parentNode.parentNode;
-          if (!popup.popupOpen) {
-            // Removing the max-width and resetting it later when overflow is
-            // handled is jarring when the item is visible, so skip this when
-            // the popup is open.
-            this._removeMaxWidths();
-          }
-
-          let title = this.getAttribute("title");
           let titleLooksLikeUrl = false;
-
           let displayUrl;
-          let originalUrl = this.getAttribute("url");
           let emphasiseUrl = true;
 
           let type = this.getAttribute("originaltype");
@@ -2332,7 +2267,15 @@ extends="chrome://global/content/bindings/popup.xml#popup">
           }
           this._setUpDescription(this._urlText, displayUrl, !emphasiseUrl);
 
-          if (this._inOverflow) {
+          // Removing the max-width may be jarring when the item is visible, but
+          // we have no other choice to properly crop the text.
+          // Removing max-widths may cause overflow or underflow events, that
+          // will set the _inOverflow property. In case both the old and the new
+          // text are overflowing, the overflow event won't happen, and we must
+          // enforce an _handleOverflow() call to update the max-widths.
+          let wasInOverflow = this._inOverflow;
+          this._removeMaxWidths();
+          if (wasInOverflow && this._inOverflow) {
             this._handleOverflow();
           }
           ]]>
@@ -2342,44 +2285,13 @@ extends="chrome://global/content/bindings/popup.xml#popup">
       <method name="_removeMaxWidths">
         <body>
           <![CDATA[
-          this._titleText.style.removeProperty("max-width");
-          this._tagsText.style.removeProperty("max-width");
-          this._urlText.style.removeProperty("max-width");
-          this._actionText.style.removeProperty("max-width");
-          ]]>
-        </body>
-      </method>
-
-      <!-- Sets the x-coordinate of the leading edge of the site icon (favicon)
-           relative the the leading edge of the window.
-           @param newStart The new x-coordinate, relative to the leading edge of
-                  the window.  Pass undefined to reset the icon's position to
-                  whatever is specified in CSS.
-           @return True if the icon's position changed, false if not. -->
-      <method name="adjustSiteIconStart">
-        <parameter name="newStart"/>
-        <body>
-          <![CDATA[
-          if (typeof(newStart) != "number") {
-            this._typeIcon.style.removeProperty("margin-inline-start");
-            return true;
+          if (this._hasMaxWidths) {
+            this._titleText.style.removeProperty("max-width");
+            this._tagsText.style.removeProperty("max-width");
+            this._urlText.style.removeProperty("max-width");
+            this._actionText.style.removeProperty("max-width");
+            this._hasMaxWidths = false;
           }
-          let utils = window.QueryInterface(Ci.nsIInterfaceRequestor)
-                            .getInterface(Ci.nsIDOMWindowUtils);
-          let rect = utils.getBoundsWithoutFlushing(this._siteIcon);
-
-          let dir = this.getAttribute("dir");
-          let delta = dir == "rtl" ? rect.right - newStart
-                                   : newStart - rect.left;
-          let px = this._typeIcon.style.marginInlineStart;
-          if (!px) {
-            // Allow margin-inline-start not to be specified in CSS initially.
-            let style = window.getComputedStyle(this._typeIcon);
-            px = dir == "rtl" ? style.marginRight : style.marginLeft;
-          }
-          let typeIconStart = Number(px.substr(0, px.length - 2));
-          this._typeIcon.style.marginInlineStart = (typeIconStart + delta) + "px";
-          return delta > 0;
           ]]>
         </body>
       </method>
@@ -2405,7 +2317,8 @@ extends="chrome://global/content/bindings/popup.xml#popup">
                                         : titleRect.left - itemRect.left;
 
           let popup = this.parentNode.parentNode;
-          let itemWidth = itemRect.width - titleStart - popup.overflowPadding;
+          let itemWidth = itemRect.width - titleStart - popup.overflowPadding -
+                          (popup.margins ? popup.margins.end : 0);
 
           if (this._tags.hasAttribute("empty")) {
             // The tags box is not displayed in this case.
@@ -2451,6 +2364,7 @@ extends="chrome://global/content/bindings/popup.xml#popup">
             urlActionMaxWidth -= separatorRect.width;
             this._urlText.style.maxWidth = urlActionMaxWidth + "px";
             this._actionText.style.maxWidth = urlActionMaxWidth + "px";
+            this._hasMaxWidths = true;
           }
         ]]></body>
       </method>
@@ -2489,13 +2403,52 @@ extends="chrome://global/content/bindings/popup.xml#popup">
             // search components.
             action.params = {
               url: params,
-            }
+            };
           }
 
           return action;
         ]]></body>
       </method>
     </implementation>
+
+    <handlers>
+      <!--
+        This overrides listitem's mousedown handler because we want to set the
+        selected item even when the shift or accel keys are pressed.
+      -->
+      <handler event="mousedown"><![CDATA[
+        // Call this.control only once since it's not a simple getter.
+        let control = this.control;
+        if (!control || control.disabled) {
+          return;
+        }
+        if (!this.selected) {
+          control.selectItem(this);
+        }
+        control.currentItem = this;
+      ]]></handler>
+
+      <handler event="mouseover"><![CDATA[
+        // The point of implementing this handler is to allow drags to change
+        // the selected item.  If the user mouses down on an item, it becomes
+        // selected.  If they then drag the mouse to another item, select it.
+        // Handle all three primary mouse buttons: right, left, and wheel, since
+        // all three change the selection on mousedown.
+        let mouseDown = event.buttons & 0b111;
+        if (!mouseDown) {
+          return;
+        }
+        // Call this.control only once since it's not a simple getter.
+        let control = this.control;
+        if (!control || control.disabled) {
+          return;
+        }
+        if (!this.selected) {
+          control.selectItem(this);
+        }
+        control.currentItem = this;
+      ]]></handler>
+    </handlers>
   </binding>
 
   <binding id="autocomplete-tree" extends="chrome://global/content/bindings/tree.xml#tree">
@@ -2543,7 +2496,14 @@ extends="chrome://global/content/bindings/popup.xml#popup">
           return;
         }
 
-        this.mousedOverIndex = this.getIndexOfItem(item);
+        let index = this.getIndexOfItem(item);
+
+        this.mousedOverIndex = index;
+
+        if (item.selectedByMouseOver) {
+          this.selectedIndex = index;
+        }
+
         this.mLastMoveTime = Date.now();
       ]]>
       </handler>
@@ -2553,6 +2513,19 @@ extends="chrome://global/content/bindings/popup.xml#popup">
   <binding id="autocomplete-treebody">
     <implementation>
       <field name="mLastMoveTime">Date.now()</field>
+      <property name="noSelectOnMouseMove">
+        <getter><![CDATA[
+          return this.getAttribute("noSelectOnMouseMove") == "true";
+        ]]></getter>
+        <setter><![CDATA[
+          if (val) {
+            this.setAttribute("noSelectOnMouseMove", "true");
+          } else {
+            this.removeAttribute("noSelectOnMouseMove");
+          }
+          return !!val;
+        ]]></setter>
+      </property>
     </implementation>
 
     <handlers>
@@ -2565,8 +2538,8 @@ extends="chrome://global/content/bindings/popup.xml#popup">
       ]]></handler>
 
       <handler event="mousemove"><![CDATA[
-        if (event.defaultPrevented) {
-          // Allow bindings that extend this one to cancel the event so that
+        if (this.noSelectOnMouseMove) {
+          // Allow uses of this binding to cancel the event so that
           // nothing is selected.
           return;
         }
@@ -2587,14 +2560,6 @@ extends="chrome://global/content/bindings/popup.xml#popup">
       </xul:hbox>
       <xul:scrollbar xbl:inherits="collapsed=hidescrollbar" orient="vertical" class="tree-scrollbar"/>
     </content>
-  </binding>
-
-  <binding id="history-dropmarker" extends="chrome://global/content/bindings/general.xml#dropmarker">
-    <handlers>
-      <handler event="mousedown" button="0"><![CDATA[
-        document.getBindingParent(this).toggleHistoryPopup();
-      ]]></handler>
-    </handlers>
   </binding>
 
 </bindings>

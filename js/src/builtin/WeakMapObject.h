@@ -12,13 +12,28 @@
 
 namespace js {
 
-class WeakMapObject : public NativeObject
+// Abstract base class for WeakMapObject and WeakSetObject.
+class WeakCollectionObject : public NativeObject
+{
+  public:
+    ObjectValueMap* getMap() { return static_cast<ObjectValueMap*>(getPrivate()); }
+
+    static MOZ_MUST_USE bool nondeterministicGetKeys(JSContext* cx,
+                                                     Handle<WeakCollectionObject*> obj,
+                                                     MutableHandleObject ret);
+
+  protected:
+    static const ClassOps classOps_;
+};
+
+class WeakMapObject : public WeakCollectionObject
 {
   public:
     static const Class class_;
-
-    ObjectValueMap* getMap() { return static_cast<ObjectValueMap*>(getPrivate()); }
 };
+
+extern JSObject*
+InitWeakMapClass(JSContext* cx, HandleObject obj);
 
 } // namespace js
 

@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -8,6 +9,7 @@
 
 #include <stdint.h>                     // for uint32_t, uint64_t
 #include "Units.h"                      // for CSSRect, CSSPixel, etc
+#include "mozilla/DefineEnum.h"         // for MOZ_DEFINE_ENUM
 #include "mozilla/HashFunctions.h"      // for HashGeneric
 #include "mozilla/Maybe.h"
 #include "mozilla/gfx/BasePoint.h"      // for BasePoint
@@ -50,23 +52,22 @@ public:
   static const ViewID START_SCROLL_ID = 2;  // This is the ID that scrolling subframes
                                         // will begin at.
 
-  enum ScrollOffsetUpdateType : uint8_t {
-    eNone,          // The default; the scroll offset was not updated
-    eMainThread,    // The scroll offset was updated by the main thread.
-    ePending,       // The scroll offset was updated on the main thread, but not
-                    // painted, so the layer texture data is still at the old
-                    // offset.
-    eUserAction,    // In an APZ repaint request, this means the APZ generated
-                    // the scroll position based on user action (the alternative
-                    // is eNone which means it's just request a repaint because
-                    // it got a scroll update from the main thread).
-    eRestore,       // The scroll offset was updated by the main thread, but as
-                    // a restore from history or after a frame reconstruction.
-                    // In this case, APZ can ignore the offset change if the
-                    // user has done an APZ scroll already.
-
-    eSentinel       // For IPC use only
-  };
+  MOZ_DEFINE_ENUM_WITH_BASE_AT_CLASS_SCOPE(
+    ScrollOffsetUpdateType, uint8_t, (
+      eNone,          // The default; the scroll offset was not updated
+      eMainThread,    // The scroll offset was updated by the main thread.
+      ePending,       // The scroll offset was updated on the main thread, but not
+                      // painted, so the layer texture data is still at the old
+                      // offset.
+      eUserAction,    // In an APZ repaint request, this means the APZ generated
+                      // the scroll position based on user action (the alternative
+                      // is eNone which means it's just request a repaint because
+                      // it got a scroll update from the main thread).
+      eRestore        // The scroll offset was updated by the main thread, but as
+                      // a restore from history or after a frame reconstruction.
+                      // In this case, APZ can ignore the offset change if the
+                      // user has done an APZ scroll already.
+  ));
 
   FrameMetrics()
     : mScrollId(NULL_SCROLL_ID)
@@ -170,16 +171,16 @@ public:
   {
     CSSRect scrollableRect = mScrollableRect;
     CSSSize compSize = CalculateCompositedSizeInCssPixels();
-    if (scrollableRect.width < compSize.width) {
-      scrollableRect.x = std::max(0.f,
-                                  scrollableRect.x - (compSize.width - scrollableRect.width));
-      scrollableRect.width = compSize.width;
+    if (scrollableRect.Width() < compSize.width) {
+      scrollableRect.SetRectX(std::max(0.f,
+                                       scrollableRect.X() - (compSize.width - scrollableRect.Width())),
+                              compSize.width);
     }
 
-    if (scrollableRect.height < compSize.height) {
-      scrollableRect.y = std::max(0.f,
-                                  scrollableRect.y - (compSize.height - scrollableRect.height));
-      scrollableRect.height = compSize.height;
+    if (scrollableRect.Height() < compSize.height) {
+      scrollableRect.SetRectY(std::max(0.f,
+                                       scrollableRect.Y() - (compSize.height - scrollableRect.Height())),
+                              compSize.height);
     }
 
     return scrollableRect;
@@ -213,8 +214,8 @@ public:
   {
     CSSSize scrollPortSize = CalculateCompositedSizeInCssPixels();
     CSSRect scrollRange = mScrollableRect;
-    scrollRange.width = std::max(scrollRange.width - scrollPortSize.width, 0.0f);
-    scrollRange.height = std::max(scrollRange.height - scrollPortSize.height, 0.0f);
+    scrollRange.SetWidth(std::max(scrollRange.Width() - scrollPortSize.width, 0.0f));
+    scrollRange.SetHeight(std::max(scrollRange.Height() - scrollPortSize.height, 0.0f));
     return scrollRange;
   }
 
@@ -333,6 +334,12 @@ public:
   void SetScrollOffset(const CSSPoint& aScrollOffset)
   {
     mScrollOffset = aScrollOffset;
+  }
+
+  // Set scroll offset, first clamping to the scroll range.
+  void ClampAndSetScrollOffset(const CSSPoint& aScrollOffset)
+  {
+    SetScrollOffset(CalculateScrollRange().ClampPoint(aScrollOffset));
   }
 
   const CSSPoint& GetScrollOffset() const
@@ -548,10 +555,14 @@ private:
   // size of the element being scrolled. However for RTL pages or elements
   // the x value may be negative.
   //
-  // This is relative to the document. It is in the same coordinate space as
-  // |mScrollOffset|, but a different coordinate space than |mViewport| and
-  // |mDisplayPort|. Note also that this coordinate system is understood by
-  // window.scrollTo().
+  // For scrollable frames that are overflow:hidden the x and y are usually
+  // set to the value of the current scroll offset, and the width and height
+  // will match the composition bounds width and height. In effect this reduces
+  // the scrollable range to 0.
+  //
+  // This is in the same coordinate space as |mScrollOffset|, but a different
+  // coordinate space than |mViewport| and |mDisplayPort|. Note also that this
+  // coordinate system is understood by window.scrollTo().
   //
   // This is valid on any layer unless it has no content.
   CSSRect mScrollableRect;
@@ -686,6 +697,12 @@ struct ScrollSnapInfo {
            mScrollSnapCoordinates == aOther.mScrollSnapCoordinates;
   }
 
+  bool HasScrollSnapping() const
+  {
+    return mScrollSnapTypeY != NS_STYLE_SCROLL_SNAP_TYPE_NONE ||
+           mScrollSnapTypeX != NS_STYLE_SCROLL_SNAP_TYPE_NONE;
+  }
+
   // The scroll frame's scroll-snap-type.
   // One of NS_STYLE_SCROLL_SNAP_{NONE, MANDATORY, PROXIMITY}.
   uint8_t mScrollSnapTypeX;
@@ -702,6 +719,32 @@ struct ScrollSnapInfo {
   // The scroll-snap-coordinates of any descendant frames of the scroll frame,
   // relative to the origin of the scrolled frame.
   nsTArray<nsPoint> mScrollSnapCoordinates;
+};
+
+MOZ_DEFINE_ENUM_CLASS_WITH_BASE(
+  OverscrollBehavior, uint8_t, (
+    Auto,
+    Contain,
+    None
+));
+
+struct OverscrollBehaviorInfo {
+  OverscrollBehaviorInfo()
+    : mBehaviorX(OverscrollBehavior::Auto)
+    , mBehaviorY(OverscrollBehavior::Auto)
+  {}
+
+  // Construct from StyleOverscrollBehavior values.
+  static OverscrollBehaviorInfo FromStyleConstants(StyleOverscrollBehavior aBehaviorX,
+                                                   StyleOverscrollBehavior aBehaviorY);
+
+  bool operator==(const OverscrollBehaviorInfo& aOther) const {
+    return mBehaviorX == aOther.mBehaviorX &&
+           mBehaviorY == aOther.mBehaviorY;
+  }
+
+  OverscrollBehavior mBehaviorX;
+  OverscrollBehavior mBehaviorY;
 };
 
 /**
@@ -780,6 +823,7 @@ public:
     , mIsLayersIdRoot(false)
     , mUsesContainerScrolling(false)
     , mForceDisableApz(false)
+    , mOverscrollBehavior()
   {}
 
   bool operator==(const ScrollMetadata& aOther) const
@@ -796,7 +840,8 @@ public:
            mAllowVerticalScrollWithWheel == aOther.mAllowVerticalScrollWithWheel &&
            mIsLayersIdRoot == aOther.mIsLayersIdRoot &&
            mUsesContainerScrolling == aOther.mUsesContainerScrolling &&
-           mForceDisableApz == aOther.mForceDisableApz;
+           mForceDisableApz == aOther.mForceDisableApz &&
+           mOverscrollBehavior == aOther.mOverscrollBehavior;
   }
 
   bool operator!=(const ScrollMetadata& aOther) const
@@ -906,6 +951,13 @@ public:
     return mForceDisableApz;
   }
 
+  void SetOverscrollBehavior(const OverscrollBehaviorInfo& aOverscrollBehavior) {
+    mOverscrollBehavior = aOverscrollBehavior;
+  }
+  const OverscrollBehaviorInfo& GetOverscrollBehavior() const {
+    return mOverscrollBehavior;
+  }
+
 private:
   FrameMetrics mMetrics;
 
@@ -954,6 +1006,9 @@ private:
   // Whether or not the compositor should actually do APZ-scrolling on this
   // scrollframe.
   bool mForceDisableApz:1;
+
+  // The overscroll behavior for this scroll frame.
+  OverscrollBehaviorInfo mOverscrollBehavior;
 
   // WARNING!!!!
   //
@@ -1040,7 +1095,7 @@ struct ScrollableLayerGuid {
     return false;
   }
 
-  uint32_t Hash() const
+  PLDHashNumber Hash() const
   {
     return HashGeneric(mLayersId, mPresShellId, mScrollId);
   }
@@ -1103,6 +1158,15 @@ struct ZoomConstraints {
     return !(*this == other);
   }
 };
+
+struct ScrollableLayerGuidHash
+{
+  std::size_t operator()(const ScrollableLayerGuid& Guid) const
+  {
+    return Guid.Hash();
+  }
+};
+
 
 typedef Maybe<ZoomConstraints> MaybeZoomConstraints;
 

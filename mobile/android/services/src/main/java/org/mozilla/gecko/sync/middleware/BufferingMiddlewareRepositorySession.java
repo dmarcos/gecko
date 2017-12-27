@@ -11,14 +11,13 @@ import org.mozilla.gecko.sync.SyncDeadlineReachedException;
 import org.mozilla.gecko.sync.middleware.storage.BufferStorage;
 import org.mozilla.gecko.sync.repositories.InactiveSessionException;
 import org.mozilla.gecko.sync.repositories.NoStoreDelegateException;
+import org.mozilla.gecko.sync.repositories.Repository;
 import org.mozilla.gecko.sync.repositories.RepositorySession;
 import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionFetchRecordsDelegate;
 import org.mozilla.gecko.sync.repositories.delegates.RepositorySessionStoreDelegate;
 import org.mozilla.gecko.sync.repositories.domain.Record;
 
 import java.util.Collection;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
  * Buffering middleware which is intended to wrap local RepositorySessions.
@@ -35,7 +34,7 @@ import java.util.concurrent.Executors;
     private final long syncDeadlineMillis;
 
     /* package-local */ BufferingMiddlewareRepositorySession(
-            RepositorySession repositorySession, MiddlewareRepository repository,
+            RepositorySession repositorySession, BufferingMiddlewareRepository repository,
             long syncDeadlineMillis, BufferStorage bufferStorage) {
         super(repositorySession, repository);
         this.syncDeadlineMillis = syncDeadlineMillis;
@@ -43,8 +42,8 @@ import java.util.concurrent.Executors;
     }
 
     @Override
-    public void fetchSince(long timestamp, RepositorySessionFetchRecordsDelegate delegate) {
-        this.inner.fetchSince(timestamp, delegate);
+    public void fetchModified(RepositorySessionFetchRecordsDelegate delegate) {
+        this.inner.fetchModified(delegate);
     }
 
     @Override
@@ -65,6 +64,7 @@ import java.util.concurrent.Executors;
     @Override
     public void performCleanup() {
         bufferStorage.clear();
+        inner.performCleanup();
     }
 
     @Override

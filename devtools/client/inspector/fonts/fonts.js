@@ -6,245 +6,185 @@
 
 "use strict";
 
-const {gDevTools} = require("devtools/client/framework/devtools");
+const { getColor } = require("devtools/client/shared/theme");
 
-const DEFAULT_PREVIEW_TEXT = "Abc";
-const PREVIEW_UPDATE_DELAY = 150;
+const { createFactory, createElement } = require("devtools/client/shared/vendor/react");
+const { Provider } = require("devtools/client/shared/vendor/react-redux");
 
-const {Task} = require("devtools/shared/task");
-const {getColor} = require("devtools/client/shared/theme");
+const { gDevTools } = require("devtools/client/framework/devtools");
 
-function FontInspector(inspector, window) {
-  this.inspector = inspector;
-  this.pageStyle = this.inspector.pageStyle;
-  this.chromeDoc = window.document;
-  this.init();
-}
+const FontsApp = createFactory(require("./components/FontsApp"));
 
-FontInspector.prototype = {
-  init: function () {
+const { LocalizationHelper } = require("devtools/shared/l10n");
+const INSPECTOR_L10N =
+  new LocalizationHelper("devtools/client/locales/inspector.properties");
+
+const { updateFonts } = require("./actions/fonts");
+const { updatePreviewText, updateShowAllFonts } = require("./actions/font-options");
+
+class FontInspector {
+  constructor(inspector, window) {
+    this.document = window.document;
+    this.inspector = inspector;
+    this.pageStyle = this.inspector.pageStyle;
+    this.store = this.inspector.store;
+
     this.update = this.update.bind(this);
+
     this.onNewNode = this.onNewNode.bind(this);
+    this.onPreviewFonts = this.onPreviewFonts.bind(this);
+    this.onShowAllFont = this.onShowAllFont.bind(this);
     this.onThemeChanged = this.onThemeChanged.bind(this);
+
+    this.init();
+  }
+
+  init() {
+    if (!this.inspector) {
+      return;
+    }
+
+    let fontsApp = FontsApp({
+      onPreviewFonts: this.onPreviewFonts,
+      onShowAllFont: this.onShowAllFont,
+    });
+
+    let provider = createElement(Provider, {
+      id: "fontinspector",
+      key: "fontinspector",
+      store: this.store,
+      title: INSPECTOR_L10N.getStr("inspector.sidebar.fontInspectorTitle"),
+    }, fontsApp);
+
+    // Expose the provider to let inspector.js use it in setupSidebar.
+    this.provider = provider;
+
     this.inspector.selection.on("new-node-front", this.onNewNode);
     this.inspector.sidebar.on("fontinspector-selected", this.onNewNode);
-    this.showAll = this.showAll.bind(this);
-    this.showAllLink = this.chromeDoc.getElementById("font-showall");
-    this.showAllLink.addEventListener("click", this.showAll);
-    this.previewTextChanged = this.previewTextChanged.bind(this);
-    this.previewInput = this.chromeDoc.getElementById("font-preview-text-input");
-    this.previewInput.addEventListener("input", this.previewTextChanged);
-    this.previewInput.addEventListener("contextmenu",
-      this.inspector.onTextBoxContextMenu);
 
     // Listen for theme changes as the color of the previews depend on the theme
     gDevTools.on("theme-switched", this.onThemeChanged);
 
-    this.update();
-  },
+    this.store.dispatch(updatePreviewText(""));
+    this.store.dispatch(updateShowAllFonts(false));
+    this.update(false, "");
+  }
 
   /**
-   * Is the fontinspector visible in the sidebar?
+   * Destruction function called when the inspector is destroyed. Removes event listeners
+   * and cleans up references.
    */
-  isActive: function () {
-    return this.inspector.sidebar &&
-           this.inspector.sidebar.getCurrentTabID() == "fontinspector";
-  },
-
-  /**
-   * Remove listeners.
-   */
-  destroy: function () {
-    this.chromeDoc = null;
-    this.inspector.sidebar.off("fontinspector-selected", this.onNewNode);
+  destroy() {
     this.inspector.selection.off("new-node-front", this.onNewNode);
-    this.showAllLink.removeEventListener("click", this.showAll);
-    this.previewInput.removeEventListener("input", this.previewTextChanged);
-    this.previewInput.removeEventListener("contextmenu",
-      this.inspector.onTextBoxContextMenu);
-
+    this.inspector.sidebar.off("fontinspector-selected", this.onNewNode);
     gDevTools.off("theme-switched", this.onThemeChanged);
 
-    if (this._previewUpdateTimeout) {
-      clearTimeout(this._previewUpdateTimeout);
-    }
-  },
+    this.document = null;
+    this.inspector = null;
+    this.pageStyle = null;
+    this.store = null;
+  }
+
+  /**
+   * Returns true if the font inspector panel is visible, and false otherwise.
+   */
+  isPanelVisible() {
+    return this.inspector.sidebar &&
+           this.inspector.sidebar.getCurrentTabID() === "fontinspector";
+  }
 
   /**
    * Selection 'new-node' event handler.
    */
-  onNewNode: function () {
-    if (this.isActive() &&
-        this.inspector.selection.isConnected() &&
-        this.inspector.selection.isElementNode()) {
-      this.undim();
+  onNewNode() {
+    if (this.isPanelVisible()) {
+      this.store.dispatch(updateShowAllFonts(false));
       this.update();
-    } else {
-      this.dim();
     }
-  },
+  }
 
   /**
-   * The text to use for previews. Returns either the value user has typed to
-   * the preview input or DEFAULT_PREVIEW_TEXT if the input is empty or contains
-   * only whitespace.
+   * Handler for change in preview input.
    */
-  getPreviewText: function () {
-    let inputText = this.previewInput.value.trim();
-    if (inputText === "") {
-      return DEFAULT_PREVIEW_TEXT;
+  onPreviewFonts(value) {
+    this.store.dispatch(updatePreviewText(value));
+    this.update();
+  }
+
+  /**
+   * Handler for click on show all fonts button.
+   */
+  onShowAllFont() {
+    this.store.dispatch(updateShowAllFonts(true));
+    this.update();
+  }
+
+  /**
+   * Handler for the "theme-switched" event.
+   */
+  onThemeChanged(event, frame) {
+    if (frame === this.document.defaultView) {
+      this.update();
     }
+  }
 
-    return inputText;
-  },
-
-  /**
-   * Preview input 'input' event handler.
-   */
-  previewTextChanged: function () {
-    if (this._previewUpdateTimeout) {
-      clearTimeout(this._previewUpdateTimeout);
-    }
-
-    this._previewUpdateTimeout = setTimeout(() => {
-      this.update(this._lastUpdateShowedAllFonts);
-    }, PREVIEW_UPDATE_DELAY);
-  },
-
-  /**
-   * Callback for the theme-switched event.
-   */
-  onThemeChanged: function (event, frame) {
-    if (frame === this.chromeDoc.defaultView) {
-      this.update(this._lastUpdateShowedAllFonts);
-    }
-  },
-
-  /**
-   * Hide the font list. No node are selected.
-   */
-  dim: function () {
-    let panel = this.chromeDoc.getElementById("sidebar-panel-fontinspector");
-    panel.classList.add("dim");
-    this.clear();
-  },
-
-  /**
-   * Show the font list. A node is selected.
-   */
-  undim: function () {
-    let panel = this.chromeDoc.getElementById("sidebar-panel-fontinspector");
-    panel.classList.remove("dim");
-  },
-
-  /**
-   * Clears the font list.
-   */
-  clear: function () {
-    this.chromeDoc.querySelector("#all-fonts").innerHTML = "";
-  },
-
- /**
-  * Retrieve all the font info for the selected node and display it.
-  */
-  update: Task.async(function* (showAllFonts) {
-    let node = this.inspector.selection.nodeFront;
-    let panel = this.chromeDoc.getElementById("sidebar-panel-fontinspector");
-
-    if (!node ||
-        !this.isActive() ||
-        !this.inspector.selection.isConnected() ||
-        !this.inspector.selection.isElementNode() ||
-        panel.classList.contains("dim")) {
+  async update() {
+    // Stop refreshing if the inspector or store is already destroyed.
+    if (!this.inspector || !this.store) {
       return;
     }
 
-    this._lastUpdateShowedAllFonts = showAllFonts;
+    let node = this.inspector.selection.nodeFront;
+    let fonts = [];
+    let { fontOptions } = this.store.getState();
+    let { showAllFonts, previewText } = fontOptions;
+
+    // Clear the list of fonts if the currently selected node is not connected or an
+    // element node unless all fonts are supposed to be shown.
+    if (!showAllFonts &&
+        (!node ||
+         !this.isPanelVisible() ||
+         !this.inspector.selection.isConnected() ||
+         !this.inspector.selection.isElementNode())) {
+      this.store.dispatch(updateFonts(fonts));
+      return;
+    }
 
     let options = {
       includePreviews: true,
-      previewText: this.getPreviewText(),
+      previewText,
       previewFillStyle: getColor("body-color")
     };
 
-    let fonts = [];
     if (showAllFonts) {
-      fonts = yield this.pageStyle.getAllUsedFontFaces(options)
-                      .then(null, console.error);
+      fonts = await this.pageStyle.getAllUsedFontFaces(options)
+                      .catch(console.error);
     } else {
-      fonts = yield this.pageStyle.getUsedFontFaces(node, options)
-                      .then(null, console.error);
+      fonts = await this.pageStyle.getUsedFontFaces(node, options)
+                      .catch(console.error);
     }
 
     if (!fonts || !fonts.length) {
       // No fonts to display. Clear the previously shown fonts.
-      this.clear();
+      if (this.store) {
+        this.store.dispatch(updateFonts(fonts));
+      }
       return;
     }
 
     for (let font of fonts) {
-      font.previewUrl = yield font.preview.data.string();
+      font.previewUrl = await font.preview.data.string();
     }
 
     // in case we've been destroyed in the meantime
-    if (!this.chromeDoc) {
+    if (!this.document) {
       return;
     }
 
-    // Make room for the new fonts.
-    this.clear();
-
-    for (let font of fonts) {
-      this.render(font);
-    }
+    this.store.dispatch(updateFonts(fonts));
 
     this.inspector.emit("fontinspector-updated");
-  }),
+  }
+}
 
-  /**
-   * Display the information of one font.
-   */
-  render: function (font) {
-    let s = this.chromeDoc.querySelector("#font-template > section");
-    s = s.cloneNode(true);
-
-    s.querySelector(".font-name").textContent = font.name;
-    s.querySelector(".font-css-name").textContent = font.CSSFamilyName;
-
-    if (font.URI) {
-      s.classList.add("is-remote");
-    } else {
-      s.classList.add("is-local");
-    }
-
-    let formatElem = s.querySelector(".font-format");
-    if (font.format) {
-      formatElem.textContent = font.format;
-    } else {
-      formatElem.hidden = true;
-    }
-
-    s.querySelector(".font-url").value = font.URI;
-
-    if (font.rule) {
-      // This is the @font-face{…} code.
-      let cssText = font.ruleText;
-
-      s.classList.add("has-code");
-      s.querySelector(".font-css-code").textContent = cssText;
-    }
-    let preview = s.querySelector(".font-preview");
-    preview.src = font.previewUrl;
-
-    this.chromeDoc.querySelector("#all-fonts").appendChild(s);
-  },
-
-  /**
-   * Show all fonts for the document (including iframes)
-   */
-  showAll: function () {
-    this.update(true);
-  },
-};
-
-exports.FontInspector = FontInspector;
+module.exports = FontInspector;

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -20,12 +21,13 @@
 #include "nsILoadContext.h"
 #include "nsIDocument.h"
 #include "mozilla/AutoRestore.h"
+#include "mozilla/AtomArray.h"
 #include "mozilla/BloomFilter.h"
 #include "mozilla/EventStates.h"
 #include "mozilla/GuardObjects.h"
 #include "mozilla/dom/Element.h"
 
-class nsIAtom;
+class nsAtom;
 class nsIContent;
 class nsICSSPseudoComparator;
 struct TreeMatchContext;
@@ -62,23 +64,32 @@ class MOZ_STACK_CLASS AncestorFilter {
 #ifdef DEBUG
   void AssertHasAllAncestors(mozilla::dom::Element *aElement) const;
 #endif
-  
+
  private:
   // Using 2^12 slots makes the Bloom filter a nice round page in
   // size, so let's do that.  We get a false positive rate of 1% or
   // less even with several hundred things in the filter.  Note that
   // we allocate the filter lazily, because not all tree match
   // contexts can use one effectively.
-  typedef mozilla::BloomFilter<12, nsIAtom> Filter;
+  typedef mozilla::BloomFilter<12, nsAtom> Filter;
   nsAutoPtr<Filter> mFilter;
 
   // Stack of indices to pop to.  These are indices into mHashes.
-  nsTArray<uint32_t> mPopTargets;
+  // 16 is chosen because it's enough to avoid most allocations for the
+  // Speedometer 2 benchmark, and also it covers many cases in some casual
+  // local browsing tests performed.  Higher values in the range of tens
+  // were observed while testing through local browsing but they were rare.
+  AutoTArray<uint32_t, 16> mPopTargets;
 
   // List of hashes; this is what we pop using mPopTargets.  We store
   // hashes of our ancestor element tag names, ids, and classes in
   // here.
-  nsTArray<uint32_t> mHashes;
+  // 50 is chosen to be the same as the preallocated buffer size used in
+  // TreeMatchContext::InitAncestors().  This value seems to be large
+  // enough for Speedometer 2, although some casual testing browsing real
+  // sites suggested they can easily require values much larger (in the
+  // range of hundreds.)
+  AutoTArray<uint32_t, 50> mHashes;
 
   // A debug-only stack of Elements for use in assertions
 #ifdef DEBUG
@@ -105,7 +116,7 @@ struct MOZ_STACK_CLASS TreeMatchContext {
     mHaveRelevantLink = false;
     mVisitedHandling = nsRuleWalker::eRelevantLinkVisited;
   }
-  
+
   void ResetForUnvisitedMatching() {
     NS_PRECONDITION(mForStyling, "Why is this being called?");
     mHaveRelevantLink = false;
@@ -164,7 +175,7 @@ struct MOZ_STACK_CLASS TreeMatchContext {
       mStyleScopes.TruncateLength(mStyleScopes.Length() - 1);
     }
   }
- 
+
   bool PopStyleScopeForSelectorMatching(mozilla::dom::Element* aElement)
   {
     NS_ASSERTION(mForScopedStyle, "only call PopStyleScopeForSelectorMatching "
@@ -226,10 +237,15 @@ struct MOZ_STACK_CLASS TreeMatchContext {
     return mCurrentStyleScope;
   }
 
-  /* Helper class for maintaining the ancestor state */
+  /*
+   * Helper class for maintaining the ancestor state.
+   *
+   * This class does nothing if aTreeMatchContext is null, which is the case for
+   * the Servo style system.
+   */
   class MOZ_RAII AutoAncestorPusher {
   public:
-    explicit AutoAncestorPusher(TreeMatchContext& aTreeMatchContext
+    explicit AutoAncestorPusher(TreeMatchContext* aTreeMatchContext
                                 MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
       : mPushedAncestor(false)
       , mPushedStyleScope(false)
@@ -240,32 +256,52 @@ struct MOZ_STACK_CLASS TreeMatchContext {
     }
 
     void PushAncestorAndStyleScope(mozilla::dom::Element* aElement) {
+      if (!mTreeMatchContext) {
+        MOZ_ASSERT(!aElement || aElement->IsStyledByServo());
+        return;
+      }
+
       MOZ_ASSERT(!mElement);
       if (aElement) {
         mElement = aElement;
         mPushedAncestor = true;
         mPushedStyleScope = true;
-        mTreeMatchContext.mAncestorFilter.PushAncestor(aElement);
-        mTreeMatchContext.PushStyleScope(aElement);
+        mTreeMatchContext->mAncestorFilter.PushAncestor(aElement);
+        mTreeMatchContext->PushStyleScope(aElement);
       }
     }
 
     void PushAncestorAndStyleScope(nsIContent* aContent) {
+      if (!mTreeMatchContext) {
+        MOZ_ASSERT(!aContent || aContent->IsStyledByServo());
+        return;
+      }
+
       if (aContent && aContent->IsElement()) {
         PushAncestorAndStyleScope(aContent->AsElement());
       }
     }
 
     void PushStyleScope(mozilla::dom::Element* aElement) {
+      if (!mTreeMatchContext) {
+        MOZ_ASSERT(!aElement || aElement->IsStyledByServo());
+        return;
+      }
+
       MOZ_ASSERT(!mElement);
       if (aElement) {
         mElement = aElement;
         mPushedStyleScope = true;
-        mTreeMatchContext.PushStyleScope(aElement);
+        mTreeMatchContext->PushStyleScope(aElement);
       }
     }
 
     void PushStyleScope(nsIContent* aContent) {
+      if (!mTreeMatchContext) {
+        MOZ_ASSERT(!aContent || aContent->IsStyledByServo());
+        return;
+      }
+
       if (aContent && aContent->IsElement()) {
         PushStyleScope(aContent->AsElement());
       }
@@ -273,17 +309,17 @@ struct MOZ_STACK_CLASS TreeMatchContext {
 
     ~AutoAncestorPusher() {
       if (mPushedAncestor) {
-        mTreeMatchContext.mAncestorFilter.PopAncestor();
+        mTreeMatchContext->mAncestorFilter.PopAncestor();
       }
       if (mPushedStyleScope) {
-        mTreeMatchContext.PopStyleScope(mElement);
+        mTreeMatchContext->PopStyleScope(mElement);
       }
     }
 
   private:
     bool mPushedAncestor;
     bool mPushedStyleScope;
-    TreeMatchContext& mTreeMatchContext;
+    TreeMatchContext* mTreeMatchContext;
     mozilla::dom::Element* mElement;
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
   };
@@ -370,6 +406,13 @@ struct MOZ_STACK_CLASS TreeMatchContext {
   // for an HTML5 scoped style sheet.
   bool mForScopedStyle;
 
+  // An enum that communicates the consumer's intensions for this
+  // TreeMatchContext in terms of :visited handling.  eNeverMatchVisited means
+  // that this TreeMatchContext's VisitedHandlingType will always be
+  // eRelevantLinkUnvisited (in other words, this value will be passed to the
+  // constructor and ResetForVisitedMatching() will never be called).
+  // eMatchVisitedDefault doesn't communicate any information about the current
+  // or future VisitedHandlingType of this TreeMatchContext.
   enum MatchVisited {
     eNeverMatchVisited,
     eMatchVisitedDefault
@@ -404,6 +447,9 @@ struct MOZ_STACK_CLASS TreeMatchContext {
       if (loadContext) {
         mUsingPrivateBrowsing = loadContext->UsePrivateBrowsing();
       }
+    } else {
+      MOZ_ASSERT(aVisitedHandling == nsRuleWalker::eRelevantLinkUnvisited,
+                 "You promised you'd never try to match :visited!");
     }
   }
 
@@ -444,7 +490,7 @@ struct MOZ_STACK_CLASS ElementDependentRuleProcessorData :
     NS_PRECONDITION(aTreeMatchContext.mForStyling == !!aRuleWalker,
                     "Should be styling if and only if we have a rule walker");
   }
-  
+
   mozilla::dom::Element* const mElement; // weak ref, must not be null
   TreeMatchContext& mTreeMatchContext;
 };
@@ -452,7 +498,7 @@ struct MOZ_STACK_CLASS ElementDependentRuleProcessorData :
 struct MOZ_STACK_CLASS ElementRuleProcessorData :
                           public ElementDependentRuleProcessorData {
   ElementRuleProcessorData(nsPresContext* aPresContext,
-                           mozilla::dom::Element* aElement, 
+                           mozilla::dom::Element* aElement,
                            nsRuleWalker* aRuleWalker,
                            TreeMatchContext& aTreeMatchContext)
     : ElementDependentRuleProcessorData(aPresContext, aElement, aRuleWalker,
@@ -488,7 +534,7 @@ struct MOZ_STACK_CLASS PseudoElementRuleProcessorData :
 
 struct MOZ_STACK_CLASS AnonBoxRuleProcessorData : public RuleProcessorData {
   AnonBoxRuleProcessorData(nsPresContext* aPresContext,
-                           nsIAtom* aPseudoTag,
+                           nsAtom* aPseudoTag,
                            nsRuleWalker* aRuleWalker)
     : RuleProcessorData(aPresContext, aRuleWalker),
       mPseudoTag(aPseudoTag)
@@ -497,7 +543,7 @@ struct MOZ_STACK_CLASS AnonBoxRuleProcessorData : public RuleProcessorData {
     NS_PRECONDITION(aRuleWalker, "Must have rule walker");
   }
 
-  nsIAtom* mPseudoTag;
+  nsAtom* mPseudoTag;
 };
 
 #ifdef MOZ_XUL
@@ -506,22 +552,21 @@ struct MOZ_STACK_CLASS XULTreeRuleProcessorData :
   XULTreeRuleProcessorData(nsPresContext* aPresContext,
                            mozilla::dom::Element* aParentElement,
                            nsRuleWalker* aRuleWalker,
-                           nsIAtom* aPseudoTag,
-                           nsICSSPseudoComparator* aComparator,
+                           nsAtom* aPseudoTag,
+                           const mozilla::AtomArray& aInputWord,
                            TreeMatchContext& aTreeMatchContext)
     : ElementDependentRuleProcessorData(aPresContext, aParentElement,
                                         aRuleWalker, aTreeMatchContext),
       mPseudoTag(aPseudoTag),
-      mComparator(aComparator)
+      mInputWord(aInputWord)
   {
     NS_PRECONDITION(aPseudoTag, "null pointer");
     NS_PRECONDITION(aRuleWalker, "Must have rule walker");
-    NS_PRECONDITION(aComparator, "must have a comparator");
     NS_PRECONDITION(aTreeMatchContext.mForStyling, "Styling here!");
   }
 
-  nsIAtom*                 mPseudoTag;
-  nsICSSPseudoComparator*  mComparator;
+  nsAtom*                 mPseudoTag;
+  const mozilla::AtomArray& mInputWord;
 };
 #endif
 
@@ -570,7 +615,7 @@ struct MOZ_STACK_CLASS AttributeRuleProcessorData :
   AttributeRuleProcessorData(nsPresContext* aPresContext,
                              mozilla::dom::Element* aElement,
                              int32_t aNameSpaceID,
-                             nsIAtom* aAttribute,
+                             nsAtom* aAttribute,
                              int32_t aModType,
                              bool aAttrHasChanged,
                              const nsAttrValue* aOtherValue,
@@ -586,7 +631,7 @@ struct MOZ_STACK_CLASS AttributeRuleProcessorData :
     NS_PRECONDITION(!aTreeMatchContext.mForStyling, "Not styling here!");
   }
   int32_t mNameSpaceID; // Namespace of the attribute involved.
-  nsIAtom* mAttribute; // |HasAttributeDependentStyle| for which attribute?
+  nsAtom* mAttribute; // |HasAttributeDependentStyle| for which attribute?
   // non-null if we have the value.
   const nsAttrValue* mOtherValue;
   int32_t mModType;    // The type of modification (see nsIDOMMutationEvent).

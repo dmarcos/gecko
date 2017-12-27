@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -9,12 +10,15 @@
 #include <stdint.h>                     // for int32_t
 #include "Layers.h"
 #include "gfxContext.h"                 // for gfxContext
+#include "gfxPrefs.h"
 #include "mozilla/Attributes.h"         // for override
 #include "mozilla/LinkedList.h"         // For LinkedList
 #include "mozilla/WidgetUtils.h"        // for ScreenRotation
 #include "mozilla/gfx/Rect.h"           // for Rect
 #include "mozilla/layers/CompositorTypes.h"
+#include "mozilla/layers/FocusTarget.h"  // for FocusTarget
 #include "mozilla/layers/LayersTypes.h"  // for BufferMode, LayersBackend, etc
+#include "mozilla/layers/PaintThread.h" // For PaintThread
 #include "mozilla/layers/ShadowLayers.h"  // for ShadowLayerForwarder, etc
 #include "mozilla/layers/APZTestData.h" // for APZTestData
 #include "nsCOMPtr.h"                   // for already_AddRefed
@@ -106,14 +110,14 @@ public:
   virtual already_AddRefed<BorderLayer> CreateBorderLayer() override;
   virtual already_AddRefed<RefLayer> CreateRefLayer() override;
 
-  virtual void UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier,
-											  uint64_t aDeviceResetSeqNo) override;
+  virtual void UpdateTextureFactoryIdentifier(const TextureFactoryIdentifier& aNewIdentifier) override;
   virtual TextureFactoryIdentifier GetTextureFactoryIdentifier() override
   {
     return AsShadowForwarder()->GetTextureFactoryIdentifier();
   }
 
   virtual void FlushRendering() override;
+  virtual void WaitOnTransactionProcessed() override;
   virtual void SendInvalidRegion(const nsIntRegion& aRegion) override;
 
   virtual uint32_t StartFrameTimeRecording(int32_t aBufferSize) override;
@@ -131,6 +135,8 @@ public:
   virtual bool HasShadowManagerInternal() const override { return HasShadowManager(); }
 
   virtual void SetIsFirstPaint() override;
+
+  virtual void SetFocusTarget(const FocusTarget& aFocusTarget) override;
 
   /**
    * Pass through call to the forwarder for nsPresContext's
@@ -153,6 +159,7 @@ public:
   bool IsRepeatTransaction() { return mIsRepeatTransaction; }
 
   void SetTransactionIncomplete() { mTransactionIncomplete = true; }
+  void SetQueuedAsyncPaints() { mQueuedAsyncPaints = true; }
 
   bool HasShadowTarget() { return !!mShadowTarget; }
 
@@ -186,7 +193,7 @@ public:
   }
   virtual bool NeedsComposite() const override { return mNeedsComposite; }
 
-  virtual void Composite() override;
+  virtual void ScheduleComposite() override;
   virtual void GetFrameUniformity(FrameUniformityData* aFrameUniformityData) override;
 
   virtual void DidComposite(uint64_t aTransactionId,
@@ -202,6 +209,7 @@ public:
                                   const std::string& aKey,
                                   const std::string& aValue)
   {
+    MOZ_ASSERT(gfxPrefs::APZTestLoggingEnabled(), "don't call me");
     mApzTestData.LogTestDataForPaint(mPaintSequenceNumber, aScrollId, aKey, aValue);
   }
 
@@ -218,6 +226,7 @@ public:
                                     const std::string& aKey,
                                     const std::string& aValue)
   {
+    MOZ_ASSERT(gfxPrefs::APZTestLoggingEnabled(), "don't call me");
     mApzTestData.LogTestDataForRepaintRequest(aSequenceNumber, aScrollId, aKey, aValue);
   }
 
@@ -237,8 +246,6 @@ public:
   float RequestProperty(const nsAString& aProperty) override;
 
   bool AsyncPanZoomEnabled() const override;
-
-  void SetNextPaintSyncId(int32_t aSyncId);
 
   virtual void SetLayerObserverEpoch(uint64_t aLayerObserverEpoch) override;
 
@@ -343,14 +350,11 @@ private:
   bool mTransactionIncomplete;
   bool mCompositorMightResample;
   bool mNeedsComposite;
+  bool mQueuedAsyncPaints;
 
   // An incrementing sequence number for paints.
   // Incremented in BeginTransaction(), but not for repeat transactions.
   uint32_t mPaintSequenceNumber;
-
-  // A sequence number for checking whether we have not yet acknowledged
-  // a device reset.
-  uint64_t mDeviceResetSequenceNumber;
 
   APZTestData mApzTestData;
 

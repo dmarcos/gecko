@@ -43,9 +43,9 @@ public:
         return GetWrapper();
     }
 
-    void ForgetGlobalObject()
+    void ForgetGlobalObject(JSObject* obj)
     {
-        ClearWrapper();
+        ClearWrapper(obj);
     }
 
     virtual JSObject* WrapObject(JSContext* cx, JS::Handle<JSObject*> aGivenProto) override
@@ -53,9 +53,10 @@ public:
         MOZ_CRASH("SandboxPrivate doesn't use DOM bindings!");
     }
 
-    void ObjectMoved(JSObject* obj, const JSObject* old)
+    size_t ObjectMoved(JSObject* obj, JSObject* old)
     {
         UpdateWrapper(obj, old);
+        return 0;
     }
 
 private:

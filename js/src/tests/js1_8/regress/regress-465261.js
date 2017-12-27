@@ -16,19 +16,16 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
  
 
   for (let z = 0; z < 2; ++z) { 
-    for each (let x in [0, true, (void 0), 0, (void 0)]) { 
+    for (let x of [0, true, (void 0), 0, (void 0)]) { 
         if(x){} 
     } 
   };
 
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

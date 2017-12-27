@@ -3,13 +3,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use dom::bindings::codegen::Bindings::HTMLQuoteElementBinding;
-use dom::bindings::js::Root;
-use dom::bindings::str::DOMString;
+use dom::bindings::root::DomRoot;
 use dom::document::Document;
 use dom::htmlelement::HTMLElement;
 use dom::node::Node;
 use dom_struct::dom_struct;
-use html5ever_atoms::LocalName;
+use html5ever::{LocalName, Prefix};
 
 #[dom_struct]
 pub struct HTMLQuoteElement {
@@ -18,7 +17,7 @@ pub struct HTMLQuoteElement {
 
 impl HTMLQuoteElement {
     fn new_inherited(local_name: LocalName,
-                     prefix: Option<DOMString>,
+                     prefix: Option<Prefix>,
                      document: &Document) -> HTMLQuoteElement {
         HTMLQuoteElement {
             htmlelement:
@@ -28,9 +27,9 @@ impl HTMLQuoteElement {
 
     #[allow(unrooted_must_root)]
     pub fn new(local_name: LocalName,
-               prefix: Option<DOMString>,
-               document: &Document) -> Root<HTMLQuoteElement> {
-        Node::reflect_node(box HTMLQuoteElement::new_inherited(local_name, prefix, document),
+               prefix: Option<Prefix>,
+               document: &Document) -> DomRoot<HTMLQuoteElement> {
+        Node::reflect_node(Box::new(HTMLQuoteElement::new_inherited(local_name, prefix, document)),
                            document,
                            HTMLQuoteElementBinding::Wrap)
     }

@@ -6,7 +6,7 @@
 description: Object rest element needs to be the last AssignmenProperty in ObjectAssignmentPattern. (For..of statement)
 esid: sec-for-in-and-for-of-statements-runtime-semantics-labelledevaluation
 es6id: 13.7.5.11
-features: [destructuring-binding]
+features: [object-rest, destructuring-binding]
 flags: [generated]
 negative:
   phase: early
@@ -29,6 +29,7 @@ info: |
           lhs using AssignmentPattern as the goal symbol.
     [...]
 ---*/
+throw "Test262: This statement should not be evaluated.";
 var rest, b;
 
 for ({...rest, b} of [{}

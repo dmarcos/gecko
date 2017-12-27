@@ -67,9 +67,6 @@ public:
 protected:
     bool mIsLocked;
     bool mIsProducerAcquired;
-#ifdef DEBUG
-    nsIThread* const mOwningThread;
-#endif
 
     SharedSurface(SharedSurfaceType type,
                   AttachmentType attachType,
@@ -79,8 +76,7 @@ protected:
                   bool canRecycle);
 
 public:
-    virtual ~SharedSurface() {
-    }
+    virtual ~SharedSurface();
 
     // Specifies to the TextureClient any flags which
     // are required by the SharedSurface backend.
@@ -95,6 +91,10 @@ public:
 
     // Unlocking is harmless if we're already unlocked.
     void UnlockProd();
+
+    // This surface has been moved to the front buffer and will not be locked again
+    // until it is recycled. Do any finalization steps here.
+    virtual void Commit(){}
 
 protected:
     virtual void LockProdImpl() = 0;

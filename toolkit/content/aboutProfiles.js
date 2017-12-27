@@ -27,9 +27,7 @@ const bundle = Services.strings.createBundle(
 function findCurrentProfile() {
   let cpd;
   try {
-    cpd = Cc["@mozilla.org/file/directory_service;1"]
-            .getService(Ci.nsIProperties)
-            .get("ProfD", Ci.nsIFile);
+    cpd = Services.dirsvc.get("ProfD", Ci.nsIFile);
   } catch (e) {}
 
   if (cpd) {
@@ -76,15 +74,15 @@ function refreshUI() {
   createButton.onclick = createProfileWizard;
 
   let restartSafeModeButton = document.getElementById("restart-in-safe-mode-button");
-  restartSafeModeButton.onclick = function() { restart(true); }
+  restartSafeModeButton.onclick = function() { restart(true); };
 
   let restartNormalModeButton = document.getElementById("restart-button");
-  restartNormalModeButton.onclick = function() { restart(false); }
+  restartNormalModeButton.onclick = function() { restart(false); };
 }
 
 function openDirectory(dir) {
   let nsLocalFile = Components.Constructor("@mozilla.org/file/local;1",
-                                           "nsILocalFile", "initWithPath");
+                                           "nsIFile", "initWithPath");
   new nsLocalFile(dir).reveal();
 }
 
@@ -291,7 +289,7 @@ function removeProfile(profile) {
     }
   }
 
-  profile.remove(deleteFiles);
+  profile.removeInBackground(deleteFiles);
   ProfileService.flush();
   refreshUI();
 }

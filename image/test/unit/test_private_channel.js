@@ -82,7 +82,7 @@ function run_loadImage_tests() {
       loadImage(false, function() {
         loadImage(true, function() {
           loadImage(true, function() {
-            do_check_eq(gHits, 2);
+            Assert.equal(gHits, 2);
             server.stop(do_test_finished);
           });
         });
@@ -104,9 +104,11 @@ function cleanup()
 }
 
 function run_test() {
-  do_register_cleanup(cleanup);
+  registerCleanupFunction(cleanup);
 
   do_test_pending();
+
+  Services.prefs.setBoolPref("network.http.rcwn.enabled", false);
 
   // We create a public channel that loads an image, then an identical
   // one that should cause a cache read. We then create a private channel
@@ -117,7 +119,7 @@ function run_test() {
     setup_chan('/image.png', false, function() {
       setup_chan('/image.png', true, function() {
         setup_chan('/image.png', true, function() {
-          do_check_eq(gHits, 2);
+          Assert.equal(gHits, 2);
           run_loadImage_tests();
         });
       });

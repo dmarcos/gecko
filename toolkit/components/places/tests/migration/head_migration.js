@@ -1,7 +1,7 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-"use strict"
+"use strict";
 
 var { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 
@@ -28,20 +28,17 @@ const DB_FILENAME = "places.sqlite";
  *        toolkit/components/places/tests/migration!
  * @return {Promise}
  */
-var setupPlacesDatabase = Task.async(function* (aFileName) {
-  let currentDir = yield OS.File.getCurrentDirectory();
+var setupPlacesDatabase = async function(aFileName) {
+  let currentDir = await OS.File.getCurrentDirectory();
 
   let src = OS.Path.join(currentDir, aFileName);
-  Assert.ok((yield OS.File.exists(src)), "Database file found");
+  Assert.ok((await OS.File.exists(src)), "Database file found");
 
   // Ensure that our database doesn't already exist.
   let dest = OS.Path.join(OS.Constants.Path.profileDir, DB_FILENAME);
-  Assert.ok(!(yield OS.File.exists(dest)), "Database file should not exist yet");
+  Assert.ok(!(await OS.File.exists(dest)), "Database file should not exist yet");
 
-  yield OS.File.copy(src, dest);
-});
+  await OS.File.copy(src, dest);
+};
 
 // This works provided all tests in this folder use add_task.
-function run_test() {
-  run_next_test();
-}

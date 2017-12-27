@@ -7,7 +7,7 @@
 var { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/Messaging.jsm");
-Cu.import('resource://gre/modules/Geometry.jsm');
+Cu.import("resource://gre/modules/Geometry.jsm");
 
 const ACCESSIBLECARET_PREF = "layout.accessiblecaret.enabled";
 const BASE_TEST_URL = "http://mochi.test:8888/tests/robocop/testAccessibleCarets.html";
@@ -18,6 +18,8 @@ const TAB_CHANGE_EVENT = "testAccessibleCarets:TabChange";
 const TAB_STOP_EVENT = "STOP";
 
 const gChromeWin = Services.wm.getMostRecentWindow("navigator:browser");
+const gActionBarHandler = Cc["@mozilla.org/browser/browser-clh;1"]
+    .getService().wrappedJSObject.ActionBarHandler;
 
 /**
  * Wait for and return, when an expected tab change event occurs.
@@ -43,8 +45,11 @@ function do_promiseTabChangeEvent(tabId, eventType) {
  * or if we have basic content.
  */
 function isInputOrTextarea(element) {
+  // ChromeUtils isn't included in robocop tests, so we have to use a different
+  // way to test elements.
   return ((element instanceof Ci.nsIDOMHTMLInputElement) ||
-          (element instanceof Ci.nsIDOMHTMLTextAreaElement));
+          (element.localName === "textarea" &&
+           element.namespaceURI === "http://www.w3.org/1999/xhtml"));
 }
 
 /**
@@ -115,10 +120,9 @@ function getLongPressResult(browser, midPoint) {
   domWinUtils.sendTouchEventToWindow("touchend", [0], [midPoint.x], [midPoint.y],
                                      [1], [1], [0], [1], 1, 0);
 
-  let ActionBarHandler = gChromeWin.ActionBarHandler;
-  return { focusedElement: ActionBarHandler._targetElement,
-           text: ActionBarHandler._getSelectedText(),
-           selectionID: ActionBarHandler._selectionID,
+  return { focusedElement: gActionBarHandler._targetElement,
+           text: gActionBarHandler._getSelectedText(),
+           selectionID: gActionBarHandler._selectionID,
   };
 }
 
@@ -130,7 +134,7 @@ function getLongPressResult(browser, midPoint) {
  * @return Result boolean.
  */
 function UIhasActionByID(expectedActionID) {
-  let actions = gChromeWin.ActionBarHandler._actionBarActions;
+  let actions = gActionBarHandler._actionBarActions;
   return actions.some(action => {
     return action.id === expectedActionID;
   });
@@ -141,7 +145,7 @@ function UIhasActionByID(expectedActionID) {
  */
 function closeSelectionUI() {
   gChromeWin.WindowEventDispatcher.dispatch("TextSelection:End",
-    {selectionID: gChromeWin.ActionBarHandler._selectionID});
+    {selectionID: gActionBarHandler._selectionID});
 }
 
 /**

@@ -19,15 +19,15 @@
 #include "mozilla/ipc/MessageChannel.h"
 #include "mozilla/ipc/Transport.h"
 #include "mozilla/StaticMutex.h"
+#include "mozilla/SystemGroup.h"
 #include "mozilla/Unused.h"
 #include "nsPrintfCString.h"
 
 #if defined(MOZ_SANDBOX) && defined(XP_WIN)
-#define TARGET_SANDBOX_EXPORTS
 #include "mozilla/sandboxTarget.h"
 #endif
 
-#if defined(MOZ_CRASHREPORTER) && defined(XP_WIN)
+#if defined(XP_WIN)
 #include "aclapi.h"
 #include "sddl.h"
 
@@ -44,7 +44,7 @@ using base::ProcessId;
 
 namespace mozilla {
 
-#if defined(MOZ_CRASHREPORTER) && defined(XP_WIN)
+#if defined(XP_WIN)
 // Generate RAII classes for LPTSTR and PSECURITY_DESCRIPTOR.
 MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedLPTStr, \
                                           RemovePointer<LPTSTR>::Type, \
@@ -75,7 +75,8 @@ public:
                 NestedLevel aNestedLevel = NOT_NESTED)
     : IPC::Message(MSG_ROUTING_CONTROL, // these only go to top-level actors
                    CHANNEL_OPENED_MESSAGE_TYPE,
-                   aNestedLevel)
+                   0,
+                   HeaderFlags(aNestedLevel))
   {
     IPC::WriteParam(this, aDescriptor);
     IPC::WriteParam(this, aOtherProcess);
@@ -207,11 +208,9 @@ bool DuplicateHandle(HANDLE aSourceHandle,
                                                 FALSE,
                                                 aTargetProcessId));
   if (!targetProcess) {
-#ifdef MOZ_CRASHREPORTER
     CrashReporter::AnnotateCrashReport(
       NS_LITERAL_CSTRING("IPCTransportFailureReason"),
       NS_LITERAL_CSTRING("Failed to open target process."));
-#endif
     return false;
   }
 
@@ -221,7 +220,6 @@ bool DuplicateHandle(HANDLE aSourceHandle,
 }
 #endif
 
-#ifdef MOZ_CRASHREPORTER
 void
 AnnotateSystemError()
 {
@@ -237,9 +235,8 @@ AnnotateSystemError()
       nsPrintfCString("%" PRId64, error));
   }
 }
-#endif
 
-#if defined(MOZ_CRASHREPORTER) && defined(XP_MACOSX)
+#if defined(XP_MACOSX)
 void
 AnnotateCrashReportWithErrno(const char* tag, int error)
 {
@@ -286,7 +283,6 @@ FatalError(const char* aProtocolName, const char* aMsg, bool aIsParent)
   formattedMessage.AppendLiteral("]: \"");
   formattedMessage.AppendASCII(aMsg);
   if (aIsParent) {
-#ifdef MOZ_CRASHREPORTER
     // We're going to crash the parent process because at this time
     // there's no other really nice way of getting a minidump out of
     // this process if we're off the main thread.
@@ -297,25 +293,23 @@ FatalError(const char* aProtocolName, const char* aMsg, bool aIsParent)
     CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("IPCFatalErrorMsg"),
                                        nsDependentCString(aMsg));
     AnnotateSystemError();
-#endif
     MOZ_CRASH("IPC FatalError in the parent process!");
   } else {
     formattedMessage.AppendLiteral("\". abort()ing as a result.");
-    NS_RUNTIMEABORT(formattedMessage.get());
+    MOZ_CRASH_UNSAFE_OOL(formattedMessage.get());
   }
 }
 
 void
 LogicError(const char* aMsg)
 {
-  NS_RUNTIMEABORT(aMsg);
+  MOZ_CRASH_UNSAFE_OOL(aMsg);
 }
 
 void
 ActorIdReadError(const char* aActorDescription)
 {
-  nsPrintfCString message("Error deserializing id for %s", aActorDescription);
-  NS_RUNTIMEABORT(message.get());
+  MOZ_CRASH_UNSAFE_PRINTF("Error deserializing id for %s", aActorDescription);
 }
 
 void
@@ -343,22 +337,19 @@ MismatchedActorTypeError(const char* aActorDescription)
 void
 UnionTypeReadError(const char* aUnionName)
 {
-  nsPrintfCString message("error deserializing type of union %s", aUnionName);
-  NS_RUNTIMEABORT(message.get());
+  MOZ_CRASH_UNSAFE_PRINTF("error deserializing type of union %s", aUnionName);
 }
 
 void
 ArrayLengthReadError(const char* aElementName)
 {
-  nsPrintfCString message("error deserializing length of %s[]", aElementName);
-  NS_RUNTIMEABORT(message.get());
+  MOZ_CRASH_UNSAFE_PRINTF("error deserializing length of %s[]", aElementName);
 }
 
 void
 SentinelReadError(const char* aClassName)
 {
-  nsPrintfCString message("incorrect sentinel when reading %s", aClassName);
-  NS_RUNTIMEABORT(message.get());
+  MOZ_CRASH_UNSAFE_PRINTF("incorrect sentinel when reading %s", aClassName);
 }
 
 void
@@ -547,10 +538,26 @@ IProtocol::SetEventTargetForActor(IProtocol* aActor, nsIEventTarget* aEventTarge
 }
 
 void
+IProtocol::ReplaceEventTargetForActor(IProtocol* aActor,
+                                      nsIEventTarget* aEventTarget)
+{
+  // Ensure the actor has been registered.
+  MOZ_ASSERT(aActor->Manager());
+  ReplaceEventTargetForActorInternal(aActor, aEventTarget);
+}
+
+void
 IProtocol::SetEventTargetForActorInternal(IProtocol* aActor,
                                           nsIEventTarget* aEventTarget)
 {
   Manager()->SetEventTargetForActorInternal(aActor, aEventTarget);
+}
+
+void
+IProtocol::ReplaceEventTargetForActorInternal(IProtocol* aActor,
+                                              nsIEventTarget* aEventTarget)
+{
+  Manager()->ReplaceEventTargetForActorInternal(aActor, aEventTarget);
 }
 
 nsIEventTarget*
@@ -603,11 +610,7 @@ bool
 IToplevelProtocol::TakeMinidump(nsIFile** aDump, uint32_t* aSequence)
 {
   MOZ_RELEASE_ASSERT(GetSide() == ParentSide);
-#ifdef MOZ_CRASHREPORTER
   return XRE_TakeMinidumpForChild(OtherPid(), aDump, aSequence);
-#else
-  return false;
-#endif
 }
 
 bool
@@ -626,7 +629,16 @@ IToplevelProtocol::Open(MessageChannel* aChannel,
                         mozilla::ipc::Side aSide)
 {
   SetOtherProcessId(base::GetCurrentProcId());
-  return GetIPCChannel()->Open(aChannel, aMessageLoop, aSide);
+  return GetIPCChannel()->Open(aChannel, aMessageLoop->SerialEventTarget(), aSide);
+}
+
+bool
+IToplevelProtocol::Open(MessageChannel* aChannel,
+                        nsIEventTarget* aEventTarget,
+                        mozilla::ipc::Side aSide)
+{
+  SetOtherProcessId(base::GetCurrentProcId());
+  return GetIPCChannel()->Open(aChannel, aEventTarget, aSide);
 }
 
 void
@@ -874,6 +886,22 @@ IToplevelProtocol::SetEventTargetForActorInternal(IProtocol* aActor,
 
   MutexAutoLock lock(mEventTargetMutex);
   mEventTargetMap.AddWithID(aEventTarget, id);
+}
+
+void
+IToplevelProtocol::ReplaceEventTargetForActorInternal(
+  IProtocol* aActor,
+  nsIEventTarget* aEventTarget)
+{
+  // The EventTarget of a ToplevelProtocol shall never be set.
+  MOZ_RELEASE_ASSERT(aActor != this);
+
+  int32_t id = aActor->Id();
+  // The ID of the actor should have existed.
+  MOZ_RELEASE_ASSERT(id!= kNullActorId && id!= kFreedActorId);
+
+  MutexAutoLock lock(mEventTargetMutex);
+  mEventTargetMap.ReplaceWithID(aEventTarget, id);
 }
 
 } // namespace ipc

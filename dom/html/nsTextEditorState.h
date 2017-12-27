@@ -14,6 +14,7 @@
 #include "mozilla/dom/Element.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/TextEditor.h"
 #include "mozilla/WeakPtr.h"
 #include "mozilla/dom/HTMLInputElementBinding.h"
 #include "mozilla/dom/Nullable.h"
@@ -24,7 +25,6 @@ class nsTextInputSelectionImpl;
 class nsAnonDivObserver;
 class nsISelectionController;
 class nsFrameSelection;
-class nsIEditor;
 class nsITextControlElement;
 class nsFrame;
 
@@ -147,13 +147,11 @@ public:
   {
     Unlink();
     mValue.reset();
-    mCachedValue.Truncate();
     mValueBeingSet.Truncate();
     mTextCtrlElement = nullptr;
-    MOZ_ASSERT(!mMutationObserver);
   }
 
-  nsIEditor* GetEditor();
+  mozilla::TextEditor* GetTextEditor();
   nsISelectionController* GetSelectionController() const;
   nsFrameSelection* GetConstFrameSelection();
   nsresult BindToFrame(nsTextControlFrame* aFrame);
@@ -173,37 +171,42 @@ public:
     // Whether the value change should be notified to the frame/contet nor not.
     eSetValue_Notify                = 1 << 2,
     // Whether to move the cursor to end of the value (in the case when we have
-    // cached selection offsets).  If this is not set, the cached selection
-    // offsets will simply be clamped to be within the length of the new value.
-    eSetValue_MoveCursorToEnd       = 1 << 3,
+    // cached selection offsets), in the case when the value has changed.  If
+    // this is not set, the cached selection offsets will simply be clamped to
+    // be within the length of the new value.  In either case, if the value has
+    // not changed the cursor won't move.
+    eSetValue_MoveCursorToEndIfValueChanged = 1 << 3,
+    // The value is changed for a XUL text control as opposed to for an HTML
+    // text control.  Such value changes are different in that they preserve the
+    // undo history.
+    eSetValue_ForXUL                = 1 << 4,
   };
-  MOZ_MUST_USE bool SetValue(const nsAString& aValue, uint32_t aFlags);
+  MOZ_MUST_USE bool SetValue(const nsAString& aValue,
+                             const nsAString* aOldValue,
+                             uint32_t aFlags);
+  MOZ_MUST_USE bool SetValue(const nsAString& aValue,
+                             uint32_t aFlags)
+  {
+    return SetValue(aValue, nullptr, aFlags);
+  }
   void GetValue(nsAString& aValue, bool aIgnoreWrap) const;
+  bool HasNonEmptyValue();
+  // The following methods are for textarea element to use whether default
+  // value or not.
+  // XXX We might have to add assertion when it is into editable,
+  // or reconsider fixing bug 597525 to remove these.
   void EmptyValue() { if (mValue) mValue->Truncate(); }
   bool IsEmpty() const { return mValue ? mValue->IsEmpty() : true; }
 
-  nsresult CreatePlaceholderNode();
-  nsresult CreatePreviewNode();
-  mozilla::dom::Element* CreateEmptyDivNode();
-
-  mozilla::dom::Element* GetRootNode() {
-    return mRootNode;
-  }
-  mozilla::dom::Element* GetPlaceholderNode() {
-    return mPlaceholderDiv;
-  }
-  mozilla::dom::Element* GetPreviewNode() {
-    return mPreviewDiv;
-  }
+  mozilla::dom::Element* GetRootNode();
+  mozilla::dom::Element* GetPlaceholderNode();
+  mozilla::dom::Element* GetPreviewNode();
 
   bool IsSingleLineTextControl() const {
     return mTextCtrlElement->IsSingleLineTextControl();
   }
   bool IsTextArea() const {
     return mTextCtrlElement->IsTextArea();
-  }
-  bool IsPlainTextControl() const {
-    return mTextCtrlElement->IsPlainTextControl();
   }
   bool IsPasswordTextControl() const {
     return mTextCtrlElement->IsPasswordTextControl();
@@ -224,7 +227,6 @@ public:
   bool GetPlaceholderVisibility() {
     return mPlaceholderVisibility;
   }
-  void UpdatePlaceholderText(bool aNotify);
 
   // preview methods
   void SetPreviewText(const nsAString& aValue, bool aNotify);
@@ -238,9 +240,7 @@ public:
    * @param aMaxLength the value of the max length attr
    * @returns false if attr not defined
    */
-  bool GetMaxLength(int32_t* aMaxLength);
-
-  void ClearValueCache() { mCachedValue.Truncate(); }
+  int32_t GetMaxLength();
 
   void HideSelectionIfBlurred();
 
@@ -280,10 +280,15 @@ public:
         mIsDirty = true;
         mDirection = value;
       }
-      // return true only if mStart, mEnd, or mDirection have been modified
+      // return true only if mStart, mEnd, or mDirection have been modified,
+      // or if SetIsDirty() was explicitly called.
       bool IsDirty() const
       {
         return mIsDirty;
+      }
+      void SetIsDirty()
+      {
+        mIsDirty = true;
       }
     private:
       uint32_t mStart, mEnd;
@@ -371,8 +376,8 @@ public:
                       mozilla::Nothing());
 
   void UpdateEditableState(bool aNotify) {
-    if (mRootNode) {
-      mRootNode->UpdateEditableState(aNotify);
+    if (auto* root = GetRootNode()) {
+      root->UpdateEditableState(aNotify);
     }
   }
 
@@ -383,8 +388,6 @@ private:
   nsTextEditorState(const nsTextEditorState&);
   // not assignable
   void operator= (const nsTextEditorState&);
-
-  nsresult CreateRootNode();
 
   void ValueWasChanged(bool aNotify);
 
@@ -428,18 +431,12 @@ private:
   // The text control element owns this object, and ensures that this object
   // has a smaller lifetime.
   nsITextControlElement* MOZ_NON_OWNING_REF mTextCtrlElement;
-  // mSelCon is non-null while we have an mBoundFrame.
   RefPtr<nsTextInputSelectionImpl> mSelCon;
   RefPtr<RestoreSelectionState> mRestoringSelection;
-  nsCOMPtr<nsIEditor> mEditor;
-  nsCOMPtr<mozilla::dom::Element> mRootNode;
-  nsCOMPtr<mozilla::dom::Element> mPlaceholderDiv;
-  nsCOMPtr<mozilla::dom::Element> mPreviewDiv;
+  RefPtr<mozilla::TextEditor> mTextEditor;
   nsTextControlFrame* mBoundFrame;
   RefPtr<nsTextInputListener> mTextListener;
   mozilla::Maybe<nsString> mValue;
-  RefPtr<nsAnonDivObserver> mMutationObserver;
-  mutable nsString mCachedValue; // Caches non-hard-wrapped value on a multiline control.
   // mValueBeingSet is available only while SetValue() is requesting to commit
   // composition.  I.e., this is valid only while mIsCommittingComposition is
   // true.  While active composition is being committed, GetValue() needs

@@ -55,10 +55,16 @@ interface mozILocaleService : nsISupports
    * Default locale of the browser. The locale we are guaranteed to have
    * resources for that should be used as a last resort fallack in cases
    * where requested locales do not match available locales.
+   */
+  readonly attribute ACString defaultLocale;
+
+  /**
+   * Last fallback is the final fallback locale we're going to attempt if all
+   * else fails in any language negotiation or locale resource retrieval situations.
    *
    * At the moment it returns `en-US`.
    */
-  readonly attribute ACString defaultLocale;
+  readonly attribute ACString lastFallbackLocale;
 
   /**
    * Returns a list of locales that the application should be localized to.
@@ -81,6 +87,22 @@ interface mozILocaleService : nsISupports
                                [retval, array, size_is(aCount)] out string aLocales);
   void getAppLocalesAsBCP47([optional] out unsigned long aCount,
                             [retval, array, size_is(aCount)] out string aLocales);
+
+  /**
+   * Returns a list of locales to use for any regional specific operations
+   * like date formatting, calendars, unit formatting etc.
+   *
+   * The result is a ordered list of valid locale IDs and it should be
+   * used for all APIs that accept list of locales, like ECMA402 and L10n APIs.
+   *
+   * This API always returns at least one locale.
+   *
+   * Example: ["en-US", "de", "pl", "sr-Cyrl", "zh-Hans-HK"]
+   *
+   * (See LocaleService.h for a more C++-friendly version of this.)
+   */
+  void getRegionalPrefsLocales([optional] out unsigned long aCount,
+                        [retval, array, size_is(aCount)] out string aOutArray);
 
   /**
    * Negotiates the best locales out of a ordered list of requested locales and

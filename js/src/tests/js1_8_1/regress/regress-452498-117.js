@@ -16,7 +16,6 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
 
@@ -41,16 +40,6 @@ function test()
 // Assertion failure: !(pnu->pn_dflags & PND_BOUND), at ../jsemit.cpp:1818
 // =====
   (function(){const x = 0, y = delete x;})()
-
-// Assertion failure: JOF_OPTYPE(op) == JOF_ATOM, at ../jsemit.cpp:1710
-// =====
-    try
-    {
-      (function(){(yield []) (function(){with({}){x} }); const x = undefined;})();
-    }
-    catch(ex)
-    {
-    }
 
 // Assertion failure: pnu->pn_lexdef == dn, at ../jsemit.cpp:1817
 // =====
@@ -78,7 +67,7 @@ function test()
   {
     eval(
       "for (a in (function(){" +
-      "      for each (let x in ['']) { return new function x1 (\u3056) { yield x } ();" +
+      "      for (let x of ['']) { return new function x1 (\u3056) { yield x } ();" +
       "        }})())" +
       "  function(){}"
       );
@@ -90,6 +79,4 @@ function test()
 // =====
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

@@ -63,7 +63,9 @@
      property names like 'border-bottom-right-radius' without ellipsis) */
   --timeline-sidebar-width: 200px;
   /* How high should animations displayed in the timeline be */
-  --timeline-animation-height: 20px;
+  --timeline-animation-height: 30px;
+  /* How high should animated properties displayed in the details view be */
+  --detail-animation-height: 20px;
   /* The size of a keyframe marker in the keyframes diagram */
   --keyframes-marker-size: 10px;
   /* The color of the time graduation borders */
@@ -107,7 +109,6 @@ body {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  color: var(--theme-content-color3);
 }
 
 /* The top toolbar, containing the toggle-all button. And the timeline toolbar,
@@ -139,11 +140,6 @@ body {
 
 /* The main animations container */
 
-#sidebar-panel-animationinspector {
-  height: 100%;
-  width: 100%;
-}
-
 #players {
   height: calc(100% - var(--toolbar-height));
 }
@@ -155,8 +151,6 @@ body {
 /* The error message, shown when an invalid/unanimated element is selected */
 
 #error-message {
-  padding-top: 10%;
-  text-align: center;
   flex: 1;
   overflow: auto;
 
@@ -214,7 +208,7 @@ body {
 }
 
 #timeline-rate select.devtools-button {
-  -moz-appearance: none; appearance: none;
+  -moz-appearance: none;
   text-align: center;
   font-family: inherit;
   color: var(--theme-body-color);
@@ -244,7 +238,8 @@ body {
 .animation-timeline {
   position: relative;
   width: 100%;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* Useful for positioning animations or keyframes in the timeline */
@@ -257,6 +252,15 @@ body {
      selected easily */
   right: var(--keyframes-marker-size);
   height: var(--timeline-animation-height);
+}
+
+.animation-detail .track-container {
+  height: var(--detail-animation-height);
+}
+
+.time-body.track-container {
+  height: 0;
+  pointer-events: none;
 }
 
 .animation-timeline .scrubber-wrapper {
@@ -306,9 +310,9 @@ body {
 }
 
 .animation-timeline .time-header {
-  min-height: var(--timeline-animation-height);
   cursor: col-resize;
   -moz-user-select: none;
+  height: 100%;
 }
 
 .animated-properties-header .header-item,
@@ -325,20 +329,20 @@ body {
   background-color: var(--theme-body-background);
   border-bottom: 1px solid var(--time-graduation-border-color);
   z-index: 3;
-  height: var(--timeline-animation-height);
+  height: var(--toolbar-height);
   width: 100%;
   overflow: hidden;
 }
 
 .animation-timeline .time-body {
-  top: var(--timeline-animation-height);
+  top: var(--toolbar-height);
+  z-index: 3;
 }
 
 .progress-tick-container .progress-tick,
 .animation-timeline .time-body .time-tick {
   -moz-user-select: none;
   position: absolute;
-  height: 100%;
 }
 
 .progress-tick-container .progress-tick::before,
@@ -372,7 +376,7 @@ body {
 }
 
 .animation-timeline .animation.selected {
-  background-color: var(--theme-selection-background-semitransparent);
+  background-color: var(--theme-selection-background-hover);
 }
 
 .animation-timeline .animation:last-child {
@@ -402,9 +406,14 @@ body {
   height: 100%;
 }
 
-.animation-timeline .animation .summary path {
-  fill: var(--timeline-background-color);
+.animation-timeline .animation .summary .effect-easing path {
+  fill: none;
   stroke: var(--timeline-border-color);
+  stroke-dasharray: 2px 2px;
+}
+
+.animation-timeline .animation .summary .keyframes-easing path {
+  fill: var(--timeline-background-color);
 }
 
 .animation-timeline .animation .summary .infinity.copied {
@@ -420,26 +429,27 @@ body {
 
 .animation-timeline .animation .name {
   position: absolute;
-  color: var(--theme-content-color3);
   top: 0px;
   left: 0px;
   height: 100%;
   width: 100%;
-  display: flex;
-  align-items: center;
-  padding: 0 2px;
-  box-sizing: border-box;
   --fast-track-icon-width: 15px;
-  z-index: 1;
 }
 
-.animation-timeline .animation .name div {
-  /* Flex items don't support text-overflow, so a child div is used */
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  background-color: rgba(255, 255, 255, 0.7);
-  max-width: 50%;
+.animation-timeline .animation .name svg {
+  height: 100%;
+  width: calc(100% - 20px);
+}
+
+.animation-timeline .animation .name text {
+  fill: var(--theme-focus-outline-color);
+  stroke: var(--theme-body-background);
+  stroke-width: 4;
+  stroke-opacity: .5;
+  stroke-linejoin: round;
+  paint-order: stroke;
+  text-anchor: end;
+  dominant-baseline: middle;
 }
 
 .animation-timeline .fast-track .name::after {
@@ -447,25 +457,19 @@ body {
   content: "";
   display: block;
   position: absolute;
-  top: 1px;
+  top: 5px;
   right: 0;
   height: 100%;
   width: var(--fast-track-icon-width);
   z-index: 1;
 }
 
-.animation-timeline .all-properties .name::after {
-  background-color: var(--theme-content-color3);
-  clip-path: url(images/animation-fast-track.svg#thunderbolt);
-  background-repeat: no-repeat;
-  background-position: center;
-}
-
+.animation-timeline .all-properties .name::after,
 .animation-timeline .some-properties .name::after {
-  background-color: var(--theme-content-color3);
-  clip-path: url(images/animation-fast-track.svg#thunderbolt);
+  -moz-context-properties: fill;
+  fill: var(--theme-content-color3);
+  background-image: url("images/animation-fast-track.svg");
   background-repeat: no-repeat;
-  background-position: center;
 }
 
 .animation-timeline .animation .delay,
@@ -531,18 +535,18 @@ body {
 }
 
 .animation-target .node-highlighter:hover {
-  filter: url(images/filters.svg#checked-icon-state);
+  filter: var(--theme-icon-checked-filter);
 }
 
 .animation-target .node-highlighter:active,
 .animation-target .node-highlighter.selected {
-  filter: url(images/filters.svg#checked-icon-state) brightness(0.9);
+  filter: var(--theme-icon-checked-filter) brightness(0.9);
 }
 
 /* Inline keyframes info in the timeline */
 
 .animation-detail .animated-properties .property {
-  height: var(--timeline-animation-height);
+  height: var(--detail-animation-height);
   position: relative;
 }
 
@@ -588,8 +592,9 @@ body {
   display: inline-block;
   width: 17px;
   height: 17px;
-  background-color: var(--background-color);
-  clip-path: url(images/animation-fast-track.svg#thunderbolt);
+  -moz-context-properties: fill;
+  fill: var(--background-color);
+  background-image: url("images/animation-fast-track.svg");
   vertical-align: middle;
 }
 
@@ -687,6 +692,24 @@ body {
   height: 100%;
 }
 
+.keyframes svg .hint {
+  stroke-opacity: 0;
+  stroke-linecap: round;
+  stroke-width: 5;
+}
+
+.keyframes svg path.hint {
+  fill: none;
+}
+
+.keyframes svg path.hint:hover {
+  stroke-opacity: 1;
+}
+
+.keyframes svg rect.hint {
+  fill-opacity: .1;
+}
+
 .animation-detail {
   position: relative;
   width: 100%;
@@ -749,8 +772,8 @@ body {
 .animated-properties-header {
   -moz-user-select: none;
   position: sticky;
-  top: var(--timeline-animation-height);
-  min-height: var(--timeline-animation-height);
+  top: var(--toolbar-height);
+  min-height: var(--toolbar-height);
   padding-top: 2px;
   z-index: 3;
   background-color: var(--theme-body-background);
@@ -776,7 +799,7 @@ body {
 
 .animated-properties-body .property:last-child {
   /* To display animation progress graph clealy when the scroll is bottom. */
-  padding-bottom: calc(var(--timeline-animation-height) / 2);
+  padding-bottom: calc(var(--detail-animation-height) / 2);
 }
 
 .animated-properties .progress-indicator-wrapper {

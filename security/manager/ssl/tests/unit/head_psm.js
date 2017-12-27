@@ -50,6 +50,7 @@ const SEC_ERROR_UNTRUSTED_CERT                          = SEC_ERROR_BASE + 21;
 const SEC_ERROR_EXPIRED_ISSUER_CERTIFICATE              = SEC_ERROR_BASE + 30;
 const SEC_ERROR_CA_CERT_INVALID                         = SEC_ERROR_BASE + 36;
 const SEC_ERROR_UNKNOWN_CRITICAL_EXTENSION              = SEC_ERROR_BASE + 41;
+const SEC_ERROR_PKCS7_BAD_SIGNATURE                     = SEC_ERROR_BASE + 47;
 const SEC_ERROR_INADEQUATE_KEY_USAGE                    = SEC_ERROR_BASE + 90;
 const SEC_ERROR_INADEQUATE_CERT_TYPE                    = SEC_ERROR_BASE + 91;
 const SEC_ERROR_CERT_NOT_IN_NAME_SPACE                  = SEC_ERROR_BASE + 112;
@@ -90,9 +91,6 @@ const certificateUsageSSLServer              = 0x0002;
 const certificateUsageSSLCA                  = 0x0008;
 const certificateUsageEmailSigner            = 0x0010;
 const certificateUsageEmailRecipient         = 0x0020;
-const certificateUsageObjectSigner           = 0x0040;
-const certificateUsageVerifyCA               = 0x0100;
-const certificateUsageStatusResponder        = 0x0400;
 
 // A map from the name of a certificate usage to the value of the usage.
 // Useful for printing debugging information and for enumerating all supported
@@ -103,9 +101,6 @@ const allCertificateUsages = {
   certificateUsageSSLCA,
   certificateUsageEmailSigner,
   certificateUsageEmailRecipient,
-  certificateUsageObjectSigner,
-  certificateUsageVerifyCA,
-  certificateUsageStatusResponder
 };
 
 const NO_FLAGS = 0;
@@ -125,6 +120,16 @@ function pemToBase64(pem) {
   return pem.replace(/-----BEGIN CERTIFICATE-----/, "")
             .replace(/-----END CERTIFICATE-----/, "")
             .replace(/[\r\n]/g, "");
+}
+
+function build_cert_chain(certNames) {
+  let certList = Cc["@mozilla.org/security/x509certlist;1"]
+                   .createInstance(Ci.nsIX509CertList);
+  certNames.forEach(function(certName) {
+    let cert = constructCertFromFile("bad_certs/" + certName + ".pem");
+    certList.addCert(cert);
+  });
+  return certList;
 }
 
 function readFile(file) {
@@ -175,8 +180,8 @@ function getXPCOMStatusFromNSS(statusNSS) {
 function checkCertErrorGenericAtTime(certdb, cert, expectedError, usage, time,
                                      /* optional */ hasEVPolicy,
                                      /* optional */ hostname) {
-  do_print(`cert cn=${cert.commonName}`);
-  do_print(`cert issuer cn=${cert.issuerCommonName}`);
+  info(`cert cn=${cert.commonName}`);
+  info(`cert issuer cn=${cert.issuerCommonName}`);
   let verifiedChain = {};
   let error = certdb.verifyCertAtTime(cert, usage, NO_FLAGS, hostname, time,
                                       verifiedChain, hasEVPolicy || {});
@@ -189,8 +194,8 @@ function checkCertErrorGenericAtTime(certdb, cert, expectedError, usage, time,
 function checkCertErrorGeneric(certdb, cert, expectedError, usage,
                                /* optional */ hasEVPolicy,
                                /* optional */ hostname) {
-  do_print(`cert cn=${cert.commonName}`);
-  do_print(`cert issuer cn=${cert.issuerCommonName}`);
+  info(`cert cn=${cert.commonName}`);
+  info(`cert issuer cn=${cert.issuerCommonName}`);
   let verifiedChain = {};
   let error = certdb.verifyCertNow(cert, usage, NO_FLAGS, hostname,
                                    verifiedChain, hasEVPolicy || {});
@@ -217,7 +222,7 @@ function _getLibraryFunctionWithNoArguments(functionName, libraryName,
   } catch (e) {
     // In case opening the library without a full path fails,
     // try again with a full path.
-    let file = Services.dirsvc.get("GreBinD", Ci.nsILocalFile);
+    let file = Services.dirsvc.get("GreBinD", Ci.nsIFile);
     file.append(path);
     nsslib = ctypes.open(file.path);
   }
@@ -238,15 +243,18 @@ function clearSessionCache() {
   let SSL_ClearSessionCache = null;
   try {
     SSL_ClearSessionCache =
-      _getLibraryFunctionWithNoArguments("SSL_ClearSessionCache", "ssl3");
+      _getLibraryFunctionWithNoArguments("SSL_ClearSessionCache", "ssl3",
+                                         ctypes.void_t);
   } catch (e) {
     // On Windows, this is actually in the nss3 library.
     SSL_ClearSessionCache =
-      _getLibraryFunctionWithNoArguments("SSL_ClearSessionCache", "nss3");
+      _getLibraryFunctionWithNoArguments("SSL_ClearSessionCache", "nss3",
+                                         ctypes.void_t);
   }
-  if (!SSL_ClearSessionCache || SSL_ClearSessionCache() != 0) {
-    throw new Error("Failed to clear SSL session cache");
+  if (!SSL_ClearSessionCache) {
+    throw new Error("couldn't get SSL_ClearSessionCache");
   }
+  SSL_ClearSessionCache();
 }
 
 function getSSLStatistics() {
@@ -447,7 +455,7 @@ function add_connection_test(aHost, aExpectedResult,
       aBeforeConnect();
     }
     connectTo(aHost).then(function(conn) {
-      do_print("handling " + aHost);
+      info("handling " + aHost);
       let expectedNSResult = aExpectedResult == PRErrorCodeSuccess
                            ? Cr.NS_OK
                            : getXPCOMStatusFromNSS(aExpectedResult);
@@ -466,12 +474,12 @@ function _getBinaryUtil(binaryUtilName) {
   let directoryService = Cc["@mozilla.org/file/directory_service;1"]
                            .getService(Ci.nsIProperties);
 
-  let utilBin = directoryService.get("CurProcD", Ci.nsILocalFile);
+  let utilBin = directoryService.get("CurProcD", Ci.nsIFile);
   utilBin.append(binaryUtilName + mozinfo.bin_suffix);
   // If we're testing locally, the above works. If not, the server executable
   // is in another location.
   if (!utilBin.exists()) {
-    utilBin = directoryService.get("CurWorkD", Ci.nsILocalFile);
+    utilBin = directoryService.get("CurWorkD", Ci.nsIFile);
     while (utilBin.path.indexOf("xpcshell") != -1) {
       utilBin = utilBin.parent;
     }
@@ -515,7 +523,7 @@ function _setupTLSServerTest(serverBinName, certsPath) {
         aResponse.setHeader("Content-Type", "text/plain");
         let responseBody = "OK!";
         aResponse.bodyOutputStream.write(responseBody, responseBody.length);
-        do_execute_soon(function() {
+        executeSoon(function() {
           httpServer.stop(run_next_test);
         });
       });
@@ -524,13 +532,13 @@ function _setupTLSServerTest(serverBinName, certsPath) {
   let serverBin = _getBinaryUtil(serverBinName);
   let process = Cc["@mozilla.org/process/util;1"].createInstance(Ci.nsIProcess);
   process.init(serverBin);
-  let certDir = directoryService.get("CurWorkD", Ci.nsILocalFile);
+  let certDir = directoryService.get("CurWorkD", Ci.nsIFile);
   certDir.append(`${certsPath}`);
   Assert.ok(certDir.exists(), `certificate folder (${certsPath}) should exist`);
   // Using "sql:" causes the SQL DB to be used so we can run tests on Android.
   process.run(false, [ "sql:" + certDir.path ], 1);
 
-  do_register_cleanup(function() {
+  registerCleanupFunction(function() {
     process.kill();
   });
 }
@@ -538,7 +546,7 @@ function _setupTLSServerTest(serverBinName, certsPath) {
 // Returns an Array of OCSP responses for a given ocspRespArray and a location
 // for a nssDB where the certs and public keys are prepopulated.
 // ocspRespArray is an array of arrays like:
-// [ [typeOfResponse, certnick, extracertnick]...]
+// [ [typeOfResponse, certnick, extracertnick, thisUpdateSkew]...]
 function generateOCSPResponses(ocspRespArray, nssDBlocation) {
   let utilBinName = "GenerateOCSPResponse";
   let ocspGenBin = _getBinaryUtil(utilBinName);
@@ -553,13 +561,14 @@ function generateOCSPResponses(ocspRespArray, nssDBlocation) {
     argArray.push(ocspRespArray[i][0]); // ocsRespType;
     argArray.push(ocspRespArray[i][1]); // nick;
     argArray.push(ocspRespArray[i][2]); // extranickname
+    argArray.push(ocspRespArray[i][3]); // thisUpdate skew
     argArray.push(filename);
-    do_print("argArray = " + argArray);
+    info("argArray = " + argArray);
 
     let process = Cc["@mozilla.org/process/util;1"]
                     .createInstance(Ci.nsIProcess);
     process.init(ocspGenBin);
-    process.run(true, argArray, 5);
+    process.run(true, argArray, argArray.length);
     Assert.equal(0, process.exitValue, "Process exit value should be 0");
     let ocspFile = do_get_file(i.toString() + ".ocsp", false);
     retArray.push(readFile(ocspFile));
@@ -614,7 +623,7 @@ function startOCSPResponder(serverPort, identity, nssDBLocation,
       if (expectedResponseTypes && expectedResponseTypes.length >= 1) {
         responseType = expectedResponseTypes.shift();
       }
-      return [responseType, expectedNick, "unused"];
+      return [responseType, expectedNick, "unused", 0];
     }
   );
   let ocspResponses = generateOCSPResponses(ocspResponseGenerationArgs,
@@ -622,7 +631,7 @@ function startOCSPResponder(serverPort, identity, nssDBLocation,
   let httpServer = new HttpServer();
   httpServer.registerPrefixHandler("/",
     function handleServerCallback(aRequest, aResponse) {
-      do_print("got request for: " + aRequest.path);
+      info("got request for: " + aRequest.path);
       let basePath = aRequest.path.slice(1).split("/")[0];
       if (expectedBasePaths.length >= 1) {
         Assert.equal(basePath, expectedBasePaths.shift(),
@@ -694,7 +703,7 @@ FakeSSLStatus.prototype = {
 function add_cert_override(aHost, aExpectedBits, aExpectedErrorRegexp,
                            aSecurityInfo) {
   if (aExpectedErrorRegexp) {
-    do_print(aSecurityInfo.errorMessage);
+    info(aSecurityInfo.errorMessage);
     Assert.ok(aExpectedErrorRegexp.test(aSecurityInfo.errorMessage),
               "Actual error message should match expected error regexp");
   }
@@ -704,6 +713,7 @@ function add_cert_override(aHost, aExpectedBits, aExpectedErrorRegexp,
     (sslstatus.isUntrusted ? Ci.nsICertOverrideService.ERROR_UNTRUSTED : 0) |
     (sslstatus.isDomainMismatch ? Ci.nsICertOverrideService.ERROR_MISMATCH : 0) |
     (sslstatus.isNotValidAtThisTime ? Ci.nsICertOverrideService.ERROR_TIME : 0);
+
   Assert.equal(bits, aExpectedBits,
                "Actual and expected override bits should match");
   let cert = sslstatus.serverCert;
@@ -719,7 +729,8 @@ function add_cert_override(aHost, aExpectedBits, aExpectedErrorRegexp,
 // with the expected errors and that adding an override results in a subsequent
 // connection succeeding.
 function add_cert_override_test(aHost, aExpectedBits, aExpectedError,
-                                aExpectedErrorRegexp = undefined) {
+                                aExpectedErrorRegexp = undefined,
+                                aExpectedSSLStatus = undefined) {
   add_connection_test(aHost, aExpectedError, null,
                       add_cert_override.bind(this, aHost, aExpectedBits,
                                              aExpectedErrorRegexp));
@@ -727,6 +738,13 @@ function add_cert_override_test(aHost, aExpectedBits, aExpectedError,
     Assert.ok(aSecurityInfo.securityState &
               Ci.nsIWebProgressListener.STATE_CERT_USER_OVERRIDDEN,
               "Cert override flag should be set on the security state");
+    if (aExpectedSSLStatus) {
+      let sslstatus = aSecurityInfo.QueryInterface(Ci.nsISSLStatusProvider)
+                                  .SSLStatus;
+      if (aExpectedSSLStatus.failedCertChain) {
+        ok(aExpectedSSLStatus.failedCertChain.equals(sslstatus.failedCertChain));
+      }
+    }
   });
 }
 
@@ -762,14 +780,6 @@ function add_prevented_cert_override_test(aHost, aExpectedBits, aExpectedError) 
   add_connection_test(aHost, aExpectedError, null,
                       attempt_adding_cert_override.bind(this, aHost, aExpectedBits));
   add_connection_test(aHost, aExpectedError);
-}
-
-function loginToDBWithDefaultPassword() {
-  let tokenDB = Cc["@mozilla.org/security/pk11tokendb;1"]
-                  .getService(Ci.nsIPK11TokenDB);
-  let token = tokenDB.getInternalKeyToken();
-  token.initPassword("");
-  token.login(/* force */ false);
 }
 
 // Helper for asyncTestCertificateUsages.
@@ -839,21 +849,22 @@ function asyncTestCertificateUsages(certdb, cert, expectedUsages) {
  *                  module gets reported.
  */
 function loadPKCS11TestModule(expectModuleUnloadToFail) {
-  let libraryFile = Services.dirsvc.get("CurWorkD", Ci.nsILocalFile);
+  let libraryFile = Services.dirsvc.get("CurWorkD", Ci.nsIFile);
   libraryFile.append("pkcs11testmodule");
   libraryFile.append(ctypes.libraryName("pkcs11testmodule"));
   ok(libraryFile.exists(), "The pkcs11testmodule file should exist");
 
-  let pkcs11 = Cc["@mozilla.org/security/pkcs11;1"].getService(Ci.nsIPKCS11);
-  do_register_cleanup(() => {
+  let pkcs11ModuleDB = Cc["@mozilla.org/security/pkcs11moduledb;1"]
+                         .getService(Ci.nsIPKCS11ModuleDB);
+  registerCleanupFunction(() => {
     try {
-      pkcs11.deleteModule("PKCS11 Test Module");
+      pkcs11ModuleDB.deleteModule("PKCS11 Test Module");
     } catch (e) {
       Assert.ok(expectModuleUnloadToFail,
                 `Module unload should suceed only when expected: ${e}`);
     }
   });
-  pkcs11.addModule("PKCS11 Test Module", libraryFile.path, 0, 0);
+  pkcs11ModuleDB.addModule("PKCS11 Test Module", libraryFile.path, 0, 0);
 }
 
 /**
@@ -866,4 +877,18 @@ function hexify(data) {
   // string when we want one that's two characters, and unconditionally
   // prepending a "0" solves the problem.
   return Array.from(data, (c, i) => ("0" + data.charCodeAt(i).toString(16)).slice(-2)).join("");
+}
+
+/**
+ * @param {String[]} lines
+ *        Lines to write. Each line automatically has "\n" appended to it when
+ *        being written.
+ * @param {nsIFileOutputStream} outputStream
+ */
+function writeLinesAndClose(lines, outputStream) {
+  for (let line of lines) {
+    line += "\n";
+    outputStream.write(line, line.length);
+  }
+  outputStream.close();
 }

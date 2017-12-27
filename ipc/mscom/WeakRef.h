@@ -12,6 +12,7 @@
 
 #include "mozilla/Assertions.h"
 #include "mozilla/Atomics.h"
+#include "mozilla/Mutex.h"
 #include "mozilla/RefPtr.h"
 #include "nsISupportsImpl.h"
 
@@ -23,6 +24,7 @@
 namespace mozilla {
 namespace mscom {
 
+struct IWeakReferenceSource;
 class WeakReferenceSupport;
 
 namespace detail {
@@ -34,6 +36,7 @@ public:
   void Lock();
   void Unlock();
 
+  HRESULT ToStrongRef(IWeakReferenceSource** aOutStringReference);
   HRESULT Resolve(REFIID aIid, void** aOutStrongReference);
   void Clear();
 
@@ -60,6 +63,7 @@ DEFINE_GUID(IID_IWeakReference,
 
 struct IWeakReference : public IUnknown
 {
+  virtual STDMETHODIMP ToStrongRef(IWeakReferenceSource** aOutStrongReference) = 0;
   virtual STDMETHODIMP Resolve(REFIID aIid, void** aOutStrongReference) = 0;
 };
 
@@ -98,6 +102,12 @@ protected:
   virtual HRESULT ThreadSafeQueryInterface(REFIID aIid,
                                            IUnknown** aOutInterface) = 0;
 
+  void Lock();
+  void Unlock();
+
+  typedef BaseAutoLock<WeakReferenceSupport> AutoLock;
+  friend class BaseAutoLock<WeakReferenceSupport>;
+
 private:
   RefPtr<detail::SharedRef> mSharedRef;
   ULONG                     mRefCnt;
@@ -114,6 +124,7 @@ public:
   STDMETHODIMP_(ULONG) Release() override;
 
   // IWeakReference
+  STDMETHODIMP ToStrongRef(IWeakReferenceSource** aOutStrongReference) override;
   STDMETHODIMP Resolve(REFIID aIid, void** aOutStrongReference) override;
 
   explicit WeakRef(RefPtr<detail::SharedRef>& aSharedRef);

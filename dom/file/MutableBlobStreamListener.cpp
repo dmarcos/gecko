@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,14 +13,22 @@ namespace dom {
 MutableBlobStreamListener::MutableBlobStreamListener(MutableBlobStorage::MutableBlobStorageType aStorageType,
                                                      nsISupports* aParent,
                                                      const nsACString& aContentType,
-                                                     MutableBlobStorageCallback* aCallback)
+                                                     MutableBlobStorageCallback* aCallback,
+                                                     nsIEventTarget* aEventTarget)
   : mCallback(aCallback)
   , mParent(aParent)
   , mStorageType(aStorageType)
   , mContentType(aContentType)
+  , mEventTarget(aEventTarget)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aCallback);
+
+  if (!mEventTarget) {
+    mEventTarget = GetMainThreadEventTarget();
+  }
+
+  MOZ_ASSERT(mEventTarget);
 }
 
 MutableBlobStreamListener::~MutableBlobStreamListener()
@@ -36,8 +45,9 @@ MutableBlobStreamListener::OnStartRequest(nsIRequest* aRequest, nsISupports* aCo
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(!mStorage);
+  MOZ_ASSERT(mEventTarget);
 
-  mStorage = new MutableBlobStorage(mStorageType);
+  mStorage = new MutableBlobStorage(mStorageType, mEventTarget);
   return NS_OK;
 }
 

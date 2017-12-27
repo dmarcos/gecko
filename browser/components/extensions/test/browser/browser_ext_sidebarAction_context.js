@@ -10,7 +10,7 @@ SpecialPowers.pushPrefEnv({
   set: [["extensions.sidebar-button.shown", true]],
 });
 
-function* runTests(options) {
+async function runTests(options) {
   async function background(getTests) {
     async function checkDetails(expecting, tabId) {
       let title = await browser.sidebarAction.getTitle({tabId});
@@ -120,9 +120,9 @@ function* runTests(options) {
     extension.sendMessage("runNextTest");
   }, {capture: true, once: true});
 
-  yield extension.startup();
-  yield awaitFinish;
-  yield extension.unload();
+  await extension.startup();
+  await awaitFinish;
+  await extension.unload();
 }
 
 let sidebar = `
@@ -134,8 +134,8 @@ let sidebar = `
   </body></html>
 `;
 
-add_task(function* testTabSwitchContext() {
-  yield runTests({
+add_task(async function testTabSwitchContext() {
+  await runTests({
     manifest: {
       "sidebar_action": {
         "default_icon": "default.png",
@@ -306,8 +306,8 @@ add_task(function* testTabSwitchContext() {
   });
 });
 
-add_task(function* testDefaultTitle() {
-  yield runTests({
+add_task(async function testDefaultTitle() {
+  await runTests({
     manifest: {
       "name": "Foo Extension",
 
@@ -371,6 +371,15 @@ add_task(function* testDefaultTitle() {
         async expect => {
           browser.test.log("Set default title to null string. Expect null string from API, extension title in UI.");
           browser.sidebarAction.setTitle({title: ""});
+
+          await expectDefaults(details[3]);
+          expect(details[3]);
+        },
+        async expect => {
+          browser.test.assertRejects(
+            browser.sidebarAction.setPanel({panel: "about:addons"}),
+            /Access denied for URL about:addons/,
+            "unable to set panel to about:addons");
 
           await expectDefaults(details[3]);
           expect(details[3]);

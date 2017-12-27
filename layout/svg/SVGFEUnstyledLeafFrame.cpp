@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,7 +8,7 @@
 #include "nsContainerFrame.h"
 #include "nsFrame.h"
 #include "nsGkAtoms.h"
-#include "nsSVGEffects.h"
+#include "SVGObserverUtils.h"
 #include "nsSVGFilters.h"
 
 class SVGFEUnstyledLeafFrame : public nsFrame
@@ -16,16 +17,15 @@ class SVGFEUnstyledLeafFrame : public nsFrame
   NS_NewSVGFEUnstyledLeafFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 protected:
   explicit SVGFEUnstyledLeafFrame(nsStyleContext* aContext)
-    : nsFrame(aContext)
+    : nsFrame(aContext, kClassID)
   {
     AddStateBits(NS_FRAME_SVG_LAYOUT | NS_FRAME_IS_NONDISPLAY);
   }
 
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(SVGFEUnstyledLeafFrame)
 
   virtual void BuildDisplayList(nsDisplayListBuilder* aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override {}
 
   virtual bool IsFrameOfType(uint32_t aFlags) const override
@@ -40,15 +40,8 @@ public:
   }
 #endif
 
-  /**
-   * Get the "type" of the frame
-   *
-   * @see nsGkAtoms::svgFEUnstyledLeafFrame
-   */
-  virtual nsIAtom* GetType() const override;
-
   virtual nsresult AttributeChanged(int32_t  aNameSpaceID,
-                                    nsIAtom* aAttribute,
+                                    nsAtom* aAttribute,
                                     int32_t  aModType) override;
 
   virtual bool ComputeCustomOverflow(nsOverflowAreas& aOverflowAreas) override {
@@ -65,22 +58,16 @@ NS_NewSVGFEUnstyledLeafFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 
 NS_IMPL_FRAMEARENA_HELPERS(SVGFEUnstyledLeafFrame)
 
-nsIAtom *
-SVGFEUnstyledLeafFrame::GetType() const
-{
-  return nsGkAtoms::svgFEUnstyledLeafFrame;
-}
-
 nsresult
 SVGFEUnstyledLeafFrame::AttributeChanged(int32_t  aNameSpaceID,
-                                         nsIAtom* aAttribute,
+                                         nsAtom* aAttribute,
                                          int32_t  aModType)
 {
-  SVGFEUnstyledElement *element = static_cast<SVGFEUnstyledElement*>(mContent);
+  SVGFEUnstyledElement *element = static_cast<SVGFEUnstyledElement*>(GetContent());
   if (element->AttributeAffectsRendering(aNameSpaceID, aAttribute)) {
-    MOZ_ASSERT(GetParent()->GetParent()->GetType() == nsGkAtoms::svgFilterFrame,
+    MOZ_ASSERT(GetParent()->GetParent()->IsSVGFilterFrame(),
                "Observers observe the filter, so that's what we must invalidate");
-    nsSVGEffects::InvalidateDirectRenderingObservers(GetParent()->GetParent());
+    SVGObserverUtils::InvalidateDirectRenderingObservers(GetParent()->GetParent());
   }
 
   return nsFrame::AttributeChanged(aNameSpaceID, aAttribute, aModType);

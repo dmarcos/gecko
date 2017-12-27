@@ -174,7 +174,8 @@ class AsyncFetchAndSetIconForPage final : public Runnable
                               PageData& aPage,
                               bool aFaviconLoadPrivate,
                               nsIFaviconDataCallback* aCallback,
-                              nsIPrincipal* aLoadingPrincipal);
+                              nsIPrincipal* aLoadingPrincipal,
+                              uint64_t aRequestContextID);
 
 private:
   nsresult FetchFromNetwork();
@@ -187,6 +188,7 @@ private:
   nsMainThreadPtrHandle<nsIPrincipal> mLoadingPrincipal;
   bool mCanceled;
   nsCOMPtr<nsIRequest> mRequest;
+  uint64_t mRequestContextID;
 };
 
 /**
@@ -352,6 +354,36 @@ private:
   nsresult StorePayload(int64_t aId, int32_t aWidth, const nsCString& aPayload);
 
   nsCOMPtr<mozIStorageConnection> mDB;
+};
+
+/**
+ * Copies Favicons from one page to another one.
+ */
+class AsyncCopyFavicons final : public Runnable
+{
+public:
+  NS_DECL_NSIRUNNABLE
+
+  /**
+   * Constructor.
+   *
+   * @param aFromPage
+   *        The originating page.
+   * @param aToPage
+   *        The destination page.
+   * @param aFaviconLoadPrivate
+   *        Whether this favicon load is in private browsing.
+   * @param aCallback
+   *        An optional callback to invoke when done.
+   */
+  AsyncCopyFavicons(PageData& aFromPage,
+                    PageData& aToPage,
+                    nsIFaviconDataCallback* aCallback);
+
+private:
+  PageData mFromPage;
+  PageData mToPage;
+  nsMainThreadPtrHandle<nsIFaviconDataCallback> mCallback;
 };
 
 } // namespace places

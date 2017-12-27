@@ -127,8 +127,10 @@ public:
    *
    * @param aRemoveFromForm set false if you do not want this element removed
    *        from the form.  (Used by nsFormControlList::Clear())
+   * @param aUnbindOrDelete set true if the element is being deleted or unbound
+   *        from tree.
    */
-  virtual void ClearForm(bool aRemoveFromForm) = 0;
+  virtual void ClearForm(bool aRemoveFromForm, bool aUnbindOrDelete) = 0;
 
   /**
    * Get the type of this control as an int (see NS_FORM_* above)
@@ -200,6 +202,13 @@ public:
   inline bool IsSingleLineTextControl(bool aExcludePassword) const;
 
   /**
+  * Returns true if this is a single line text control or a number control.
+  * @param  aExcludePassword  to have NS_FORM_INPUT_PASSWORD returning false.
+  * @return true if this is a single line text control or a number control.
+  */
+  inline bool IsSingleLineTextOrNumberControl(bool aExcludePassword) const;
+
+  /**
    * Returns whether this is a submittable form control.
    * @return whether this is a submittable form control.
    */
@@ -263,6 +272,13 @@ nsIFormControl::IsSingleLineTextControl(bool aExcludePassword) const
   return IsSingleLineTextControl(aExcludePassword, ControlType());
 }
 
+bool
+nsIFormControl::IsSingleLineTextOrNumberControl(bool aExcludePassword) const
+{
+  return IsSingleLineTextControl(aExcludePassword) ||
+         ControlType() == NS_FORM_INPUT_NUMBER;
+}
+
 /*static*/
 bool
 nsIFormControl::IsSingleLineTextControl(bool aExcludePassword, uint32_t aType)
@@ -273,11 +289,6 @@ nsIFormControl::IsSingleLineTextControl(bool aExcludePassword, uint32_t aType)
          aType == NS_FORM_INPUT_TEL ||
          aType == NS_FORM_INPUT_URL ||
          // TODO: those are temporary until bug 773205 is fixed.
-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
-         // On Android/B2G, date/time input appears as a normal text box.
-         aType == NS_FORM_INPUT_TIME ||
-         aType == NS_FORM_INPUT_DATE ||
-#endif
          aType == NS_FORM_INPUT_MONTH ||
          aType == NS_FORM_INPUT_WEEK ||
          aType == NS_FORM_INPUT_DATETIME_LOCAL ||

@@ -14,8 +14,7 @@ var gDefaultAutoCompleteSearch = null;
  * @param aValues [in] set of possible results values
  * @param aComments [in] set of possible results descriptions
  */
-function initAutoComplete(aValues, aComments)
-{
+function initAutoComplete(aValues, aComments) {
   var allResults = new ResultsHeap(aValues, aComments);
   gDefaultAutoCompleteSearch =
     new AutoCompleteSearch("test-a11y-search", allResults);
@@ -26,8 +25,7 @@ function initAutoComplete(aValues, aComments)
 /**
  * Unregister 'test-a11y-search' AutoCompleteSearch.
  */
-function shutdownAutoComplete()
-{
+function shutdownAutoComplete() {
   unregisterAutoCompleteSearch(gDefaultAutoCompleteSearch);
   gDefaultAutoCompleteSearch.cid = null;
   gDefaultAutoCompleteSearch = null;
@@ -40,8 +38,7 @@ function shutdownAutoComplete()
  * @param aSearch       [in] AutoCompleteSearch object
  * @param aDescription  [in] description of the search object
  */
-function registerAutoCompleteSearch(aSearch, aDescription)
-{
+function registerAutoCompleteSearch(aSearch, aDescription) {
   var name = "@mozilla.org/autocomplete/search;1?name=" + aSearch.name;
 
   var uuidGenerator = Components.classes["@mozilla.org/uuid-generator;1"].
@@ -58,8 +55,7 @@ function registerAutoCompleteSearch(aSearch, aDescription)
 /**
  * Unregister the given AutoCompleteSearch.
  */
-function unregisterAutoCompleteSearch(aSearch)
-{
+function unregisterAutoCompleteSearch(aSearch) {
   var componentManager = Components.manager.QueryInterface(nsIComponentRegistrar);
   componentManager.unregisterFactory(aSearch.cid, aSearch);
 }
@@ -68,8 +64,7 @@ function unregisterAutoCompleteSearch(aSearch)
 /**
  * A container to keep all possible results of autocomplete search.
  */
-function ResultsHeap(aValues, aComments)
-{
+function ResultsHeap(aValues, aComments) {
   this.values = aValues;
   this.comments = aComments;
 }
@@ -81,8 +76,7 @@ ResultsHeap.prototype =
   /**
    * Return AutoCompleteResult for the given search string.
    */
-  getAutoCompleteResultFor: function(aSearchString)
-  {
+  getAutoCompleteResultFor(aSearchString) {
     var values = [], comments = [];
     for (var idx = 0; idx < this.values.length; idx++) {
       if (this.values[idx].indexOf(aSearchString) != -1) {
@@ -92,7 +86,7 @@ ResultsHeap.prototype =
     }
     return new AutoCompleteResult(values, comments);
   }
-}
+};
 
 
 /**
@@ -101,8 +95,7 @@ ResultsHeap.prototype =
  * @param aName       [in] the name of autocomplete search
  * @param aAllResults [in] ResultsHeap object
  */
-function AutoCompleteSearch(aName, aAllResults)
-{
+function AutoCompleteSearch(aName, aAllResults) {
   this.name = aName;
   this.allResults = aAllResults;
 }
@@ -112,18 +105,15 @@ AutoCompleteSearch.prototype =
   constructor: AutoCompleteSearch,
 
   // nsIAutoCompleteSearch implementation
-  startSearch: function(aSearchString, aSearchParam, aPreviousResult,
-                        aListener)
-  {
+  startSearch(aSearchString, aSearchParam, aPreviousResult, aListener) {
     var result = this.allResults.getAutoCompleteResultFor(aSearchString);
     aListener.onSearchResult(this, result);
   },
 
-  stopSearch: function() {},
+  stopSearch() {},
 
   // nsISupports implementation
-  QueryInterface: function(iid)
-  {
+  QueryInterface(iid) {
     if (iid.equals(nsISupports) ||
         iid.equals(nsIFactory) ||
         iid.equals(nsIAutoCompleteSearch))
@@ -133,8 +123,7 @@ AutoCompleteSearch.prototype =
   },
 
   // nsIFactory implementation
-  createInstance: function(outer, iid)
-  {
+  createInstance(outer, iid) {
     return this.QueryInterface(iid);
   },
 
@@ -143,14 +132,13 @@ AutoCompleteSearch.prototype =
 
   // Results heap.
   allResults: null
-}
+};
 
 
 /**
  * nsIAutoCompleteResult implementation.
  */
-function AutoCompleteResult(aValues, aComments)
-{
+function AutoCompleteResult(aValues, aComments) {
   this.values = aValues;
   this.comments = aComments;
 
@@ -169,45 +157,38 @@ AutoCompleteResult.prototype =
 
   defaultIndex: 0,
 
-  get matchCount()
-  {
+  get matchCount() {
     return this.values.length;
   },
 
-  getValueAt: function(aIndex)
-  {
+  getValueAt(aIndex) {
     return this.values[aIndex];
   },
 
-  getLabelAt: function(aIndex)
-  {
+  getLabelAt(aIndex) {
     return this.getValueAt(aIndex);
   },
 
-  getCommentAt: function(aIndex)
-  {
+  getCommentAt(aIndex) {
     return this.comments[aIndex];
   },
 
-  getStyleAt: function(aIndex)
-  {
+  getStyleAt(aIndex) {
     return null;
   },
 
-  getImageAt: function(aIndex)
-  {
+  getImageAt(aIndex) {
     return "";
   },
 
-  getFinalCompleteValueAt: function(aIndex)
-  {
+  getFinalCompleteValueAt(aIndex) {
     return this.getValueAt(aIndex);
   },
 
-  removeValueAt: function (aRowIndex, aRemoveFromDb) {},
+  removeValueAt(aRowIndex, aRemoveFromDb) {},
 
   // nsISupports implementation
-  QueryInterface: function(iid) {
+  QueryInterface(iid) {
     if (iid.equals(nsISupports) ||
         iid.equals(nsIAutoCompleteResult))
       return this;
@@ -218,4 +199,4 @@ AutoCompleteResult.prototype =
   // Data
   values: null,
   comments: null
-}
+};

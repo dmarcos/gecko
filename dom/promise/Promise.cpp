@@ -14,7 +14,6 @@
 #include "mozilla/Preferences.h"
 
 #include "mozilla/dom/BindingUtils.h"
-#include "mozilla/dom/DOMError.h"
 #include "mozilla/dom/DOMException.h"
 #include "mozilla/dom/DOMExceptionBinding.h"
 #include "mozilla/dom/MediaStreamError.h"
@@ -37,9 +36,6 @@
 #include "WorkerRunnable.h"
 #include "WrapperFactory.h"
 #include "xpcpublic.h"
-#ifdef MOZ_CRASHREPORTER
-#include "nsExceptionHandler.h"
-#endif
 
 namespace mozilla {
 namespace dom {
@@ -228,15 +224,6 @@ Promise::Then(JSContext* aCx,
   aRetval.setObject(*retval);
 }
 
-// We need a dummy function to pass to JS::NewPromiseObject.
-static bool
-DoNothingPromiseExecutor(JSContext*, unsigned aArgc, JS::Value* aVp)
-{
-  JS::CallArgs args = CallArgsFromVp(aArgc, aVp);
-  args.rval().setUndefined();
-  return true;
-}
-
 void
 Promise::CreateWrapper(JS::Handle<JSObject*> aDesiredProto, ErrorResult& aRv)
 {
@@ -246,18 +233,7 @@ Promise::CreateWrapper(JS::Handle<JSObject*> aDesiredProto, ErrorResult& aRv)
     return;
   }
   JSContext* cx = jsapi.cx();
-
-  JSFunction* doNothingFunc =
-    JS_NewFunction(cx, DoNothingPromiseExecutor, /* nargs = */ 2,
-                   /* flags = */ 0, nullptr);
-  if (!doNothingFunc) {
-    JS_ClearPendingException(cx);
-    aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
-    return;
-  }
-
-  JS::Rooted<JSObject*> doNothingObj(cx, JS_GetFunctionObject(doNothingFunc));
-  mPromiseObj = JS::NewPromiseObject(cx, doNothingObj, aDesiredProto);
+  mPromiseObj = JS::NewPromiseObject(cx, nullptr, aDesiredProto);
   if (!mPromiseObj) {
     JS_ClearPendingException(cx);
     aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
@@ -304,14 +280,13 @@ NativeHandlerCallback(JSContext* aCx, unsigned aArgc, JS::Value* aVp)
 {
   JS::CallArgs args = CallArgsFromVp(aArgc, aVp);
 
-  JS::Rooted<JS::Value> v(aCx,
-                          js::GetFunctionNativeReserved(&args.callee(),
-                                                        SLOT_NATIVEHANDLER));
+  JS::Value v = js::GetFunctionNativeReserved(&args.callee(),
+                                              SLOT_NATIVEHANDLER);
   MOZ_ASSERT(v.isObject());
 
+  JS::Rooted<JSObject*> obj(aCx, &v.toObject());
   PromiseNativeHandler* handler = nullptr;
-  if (NS_FAILED(UNWRAP_OBJECT(PromiseNativeHandler, &v.toObject(),
-                              handler))) {
+  if (NS_FAILED(UNWRAP_OBJECT(PromiseNativeHandler, &obj, handler))) {
     return Throw(aCx, NS_ERROR_UNEXPECTED);
   }
 
@@ -522,7 +497,9 @@ Promise::ReportRejectedPromise(JSContext* aCx, JS::HandleObject aPromise)
   bool isMainThread = MOZ_LIKELY(NS_IsMainThread());
   bool isChrome = isMainThread ? nsContentUtils::IsSystemPrincipal(nsContentUtils::ObjectPrincipal(aPromise))
                                : GetCurrentThreadWorkerPrivate()->IsChromeWorker();
-  nsGlobalWindow* win = isMainThread ? xpc::WindowGlobalOrNull(aPromise) : nullptr;
+  nsGlobalWindowInner* win = isMainThread
+    ? xpc::WindowGlobalOrNull(aPromise)
+    : nullptr;
   xpcReport->Init(report.report(), report.toStringResult().c_str(), isChrome,
                   win ? win->AsInner()->WindowID() : 0);
 
@@ -562,6 +539,22 @@ Promise::PerformMicroTaskCheckpoint()
   } while (!microtaskQueue.empty());
 
   return true;
+}
+
+bool
+Promise::IsWorkerDebuggerMicroTaskEmpty()
+{
+  MOZ_ASSERT(!NS_IsMainThread(), "Wrong thread!");
+
+  CycleCollectedJSContext* context = CycleCollectedJSContext::Get();
+  if (!context) {
+    return true;
+  }
+
+  std::queue<nsCOMPtr<nsIRunnable>>* microtaskQueue =
+    &context->GetDebuggerPromiseMicroTaskQueue();
+
+  return microtaskQueue->empty();
 }
 
 void
@@ -703,7 +696,8 @@ class PromiseWorkerHolder final : public WorkerHolder
 
 public:
   explicit PromiseWorkerHolder(PromiseWorkerProxy* aProxy)
-    : mProxy(aProxy)
+    : WorkerHolder("PromiseWorkerHolder")
+    , mProxy(aProxy)
   {
     MOZ_ASSERT(aProxy);
   }
@@ -925,7 +919,7 @@ PromiseWorkerProxy::CustomWriteHandler(JSContext* aCx,
 
 // Specializations of MaybeRejectBrokenly we actually support.
 template<>
-void Promise::MaybeRejectBrokenly(const RefPtr<DOMError>& aArg) {
+void Promise::MaybeRejectBrokenly(const RefPtr<DOMException>& aArg) {
   MaybeSomething(aArg, &Promise::MaybeReject);
 }
 template<>

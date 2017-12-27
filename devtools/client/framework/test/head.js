@@ -8,6 +8,8 @@
 // shared-head.js handles imports, constants, and utility functions
 Services.scriptloader.loadSubScript("chrome://mochitests/content/browser/devtools/client/framework/test/shared-head.js", this);
 
+const EventEmitter = require("devtools/shared/old-event-emitter");
+
 function toggleAllTools(state) {
   for (let [, tool] of gDevTools._tools) {
     if (!tool.visibilityswitch) {
@@ -24,12 +26,10 @@ function toggleAllTools(state) {
 function getChromeActors(callback)
 {
   let { DebuggerServer } = require("devtools/server/main");
-  let { DebuggerClient } = require("devtools/shared/client/main");
+  let { DebuggerClient } = require("devtools/shared/client/debugger-client");
 
-  if (!DebuggerServer.initialized) {
-    DebuggerServer.init();
-    DebuggerServer.addBrowserActors();
-  }
+  DebuggerServer.init();
+  DebuggerServer.registerAllActors();
   DebuggerServer.allowChromeProcess = true;
 
   let client = new DebuggerClient(DebuggerServer.connectPipe());
@@ -145,4 +145,105 @@ function checkHostType(toolbox, hostType, previousHostType) {
     is(Services.prefs.getCharPref("devtools.toolbox.previousHost"),
       previousHostType, "The previous host is correct");
   }
+}
+
+/**
+ * Create a new <script> referencing URL.  Return a promise that
+ * resolves when this has happened
+ * @param {String} url
+ *        the url
+ * @return {Promise} a promise that resolves when the element has been created
+ */
+function createScript(url) {
+  info(`Creating script: ${url}`);
+  let mm = getFrameScript();
+  let command = `
+    let script = document.createElement("script");
+    script.setAttribute("src", "${url}");
+    document.body.appendChild(script);
+    null;
+  `;
+  return evalInDebuggee(mm, command);
+}
+
+/**
+ * Wait for the toolbox to notice that a given source is loaded
+ * @param {Toolbox} toolbox
+ * @param {String} url
+ *        the url to wait for
+ * @return {Promise} a promise that is resolved when the source is loaded
+ */
+function waitForSourceLoad(toolbox, url) {
+  info(`Waiting for source ${url} to be available...`);
+  return new Promise(resolve => {
+    let target = toolbox.target;
+
+    function sourceHandler(_, sourceEvent) {
+      if (sourceEvent && sourceEvent.source && sourceEvent.source.url === url) {
+        resolve();
+        target.off("source-updated", sourceHandler);
+      }
+    }
+
+    target.on("source-updated", sourceHandler);
+  });
+}
+
+/**
+* When a Toolbox is started it creates a DevToolPanel for each of the tools
+* by calling toolDefinition.build(). The returned object should
+* at least implement these functions. They will be used by the ToolBox.
+*
+* There may be no benefit in doing this as an abstract type, but if nothing
+* else gives us a place to write documentation.
+*/
+function DevToolPanel(iframeWindow, toolbox) {
+  EventEmitter.decorate(this);
+
+  this._toolbox = toolbox;
+  this._window = iframeWindow;
+}
+
+DevToolPanel.prototype = {
+  open: function () {
+    let deferred = defer();
+
+    executeSoon(() => {
+      this._isReady = true;
+      this.emit("ready");
+      deferred.resolve(this);
+    });
+
+    return deferred.promise;
+  },
+
+  get document() {
+    return this._window.document;
+  },
+
+  get target() {
+    return this._toolbox.target;
+  },
+
+  get toolbox() {
+    return this._toolbox;
+  },
+
+  get isReady() {
+    return this._isReady;
+  },
+
+  _isReady: false,
+
+  destroy: function () {
+    return defer(null);
+  },
+};
+
+/**
+ * Create a simple devtools test panel that implements the minimum API needed to be
+ * registered and opened in the toolbox.
+ */
+function createTestPanel(iframeWindow, toolbox) {
+  return new DevToolPanel(iframeWindow, toolbox);
 }

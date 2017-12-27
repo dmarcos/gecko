@@ -35,8 +35,12 @@
 #include "hb-ot-layout-gsub-table.hh"
 #include "hb-ot-layout-gpos-table.hh"
 #include "hb-ot-layout-jstf-table.hh" // Just so we compile it; unused otherwise.
+#include "hb-ot-name-table.hh" // Just so we compile it; unused otherwise.
 
 #include "hb-ot-map-private.hh"
+
+
+const void * const OT::_hb_NullPool[HB_NULL_POOL_SIZE / sizeof (void *)] = {};
 
 
 hb_ot_layout_t *
@@ -44,7 +48,7 @@ _hb_ot_layout_create (hb_face_t *face)
 {
   hb_ot_layout_t *layout = (hb_ot_layout_t *) calloc (1, sizeof (hb_ot_layout_t));
   if (unlikely (!layout))
-    return NULL;
+    return nullptr;
 
   layout->gdef_blob = OT::Sanitizer<OT::GDEF>::sanitize (face->reference_table (HB_OT_TAG_GDEF));
   layout->gdef = OT::Sanitizer<OT::GDEF>::lock_instance (layout->gdef_blob);
@@ -101,10 +105,18 @@ _hb_ot_layout_create (hb_face_t *face)
       || (928 == gdef_len && 59332 == gpos_len && 23298 == gsub_len)
       /* sha1sum:6d400781948517c3c0441ba42acb309584b73033  tahomabd.ttf from Windows 8.1 */
       || (940 == gdef_len && 60732 == gpos_len && 23310 == gsub_len)
+      /* tahoma.ttf v6.04 from Windows 8.1 x64, see https://bugzilla.mozilla.org/show_bug.cgi?id=1279925 */
+      || (964 == gdef_len && 60072 == gpos_len && 23836 == gsub_len)
+      /* tahomabd.ttf v6.04 from Windows 8.1 x64, see https://bugzilla.mozilla.org/show_bug.cgi?id=1279925 */
+      || (976 == gdef_len && 61456 == gpos_len && 23832 == gsub_len)
       /* sha1sum:e55fa2dfe957a9f7ec26be516a0e30b0c925f846  tahoma.ttf from Windows 10 */
       || (994 == gdef_len && 60336 == gpos_len && 24474 == gsub_len)
       /* sha1sum:7199385abb4c2cc81c83a151a7599b6368e92343  tahomabd.ttf from Windows 10 */
       || (1006 == gdef_len && 61740 == gpos_len && 24470 == gsub_len)
+      /* tahoma.ttf v6.91 from Windows 10 x64, see https://bugzilla.mozilla.org/show_bug.cgi?id=1279925 */
+      || (1006 == gdef_len && 61346 == gpos_len && 24576 == gsub_len)
+      /* tahomabd.ttf v6.91 from Windows 10 x64, see https://bugzilla.mozilla.org/show_bug.cgi?id=1279925 */
+      || (1018 == gdef_len && 62828 == gpos_len && 24572 == gsub_len)
       /* sha1sum:b9c84d820c49850d3d27ec498be93955b82772b5  tahoma.ttf from Windows 10 AU */
       || (1006 == gdef_len && 61352 == gpos_len && 24576 == gsub_len)
       /* sha1sum:2bdfaab28174bdadd2f3d4200a30a7ae31db79d2  tahomabd.ttf from Windows 10 AU */
@@ -125,6 +137,14 @@ _hb_ot_layout_create (hb_face_t *face)
       /* 2c0c90c6f6087ffbfea76589c93113a9cbb0e75f  cantarell-fonts-0.0.21/otf/Cantarell-Bold.otf */
       /* 55461f5b853c6da88069ffcdf7f4dd3f8d7e3e6b  cantarell-fonts-0.0.21/otf/Cantarell-Bold-Oblique.otf */
       || (188 == gdef_len && 3426 == gpos_len && 264 == gsub_len)
+      /* d125afa82a77a6475ac0e74e7c207914af84b37a padauk-2.80/Padauk.ttf RHEL 7.2 */
+      || (1058 == gdef_len && 11818 == gpos_len && 47032 == gsub_len)
+      /* 0f7b80437227b90a577cc078c0216160ae61b031 padauk-2.80/Padauk-Bold.ttf RHEL 7.2*/
+      || (1046 == gdef_len && 12600 == gpos_len && 47030 == gsub_len)
+      /* d3dde9aa0a6b7f8f6a89ef1002e9aaa11b882290 padauk-2.80/Padauk.ttf Ubuntu 16.04 */
+      || (1058 == gdef_len && 16770 == gpos_len && 71796 == gsub_len)
+      /* 5f3c98ccccae8a953be2d122c1b3a77fd805093f padauk-2.80/Padauk-Bold.ttf Ubuntu 16.04 */
+      || (1046 == gdef_len && 17862 == gpos_len && 71790 == gsub_len)
       /* 6c93b63b64e8b2c93f5e824e78caca555dc887c7 padauk-2.80/Padauk-book.ttf */
       || (1046 == gdef_len && 17112 == gpos_len && 71788 == gsub_len)
       /* d89b1664058359b8ec82e35d3531931125991fb9 padauk-2.80/Padauk-bookbold.ttf */
@@ -160,7 +180,7 @@ _hb_ot_layout_create (hb_face_t *face)
 		(layout->gpos_lookup_count && !layout->gpos_accels)))
   {
     _hb_ot_layout_destroy (layout);
-    return NULL;
+    return nullptr;
   }
 
   for (unsigned int i = 0; i < layout->gsub_lookup_count; i++)
@@ -263,7 +283,7 @@ hb_ot_layout_get_ligature_carets (hb_font_t      *font,
 				  hb_codepoint_t  glyph,
 				  unsigned int    start_offset,
 				  unsigned int   *caret_count /* IN/OUT */,
-				  int            *caret_array /* OUT */)
+				  hb_position_t  *caret_array /* OUT */)
 {
   return _get_gdef (font->face).get_lig_carets (font, direction, glyph, start_offset, caret_count, caret_array);
 }
@@ -305,7 +325,7 @@ hb_ot_layout_table_find_script (hb_face_t    *face,
 				hb_tag_t      script_tag,
 				unsigned int *script_index)
 {
-  ASSERT_STATIC (OT::Index::NOT_FOUND_INDEX == HB_OT_LAYOUT_NO_SCRIPT_INDEX);
+  static_assert ((OT::Index::NOT_FOUND_INDEX == HB_OT_LAYOUT_NO_SCRIPT_INDEX), "");
   const OT::GSUBGPOS &g = get_gsubgpos_table (face, table_tag);
 
   if (g.find_script_index (script_tag, script_index))
@@ -336,7 +356,7 @@ hb_ot_layout_table_choose_script (hb_face_t      *face,
 				  unsigned int   *script_index,
 				  hb_tag_t       *chosen_script)
 {
-  ASSERT_STATIC (OT::Index::NOT_FOUND_INDEX == HB_OT_LAYOUT_NO_SCRIPT_INDEX);
+  static_assert ((OT::Index::NOT_FOUND_INDEX == HB_OT_LAYOUT_NO_SCRIPT_INDEX), "");
   const OT::GSUBGPOS &g = get_gsubgpos_table (face, table_tag);
 
   while (*script_tags)
@@ -395,7 +415,7 @@ hb_ot_layout_table_find_feature (hb_face_t    *face,
 				 hb_tag_t      feature_tag,
 				 unsigned int *feature_index)
 {
-  ASSERT_STATIC (OT::Index::NOT_FOUND_INDEX == HB_OT_LAYOUT_NO_FEATURE_INDEX);
+  static_assert ((OT::Index::NOT_FOUND_INDEX == HB_OT_LAYOUT_NO_FEATURE_INDEX), "");
   const OT::GSUBGPOS &g = get_gsubgpos_table (face, table_tag);
 
   unsigned int num_features = g.get_feature_count ();
@@ -432,7 +452,7 @@ hb_ot_layout_script_find_language (hb_face_t    *face,
 				   hb_tag_t      language_tag,
 				   unsigned int *language_index)
 {
-  ASSERT_STATIC (OT::Index::NOT_FOUND_INDEX == HB_OT_LAYOUT_DEFAULT_LANGUAGE_INDEX);
+  static_assert ((OT::Index::NOT_FOUND_INDEX == HB_OT_LAYOUT_DEFAULT_LANGUAGE_INDEX), "");
   const OT::Script &s = get_gsubgpos_table (face, table_tag).get_script (script_index);
 
   if (s.find_lang_sys_index (language_tag, language_index))
@@ -458,7 +478,7 @@ hb_ot_layout_language_get_required_feature_index (hb_face_t    *face,
 						     script_index,
 						     language_index,
 						     feature_index,
-						     NULL);
+						     nullptr);
 }
 
 /**
@@ -511,7 +531,7 @@ hb_ot_layout_language_get_feature_tags (hb_face_t    *face,
   const OT::GSUBGPOS &g = get_gsubgpos_table (face, table_tag);
   const OT::LangSys &l = g.get_script (script_index).get_lang_sys (language_index);
 
-  ASSERT_STATIC (sizeof (unsigned int) == sizeof (hb_tag_t));
+  static_assert ((sizeof (unsigned int) == sizeof (hb_tag_t)), "");
   unsigned int ret = l.get_feature_indexes (start_offset, feature_count, (unsigned int *) feature_tags);
 
   if (feature_tags) {
@@ -532,7 +552,7 @@ hb_ot_layout_language_find_feature (hb_face_t    *face,
 				    hb_tag_t      feature_tag,
 				    unsigned int *feature_index)
 {
-  ASSERT_STATIC (OT::Index::NOT_FOUND_INDEX == HB_OT_LAYOUT_NO_FEATURE_INDEX);
+  static_assert ((OT::Index::NOT_FOUND_INDEX == HB_OT_LAYOUT_NO_FEATURE_INDEX), "");
   const OT::GSUBGPOS &g = get_gsubgpos_table (face, table_tag);
   const OT::LangSys &l = g.get_script (script_index).get_lang_sys (language_index);
 
@@ -581,6 +601,7 @@ unsigned int
 hb_ot_layout_table_get_lookup_count (hb_face_t    *face,
 				     hb_tag_t      table_tag)
 {
+  if (unlikely (!hb_ot_shaper_face_data_ensure (face))) return 0;
   switch (table_tag)
   {
     case HB_OT_TAG_GSUB:
@@ -636,7 +657,7 @@ _hb_ot_layout_collect_lookups_features (hb_face_t      *face,
 						    script_index,
 						    language_index,
 						    &required_feature_index,
-						    NULL))
+						    nullptr))
       _hb_ot_layout_collect_lookups_lookups (face,
 					     table_tag,
 					     required_feature_index,
@@ -705,7 +726,7 @@ _hb_ot_layout_collect_lookups_languages (hb_face_t      *face,
     unsigned int count = hb_ot_layout_script_get_language_tags (face,
 								table_tag,
 								script_index,
-								0, NULL, NULL);
+								0, nullptr, nullptr);
     for (unsigned int language_index = 0; language_index < count; language_index++)
       _hb_ot_layout_collect_lookups_features (face,
 					      table_tag,
@@ -752,7 +773,7 @@ hb_ot_layout_collect_lookups (hb_face_t      *face,
     /* All scripts */
     unsigned int count = hb_ot_layout_table_get_script_tags (face,
 							     table_tag,
-							     0, NULL, NULL);
+							     0, nullptr, nullptr);
     for (unsigned int script_index = 0; script_index < count; script_index++)
       _hb_ot_layout_collect_lookups_languages (face,
 					       table_tag,
@@ -789,10 +810,10 @@ void
 hb_ot_layout_lookup_collect_glyphs (hb_face_t    *face,
 				    hb_tag_t      table_tag,
 				    unsigned int  lookup_index,
-				    hb_set_t     *glyphs_before, /* OUT. May be NULL */
-				    hb_set_t     *glyphs_input,  /* OUT. May be NULL */
-				    hb_set_t     *glyphs_after,  /* OUT. May be NULL */
-				    hb_set_t     *glyphs_output  /* OUT. May be NULL */)
+				    hb_set_t     *glyphs_before, /* OUT. May be nullptr */
+				    hb_set_t     *glyphs_input,  /* OUT. May be nullptr */
+				    hb_set_t     *glyphs_after,  /* OUT. May be nullptr */
+				    hb_set_t     *glyphs_output  /* OUT. May be nullptr */)
 {
   if (unlikely (!hb_ot_shaper_face_data_ensure (face))) return;
 
@@ -843,7 +864,7 @@ hb_ot_layout_feature_with_variations_get_lookups (hb_face_t    *face,
 						  unsigned int *lookup_count /* IN/OUT */,
 						  unsigned int *lookup_indexes /* OUT */)
 {
-  ASSERT_STATIC (OT::FeatureVariations::NOT_FOUND_INDEX == HB_OT_LAYOUT_NO_VARIATIONS_INDEX);
+  static_assert ((OT::FeatureVariations::NOT_FOUND_INDEX == HB_OT_LAYOUT_NO_VARIATIONS_INDEX), "");
   const OT::GSUBGPOS &g = get_gsubgpos_table (face, table_tag);
 
   const OT::Feature &f = g.get_feature_variation (feature_index, variations_index);
@@ -951,11 +972,11 @@ hb_ot_layout_position_finish_offsets (hb_font_t *font, hb_buffer_t *buffer)
  **/
 hb_bool_t
 hb_ot_layout_get_size_params (hb_face_t    *face,
-			      unsigned int *design_size,       /* OUT.  May be NULL */
-			      unsigned int *subfamily_id,      /* OUT.  May be NULL */
-			      unsigned int *subfamily_name_id, /* OUT.  May be NULL */
-			      unsigned int *range_start,       /* OUT.  May be NULL */
-			      unsigned int *range_end          /* OUT.  May be NULL */)
+			      unsigned int *design_size,       /* OUT.  May be nullptr */
+			      unsigned int *subfamily_id,      /* OUT.  May be nullptr */
+			      unsigned int *subfamily_name_id, /* OUT.  May be nullptr */
+			      unsigned int *range_start,       /* OUT.  May be nullptr */
+			      unsigned int *range_end          /* OUT.  May be nullptr */)
 {
   const OT::GPOS &gpos = _get_gpos (face);
   const hb_tag_t tag = HB_TAG ('s','i','z','e');
@@ -1203,6 +1224,7 @@ inline void hb_ot_map_t::apply (const Proxy &proxy,
       c.set_lookup_index (lookup_index);
       c.set_lookup_mask (lookups[table_index][i].mask);
       c.set_auto_zwj (lookups[table_index][i].auto_zwj);
+      c.set_auto_zwnj (lookups[table_index][i].auto_zwnj);
       apply_string<Proxy> (&c,
 			   proxy.table.get_lookup (lookup_index),
 			   proxy.accels[lookup_index]);

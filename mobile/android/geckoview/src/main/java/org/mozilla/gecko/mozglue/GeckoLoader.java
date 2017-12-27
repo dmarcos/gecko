@@ -8,9 +8,6 @@ package org.mozilla.gecko.mozglue;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.text.DecimalFormat;
-import java.text.DecimalFormatSymbols;
-import java.text.NumberFormat;
 import java.util.Locale;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -55,34 +52,6 @@ public final class GeckoLoader {
             sGREDir = new File(context.getApplicationInfo().dataDir);
         }
         return sGREDir;
-    }
-
-    private static void setupPluginEnvironment(Context context, String[] pluginDirs) {
-        // setup plugin path directories
-        try {
-            // Check to see if plugins were blocked.
-            if (pluginDirs == null) {
-                putenv("MOZ_PLUGINS_BLOCKED=1");
-                putenv("MOZ_PLUGIN_PATH=");
-                return;
-            }
-
-            StringBuilder pluginSearchPath = new StringBuilder();
-            for (int i = 0; i < pluginDirs.length; i++) {
-                pluginSearchPath.append(pluginDirs[i]);
-                pluginSearchPath.append(":");
-            }
-            putenv("MOZ_PLUGIN_PATH=" + pluginSearchPath);
-
-            File pluginDataDir = context.getDir("plugins", 0);
-            putenv("ANDROID_PLUGIN_DATADIR=" + pluginDataDir.getPath());
-
-            File pluginPrivateDataDir = context.getDir("plugins_private", 0);
-            putenv("ANDROID_PLUGIN_DATADIR_PRIVATE=" + pluginPrivateDataDir.getPath());
-
-        } catch (Exception ex) {
-            Log.w(LOGTAG, "Caught exception getting plugin dirs.", ex);
-        }
     }
 
     private static void setupDownloadEnvironment(final Context context) {
@@ -134,7 +103,7 @@ public final class GeckoLoader {
         }
     }
 
-    public static void setupGeckoEnvironment(Context context, String[] pluginDirs, String profilePath) {
+    public static void setupGeckoEnvironment(Context context, String profilePath) {
         // if we have an intent (we're being launched by an activity)
         // read in any environmental variables from it here
         final SafeIntent intent = sIntent;
@@ -153,9 +122,15 @@ public final class GeckoLoader {
             }
         }
 
+        try {
+            final File dataDir = new File(context.getApplicationInfo().dataDir);
+            putenv("MOZ_ANDROID_DATA_DIR=" + dataDir.getCanonicalPath());
+        } catch (final java.io.IOException e) {
+            Log.e(LOGTAG, "Failed to resolve app data directory");
+        }
+
         putenv("MOZ_ANDROID_PACKAGE_NAME=" + context.getPackageName());
 
-        setupPluginEnvironment(context, pluginDirs);
         setupDownloadEnvironment(context);
 
         // profile home path
@@ -203,16 +178,6 @@ public final class GeckoLoader {
         if (linkerCache == null) {
             linkerCache = cacheFile.getPath();
             putenv("MOZ_LINKER_CACHE=" + linkerCache);
-        }
-
-        // Disable on-demand decompression of the linker on devices where it
-        // is known to cause crashes.
-        String forced_ondemand = System.getenv("MOZ_LINKER_ONDEMAND");
-        if (forced_ondemand == null) {
-            if ("HTC".equals(android.os.Build.MANUFACTURER) &&
-                "HTC Vision".equals(android.os.Build.MODEL)) {
-                putenv("MOZ_LINKER_ONDEMAND=0");
-            }
         }
 
         putenv("MOZ_LINKER_EXTRACT=1");
@@ -373,17 +338,13 @@ public final class GeckoLoader {
         }
 
         try {
-            if (Build.VERSION.SDK_INT >= 9) {
-                final String nativeLibPath = context.getApplicationInfo().nativeLibraryDir;
-                final boolean nativeLibDirExists = new File(nativeLibPath).exists();
-                final boolean nativeLibLibExists = new File(nativeLibPath + "/lib" + lib + ".so").exists();
+            final String nativeLibPath = context.getApplicationInfo().nativeLibraryDir;
+            final boolean nativeLibDirExists = new File(nativeLibPath).exists();
+            final boolean nativeLibLibExists = new File(nativeLibPath + "/lib" + lib + ".so").exists();
 
-                message.append(", nativeLib: " + nativeLibPath);
-                message.append(", dirx=" + nativeLibDirExists);
-                message.append(", libx=" + nativeLibLibExists);
-            } else {
-                message.append(", <pre-9>");
-            }
+            message.append(", nativeLib: " + nativeLibPath);
+            message.append(", dirx=" + nativeLibDirExists);
+            message.append(", libx=" + nativeLibLibExists);
         } catch (Throwable e) {
             message.append(", nativeLib fail.");
         }
@@ -416,11 +377,6 @@ public final class GeckoLoader {
         } catch (Throwable e) {
             Log.wtf(LOGTAG, "Couldn't load " + lib + ". Trying native library dir.");
 
-            if (Build.VERSION.SDK_INT < 9) {
-                // We can't use nativeLibraryDir.
-                return e;
-            }
-
             // Attempt 2: use nativeLibraryDir, which should also work.
             final String libDir = context.getApplicationInfo().nativeLibraryDir;
             final String libPath = libDir + "/lib" + lib + ".so";
@@ -450,11 +406,9 @@ public final class GeckoLoader {
 
         // If we're in a mismatched UID state (Bug 1042935 Comment 16) there's really
         // nothing we can do.
-        if (Build.VERSION.SDK_INT >= 9) {
-            final String nativeLibPath = context.getApplicationInfo().nativeLibraryDir;
-            if (nativeLibPath.contains("mismatched_uid")) {
-                throw new RuntimeException("Fatal: mismatched UID: cannot load.");
-            }
+        final String nativeLibPath = context.getApplicationInfo().nativeLibraryDir;
+        if (nativeLibPath.contains("mismatched_uid")) {
+            throw new RuntimeException("Fatal: mismatched UID: cannot load.");
         }
 
         // Attempt 3: try finding the path the pseudo-supported way using .dataDir.
@@ -516,15 +470,6 @@ public final class GeckoLoader {
 
     private static void setupLocaleEnvironment() {
         putenv("LANG=" + Locale.getDefault().toString());
-        NumberFormat nf = NumberFormat.getInstance();
-        if (nf instanceof DecimalFormat) {
-            DecimalFormat df = (DecimalFormat)nf;
-            DecimalFormatSymbols dfs = df.getDecimalFormatSymbols();
-
-            putenv("LOCALE_DECIMAL_POINT=" + dfs.getDecimalSeparator());
-            putenv("LOCALE_THOUSANDS_SEP=" + dfs.getGroupingSeparator());
-            putenv("LOCALE_GROUPING=" + (char)df.getGroupingSize());
-        }
     }
 
     @SuppressWarnings("serial")
@@ -553,4 +498,5 @@ public final class GeckoLoader {
     private static native void loadSQLiteLibsNative(String apkName);
     private static native void loadNSSLibsNative(String apkName);
     public static native boolean neonCompatible();
+    public static native void suppressCrashDialog();
 }

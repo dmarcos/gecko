@@ -16,15 +16,12 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
  
 
-  var c = 0, v; for each (let x in ["",v,v,v]) { for (c=0;c<4;++c) { } }
+  var c = 0, v; for (let x of ["",v,v,v]) { for (c=0;c<4;++c) { } }
 
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

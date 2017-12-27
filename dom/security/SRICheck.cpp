@@ -10,7 +10,6 @@
 #include "mozilla/LoadTainting.h"
 #include "mozilla/Logging.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/dom/SRILogHelper.h"
 #include "mozilla/dom/SRIMetadata.h"
 #include "nsContentUtils.h"
@@ -108,10 +107,11 @@ SRICheck::IntegrityMetadata(const nsAString& aMetadataList,
   }
 
   // put a reasonable bound on the length of the metadata
-  NS_ConvertUTF16toUTF8 metadataList(aMetadataList);
+  NS_LossyConvertUTF16toASCII metadataList(aMetadataList);
   if (metadataList.Length() > SRICheck::MAX_METADATA_LENGTH) {
     metadataList.Truncate(SRICheck::MAX_METADATA_LENGTH);
   }
+  SRILOG(("SRICheck::IntegrityMetadata, metadataList=%s", metadataList.get()));
   MOZ_ASSERT(metadataList.Length() <= aMetadataList.Length());
 
   // the integrity attribute is a list of whitespace-separated hashes
@@ -182,22 +182,18 @@ SRICheck::IntegrityMetadata(const nsAString& aMetadataList,
 
 /* static */ nsresult
 SRICheck::VerifyIntegrity(const SRIMetadata& aMetadata,
-                          nsIUnicharStreamLoader* aLoader,
-                          const nsAString& aString,
+                          nsIChannel* aChannel,
+                          const nsACString& aBytes,
                           const nsACString& aSourceFileURI,
                           nsIConsoleReportCollector* aReporter)
 {
-  NS_ENSURE_ARG_POINTER(aLoader);
   NS_ENSURE_ARG_POINTER(aReporter);
-
-  nsCOMPtr<nsIChannel> channel;
-  aLoader->GetChannel(getter_AddRefs(channel));
 
   if (MOZ_LOG_TEST(SRILogHelper::GetSriLog(), mozilla::LogLevel::Debug)) {
     nsAutoCString requestURL;
     nsCOMPtr<nsIURI> originalURI;
-    if (channel &&
-        NS_SUCCEEDED(channel->GetOriginalURI(getter_AddRefs(originalURI))) &&
+    if (aChannel &&
+        NS_SUCCEEDED(aChannel->GetOriginalURI(getter_AddRefs(originalURI))) &&
         originalURI) {
       originalURI->GetAsciiSpec(requestURL);
     }
@@ -205,14 +201,11 @@ SRICheck::VerifyIntegrity(const SRIMetadata& aMetadata,
   }
 
   SRICheckDataVerifier verifier(aMetadata, aSourceFileURI, aReporter);
-  nsresult rv;
-  nsDependentCString rawBuffer;
-  rv = aLoader->GetRawBuffer(rawBuffer);
-  NS_ENSURE_SUCCESS(rv, rv);
-  rv = verifier.Update(rawBuffer.Length(), (const uint8_t*)rawBuffer.get());
+  nsresult rv =
+    verifier.Update(aBytes.Length(), (const uint8_t*)aBytes.BeginReading());
   NS_ENSURE_SUCCESS(rv, rv);
 
-  return verifier.Verify(aMetadata, channel, aSourceFileURI, aReporter);
+  return verifier.Verify(aMetadata, aChannel, aSourceFileURI, aReporter);
 }
 
 //////////////////////////////////////////////////////////////
@@ -371,7 +364,7 @@ SRICheckDataVerifier::Verify(const SRIMetadata& aMetadata,
     nsCOMPtr<nsIRequest> request;
     request = do_QueryInterface(aChannel);
     request->GetName(requestURL);
-    SRILOG(("SRICheckDataVerifier::Verify, url=%s (length=%" PRIuSIZE ")",
+    SRILOG(("SRICheckDataVerifier::Verify, url=%s (length=%zu)",
             requestURL.get(), mBytesHashed));
   }
 
@@ -437,7 +430,8 @@ SRICheckDataVerifier::DataSummaryLength(uint32_t aDataLen, const uint8_t* aData,
 
   // decode the content of the buffer
   size_t offset = sizeof(mHashType);
-  size_t len = *reinterpret_cast<const decltype(mHashLength)*>(&aData[offset]);
+  decltype(mHashLength) len = 0;
+  memcpy(&len, &aData[offset], sizeof(mHashLength));
   offset += sizeof(mHashLength);
 
   SRIVERBOSE(("SRICheckDataVerifier::DataSummaryLength, header {%x, %x, %x, %x, %x, ...}",
@@ -474,18 +468,20 @@ SRICheckDataVerifier::ImportDataSummary(uint32_t aDataLen, const uint8_t* aData)
 
   // decode the content of the buffer
   size_t offset = 0;
-  if (*reinterpret_cast<const decltype(mHashType)*>(&aData[offset]) != mHashType) {
+  decltype(mHashType) hashType;
+  memcpy(&hashType, &aData[offset], sizeof(mHashType));
+  if (hashType != mHashType) {
     SRILOG(("SRICheckDataVerifier::ImportDataSummary, hash type[%d] does not match[%d]",
-            *reinterpret_cast<const decltype(mHashType)*>(&aData[offset]),
-             mHashType));
+            hashType, mHashType));
     return NS_ERROR_SRI_UNEXPECTED_HASH_TYPE;
   }
   offset += sizeof(mHashType);
 
-  if (*reinterpret_cast<const decltype(mHashLength)*>(&aData[offset]) != mHashLength) {
+  decltype(mHashLength) hashLength;
+  memcpy(&hashLength, &aData[offset], sizeof(mHashLength));
+  if (hashLength != mHashLength) {
     SRILOG(("SRICheckDataVerifier::ImportDataSummary, hash length[%d] does not match[%d]",
-            *reinterpret_cast<const decltype(mHashLength)*>(&aData[offset]),
-             mHashLength));
+            hashLength, mHashLength));
     return NS_ERROR_SRI_UNEXPECTED_HASH_TYPE;
   }
   offset += sizeof(mHashLength);
@@ -507,9 +503,9 @@ SRICheckDataVerifier::ExportDataSummary(uint32_t aDataLen, uint8_t* aData)
 
   // serialize the hash in the buffer
   size_t offset = 0;
-  *reinterpret_cast<decltype(mHashType)*>(&aData[offset]) = mHashType;
+  memcpy(&aData[offset], &mHashType, sizeof(mHashType));
   offset += sizeof(mHashType);
-  *reinterpret_cast<decltype(mHashLength)*>(&aData[offset]) = mHashLength;
+  memcpy(&aData[offset], &mHashLength, sizeof(mHashLength));
   offset += sizeof(mHashLength);
 
   SRIVERBOSE(("SRICheckDataVerifier::ExportDataSummary, header {%x, %x, %x, %x, %x, ...}",
@@ -529,9 +525,9 @@ SRICheckDataVerifier::ExportEmptyDataSummary(uint32_t aDataLen, uint8_t* aData)
 
   // serialize an unknown hash in the buffer, to be able to skip it later
   size_t offset = 0;
-  *reinterpret_cast<decltype(mHashType)*>(&aData[offset]) = 0;
+  memset(&aData[offset], 0, sizeof(mHashType));
   offset += sizeof(mHashType);
-  *reinterpret_cast<decltype(mHashLength)*>(&aData[offset]) = 0;
+  memset(&aData[offset], 0, sizeof(mHashLength));
   offset += sizeof(mHashLength);
 
   SRIVERBOSE(("SRICheckDataVerifier::ExportEmptyDataSummary, header {%x, %x, %x, %x, %x, ...}",

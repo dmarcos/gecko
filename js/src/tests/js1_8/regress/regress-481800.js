@@ -16,15 +16,12 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
 
 
-  for each (let x in ['', 0, 0, eval]) { y = x } ( function(){} );
+  for (let x of ['', 0, 0, eval]) { y = x } ( function(){} );
 
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -6,8 +7,8 @@
 
 #include "nsMathMLmmultiscriptsFrame.h"
 #include "nsPresContext.h"
-#include "nsRenderingContext.h"
 #include <algorithm>
+#include "gfxContext.h"
 #include "gfxMathTable.h"
 
 using mozilla::WritingMode;
@@ -153,7 +154,7 @@ nsMathMLmmultiscriptsFrame::PlaceMultiScript(nsPresContext*  aPresContext,
                                         nscoord              aUserSupScriptShift,
                                         float                aFontSizeInflation)
 {
-  nsIAtom* tag = aFrame->GetContent()->NodeInfo()->NameAtom();
+  nsAtom* tag = aFrame->GetContent()->NodeInfo()->NameAtom();
 
   // This function deals with both munderover etc. as well as msubsup etc.
   // As the former behaves identically to the later, we treat it as such
@@ -374,7 +375,7 @@ nsMathMLmmultiscriptsFrame::PlaceMultiScript(nsPresContext*  aPresContext,
       GetReflowAndBoundingMetricsFor(baseFrame, baseSize, bmBase);
 
       if (tag != nsGkAtoms::msub_) {
-        // Apply italics correction if there is the potential for a 
+        // Apply italics correction if there is the potential for a
         // postsupscript.
         GetItalicCorrection(bmBase, italicCorrection);
         // If italics correction is applied, we always add "a little to spare"
@@ -411,7 +412,7 @@ nsMathMLmmultiscriptsFrame::PlaceMultiScript(nsPresContext*  aPresContext,
                     subScriptSize.BlockStartAscent()));
         bmMultiSub.ascent = std::max(bmMultiSub.ascent, bmSubScript.ascent);
         bmMultiSub.descent = std::max(bmMultiSub.descent, bmSubScript.descent);
-        multiSubSize.Height() = 
+        multiSubSize.Height() =
           std::max(multiSubSize.Height(),
                    subScriptSize.Height() - subScriptSize.BlockStartAscent());
         if (bmSubScript.width)
@@ -492,7 +493,7 @@ nsMathMLmmultiscriptsFrame::PlaceMultiScript(nsPresContext*  aPresContext,
         // negotiate between the various shifts so that
         // there is enough gap between the sup and subscripts
         // Rule 18e, App. G, TeXbook
-        if (tag == nsGkAtoms::mmultiscripts_ || 
+        if (tag == nsGkAtoms::mmultiscripts_ ||
             tag == nsGkAtoms::msubsup_) {
           nscoord subSuperscriptGapMin;
           if (mathFont) {
@@ -550,7 +551,7 @@ nsMathMLmmultiscriptsFrame::PlaceMultiScript(nsPresContext*  aPresContext,
       (!isSubScript && tag == nsGkAtoms::mmultiscripts_)) {
     // report an error, encourage people to get their markups in order
     if (aPlaceOrigin) {
-      if ((count != 2 && (tag == nsGkAtoms::msup_ || 
+      if ((count != 2 && (tag == nsGkAtoms::msup_ ||
           tag == nsGkAtoms::msub_)) ||
           (count != 3 && tag == nsGkAtoms::msubsup_ )) {
         aFrame->ReportChildCountError();
@@ -617,7 +618,7 @@ nsMathMLmmultiscriptsFrame::PlaceMultiScript(nsPresContext*  aPresContext,
   if (aPlaceOrigin) {
     nscoord dx = 0, dy = 0;
 
-    // With msub and msup there is only one element and 
+    // With msub and msup there is only one element and
     // subscriptFrame/supScriptFrame have already been set above where
     // relevant.  In these cases we skip to the reflow part.
     if (tag == nsGkAtoms::msub_ || tag == nsGkAtoms::msup_)
@@ -640,7 +641,7 @@ nsMathMLmmultiscriptsFrame::PlaceMultiScript(nsPresContext*  aPresContext,
         dx += bmBase.width;
       } else if (prescriptsFrame == childFrame) {
         // Clear reflow flags of prescripts frame.
-        prescriptsFrame->DidReflow(aPresContext, nullptr, nsDidReflowStatus::FINISHED);
+        prescriptsFrame->DidReflow(aPresContext, nullptr);
       } else {
         // process each sup/sub pair
         if (0 == count) {

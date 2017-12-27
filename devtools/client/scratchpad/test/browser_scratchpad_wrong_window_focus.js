@@ -25,8 +25,8 @@ function test()
   // on the location link. After that we check which Scratchpad window
   // is currently active (it should be the older one).
 
-  gBrowser.selectedTab = gBrowser.addTab();
-  gBrowser.selectedBrowser.addEventListener("load", function () {
+  gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
+  BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser).then(function () {
     openScratchpad(function () {
       let sw = gScratchpadWindow;
       let {require} = Cu.import("resource://devtools/shared/Loader.jsm", {});
@@ -41,9 +41,9 @@ function test()
         });
       });
     });
-  }, {capture: true, once: true});
+  });
 
-  content.location = "data:text/html;charset=utf8,<p>test window focus for Scratchpad.";
+  gBrowser.loadURI("data:text/html;charset=utf8,<p>test window focus for Scratchpad.");
 }
 
 function testFocus(sw, hud) {

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -124,7 +125,9 @@ public:
     // that we called AddPendingRestyle for and found the element this is
     // the RestyleData for as its nearest restyle root.
     nsTArray<RefPtr<Element>> mDescendants;
+#if defined(MOZ_GECKO_PROFILER)
     UniqueProfilerBacktrace mBacktrace;
+#endif
   };
 
   /**
@@ -259,9 +262,11 @@ RestyleTracker::AddPendingRestyleToTable(Element* aElement,
   if (!existingData) {
     RestyleData* rd =
       new RestyleData(aRestyleHint, aMinChangeHint, aRestyleHintData);
-    if (profiler_feature_active("restyle")) {
+#if defined(MOZ_GECKO_PROFILER)
+    if (profiler_feature_active(ProfilerFeature::Restyle)) {
       rd->mBacktrace = profiler_get_backtrace();
     }
+#endif
     mPendingRestyles.Put(aElement, rd);
     return false;
   }
@@ -345,13 +350,23 @@ RestyleTracker::AddPendingRestyle(Element* aElement,
       // the descendant.
       RestyleData* curData;
       mPendingRestyles.Get(cur, &curData);
-      NS_ASSERTION(curData, "expected to find a RestyleData for cur");
-      // If cur has an eRestyle_ForceDescendants restyle hint, then we
-      // know that we will get to all descendants.  Don't bother
-      // recording the descendant to restyle in that case.
-      if (curData && !(curData->mRestyleHint & eRestyle_ForceDescendants)) {
+
+      // Even if cur has a ForceDescendants restyle hint, we're not guaranteed
+      // to reach aElement in the case the PresShell posts a restyle event from
+      // PostRecreateFramesFor, so we need to track it here.
+      MOZ_ASSERT(curData, "expected to find a RestyleData for cur");
+      if (curData) {
         curData->mDescendants.AppendElement(aElement);
       }
+    }
+  }
+
+  // If we need to restyle later siblings, we will need a flag on parent to note
+  // that some children need restyle for nsComputedDOMStyle.
+  if (aRestyleHint & eRestyle_LaterSiblings) {
+    nsIContent* parent = aElement->GetFlattenedTreeParent();
+    if (parent && parent->IsElement()) {
+      parent->SetFlags(ELEMENT_HAS_CHILD_WITH_LATER_SIBLINGS_HINT);
     }
   }
 

@@ -11,7 +11,21 @@ const EXPORTED_SYMBOLS = ["BrowserTabs"];
 
 const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
+Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://services-sync/main.js");
+
+// Unfortunately, due to where TPS is run, we can't directly reuse the logic from
+// BrowserTestUtils.jsm. Moreover, we can't resolve the URI it loads the content
+// frame script from ("chrome://mochikit/content/tests/BrowserTestUtils/content-utils.js"),
+// hence the hackiness here and in BrowserTabs.Add.
+Cc["@mozilla.org/globalmessagemanager;1"]
+.getService(Ci.nsIMessageListenerManager)
+.loadFrameScript("data:application/javascript;charset=utf-8," + encodeURIComponent(`
+  Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+  addEventListener("load", function(event) {
+    let subframe = event.target != content.document;
+    sendAsyncMessage("tps:loadEvent", {subframe: subframe, url: event.target.documentURI});
+  }, true)`), true);
 
 var BrowserTabs = {
   /**
@@ -24,15 +38,18 @@ var BrowserTabs = {
    * @return nothing
    */
   Add(uri, fn) {
+
     // Open the uri in a new tab in the current browser window, and calls
     // the callback fn from the tab's onload handler.
-    let wm = Cc["@mozilla.org/appshell/window-mediator;1"]
-               .getService(Ci.nsIWindowMediator);
-    let mainWindow = wm.getMostRecentWindow("navigator:browser");
-    let newtab = mainWindow.getBrowser().addTab(uri);
-    mainWindow.getBrowser().selectedTab = newtab;
-    let win = mainWindow.getBrowser().getBrowserForTab(newtab);
-    win.addEventListener("load", function() { fn.call(); }, true);
+    let mainWindow = Services.wm.getMostRecentWindow("navigator:browser");
+    let browser = mainWindow.getBrowser();
+    let mm = browser.ownerGlobal.messageManager;
+    mm.addMessageListener("tps:loadEvent", function onLoad(msg) {
+      mm.removeMessageListener("tps:loadEvent", onLoad);
+      fn();
+    });
+    let newtab = browser.addTab(uri);
+    browser.selectedTab = newtab;
   },
 
   /**
@@ -64,4 +81,3 @@ var BrowserTabs = {
     return false;
   },
 };
-

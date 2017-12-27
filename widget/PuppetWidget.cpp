@@ -19,6 +19,7 @@
 #include "mozilla/layers/WebRenderLayerManager.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/TextComposition.h"
+#include "mozilla/TextEventDispatcher.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/Unused.h"
 #include "BasicLayers.h"
@@ -27,6 +28,7 @@
 #include "nsIWidgetListener.h"
 #include "imgIContainer.h"
 #include "nsView.h"
+#include "nsPrintfCString.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -80,22 +82,19 @@ const size_t PuppetWidget::kMaxDimension = 4000;
 static bool gRemoteDesktopBehaviorEnabled = false;
 static bool gRemoteDesktopBehaviorInitialized = false;
 
-NS_IMPL_ISUPPORTS_INHERITED0(PuppetWidget, nsBaseWidget)
+NS_IMPL_ISUPPORTS_INHERITED(PuppetWidget, nsBaseWidget
+                                        , TextEventDispatcherListener)
 
 PuppetWidget::PuppetWidget(TabChild* aTabChild)
   : mTabChild(aTabChild)
   , mMemoryPressureObserver(nullptr)
   , mDPI(-1)
-  , mRounding(-1)
+  , mRounding(1)
   , mDefaultScale(-1)
   , mCursorHotspotX(0)
   , mCursorHotspotY(0)
-  , mNativeKeyCommandsValid(false)
+  , mIgnoreCompositionEvents(false)
 {
-  mSingleLineCommands.SetCapacity(4);
-  mMultiLineCommands.SetCapacity(4);
-  mRichTextCommands.SetCapacity(4);
-
   // Setting 'Unknown' means "not yet cached".
   mInputContext.mIMEState.mEnabled = IMEState::UNKNOWN;
 
@@ -313,7 +312,7 @@ PuppetWidget::Invalidate(const LayoutDeviceIntRect& aRect)
   if (mTabChild && !mDirtyRegion.IsEmpty() && !mPaintTask.IsPending()) {
     mPaintTask = new PaintTask(this);
     nsCOMPtr<nsIRunnable> event(mPaintTask.get());
-    mTabChild->TabGroup()->Dispatch("PuppetWidget::Invalidate", TaskCategory::Other, event.forget());
+    mTabChild->TabGroup()->Dispatch(TaskCategory::Other, event.forget());
     return;
   }
 }
@@ -340,16 +339,27 @@ PuppetWidget::DispatchEvent(WidgetGUIEvent* aEvent, nsEventStatus& aStatus)
   MOZ_ASSERT(!mChild || mChild->mWindowType == eWindowType_popup,
              "Unexpected event dispatch!");
 
-  AutoCacheNativeKeyCommands autoCache(this);
-  if ((aEvent->mFlags.mIsSynthesizedForTests ||
-       aEvent->mFlags.mIsSuppressedOrDelayed) && !mNativeKeyCommandsValid) {
-    WidgetKeyboardEvent* keyEvent = aEvent->AsKeyboardEvent();
-    if (keyEvent) {
-      mTabChild->RequestNativeKeyBindings(&autoCache, keyEvent);
-    }
-  }
+  MOZ_ASSERT(!aEvent->AsKeyboardEvent() ||
+             aEvent->mFlags.mIsSynthesizedForTests ||
+             aEvent->AsKeyboardEvent()->AreAllEditCommandsInitialized(),
+    "Non-sysnthesized keyboard events should have edit commands for all types "
+    "before dispatched");
 
   if (aEvent->mClass == eCompositionEventClass) {
+    // If we've already requested to commit/cancel the latest composition,
+    // TextComposition for the old composition has been destroyed.  Then,
+    // the DOM tree needs to listen to next eCompositionStart and its
+    // following events.  So, until we meet new eCompositionStart, let's
+    // discard all unnecessary composition events here.
+    if (mIgnoreCompositionEvents) {
+      if (aEvent->mMessage != eCompositionStart) {
+        aStatus = nsEventStatus_eIgnore;
+        return NS_OK;
+      }
+      // Now, we receive new eCompositionStart.  Let's restart to handle
+      // composition in this process.
+      mIgnoreCompositionEvents = false;
+    }
     // Store the latest native IME context of parent process's widget or
     // TextEventDispatcher if it's in this process.
     WidgetCompositionEvent* compositionEvent = aEvent->AsCompositionEvent();
@@ -365,6 +375,32 @@ PuppetWidget::DispatchEvent(WidgetGUIEvent* aEvent, nsEventStatus& aStatus)
     }
 #endif // #ifdef DEBUG
     mNativeIMEContext = compositionEvent->mNativeIMEContext;
+  }
+
+  // If the event is a composition event or a keyboard event, it should be
+  // dispatched with TextEventDispatcher if we could do that with current
+  // design.  However, we cannot do that without big changes and the behavior
+  // is not so complicated for now.  Therefore, we should just notify it
+  // of dispatching events and TextEventDispatcher should emulate the state
+  // with events here.
+  if (aEvent->mClass == eCompositionEventClass ||
+      aEvent->mClass == eKeyboardEventClass) {
+    TextEventDispatcher* dispatcher = GetTextEventDispatcher();
+    // However, if the event is being dispatched by the text event dispatcher
+    // or, there is native text event dispatcher listener, that means that
+    // native text input event handler is in this process like on Android,
+    // and the event is not synthesized for tests, the event is coming from
+    // the TextEventDispatcher.  In these cases, we shouldn't notify
+    // TextEventDispatcher of dispatching the event.
+    if (!dispatcher->IsDispatchingEvent() &&
+        !(mNativeTextEventDispatcherListener &&
+          !aEvent->mFlags.mIsSynthesizedForTests)) {
+      DebugOnly<nsresult> rv =
+        dispatcher->BeginInputTransactionFor(aEvent, this);
+      NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+        "The text event dispatcher should always succeed to start input "
+        "transaction for the event");
+    }
   }
 
   aStatus = nsEventStatus_eIgnore;
@@ -523,7 +559,7 @@ PuppetWidget::ClearNativeTouchSequence(nsIObserver* aObserver)
   mTabChild->SendClearNativeTouchSequence(notifier.SaveObserver());
   return NS_OK;
 }
- 
+
 void
 PuppetWidget::SetConfirmedTargetAPZC(
                 uint64_t aInputBlockId,
@@ -550,49 +586,15 @@ PuppetWidget::AsyncPanZoomEnabled() const
   return mTabChild && mTabChild->AsyncPanZoomEnabled();
 }
 
-bool
-PuppetWidget::ExecuteNativeKeyBinding(
-                NativeKeyBindingsType aType,
-                const mozilla::WidgetKeyboardEvent& aEvent,
-                DoCommandCallback aCallback,
-                void* aCallbackData)
+void
+PuppetWidget::GetEditCommands(NativeKeyBindingsType aType,
+                              const WidgetKeyboardEvent& aEvent,
+                              nsTArray<CommandInt>& aCommands)
 {
-  AutoCacheNativeKeyCommands autoCache(this);
-  if (!aEvent.mWidget && !mNativeKeyCommandsValid) {
-    MOZ_ASSERT(!aEvent.mFlags.mIsSynthesizedForTests);
-    // Abort if untrusted to avoid leaking system settings
-    if (NS_WARN_IF(!aEvent.IsTrusted())) {
-      return false;
-    }
-    mTabChild->RequestNativeKeyBindings(&autoCache, &aEvent);
-  }
+  // Validate the arguments.
+  nsIWidget::GetEditCommands(aType, aEvent, aCommands);
 
-  MOZ_ASSERT(mNativeKeyCommandsValid);
-
-  const nsTArray<mozilla::CommandInt>* commands = nullptr;
-  switch (aType) {
-    case nsIWidget::NativeKeyBindingsForSingleLineEditor:
-      commands = &mSingleLineCommands;
-      break;
-    case nsIWidget::NativeKeyBindingsForMultiLineEditor:
-      commands = &mMultiLineCommands;
-      break;
-    case nsIWidget::NativeKeyBindingsForRichTextEditor:
-      commands = &mRichTextCommands;
-      break;
-    default:
-      MOZ_CRASH("Invalid type");
-      break;
-  }
-
-  if (commands->IsEmpty()) {
-    return false;
-  }
-
-  for (uint32_t i = 0; i < commands->Length(); i++) {
-    aCallback(static_cast<mozilla::Command>((*commands)[i]), aCallbackData);
-  }
-  return true;
+  mTabChild->RequestEditCommands(aType, aEvent, aCommands);
 }
 
 LayerManager*
@@ -609,47 +611,39 @@ PuppetWidget::GetLayerManager(PLayerTransactionChild* aShadowManager,
       return mLayerManager;
     }
 
-    if (mTabChild && !mTabChild->IsLayersConnected()) {
-      // If we know for sure that the parent side of this TabChild is not
-      // connected to the compositor, we don't want to use a "remote" layer
-      // manager like WebRender or Client. Instead we use a Basic one which
-      // can do drawing in this process.
-      mLayerManager = new BasicLayerManager(this);
-    } else if (gfxVars::UseWebRender()) {
-      MOZ_ASSERT(!aShadowManager);
-      mLayerManager = new WebRenderLayerManager(this);
-    } else {
-      mLayerManager = new ClientLayerManager(this);
-    }
-  }
-
-  // Attach a shadow forwarder if none exists.
-  ShadowLayerForwarder* lf = mLayerManager->AsShadowForwarder();
-  if (lf && !lf->HasShadowManager() && aShadowManager) {
-    lf->SetShadowManager(aShadowManager);
+    // If we know for sure that the parent side of this TabChild is not
+    // connected to the compositor, we don't want to use a "remote" layer
+    // manager like WebRender or Client. Instead we use a Basic one which
+    // can do drawing in this process.
+    MOZ_ASSERT(!mTabChild || mTabChild->IsLayersConnected() != Some(true));
+    mLayerManager = new BasicLayerManager(this);
   }
 
   return mLayerManager;
 }
 
-LayerManager*
-PuppetWidget::RecreateLayerManager(PLayerTransactionChild* aShadowManager)
+bool
+PuppetWidget::CreateRemoteLayerManager(const std::function<bool(LayerManager*)>& aInitializeFunc)
 {
-  // Force the old LM to self destruct, otherwise if the reference dangles we
-  // could fail to revoke the most recent transaction.
-  DestroyLayerManager();
-
+  RefPtr<LayerManager> lm;
   MOZ_ASSERT(mTabChild);
-  if (gfxVars::UseWebRender()) {
-    MOZ_ASSERT(!aShadowManager);
-    mLayerManager = new WebRenderLayerManager(this);
+  if (mTabChild->GetCompositorOptions().UseWebRender()) {
+    lm = new WebRenderLayerManager(this);
   } else {
-    mLayerManager = new ClientLayerManager(this);
+    lm = new ClientLayerManager(this);
   }
-  if (ShadowLayerForwarder* lf = mLayerManager->AsShadowForwarder()) {
-    lf->SetShadowManager(aShadowManager);
+
+  if (!aInitializeFunc(lm)) {
+    return false;
   }
-  return mLayerManager;
+
+  // Force the old LM to self destruct, otherwise if the reference dangles we
+  // could fail to revoke the most recent transaction. We only want to replace
+  // it if we successfully create its successor because a partially initialized
+  // layer manager is worse than a fully initialized but shutdown layer manager.
+  DestroyLayerManager();
+  mLayerManager = lm.forget();
+  return true;
 }
 
 nsresult
@@ -666,12 +660,26 @@ PuppetWidget::RequestIMEToCommitComposition(bool aCancel)
     return NS_OK;
   }
 
+  // We've already requested to commit/cancel composition.
+  if (NS_WARN_IF(mIgnoreCompositionEvents)) {
+#ifdef DEBUG
+    RefPtr<TextComposition> composition =
+      IMEStateManager::GetTextCompositionFor(this);
+    MOZ_ASSERT(!composition);
+#endif // #ifdef DEBUG
+    return NS_OK;
+  }
+
   RefPtr<TextComposition> composition =
     IMEStateManager::GetTextCompositionFor(this);
   // This method shouldn't be called when there is no text composition instance.
   if (NS_WARN_IF(!composition)) {
     return NS_OK;
   }
+
+  MOZ_DIAGNOSTIC_ASSERT(composition->IsRequestingCommitOrCancelComposition(),
+    "Requesting commit or cancel composition should be requested via "
+    "TextComposition instance");
 
   bool isCommitted = false;
   nsAutoString committedString;
@@ -693,39 +701,21 @@ PuppetWidget::RequestIMEToCommitComposition(bool aCancel)
   nsEventStatus status = nsEventStatus_eIgnore;
   DispatchEvent(&compositionCommitEvent, status);
 
+#ifdef DEBUG
+  RefPtr<TextComposition> currentComposition =
+    IMEStateManager::GetTextCompositionFor(this);
+  MOZ_ASSERT(!currentComposition);
+#endif // #ifdef DEBUG
+
+  // Ignore the following composition events until we receive new
+  // eCompositionStart event.
+  mIgnoreCompositionEvents = true;
+
+  Unused <<
+    mTabChild->SendOnEventNeedingAckHandled(eCompositionCommitRequestHandled);
+
   // NOTE: PuppetWidget might be destroyed already.
   return NS_OK;
-}
-
-nsresult
-PuppetWidget::NotifyIMEInternal(const IMENotification& aIMENotification)
-{
-  if (mNativeTextEventDispatcherListener) {
-    // Use mNativeTextEventDispatcherListener for IME notifications.
-    return NS_ERROR_NOT_IMPLEMENTED;
-  }
-
-  switch (aIMENotification.mMessage) {
-    case REQUEST_TO_COMMIT_COMPOSITION:
-      return RequestIMEToCommitComposition(false);
-    case REQUEST_TO_CANCEL_COMPOSITION:
-      return RequestIMEToCommitComposition(true);
-    case NOTIFY_IME_OF_FOCUS:
-    case NOTIFY_IME_OF_BLUR:
-      return NotifyIMEOfFocusChange(aIMENotification);
-    case NOTIFY_IME_OF_SELECTION_CHANGE:
-      return NotifyIMEOfSelectionChange(aIMENotification);
-    case NOTIFY_IME_OF_TEXT_CHANGE:
-      return NotifyIMEOfTextChange(aIMENotification);
-    case NOTIFY_IME_OF_COMPOSITION_EVENT_HANDLED:
-      return NotifyIMEOfCompositionUpdate(aIMENotification);
-    case NOTIFY_IME_OF_MOUSE_BUTTON_EVENT:
-      return NotifyIMEOfMouseButtonEvent(aIMENotification);
-    case NOTIFY_IME_OF_POSITION_CHANGE:
-      return NotifyIMEOfPositionChange(aIMENotification);
-    default:
-      return NS_ERROR_NOT_IMPLEMENTED;
-  }
 }
 
 nsresult
@@ -776,6 +766,7 @@ PuppetWidget::SetInputContext(const InputContext& aContext,
     aContext.mHTMLInputType,
     aContext.mHTMLInputInputmode,
     aContext.mActionHint,
+    aContext.mInPrivateBrowsing,
     static_cast<int32_t>(aAction.mCause),
     static_cast<int32_t>(aAction.mFocusChange));
 }
@@ -842,11 +833,19 @@ PuppetWidget::NotifyIMEOfFocusChange(const IMENotification& aIMENotification)
     mContentCache.Clear();
   }
 
-  mIMENotificationRequestsOfParent = IMENotificationRequests();
-  if (!mTabChild->SendNotifyIMEFocus(mContentCache, aIMENotification,
-                                     &mIMENotificationRequestsOfParent)) {
-    return NS_ERROR_FAILURE;
-  }
+  mIMENotificationRequestsOfParent =
+  IMENotificationRequests(IMENotificationRequests::NOTIFY_ALL);
+  RefPtr<PuppetWidget> self = this;
+  mTabChild->SendNotifyIMEFocus(mContentCache, aIMENotification)->Then(
+    mTabChild->TabGroup()->EventTargetFor(TaskCategory::UI),
+    __func__,
+    [self] (IMENotificationRequests aRequests) {
+      self->mIMENotificationRequestsOfParent = aRequests;
+    },
+    [self] (mozilla::ipc::ResponseRejectReason aReason) {
+      NS_WARNING("SendNotifyIMEFocus got rejected.");
+    });
+
   return NS_OK;
 }
 
@@ -864,33 +863,6 @@ PuppetWidget::NotifyIMEOfCompositionUpdate(
   }
   mTabChild->SendNotifyIMECompositionUpdate(mContentCache, aIMENotification);
   return NS_OK;
-}
-
-IMENotificationRequests
-PuppetWidget::GetIMENotificationRequests()
-{
-  if (mNativeTextEventDispatcherListener) {
-    // Use mNativeTextEventDispatcherListener for retrieving IME notification
-    // requests because non-native IME may have transaction.
-    return mNativeTextEventDispatcherListener->GetIMENotificationRequests();
-  }
-
-  // e10s requires IME content cache in in the TabParent for handling query
-  // content event only with the parent process.  Therefore, this process
-  // needs to receive a lot of information from the focused editor to sent
-  // the latest content to the parent process.
-  if (mInputContext.mIMEState.mEnabled == IMEState::PLUGIN) {
-    // But if a plugin has focus, we cannot receive text nor selection change
-    // in the plugin.  Therefore, PuppetWidget needs to receive only position
-    // change event for updating the editor rect cache.
-    return IMENotificationRequests(
-             mIMENotificationRequestsOfParent.mWantUpdates |
-             IMENotificationRequests::NOTIFY_POSITION_CHANGE);
-  }
-  return IMENotificationRequests(
-           mIMENotificationRequestsOfParent.mWantUpdates |
-           IMENotificationRequests::NOTIFY_TEXT_CHANGE |
-           IMENotificationRequests::NOTIFY_POSITION_CHANGE);
 }
 
 nsresult
@@ -944,7 +916,7 @@ PuppetWidget::NotifyIMEOfSelectionChange(
   // Note that selection change must be notified after text change if it occurs.
   // Therefore, we don't need to query text content again here.
   mContentCache.SetSelection(
-    this, 
+    this,
     aIMENotification.mSelectionChangeData.mOffset,
     aIMENotification.mSelectionChangeData.Length(),
     aIMENotification.mSelectionChangeData.mReversed,
@@ -1067,7 +1039,7 @@ PuppetWidget::SetCursor(imgIContainer* aCursor,
     return NS_ERROR_FAILURE;
   }
 
-  mCursor = nsCursor(-1);
+  mCursor = eCursorInvalid;
   mCustomCursor = aCursor;
   mCursorHotspotX = aHotspotX;
   mCursorHotspotY = aHotspotY;
@@ -1108,7 +1080,9 @@ PuppetWidget::Paint()
 #endif
 
     if (mLayerManager->GetBackendType() == mozilla::layers::LayersBackend::LAYERS_CLIENT ||
-        mLayerManager->GetBackendType() == mozilla::layers::LayersBackend::LAYERS_WR) {
+        mLayerManager->GetBackendType() == mozilla::layers::LayersBackend::LAYERS_WR ||
+        (mozilla::layers::LayersBackend::LAYERS_BASIC == mLayerManager->GetBackendType() &&
+         mTabChild && mTabChild->IsLayersConnected().isSome())) {
       // Do nothing, the compositor will handle drawing
       if (mTabChild) {
         mTabChild->NotifyPainted();
@@ -1212,42 +1186,18 @@ PuppetWidget::NeedsPaint()
 float
 PuppetWidget::GetDPI()
 {
-  if (mDPI < 0) {
-    if (mTabChild) {
-      mTabChild->GetDPI(&mDPI);
-    } else {
-      mDPI = 96.0;
-    }
-  }
-
   return mDPI;
 }
 
 double
 PuppetWidget::GetDefaultScaleInternal()
 {
-  if (mDefaultScale < 0) {
-    if (mTabChild) {
-      mTabChild->GetDefaultScale(&mDefaultScale);
-    } else {
-      mDefaultScale = 1;
-    }
-  }
-
   return mDefaultScale;
 }
 
 int32_t
 PuppetWidget::RoundsWidgetCoordinatesTo()
 {
-  if (mRounding < 0) {
-    if (mTabChild) {
-      mTabChild->GetWidgetRounding(&mRounding);
-    } else {
-      mRounding = 1;
-    }
-  }
-
   return mRounding;
 }
 
@@ -1256,10 +1206,14 @@ PuppetWidget::GetNativeData(uint32_t aDataType)
 {
   switch (aDataType) {
   case NS_NATIVE_SHAREABLE_WINDOW: {
-    MOZ_ASSERT(mTabChild, "Need TabChild to get the nativeWindow from!");
+    // NOTE: We can not have a tab child in some situations, such as when we're
+    // rendering to a fake widget for thumbnails.
+    if (!mTabChild) {
+      NS_WARNING("Need TabChild to get the nativeWindow from!");
+    }
     mozilla::WindowsHandle nativeData = 0;
     if (mTabChild) {
-      mTabChild->SendGetWidgetNativeData(&nativeData);
+      nativeData = mTabChild->WidgetNativeData();
     }
     return (void*)nativeData;
   }
@@ -1297,26 +1251,26 @@ PuppetWidget::SetNativeData(uint32_t aDataType, uintptr_t aVal)
 }
 #endif
 
-nsIntPoint
-PuppetWidget::GetChromeDimensions()
+LayoutDeviceIntPoint
+PuppetWidget::GetChromeOffset()
 {
   if (!GetOwningTabChild()) {
     NS_WARNING("PuppetWidget without Tab does not have chrome information.");
-    return nsIntPoint();
+    return LayoutDeviceIntPoint();
   }
-  return GetOwningTabChild()->GetChromeDisplacement().ToUnknownPoint();
+  return GetOwningTabChild()->GetChromeOffset();
 }
 
-nsIntPoint
+LayoutDeviceIntPoint
 PuppetWidget::GetWindowPosition()
 {
   if (!GetOwningTabChild()) {
-    return nsIntPoint();
+    return LayoutDeviceIntPoint();
   }
 
   int32_t winX, winY, winW, winH;
-  NS_ENSURE_SUCCESS(GetOwningTabChild()->GetDimensions(0, &winX, &winY, &winW, &winH), nsIntPoint());
-  return nsIntPoint(winX, winY) + GetOwningTabChild()->GetClientOffset().ToUnknownPoint();
+  NS_ENSURE_SUCCESS(GetOwningTabChild()->GetDimensions(0, &winX, &winY, &winW, &winH), LayoutDeviceIntPoint());
+  return LayoutDeviceIntPoint(winX, winY) + GetOwningTabChild()->GetClientOffset();
 }
 
 LayoutDeviceIntRect
@@ -1327,16 +1281,11 @@ PuppetWidget::GetScreenBounds()
 
 uint32_t PuppetWidget::GetMaxTouchPoints() const
 {
-  static uint32_t sTouchPoints = 0;
-  static bool sIsInitialized = false;
-  if (sIsInitialized) {
-    return sTouchPoints;
-  }
+  uint32_t maxTouchPoints = 0;
   if (mTabChild) {
-    mTabChild->GetMaxTouchPoints(&sTouchPoints);
-    sIsInitialized = true;
+    mTabChild->GetMaxTouchPoints(&maxTouchPoints);
   }
-  return sTouchPoints;
+  return maxTouchPoints;
 }
 
 void
@@ -1493,23 +1442,9 @@ PuppetWidget::HasPendingInputEvent()
 
   mTabChild->GetIPCChannel()->PeekMessages(
     [&ret](const IPC::Message& aMsg) -> bool {
-      if ((aMsg.type() & mozilla::dom::PBrowser::PBrowserStart)
-          == mozilla::dom::PBrowser::PBrowserStart) {
-        switch (aMsg.type()) {
-          case mozilla::dom::PBrowser::Msg_RealMouseMoveEvent__ID:
-          case mozilla::dom::PBrowser::Msg_SynthMouseMoveEvent__ID:
-          case mozilla::dom::PBrowser::Msg_RealMouseButtonEvent__ID:
-          case mozilla::dom::PBrowser::Msg_RealKeyEvent__ID:
-          case mozilla::dom::PBrowser::Msg_MouseWheelEvent__ID:
-          case mozilla::dom::PBrowser::Msg_RealTouchEvent__ID:
-          case mozilla::dom::PBrowser::Msg_RealTouchMoveEvent__ID:
-          case mozilla::dom::PBrowser::Msg_RealDragEvent__ID:
-          case mozilla::dom::PBrowser::Msg_UpdateDimensions__ID:
-          case mozilla::dom::PBrowser::Msg_MouseEvent__ID:
-          case mozilla::dom::PBrowser::Msg_KeyEvent__ID:
-            ret = true;
-            return false;  // Stop peeking.
-        }
+      if (nsContentUtils::IsMessageInputEvent(aMsg)) {
+        ret = true;
+        return false; // Stop peeking.
       }
       return true;
     }
@@ -1545,6 +1480,80 @@ PuppetWidget::OnWindowedPluginKeyEvent(const NativeEventData& aKeyEventData,
   }
   mKeyEventInPluginCallbacks.AppendElement(aCallback);
   return NS_SUCCESS_EVENT_HANDLED_ASYNCHRONOUSLY;
+}
+
+// TextEventDispatcherListener
+
+NS_IMETHODIMP
+PuppetWidget::NotifyIME(TextEventDispatcher* aTextEventDispatcher,
+                        const IMENotification& aIMENotification)
+{
+  MOZ_ASSERT(aTextEventDispatcher == mTextEventDispatcher);
+
+  // If there is different text event dispatcher listener for handling
+  // text event dispatcher, that means that native keyboard events and
+  // IME events are handled in this process.  Therefore, we don't need
+  // to send any requests and notifications to the parent process.
+  if (mNativeTextEventDispatcherListener) {
+    return NS_ERROR_NOT_IMPLEMENTED;
+  }
+
+  switch (aIMENotification.mMessage) {
+    case REQUEST_TO_COMMIT_COMPOSITION:
+      return RequestIMEToCommitComposition(false);
+    case REQUEST_TO_CANCEL_COMPOSITION:
+      return RequestIMEToCommitComposition(true);
+    case NOTIFY_IME_OF_FOCUS:
+    case NOTIFY_IME_OF_BLUR:
+      return NotifyIMEOfFocusChange(aIMENotification);
+    case NOTIFY_IME_OF_SELECTION_CHANGE:
+      return NotifyIMEOfSelectionChange(aIMENotification);
+    case NOTIFY_IME_OF_TEXT_CHANGE:
+      return NotifyIMEOfTextChange(aIMENotification);
+    case NOTIFY_IME_OF_COMPOSITION_EVENT_HANDLED:
+      return NotifyIMEOfCompositionUpdate(aIMENotification);
+    case NOTIFY_IME_OF_MOUSE_BUTTON_EVENT:
+      return NotifyIMEOfMouseButtonEvent(aIMENotification);
+    case NOTIFY_IME_OF_POSITION_CHANGE:
+      return NotifyIMEOfPositionChange(aIMENotification);
+    default:
+      return NS_ERROR_NOT_IMPLEMENTED;
+  }
+
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP_(IMENotificationRequests)
+PuppetWidget::GetIMENotificationRequests()
+{
+  if (mInputContext.mIMEState.mEnabled == IMEState::PLUGIN) {
+    // If a plugin has focus, we cannot receive text nor selection change
+    // in the plugin.  Therefore, PuppetWidget needs to receive only position
+    // change event for updating the editor rect cache.
+    return IMENotificationRequests(
+             mIMENotificationRequestsOfParent.mWantUpdates |
+             IMENotificationRequests::NOTIFY_POSITION_CHANGE);
+  }
+  return IMENotificationRequests(
+           mIMENotificationRequestsOfParent.mWantUpdates |
+           IMENotificationRequests::NOTIFY_TEXT_CHANGE |
+           IMENotificationRequests::NOTIFY_POSITION_CHANGE);
+}
+
+NS_IMETHODIMP_(void)
+PuppetWidget::OnRemovedFrom(TextEventDispatcher* aTextEventDispatcher)
+{
+  MOZ_ASSERT(aTextEventDispatcher == mTextEventDispatcher);
+}
+
+NS_IMETHODIMP_(void)
+PuppetWidget::WillDispatchKeyboardEvent(
+                TextEventDispatcher* aTextEventDispatcher,
+                WidgetKeyboardEvent& aKeyboardEvent,
+                uint32_t aIndexOfKeypress,
+                void* aData)
+{
+  MOZ_ASSERT(aTextEventDispatcher == mTextEventDispatcher);
 }
 
 } // namespace widget

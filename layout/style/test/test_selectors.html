@@ -134,8 +134,9 @@ function run() {
         }
         var docurl = "data:text/html," + escape(html_doc);
         defer_clonedoc_tests(docurl, function() {
-            var clonedoc = cloneiframe.contentDocument;
-            var clonewin = cloneiframe.contentWindow;
+            var wrappedCloneFrame = SpecialPowers.wrap(cloneiframe);
+            var clonedoc = wrappedCloneFrame.contentDocument;
+            var clonewin = wrappedCloneFrame.contentWindow;
 
             if (typeof(body_contents) != "string") {
                 body_contents(clonedoc.body);
@@ -221,8 +222,9 @@ function run() {
         var docurl = "data:text/html," + escape(html_doc);
 
         defer_clonedoc_tests(docurl, function() {
-            var clonedoc = cloneiframe.contentDocument;
-            var clonewin = cloneiframe.contentWindow;
+            var wrappedCloneFrame = SpecialPowers.wrap(cloneiframe);
+            var clonedoc = wrappedCloneFrame.contentDocument;
+            var clonewin = wrappedCloneFrame.contentWindow;
             var links = clonedoc.getElementsByTagName("link");
             // cause a clone
             links[1].sheet.insertRule("#nonexistent { color: purple}", 0);
@@ -395,6 +397,51 @@ function run() {
     test_balanced_unparseable("[attr*=]");
     test_balanced_unparseable("[attr*=foo bar]");
 
+    // And now tests for correctness of matching of attr selectors.
+    var attrTestBody =
+        // Paragraphs 1-5
+        "<p attr></p> <p attr=''></p> <p attr='foo'></p> <p att></p> <p></p>" +
+        // Paragraphs 6-8
+        "<p attr='foo bar'></p> <p attr='foo-bar'></p> <p attr='foobar'></p>" +
+        // Paragraphs 9-10
+        "<p attr='foo bar baz'></p> <p attr='foo-bar-baz'></p>" +
+        // Paragraphs 11-12
+        "<p attr='foo-bar baz'></p> <p attr='   foo-bar  '></p> " +
+        // Paragraph 13-15
+        "<p attr=' foo '></p> <p attr='fo'></p> <p attr='bar baz-foo'></p>";
+    test_selector_in_html(
+        "[attr]", attrTestBody,
+        pset([1,2,3,6,7,8,9,10,11,12,13,14,15]), pset([4,5]));
+    test_selector_in_html(
+        "[attr=foo]", attrTestBody,
+        pset([3]), pset([1,2,4,5,6,7,8,9,10,11,12,13,14,15]));
+    test_selector_in_html(
+        "[attr~=foo]", attrTestBody,
+        pset([3,6,9,13]), pset([1,2,4,5,7,8,10,11,12,14,15]));
+    test_selector_in_html(
+        "[attr~=bar]", attrTestBody,
+        pset([6,9,15]), pset([1,2,3,4,5,7,8,10,11,12,13,14]));
+    test_selector_in_html(
+        "[attr~=baz]", attrTestBody,
+        pset([9,11]), pset([1,2,3,4,5,6,7,8,10,12,13,14,15]));
+    test_selector_in_html(
+        "[attr|=foo]", attrTestBody,
+        pset([3,7,10,11]), pset([1,2,4,5,6,8,9,12,13,14,15]));
+    test_selector_in_html(
+        "[attr|='bar baz']", attrTestBody,
+        pset([15]), pset([1,2,3,4,5,6,7,8,9,10,11,12,13,14]));
+    test_selector_in_html(
+        "[attr$=foo]", attrTestBody,
+        pset([3,15]), pset([1,2,4,5,6,7,8,9,10,11,12,13,14]));
+    test_selector_in_html(
+        "[attr$=bar]", attrTestBody,
+        pset([6,7,8]), pset([1,2,3,4,5,9,10,11,12,13,14,15]));
+    test_selector_in_html(
+        "[attr^=foo]", attrTestBody,
+        pset([3,6,7,8,9,10,11]), pset([1,2,4,5,12,13,14,15]));
+    test_selector_in_html(
+        "[attr*=foo]", attrTestBody,
+        pset([3,6,7,8,9,10,11,12,13,15]), pset([1,2,4,5,14]));
 
     // Bug 420814
     test_selector_in_html(
@@ -602,17 +649,17 @@ function run() {
     test_parseable(":nth-child(+n/**/+2)");
     test_parseable(":nth-child(+n+/**/2)");
     test_parseable(":nth-child(+n+2/**/)");
-    test_parseable(":nth-child(+1/**/n+2)");
+    test_balanced_unparseable(":nth-child(+1/**/n+2)");
     test_parseable(":nth-child(+1n/**/+2)");
     test_parseable(":nth-child(+1n/**/+2)");
     test_parseable(":nth-child(+1n+/**/2)");
     test_parseable(":nth-child(+1n+2/**/)");
-    test_parseable(":nth-child(-/**/n+2)");
+    test_balanced_unparseable(":nth-child(-/**/n+2)");
     test_parseable(":nth-child(-n/**/+2)");
     test_parseable(":nth-child(-n/**/+2)");
     test_parseable(":nth-child(-n+/**/2)");
     test_parseable(":nth-child(-n+2/**/)");
-    test_parseable(":nth-child(-1/**/n+2)");
+    test_balanced_unparseable(":nth-child(-1/**/n+2)");
     test_parseable(":nth-child(-1n/**/+2)");
     test_parseable(":nth-child(-1n/**/+2)");
     test_parseable(":nth-child(-1n+/**/2)");
@@ -626,17 +673,17 @@ function run() {
     test_parseable(":nth-child(+n/**/-2)");
     test_parseable(":nth-child(+n-/**/2)");
     test_parseable(":nth-child(+n-2/**/)");
-    test_parseable(":nth-child(+1/**/n-2)");
+    test_balanced_unparseable(":nth-child(+1/**/n-2)");
     test_parseable(":nth-child(+1n/**/-2)");
     test_parseable(":nth-child(+1n/**/-2)");
     test_parseable(":nth-child(+1n-/**/2)");
     test_parseable(":nth-child(+1n-2/**/)");
-    test_parseable(":nth-child(-/**/n-2)");
+    test_balanced_unparseable(":nth-child(-/**/n-2)");
     test_parseable(":nth-child(-n/**/-2)");
     test_parseable(":nth-child(-n/**/-2)");
     test_parseable(":nth-child(-n-/**/2)");
     test_parseable(":nth-child(-n-2/**/)");
-    test_parseable(":nth-child(-1/**/n-2)");
+    test_balanced_unparseable(":nth-child(-1/**/n-2)");
     test_parseable(":nth-child(-1n/**/-2)");
     test_parseable(":nth-child(-1n/**/-2)");
     test_parseable(":nth-child(-1n-/**/2)");
@@ -650,17 +697,17 @@ function run() {
     test_parseable(":nth-child(+N/**/-2)");
     test_parseable(":nth-child(+N-/**/2)");
     test_parseable(":nth-child(+N-2/**/)");
-    test_parseable(":nth-child(+1/**/N-2)");
+    test_balanced_unparseable(":nth-child(+1/**/N-2)");
     test_parseable(":nth-child(+1N/**/-2)");
     test_parseable(":nth-child(+1N/**/-2)");
     test_parseable(":nth-child(+1N-/**/2)");
     test_parseable(":nth-child(+1N-2/**/)");
-    test_parseable(":nth-child(-/**/N-2)");
+    test_balanced_unparseable(":nth-child(-/**/N-2)");
     test_parseable(":nth-child(-N/**/-2)");
     test_parseable(":nth-child(-N/**/-2)");
     test_parseable(":nth-child(-N-/**/2)");
     test_parseable(":nth-child(-N-2/**/)");
-    test_parseable(":nth-child(-1/**/N-2)");
+    test_balanced_unparseable(":nth-child(-1/**/N-2)");
     test_parseable(":nth-child(-1N/**/-2)");
     test_parseable(":nth-child(-1N/**/-2)");
     test_parseable(":nth-child(-1N-/**/2)");
@@ -671,14 +718,14 @@ function run() {
     test_balanced_unparseable(":nth-child(+ /**/N-2)");
     test_parseable(":nth-child( +n + 1 )");
     test_parseable(":nth-child( +/**/n + 1 )");
-    test_parseable(":nth-child( -/**/2/**/n/**/+/**/4 )");
-    test_balanced_unparseable(":nth-child( -/**/ 2/**/n/**/+/**/4 )");
-    test_balanced_unparseable(":nth-child( -/**/2 /**/n/**/+/**/4 )");
-    test_balanced_unparseable(":nth-child( -/**/2/**/ n/**/+/**/4 )");
-    test_parseable(":nth-child( -/**/2/**/n /**/+/**/4 )");
-    test_parseable(":nth-child( -/**/2/**/n/**/ +/**/4 )");
-    test_parseable(":nth-child(+1/**/n-1)");
-    test_parseable(":nth-child(1/**/n-1)");
+    test_balanced_unparseable(":nth-child( -/**/2/**/n/**/+/**/4 )");
+    test_parseable(":nth-child( -2n/**/ + /**/4 )");
+    test_parseable(":nth-child( -2n/**/+/**/4 )");
+    test_parseable(":nth-child( -2n  /**/+/**/4 )");
+    test_balanced_unparseable(":nth-child( -/**/n  /**/+ /**/ 4 )");
+    test_parseable(":nth-child( +/**/n  /**/+ /**/ 4 )");
+    test_balanced_unparseable(":nth-child(+1/**/n-1)");
+    test_balanced_unparseable(":nth-child(1/**/n-1)");
     // bug 876570
     test_balanced_unparseable(":nth-child(+2n-)");
     test_balanced_unparseable(":nth-child(+n-)");

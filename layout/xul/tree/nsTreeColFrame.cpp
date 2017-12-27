@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -47,13 +48,14 @@ nsTreeColFrame::Init(nsIContent*       aContent,
 }
 
 void
-nsTreeColFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsTreeColFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   InvalidateColumns(false);
-  nsBoxFrame::DestroyFrom(aDestructRoot);
+  nsBoxFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
-class nsDisplayXULTreeColSplitterTarget : public nsDisplayItem {
+class nsDisplayXULTreeColSplitterTarget final : public nsDisplayItem
+{
 public:
   nsDisplayXULTreeColSplitterTarget(nsDisplayListBuilder* aBuilder,
                                     nsIFrame* aFrame) :
@@ -112,26 +114,25 @@ nsDisplayXULTreeColSplitterTarget::HitTest(nsDisplayListBuilder* aBuilder, const
 
 void
 nsTreeColFrame::BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
-                                            const nsRect&           aDirtyRect,
                                             const nsDisplayListSet& aLists)
 {
   if (!aBuilder->IsForEventDelivery()) {
-    nsBoxFrame::BuildDisplayListForChildren(aBuilder, aDirtyRect, aLists);
+    nsBoxFrame::BuildDisplayListForChildren(aBuilder, aLists);
     return;
   }
-  
-  nsDisplayListCollection set;
-  nsBoxFrame::BuildDisplayListForChildren(aBuilder, aDirtyRect, set);
-  
+
+  nsDisplayListCollection set(aBuilder);
+  nsBoxFrame::BuildDisplayListForChildren(aBuilder, set);
+
   WrapListsInRedirector(aBuilder, set, aLists);
 
-  aLists.Content()->AppendNewToTop(new (aBuilder)
+  aLists.Content()->AppendToTop(new (aBuilder)
     nsDisplayXULTreeColSplitterTarget(aBuilder, this));
 }
 
 nsresult
 nsTreeColFrame::AttributeChanged(int32_t aNameSpaceID,
-                                 nsIAtom* aAttribute,
+                                 nsAtom* aAttribute,
                                  int32_t aModType)
 {
   nsresult rv = nsBoxFrame::AttributeChanged(aNameSpaceID, aAttribute,

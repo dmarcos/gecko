@@ -29,6 +29,9 @@
 #include "base/dir_reader_posix.h"
 
 #include "mozilla/UniquePtr.h"
+// For PR_DuplicateEnvironment:
+#include "prenv.h"
+#include "prmem.h"
 
 const int kMicrosecondsPerSecond = 1000000;
 
@@ -125,7 +128,7 @@ void CloseSuperfluousFds(const base::InjectiveMultimap& saved_mapping) {
 #if defined(ANDROID)
   static const rlim_t kSystemDefaultMaxFds = 1024;
   static const char kFDDir[] = "/proc/self/fd";
-#elif defined(OS_LINUX)
+#elif defined(OS_LINUX) || defined(OS_SOLARIS)
   static const rlim_t kSystemDefaultMaxFds = 8192;
   static const char kFDDir[] = "/proc/self/fd";
 #elif defined(OS_MACOSX)
@@ -217,7 +220,7 @@ void CloseSuperfluousFds(const base::InjectiveMultimap& saved_mapping) {
 // TODO(agl): Remove this function. It's fundamentally broken for multithreaded
 // apps.
 void SetAllFDsToCloseOnExec() {
-#if defined(OS_LINUX)
+#if defined(OS_LINUX) || defined(OS_SOLARIS)
   const char fd_dir[] = "/proc/self/fd";
 #elif defined(OS_MACOSX) || defined(OS_BSD)
   const char fd_dir[] = "/dev/fd";
@@ -351,6 +354,45 @@ int ProcessMetrics::GetCPUUsage() {
   last_time_ = time;
 
   return cpu;
+}
+
+void
+FreeEnvVarsArray::operator()(char** array)
+{
+  for (char** varPtr = array; *varPtr != nullptr; ++varPtr) {
+    free(*varPtr);
+  }
+  delete[] array;
+}
+
+EnvironmentArray
+BuildEnvironmentArray(const environment_map& env_vars_to_set)
+{
+  base::environment_map combined_env_vars = env_vars_to_set;
+  char **environ = PR_DuplicateEnvironment();
+  for (char** varPtr = environ; *varPtr != nullptr; ++varPtr) {
+    std::string varString = *varPtr;
+    size_t equalPos = varString.find_first_of('=');
+    std::string varName = varString.substr(0, equalPos);
+    std::string varValue = varString.substr(equalPos + 1);
+    if (combined_env_vars.find(varName) == combined_env_vars.end()) {
+      combined_env_vars[varName] = varValue;
+    }
+    PR_Free(*varPtr); // PR_DuplicateEnvironment() uses PR_Malloc().
+  }
+  PR_Free(environ); // PR_DuplicateEnvironment() uses PR_Malloc().
+
+  EnvironmentArray array(new char*[combined_env_vars.size() + 1]);
+  size_t i = 0;
+  for (const auto& key_val : combined_env_vars) {
+    std::string entry(key_val.first);
+    entry += "=";
+    entry += key_val.second;
+    array[i] = strdup(entry.c_str());
+    i++;
+  }
+  array[i] = nullptr;
+  return array;
 }
 
 }  // namespace base

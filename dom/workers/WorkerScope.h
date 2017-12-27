@@ -19,6 +19,7 @@ namespace dom {
 
 class AnyCallback;
 struct ChannelPixelLayout;
+class Clients;
 class Console;
 class Crypto;
 class Function;
@@ -40,7 +41,6 @@ class CacheStorage;
 
 namespace workers {
 
-class ServiceWorkerClients;
 class WorkerPrivate;
 
 } // namespace workers
@@ -58,6 +58,7 @@ class WorkerGlobalScope : public DOMEventTargetHelper,
   RefPtr<Performance> mPerformance;
   RefPtr<IDBFactory> mIndexedDB;
   RefPtr<cache::CacheStorage> mCacheStorage;
+  nsCOMPtr<nsISerialEventTarget> mSerialEventTarget;
 
   uint32_t mWindowInteractionsAllowed;
 
@@ -91,7 +92,7 @@ public:
     return this;
   }
 
-  Console*
+  already_AddRefed<Console>
   GetConsole(ErrorResult& aRv);
 
   Console*
@@ -155,6 +156,11 @@ public:
 
   Performance* GetPerformance();
 
+  Performance* GetPerformanceIfExists() const
+  {
+    return mPerformance;
+  }
+
   already_AddRefed<Promise>
   Fetch(const RequestOrUSVString& aInput, const RequestInit& aInit,
         CallerType aCallerType, ErrorResult& aRv);
@@ -203,18 +209,38 @@ public:
     MOZ_ASSERT(mWindowInteractionsAllowed > 0);
     mWindowInteractionsAllowed--;
   }
+
+  // Override DispatchTrait API to target the worker thread.  Dispatch may
+  // return failure if the worker thread is not alive.
+  nsresult
+  Dispatch(TaskCategory aCategory,
+           already_AddRefed<nsIRunnable>&& aRunnable) override;
+
+  nsISerialEventTarget*
+  EventTargetFor(TaskCategory aCategory) const override;
+
+  AbstractThread*
+  AbstractMainThreadFor(TaskCategory aCategory) override;
 };
 
 class DedicatedWorkerGlobalScope final : public WorkerGlobalScope
 {
+  const nsString mName;
+
   ~DedicatedWorkerGlobalScope() { }
 
 public:
-  explicit DedicatedWorkerGlobalScope(WorkerPrivate* aWorkerPrivate);
+  DedicatedWorkerGlobalScope(WorkerPrivate* aWorkerPrivate,
+                             const nsString& aName);
 
   virtual bool
   WrapGlobalObject(JSContext* aCx,
                    JS::MutableHandle<JSObject*> aReflector) override;
+
+  void GetName(DOMString& aName) const
+  {
+    aName.AsAString() = mName;
+  }
 
   void
   PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
@@ -225,17 +251,18 @@ public:
   Close(JSContext* aCx);
 
   IMPL_EVENT_HANDLER(message)
+  IMPL_EVENT_HANDLER(messageerror)
 };
 
 class SharedWorkerGlobalScope final : public WorkerGlobalScope
 {
-  const nsCString mName;
+  const nsString mName;
 
   ~SharedWorkerGlobalScope() { }
 
 public:
   SharedWorkerGlobalScope(WorkerPrivate* aWorkerPrivate,
-                          const nsCString& aName);
+                          const nsString& aName);
 
   virtual bool
   WrapGlobalObject(JSContext* aCx,
@@ -243,7 +270,7 @@ public:
 
   void GetName(DOMString& aName) const
   {
-    aName.AsAString() = NS_ConvertUTF8toUTF16(mName);
+    aName.AsAString() = mName;
   }
 
   void
@@ -255,7 +282,7 @@ public:
 class ServiceWorkerGlobalScope final : public WorkerGlobalScope
 {
   const nsString mScope;
-  RefPtr<workers::ServiceWorkerClients> mClients;
+  RefPtr<Clients> mClients;
   RefPtr<ServiceWorkerRegistration> mRegistration;
 
   ~ServiceWorkerGlobalScope();
@@ -273,17 +300,14 @@ public:
   WrapGlobalObject(JSContext* aCx,
                    JS::MutableHandle<JSObject*> aReflector) override;
 
-  static bool
-  OpenWindowEnabled(JSContext* aCx, JSObject* aObj);
-
   void
   GetScope(nsString& aScope) const
   {
     aScope = mScope;
   }
 
-  workers::ServiceWorkerClients*
-  Clients();
+  already_AddRefed<Clients>
+  GetClients();
 
   ServiceWorkerRegistration*
   Registration();
@@ -320,6 +344,7 @@ class WorkerDebuggerGlobalScope final : public DOMEventTargetHelper,
 
   WorkerPrivate* mWorkerPrivate;
   RefPtr<Console> mConsole;
+  nsCOMPtr<nsISerialEventTarget> mSerialEventTarget;
 
 public:
   explicit WorkerDebuggerGlobalScope(WorkerPrivate* aWorkerPrivate);
@@ -369,6 +394,7 @@ public:
   PostMessage(const nsAString& aMessage);
 
   IMPL_EVENT_HANDLER(message)
+  IMPL_EVENT_HANDLER(messageerror)
 
   void
   SetImmediate(Function& aHandler, ErrorResult& aRv);
@@ -384,7 +410,7 @@ public:
   SetConsoleEventHandler(JSContext* aCx, AnyCallback* aHandler,
                          ErrorResult& aRv);
 
-  Console*
+  already_AddRefed<Console>
   GetConsole(ErrorResult& aRv);
 
   Console*
@@ -395,6 +421,18 @@ public:
 
   void
   Dump(JSContext* aCx, const Optional<nsAString>& aString) const;
+
+  // Override DispatchTrait API to target the worker thread.  Dispatch may
+  // return failure if the worker thread is not alive.
+  nsresult
+  Dispatch(TaskCategory aCategory,
+           already_AddRefed<nsIRunnable>&& aRunnable) override;
+
+  nsISerialEventTarget*
+  EventTargetFor(TaskCategory aCategory) const override;
+
+  AbstractThread*
+  AbstractMainThreadFor(TaskCategory aCategory) override;
 
 private:
   virtual ~WorkerDebuggerGlobalScope();

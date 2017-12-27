@@ -18,9 +18,7 @@
 #include "mozilla/Unused.h"
 #include "mozilla/dom/Exceptions.h"
 #include "nsContentUtils.h"
-#ifdef MOZ_CRASHREPORTER
 #include "nsExceptionHandler.h"
-#endif
 #include "mozilla/StackWalk.h"
 #include "nsString.h"
 #include "nsThreadUtils.h"
@@ -98,8 +96,7 @@ SandboxLogCStack()
   // can't walk past the signal trampoline on ARM (bug 968531), and
   // x86 frame pointer walking may or may not work (bug 1082276).
 
-  MozStackWalk(SandboxPrintStackFrame, /* skip */ 3, /* max */ 0,
-               nullptr, 0, nullptr);
+  MozStackWalk(SandboxPrintStackFrame, /* skip */ 3, /* max */ 0, nullptr);
   SANDBOX_LOG_ERROR("end of stack.");
 }
 
@@ -107,11 +104,8 @@ static void
 SandboxCrash(int nr, siginfo_t *info, void *void_context)
 {
   pid_t pid = getpid(), tid = syscall(__NR_gettid);
-  bool dumped = false;
+  bool dumped = CrashReporter::WriteMinidumpForSigInfo(nr, info, void_context);
 
-#ifdef MOZ_CRASHREPORTER
-  dumped = CrashReporter::WriteMinidumpForSigInfo(nr, info, void_context);
-#endif
   if (!dumped) {
     SANDBOX_LOG_ERROR("crash reporter is disabled (or failed);"
                       " trying stack trace:");

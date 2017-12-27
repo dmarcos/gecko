@@ -6,9 +6,12 @@
 
 const {utils: Cu, classes: Cc, interfaces: Ci} = Components;
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
-Cu.import("resource://gre/modules/CanonicalJSON.jsm");
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://shield-recipe-client/lib/LogManager.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(
+  this, "CanonicalJSON", "resource://gre/modules/CanonicalJSON.jsm");
+
 Cu.importGlobalProperties(["fetch", "URL"]); /* globals fetch, URL */
 
 this.EXPORTED_SYMBOLS = ["NormandyApi"];
@@ -19,6 +22,8 @@ const prefs = Services.prefs.getBranch("extensions.shield-recipe-client.");
 let indexPromise = null;
 
 this.NormandyApi = {
+  InvalidSignatureError: class InvalidSignatureError extends Error {},
+
   clearIndexCache() {
     indexPromise = null;
   },
@@ -61,79 +66,154 @@ this.NormandyApi = {
     throw new Error("Can't use relative urls");
   },
 
-  getApiUrl: Task.async(function * (name) {
-    const apiBase = prefs.getCharPref("api_url");
+  async getApiUrl(name) {
     if (!indexPromise) {
-      indexPromise = this.get(apiBase).then(res => res.json());
+      const apiBase = new URL(prefs.getCharPref("api_url"));
+      if (!apiBase.pathname.endsWith("/")) {
+        apiBase.pathname += "/";
+      }
+      indexPromise = this.get(apiBase.toString()).then(res => res.json());
     }
-    const index = yield indexPromise;
+    const index = await indexPromise;
     if (!(name in index)) {
       throw new Error(`API endpoint with name "${name}" not found.`);
     }
     const url = index[name];
     return this.absolutify(url);
-  }),
+  },
 
-  fetchRecipes: Task.async(function* (filters = {enabled: true}) {
-    const signedRecipesUrl = yield this.getApiUrl("recipe-signed");
-    const recipesResponse = yield this.get(signedRecipesUrl, filters);
-    const rawText = yield recipesResponse.text();
-    const recipesWithSigs = JSON.parse(rawText);
+  async fetchSignedObjects(type, filters) {
+    const signedObjectsUrl = await this.getApiUrl(`${type}-signed`);
+    const objectsResponse = await this.get(signedObjectsUrl, filters);
+    const rawText = await objectsResponse.text();
+    const objectsWithSigs = JSON.parse(rawText);
 
-    const verifiedRecipes = [];
+    const verifiedObjects = [];
 
-    for (const {recipe, signature: {signature, x5u}} of recipesWithSigs) {
-      const serialized = CanonicalJSON.stringify(recipe);
+    for (const objectWithSig of objectsWithSigs) {
+      const {signature, x5u} = objectWithSig.signature;
+      const object = objectWithSig[type];
+
+      const serialized = CanonicalJSON.stringify(object);
+      // Check that the rawtext (the object and the signature)
+      // includes the CanonicalJSON version of the object. This isn't
+      // strictly needed, but it is a great benefit for debugging
+      // signature problems.
       if (!rawText.includes(serialized)) {
         log.debug(rawText, serialized);
-        throw new Error("Canonical recipe serialization does not match!");
+        throw new NormandyApi.InvalidSignatureError(
+          `Canonical ${type} serialization does not match!`);
       }
 
-      const certChainResponse = yield fetch(this.absolutify(x5u));
-      const certChain = yield certChainResponse.text();
+      const certChainResponse = await this.get(this.absolutify(x5u));
+      const certChain = await certChainResponse.text();
       const builtSignature = `p384ecdsa=${signature}`;
 
       const verifier = Cc["@mozilla.org/security/contentsignatureverifier;1"]
         .createInstance(Ci.nsIContentSignatureVerifier);
 
-      const valid = verifier.verifyContentSignature(
-        serialized,
-        builtSignature,
-        certChain,
-        "normandy.content-signature.mozilla.org"
-      );
-      if (!valid) {
-        throw new Error("Recipe signature is not valid");
+      let valid;
+      try {
+        valid = verifier.verifyContentSignature(
+          serialized,
+          builtSignature,
+          certChain,
+          "normandy.content-signature.mozilla.org"
+        );
+      } catch (err) {
+        throw new NormandyApi.InvalidSignatureError(`${type} signature validation failed: ${err}`);
       }
-      verifiedRecipes.push(recipe);
+
+      if (!valid) {
+        throw new NormandyApi.InvalidSignatureError(`${type} signature is not valid`);
+      }
+
+      verifiedObjects.push(object);
     }
 
     log.debug(
-      `Fetched ${verifiedRecipes.length} recipes from the server:`,
-      verifiedRecipes.map(r => r.name).join(", ")
+      `Fetched ${verifiedObjects.length} ${type} from the server:`,
+      verifiedObjects.map(r => r.name).join(", ")
     );
 
-    return verifiedRecipes;
-  }),
+    return verifiedObjects;
+  },
 
   /**
    * Fetch metadata about this client determined by the server.
    * @return {object} Metadata specified by the server
    */
-  classifyClient: Task.async(function* () {
-    const classifyClientUrl = yield this.getApiUrl("classify-client");
-    const response = yield this.get(classifyClientUrl);
-    const clientData = yield response.json();
+  async classifyClient() {
+    const classifyClientUrl = await this.getApiUrl("classify-client");
+    const response = await this.get(classifyClientUrl);
+    const clientData = await response.json();
     clientData.request_time = new Date(clientData.request_time);
     return clientData;
-  }),
+  },
 
-  fetchAction: Task.async(function* (name) {
-    let actionApiUrl = yield this.getApiUrl("action-list");
-    if (!actionApiUrl.endsWith("/")) {
-      actionApiUrl += "/";
+  /**
+   * Fetch an array of available actions from the server.
+   * @param filters
+   * @param filters.enabled {boolean} If true, only returns enabled
+   * recipes. Default true.
+   * @resolves {Array}
+   */
+  async fetchRecipes(filters = {enabled: true}) {
+    return this.fetchSignedObjects("recipe", filters);
+  },
+
+  /**
+   * Fetch an array of available actions from the server.
+   * @resolves {Array}
+   */
+  async fetchActions(filters = {}) {
+    return this.fetchSignedObjects("action", filters);
+  },
+
+  async fetchImplementation(action) {
+    const implementationUrl = new URL(this.absolutify(action.implementation_url));
+
+    // fetch implementation
+    const response = await fetch(implementationUrl);
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch action implementation for ${action.name}: ${response.status}`
+      );
     }
-    const res = yield this.get(actionApiUrl + name);
-    return yield res.json();
-  }),
+    const responseText = await response.text();
+
+    // Try to verify integrity of the implementation text.  If the
+    // integrity value doesn't match the content or uses an unknown
+    // algorithm, fail.
+
+    // Get the last non-empty portion of the url path, and split it
+    // into two to get the aglorithm and hash.
+    const parts = implementationUrl.pathname.split("/");
+    const lastNonEmpty = parts.filter(p => p !== "").slice(-1)[0];
+    const [algorithm, ...hashParts] = lastNonEmpty.split("-");
+    const expectedHash = hashParts.join("-");
+
+    if (algorithm !== "sha384") {
+      throw new Error(
+        `Failed to fetch action implemenation for ${action.name}: ` +
+        `Unexpected integrity algorithm, expected "sha384", got ${algorithm}`
+      );
+    }
+
+    // verify integrity hash
+    const hasher = Cc["@mozilla.org/security/hash;1"].createInstance(Ci.nsICryptoHash);
+    hasher.init(hasher.SHA384);
+    const dataToHash = new TextEncoder().encode(responseText);
+    hasher.update(dataToHash, dataToHash.length);
+    const useBase64 = true;
+    const hash = hasher.finish(useBase64).replace(/\+/g, "-").replace(/\//g, "_");
+    if (hash !== expectedHash) {
+      throw new Error(
+        `Failed to fetch action implementation for ${action.name}: ` +
+        `Integrity hash does not match content. Expected ${expectedHash} got ${hash}.`
+      );
+    }
+
+    return responseText;
+  },
 };

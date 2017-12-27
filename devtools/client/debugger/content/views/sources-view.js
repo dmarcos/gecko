@@ -95,7 +95,7 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     this._preferredSourceURL = null;
     this._unnamedSourceIndex = 0;
     this.emptyText = L10N.getStr("noSourcesText");
-    this._blackBoxCheckboxTooltip = L10N.getStr("blackBoxCheckboxTooltip");
+    this._blackBoxCheckboxTooltip = L10N.getStr("blackboxCheckboxTooltip2");
 
     this._commandset = document.getElementById("debuggerCommands");
     this._popupset = document.getElementById("debuggerPopupset");
@@ -733,7 +733,7 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
    *         line number and line text nodes.
    */
   _createBreakpointView: function (aOptions) {
-    let { location, disabled, text, message } = aOptions;
+    let { location, disabled, text, message, isWasm } = aOptions;
     let identifier = makeLocationId(location);
 
     let checkbox = document.createElement("checkbox");
@@ -744,7 +744,9 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
 
     let lineNumberNode = document.createElement("label");
     lineNumberNode.className = "plain dbg-breakpoint-line";
-    lineNumberNode.setAttribute("value", location.line);
+    let lineNumberStr = !isWasm ? location.line.toString() :
+      location.line.toString(16).toUpperCase();
+    lineNumberNode.setAttribute("value", lineNumberStr);
 
     let lineTextNode = document.createElement("label");
     lineTextNode.className = "plain dbg-breakpoint-text";

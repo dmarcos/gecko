@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -45,20 +46,20 @@ protected:
    Our own versions of the standard frame tree navigation
    methods, which, if the iterator is following out-of-flows,
    apply the following rules for placeholder frames:
-   
+
    - If a frame HAS a placeholder frame, getting its parent
    gets the placeholder's parent.
-   
+
    - If a frame's first child or next/prev sibling IS a
    placeholder frame, then we instead return the real frame.
-   
+
    - If a frame HAS a placeholder frame, getting its next/prev
    sibling gets the placeholder frame's next/prev sibling.
-   
+
    These are all applied recursively to support multiple levels of
    placeholders.
-   */  
-  
+   */
+
   nsIFrame* GetParentFrame(nsIFrame* aFrame);
   // like GetParentFrame but returns null once a popup frame is reached
   nsIFrame* GetParentFrameNotPopup(nsIFrame* aFrame);
@@ -75,13 +76,17 @@ protected:
    order", "get next sibling in visual order" and "get previous sibling in visual
    order".
   */
-  
+
   virtual nsIFrame* GetFirstChildInner(nsIFrame* aFrame);
-  virtual nsIFrame* GetLastChildInner(nsIFrame* aFrame);  
+  virtual nsIFrame* GetLastChildInner(nsIFrame* aFrame);
 
   virtual nsIFrame* GetNextSiblingInner(nsIFrame* aFrame);
   virtual nsIFrame* GetPrevSiblingInner(nsIFrame* aFrame);
 
+  /**
+   * Return the placeholder frame for aFrame if it has one, otherwise return
+   * aFrame itself.
+   */
   nsIFrame* GetPlaceholderFrame(nsIFrame* aFrame);
   bool      IsPopupFrame(nsIFrame* aFrame);
 
@@ -111,10 +116,10 @@ public:
 
 protected:
   nsIFrame* GetFirstChildInner(nsIFrame* aFrame) override;
-  nsIFrame* GetLastChildInner(nsIFrame* aFrame) override;  
-  
+  nsIFrame* GetLastChildInner(nsIFrame* aFrame) override;
+
   nsIFrame* GetNextSiblingInner(nsIFrame* aFrame) override;
-  nsIFrame* GetPrevSiblingInner(nsIFrame* aFrame) override;  
+  nsIFrame* GetPrevSiblingInner(nsIFrame* aFrame) override;
 };
 
 /************IMPLEMENTATIONS**************/
@@ -170,7 +175,7 @@ nsFrameTraversal::~nsFrameTraversal()
 
 NS_IMPL_ISUPPORTS(nsFrameTraversal,nsIFrameTraversal)
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
  nsFrameTraversal::NewFrameTraversal(nsIFrameEnumerator **aEnumerator,
                                      nsPresContext* aPresContext,
                                      nsIFrame *aStart,
@@ -182,7 +187,7 @@ NS_IMETHODIMP
 {
   return NS_NewFrameTraversal(aEnumerator, aPresContext, aStart,
                               static_cast<nsIteratorType>(aType),
-                              aVisual, aLockInScrollView, aFollowOOFs, aSkipPopupChecks);  
+                              aVisual, aLockInScrollView, aFollowOOFs, aSkipPopupChecks);
 }
 
 // nsFrameIterator implementation
@@ -202,7 +207,7 @@ nsFrameIterator::nsFrameIterator(nsPresContext* aPresContext, nsIFrame *aStart,
   mLast(aStart),
   mOffEdge(0)
 {
-  MOZ_ASSERT(!aFollowOOFs || aStart->GetType() != nsGkAtoms::placeholderFrame,
+  MOZ_ASSERT(!aFollowOOFs || !aStart->IsPlaceholderFrame(),
              "Caller should have resolved placeholder frame");
 }
 
@@ -234,9 +239,7 @@ nsFrameIterator::First()
 static bool
 IsRootFrame(nsIFrame* aFrame)
 {
-  nsIAtom* atom = aFrame->GetType();
-  return (atom == nsGkAtoms::canvasFrame) ||
-         (atom == nsGkAtoms::rootFrame);
+  return aFrame->IsCanvasFrame() || aFrame->IsRootFrame();
 }
 
 void
@@ -246,7 +249,7 @@ nsFrameIterator::Last()
   nsIFrame* parent = getCurrent();
   // If the current frame is a popup, don't move farther up the tree.
   // Otherwise, get the nearest root frame or popup.
-  if (mSkipPopupChecks || parent->GetType() != nsGkAtoms::menuPopupFrame) {
+  if (mSkipPopupChecks || !parent->IsMenuPopupFrame()) {
     while (!IsRootFrame(parent) && (result = GetParentFrameNotPopup(parent)))
       parent = result;
   }
@@ -254,7 +257,7 @@ nsFrameIterator::Last()
   while ((result = GetLastChild(parent))) {
     parent = result;
   }
-  
+
   setCurrent(parent);
   if (!parent)
     setOffEdge(1);
@@ -298,7 +301,7 @@ nsFrameIterator::Next()
       else {
         result = GetParentFrameNotPopup(parent);
         if (!result || IsRootFrame(result) ||
-            (mLockScroll && result->GetType() == nsGkAtoms::scrollFrame)) {
+            (mLockScroll && result->IsScrollFrame())) {
           result = nullptr;
           break;
         }
@@ -335,7 +338,7 @@ nsFrameIterator::Prev()
     if (result)
       parent = result;
   }
-  
+
   if (parent != getCurrent()) {
     result = parent;
   } else {
@@ -353,7 +356,7 @@ nsFrameIterator::Prev()
       } else {
         result = GetParentFrameNotPopup(parent);
         if (!result || IsRootFrame(result) ||
-            (mLockScroll && result->GetType() == nsGkAtoms::scrollFrame)) {
+            (mLockScroll && result->IsScrollFrame())) {
           result = nullptr;
           break;
         }
@@ -378,7 +381,7 @@ nsFrameIterator::GetParentFrame(nsIFrame* aFrame)
     aFrame = GetPlaceholderFrame(aFrame);
   if (aFrame)
     return aFrame->GetParent();
-  
+
   return nullptr;
 }
 
@@ -392,7 +395,7 @@ nsFrameIterator::GetParentFrameNotPopup(nsIFrame* aFrame)
     if (!IsPopupFrame(parent))
       return parent;
   }
-    
+
   return nullptr;
 }
 
@@ -400,11 +403,11 @@ nsIFrame*
 nsFrameIterator::GetFirstChild(nsIFrame* aFrame)
 {
   nsIFrame* result = GetFirstChildInner(aFrame);
-  if (mLockScroll && result && result->GetType() == nsGkAtoms::scrollFrame)
+  if (mLockScroll && result && result->IsScrollFrame())
     return nullptr;
   if (result && mFollowOOFs) {
     result = nsPlaceholderFrame::GetRealFrameFor(result);
-    
+
     if (IsPopupFrame(result))
       result = GetNextSibling(result);
   }
@@ -415,11 +418,11 @@ nsIFrame*
 nsFrameIterator::GetLastChild(nsIFrame* aFrame)
 {
   nsIFrame* result = GetLastChildInner(aFrame);
-  if (mLockScroll && result && result->GetType() == nsGkAtoms::scrollFrame)
+  if (mLockScroll && result && result->IsScrollFrame())
     return nullptr;
   if (result && mFollowOOFs) {
     result = nsPlaceholderFrame::GetRealFrameFor(result);
-    
+
     if (IsPopupFrame(result))
       result = GetPrevSibling(result);
   }
@@ -486,18 +489,11 @@ nsFrameIterator::GetPrevSiblingInner(nsIFrame* aFrame) {
 nsIFrame*
 nsFrameIterator::GetPlaceholderFrame(nsIFrame* aFrame)
 {
-  nsIFrame* result = aFrame;
-  nsIPresShell *presShell = mPresContext->GetPresShell();
-  if (presShell) {
-    nsIFrame* placeholder = presShell->GetPlaceholderFrameFor(aFrame);
-    if (placeholder)
-      result = placeholder;
+  if (MOZ_LIKELY(!aFrame || !aFrame->HasAnyStateBits(NS_FRAME_OUT_OF_FLOW))) {
+    return aFrame;
   }
-
-  if (result != aFrame)
-    result = GetPlaceholderFrame(result);
-
-  return result;
+  nsIFrame* placeholder = aFrame->GetPlaceholderFrame();
+  return placeholder ? placeholder : aFrame;
 }
 
 bool

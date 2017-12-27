@@ -59,6 +59,7 @@ public:
   typedef nsBaseHashtableET<KeyClass, DataType> EntryType;
 
   using nsTHashtable<EntryType>::Contains;
+  using nsTHashtable<EntryType>::GetGeneration;
 
   nsBaseHashtable() {}
   explicit nsBaseHashtable(uint32_t aInitLength)
@@ -122,20 +123,14 @@ public:
    */
   DataType& GetOrInsert(const KeyType& aKey)
   {
-    EntryType* ent = this->GetEntry(aKey);
-    if (ent) {
-      return ent->mData;
-    }
-
-    ent = this->PutEntry(aKey);
+    EntryType* ent = this->PutEntry(aKey);
     return ent->mData;
   }
 
   /**
-   * put a new value for the associated key
+   * Put a new value for the associated key
    * @param aKey the key to put
    * @param aData the new data
-   * @return always true, unless memory allocation failed
    */
   void Put(KeyType aKey, const UserDataType& aData)
   {
@@ -158,10 +153,201 @@ public:
   }
 
   /**
-   * remove the data for the associated key
-   * @param aKey the key to remove from the hashtable
+   * Put a new value for the associated key
+   * @param aKey the key to put
+   * @param aData the new data
    */
-  void Remove(KeyType aKey) { this->RemoveEntry(aKey); }
+  void Put(KeyType aKey, UserDataType&& aData)
+  {
+    if (!Put(aKey, mozilla::Move(aData), mozilla::fallible)) {
+      NS_ABORT_OOM(this->mTable.EntrySize() * this->mTable.EntryCount());
+    }
+  }
+
+  MOZ_MUST_USE bool Put(KeyType aKey, UserDataType&& aData, const fallible_t&)
+  {
+    EntryType* ent = this->PutEntry(aKey, mozilla::fallible);
+    if (!ent) {
+      return false;
+    }
+
+    ent->mData = mozilla::Move(aData);
+
+    return true;
+  }
+
+  /**
+   * Remove the entry associated with aKey (if any), optionally _moving_ its
+   * current value into *aData.  Return true if found.
+   * @param aKey the key to remove from the hashtable
+   * @param aData where to move the value (if non-null).  If an entry is not
+   *              found, *aData will be assigned a default-constructed value
+   *              (i.e. reset to zero or nullptr for primitive types).
+   * @return true if an entry for aKey was found (and removed)
+   */
+  bool Remove(KeyType aKey, DataType* aData = nullptr)
+  {
+    if (auto* ent = this->GetEntry(aKey)) {
+      if (aData) {
+        *aData = mozilla::Move(ent->mData);
+      }
+      this->RemoveEntry(ent);
+      return true;
+    }
+    if (aData) {
+      *aData = mozilla::Move(DataType());
+    }
+    return false;
+  }
+
+  struct LookupResult {
+  private:
+    EntryType* mEntry;
+    nsBaseHashtable& mTable;
+#ifdef DEBUG
+    uint32_t mTableGeneration;
+#endif
+
+  public:
+    LookupResult(EntryType* aEntry, nsBaseHashtable& aTable)
+      : mEntry(aEntry)
+      , mTable(aTable)
+#ifdef DEBUG
+      , mTableGeneration(aTable.GetGeneration())
+#endif
+    {}
+
+    // Is there something stored in the table?
+    explicit operator bool() const
+    {
+      MOZ_ASSERT(mTableGeneration == mTable.GetGeneration());
+      return mEntry;
+    }
+
+    void Remove()
+    {
+      if (!*this) {
+        return;
+      }
+      mTable.RemoveEntry(mEntry);
+      mEntry = nullptr;
+    }
+
+    MOZ_MUST_USE DataType& Data()
+    {
+      MOZ_ASSERT(!!*this, "must have an entry to access its value");
+      return mEntry->mData;
+    }
+  };
+
+  /**
+   * Looks up aKey in the hashtable and returns an object that allows you to
+   * read/modify the value of the entry, or remove the entry (if found).
+   *
+   * A typical usage of this API looks like this:
+   *
+   *   if (auto entry = hashtable.Lookup(key)) {
+   *     DoSomething(entry.Data());
+   *     if (entry.Data() > 42) {
+   *       entry.Remove();
+   *     }
+   *   } // else - an entry with the given key doesn't exist
+   *
+   * This is useful for cases where you want to read/write the value of an entry
+   * and (optionally) remove the entry without having to do multiple hashtable
+   * lookups.  If you want to insert a new entry if one does not exist, then use
+   * LookupForAdd instead, see below.
+   */
+  MOZ_MUST_USE LookupResult Lookup(KeyType aKey)
+  {
+    return LookupResult(this->GetEntry(aKey), *this);
+  }
+
+  struct EntryPtr {
+  private:
+    EntryType& mEntry;
+    bool mExistingEntry;
+    // For debugging purposes
+#ifdef DEBUG
+    nsBaseHashtable& mTable;
+    uint32_t mTableGeneration;
+    bool mDidInitNewEntry;
+#endif
+
+  public:
+    EntryPtr(nsBaseHashtable& aTable, EntryType* aEntry, bool aExistingEntry)
+      : mEntry(*aEntry)
+      , mExistingEntry(aExistingEntry)
+#ifdef DEBUG
+      , mTable(aTable)
+      , mTableGeneration(aTable.GetGeneration())
+      , mDidInitNewEntry(false)
+#endif
+    {}
+    ~EntryPtr()
+    {
+      MOZ_ASSERT(mExistingEntry || mDidInitNewEntry,
+                 "Forgot to call OrInsert() on a new entry");
+    }
+
+    // Is there something stored in the table already?
+    explicit operator bool() const
+    {
+      MOZ_ASSERT(mTableGeneration == mTable.GetGeneration());
+      return mExistingEntry;
+    }
+
+    template <class F>
+    UserDataType OrInsert(F func)
+    {
+      MOZ_ASSERT(mTableGeneration == mTable.GetGeneration());
+      if (!mExistingEntry) {
+        mEntry.mData = func();
+#ifdef DEBUG
+        mDidInitNewEntry = true;
+#endif
+      }
+      return mEntry.mData;
+    }
+
+    MOZ_MUST_USE DataType& Data()
+    {
+      MOZ_ASSERT(mTableGeneration == mTable.GetGeneration());
+      return mEntry.mData;
+    }
+  };
+
+  /**
+   * Looks up aKey in the hashtable and returns an object that allows you to
+   * insert a new entry into the hashtable for that key if an existing entry
+   * isn't found for it.
+   *
+   * A typical usage of this API looks like this:
+   *
+   *   auto insertedValue = table.LookupForAdd(key).OrInsert([]() {
+   *     return newValue;
+   *   });
+   *
+   *   auto p = table.LookupForAdd(key);
+   *   if (p) {
+   *     // The entry already existed in the table.
+   *     DoSomething(p.Data());
+   *   } else {
+   *     // An existing entry wasn't found, store a new entry in the hashtable.
+   *     p.OrInsert([]() { return newValue; });
+   *   }
+   *
+   * We ensure that the hashtable isn't modified before EntryPtr method calls.
+   * This is useful for cases where you want to insert a new entry into the
+   * hashtable if one doesn't exist before but would like to avoid two hashtable
+   * lookups.
+   */
+  MOZ_MUST_USE EntryPtr LookupForAdd(KeyType aKey)
+  {
+    auto count = Count();
+    EntryType* ent = this->PutEntry(aKey);
+    return EntryPtr(*this, ent, count == Count());
+  }
 
   // This is an iterator that also allows entry removal. Example usage:
   //

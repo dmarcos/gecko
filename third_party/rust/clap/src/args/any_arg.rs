@@ -3,17 +3,13 @@ use std::rc::Rc;
 use std::fmt as std_fmt;
 use std::ffi::{OsStr, OsString};
 
-// Third Party
-use vec_map::{self, VecMap};
-
 // Internal
 use args::settings::ArgSettings;
-use args::ArgKind;
+use map::{self, VecMap};
 
 #[doc(hidden)]
 pub trait AnyArg<'n, 'e>: std_fmt::Display {
     fn name(&self) -> &'n str;
-    fn id(&self) -> usize;
     fn overrides(&self) -> Option<&[&'e str]>;
     fn aliases(&self) -> Option<Vec<&'e str>>;
     fn requires(&self) -> Option<&[(Option<&'e str>, &'n str)]>;
@@ -34,10 +30,11 @@ pub trait AnyArg<'n, 'e>: std_fmt::Display {
     fn takes_value(&self) -> bool;
     fn val_names(&self) -> Option<&VecMap<&'e str>>;
     fn help(&self) -> Option<&'e str>;
-    fn default_val(&self) -> Option<&'n str>;
-    fn default_vals_ifs(&self) -> Option<vec_map::Values<(&'n str, Option<&'e str>, &'e str)>>;
+    fn long_help(&self) -> Option<&'e str>;
+    fn default_val(&self) -> Option<&'e OsStr>;
+    fn default_vals_ifs(&self) -> Option<map::Values<(&'n str, Option<&'e OsStr>, &'e OsStr)>>;
+    fn env<'s>(&'s self) -> Option<(&'n OsStr, Option<&'s OsString>)>;
     fn longest_filter(&self) -> bool;
-    fn kind(&self) -> ArgKind;
     fn val_terminator(&self) -> Option<&'e str>;
 }
 

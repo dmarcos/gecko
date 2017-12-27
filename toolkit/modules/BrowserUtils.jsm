@@ -11,11 +11,52 @@ const {interfaces: Ci, utils: Cu, classes: Cc} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
   "resource://gre/modules/PlacesUtils.jsm");
 
 Cu.importGlobalProperties(["URL"]);
+
+let reflowObservers = new WeakMap();
+
+function ReflowObserver(doc) {
+  this._doc = doc;
+
+  doc.docShell.addWeakReflowObserver(this);
+  reflowObservers.set(this._doc, this);
+
+  this.callbacks = [];
+}
+
+ReflowObserver.prototype = {
+  QueryInterface: XPCOMUtils.generateQI(["nsIReflowObserver", "nsISupportsWeakReference"]),
+
+  _onReflow() {
+    reflowObservers.delete(this._doc);
+    this._doc.docShell.removeWeakReflowObserver(this);
+
+    for (let callback of this.callbacks) {
+      try {
+        callback();
+      } catch (e) {
+        Cu.reportError(e);
+      }
+    }
+  },
+
+  reflow() {
+    this._onReflow();
+  },
+
+  reflowInterruptible() {
+    this._onReflow();
+  },
+};
+
+const FLUSH_TYPES = {
+  "style": Ci.nsIDOMWindowUtils.FLUSH_STYLE,
+  "layout": Ci.nsIDOMWindowUtils.FLUSH_LAYOUT,
+  "display": Ci.nsIDOMWindowUtils.FLUSH_DISPLAY,
+};
 
 this.BrowserUtils = {
 
@@ -33,8 +74,6 @@ this.BrowserUtils = {
    * safe mode if it is already in safe mode.
    */
   restartApplication() {
-    let appStartup = Cc["@mozilla.org/toolkit/app-startup;1"]
-                       .getService(Ci.nsIAppStartup);
     let cancelQuit = Cc["@mozilla.org/supports-PRBool;1"]
                        .createInstance(Ci.nsISupportsPRBool);
     Services.obs.notifyObservers(cancelQuit, "quit-application-requested", "restart");
@@ -43,10 +82,10 @@ this.BrowserUtils = {
     }
     // if already in safe mode restart in safe mode
     if (Services.appinfo.inSafeMode) {
-      appStartup.restartInSafeMode(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
+      Services.startup.restartInSafeMode(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
       return undefined;
     }
-    appStartup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
+    Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
     return undefined;
   },
 
@@ -128,17 +167,22 @@ this.BrowserUtils = {
    * @param aOriginCharset The charset of the URI.
    * @param aBaseURI Base URI to resolve aURL, or null.
    * @return an nsIURI object based on aURL.
+   *
+   * @deprecated Use Services.io.newURI directly instead.
    */
   makeURI(aURL, aOriginCharset, aBaseURI) {
     return Services.io.newURI(aURL, aOriginCharset, aBaseURI);
   },
 
+  /**
+   * @deprecated Use Services.io.newFileURI directly instead.
+   */
   makeFileURI(aFile) {
     return Services.io.newFileURI(aFile);
   },
 
   makeURIFromCPOW(aCPOWURI) {
-    return Services.io.newURI(aCPOWURI.spec, aCPOWURI.originCharset);
+    return Services.io.newURI(aCPOWURI.spec);
   },
 
   /**
@@ -363,6 +407,40 @@ this.BrowserUtils = {
   },
 
   /**
+   * Sets the --toolbarbutton-button-height CSS property on the closest
+   * toolbar to the provided element. Useful if you need to vertically
+   * center a position:absolute element within a toolbar that uses
+   * -moz-pack-align:stretch, and thus a height which is dependant on
+   * the font-size.
+   *
+   * @param element An element within the toolbar whose height is desired.
+   */
+  async setToolbarButtonHeightProperty(element) {
+    let window = element.ownerGlobal;
+    let dwu = window.getInterface(Ci.nsIDOMWindowUtils);
+    let toolbarItem = element;
+    let urlBarContainer = element.closest("#urlbar-container");
+    if (urlBarContainer) {
+      // The stop-reload-button, which is contained in #urlbar-container,
+      // needs to use #urlbar-container to calculate the bounds.
+      toolbarItem = urlBarContainer;
+    }
+    if (!toolbarItem) {
+      return;
+    }
+    let bounds = dwu.getBoundsWithoutFlushing(toolbarItem);
+    if (!bounds.height) {
+      let document = element.ownerDocument;
+      await BrowserUtils.promiseLayoutFlushed(document, "layout", () => {
+        bounds = dwu.getBoundsWithoutFlushing(toolbarItem);
+      });
+    }
+    if (bounds.height) {
+      toolbarItem.style.setProperty("--toolbarbutton-height", bounds.height + "px");
+    }
+  },
+
+  /**
    * Track whether a toolbar is visible for a given a docShell.
    *
    * @param  {nsIDocShell} docShell  The docShell instance that a toolbar should
@@ -410,11 +488,24 @@ this.BrowserUtils = {
 
     let selection = focusedWindow.getSelection();
     let selectionStr = selection.toString();
-
-    let collapsed = selection.isCollapsed;
+    let fullText;
 
     let url;
     let linkText;
+
+    // try getting a selected text in text input.
+    if (!selectionStr && focusedElement instanceof Ci.nsIDOMNSEditableElement) {
+      // Don't get the selection for password fields. See bug 565717.
+      if (ChromeUtils.getClassName(focusedElement) === "HTMLTextAreaElement" ||
+          (focusedElement instanceof Ci.nsIDOMHTMLInputElement &&
+           focusedElement.mozIsTextField(true))) {
+        selection = focusedElement.editor.selection;
+        selectionStr = selection.toString();
+      }
+    }
+
+    let collapsed = selection.isCollapsed;
+
     if (selectionStr) {
       // Have some text, let's figure out if it looks like a URL that isn't
       // actually a link.
@@ -458,26 +549,18 @@ this.BrowserUtils = {
         }
 
         if (delimitedAtStart && delimitedAtEnd) {
-          let uriFixup = Cc["@mozilla.org/docshell/urifixup;1"]
-                           .getService(Ci.nsIURIFixup);
           try {
-            url = uriFixup.createFixupURI(linkText, uriFixup.FIXUP_FLAG_NONE);
+            url = Services.uriFixup.createFixupURI(linkText, Services.uriFixup.FIXUP_FLAG_NONE);
           } catch (ex) {}
         }
       }
     }
 
-    // try getting a selected text in text input.
-    if (!selectionStr && focusedElement instanceof Ci.nsIDOMNSEditableElement) {
-      // Don't get the selection for password fields. See bug 565717.
-      if (focusedElement instanceof Ci.nsIDOMHTMLTextAreaElement ||
-          (focusedElement instanceof Ci.nsIDOMHTMLInputElement &&
-           focusedElement.mozIsTextField(true))) {
-        selectionStr = focusedElement.editor.selection.toString();
-      }
-    }
-
     if (selectionStr) {
+      // Pass up to 16K through unmolested.  If an add-on needs more, they will
+      // have to use a content script.
+      fullText = selectionStr.substr(0, 16384);
+
       if (selectionStr.length > charLen) {
         // only use the first charLen important chars. see bug 221361
         var pattern = new RegExp("^(?:\\s*.){0," + charLen + "}");
@@ -496,7 +579,7 @@ this.BrowserUtils = {
       url = null;
     }
 
-    return { text: selectionStr, docSelectionIsCollapsed: collapsed,
+    return { text: selectionStr, docSelectionIsCollapsed: collapsed, fullText,
              linkURL: url ? url.spec : null, linkText: url ? linkText : "" };
   },
 
@@ -523,8 +606,8 @@ this.BrowserUtils = {
    * @return [url, postData]
    * @throws if nor url nor postData accept a param, but a param was provided.
    */
-  parseUrlAndPostData: Task.async(function* (url, postData, param) {
-    let hasGETParam = /%s/i.test(url)
+  async parseUrlAndPostData(url, postData, param) {
+    let hasGETParam = /%s/i.test(url);
     let decodedPostData = postData ? unescape(postData) : "";
     let hasPOSTParam = /%s/i.test(decodedPostData);
 
@@ -546,7 +629,7 @@ this.BrowserUtils = {
       // Try to fetch a charset from History.
       try {
         // Will return an empty string if character-set is not found.
-        charset = yield PlacesUtils.getCharsetForURI(this.makeURI(url));
+        charset = await PlacesUtils.getCharsetForURI(this.makeURI(url));
       } catch (ex) {
         // makeURI() throws if url is invalid.
         Cu.reportError(ex);
@@ -580,5 +663,64 @@ this.BrowserUtils = {
                                 .replace(/%S/g, param);
     }
     return [url, postData];
-  }),
+  },
+
+  /**
+   * Calls the given function when the given document has just reflowed,
+   * and returns a promise which resolves to its return value after it
+   * has been called.
+   *
+   * The function *must not trigger any reflows*, or make any changes
+   * which would require a layout flush.
+   *
+   * @param {Document} doc
+   * @param {function} callback
+   * @returns {Promise}
+   */
+  promiseReflowed(doc, callback) {
+    let observer = reflowObservers.get(doc);
+    if (!observer) {
+      observer = new ReflowObserver(doc);
+      reflowObservers.set(doc, observer);
+    }
+
+    return new Promise((resolve, reject) => {
+      observer.callbacks.push(() => {
+        try {
+          resolve(callback());
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+  },
+
+  /**
+   * Calls the given function as soon as a layout flush of the given
+   * type is not necessary, and returns a promise which resolves to the
+   * callback's return value after it executes.
+   *
+   * The function *must not trigger any reflows*, or make any changes
+   * which would require a layout flush.
+   *
+   * @param {Document} doc
+   * @param {string} flushType
+   *        The flush type required. Must be one of:
+   *
+   *          - "style"
+   *          - "layout"
+   *          - "display"
+   * @param {function} callback
+   * @returns {Promise}
+   */
+  async promiseLayoutFlushed(doc, flushType, callback) {
+    let utils = doc.defaultView.QueryInterface(Ci.nsIInterfaceRequestor)
+                   .getInterface(Ci.nsIDOMWindowUtils);
+
+    if (!utils.needsFlush(FLUSH_TYPES[flushType])) {
+      return callback();
+    }
+
+    return this.promiseReflowed(doc, callback);
+  },
 };

@@ -4,10 +4,10 @@
 
 "use strict";
 
-const { addons, createClass, createFactory, PropTypes } =
-  require("devtools/client/shared/vendor/react");
+const Services = require("Services");
+const { createFactory, PureComponent } = require("devtools/client/shared/vendor/react");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
 const { connect } = require("devtools/client/shared/vendor/react-redux");
-
 const { LocalizationHelper } = require("devtools/shared/l10n");
 
 const Accordion =
@@ -19,22 +19,21 @@ const Types = require("../types");
 const BOXMODEL_STRINGS_URI = "devtools/client/locales/boxmodel.properties";
 const BOXMODEL_L10N = new LocalizationHelper(BOXMODEL_STRINGS_URI);
 
-const BoxModelApp = createClass({
+const BOXMODEL_OPENED_PREF = "devtools.computed.boxmodel.opened";
 
-  displayName: "BoxModelApp",
-
-  propTypes: {
-    boxModel: PropTypes.shape(Types.boxModel).isRequired,
-    setSelectedNode: PropTypes.func.isRequired,
-    showBoxModelProperties: PropTypes.bool.isRequired,
-    onHideBoxModelHighlighter: PropTypes.func.isRequired,
-    onShowBoxModelEditor: PropTypes.func.isRequired,
-    onShowBoxModelHighlighter: PropTypes.func.isRequired,
-    onShowBoxModelHighlighterForNode: PropTypes.func.isRequired,
-    onToggleGeometryEditor: PropTypes.func.isRequired,
-  },
-
-  mixins: [ addons.PureRenderMixin ],
+class BoxModelApp extends PureComponent {
+  static get propTypes() {
+    return {
+      boxModel: PropTypes.shape(Types.boxModel).isRequired,
+      setSelectedNode: PropTypes.func.isRequired,
+      showBoxModelProperties: PropTypes.bool.isRequired,
+      onHideBoxModelHighlighter: PropTypes.func.isRequired,
+      onShowBoxModelEditor: PropTypes.func.isRequired,
+      onShowBoxModelHighlighter: PropTypes.func.isRequired,
+      onShowBoxModelHighlighterForNode: PropTypes.func.isRequired,
+      onToggleGeometryEditor: PropTypes.func.isRequired,
+    };
+  }
 
   render() {
     return Accordion({
@@ -43,12 +42,15 @@ const BoxModelApp = createClass({
           header: BOXMODEL_L10N.getStr("boxmodel.title"),
           component: BoxModel,
           componentProps: this.props,
-          opened: true,
+          opened: Services.prefs.getBoolPref(BOXMODEL_OPENED_PREF),
+          onToggled: () => {
+            let opened = Services.prefs.getBoolPref(BOXMODEL_OPENED_PREF);
+            Services.prefs.setBoolPref(BOXMODEL_OPENED_PREF, !opened);
+          }
         }
       ]
     });
-  },
-
-});
+  }
+}
 
 module.exports = connect(state => state)(BoxModelApp);

@@ -7,9 +7,11 @@
 #include "MediaPrefs.h"
 #include "mozilla/PodOperations.h"
 #include "mozilla/Types.h"
+#include "PlatformDecoderModule.h"
 #include "prlink.h"
 
 #define AV_LOG_DEBUG    48
+#define AV_LOG_INFO     32
 
 namespace mozilla
 {
@@ -42,8 +44,8 @@ FFmpegLibWrapper::Link()
       return LinkResult::CannotUseLibAV57;
     }
 #ifdef MOZ_FFMPEG
-    if (version < (54u << 16 | 35u << 8 | 1u)
-        && !MediaPrefs::LibavcodecAllowObsolete()) {
+    if (version < (54u << 16 | 35u << 8 | 1u) &&
+        !MediaPrefs::LibavcodecAllowObsolete()) {
       // Refuse any libavcodec version prior to 54.35.1.
       // (Unless media.libavcodec.allow-obsolete==true)
       Unlink();
@@ -140,10 +142,13 @@ FFmpegLibWrapper::Link()
 #undef AV_FUNC_OPTION
 
   avcodec_register_all();
-#ifdef DEBUG
-  av_log_set_level(AV_LOG_DEBUG);
-#endif
-
+  if (MOZ_LOG_TEST(sPDMLog, LogLevel::Debug)) {
+    av_log_set_level(AV_LOG_DEBUG);
+  } else if (MOZ_LOG_TEST(sPDMLog, LogLevel::Info)) {
+    av_log_set_level(AV_LOG_INFO);
+  } else {
+    av_log_set_level(0);
+  }
   return LinkResult::Success;
 }
 

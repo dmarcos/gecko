@@ -16,14 +16,11 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
  
-  for each (let j in [null, 2, 3]) { }
+  for (let j of [null, 2, 3]) { }
 
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

@@ -41,6 +41,10 @@ public:
                 nsPIDOMWindowOuter* aDOMWindow);
     void Detach();
 
+    nsresult Dispatch(const char16_t* aEvent,
+                      java::GeckoBundle::Param aData = nullptr,
+                      nsIAndroidEventCallback* aCallback = nullptr);
+
     using NativesBase::DisposeNative;
 
     bool HasGeckoListener(jni::String::Param aEvent);
@@ -49,7 +53,7 @@ public:
                          jni::Object::Param aCallback);
 
     static nsresult UnboxBundle(JSContext* aCx,
-                                const jni::Object::Param aData,
+                                jni::Object::Param aData,
                                 JS::MutableHandleValue aOut);
 
 private:
@@ -83,6 +87,9 @@ private:
     nsresult DispatchOnGecko(ListenersList* list, const nsAString& aEvent,
                              JS::HandleValue aData,
                              nsIAndroidEventCallback* aCallback);
+
+    java::EventDispatcher::NativeCallbackDelegate::LocalRef
+    WrapCallback(nsIAndroidEventCallback* aCallback);
 };
 
 } // namespace widget

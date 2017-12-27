@@ -1,6 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: sw=2 ts=8 et :
- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -66,13 +65,11 @@ public:
 
   void BuildDisplayList(nsDisplayListBuilder* aBuilder,
                         nsSubDocumentFrame* aFrame,
-                        const nsRect& aDirtyRect,
                         const nsDisplayListSet& aLists);
 
   already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
                                      nsIFrame* aFrame,
                                      LayerManager* aManager,
-                                     const nsIntRect& aVisibleRect,
                                      nsDisplayItem* aItem,
                                      const ContainerLayerParameters& aContainerParameters);
 
@@ -89,6 +86,8 @@ public:
   void TakeFocusForClickFromTap();
 
   void EnsureLayersConnected(CompositorOptions* aCompositorOptions);
+
+  LayerManager* AttachLayerManager();
 
 protected:
   void ActorDestroy(ActorDestroyReason why) override;
@@ -114,6 +113,7 @@ private:
 
   RefPtr<nsFrameLoader> mFrameLoader;
   RefPtr<ContainerLayer> mContainer;
+  RefPtr<LayerManager> mLayerManager;
 
   // True after Destroy() has been called, which is triggered
   // originally by nsFrameLoader::Destroy().  After this point, we can
@@ -126,7 +126,7 @@ private:
   // Prefer the extra bit of state to null'ing out mFrameLoader in
   // Destroy() so that less code needs to be special-cased for after
   // Destroy().
-  // 
+  //
   // It's possible for mFrameLoader==null and
   // mFrameLoaderDestroyed==false.
   bool mFrameLoaderDestroyed;
@@ -160,10 +160,21 @@ public:
   BuildLayer(nsDisplayListBuilder* aBuilder, LayerManager* aManager,
              const ContainerLayerParameters& aContainerParameters) override;
 
+  virtual bool CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
+                                       mozilla::wr::IpcResourceUpdateQueue& aResources,
+                                       const StackingContextHelper& aSc,
+                                       mozilla::layers::WebRenderLayerManager* aManager,
+                                       nsDisplayListBuilder* aDisplayListBuilder) override;
+  virtual bool UpdateScrollData(mozilla::layers::WebRenderScrollData* aData,
+                                mozilla::layers::WebRenderLayerScrollData* aLayerData) override;
+
+  uint64_t GetRemoteLayersId() const;
+
   NS_DISPLAY_DECL_NAME("Remote", TYPE_REMOTE)
 
 private:
   RenderFrameParent* mRemoteFrame;
+  mozilla::LayoutDeviceIntPoint mOffset;
   mozilla::layers::EventRegionsOverride mEventRegionsOverride;
 };
 

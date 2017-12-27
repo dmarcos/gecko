@@ -8,7 +8,7 @@ createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "42");
 const sampleAddon = {
   id: "webextension1@tests.mozilla.org",
   name: "webextension_1",
-}
+};
 
 const manifestSample = {
   id: "bootstrap1@tests.mozilla.org",
@@ -21,35 +21,22 @@ const manifestSample = {
   }],
 };
 
-const { Management } = Components.utils.import("resource://gre/modules/Extension.jsm", {});
-
-function promiseAddonStartup() {
-  return new Promise(resolve => {
-    let listener = (extension) => {
-      Management.off("startup", listener);
-      resolve(extension);
-    };
-
-    Management.on("startup", listener);
-  });
-}
-
-function* installAddon(fixtureName, addonID) {
-  yield promiseInstallAllFiles([do_get_addon(fixtureName)]);
+async function installAddon(fixtureName, addonID) {
+  await promiseInstallAllFiles([do_get_addon(fixtureName)]);
   return promiseAddonByID(addonID);
 }
 
-function* tearDownAddon(addon) {
+async function tearDownAddon(addon) {
   addon.uninstall();
-  yield promiseShutdownManager();
+  await promiseShutdownManager();
 }
 
-add_task(function* test_reloading_a_temp_addon() {
+add_task(async function test_reloading_a_temp_addon() {
   if (AppConstants.MOZ_APP_NAME == "thunderbird")
     return;
-  yield promiseRestartManager();
-  yield AddonManager.installTemporaryAddon(do_get_addon(sampleAddon.name));
-  const addon = yield promiseAddonByID(sampleAddon.id)
+  await promiseRestartManager();
+  await AddonManager.installTemporaryAddon(do_get_addon(sampleAddon.name));
+  const addon = await promiseAddonByID(sampleAddon.id);
 
   var receivedOnUninstalled = false;
   var receivedOnUninstalling = false;
@@ -79,15 +66,15 @@ add_task(function* test_reloading_a_temp_addon() {
         AddonManager.removeAddonListener(listener);
         resolve();
       },
-    }
+    };
     AddonManager.addAddonListener(listener);
   });
 
-  yield Promise.all([
+  await Promise.all([
     addon.reload(),
-    promiseAddonStartup(),
+    promiseWebExtensionStartup(),
   ]);
-  yield onReload;
+  await onReload;
 
   // Make sure reload() doesn't trigger uninstall events.
   equal(receivedOnUninstalled, false, "reload should not trigger onUninstalled");
@@ -97,43 +84,43 @@ add_task(function* test_reloading_a_temp_addon() {
   equal(receivedOnInstalling, true, "reload should trigger onInstalling");
   equal(receivedOnInstalled, true, "reload should trigger onInstalled");
 
-  yield tearDownAddon(addon);
+  await tearDownAddon(addon);
 });
 
-add_task(function* test_can_reload_permanent_addon() {
-  yield promiseRestartManager();
-  const addon = yield installAddon(sampleAddon.name, sampleAddon.id);
+add_task(async function test_can_reload_permanent_addon() {
+  await promiseRestartManager();
+  const addon = await installAddon(sampleAddon.name, sampleAddon.id);
 
   let disabledCalled = false;
   let enabledCalled = false;
   AddonManager.addAddonListener({
     onDisabled: (aAddon) => {
-      do_check_false(enabledCalled);
-      disabledCalled = true
+      Assert.ok(!enabledCalled);
+      disabledCalled = true;
     },
     onEnabled: (aAddon) => {
-      do_check_true(disabledCalled);
-      enabledCalled = true
+      Assert.ok(disabledCalled);
+      enabledCalled = true;
     }
-  })
+  });
 
-  yield Promise.all([
+  await Promise.all([
     addon.reload(),
-    promiseAddonStartup(),
+    promiseWebExtensionStartup(),
   ]);
 
-  do_check_true(disabledCalled);
-  do_check_true(enabledCalled);
+  Assert.ok(disabledCalled);
+  Assert.ok(enabledCalled);
 
   notEqual(addon, null);
   equal(addon.appDisabled, false);
   equal(addon.userDisabled, false);
 
-  yield tearDownAddon(addon);
+  await tearDownAddon(addon);
 });
 
-add_task(function* test_reload_to_invalid_version_fails() {
-  yield promiseRestartManager();
+add_task(async function test_reload_to_invalid_version_fails() {
+  await promiseRestartManager();
   let tempdir = gTmpD.clone();
 
   // The initial version of the add-on will be compatible, and will therefore load
@@ -150,11 +137,11 @@ add_task(function* test_reload_to_invalid_version_fails() {
     },
   };
 
-  let addonDir = yield promiseWriteWebManifestForExtension(manifest, tempdir, "invalid_version");
-  yield AddonManager.installTemporaryAddon(addonDir);
-  yield promiseAddonStartup();
+  let addonDir = await promiseWriteWebManifestForExtension(manifest, tempdir, "invalid_version");
+  await AddonManager.installTemporaryAddon(addonDir);
+  await promiseWebExtensionStartup();
 
-  let addon = yield promiseAddonByID(addonId);
+  let addon = await promiseAddonByID(addonId);
   notEqual(addon, null);
   equal(addon.id, addonId);
   equal(addon.version, "1.0");
@@ -167,27 +154,30 @@ add_task(function* test_reload_to_invalid_version_fails() {
   manifest.applications.gecko.strict_max_version = "1";
   manifest.version = "2.0";
 
-  addonDir = yield promiseWriteWebManifestForExtension(manifest, tempdir, "invalid_version", false);
+  addonDir = await promiseWriteWebManifestForExtension(manifest, tempdir, "invalid_version", false);
   let expectedMsg = new RegExp("Add-on invalid_version_cannot_be_reloaded@tests.mozilla.org is not compatible with application version. " +
                                "add-on minVersion: 1. add-on maxVersion: 1.");
 
-  yield Assert.rejects(addon.reload(),
+  await Assert.rejects(addon.reload(),
                        expectedMsg,
                        "Reload rejects when application version does not fall between minVersion and maxVersion");
 
-  let reloadedAddon = yield promiseAddonByID(addonId);
+  let reloadedAddon = await promiseAddonByID(addonId);
   notEqual(reloadedAddon, null);
   equal(reloadedAddon.id, addonId);
   equal(reloadedAddon.version, "1.0");
   equal(reloadedAddon.appDisabled, false);
   equal(reloadedAddon.userDisabled, false);
 
-  yield tearDownAddon(reloadedAddon);
+  await tearDownAddon(reloadedAddon);
   addonDir.remove(true);
 });
 
-add_task(function* test_manifest_changes_are_refreshed() {
-  yield promiseRestartManager();
+add_task(async function test_manifest_changes_are_refreshed() {
+  if (!AppConstants.MOZ_ALLOW_LEGACY_EXTENSIONS) {
+    return;
+  }
+  await promiseRestartManager();
   let tempdir = gTmpD.clone();
 
   const unpackedAddon = writeInstallRDFToDir(
@@ -195,8 +185,8 @@ add_task(function* test_manifest_changes_are_refreshed() {
       name: "Test Bootstrap 1",
     }), tempdir, manifestSample.id, "bootstrap.js");
 
-  yield AddonManager.installTemporaryAddon(unpackedAddon);
-  const addon = yield promiseAddonByID(manifestSample.id);
+  await AddonManager.installTemporaryAddon(unpackedAddon);
+  const addon = await promiseAddonByID(manifestSample.id);
   notEqual(addon, null);
   equal(addon.name, "Test Bootstrap 1");
 
@@ -204,18 +194,21 @@ add_task(function* test_manifest_changes_are_refreshed() {
     name: "Test Bootstrap 1 (reloaded)",
   }), tempdir, manifestSample.id);
 
-  yield addon.reload();
+  await addon.reload();
 
-  const reloadedAddon = yield promiseAddonByID(manifestSample.id);
+  const reloadedAddon = await promiseAddonByID(manifestSample.id);
   notEqual(reloadedAddon, null);
   equal(reloadedAddon.name, "Test Bootstrap 1 (reloaded)");
 
-  yield tearDownAddon(reloadedAddon);
+  await tearDownAddon(reloadedAddon);
   unpackedAddon.remove(true);
 });
 
-add_task(function* test_reload_fails_on_installation_errors() {
-  yield promiseRestartManager();
+add_task(async function test_reload_fails_on_installation_errors() {
+  if (!AppConstants.MOZ_ALLOW_LEGACY_EXTENSIONS) {
+    return;
+  }
+  await promiseRestartManager();
   let tempdir = gTmpD.clone();
 
   const unpackedAddon = writeInstallRDFToDir(
@@ -223,22 +216,22 @@ add_task(function* test_reload_fails_on_installation_errors() {
       name: "Test Bootstrap 1",
     }), tempdir, manifestSample.id, "bootstrap.js");
 
-  yield AddonManager.installTemporaryAddon(unpackedAddon);
-  const addon = yield promiseAddonByID(manifestSample.id);
+  await AddonManager.installTemporaryAddon(unpackedAddon);
+  const addon = await promiseAddonByID(manifestSample.id);
   notEqual(addon, null);
 
   // Trigger an installation error with an empty manifest.
   writeInstallRDFToDir({}, tempdir, manifestSample.id);
 
-  yield Assert.rejects(addon.reload(), /No ID in install manifest/);
+  await Assert.rejects(addon.reload(), /No ID in install manifest/);
 
   // The old add-on should be active. I.E. the broken reload will not
   // disturb it.
-  const oldAddon = yield promiseAddonByID(manifestSample.id);
+  const oldAddon = await promiseAddonByID(manifestSample.id);
   notEqual(oldAddon, null);
   equal(oldAddon.isActive, true);
   equal(oldAddon.name, "Test Bootstrap 1");
 
-  yield tearDownAddon(addon);
+  await tearDownAddon(addon);
   unpackedAddon.remove(true);
 });

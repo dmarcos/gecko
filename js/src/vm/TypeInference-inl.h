@@ -15,6 +15,8 @@
 #include "mozilla/Casting.h"
 #include "mozilla/PodOperations.h"
 
+#include "jsgc.h"
+
 #include "builtin/SymbolObject.h"
 #include "jit/BaselineJIT.h"
 #include "vm/ArrayObject.h"
@@ -369,10 +371,10 @@ TypeMonitorCall(JSContext* cx, const js::CallArgs& args, bool constructing)
 MOZ_ALWAYS_INLINE bool
 TrackPropertyTypes(JSObject* obj, jsid id)
 {
-    if (obj->hasLazyGroup() || obj->group()->unknownProperties())
+    if (obj->hasLazyGroup() || obj->group()->unknownPropertiesDontCheckGeneration())
         return false;
 
-    if (obj->isSingleton() && !obj->group()->maybeGetProperty(id))
+    if (obj->isSingleton() && !obj->group()->maybeGetPropertyDontCheckGeneration(id))
         return false;
 
     return true;
@@ -405,13 +407,12 @@ PropertyHasBeenMarkedNonConstant(JSObject* obj, jsid id)
 }
 
 MOZ_ALWAYS_INLINE bool
-HasTypePropertyId(JSObject* obj, jsid id, TypeSet::Type type)
+HasTrackedPropertyType(JSObject* obj, jsid id, TypeSet::Type type)
 {
-    id = IdToTypeId(id);
-    if (!TrackPropertyTypes(obj, id))
-        return true;
+    MOZ_ASSERT(id == IdToTypeId(id));
+    MOZ_ASSERT(TrackPropertyTypes(obj, id));
 
-    if (HeapTypeSet* types = obj->group()->maybeGetProperty(id)) {
+    if (HeapTypeSet* types = obj->group()->maybeGetPropertyDontCheckGeneration(id)) {
         if (!types->hasType(type))
             return false;
         // Non-constant properties are only relevant for singleton objects.
@@ -424,6 +425,16 @@ HasTypePropertyId(JSObject* obj, jsid id, TypeSet::Type type)
 }
 
 MOZ_ALWAYS_INLINE bool
+HasTypePropertyId(JSObject* obj, jsid id, TypeSet::Type type)
+{
+    id = IdToTypeId(id);
+    if (!TrackPropertyTypes(obj, id))
+        return true;
+
+    return HasTrackedPropertyType(obj, id, type);
+}
+
+MOZ_ALWAYS_INLINE bool
 HasTypePropertyId(JSObject* obj, jsid id, const Value& value)
 {
     return HasTypePropertyId(obj, id, TypeSet::GetValueType(value));
@@ -433,20 +444,18 @@ void AddTypePropertyId(JSContext* cx, ObjectGroup* group, JSObject* obj, jsid id
 void AddTypePropertyId(JSContext* cx, ObjectGroup* group, JSObject* obj, jsid id, const Value& value);
 
 /* Add a possible type for a property of obj. */
-inline void
+MOZ_ALWAYS_INLINE void
 AddTypePropertyId(JSContext* cx, JSObject* obj, jsid id, TypeSet::Type type)
 {
     id = IdToTypeId(id);
-    if (TrackPropertyTypes(obj, id))
+    if (TrackPropertyTypes(obj, id) && !HasTrackedPropertyType(obj, id, type))
         AddTypePropertyId(cx, obj->group(), obj, id, type);
 }
 
-inline void
+MOZ_ALWAYS_INLINE void
 AddTypePropertyId(JSContext* cx, JSObject* obj, jsid id, const Value& value)
 {
-    id = IdToTypeId(id);
-    if (TrackPropertyTypes(obj, id))
-        AddTypePropertyId(cx, obj->group(), obj, id, value);
+    return AddTypePropertyId(cx, obj, id, TypeSet::GetValueType(value));
 }
 
 inline void
@@ -489,6 +498,8 @@ MarkObjectStateChange(JSContext* cx, JSObject* obj)
 
 /* Interface helpers for JSScript*. */
 extern void TypeMonitorResult(JSContext* cx, JSScript* script, jsbytecode* pc, TypeSet::Type type);
+extern void TypeMonitorResult(JSContext* cx, JSScript* script, jsbytecode* pc, StackTypeSet* types,
+                              TypeSet::Type type);
 extern void TypeMonitorResult(JSContext* cx, JSScript* script, jsbytecode* pc, const Value& rval);
 
 /////////////////////////////////////////////////////////////////////
@@ -590,6 +601,15 @@ TypeScript::Monitor(JSContext* cx, const js::Value& rval)
 }
 
 /* static */ inline void
+TypeScript::Monitor(JSContext* cx, JSScript* script, jsbytecode* pc, StackTypeSet* types,
+                    const js::Value& rval)
+{
+    TypeSet::Type type = TypeSet::GetValueType(rval);
+    if (!types->hasType(type))
+        TypeMonitorResult(cx, script, pc, types, type);
+}
+
+/* static */ inline void
 TypeScript::MonitorAssign(JSContext* cx, HandleObject obj, jsid id)
 {
     if (!obj->isSingleton()) {
@@ -628,7 +648,7 @@ TypeScript::SetThis(JSContext* cx, JSScript* script, TypeSet::Type type)
         AutoEnterAnalysis enter(cx);
 
         InferSpew(ISpewOps, "externalType: setThis %p: %s",
-                  script, TypeSet::TypeString(type));
+                  script, TypeSet::TypeString(type).get());
         types->addType(cx, type);
     }
 }
@@ -652,7 +672,7 @@ TypeScript::SetArgument(JSContext* cx, JSScript* script, unsigned arg, TypeSet::
         AutoEnterAnalysis enter(cx);
 
         InferSpew(ISpewOps, "externalType: setArg %p %u: %s",
-                  script, arg, TypeSet::TypeString(type));
+                  script, arg, TypeSet::TypeString(type).get());
         types->addType(cx, type);
     }
 }
@@ -661,6 +681,21 @@ TypeScript::SetArgument(JSContext* cx, JSScript* script, unsigned arg, TypeSet::
 TypeScript::SetArgument(JSContext* cx, JSScript* script, unsigned arg, const js::Value& value)
 {
     SetArgument(cx, script, arg, TypeSet::GetValueType(value));
+}
+
+inline
+AutoKeepTypeScripts::AutoKeepTypeScripts(JSContext* cx)
+  : zone_(cx->zone()->types),
+    prev_(zone_.keepTypeScripts)
+{
+    zone_.keepTypeScripts = true;
+}
+
+inline
+AutoKeepTypeScripts::~AutoKeepTypeScripts()
+{
+    MOZ_ASSERT(zone_.keepTypeScripts);
+    zone_.keepTypeScripts = prev_;
 }
 
 /////////////////////////////////////////////////////////////////////
@@ -819,7 +854,7 @@ struct TypeHashSet
 
     // Lookup an entry in a hash set, return nullptr if it does not exist.
     template <class T, class U, class KEY>
-    static inline U*
+    static MOZ_ALWAYS_INLINE U*
     Lookup(U** values, unsigned count, T key)
     {
         if (count == 0)
@@ -1057,9 +1092,17 @@ TypeSet::getObjectClass(unsigned i) const
 /////////////////////////////////////////////////////////////////////
 
 inline uint32_t
+ObjectGroup::basePropertyCountDontCheckGeneration()
+{
+    uint32_t flags = flagsDontCheckGeneration();
+    return (flags & OBJECT_FLAG_PROPERTY_COUNT_MASK) >> OBJECT_FLAG_PROPERTY_COUNT_SHIFT;
+}
+
+inline uint32_t
 ObjectGroup::basePropertyCount()
 {
-    return (flags() & OBJECT_FLAG_PROPERTY_COUNT_MASK) >> OBJECT_FLAG_PROPERTY_COUNT_SHIFT;
+    maybeSweep(nullptr);
+    return basePropertyCountDontCheckGeneration();
 }
 
 inline void
@@ -1115,21 +1158,28 @@ ObjectGroup::getProperty(JSContext* cx, JSObject* obj, jsid id)
     return &base->types;
 }
 
-inline HeapTypeSet*
-ObjectGroup::maybeGetProperty(jsid id)
+MOZ_ALWAYS_INLINE HeapTypeSet*
+ObjectGroup::maybeGetPropertyDontCheckGeneration(jsid id)
 {
     MOZ_ASSERT(JSID_IS_VOID(id) || JSID_IS_EMPTY(id) || JSID_IS_STRING(id) || JSID_IS_SYMBOL(id));
     MOZ_ASSERT_IF(!JSID_IS_EMPTY(id), id == IdToTypeId(id));
-    MOZ_ASSERT(!unknownProperties());
+    MOZ_ASSERT(!unknownPropertiesDontCheckGeneration());
 
     Property* prop = TypeHashSet::Lookup<jsid, Property, Property>
-                         (propertySet, basePropertyCount(), id);
+                         (propertySet, basePropertyCountDontCheckGeneration(), id);
 
     if (!prop)
         return nullptr;
 
     prop->types.checkMagic();
     return &prop->types;
+}
+
+MOZ_ALWAYS_INLINE HeapTypeSet*
+ObjectGroup::maybeGetProperty(jsid id)
+{
+    maybeSweep(nullptr);
+    return maybeGetPropertyDontCheckGeneration(id);
 }
 
 inline unsigned
@@ -1167,7 +1217,7 @@ JSScript::types()
 }
 
 inline bool
-JSScript::ensureHasTypes(JSContext* cx)
+JSScript::ensureHasTypes(JSContext* cx, js::AutoKeepTypeScripts&)
 {
     return types() || makeTypes(cx);
 }

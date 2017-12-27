@@ -13,7 +13,7 @@ use dom::bindings::codegen::Bindings::NodeBinding::NodeMethods;
 use dom::bindings::codegen::Bindings::WindowBinding::WindowMethods;
 use dom::bindings::conversions::{ConversionResult, FromJSValConvertible, StringificationBehavior};
 use dom::bindings::inheritance::Castable;
-use dom::bindings::js::Root;
+use dom::bindings::root::DomRoot;
 use dom::bindings::str::DOMString;
 use dom::element::Element;
 use dom::globalscope::GlobalScope;
@@ -22,13 +22,12 @@ use dom::htmliframeelement::HTMLIFrameElement;
 use dom::htmlinputelement::HTMLInputElement;
 use dom::htmloptionelement::HTMLOptionElement;
 use dom::node::{Node, window_from_node};
-use euclid::point::Point2D;
-use euclid::rect::Rect;
-use euclid::size::Size2D;
+use euclid::{Point2D, Rect, Size2D};
 use hyper_serde::Serde;
 use ipc_channel::ipc::{self, IpcSender};
 use js::jsapi::{HandleValue, JSContext};
 use js::jsval::UndefinedValue;
+use msg::constellation_msg::BrowsingContextId;
 use msg::constellation_msg::PipelineId;
 use net_traits::CookieSource::{HTTP, NonHTTP};
 use net_traits::CoreResourceMsg::{GetCookiesDataForUrl, SetCookieForUrl};
@@ -41,7 +40,7 @@ use servo_url::ServoUrl;
 fn find_node_by_unique_id(documents: &Documents,
                           pipeline: PipelineId,
                           node_id: String)
-                          -> Option<Root<Node>> {
+                          -> Option<DomRoot<Node>> {
     documents.find_document(pipeline).and_then(|document|
         document.upcast::<Node>().traverse_preorder().find(|candidate| candidate.unique_id() == node_id)
     )
@@ -109,23 +108,23 @@ pub fn handle_execute_async_script(documents: &Documents,
     window.upcast::<GlobalScope>().evaluate_js_on_global_with_result(&eval, rval.handle_mut());
 }
 
-pub fn handle_get_frame_id(documents: &Documents,
-                           pipeline: PipelineId,
-                           webdriver_frame_id: WebDriverFrameId,
-                           reply: IpcSender<Result<Option<PipelineId>, ()>>) {
+pub fn handle_get_browsing_context_id(documents: &Documents,
+                                      pipeline: PipelineId,
+                                      webdriver_frame_id: WebDriverFrameId,
+                                      reply: IpcSender<Result<BrowsingContextId, ()>>) {
     let result = match webdriver_frame_id {
         WebDriverFrameId::Short(_) => {
             // This isn't supported yet
-            Ok(None)
+            Err(())
         },
         WebDriverFrameId::Element(x) => {
             find_node_by_unique_id(documents, pipeline, x)
-                .and_then(|node| node.downcast::<HTMLIFrameElement>().map(|elem| elem.pipeline_id()))
+                .and_then(|node| node.downcast::<HTMLIFrameElement>().and_then(|elem| elem.browsing_context_id()))
                 .ok_or(())
         },
         WebDriverFrameId::Parent => {
             documents.find_window(pipeline)
-                .map(|window| window.parent_info().map(|(parent_id, _)| parent_id))
+                .and_then(|window| window.window_proxy().parent().map(|parent| parent.browsing_context_id()))
                 .ok_or(())
         }
     };
@@ -393,7 +392,7 @@ pub fn handle_is_selected(documents: &Documents,
             else if let Some(option_element) = node.downcast::<HTMLOptionElement>() {
                 Ok(option_element.Selected())
             }
-            else if let Some(_) = node.downcast::<HTMLElement>() {
+            else if node.is::<HTMLElement>() {
                 Ok(false) // regular elements are not selectable
             } else {
                 Err(())

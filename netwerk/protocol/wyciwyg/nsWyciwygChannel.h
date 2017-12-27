@@ -92,11 +92,10 @@ protected:
 
     // reuse as much of this channel implementation as we can
     nsCOMPtr<nsIInputStreamPump>        mPump;
-    
-    // Cache related stuff    
+
+    // Cache related stuff
     nsCOMPtr<nsICacheEntry>             mCacheEntry;
     nsCOMPtr<nsIOutputStream>           mCacheOutputStream;
-    nsCOMPtr<nsIInputStream>            mCacheInputStream;
 
     bool                                mNeedToSetSecurityInfo;
     nsCOMPtr<nsISupports>               mSecurityInfo;

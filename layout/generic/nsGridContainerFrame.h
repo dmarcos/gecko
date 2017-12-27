@@ -1,8 +1,8 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
-/* This Source Code is subject to the terms of the Mozilla Public License
- * version 2.0 (the "License"). You can obtain a copy of the License at
- * http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* rendering object for CSS "display: grid | inline-grid" */
 
@@ -84,8 +84,7 @@ struct ComputedGridLineInfo
 class nsGridContainerFrame final : public nsContainerFrame
 {
 public:
-  NS_DECL_FRAMEARENA_HELPERS
-  NS_DECL_QUERYFRAME_TARGET(nsGridContainerFrame)
+  NS_DECL_FRAMEARENA_HELPERS(nsGridContainerFrame)
   NS_DECL_QUERYFRAME
   typedef mozilla::ComputedGridTrackInfo ComputedGridTrackInfo;
   typedef mozilla::ComputedGridLineInfo ComputedGridLineInfo;
@@ -95,10 +94,9 @@ public:
               ReflowOutput&     aDesiredSize,
               const ReflowInput& aReflowInput,
               nsReflowStatus&          aStatus) override;
-  nscoord GetMinISize(nsRenderingContext* aRenderingContext) override;
-  nscoord GetPrefISize(nsRenderingContext* aRenderingContext) override;
+  nscoord GetMinISize(gfxContext* aRenderingContext) override;
+  nscoord GetPrefISize(gfxContext* aRenderingContext) override;
   void MarkIntrinsicISizesDirty() override;
-  nsIAtom* GetType() const override;
   bool IsFrameOfType(uint32_t aFlags) const override
   {
     return nsContainerFrame::IsFrameOfType(aFlags &
@@ -106,7 +104,6 @@ public:
   }
 
   void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                        const nsRect&           aDirtyRect,
                         const nsDisplayListSet& aLists) override;
 
   nscoord GetLogicalBaseline(mozilla::WritingMode aWM) const override
@@ -172,7 +169,7 @@ public:
   NS_DECLARE_FRAME_PROPERTY_DELETABLE(GridColTrackInfo, ComputedGridTrackInfo)
   const ComputedGridTrackInfo* GetComputedTemplateColumns()
   {
-    const ComputedGridTrackInfo* info = Properties().Get(GridColTrackInfo());
+    const ComputedGridTrackInfo* info = GetProperty(GridColTrackInfo());
     MOZ_ASSERT(info, "Property generation wasn't requested.");
     return info;
   }
@@ -180,7 +177,7 @@ public:
   NS_DECLARE_FRAME_PROPERTY_DELETABLE(GridRowTrackInfo, ComputedGridTrackInfo)
   const ComputedGridTrackInfo* GetComputedTemplateRows()
   {
-    const ComputedGridTrackInfo* info = Properties().Get(GridRowTrackInfo());
+    const ComputedGridTrackInfo* info = GetProperty(GridRowTrackInfo());
     MOZ_ASSERT(info, "Property generation wasn't requested.");
     return info;
   }
@@ -188,7 +185,7 @@ public:
   NS_DECLARE_FRAME_PROPERTY_DELETABLE(GridColumnLineInfo, ComputedGridLineInfo)
   const ComputedGridLineInfo* GetComputedTemplateColumnLines()
   {
-    const ComputedGridLineInfo* info = Properties().Get(GridColumnLineInfo());
+    const ComputedGridLineInfo* info = GetProperty(GridColumnLineInfo());
     MOZ_ASSERT(info, "Property generation wasn't requested.");
     return info;
   }
@@ -196,7 +193,7 @@ public:
   NS_DECLARE_FRAME_PROPERTY_DELETABLE(GridRowLineInfo, ComputedGridLineInfo)
   const ComputedGridLineInfo* GetComputedTemplateRowLines()
   {
-    const ComputedGridLineInfo* info = Properties().Get(GridRowLineInfo());
+    const ComputedGridLineInfo* info = GetProperty(GridRowLineInfo());
     MOZ_ASSERT(info, "Property generation wasn't requested.");
     return info;
   }
@@ -207,14 +204,14 @@ public:
   NS_DECLARE_FRAME_PROPERTY_DELETABLE(ImplicitNamedAreasProperty,
                                       ImplicitNamedAreas)
   ImplicitNamedAreas* GetImplicitNamedAreas() const {
-    return Properties().Get(ImplicitNamedAreasProperty());
+    return GetProperty(ImplicitNamedAreasProperty());
   }
 
   typedef nsTArray<mozilla::css::GridNamedArea> ExplicitNamedAreas;
   NS_DECLARE_FRAME_PROPERTY_DELETABLE(ExplicitNamedAreasProperty,
                                       ExplicitNamedAreas)
   ExplicitNamedAreas* GetExplicitNamedAreas() const {
-    return Properties().Get(ExplicitNamedAreasProperty());
+    return GetProperty(ExplicitNamedAreasProperty());
   }
 
   /**
@@ -259,7 +256,7 @@ protected:
   friend nsContainerFrame* NS_NewGridContainerFrame(nsIPresShell* aPresShell,
                                                     nsStyleContext* aContext);
   explicit nsGridContainerFrame(nsStyleContext* aContext)
-    : nsContainerFrame(aContext)
+    : nsContainerFrame(aContext, kClassID)
     , mCachedMinISize(NS_INTRINSIC_WIDTH_UNKNOWN)
     , mCachedPrefISize(NS_INTRINSIC_WIDTH_UNKNOWN)
   {
@@ -291,7 +288,7 @@ protected:
   /**
    * Helper for GetMinISize / GetPrefISize.
    */
-  nscoord IntrinsicISize(nsRenderingContext* aRenderingContext,
+  nscoord IntrinsicISize(gfxContext*         aRenderingContext,
                          IntrinsicISizeType  aConstraint);
 
   // Helper for AppendFrames / InsertFrames.
@@ -457,7 +454,7 @@ private:
   // If true, NS_STATE_GRID_DID_PUSH_ITEMS may be set even though all pushed
   // frames may have been removed.  This is used to suppress an assertion
   // in case RemoveFrame removed all associated child frames.
-  bool mDidPushItemsBitMayLie;
+  bool mDidPushItemsBitMayLie { false };
 #endif
 };
 

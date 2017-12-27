@@ -30,15 +30,55 @@ let gWhitelist = [{
     type: "single-quote"
   }, {
     file: "phishing-afterload-warning-message.dtd",
-    key: "safeb.blocked.malwarePage.shortDesc",
+    key: "safeb.palm.advisory.desc2",
     type: "single-quote"
   }, {
     file: "phishing-afterload-warning-message.dtd",
-    key: "safeb.blocked.unwantedPage.shortDesc",
+    key: "safeb.blocked.malwarePage.errorDesc.override",
     type: "single-quote"
   }, {
     file: "phishing-afterload-warning-message.dtd",
-    key: "safeb.blocked.phishingPage.shortDesc2",
+    key: "safeb.blocked.malwarePage.errorDesc.noOverride",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.malwarePage.learnMore",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.unwantedPage.errorDesc.override",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.unwantedPage.errorDesc.noOverride",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.unwantedPage.learnMore",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.phishingPage.errorDesc.override",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.phishingPage.errorDesc.noOverride",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.phishingPage.learnMore",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.harmfulPage.errorDesc.override",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.harmfulPage.errorDesc.noOverride",
+    type: "single-quote"
+  }, {
+    file: "phishing-afterload-warning-message.dtd",
+    key: "safeb.blocked.harmfulPage.learnMore",
     type: "single-quote"
   }, {
     file: "mathfont.properties",
@@ -106,8 +146,12 @@ let gWhitelist = [{
     type: "single-quote"
   }, {
     file: "preferences.properties",
-    key: "searchResults.needHelp",
+    key: "searchResults.needHelp2",
     type: "double-quote"
+  }, {
+    file: "aboutdevtools.dtd",
+    key: "aboutDevtools.newsletter.privacy.label",
+    type: "single-quote"
   }
 ];
 
@@ -148,25 +192,25 @@ function testForErrors(filepath, key, str) {
   testForError(filepath, key, str, /\.\.\./, "ellipsis", "Strings with an ellipsis should use the Unicode \u2026 character instead of three periods.");
 }
 
-function* getAllTheFiles(extension) {
+async function getAllTheFiles(extension) {
   let appDirGreD = Services.dirsvc.get("GreD", Ci.nsIFile);
   let appDirXCurProcD = Services.dirsvc.get("XCurProcD", Ci.nsIFile);
   if (appDirGreD.contains(appDirXCurProcD)) {
-    return yield generateURIsFromDirTree(appDirGreD, [extension]);
+    return generateURIsFromDirTree(appDirGreD, [extension]);
   }
   if (appDirXCurProcD.contains(appDirGreD)) {
-    return yield generateURIsFromDirTree(appDirXCurProcD, [extension]);
+    return generateURIsFromDirTree(appDirXCurProcD, [extension]);
   }
-  let urisGreD = yield generateURIsFromDirTree(appDirGreD, [extension]);
-  let urisXCurProcD = yield generateURIsFromDirTree(appDirXCurProcD, [extension]);
+  let urisGreD = await generateURIsFromDirTree(appDirGreD, [extension]);
+  let urisXCurProcD = await generateURIsFromDirTree(appDirXCurProcD, [extension]);
   return Array.from(new Set(urisGreD.concat(appDirXCurProcD)));
 }
 
-add_task(function* checkAllTheProperties() {
+add_task(async function checkAllTheProperties() {
   // This asynchronously produces a list of URLs (sadly, mostly sync on our
   // test infrastructure because it runs against jarfiles there, and
   // our zipreader APIs are all sync)
-  let uris = yield getAllTheFiles(".properties");
+  let uris = await getAllTheFiles(".properties");
   ok(uris.length, `Found ${uris.length} .properties files to scan for misused characters`);
 
   for (let uri of uris) {
@@ -180,13 +224,13 @@ add_task(function* checkAllTheProperties() {
   }
 });
 
-var checkDTD = Task.async(function* (aURISpec) {
-  let rawContents = yield fetchFile(aURISpec);
+var checkDTD = async function(aURISpec) {
+  let rawContents = await fetchFile(aURISpec);
   // The regular expression below is adapted from:
   // https://hg.mozilla.org/mozilla-central/file/68c0b7d6f16ce5bb023e08050102b5f2fe4aacd8/python/compare-locales/compare_locales/parser.py#l233
   let entities = rawContents.match(/<!ENTITY\s+([\w\.]*)\s+("[^"]*"|'[^']*')\s*>/g);
   if (!entities) {
-    // Some files, such as requestAutocomplete.dtd, have no entities defined.
+    // Some files have no entities defined.
     return;
   }
   for (let entity of entities) {
@@ -196,21 +240,21 @@ var checkDTD = Task.async(function* (aURISpec) {
     str = str.slice(1, -1);
     testForErrors(aURISpec, key, str);
   }
-});
+};
 
-add_task(function* checkAllTheDTDs() {
-  let uris = yield getAllTheFiles(".dtd");
+add_task(async function checkAllTheDTDs() {
+  let uris = await getAllTheFiles(".dtd");
   ok(uris.length, `Found ${uris.length} .dtd files to scan for misused characters`);
   for (let uri of uris) {
-    yield checkDTD(uri.spec);
+    await checkDTD(uri.spec);
   }
 
   // This support DTD file supplies a string with a newline to make sure
   // the regex in checkDTD works correctly for that case.
   let dtdLocation = gTestPath.replace(/\/[^\/]*$/i, "/bug1262648_string_with_newlines.dtd");
-  yield checkDTD(dtdLocation);
+  await checkDTD(dtdLocation);
 });
 
-add_task(function* ensureWhiteListIsEmpty() {
+add_task(async function ensureWhiteListIsEmpty() {
   is(gWhitelist.length, 0, "No remaining whitelist entries exist");
 });

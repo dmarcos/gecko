@@ -20,21 +20,21 @@ add_task(function* () {
   let timelineEl = panel.animationsTimelineComponent.rootWrapperEl;
   checkDelayAndName(timelineEl, true);
   let animationEl = timelineEl.querySelector(".animation");
-  let state = panel.animationsTimelineComponent.timeBlocks[0].animation.state;
+  let state = getAnimationTimeBlocks(panel)[0].animation.state;
   checkPath(animationEl, state);
 
   info("Selecting a no-delay animated node");
   yield selectNodeAndWaitForAnimations(".animated", inspector);
   checkDelayAndName(timelineEl, false);
   animationEl = timelineEl.querySelector(".animation");
-  state = panel.animationsTimelineComponent.timeBlocks[0].animation.state;
+  state = getAnimationTimeBlocks(panel)[0].animation.state;
   checkPath(animationEl, state);
 
   info("Selecting a negative-delay animated node");
   yield selectNodeAndWaitForAnimations(".negative-delay", inspector);
   checkDelayAndName(timelineEl, true);
   animationEl = timelineEl.querySelector(".animation");
-  state = panel.animationsTimelineComponent.timeBlocks[0].animation.state;
+  state = getAnimationTimeBlocks(panel)[0].animation.state;
   checkPath(animationEl, state);
 });
 
@@ -57,40 +57,53 @@ function checkDelayAndName(timelineEl, hasDelay) {
 }
 
 function checkPath(animationEl, state) {
-  // Check existance of delay path.
-  const delayPathEl = animationEl.querySelector(".delay-path");
-  if (!state.iterationCount && state.delay < 0) {
-    // Infinity
-    ok(!delayPathEl, "The delay path for Infinity should not exist");
-    return;
-  }
-  if (state.delay === 0) {
-    ok(!delayPathEl, "The delay path for zero delay should not exist");
-    return;
-  }
-  ok(delayPathEl, "The delay path should exist");
+  const groupEls = animationEl.querySelectorAll("svg g");
+  groupEls.forEach(groupEl => {
+    // Check existance of delay path.
+    const delayPathEl = groupEl.querySelector(".delay-path");
+    if (!state.iterationCount && state.delay < 0) {
+      // Infinity
+      ok(!delayPathEl, "The delay path for Infinity should not exist");
+      return;
+    }
+    if (state.delay === 0) {
+      ok(!delayPathEl, "The delay path for zero delay should not exist");
+      return;
+    }
+    ok(delayPathEl, "The delay path should exist");
 
-  // Check delay path coordinates.
-  const pathSegList = delayPathEl.pathSegList;
-  const startingPathSeg = pathSegList.getItem(0);
-  const endingPathSeg = pathSegList.getItem(pathSegList.numberOfItems - 2);
-  if (state.delay < 0) {
-    ok(delayPathEl.classList.contains("negative"),
-       "The delay path should have 'negative' class");
-    const startingX = state.delay;
-    const endingX = 0;
-    is(startingPathSeg.x, startingX,
-       `The x of starting point should be ${ startingX }`);
-    is(endingPathSeg.x, endingX,
-       `The x of ending point should be ${ endingX }`);
-  } else {
-    ok(!delayPathEl.classList.contains("negative"),
-       "The delay path should not have 'negative' class");
-    const startingX = 0;
-    const endingX = state.delay;
-    is(startingPathSeg.x, startingX,
-       `The x of starting point should be ${ startingX }`);
-    is(endingPathSeg.x, endingX,
-       `The x of ending point should be ${ endingX }`);
-  }
+    // Check delay path coordinates.
+    const pathSegList = delayPathEl.pathSegList;
+    const startingPathSeg = pathSegList.getItem(0);
+    const endingPathSeg = pathSegList.getItem(pathSegList.numberOfItems - 2);
+    if (state.delay < 0) {
+      ok(delayPathEl.classList.contains("negative"),
+         "The delay path should have 'negative' class");
+      const expectedY = 0;
+      const startingX = state.delay;
+      const endingX = 0;
+      is(startingPathSeg.x, startingX,
+         `The x of starting point should be ${ startingX }`);
+      is(startingPathSeg.y, expectedY,
+         `The y of starting point should be ${ expectedY }`);
+      is(endingPathSeg.x, endingX,
+         `The x of ending point should be ${ endingX }`);
+      is(endingPathSeg.y, expectedY,
+         `The y of ending point should be ${ expectedY }`);
+    } else {
+      ok(!delayPathEl.classList.contains("negative"),
+         "The delay path should not have 'negative' class");
+      const expectedY = 0;
+      const startingX = 0;
+      const endingX = state.delay;
+      is(startingPathSeg.x, startingX,
+         `The x of starting point should be ${ startingX }`);
+      is(startingPathSeg.y, expectedY,
+         `The y of starting point should be ${ expectedY }`);
+      is(endingPathSeg.x, endingX,
+         `The x of ending point should be ${ endingX }`);
+      is(endingPathSeg.y, expectedY,
+         `The y of ending point should be ${ expectedY }`);
+    }
+  });
 }

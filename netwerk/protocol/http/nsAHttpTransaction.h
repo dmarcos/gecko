@@ -45,6 +45,10 @@ public:
     // called by the connection when it takes ownership of the transaction.
     virtual void SetConnection(nsAHttpConnection *) = 0;
 
+    // called by the connection after a successfull activation of this transaction
+    // in other words, tells the transaction it transitioned to the "active" state.
+    virtual void OnActivated(bool h2) {}
+
     // used to obtain the connection associated with this transaction
     virtual nsAHttpConnection *Connection() = 0;
 
@@ -63,9 +67,6 @@ public:
 
     // called to notify that a requested DNS cache entry was refreshed.
     virtual void     SetDNSWasRefreshed() = 0;
-
-    // called to find out how much request data is available for writing.
-    virtual uint64_t Available() = 0;
 
     // called to read request data from the transaction.
     virtual MOZ_MUST_USE nsresult ReadSegments(nsAHttpSegmentReader *reader,
@@ -165,7 +166,13 @@ public:
     virtual void DisableSpdy() { }
     virtual void ReuseConnectionOnRestartOK(bool) { }
 
-    // Returns true if early-data is possible.
+    // Returns true if early-data or fast open is possible.
+    virtual MOZ_MUST_USE bool CanDo0RTT() {
+        return false;
+    }
+    // Returns true if early-data is possible and transaction will remember
+    // that it is in 0RTT mode (to know should it rewide transaction or not
+    // in the case of an error).
     virtual MOZ_MUST_USE bool Do0RTT() {
         return false;
     }
@@ -184,10 +191,16 @@ public:
         return NS_ERROR_NOT_IMPLEMENTED;
     }
 
+    virtual MOZ_MUST_USE nsresult RestartOnFastOpenError() {
+        return NS_ERROR_NOT_IMPLEMENTED;
+    }
+
     virtual uint64_t TopLevelOuterContentWindowId() {
         MOZ_ASSERT(false);
         return 0;
     }
+
+    virtual void SetFastOpenStatus(uint8_t aStatus) {}
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsAHttpTransaction, NS_AHTTPTRANSACTION_IID)
@@ -202,7 +215,6 @@ NS_DEFINE_STATIC_IID_ACCESSOR(nsAHttpTransaction, NS_AHTTPTRANSACTION_IID)
     nsresult Status() override; \
     uint32_t Caps() override;   \
     void     SetDNSWasRefreshed() override; \
-    uint64_t Available() override; \
     virtual MOZ_MUST_USE nsresult ReadSegments(nsAHttpSegmentReader *, uint32_t, uint32_t *) override; \
     virtual MOZ_MUST_USE nsresult WriteSegments(nsAHttpSegmentWriter *, uint32_t, uint32_t *) override; \
     virtual void Close(nsresult reason) override;                                \

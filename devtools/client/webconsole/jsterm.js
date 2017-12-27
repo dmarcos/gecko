@@ -8,7 +8,7 @@
 
 const {Utils: WebConsoleUtils} =
   require("devtools/client/webconsole/utils");
-const promise = require("promise");
+const defer = require("devtools/shared/defer");
 const Debugger = require("Debugger");
 const Services = require("Services");
 const {KeyCodes} = require("devtools/client/shared/keycodes");
@@ -16,19 +16,20 @@ const {KeyCodes} = require("devtools/client/shared/keycodes");
 loader.lazyServiceGetter(this, "clipboardHelper",
                          "@mozilla.org/widget/clipboardhelper;1",
                          "nsIClipboardHelper");
-loader.lazyRequireGetter(this, "EventEmitter", "devtools/shared/event-emitter");
+loader.lazyRequireGetter(this, "EventEmitter", "devtools/shared/old-event-emitter");
 loader.lazyRequireGetter(this, "AutocompletePopup", "devtools/client/shared/autocomplete-popup");
 loader.lazyRequireGetter(this, "ToolSidebar", "devtools/client/framework/sidebar", true);
 loader.lazyRequireGetter(this, "Messages", "devtools/client/webconsole/console-output", true);
 loader.lazyRequireGetter(this, "asyncStorage", "devtools/shared/async-storage");
-loader.lazyRequireGetter(this, "EnvironmentClient", "devtools/shared/client/main", true);
-loader.lazyRequireGetter(this, "ObjectClient", "devtools/shared/client/main", true);
+loader.lazyRequireGetter(this, "EnvironmentClient", "devtools/shared/client/environment-client");
+loader.lazyRequireGetter(this, "ObjectClient", "devtools/shared/client/object-client");
 loader.lazyImporter(this, "VariablesView", "resource://devtools/client/shared/widgets/VariablesView.jsm");
 loader.lazyImporter(this, "VariablesViewController", "resource://devtools/client/shared/widgets/VariablesViewController.jsm");
 loader.lazyRequireGetter(this, "gDevTools", "devtools/client/framework/devtools", true);
+loader.lazyRequireGetter(this, "NotificationBox", "devtools/client/shared/components/NotificationBox", true);
+loader.lazyRequireGetter(this, "PriorityLevels", "devtools/client/shared/components/NotificationBox", true);
 
-const STRINGS_URI = "devtools/client/locales/webconsole.properties";
-var l10n = new WebConsoleUtils.L10n(STRINGS_URI);
+const l10n = require("devtools/client/webconsole/webconsole-l10n");
 
 // Constants used for defining the direction of JSTerm input history navigation.
 const HISTORY_BACK = -1;
@@ -257,10 +258,12 @@ JSTerm.prototype = {
     // The popup will be attached to the toolbox document or HUD document in the case
     // such as the browser console which doesn't have a toolbox.
     this.autocompletePopup = new AutocompletePopup(tooltipDoc, autocompleteOptions);
-
     let inputContainer = doc.querySelector(".jsterm-input-container");
     this.completeNode = doc.querySelector(".jsterm-complete-node");
     this.inputNode = doc.querySelector(".jsterm-input-node");
+    // Update the character width and height needed for the popup offset
+    // calculations.
+    this._updateCharSize();
 
     if (this.hud.isBrowserConsole &&
         !Services.prefs.getBoolPref("devtools.chrome.enabled")) {
@@ -268,9 +271,8 @@ JSTerm.prototype = {
     } else {
       let okstring = l10n.getStr("selfxss.okstring");
       let msg = l10n.getFormatStr("selfxss.msg", [okstring]);
-      this._onPaste = WebConsoleUtils.pasteHandlerGen(
-        this.inputNode, doc.getElementById("webconsole-notificationbox"),
-        msg, okstring);
+      this._onPaste = WebConsoleUtils.pasteHandlerGen(this.inputNode,
+          this.getNotificationBox(), msg, okstring);
       this.inputNode.addEventListener("keypress", this._keyPress);
       this.inputNode.addEventListener("paste", this._onPaste);
       this.inputNode.addEventListener("drop", this._onPaste);
@@ -343,11 +345,7 @@ JSTerm.prototype = {
           this.clearHistory();
           break;
         case "inspectObject":
-          this.openVariablesView({
-            label:
-              VariablesView.getString(helperResult.object, { concise: true }),
-            objectActor: helperResult.object,
-          });
+          this.inspectObjectActor(helperResult.object);
           break;
         case "error":
           try {
@@ -367,8 +365,8 @@ JSTerm.prototype = {
 
     // Hide undefined results coming from JSTerm helper functions.
     if (!errorMessage && result && typeof result == "object" &&
-        result.type == "undefined" &&
-        helperResult && !helperHasRawOutput) {
+      result.type == "undefined" &&
+      helperResult && !helperHasRawOutput) {
       callback && callback();
       return;
     }
@@ -406,6 +404,23 @@ JSTerm.prototype = {
     }
   },
 
+  inspectObjectActor: function (objectActor) {
+    if (this.hud.NEW_CONSOLE_OUTPUT_ENABLED) {
+      this.hud.newConsoleOutput.dispatchMessageAdd({
+        helperResult: {
+          type: "inspectObject",
+          object: objectActor
+        }
+      }, true);
+      return this.hud.newConsoleOutput;
+    }
+
+    return this.openVariablesView({
+      objectActor,
+      label: VariablesView.getString(objectActor, {concise: true}),
+    });
+  },
+
   /**
    * Execute a string. Execution happens asynchronously in the content process.
    *
@@ -419,7 +434,7 @@ JSTerm.prototype = {
    *          Resolves with the message once the result is displayed.
    */
   execute: function (executeString, callback) {
-    let deferred = promise.defer();
+    let deferred = defer();
     let resultCallback;
     if (this.hud.NEW_CONSOLE_OUTPUT_ENABLED) {
       resultCallback = (msg) => deferred.resolve(msg);
@@ -508,7 +523,7 @@ JSTerm.prototype = {
    *         received.
    */
   requestEvaluation: function (str, options = {}) {
-    let deferred = promise.defer();
+    let deferred = defer();
 
     function onResult(response) {
       if (!response.error) {
@@ -532,6 +547,21 @@ JSTerm.prototype = {
 
     this.webConsoleClient.evaluateJSAsync(str, onResult, evalOptions);
     return deferred.promise;
+  },
+
+  /**
+   * Copy the object/variable by invoking the server
+   * which invokes the `copy(variable)` command and makes it
+   * available in the clipboard
+   * @param evalString - string which has the evaluation string to be copied
+   * @param options - object - Options for evaluation
+   * @return object
+   *         A promise object that is resolved when the server response is
+   *         received.
+   */
+  copyObject: function (evalString, evalOptions) {
+    return this.webConsoleClient.evaluateJSAsync(`copy(${evalString})`,
+      null, evalOptions);
   },
 
   /**
@@ -580,6 +610,11 @@ JSTerm.prototype = {
    *         opened. The new variables view instance is given to the callbacks.
    */
   openVariablesView: function (options) {
+    // Bail out if the side bar doesn't exist.
+    if (!this.hud.document.querySelector("#webconsole-sidebar")) {
+      return Promise.resolve(null);
+    }
+
     let onContainerReady = (window) => {
       let container = window.document.querySelector("#variables");
       let view = this._variablesView;
@@ -607,7 +642,7 @@ JSTerm.prototype = {
 
     let openPromise;
     if (options.targetElement) {
-      let deferred = promise.defer();
+      let deferred = defer();
       openPromise = deferred.promise;
       let document = options.targetElement.ownerDocument;
       let iframe = document.createElementNS(XHTML_NS, "iframe");
@@ -652,7 +687,7 @@ JSTerm.prototype = {
    *         A promise object for the adding of the new tab.
    */
   _addVariablesViewSidebarTab: function () {
-    let deferred = promise.defer();
+    let deferred = defer();
 
     let onTabReady = () => {
       let window = this.sidebar.getWindowForTab("variablesview");
@@ -938,28 +973,27 @@ JSTerm.prototype = {
    */
   clearOutput: function (clearStorage) {
     let hud = this.hud;
-    let outputNode = hud.outputNode;
-    let node;
-    while ((node = outputNode.firstChild)) {
-      hud.removeOutputMessage(node);
-    }
-
-    hud.groupDepth = 0;
-    hud._outputQueue.forEach(hud._destroyItem, hud);
-    hud._outputQueue = [];
-    this.webConsoleClient.clearNetworkRequests();
-    hud._repeatNodes = {};
-
-    if (clearStorage) {
-      this.webConsoleClient.clearMessagesCache();
-    }
-
-    this._sidebarDestroy();
 
     if (hud.NEW_CONSOLE_OUTPUT_ENABLED) {
       hud.newConsoleOutput.dispatchMessagesClear();
-    }
+    } else {
+      let outputNode = hud.outputNode;
+      let node;
+      while ((node = outputNode.firstChild)) {
+        hud.removeOutputMessage(node);
+      }
 
+      hud.groupDepth = 0;
+      hud._outputQueue.forEach(hud._destroyItem, hud);
+      hud._outputQueue = [];
+      hud._repeatNodes = {};
+    }
+    this.webConsoleClient.clearNetworkRequests();
+    if (clearStorage) {
+      this.webConsoleClient.clearMessagesCache();
+    }
+    this._sidebarDestroy();
+    this.focus();
     this.emit("messages-cleared");
   },
 
@@ -989,7 +1023,11 @@ JSTerm.prototype = {
     inputNode.style.height = "auto";
 
     // Now resize the input field to fit its contents.
-    let scrollHeight = inputNode.inputField.scrollHeight;
+    // TODO: remove `inputNode.inputField.scrollHeight` when the old
+    // console UI is removed. See bug 1381834
+    let scrollHeight = inputNode.inputField ?
+      inputNode.inputField.scrollHeight : inputNode.scrollHeight;
+
     if (scrollHeight > 0) {
       inputNode.style.height = scrollHeight + "px";
     }
@@ -1582,18 +1620,16 @@ JSTerm.prototype = {
       value: inputValue,
       matchProp: lastPart,
     };
-
     if (items.length > 1 && !popup.isOpen) {
       let str = this.getInputValue().substr(0, this.inputNode.selectionStart);
       let offset = str.length - (str.lastIndexOf("\n") + 1) - lastPart.length;
-      let x = offset * this.hud._inputCharWidth;
-      popup.openPopup(inputNode, x + this.hud._chevronWidth);
+      let x = offset * this._inputCharWidth;
+      popup.openPopup(inputNode, x + this._chevronWidth);
       this._autocompletePopupNavigated = false;
     } else if (items.length < 2 && popup.isOpen) {
       popup.hidePopup();
       this._autocompletePopupNavigated = false;
     }
-
     if (items.length == 1) {
       popup.selectedIndex = 0;
     }
@@ -1687,6 +1723,55 @@ JSTerm.prototype = {
     let prefix = suffix ? this.getInputValue().replace(/[\S]/g, " ") : "";
     this.completeNode.value = prefix + suffix;
   },
+  /**
+   * Calculates the width and height of a single character of the input box.
+   * This will be used in opening the popup at the correct offset.
+   *
+   * @private
+   */
+  _updateCharSize: function () {
+    let doc = this.hud.document;
+    let tempLabel = doc.createElementNS(XHTML_NS, "span");
+    let style = tempLabel.style;
+    style.position = "fixed";
+    style.padding = "0";
+    style.margin = "0";
+    style.width = "auto";
+    style.color = "transparent";
+    WebConsoleUtils.copyTextStyles(this.inputNode, tempLabel);
+    tempLabel.textContent = "x";
+    doc.documentElement.appendChild(tempLabel);
+    this._inputCharWidth = tempLabel.offsetWidth;
+    tempLabel.remove();
+    // Calculate the width of the chevron placed at the beginning of the input
+    // box. Remove 4 more pixels to accomodate the padding of the popup.
+    this._chevronWidth = +doc.defaultView.getComputedStyle(this.inputNode)
+                             .paddingLeft.replace(/[^0-9.]/g, "") - 4;
+  },
+
+  /**
+   * Build the notification box as soon as needed.
+   */
+  getNotificationBox: function () {
+    if (this._notificationBox) {
+      return this._notificationBox;
+    }
+
+    let box = this.hud.document.getElementById("webconsole-notificationbox");
+    if (box.tagName === "notificationbox") {
+      // Here we are in the old console frontend (e.g. browser console), so we
+      // can directly return the notificationbox.
+      return box;
+    }
+
+    let toolbox = gDevTools.getToolbox(this.hud.owner.target);
+
+    // Render NotificationBox and assign priority levels to it.
+    this._notificationBox = Object.assign(
+      toolbox.ReactDOM.render(toolbox.React.createElement(NotificationBox), box),
+      PriorityLevels);
+    return this._notificationBox;
+  },
 
   /**
    * Destroy the sidebar.
@@ -1714,7 +1799,13 @@ JSTerm.prototype = {
     this._sidebarDestroy();
 
     this.clearCompletion();
-    this.clearOutput();
+
+    if (this.hud.NEW_CONSOLE_OUTPUT_ENABLED) {
+      this.webConsoleClient.clearNetworkRequests();
+      this.hud.outputNode.innerHTML = "";
+    } else {
+      this.clearOutput();
+    }
 
     this.autocompletePopup.destroy();
     this.autocompletePopup = null;

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -6,7 +7,7 @@
 #include "nsMenuBarFrame.h"
 #include "nsIServiceManager.h"
 #include "nsIContent.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsPresContext.h"
 #include "nsStyleContext.h"
 #include "nsCSSRendering.h"
@@ -51,7 +52,7 @@ NS_QUERYFRAME_TAIL_INHERITING(nsBoxFrame)
 // nsMenuBarFrame cntr
 //
 nsMenuBarFrame::nsMenuBarFrame(nsStyleContext* aContext)
-  : nsBoxFrame(aContext)
+  : nsBoxFrame(aContext, kClassID)
   , mStayActive(false)
   , mIsActive(false)
   , mActiveByKeyboard(false)
@@ -101,7 +102,7 @@ nsMenuBarFrame::SetActive(bool aActiveFlag)
 
   NS_NAMED_LITERAL_STRING(active, "DOMMenuBarActive");
   NS_NAMED_LITERAL_STRING(inactive, "DOMMenuBarInactive");
-  
+
   FireDOMEvent(mIsActive ? active : inactive, mContent);
 
   return NS_OK;
@@ -126,14 +127,14 @@ nsMenuBarFrame::ToggleMenuActiveState()
       mCurrentMenu->SelectMenu(false);
 
     // Set the active menu to be the top left item (e.g., the File menu).
-    // We use an attribute called "menuactive" to track the current 
+    // We use an attribute called "menuactive" to track the current
     // active menu.
     nsMenuFrame* firstFrame = nsXULPopupManager::GetNextMenuItem(this, nullptr, false, false);
     if (firstFrame) {
       // Activate the menu bar
       SetActive(true);
       firstFrame->SelectMenu(true);
-      
+
       // Track this item for keyboard navigation.
       mCurrentMenu = firstFrame;
     }
@@ -161,7 +162,7 @@ nsMenuBarFrame::FindMenuWithShortcut(nsIDOMKeyEvent* aKeyEvent)
     return nullptr; // no character was pressed so just return
 
   // Enumerate over our list of frames.
-  auto insertion = PresContext()->PresShell()->FrameConstructor()->
+  auto insertion = PresShell()->FrameConstructor()->
     GetInsertionPoint(GetContent(), nullptr);
   nsContainerFrame* immediateParent = insertion.mParentFrame;
   if (!immediateParent)
@@ -257,11 +258,14 @@ class nsMenuBarSwitchMenu : public Runnable
 {
 public:
   nsMenuBarSwitchMenu(nsIContent* aMenuBar,
-                      nsIContent *aOldMenu,
-                      nsIContent *aNewMenu,
+                      nsIContent* aOldMenu,
+                      nsIContent* aNewMenu,
                       bool aSelectFirstItem)
-    : mMenuBar(aMenuBar), mOldMenu(aOldMenu), mNewMenu(aNewMenu),
-      mSelectFirstItem(aSelectFirstItem)
+    : mozilla::Runnable("nsMenuBarSwitchMenu")
+    , mMenuBar(aMenuBar)
+    , mOldMenu(aOldMenu)
+    , mNewMenu(aNewMenu)
+    , mSelectFirstItem(aSelectFirstItem)
   {
   }
 
@@ -316,7 +320,7 @@ nsMenuBarFrame::ChangeMenuItem(nsMenuFrame* aMenuItem,
 
   nsIContent* aOldMenu = nullptr;
   nsIContent* aNewMenu = nullptr;
-  
+
   // Unset the current child.
   bool wasOpen = false;
   if (mCurrentMenu) {
@@ -345,8 +349,7 @@ nsMenuBarFrame::ChangeMenuItem(nsMenuFrame* aMenuItem,
   // avoids flickering
   nsCOMPtr<nsIRunnable> event =
     new nsMenuBarSwitchMenu(GetContent(), aOldMenu, aNewMenu, aSelectFirstItem);
-  return mContent->OwnerDoc()->Dispatch("nsMenuBarSwitchMenu",
-                                        TaskCategory::Other,
+  return mContent->OwnerDoc()->Dispatch(TaskCategory::Other,
                                         event.forget());
 }
 
@@ -393,7 +396,7 @@ nsMenuBarFrame::RemoveKeyboardNavigator()
 }
 
 void
-nsMenuBarFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsMenuBarFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   nsXULPopupManager* pm = nsXULPopupManager::GetInstance();
   if (pm)
@@ -402,5 +405,5 @@ nsMenuBarFrame::DestroyFrom(nsIFrame* aDestructRoot)
   mMenuBarListener->OnDestroyMenuBarFrame();
   mMenuBarListener = nullptr;
 
-  nsBoxFrame::DestroyFrom(aDestructRoot);
+  nsBoxFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }

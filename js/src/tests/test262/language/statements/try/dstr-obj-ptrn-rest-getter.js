@@ -5,7 +5,7 @@
 description: Getter is called when obj is being deconstructed to a rest Object (try statement)
 esid: sec-runtime-semantics-catchclauseevaluation
 es6id: 13.15.7
-features: [destructuring-binding]
+features: [object-rest, destructuring-binding]
 flags: [generated]
 includes: [propertyHelper.js]
 info: |
@@ -23,13 +23,14 @@ var ranCatch = false;
 try {
   throw { get v() { count++; return 2; } };
 } catch ({...x}) {
-  assert.sameValue(x.v, 2);
   assert.sameValue(count, 1);
 
-  verifyEnumerable(x, "v");
-  verifyWritable(x, "v");
-  verifyConfigurable(x, "v");
-
+  verifyProperty(x, "v", {
+    enumerable: true,
+    writable: true,
+    configurable: true,
+    value: 2
+  });
   ranCatch = true;
 }
 

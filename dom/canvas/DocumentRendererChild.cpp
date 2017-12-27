@@ -7,6 +7,7 @@
 #include "base/basictypes.h"
 
 #include "gfx2DGlue.h"
+#include "gfxContext.h"
 #include "gfxPattern.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/RefPtr.h"
@@ -19,12 +20,12 @@
 #include "nsPresContext.h"
 #include "nsCOMPtr.h"
 #include "nsColor.h"
-#include "gfxContext.h"
 #include "nsLayoutUtils.h"
 #include "nsContentUtils.h"
 #include "nsCSSValue.h"
 #include "nsRuleNode.h"
 #include "mozilla/gfx/Matrix.h"
+#include "mozilla/ServoCSSParser.h"
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -59,15 +60,24 @@ DocumentRendererChild::RenderDocument(nsPIDOMWindowOuter* window,
     if (!presContext)
         return false;
 
-    nsCSSParser parser;
-    nsCSSValue bgColorValue;
-    if (!parser.ParseColorString(aBGColor, nullptr, 0, bgColorValue)) {
-        return false;
-    }
-
     nscolor bgColor;
-    if (!nsRuleNode::ComputeColor(bgColorValue, presContext, nullptr, bgColor)) {
+
+    ServoStyleSet* servoStyleSet = presContext->StyleSet()
+      ? presContext->StyleSet()->GetAsServo()
+      : nullptr;
+
+    if (servoStyleSet) {
+      if (!ServoCSSParser::ComputeColor(servoStyleSet, NS_RGB(0, 0, 0),
+                                        aBGColor, &bgColor)) {
         return false;
+      }
+    } else {
+      nsCSSParser parser;
+      nsCSSValue bgColorValue;
+      if (!parser.ParseColorString(aBGColor, nullptr, 0, bgColorValue) ||
+          !nsRuleNode::ComputeColor(bgColorValue, presContext, nullptr, bgColor)) {
+        return false;
+      }
     }
 
     // Draw directly into the output array.
@@ -85,7 +95,7 @@ DocumentRendererChild::RenderDocument(nsPIDOMWindowOuter* window,
     }
     RefPtr<gfxContext> ctx = gfxContext::CreateOrNull(dt);
     MOZ_ASSERT(ctx); // already checked the draw target above
-    ctx->SetMatrix(mozilla::gfx::ThebesMatrix(transform));
+    ctx->SetMatrix(transform);
 
     nsCOMPtr<nsIPresShell> shell = presContext->PresShell();
     shell->RenderDocument(documentRect, renderFlags, bgColor, ctx);

@@ -87,7 +87,7 @@ function makeTestURL({ body }) {
   return url.href;
 }
 
-add_task(function*() {
+add_task(async function() {
   const promises = tests
     .map(test => ({
       gBrowser,
@@ -100,12 +100,12 @@ add_task(function*() {
       return collector;
     }, []);
 
-  const results = yield Promise.all(promises);
+  const results = await Promise.all(promises);
 
   function testObtainingManifest(aTest) {
-    return function*(aBrowser) {
+    return async function(aBrowser) {
       try {
-        const manifest = yield ManifestObtainer.browserObtainManifest(aBrowser);
+        const manifest = await ManifestObtainer.browserObtainManifest(aBrowser);
         aTest.run(manifest);
       } catch (e) {
         aTest.run(e);
@@ -119,7 +119,7 @@ add_task(function*() {
  * Open a bunch of tabs and load manifests
  * in each tab. They should all return pass.
  */
-add_task(function*() {
+add_task(async function() {
   const defaultPath = '/browser/dom/manifest/test/manifestLoader.html';
   const tabURLs = [
     `http://example.com:80${defaultPath}`,
@@ -152,18 +152,21 @@ add_task(function*() {
     `http://www.example.com:80${defaultPath}`,
   ];
   // Open tabs an collect corresponding browsers
-  let browsers = [
-    for (url of tabURLs) gBrowser.addTab(url).linkedBrowser
-  ];
+  let browsers = tabURLs.map(url => BrowserTestUtils.addTab(gBrowser, url).linkedBrowser);
+
   // Once all the pages have loaded, run a bunch of tests in "parallel".
-  yield Promise.all((
-    for (browser of browsers) BrowserTestUtils.browserLoaded(browser)
-  ));
+  await Promise.all((function*() {
+    for (let browser of browsers) {
+      yield BrowserTestUtils.browserLoaded(browser);
+    }
+  })());
   // Flood random browsers with requests. Once promises settle, check that
   // responses all pass.
-  const results = yield Promise.all((
-    for (browser of randBrowsers(browsers, 50)) ManifestObtainer.browserObtainManifest(browser)
-  ));
+  const results = await Promise.all((function*() {
+    for (let browser of randBrowsers(browsers, 50)) {
+      yield ManifestObtainer.browserObtainManifest(browser);
+    }
+  })());
   const pass = results.every(manifest => manifest.name === 'pass');
   ok(pass, 'Expect every manifest to have name equal to `pass`.');
   //cleanup

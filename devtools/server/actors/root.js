@@ -141,6 +141,8 @@ RootActor.prototype = {
     // Whether the server supports full source actors (breakpoints on
     // eval scripts, etc)
     debuggerSourceActors: true,
+    // Whether the server can return wasm binary source
+    wasmBinarySource: true,
     bulk: true,
     // Whether the style rule actor implements the modifySelector method
     // that modifies the rule's selector
@@ -152,6 +154,8 @@ RootActor.prototype = {
     getUniqueSelector: true,
     // Whether the dom node actor implements the getCssPath method
     getCssPath: true,
+    // Whether the dom node actor implements the getXPath method
+    getXPath: true,
     // Whether the director scripts are supported
     directorScripts: true,
     // Whether the debugger server supports
@@ -190,7 +194,10 @@ RootActor.prototype = {
     heapSnapshots: true,
     // Whether or not the timeline actor can emit DOMContentLoaded and Load
     // markers, currently in use by the network monitor. Fx45+
-    documentLoadingMarkers: true
+    documentLoadingMarkers: true,
+    // Whether or not the webextension addon actor have to be connected
+    // to retrieve the extension child process tab actors.
+    webExtensionAddonConnect: true,
   },
 
   /**
@@ -230,6 +237,9 @@ RootActor.prototype = {
     }
     if (this._parameters.serviceWorkerRegistrationList) {
       this._parameters.serviceWorkerRegistrationList.onListChanged = null;
+    }
+    if (this._parameters.processList) {
+      this._parameters.processList.onListChanged = null;
     }
     if (typeof this._parameters.onShutdown === "function") {
       this._parameters.onShutdown();

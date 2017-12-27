@@ -2,12 +2,21 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-
 @import url("resource://devtools/client/themes/splitters.css");
 @namespace html url("http://www.w3.org/1999/xhtml");
 
 :root {
   font: message-box;
+
+  --tab-line-selected-color: var(--blue-50);
+}
+
+:root.theme-light {
+  --tab-line-hover-color: rgba(0,0,0,.2);
+}
+
+:root.theme-dark {
+  --tab-line-hover-color: rgba(255,255,255,.2);
 }
 
 :root[platform="mac"] {
@@ -70,7 +79,7 @@ html|button, html|select {
 }
 
 .devtools-autocomplete-listbox {
-  -moz-appearance: none !important; appearance: none !important;
+  -moz-appearance: none !important;
   background-color: transparent;
   border-width: 0px !important;
   margin: 0;
@@ -82,35 +91,16 @@ html|button, html|select {
   background-color: transparent;
   border-radius: 4px;
   padding: 1px 0;
-}
-
-.devtools-autocomplete-listbox .autocomplete-selected {
-  background-color: rgba(0,0,0,0.2);
-}
-
-.devtools-autocomplete-listbox.dark-theme .autocomplete-selected,
-.devtools-autocomplete-listbox.dark-theme .autocomplete-item:hover {
-  background-color: rgba(0,0,0,0.5);
-}
-
-.devtools-autocomplete-listbox.dark-theme .autocomplete-selected > .autocomplete-value,
-.devtools-autocomplete-listbox:focus.dark-theme .autocomplete-selected > .initial-value {
-  color: hsl(208,100%,60%);
-}
-
-.devtools-autocomplete-listbox.dark-theme .autocomplete-selected > span {
-  color: #eee;
-}
-
-.devtools-autocomplete-listbox.dark-theme .autocomplete-item > span {
-  color: #ccc;
+  cursor: default;
+  text-overflow: ellipsis;
+  white-space: pre;
+  overflow: hidden;
 }
 
 .devtools-autocomplete-listbox .autocomplete-item > .initial-value,
 .devtools-autocomplete-listbox .autocomplete-item > .autocomplete-value {
   margin: 0;
   padding: 0;
-  cursor: default;
 }
 
 .devtools-autocomplete-listbox .autocomplete-item > .autocomplete-count {
@@ -120,50 +110,56 @@ html|button, html|select {
 /* Rest of the dark and light theme */
 
 .devtools-autocomplete-popup,
+.CodeMirror-hints,
+.CodeMirror-Tern-tooltip {
+  border: 1px solid hsl(210,24%,90%);
+  background-image: linear-gradient(to bottom, hsla(209,18%,100%,0.9), hsl(210,24%,95%));
+}
+
+.theme-dark .devtools-autocomplete-popup,
 .theme-dark .CodeMirror-hints,
 .theme-dark .CodeMirror-Tern-tooltip {
   border: 1px solid hsl(210,11%,10%);
   background-image: linear-gradient(to bottom, hsla(209,18%,18%,0.9), hsl(210,11%,16%));
 }
 
-.devtools-autocomplete-popup.light-theme,
-.light-theme .CodeMirror-hints,
-.light-theme .CodeMirror-Tern-tooltip {
-  border: 1px solid hsl(210,24%,90%);
-  background-image: linear-gradient(to bottom, hsla(209,18%,100%,0.9), hsl(210,24%,95%));
-}
-
-.devtools-autocomplete-popup.light-theme {
-  box-shadow: 0 1px 0 hsla(209,29%,90%,.25) inset;
-}
-
 .theme-firebug .devtools-autocomplete-popup {
   border-color: var(--theme-splitter-color);
   border-radius: 5px;
   font-size: var(--theme-autompletion-font-size);
-}
-
-.devtools-autocomplete-popup.firebug-theme {
   background: var(--theme-body-background);
 }
 
-.devtools-autocomplete-listbox.firebug-theme .autocomplete-selected,
-.devtools-autocomplete-listbox.firebug-theme .autocomplete-item:hover,
-.devtools-autocomplete-listbox.light-theme .autocomplete-selected,
-.devtools-autocomplete-listbox.light-theme .autocomplete-item:hover {
+.devtools-autocomplete-listbox .autocomplete-selected,
+.devtools-autocomplete-listbox .autocomplete-item:hover {
   background-color: rgba(128,128,128,0.3);
 }
 
-.devtools-autocomplete-listbox.firebug-theme .autocomplete-selected > .autocomplete-value,
-.devtools-autocomplete-listbox:focus.firebug-theme .autocomplete-selected > .initial-value,
-.devtools-autocomplete-listbox.light-theme .autocomplete-selected > .autocomplete-value,
-.devtools-autocomplete-listbox:focus.light-theme .autocomplete-selected > .initial-value {
+.theme-dark .devtools-autocomplete-listbox .autocomplete-selected,
+.theme-dark .devtools-autocomplete-listbox .autocomplete-item:hover {
+  background-color: rgba(0,0,0,0.5);
+}
+
+.devtools-autocomplete-listbox .autocomplete-selected > .autocomplete-value,
+.devtools-autocomplete-listbox:focus .autocomplete-selected > .initial-value {
   color: #222;
 }
 
-.devtools-autocomplete-listbox.firebug-theme .autocomplete-item > span,
-.devtools-autocomplete-listbox.light-theme .autocomplete-item > span {
+.theme-dark .devtools-autocomplete-listbox .autocomplete-selected > .autocomplete-value,
+.theme-dark .devtools-autocomplete-listbox:focus .autocomplete-selected > .initial-value {
+  color: hsl(208,100%,60%);
+}
+
+.devtools-autocomplete-listbox .autocomplete-item > span {
   color: #666;
+}
+
+.theme-dark .devtools-autocomplete-listbox .autocomplete-item > span {
+  color: #ccc;
+}
+
+.theme-dark .devtools-autocomplete-listbox .autocomplete-selected > span {
+  color: #eee;
 }
 
 /* Autocomplete list clone used for accessibility. */
@@ -243,7 +239,7 @@ checkbox:-moz-focusring {
 .devtools-menulist,
 .devtools-toolbarbutton,
 .devtools-button {
-  -moz-appearance: none; appearance: none;
+  -moz-appearance: none;
   background: transparent;
   border: 1px solid var(--toolbarbutton-border-color);
   border-radius: 2px;
@@ -265,8 +261,7 @@ checkbox:-moz-focusring {
   margin: 0 3px;
   transition: opacity 0.05s ease-in-out;
 
-  /* For text-as-image usage, match the SVG color */
-  color: #0b0b0b;
+  color: var(--theme-toolbar-color);
   direction: ltr;
   font-size: 11px;
 }
@@ -277,6 +272,10 @@ checkbox:-moz-focusring {
   background-size: cover;
   background-repeat: no-repeat;
   vertical-align: middle;
+}
+
+.devtools-button.checked:empty::before {
+  color: var(--theme-toolbar-checked-color);
 }
 
 /* Standalone buttons */
@@ -298,11 +297,6 @@ checkbox:-moz-focusring {
 }
 
 /* Icon-only buttons */
-.devtools-button:empty::before,
-.devtools-toolbarbutton:not([label]):not([disabled]) > image {
-  opacity: 0.8;
-}
-
 .devtools-button:hover:empty:not(:disabled):before,
 .devtools-button.checked:empty::before,
 .devtools-toolbarbutton:not([label]):not([disabled=true]):hover > image,
@@ -319,7 +313,7 @@ checkbox:-moz-focusring {
 .devtools-button.checked::before,
 .devtools-toolbarbutton:not([label])[checked=true] > image,
 .devtools-toolbarbutton:not([label])[open=true] > image {
-  filter: var(--checked-icon-filter);
+  fill: var(--theme-toolbar-checked-color);
 }
 
 /* Button states */
@@ -346,13 +340,14 @@ checkbox:-moz-focusring {
 
 .devtools-button:not(:empty):not(.checked):not(:disabled):hover:active,
 .devtools-toolbarbutton:not(:-moz-any([checked=true],[disabled]))[label]:hover:active {
-  background-color: var(--theme-selection-background-semitransparent);
+  background-color: var(--theme-selection-background-hover);
 }
 
 .devtools-toolbarbutton:not([disabled])[label][checked=true],
 .devtools-toolbarbutton:not([disabled])[label][open],
 .devtools-button:not(:empty).checked,
-.theme-firebug .devtools-toolbarbutton:-moz-any([checked],[open]),
+.theme-firebug .devtools-toolbarbutton[checked],
+.theme-firebug .devtools-toolbarbutton[open],
 .theme-firebug .devtools-button.checked:empty {
   background: var(--toolbarbutton-checked-background);
   border-color: var(--toolbarbutton-checked-border-color);
@@ -388,16 +383,12 @@ checkbox:-moz-focusring {
   margin-inline-start: 3px;
 }
 
-.devtools-separator + .devtools-toolbarbutton {
-  margin-inline-start: 1px;
-}
-
 /* Text input */
 
 .devtools-textinput,
 .devtools-searchinput,
 .devtools-filterinput {
-  -moz-appearance: none; appearance: none;
+  -moz-appearance: none;
   margin: 1px 3px;
   border: 1px solid;
   border-radius: 2px;
@@ -447,6 +438,11 @@ checkbox:-moz-focusring {
   background-position: calc(100% - 8px) center;
 }
 
+/* This is needed to remove the default search icon on windows. See bug 1400615. */
+.devtools-filterinput > .textbox-input-box > .textbox-search-sign {
+  display: none;
+}
+
 .devtools-searchinput > .textbox-input-box > .textbox-search-icons > .textbox-search-icon,
 .devtools-filterinput > .textbox-input-box > .textbox-search-icons > .textbox-search-icon {
   visibility: hidden;
@@ -491,6 +487,16 @@ checkbox:-moz-focusring {
   box-shadow: var(--theme-focus-box-shadow-textbox);
   transition: all 0.2s ease-in-out;
   outline: none;
+}
+
+.devtools-searchbox .devtools-autocomplete-popup {
+  position: absolute;
+  top: 100%;
+  width: 100%;
+  line-height: initial !important;
+  /* See bug - 1414609. z-index is greater than 1000 so that searchbox's z-index
+  is more than z-index of requests-list-headers-wrapper in netmonitor */
+  z-index: 1001;
 }
 
 /* Don't add 'double spacing' for inputs that are at beginning / end
@@ -690,4 +696,38 @@ checkbox:-moz-focusring {
   background-image: url("chrome://devtools/skin/images/dropmarker.svg");
   background-repeat: no-repeat;
   background-position: center;
+}
+
+.devtools-tab-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: transparent;
+}
+
+.devtools-tab:hover .devtools-tab-line,
+.tabs-menu-item:hover .devtools-tab-line {
+  background: var(--tab-line-hover-color);
+}
+
+.devtools-tab.selected .devtools-tab-line,
+.tabs-menu-item.is-active .devtools-tab-line {
+  background: var(--tab-line-selected-color);
+}
+
+/* Hide the tab line in the firebug theme */
+.theme-firebug .devtools-tab-line {
+  background: transparent !important;
+}
+
+/* No result message styles */
+
+.devtools-sidepanel-no-result {
+  font-style: italic;
+  text-align: center;
+  padding: 0.5em;
+  -moz-user-select: none;
+  font-size: 12px;
 }

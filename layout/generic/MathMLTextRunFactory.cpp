@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -542,7 +543,7 @@ MathMLTextRunFactory::RebuildTextRun(nsTransformedTextRun* aTextRun,
   bool mergeNeeded = false;
 
   bool singleCharMI =
-    aTextRun->GetFlags() & nsTextFrameUtils::TEXT_IS_SINGLE_CHAR_MI;
+    !!(aTextRun->GetFlags2() & nsTextFrameUtils::Flags::TEXT_IS_SINGLE_CHAR_MI);
 
   uint32_t length = aTextRun->GetLength();
   const char16_t* str = aTextRun->mString.BeginReading();
@@ -710,7 +711,7 @@ MathMLTextRunFactory::RebuildTextRun(nsTransformedTextRun* aTextRun,
     }
   }
 
-  uint32_t flags;
+  gfx::ShapedTextFlags flags;
   gfxTextRunFactory::Parameters innerParams =
       GetParametersForInner(aTextRun, &flags, aRefDrawTarget);
 
@@ -760,12 +761,13 @@ MathMLTextRunFactory::RebuildTextRun(nsTransformedTextRun* aTextRun,
   if (mInnerTransformingTextRunFactory) {
     transformedChild = mInnerTransformingTextRunFactory->MakeTextRun(
         convertedString.BeginReading(), convertedString.Length(),
-        &innerParams, newFontGroup, flags, Move(styleArray), false);
+        &innerParams, newFontGroup, flags, nsTextFrameUtils::Flags(),
+        Move(styleArray), false);
     child = transformedChild.get();
   } else {
     cachedChild = newFontGroup->MakeTextRun(
         convertedString.BeginReading(), convertedString.Length(),
-        &innerParams, flags, aMFR);
+        &innerParams, flags, nsTextFrameUtils::Flags(), aMFR);
     child = cachedChild.get();
   }
   if (!child)

@@ -110,9 +110,13 @@ HTMLSelectListAccessible::CurrentItem()
 void
 HTMLSelectListAccessible::SetCurrentItem(Accessible* aItem)
 {
-  aItem->GetContent()->SetAttr(kNameSpaceID_None,
-                               nsGkAtoms::selected, NS_LITERAL_STRING("true"),
-                               true);
+  if (!aItem->GetContent()->IsElement())
+    return;
+
+  aItem->GetContent()->AsElement()->SetAttr(kNameSpaceID_None,
+                                            nsGkAtoms::selected,
+                                            NS_LITERAL_STRING("true"),
+                                            true);
 }
 
 bool
@@ -152,7 +156,7 @@ HTMLSelectOptionAccessible::NativeName(nsString& aName)
   if (!aName.IsEmpty())
     return eNameOK;
 
-  // CASE #2 -- no label parameter, get the first child, 
+  // CASE #2 -- no label parameter, get the first child,
   // use it if it is a text node
   nsIContent* text = mContent->GetFirstChild();
   if (text && text->IsNodeOfType(nsINode::eTEXT)) {
@@ -310,6 +314,13 @@ HTMLSelectOptGroupAccessible::NativeInteractiveState() const
   return NativelyUnavailable() ? states::UNAVAILABLE : 0;
 }
 
+bool
+HTMLSelectOptGroupAccessible::IsAcceptableChild(nsIContent* aEl) const
+{
+  return aEl->IsNodeOfType(nsINode::eDATA_NODE) ||
+    aEl->IsHTMLElement(nsGkAtoms::option);
+}
+
 uint8_t
 HTMLSelectOptGroupAccessible::ActionCount()
 {
@@ -458,6 +469,12 @@ HTMLComboboxAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName)
     aName.AssignLiteral("open");
 }
 
+bool
+HTMLComboboxAccessible::IsAcceptableChild(nsIContent* aEl) const
+{
+  return false;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // HTMLComboboxAccessible: Widgets
 
@@ -593,6 +610,12 @@ HTMLComboboxListAccessible::RelativeBounds(nsIFrame** aBoundingFrame) const
   return (*aBoundingFrame)->GetRect();
 }
 
+bool
+HTMLComboboxListAccessible::IsAcceptableChild(nsIContent* aEl) const
+{
+  return aEl->IsAnyOfHTMLElements(nsGkAtoms::option, nsGkAtoms::optgroup);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // HTMLComboboxListAccessible: Widgets
 
@@ -607,4 +630,3 @@ HTMLComboboxListAccessible::AreItemsOperable() const
 {
   return mParent && mParent->AreItemsOperable();
 }
-

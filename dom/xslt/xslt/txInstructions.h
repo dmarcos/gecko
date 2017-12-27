@@ -16,7 +16,7 @@
 #include "txXSLTNumber.h"
 #include "nsTArray.h"
 
-class nsIAtom;
+class nsAtom;
 class txExecutionState;
 
 class txInstruction : public txObject
@@ -47,7 +47,13 @@ public:
     TX_DECL_TXINSTRUCTION
 };
 
-class txApplyImports : public txInstruction
+class txApplyImportsEnd : public txInstruction
+{
+public:
+    TX_DECL_TXINSTRUCTION
+};
+
+class txApplyImportsStart : public txInstruction
 {
 public:
     TX_DECL_TXINSTRUCTION
@@ -59,7 +65,7 @@ public:
     explicit txApplyTemplates(const txExpandedName& aMode);
 
     TX_DECL_TXINSTRUCTION
-    
+
     txExpandedName mMode;
 };
 
@@ -103,7 +109,7 @@ public:
     txConditionalGoto(nsAutoPtr<Expr>&& aCondition, txInstruction* aTarget);
 
     TX_DECL_TXINSTRUCTION
-    
+
     nsAutoPtr<Expr> mCondition;
     txInstruction* mTarget;
 };
@@ -126,7 +132,7 @@ public:
     txCopy();
 
     TX_DECL_TXINSTRUCTION
-    
+
     txInstruction* mBailTarget;
 };
 
@@ -136,7 +142,7 @@ public:
     explicit txCopyOf(nsAutoPtr<Expr>&& aSelect);
 
     TX_DECL_TXINSTRUCTION
-    
+
     nsAutoPtr<Expr> mSelect;
 };
 
@@ -158,7 +164,7 @@ public:
     explicit txGoTo(txInstruction* aTarget);
 
     TX_DECL_TXINSTRUCTION
-    
+
     txInstruction* mTarget;
 };
 
@@ -178,22 +184,22 @@ public:
     explicit txLoopNodeSet(txInstruction* aTarget);
 
     TX_DECL_TXINSTRUCTION
-    
+
     txInstruction* mTarget;
 };
 
 class txLREAttribute : public txInstruction
 {
 public:
-    txLREAttribute(int32_t aNamespaceID, nsIAtom* aLocalName,
-                   nsIAtom* aPrefix, nsAutoPtr<Expr>&& aValue);
+    txLREAttribute(int32_t aNamespaceID, nsAtom* aLocalName,
+                   nsAtom* aPrefix, nsAutoPtr<Expr>&& aValue);
 
     TX_DECL_TXINSTRUCTION
 
     int32_t mNamespaceID;
-    nsCOMPtr<nsIAtom> mLocalName;
-    nsCOMPtr<nsIAtom> mLowercaseLocalName;
-    nsCOMPtr<nsIAtom> mPrefix;
+    RefPtr<nsAtom> mLocalName;
+    RefPtr<nsAtom> mLowercaseLocalName;
+    RefPtr<nsAtom> mPrefix;
     nsAutoPtr<Expr> mValue;
 };
 
@@ -249,8 +255,8 @@ public:
     ~txPushNewContext();
 
     TX_DECL_TXINSTRUCTION
-    
-    
+
+
     nsresult addSort(nsAutoPtr<Expr>&& aSelectExpr,
                      nsAutoPtr<Expr>&& aLangExpr,
                      nsAutoPtr<Expr>&& aDataTypeExpr,
@@ -264,7 +270,7 @@ public:
         nsAutoPtr<Expr> mOrderExpr;
         nsAutoPtr<Expr> mCaseOrderExpr;
     };
-    
+
     nsTArray<SortKey> mSortKeys;
     nsAutoPtr<Expr> mSelect;
     txInstruction* mBailTarget;
@@ -352,15 +358,15 @@ public:
 class txStartLREElement : public txInstruction
 {
 public:
-    txStartLREElement(int32_t aNamespaceID, nsIAtom* aLocalName,
-                      nsIAtom* aPrefix);
+    txStartLREElement(int32_t aNamespaceID, nsAtom* aLocalName,
+                      nsAtom* aPrefix);
 
     TX_DECL_TXINSTRUCTION
 
     int32_t mNamespaceID;
-    nsCOMPtr<nsIAtom> mLocalName;
-    nsCOMPtr<nsIAtom> mLowercaseLocalName;
-    nsCOMPtr<nsIAtom> mPrefix;
+    RefPtr<nsAtom> mLocalName;
+    RefPtr<nsAtom> mLowercaseLocalName;
+    RefPtr<nsAtom> mPrefix;
 };
 
 class txText : public txInstruction

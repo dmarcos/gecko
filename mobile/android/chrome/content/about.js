@@ -30,7 +30,7 @@ function init() {
       distroIdField.textContent = distroId + " - " + distroVersion;
       distroIdField.hidden = false;
 
-      let distroAbout = Services.prefs.getComplexValue("distribution.about", Ci.nsISupportsString);
+      let distroAbout = Services.prefs.getStringPref("distribution.about");
       let distroField = document.getElementById("distributionAbout");
       distroField.textContent = distroAbout;
       distroField.hidden = false;
@@ -54,7 +54,9 @@ function init() {
     links.forEach(function(link) {
       let url = formatter.formatURLPref(link.pref);
       let element = document.getElementById(link.id);
-      element.setAttribute("href", url);
+      if (element) {
+        element.setAttribute("href", url);
+      }
     });
   } catch (ex) {}
 

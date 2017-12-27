@@ -6,9 +6,8 @@ use dom::attr::Attr;
 use dom::bindings::codegen::Bindings::HTMLDetailsElementBinding;
 use dom::bindings::codegen::Bindings::HTMLDetailsElementBinding::HTMLDetailsElementMethods;
 use dom::bindings::inheritance::Castable;
-use dom::bindings::js::Root;
 use dom::bindings::refcounted::Trusted;
-use dom::bindings::str::DOMString;
+use dom::bindings::root::DomRoot;
 use dom::document::Document;
 use dom::element::AttributeMutation;
 use dom::eventtarget::EventTarget;
@@ -16,8 +15,7 @@ use dom::htmlelement::HTMLElement;
 use dom::node::{Node, window_from_node};
 use dom::virtualmethods::VirtualMethods;
 use dom_struct::dom_struct;
-use html5ever_atoms::LocalName;
-use script_thread::Runnable;
+use html5ever::{LocalName, Prefix};
 use std::cell::Cell;
 use task_source::TaskSource;
 
@@ -29,7 +27,7 @@ pub struct HTMLDetailsElement {
 
 impl HTMLDetailsElement {
     fn new_inherited(local_name: LocalName,
-                     prefix: Option<DOMString>,
+                     prefix: Option<Prefix>,
                      document: &Document) -> HTMLDetailsElement {
         HTMLDetailsElement {
             htmlelement:
@@ -40,15 +38,11 @@ impl HTMLDetailsElement {
 
     #[allow(unrooted_must_root)]
     pub fn new(local_name: LocalName,
-               prefix: Option<DOMString>,
-               document: &Document) -> Root<HTMLDetailsElement> {
-        Node::reflect_node(box HTMLDetailsElement::new_inherited(local_name, prefix, document),
+               prefix: Option<Prefix>,
+               document: &Document) -> DomRoot<HTMLDetailsElement> {
+        Node::reflect_node(Box::new(HTMLDetailsElement::new_inherited(local_name, prefix, document)),
                            document,
                            HTMLDetailsElementBinding::Wrap)
-    }
-
-    pub fn check_toggle_count(&self, number: u32) -> bool {
-        number == self.toggle_counter.get()
     }
 }
 
@@ -73,29 +67,17 @@ impl VirtualMethods for HTMLDetailsElement {
             self.toggle_counter.set(counter);
 
             let window = window_from_node(self);
-            let task_source = window.dom_manipulation_task_source();
-            let details = Trusted::new(self);
-            let runnable = box DetailsNotificationRunnable {
-                element: details,
-                toggle_number: counter
-            };
-            let _ = task_source.queue(runnable, window.upcast());
-        }
-    }
-}
-
-pub struct DetailsNotificationRunnable {
-    element: Trusted<HTMLDetailsElement>,
-    toggle_number: u32
-}
-
-impl Runnable for DetailsNotificationRunnable {
-    fn name(&self) -> &'static str { "DetailsNotificationRunnable" }
-
-    fn handler(self: Box<DetailsNotificationRunnable>) {
-        let target = self.element.root();
-        if target.check_toggle_count(self.toggle_number) {
-            target.upcast::<EventTarget>().fire_event(atom!("toggle"));
+            let this = Trusted::new(self);
+            // FIXME(nox): Why are errors silenced here?
+            let _ = window.dom_manipulation_task_source().queue(
+                task!(details_notification_task_steps: move || {
+                    let this = this.root();
+                    if counter == this.toggle_counter.get() {
+                        this.upcast::<EventTarget>().fire_event(atom!("toggle"));
+                    }
+                }),
+                window.upcast(),
+            );
         }
     }
 }

@@ -32,19 +32,11 @@ macro_rules! define_matrix {
 
         impl<T: Copy, $($phantom),+> Copy for $name<T, $($phantom),+> {}
 
-        impl<T, $($phantom),+> ::heapsize::HeapSizeOf for $name<T, $($phantom),+>
-            where T: ::heapsize::HeapSizeOf
-        {
-            fn heap_size_of_children(&self) -> usize {
-                $(self.$field.heap_size_of_children() +)+ 0
-            }
-        }
-
-        impl<T, $($phantom),+> ::serde::Deserialize for $name<T, $($phantom),+>
-            where T: ::serde::Deserialize
+        impl<'de, T, $($phantom),+> ::serde::Deserialize<'de> for $name<T, $($phantom),+>
+            where T: ::serde::Deserialize<'de>
         {
             fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-                where D: ::serde::Deserializer
+                where D: ::serde::Deserializer<'de>
             {
                 let ($($field,)+) =
                     try!(::serde::Deserialize::deserialize(deserializer));

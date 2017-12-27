@@ -30,19 +30,8 @@
 
 "use strict";
 
-const { HEADERS } = require("../constants");
-const HEADER_FILTERS = HEADERS
-  .filter(h => h.canFilter)
-  .map(h => h.filterKey || h.name);
-
-const FILTER_FLAGS = [
-  ...HEADER_FILTERS,
-  "scheme",
-  "mime-type",
-  "larger-than",
-  "is",
-  "has-response-header",
-];
+const { FILTER_FLAGS } = require("../constants");
+const { getFormattedIPAndPort } = require("./format-utils");
 
 /*
   The function `parseFilters` is from:
@@ -89,9 +78,12 @@ function parseFilters(query) {
 
 function processFlagFilter(type, value) {
   switch (type) {
+    case "regexp":
+      return value;
     case "size":
     case "transferred":
     case "larger-than":
+    case "transferred-larger-than":
       let multiplier = 1;
       if (value.endsWith("k")) {
         multiplier = 1024;
@@ -110,12 +102,15 @@ function processFlagFilter(type, value) {
   }
 }
 
-function getSizeOrder(size) {
-  return Math.round(Math.log10(size));
-}
-
 function isFlagFilterMatch(item, { type, value, negative }) {
+  // Ensures when filter token is exactly a flag ie. "remote-ip:", all values are shown
+  if (value.length < 1) {
+    return true;
+  }
+
   let match = true;
+  let { responseCookies = { cookies: [] } } = item;
+  responseCookies = responseCookies.cookies || responseCookies;
   switch (type) {
     case "status-code":
       match = item.status === value;
@@ -132,7 +127,8 @@ function isFlagFilterMatch(item, { type, value, negative }) {
       match = item.urlDetails.host.toLowerCase().includes(value);
       break;
     case "remote-ip":
-      match = `${item.remoteAddress}:${item.remotePort}`.toLowerCase().includes(value);
+      match = getFormattedIPAndPort(item.remoteAddress, item.remotePort)
+        .toLowerCase().includes(value);
       break;
     case "has-response-header":
       if (typeof item.responseHeaders === "object") {
@@ -151,14 +147,21 @@ function isFlagFilterMatch(item, { type, value, negative }) {
       if (item.fromCache) {
         match = false;
       } else {
-        match = getSizeOrder(value) === getSizeOrder(item.transferredSize);
+        match = isSizeMatch(value, item.transferredSize);
       }
       break;
     case "size":
-      match = getSizeOrder(value) === getSizeOrder(item.contentSize);
+      match = isSizeMatch(value, item.contentSize);
       break;
     case "larger-than":
       match = item.contentSize > value;
+      break;
+    case "transferred-larger-than":
+      if (item.fromCache) {
+        match = false;
+      } else {
+        match = item.transferredSize > value;
+      }
       break;
     case "mime-type":
       match = item.mimeType.includes(value);
@@ -172,14 +175,45 @@ function isFlagFilterMatch(item, { type, value, negative }) {
       }
       break;
     case "scheme":
-      let scheme = new URL(item.url).protocol.replace(":", "").toLowerCase();
-      match = scheme === value;
+      match = item.urlDetails.scheme === value;
+      break;
+    case "regexp":
+      try {
+        let pattern = new RegExp(value);
+        match = pattern.test(item.url);
+      } catch (e) {
+        match = false;
+      }
+      break;
+    case "set-cookie-domain":
+      if (responseCookies.length > 0) {
+        let host = item.urlDetails.host;
+        let i = responseCookies.findIndex(c => {
+          let domain = c.hasOwnProperty("domain") ? c.domain : host;
+          return domain.includes(value);
+        });
+        match = i > -1;
+      } else {
+        match = false;
+      }
+      break;
+    case "set-cookie-name":
+      match = responseCookies.findIndex(c =>
+        c.name.toLowerCase().includes(value)) > -1;
+      break;
+    case "set-cookie-value":
+      match = responseCookies.findIndex(c =>
+        c.value.toLowerCase().includes(value)) > -1;
       break;
   }
   if (negative) {
     return !match;
   }
   return match;
+}
+
+function isSizeMatch(value, size) {
+  return value >= (size - size / 10) && value <= (size + size / 10);
 }
 
 function isTextFilterMatch({ url }, text) {

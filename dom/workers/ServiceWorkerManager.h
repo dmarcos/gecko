@@ -15,6 +15,7 @@
 #include "mozilla/AutoRestore.h"
 #include "mozilla/ConsoleReportCollector.h"
 #include "mozilla/LinkedList.h"
+#include "mozilla/MozPromise.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/TypedEnumBits.h"
 #include "mozilla/UniquePtr.h"
@@ -28,7 +29,6 @@
 #include "mozilla/ipc/BackgroundUtils.h"
 #include "nsClassHashtable.h"
 #include "nsDataHashtable.h"
-#include "nsIIPCBackgroundChildCreateCallback.h"
 #include "nsRefPtrHashtable.h"
 #include "nsTArrayForwardDeclare.h"
 #include "nsTObserverArray.h"
@@ -46,7 +46,6 @@ class ServiceWorkerRegistrationListener;
 
 namespace workers {
 
-class ServiceWorkerClientInfo;
 class ServiceWorkerInfo;
 class ServiceWorkerJobQueue;
 class ServiceWorkerManagerChild;
@@ -83,7 +82,6 @@ public:
  */
 class ServiceWorkerManager final
   : public nsIServiceWorkerManager
-  , public nsIIPCBackgroundChildCreateCallback
   , public nsIObserver
 {
   friend class GetReadyPromiseRunnable;
@@ -98,7 +96,6 @@ class ServiceWorkerManager final
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSISERVICEWORKERMANAGER
-  NS_DECL_NSIIPCBACKGROUNDCHILDCREATECALLBACK
   NS_DECL_NSIOBSERVER
 
   struct RegistrationDataPerPrincipal;
@@ -128,9 +125,6 @@ public:
   bool
   IsAvailable(nsIPrincipal* aPrincipal, nsIURI* aURI);
 
-  bool
-  IsControlled(nsIDocument* aDocument, ErrorResult& aRv);
-
   // Return true if the given content process could potentially be executing
   // service worker code with the given principal.  At the current time, this
   // just means that we have any registration for the origin, regardless of
@@ -153,7 +147,6 @@ public:
   void
   DispatchFetchEvent(const OriginAttributes& aOriginAttributes,
                      nsIDocument* aDoc,
-                     const nsAString& aDocumentIdForTopLevelNavigation,
                      nsIInterceptedChannel* aChannel,
                      bool aIsReload,
                      bool aIsSubresourceLoad,
@@ -201,7 +194,7 @@ public:
   already_AddRefed<ServiceWorkerRegistrationInfo>
   CreateNewRegistration(const nsCString& aScope,
                         nsIPrincipal* aPrincipal,
-                        nsLoadFlags aLoadFlags);
+                        ServiceWorkerUpdateViaCache aUpdateViaCache);
 
   void
   RemoveRegistration(ServiceWorkerRegistrationInfo* aRegistration);
@@ -275,24 +268,13 @@ public:
               uint32_t aFlags,
               JSExnType aExnType);
 
-  UniquePtr<ServiceWorkerClientInfo>
-  GetClient(nsIPrincipal* aPrincipal,
-            const nsAString& aClientId,
-            ErrorResult& aRv);
-
-  void
-  GetAllClients(nsIPrincipal* aPrincipal,
-                const nsCString& aScope,
-                uint64_t aServiceWorkerID,
-                bool aIncludeUncontrolled,
-                nsTArray<ServiceWorkerClientInfo>& aDocuments);
-
-  void
+  already_AddRefed<GenericPromise>
   MaybeClaimClient(nsIDocument* aDocument,
                    ServiceWorkerRegistrationInfo* aWorkerRegistration);
 
-  nsresult
-  ClaimClients(nsIPrincipal* aPrincipal, const nsCString& aScope, uint64_t aId);
+  already_AddRefed<GenericPromise>
+  MaybeClaimClient(nsIDocument* aDoc,
+                   const ServiceWorkerDescriptor& aServiceWorker);
 
   void
   SetSkipWaitingFlag(nsIPrincipal* aPrincipal, const nsCString& aScope,
@@ -335,6 +317,9 @@ public:
 
   void
   WorkerIsIdle(ServiceWorkerInfo* aWorker);
+
+  void
+  CheckPendingReadyPromises();
 
 private:
   ServiceWorkerManager();
@@ -390,10 +375,9 @@ private:
   void
   NotifyServiceWorkerRegistrationRemoved(ServiceWorkerRegistrationInfo* aRegistration);
 
-  void
+  RefPtr<GenericPromise>
   StartControllingADocument(ServiceWorkerRegistrationInfo* aRegistration,
-                            nsIDocument* aDoc,
-                            const nsAString& aDocumentId);
+                            nsIDocument* aDoc);
 
   void
   StopControllingADocument(ServiceWorkerRegistrationInfo* aRegistration);
@@ -440,14 +424,11 @@ private:
   FireUpdateFoundOnServiceWorkerRegistrations(ServiceWorkerRegistrationInfo* aRegistration);
 
   void
-  FireControllerChange(ServiceWorkerRegistrationInfo* aRegistration);
+  UpdateClientControllers(ServiceWorkerRegistrationInfo* aRegistration);
 
   void
   StorePendingReadyPromise(nsPIDOMWindowInner* aWindow, nsIURI* aURI,
                            Promise* aPromise);
-
-  void
-  CheckPendingReadyPromises();
 
   bool
   CheckReadyPromise(nsPIDOMWindowInner* aWindow, nsIURI* aURI,
@@ -463,13 +444,6 @@ private:
     RefPtr<Promise> mPromise;
   };
 
-  void AppendPendingOperation(nsIRunnable* aRunnable);
-
-  bool HasBackgroundActor() const
-  {
-    return !!mActor;
-  }
-
   nsClassHashtable<nsISupportsHashKey, PendingReadyPromise> mPendingReadyPromises;
 
   void
@@ -480,8 +454,6 @@ private:
   RemoveAllRegistrations(OriginAttributesPattern* aPattern);
 
   RefPtr<ServiceWorkerManagerChild> mActor;
-
-  nsTArray<nsCOMPtr<nsIRunnable>> mPendingOperations;
 
   bool mShuttingDown;
 

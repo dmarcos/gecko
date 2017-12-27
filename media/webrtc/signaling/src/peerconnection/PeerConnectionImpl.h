@@ -24,6 +24,12 @@
 #include "nsPIDOMWindow.h"
 #include "nsIUUIDGenerator.h"
 #include "nsIThread.h"
+#include "mozilla/Mutex.h"
+
+// Work around nasty macro in webrtc/voice_engine/voice_engine_defines.h
+#ifdef GetLastError
+#undef GetLastError
+#endif
 
 #include "signaling/src/jsep/JsepSession.h"
 #include "signaling/src/jsep/JsepSessionImpl.h"
@@ -31,6 +37,8 @@
 
 #include "mozilla/ErrorResult.h"
 #include "mozilla/dom/PeerConnectionImplEnumsBinding.h"
+#include "mozilla/dom/RTCPeerConnectionBinding.h" // mozPacketDumpType, maybe move?
+#include "mozilla/dom/RTCRtpTransceiverBinding.h"
 #include "PrincipalChangeObserver.h"
 #include "StreamTracks.h"
 
@@ -48,7 +56,6 @@ class AFakePCObserver;
 #endif
 }
 
-class nsGlobalWindow;
 class nsDOMDataChannel;
 
 namespace mozilla {
@@ -59,12 +66,12 @@ class NrIceMediaStream;
 class NrIceStunServer;
 class NrIceTurnServer;
 class MediaPipeline;
-
-class DOMMediaStream;
+class TransceiverImpl;
 
 namespace dom {
 class RTCCertificate;
 struct RTCConfiguration;
+struct RTCRtpSourceEntry;
 class RTCDTMFSender;
 struct RTCIceServer;
 struct RTCOfferOptions;
@@ -107,7 +114,6 @@ using mozilla::dom::PeerConnectionObserver;
 using mozilla::dom::RTCConfiguration;
 using mozilla::dom::RTCIceServer;
 using mozilla::dom::RTCOfferOptions;
-using mozilla::DOMMediaStream;
 using mozilla::NrIceCtx;
 using mozilla::NrIceMediaStream;
 using mozilla::DtlsIdentity;
@@ -249,7 +255,6 @@ public:
   static already_AddRefed<PeerConnectionImpl>
       Constructor(const mozilla::dom::GlobalObject& aGlobal, ErrorResult& rv);
   static PeerConnectionImpl* CreatePeerConnection();
-  already_AddRefed<DOMMediaStream> MakeMediaStream();
 
   nsresult CreateRemoteSourceStreamInfo(RefPtr<RemoteSourceStreamInfo>* aInfo,
                                         const std::string& aId);
@@ -318,13 +323,13 @@ public:
   // (used directly by unit-tests, and indirectly by the JS entry point)
   // This is necessary because RTCConfiguration can't be used by unit-tests
   nsresult Initialize(PeerConnectionObserver& aObserver,
-                      nsGlobalWindow* aWindow,
+                      nsGlobalWindowInner* aWindow,
                       const PeerConnectionConfiguration& aConfiguration,
                       nsISupports* aThread);
 
   // Initialize PeerConnection from an RTCConfiguration object (JS entrypoint)
   void Initialize(PeerConnectionObserver& aObserver,
-                  nsGlobalWindow& aWindow,
+                  nsGlobalWindowInner& aWindow,
                   const RTCConfiguration& aConfiguration,
                   nsISupports* aThread,
                   ErrorResult &rv);
@@ -356,9 +361,7 @@ public:
     rv = SetLocalDescription(aAction, NS_ConvertUTF16toUTF8(aSDP).get());
   }
 
-  nsresult CreateNewRemoteTracks(RefPtr<PeerConnectionObserver>& aPco);
-
-  void RemoveOldRemoteTracks(RefPtr<PeerConnectionObserver>& aPco);
+  void FireOnTrackEvents(RefPtr<PeerConnectionObserver>& aPco);
 
   NS_IMETHODIMP SetRemoteDescription (int32_t aAction, const char* aSDP);
 
@@ -392,27 +395,27 @@ public:
     rv = CloseStreams();
   }
 
-  NS_IMETHODIMP_TO_ERRORRESULT(AddTrack, ErrorResult &rv,
-      mozilla::dom::MediaStreamTrack& aTrack,
-      const mozilla::dom::Sequence<mozilla::OwningNonNull<DOMMediaStream>>& aStreams)
-  {
-    rv = AddTrack(aTrack, aStreams);
-  }
-
   NS_IMETHODIMP_TO_ERRORRESULT(RemoveTrack, ErrorResult &rv,
                                mozilla::dom::MediaStreamTrack& aTrack)
   {
     rv = RemoveTrack(aTrack);
   }
 
-  nsresult
-  AddTrack(mozilla::dom::MediaStreamTrack& aTrack, DOMMediaStream& aStream);
+  already_AddRefed<TransceiverImpl> CreateTransceiverImpl(
+      const nsAString& aKind,
+      dom::MediaStreamTrack* aSendTrack,
+      ErrorResult& rv);
+
+  OwningNonNull<dom::MediaStreamTrack> CreateReceiveTrack(
+      SdpMediaSection::MediaType type);
+
+  bool CheckNegotiationNeeded(ErrorResult &rv);
 
   NS_IMETHODIMP_TO_ERRORRESULT(InsertDTMF, ErrorResult &rv,
-                               dom::RTCRtpSender& sender,
+                               TransceiverImpl& transceiver,
                                const nsAString& tones,
                                uint32_t duration, uint32_t interToneGap) {
-    rv = InsertDTMF(sender, tones, duration, interToneGap);
+    rv = InsertDTMF(transceiver, tones, duration, interToneGap);
   }
 
   NS_IMETHODIMP_TO_ERRORRESULT(GetDTMFToneBuffer, ErrorResult &rv,
@@ -421,11 +424,20 @@ public:
     rv = GetDTMFToneBuffer(sender, outToneBuffer);
   }
 
-  NS_IMETHODIMP_TO_ERRORRESULT(ReplaceTrack, ErrorResult &rv,
-                               mozilla::dom::MediaStreamTrack& aThisTrack,
-                               mozilla::dom::MediaStreamTrack& aWithTrack)
+  NS_IMETHODIMP_TO_ERRORRESULT(GetRtpSources, ErrorResult &rv,
+      dom::MediaStreamTrack& aRecvTrack,
+      DOMHighResTimeStamp aRtpSourceNow,
+      nsTArray<dom::RTCRtpSourceEntry>& outRtpSources) {
+    rv = GetRtpSources(aRecvTrack, aRtpSourceNow, outRtpSources);
+  }
+
+  DOMHighResTimeStamp GetNowInRtpSourceReferenceTime();
+
+  NS_IMETHODIMP_TO_ERRORRESULT(ReplaceTrackNoRenegotiation, ErrorResult &rv,
+                               TransceiverImpl& aTransceiver,
+                               mozilla::dom::MediaStreamTrack* aWithTrack)
   {
-    rv = ReplaceTrack(aThisTrack, aWithTrack);
+    rv = ReplaceTrackNoRenegotiation(aTransceiver, aWithTrack);
   }
 
   NS_IMETHODIMP_TO_ERRORRESULT(SetParameters, ErrorResult &rv,
@@ -450,11 +462,54 @@ public:
   GetParameters(dom::MediaStreamTrack& aTrack,
                 std::vector<JsepTrack::JsConstraints>* aOutConstraints);
 
-  NS_IMETHODIMP_TO_ERRORRESULT(SelectSsrc, ErrorResult &rv,
+  // test-only: called from contributing sources mochitests.
+  NS_IMETHODIMP_TO_ERRORRESULT(InsertAudioLevelForContributingSource,
+                               ErrorResult &rv,
                                dom::MediaStreamTrack& aRecvTrack,
-                               unsigned short aSsrcIndex)
+                               unsigned long aSource,
+                               DOMHighResTimeStamp aTimestamp,
+                               bool aHasLevel,
+                               uint8_t aLevel)
+ {
+   rv = InsertAudioLevelForContributingSource(aRecvTrack,
+                                              aSource,
+                                              aTimestamp,
+                                              aHasLevel,
+                                              aLevel);
+ }
+
+  // test-only: called from simulcast mochitests.
+  NS_IMETHODIMP_TO_ERRORRESULT(AddRIDExtension, ErrorResult &rv,
+                               dom::MediaStreamTrack& aRecvTrack,
+                               unsigned short aExtensionId)
   {
-    rv = SelectSsrc(aRecvTrack, aSsrcIndex);
+    rv = AddRIDExtension(aRecvTrack, aExtensionId);
+  }
+
+  // test-only: called from simulcast mochitests.
+  NS_IMETHODIMP_TO_ERRORRESULT(AddRIDFilter, ErrorResult& rv,
+                               dom::MediaStreamTrack& aRecvTrack,
+                               const nsAString& aRid)
+  {
+    rv = AddRIDFilter(aRecvTrack, aRid);
+  }
+
+  // test-only
+  NS_IMETHODIMP_TO_ERRORRESULT(EnablePacketDump, ErrorResult& rv,
+                               unsigned long level,
+                               dom::mozPacketDumpType type,
+                               bool sending)
+  {
+    rv = EnablePacketDump(level, type, sending);
+  }
+
+  // test-only
+  NS_IMETHODIMP_TO_ERRORRESULT(DisablePacketDump, ErrorResult& rv,
+                               unsigned long level,
+                               dom::mozPacketDumpType type,
+                               bool sending)
+  {
+    rv = DisablePacketDump(level, type, sending);
   }
 
   nsresult GetPeerIdentity(nsAString& peerIdentity)
@@ -500,25 +555,13 @@ public:
     delete[] tmp;
   }
 
-  NS_IMETHODIMP GetLocalDescription(char** aSDP);
+  NS_IMETHODIMP GetLocalDescription(nsAString& aSDP);
+  NS_IMETHODIMP GetCurrentLocalDescription(nsAString& aSDP);
+  NS_IMETHODIMP GetPendingLocalDescription(nsAString& aSDP);
 
-  void GetLocalDescription(nsAString& aSDP)
-  {
-    char *tmp;
-    GetLocalDescription(&tmp);
-    aSDP.AssignASCII(tmp);
-    delete[] tmp;
-  }
-
-  NS_IMETHODIMP GetRemoteDescription(char** aSDP);
-
-  void GetRemoteDescription(nsAString& aSDP)
-  {
-    char *tmp;
-    GetRemoteDescription(&tmp);
-    aSDP.AssignASCII(tmp);
-    delete[] tmp;
-  }
+  NS_IMETHODIMP GetRemoteDescription(nsAString& aSDP);
+  NS_IMETHODIMP GetCurrentRemoteDescription(nsAString& aSDP);
+  NS_IMETHODIMP GetPendingRemoteDescription(nsAString& aSDP);
 
   NS_IMETHODIMP SignalingState(mozilla::dom::PCImplSignalingState* aState);
 
@@ -574,18 +617,6 @@ public:
                                       bool aExternalNegotiated,
                                       uint16_t aStream);
 
-  NS_IMETHODIMP_TO_ERRORRESULT(GetLocalStreams, ErrorResult &rv,
-                               nsTArray<RefPtr<DOMMediaStream > >& result)
-  {
-    rv = GetLocalStreams(result);
-  }
-
-  NS_IMETHODIMP_TO_ERRORRESULT(GetRemoteStreams, ErrorResult &rv,
-                               nsTArray<RefPtr<DOMMediaStream > >& result)
-  {
-    rv = GetRemoteStreams(result);
-  }
-
   // Called whenever something is unrecognized by the parser
   // May be called more than once and does not necessarily mean
   // that parsing was stopped, only that something was unrecognized.
@@ -624,10 +655,13 @@ public:
   // PeerConnectionMedia can't do it because it doesn't know about principals
   virtual void PrincipalChanged(dom::MediaStreamTrack* aTrack) override;
 
-  static std::string GetStreamId(const DOMMediaStream& aStream);
-  static std::string GetTrackId(const dom::MediaStreamTrack& track);
-
   void OnMediaError(const std::string& aError);
+
+  bool ShouldDumpPacket(size_t level, dom::mozPacketDumpType type,
+                        bool sending) const;
+
+  void DumpPacket_m(size_t level, dom::mozPacketDumpType type, bool sending,
+                    UniquePtr<uint8_t[]>& packet, size_t size);
 
 private:
   virtual ~PeerConnectionImpl();
@@ -637,7 +671,8 @@ private:
                                 std::vector<uint8_t>* fingerprint) const;
   nsresult ConfigureJsepSessionCodecs();
 
-  NS_IMETHODIMP EnsureDataConnection(uint16_t aNumstreams);
+  NS_IMETHODIMP EnsureDataConnection(uint16_t aLocalPort, uint16_t aNumstreams,
+                                     uint32_t aMaxMessageSize, bool aMMSSet);
 
   nsresult CloseInt();
   nsresult CheckApiState(bool assert_ice_ready) const;
@@ -650,6 +685,11 @@ private:
     NS_ENSURE_TRUE(on, false);
     return true;
   }
+
+  // test-only: called from AddRIDExtension and AddRIDFilter
+  // for simulcast mochitests.
+  RefPtr<MediaPipeline> GetMediaPipelineForTrack(
+      dom::MediaStreamTrack& aRecvTrack);
 
   nsresult GetTimeSinceEpoch(DOMHighResTimeStamp *result);
 
@@ -665,16 +705,15 @@ private:
       uint32_t* channels,
       uint16_t* localport,
       uint16_t* remoteport,
+      uint32_t* maxmessagesize,
+      bool*     mmsset,
       uint16_t* level) const;
 
-  static void DeferredAddTrackToJsepSession(const std::string& pcHandle,
-                                            SdpMediaSection::MediaType type,
-                                            const std::string& streamId,
-                                            const std::string& trackId);
-
-  nsresult AddTrackToJsepSession(SdpMediaSection::MediaType type,
-                                 const std::string& streamId,
-                                 const std::string& trackId);
+  nsresult AddRtpTransceiverToJsepSession(RefPtr<JsepTransceiver>& transceiver);
+  already_AddRefed<TransceiverImpl> CreateTransceiverImpl(
+      JsepTransceiver* aJsepTransceiver,
+      dom::MediaStreamTrack* aSendTrack,
+      ErrorResult& aRv);
 
   nsresult SetupIceRestart();
   nsresult RollbackIceRestart();
@@ -697,10 +736,6 @@ private:
   // or other things.
   void RecordLongtermICEStatistics();
 
-  void OnNegotiationNeeded();
-  static void MaybeFireNegotiationNeeded_static(const std::string& pcHandle);
-  void MaybeFireNegotiationNeeded();
-
   // Timecard used to measure processing time. This should be the first class
   // attribute so that we accurately measure the time required to instantiate
   // any other attributes of this class.
@@ -722,7 +757,7 @@ private:
 
   nsCOMPtr<nsPIDOMWindowInner> mWindow;
 
-  // The SDP sent in from JS - here for debugging.
+  // The SDP sent in from JS
   std::string mLocalRequestedSDP;
   std::string mRemoteRequestedSDP;
 
@@ -766,18 +801,14 @@ private:
   mozilla::UniquePtr<mozilla::JsepSession> mJsepSession;
   std::string mPreviousIceUfrag; // used during rollback of ice restart
   std::string mPreviousIcePwd; // used during rollback of ice restart
+  unsigned long mIceRestartCount;
+  unsigned long mIceRollbackCount;
 
   // Start time of ICE, used for telemetry
   mozilla::TimeStamp mIceStartTime;
   // Start time of call used for Telemetry
   mozilla::TimeStamp mStartTime;
 
-  // Temporary: used to prevent multiple audio streams or multiple video streams
-  // in a single PC. This is tied up in the IETF discussion around proper
-  // representation of multiple streams in SDP, and strongly related to
-  // Bug 840728.
-  int mNumAudioStreams;
-  int mNumVideoStreams;
   bool mHaveConfiguredCodecs;
 
   bool mHaveDataStream;
@@ -786,29 +817,43 @@ private:
 
   bool mTrickle;
 
-  bool mNegotiationNeeded;
-
   bool mPrivateWindow;
+
+  // Whether this PeerConnection is being counted as active by mWindow
+  bool mActiveOnWindow;
 
   // storage for Telemetry data
   uint16_t mMaxReceiving[SdpMediaSection::kMediaTypes];
   uint16_t mMaxSending[SdpMediaSection::kMediaTypes];
 
   // DTMF
-  struct DTMFState {
-    PeerConnectionImpl* mPeerConnectionImpl;
-    nsCOMPtr<nsITimer> mSendTimer;
-    nsString mTrackId;
-    nsString mTones;
-    size_t mLevel;
-    uint32_t mDuration;
-    uint32_t mInterToneGap;
+  class DTMFState : public nsITimerCallback {
+      virtual ~DTMFState();
+    public:
+      DTMFState();
+
+      NS_DECL_NSITIMERCALLBACK
+      NS_DECL_THREADSAFE_ISUPPORTS
+
+      nsWeakPtr mPCObserver;
+      RefPtr<TransceiverImpl> mTransceiver;
+      nsCOMPtr<nsITimer> mSendTimer;
+      nsString mTones;
+      uint32_t mDuration;
+      uint32_t mInterToneGap;
   };
 
-  static void
-  DTMFSendTimerCallback_m(nsITimer* timer, void*);
+  // TODO(bug 1401983): Move DTMF stuff to TransceiverImpl
+  nsTArray<RefPtr<DTMFState>> mDTMFStates;
 
-  nsTArray<DTMFState> mDTMFStates;
+  std::vector<unsigned> mSendPacketDumpFlags;
+  std::vector<unsigned> mRecvPacketDumpFlags;
+  Atomic<bool> mPacketDumpEnabled;
+  mutable Mutex mPacketDumpFlagsMutex;
+
+  // used to store the raw trickle candidate string for display
+  // on the about:webrtc raw candidates table.
+  std::vector<std::string> mRawTrickledCandidates;
 
 public:
   //these are temporary until the DataChannel Listen/Connect API is removed

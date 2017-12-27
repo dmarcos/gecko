@@ -61,14 +61,20 @@ protected:
    * document, leave it as a string) and return as nsAttrValue.
    *
    * @param aValue the value to parse
+   * @param aMaybeScriptedPrincipal if available, the scripted principal
+   *        responsible for this attribute value, as passed to
+   *        Element::ParseAttribute.
    * @param aResult the resulting HTMLValue [OUT]
    */
   void ParseStyleAttribute(const nsAString& aValue,
+                           nsIPrincipal* aMaybeScriptedPrincipal,
                            nsAttrValue& aResult,
                            bool aForceInDataDoc);
 
-  virtual bool ParseAttribute(int32_t aNamespaceID, nsIAtom* aAttribute,
-                                const nsAString& aValue, nsAttrValue& aResult) override;
+  virtual bool ParseAttribute(int32_t aNamespaceID, nsAtom* aAttribute,
+                                const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
+                                nsAttrValue& aResult) override;
 
   friend class mozilla::dom::Element;
 
@@ -82,6 +88,10 @@ protected:
   nsresult ReparseStyleAttribute(bool aForceInDataDoc, bool aForceIfAlreadyParsed);
 
   virtual void NodeInfoChanged(nsIDocument* aOldDoc) override;
+
+  virtual nsresult BeforeSetAttr(int32_t aNamespaceID, nsAtom* aName,
+                                 const nsAttrValueOrString* aValue,
+                                 bool aNotify) override;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsStyledElement, NS_STYLED_ELEMENT_IID)

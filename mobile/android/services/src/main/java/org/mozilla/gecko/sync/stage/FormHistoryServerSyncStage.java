@@ -75,7 +75,9 @@ public class FormHistoryServerSyncStage extends ServerSyncStage {
             FORM_HISTORY_SORT,
             getAllowedMultipleBatches(),
             getAllowedToUseHighWaterMark(),
-            getRepositoryStateProvider()
+            getRepositoryStateProvider(),
+            false,
+            false
     );
   }
 
@@ -88,7 +90,7 @@ public class FormHistoryServerSyncStage extends ServerSyncStage {
     );
   }
 
-  public class FormHistoryRecordFactory extends RecordFactory {
+  public static final class FormHistoryRecordFactory extends RecordFactory {
 
     @Override
     public Record createRecord(Record record) {

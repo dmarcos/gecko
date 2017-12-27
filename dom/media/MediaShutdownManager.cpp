@@ -6,21 +6,31 @@
 
 #include "mozilla/Logging.h"
 #include "mozilla/StaticPtr.h"
-#include "nsContentUtils.h"
+#include "mozilla/Services.h"
 
 #include "MediaDecoder.h"
 #include "MediaShutdownManager.h"
 
 namespace mozilla {
 
+#undef LOGW
+
 extern LazyLogModule gMediaDecoderLog;
 #define DECODER_LOG(type, msg) MOZ_LOG(gMediaDecoderLog, type, msg)
+#define LOGW(...) NS_WARNING(nsPrintfCString(__VA_ARGS__).get())
+
+#ifdef NIGHTLY_BUILD
+#define DEBUG_SHUTDOWN(fmt, ...) printf_stderr("[DEBUG SHUTDOWN] %s: " fmt "\n", __func__, ##__VA_ARGS__)
+#else
+#define DEBUG_SHUTDOWN(...) do { } while (0)
+#endif
 
 NS_IMPL_ISUPPORTS(MediaShutdownManager, nsIAsyncShutdownBlocker)
 
 MediaShutdownManager::MediaShutdownManager()
 {
   MOZ_ASSERT(NS_IsMainThread());
+  MOZ_DIAGNOSTIC_ASSERT(sInitPhase == NotInited);
 }
 
 MediaShutdownManager::~MediaShutdownManager()
@@ -32,11 +42,17 @@ MediaShutdownManager::~MediaShutdownManager()
 // may interfere with our shutdown listener.
 StaticRefPtr<MediaShutdownManager> MediaShutdownManager::sInstance;
 
+MediaShutdownManager::InitPhase MediaShutdownManager::sInitPhase = MediaShutdownManager::NotInited;
+
 MediaShutdownManager&
 MediaShutdownManager::Instance()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_DIAGNOSTIC_ASSERT(sInstance);
+#ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
+  if (!sInstance) {
+    MOZ_CRASH_UNSAFE_PRINTF("sInstance is null. sInitPhase=%d", int(sInitPhase));
+  }
+#endif
   return *sInstance;
 }
 
@@ -62,31 +78,34 @@ void
 MediaShutdownManager::InitStatics()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  static bool sInitDone = false;
-  if (sInitDone) {
+  if (sInitPhase != NotInited) {
     return;
   }
 
-  sInitDone = true;
   sInstance = new MediaShutdownManager();
+  MOZ_DIAGNOSTIC_ASSERT(sInstance);
 
   nsresult rv = GetShutdownBarrier()->AddBlocker(
     sInstance, NS_LITERAL_STRING(__FILE__), __LINE__,
     NS_LITERAL_STRING("MediaShutdownManager shutdown"));
   if (NS_FAILED(rv)) {
-    MOZ_CRASH_UNSAFE_PRINTF("Failed to add shutdown blocker! rv=%x", uint32_t(rv));
+    LOGW("Failed to add shutdown blocker! rv=%x", uint32_t(rv));
+    sInitPhase = InitFailed;
+    return;
   }
+  sInitPhase = InitSucceeded;
 }
 
 void
 MediaShutdownManager::RemoveBlocker()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(mIsDoingXPCOMShutDown);
+  MOZ_DIAGNOSTIC_ASSERT(sInitPhase == XPCOMShutdownStarted);
   MOZ_ASSERT(mDecoders.Count() == 0);
   GetShutdownBarrier()->RemoveBlocker(this);
   // Clear our singleton reference. This will probably delete
   // this instance, so don't deref |this| clearing sInstance.
+  sInitPhase = XPCOMShutdownEnded;
   sInstance = nullptr;
   DECODER_LOG(LogLevel::Debug, ("MediaShutdownManager::BlockShutdown() end."));
 }
@@ -95,13 +114,17 @@ nsresult
 MediaShutdownManager::Register(MediaDecoder* aDecoder)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  if (mIsDoingXPCOMShutDown) {
+  if (sInitPhase == InitFailed) {
+    return NS_ERROR_NOT_INITIALIZED;
+  }
+  if (sInitPhase == XPCOMShutdownStarted) {
     return NS_ERROR_ABORT;
   }
   // Don't call Register() after you've Unregistered() all the decoders,
   // that's not going to work.
   MOZ_ASSERT(!mDecoders.Contains(aDecoder));
   mDecoders.PutEntry(aDecoder);
+  DEBUG_SHUTDOWN("decoder=%p, count=%d", aDecoder, mDecoders.Count());
   MOZ_ASSERT(mDecoders.Contains(aDecoder));
   MOZ_ASSERT(mDecoders.Count() > 0);
   return NS_OK;
@@ -115,7 +138,8 @@ MediaShutdownManager::Unregister(MediaDecoder* aDecoder)
     return;
   }
   mDecoders.RemoveEntry(aDecoder);
-  if (mIsDoingXPCOMShutDown && mDecoders.Count() == 0) {
+  DEBUG_SHUTDOWN("decoder=%p, count=%d", aDecoder, mDecoders.Count());
+  if (sInitPhase == XPCOMShutdownStarted && mDecoders.Count() == 0) {
     RemoveBlocker();
   }
 }
@@ -137,12 +161,13 @@ NS_IMETHODIMP
 MediaShutdownManager::BlockShutdown(nsIAsyncShutdownClient*)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(sInstance);
+  MOZ_DIAGNOSTIC_ASSERT(sInitPhase == InitSucceeded);
+  MOZ_DIAGNOSTIC_ASSERT(sInstance);
 
   DECODER_LOG(LogLevel::Debug, ("MediaShutdownManager::BlockShutdown() start..."));
 
   // Set this flag to ensure no Register() is allowed when Shutdown() begins.
-  mIsDoingXPCOMShutDown = true;
+  sInitPhase = XPCOMShutdownStarted;
 
   auto oldCount = mDecoders.Count();
   if (oldCount == 0) {
@@ -162,3 +187,6 @@ MediaShutdownManager::BlockShutdown(nsIAsyncShutdownClient*)
 }
 
 } // namespace mozilla
+
+// avoid redefined macro in unified build
+#undef LOGW

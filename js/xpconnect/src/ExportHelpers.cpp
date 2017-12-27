@@ -13,6 +13,7 @@
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/BlobBinding.h"
 #include "mozilla/dom/File.h"
+#include "mozilla/dom/FileListBinding.h"
 #include "mozilla/dom/StructuredCloneHolder.h"
 #include "nsGlobalWindow.h"
 #include "nsJSUtils.h"
@@ -52,13 +53,7 @@ enum StackScopedCloneTags {
 // per scope.
 bool IsFileList(JSObject* obj)
 {
-    nsISupports* supports = UnwrapReflectorToISupports(obj);
-    if (!supports)
-        return false;
-    nsCOMPtr<nsIDOMFileList> fileList = do_QueryInterface(supports);
-    if (fileList)
-        return true;
-    return false;
+    return IS_INSTANCE_OF(FileList, obj);
 }
 
 class MOZ_STACK_CLASS StackScopedCloneData
@@ -150,8 +145,9 @@ public:
                             JS::Handle<JSObject*> aObj)
     {
         {
+            JS::Rooted<JSObject*> obj(aCx, aObj);
             Blob* blob = nullptr;
-            if (NS_SUCCEEDED(UNWRAP_OBJECT(Blob, aObj, blob))) {
+            if (NS_SUCCEEDED(UNWRAP_OBJECT(Blob, &obj, blob))) {
                 BlobImpl* blobImpl = blob->Impl();
                 MOZ_ASSERT(blobImpl);
 
@@ -333,11 +329,20 @@ NewFunctionForwarder(JSContext* cx, HandleId idArg, HandleObject callable,
     if (id == JSID_VOIDHANDLE)
         id = GetJSIDByIndex(cx, XPCJSContext::IDX_EMPTYSTRING);
 
+    // If our callable is a (possibly wrapped) function, we can give
+    // the exported thing the right number of args.
+    unsigned nargs = 0;
+    RootedObject unwrapped(cx, js::UncheckedUnwrap(callable));
+    if (unwrapped) {
+        if (JSFunction* fun = JS_GetObjectFunction(unwrapped))
+            nargs = JS_GetFunctionArity(fun);
+    }
+
     // We have no way of knowing whether the underlying function wants to be a
     // constructor or not, so we just mark all forwarders as constructors, and
     // let the underlying function throw for construct calls if it wants.
     JSFunction* fun = js::NewFunctionByIdWithReserved(cx, FunctionForwarder,
-                                                      0, JSFUN_CONSTRUCTOR, id);
+                                                      nargs, JSFUN_CONSTRUCTOR, id);
     if (!fun)
         return false;
 
@@ -437,8 +442,7 @@ ExportFunction(JSContext* cx, HandleValue vfunction, HandleValue vscope, HandleV
         // the target.
         if (!JSID_IS_VOID(options.defineAs)) {
             if (!JS_DefinePropertyById(cx, targetScope, id, rval,
-                                       JSPROP_ENUMERATE,
-                                       JS_STUBGETTER, JS_STUBSETTER)) {
+                                       JSPROP_ENUMERATE)) {
                 return false;
             }
         }
@@ -484,8 +488,7 @@ CreateObjectIn(JSContext* cx, HandleValue vobj, CreateObjectInOptions& options,
 
         if (define) {
             if (!JS_DefinePropertyById(cx, scope, options.defineAs, obj,
-                                       JSPROP_ENUMERATE,
-                                       JS_STUBGETTER, JS_STUBSETTER))
+                                       JSPROP_ENUMERATE))
                 return false;
         }
     }

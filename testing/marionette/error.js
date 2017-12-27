@@ -6,12 +6,15 @@
 
 const {interfaces: Ci, utils: Cu} = Components;
 
+const {pprint} = Cu.import("chrome://marionette/content/format.js", {});
+
 const ERRORS = new Set([
   "ElementClickInterceptedError",
   "ElementNotAccessibleError",
   "ElementNotInteractableError",
   "InsecureCertificateError",
   "InvalidArgumentError",
+  "InvalidCookieDomainError",
   "InvalidElementStateError",
   "InvalidSelectorError",
   "InvalidSessionIDError",
@@ -26,6 +29,7 @@ const ERRORS = new Set([
   "StaleElementReferenceError",
   "TimeoutError",
   "UnableToSetCookieError",
+  "UnexpectedAlertOpenError",
   "UnknownCommandError",
   "UnknownError",
   "UnsupportedOperationError",
@@ -43,8 +47,12 @@ const BUILTIN_ERRORS = new Set([
   "URIError",
 ]);
 
-this.EXPORTED_SYMBOLS = ["error"].concat(Array.from(ERRORS));
+this.EXPORTED_SYMBOLS = [
+  "error",
+  "stack",
+].concat(Array.from(ERRORS));
 
+/** @namespace */
 this.error = {};
 
 /**
@@ -69,47 +77,56 @@ this.error = {};
  * @return {boolean}
  *     True if error, false otherwise.
  */
-error.isError = function (val) {
+error.isError = function(val) {
   if (val === null || typeof val != "object") {
     return false;
   } else if (val instanceof Ci.nsIException) {
     return true;
-  } else {
-    // DOMRectList errors on string comparison
-   try {
-      let proto = Object.getPrototypeOf(val);
-      return BUILTIN_ERRORS.has(proto.toString());
-    } catch (e) {
-      return false;
-    }
+  }
+
+  // DOMRectList errors on string comparison
+  try {
+    let proto = Object.getPrototypeOf(val);
+    return BUILTIN_ERRORS.has(proto.toString());
+  } catch (e) {
+    return false;
   }
 };
 
 /**
  * Checks if obj is an object in the WebDriverError prototypal chain.
  */
-error.isWebDriverError = function (obj) {
+error.isWebDriverError = function(obj) {
   return error.isError(obj) &&
       ("name" in obj && ERRORS.has(obj.name));
 };
 
 /**
- * Wraps any error as a WebDriverError.  If the given error is already in
- * the WebDriverError prototype chain, this function returns it
- * unmodified.
+ * Ensures error instance is a WebDriverError.
+ *
+ * If the given error is already in the WebDriverError prototype
+ * chain, |err| is returned unmodified.  If it is not, it is wrapped
+ * in UnknownError.
+ *
+ * @param {Error} err
+ *     Error to conditionally turn into a WebDriverError.
+ *
+ * @return {WebDriverError}
+ *     If |err| is a WebDriverError, it is returned unmodified.
+ *     Otherwise an UnknownError type is returned.
  */
-error.wrap = function (err) {
+error.wrap = function(err) {
   if (error.isWebDriverError(err)) {
     return err;
   }
-  return new WebDriverError(err);
+  return new UnknownError(err);
 };
 
 /**
  * Unhandled error reporter.  Dumps the error and its stacktrace to console,
  * and reports error to the Browser Console.
  */
-error.report = function (err) {
+error.report = function(err) {
   let msg = "Marionette threw an error: " + error.stringify(err);
   dump(msg + "\n");
   if (Cu.reportError) {
@@ -120,7 +137,7 @@ error.report = function (err) {
 /**
  * Prettifies an instance of Error and its stacktrace to a string.
  */
-error.stringify = function (err) {
+error.stringify = function(err) {
   try {
     let s = err.toString();
     if ("stack" in err) {
@@ -132,68 +149,12 @@ error.stringify = function (err) {
   }
 };
 
-/**
- * Pretty-print values passed to template strings.
- *
- * Usage:
- *
- *     let bool = {value: true};
- *     error.pprint`Expected boolean, got ${bool}`;
- *     => 'Expected boolean, got [object Object] {"value": true}'
- *
- *     let htmlElement = document.querySelector("input#foo");
- *     error.pprint`Expected element ${htmlElement}`;
- *     => 'Expected element <input id="foo" class="bar baz">'
- */
-error.pprint = function (ss, ...values) {
-  function prettyObject (obj) {
-    let proto = Object.prototype.toString.call(obj);
-    let s = "";
-    try {
-      s = JSON.stringify(obj);
-    } catch (e if e instanceof TypeError) {
-      s = `<${e.message}>`;
-    }
-    return proto + " " + s;
-  }
-
-  function prettyElement (el) {
-    let ident = [];
-    if (el.id) {
-      ident.push(`id="${el.id}"`);
-    }
-    if (el.classList.length > 0) {
-      ident.push(`class="${el.className}"`);
-    }
-
-    let idents = "";
-    if (ident.length > 0) {
-      idents = " " + ident.join(" ");
-    }
-
-    return `<${el.localName}${idents}>`;
-  }
-
-  let res = [];
-  for (let i = 0; i < ss.length; i++) {
-    res.push(ss[i]);
-    if (i < values.length) {
-      let val = values[i];
-      let typ = Object.prototype.toString.call(val);
-      let s;
-      try {
-        if (val && val.nodeType === 1) {
-          s = prettyElement(val);
-        } else {
-          s = prettyObject(val);
-        }
-      } catch (e) {
-        s = typeof val;
-      }
-      res.push(s);
-    }
-  }
-  return res.join("");
+/** Create a stacktrace to the current line in the program. */
+this.stack = function() {
+  let trace = new Error().stack;
+  let sa = trace.split("\n");
+  sa = sa.slice(1);
+  return "stacktrace:\n" + sa.join("\n");
 };
 
 /**
@@ -207,7 +168,7 @@ class WebDriverError extends Error {
    *     Optional string describing error situation or Error instance
    *     to propagate.
    */
-  constructor (x) {
+  constructor(x) {
     super(x);
     this.name = this.constructor.name;
     this.status = "webdriver error";
@@ -218,15 +179,29 @@ class WebDriverError extends Error {
     }
   }
 
-  toJSON () {
+  /**
+   * @return {Object.<string, string>}
+   *     JSON serialisation of error prototype.
+   */
+  toJSON() {
     return {
       error: this.status,
       message: this.message || "",
       stacktrace: this.stack || "",
-    }
+    };
   }
 
-  static fromJSON (json) {
+  /**
+   * Unmarshals a JSON error representation to the appropriate Marionette
+   * error type.
+   *
+   * @param {Object.<string, string>} json
+   *     Error object.
+   *
+   * @return {Error}
+   *     Error prototype.
+   */
+  static fromJSON(json) {
     if (typeof json.error == "undefined") {
       let s = JSON.stringify(json);
       throw new TypeError("Undeserialisable error type: " + s);
@@ -247,8 +222,9 @@ class WebDriverError extends Error {
   }
 }
 
+/** The Gecko a11y API indicates that the element is not accessible. */
 class ElementNotAccessibleError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "element not accessible";
   }
@@ -266,15 +242,28 @@ class ElementNotAccessibleError extends WebDriverError {
  *     will produce a nicer error message.
  */
 class ElementClickInterceptedError extends WebDriverError {
-  constructor (obscuredEl = undefined, coords = undefined) {
+  constructor(obscuredEl = undefined, coords = undefined) {
     let msg = "";
     if (obscuredEl && coords) {
       const doc = obscuredEl.ownerDocument;
       const overlayingEl = doc.elementFromPoint(coords.x, coords.y);
-      msg = error.pprint`Element ${obscuredEl} is not clickable ` +
-          `at point (${coords.x},${coords.y}) ` +
-          error.pprint`because another element ${overlayingEl} ` +
-          `obscures it`;
+
+      switch (obscuredEl.style.pointerEvents) {
+        case "none":
+          msg = pprint`Element ${obscuredEl} is not clickable ` +
+              `at point (${coords.x},${coords.y}) ` +
+              `because it does not have pointer events enabled, ` +
+              pprint`and element ${overlayingEl} ` +
+              `would receive the click instead`;
+          break;
+
+        default:
+          msg = pprint`Element ${obscuredEl} is not clickable ` +
+              `at point (${coords.x},${coords.y}) ` +
+              pprint`because another element ${overlayingEl} ` +
+              `obscures it`;
+          break;
+      }
     }
 
     super(msg);
@@ -282,43 +271,59 @@ class ElementClickInterceptedError extends WebDriverError {
   }
 }
 
+/**
+ * A command could not be completed because the element is not pointer-
+ * or keyboard interactable.
+ */
 class ElementNotInteractableError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "element not interactable";
   }
 }
 
+/**
+ * Navigation caused the user agent to hit a certificate warning, which
+ * is usually the result of an expired or invalid TLS certificate.
+ */
 class InsecureCertificateError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "insecure certificate";
   }
 }
 
+/** The arguments passed to a command are either invalid or malformed. */
 class InvalidArgumentError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "invalid argument";
   }
 }
 
+class InvalidCookieDomainError extends WebDriverError {
+  constructor(message) {
+    super(message);
+    this.status = "invalid cookie domain";
+  }
+}
+
 class InvalidElementStateError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "invalid element state";
   }
 }
 
 class InvalidSelectorError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "invalid selector";
   }
 }
 
 class InvalidSessionIDError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "invalid session id";
   }
@@ -342,20 +347,16 @@ class JavaScriptError extends WebDriverError {
    * @param {string=} script
    *     Script being executed, in text form.
    */
-  constructor (
-      x,
-      fnName = undefined,
-      file = undefined,
-      line = undefined,
-      script = undefined) {
+  constructor(x,
+      {fnName = null, file = null, line = null, script = null} = {}) {
     let msg = String(x);
     let trace = "";
 
-    if (fnName) {
+    if (fnName !== null) {
       trace += fnName;
-      if (file) {
+      if (file !== null) {
         trace += ` @${file}`;
-        if (line) {
+        if (line !== null) {
           trace += `, line ${line}`;
         }
       }
@@ -365,7 +366,7 @@ class JavaScriptError extends WebDriverError {
       let jsStack = x.stack.split("\n");
       let match = jsStack[0].match(/:(\d+):\d+$/);
       let jsLine = match ? parseInt(match[1]) : 0;
-      if (script) {
+      if (script !== null) {
         let src = script.split("\n")[jsLine];
         trace += "\n" +
           `inline javascript, line ${jsLine}\n` +
@@ -381,102 +382,110 @@ class JavaScriptError extends WebDriverError {
 }
 
 class MoveTargetOutOfBoundsError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "move target out of bounds";
   }
 }
 
 class NoAlertOpenError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "no such alert";
   }
 }
 
 class NoSuchElementError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "no such element";
   }
 }
 
 class NoSuchFrameError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "no such frame";
   }
 }
 
 class NoSuchWindowError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "no such window";
   }
 }
 
 class ScriptTimeoutError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "script timeout";
   }
 }
 
 class SessionNotCreatedError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "session not created";
   }
 }
 
 class StaleElementReferenceError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "stale element reference";
   }
 }
 
 class TimeoutError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "timeout";
   }
 }
 
 class UnableToSetCookieError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "unable to set cookie";
   }
 }
 
+class UnexpectedAlertOpenError extends WebDriverError {
+  constructor(message) {
+    super(message);
+    this.status = "unexpected alert open";
+  }
+}
+
 class UnknownCommandError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "unknown command";
   }
 }
 
 class UnknownError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "unknown error";
   }
 }
 
 class UnsupportedOperationError extends WebDriverError {
-  constructor (message) {
+  constructor(message) {
     super(message);
     this.status = "unsupported operation";
   }
 }
 
 const STATUSES = new Map([
+  ["element click intercepted", ElementClickInterceptedError],
   ["element not accessible", ElementNotAccessibleError],
   ["element not interactable", ElementNotInteractableError],
-  ["element click intercepted", ElementClickInterceptedError],
   ["insecure certificate", InsecureCertificateError],
   ["invalid argument", InvalidArgumentError],
+  ["invalid cookie domain", InvalidCookieDomainError],
   ["invalid element state", InvalidElementStateError],
   ["invalid selector", InvalidSelectorError],
   ["invalid session id", InvalidSessionIDError],
@@ -491,8 +500,17 @@ const STATUSES = new Map([
   ["stale element reference", StaleElementReferenceError],
   ["timeout", TimeoutError],
   ["unable to set cookie", UnableToSetCookieError],
+  ["unexpected alert open", UnexpectedAlertOpenError],
   ["unknown command", UnknownCommandError],
   ["unknown error", UnknownError],
   ["unsupported operation", UnsupportedOperationError],
   ["webdriver error", WebDriverError],
 ]);
+
+// Errors must be expored on the local this scope so that the
+// EXPORTED_SYMBOLS and the Cu.import("foo", {}) machinery sees them.
+// We could assign each error definition directly to |this|, but
+// because they are Error prototypes this would mess up their names.
+for (let cls of STATUSES.values()) {
+  this[cls.name] = cls;
+}

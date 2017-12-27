@@ -37,7 +37,7 @@ SVGTransformableElement::Transform()
 // nsIContent methods
 
 NS_IMETHODIMP_(bool)
-SVGTransformableElement::IsAttributeMapped(const nsIAtom* name) const
+SVGTransformableElement::IsAttributeMapped(const nsAtom* name) const
 {
   static const MappedAttributeEntry* const map[] = {
     sColorMap,
@@ -50,7 +50,7 @@ SVGTransformableElement::IsAttributeMapped(const nsIAtom* name) const
 }
 
 nsChangeHint
-SVGTransformableElement::GetAttributeChangeHint(const nsIAtom* aAttribute,
+SVGTransformableElement::GetAttributeChangeHint(const nsAtom* aAttribute,
                                                 int32_t aModType) const
 {
   nsChangeHint retval =
@@ -92,7 +92,7 @@ SVGTransformableElement::GetAttributeChangeHint(const nsIAtom* aAttribute,
 }
 
 bool
-SVGTransformableElement::IsEventAttributeName(nsIAtom* aName)
+SVGTransformableElement::IsEventAttributeNameInternal(nsAtom* aName)
 {
   return nsContentUtils::IsEventAttributeName(aName, EventNameType_SVGGraphic);
 }
@@ -172,7 +172,7 @@ SVGTransformableElement::GetFarthestViewportElement()
 }
 
 already_AddRefed<SVGIRect>
-SVGTransformableElement::GetBBox(const SVGBoundingBoxOptions& aOptions, 
+SVGTransformableElement::GetBBox(const SVGBoundingBoxOptions& aOptions,
                                  ErrorResult& rv)
 {
   nsIFrame* frame = GetPrimaryFrame(FlushType::Layout);
@@ -188,7 +188,9 @@ SVGTransformableElement::GetBBox(const SVGBoundingBoxOptions& aOptions,
   }
 
   if (!NS_SVGNewGetBBoxEnabled()) {
-    return NS_NewSVGRect(this, ToRect(nsSVGUtils::GetBBox(frame)));
+    return NS_NewSVGRect(this, ToRect(nsSVGUtils::GetBBox(frame,
+                                      nsSVGUtils::eBBoxIncludeFillGeometry |
+                                      nsSVGUtils::eUseUserSpaceOfUseElement)));
   } else {
     uint32_t flags = 0;
     if (aOptions.mFill) {
@@ -210,6 +212,7 @@ SVGTransformableElement::GetBBox(const SVGBoundingBoxOptions& aOptions,
         flags == nsSVGUtils::eBBoxIncludeClipped) {
       flags |= nsSVGUtils::eBBoxIncludeFill;
     }
+    flags |= nsSVGUtils::eUseUserSpaceOfUseElement;
     return NS_NewSVGRect(this, ToRect(nsSVGUtils::GetBBox(frame, flags)));
   }
 }

@@ -7,8 +7,8 @@
 
 const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 
-Cu.import('resource://gre/modules/XPCOMUtils.jsm');
-Cu.import('resource://gre/modules/Services.jsm');
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "Prompt",
                                   "resource://gre/modules/Prompt.jsm");
@@ -69,10 +69,11 @@ PresentationDevicePrompt.prototype = {
     });
   },
 
-  _getPrompt: function(aTitle, aMenu) {
+  _getPrompt: function(aTitle, aMenu, aWindow) {
     debug("_getPrompt");
 
     let p = new Prompt({
+      window: aWindow,
       title: aTitle,
     });
 
@@ -97,10 +98,10 @@ PresentationDevicePrompt.prototype = {
       return;
     }
 
-    if (aIndex < 0) {                    // Cancel request if no selected device,
+    if (aIndex < 0) { // Cancel request if no selected device,
       this._request.cancel(Cr.NS_ERROR_DOM_NOT_ALLOWED_ERR);
       return;
-    } else if (!this._devices.length) {  // or there is no available devices
+    } else if (!this._devices.length) { // or there is no available devices
       this._request.cancel(Cr.NS_ERROR_DOM_NOT_FOUND_ERR);
       return;
     }
@@ -123,7 +124,9 @@ PresentationDevicePrompt.prototype = {
     this._request = aRequest;
 
     let prompt = this._getPrompt(this._getString("deviceMenu.title"),
-                                 this._getPromptMenu(this._devices));
+                                 this._getPromptMenu(this._devices),
+                                 aRequest.chromeEventHandler &&
+                                   aRequest.chromeEventHandler.ownerGlobal);
 
     this._showPrompt(prompt, this._selectDevice.bind(this));
 

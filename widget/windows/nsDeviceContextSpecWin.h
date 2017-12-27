@@ -39,8 +39,8 @@ public:
 
   float GetPrintingScale() final;
 
-  void GetDriverName(wchar_t *&aDriverName) const   { aDriverName = mDriverName;     }
-  void GetDeviceName(wchar_t *&aDeviceName) const   { aDeviceName = mDeviceName;     }
+  void GetDriverName(nsAString& aDriverName) const { aDriverName = mDriverName; }
+  void GetDeviceName(nsAString& aDeviceName) const { aDeviceName = mDeviceName; }
 
   // The GetDevMode will return a pointer to a DevMode
   // whether it is from the Global memory handle or just the DevMode
@@ -49,22 +49,31 @@ public:
   void GetDevMode(LPDEVMODEW &aDevMode);
 
   // helper functions
-  nsresult GetDataFromPrinter(char16ptr_t aName, nsIPrintSettings* aPS = nullptr);
+  nsresult GetDataFromPrinter(const nsAString& aName,
+                              nsIPrintSettings* aPS = nullptr);
 
 protected:
 
-  void SetDeviceName(char16ptr_t aDeviceName);
-  void SetDriverName(char16ptr_t aDriverName);
+  void SetDeviceName(const nsAString& aDeviceName);
+  void SetDriverName(const nsAString& aDriverName);
   void SetDevMode(LPDEVMODEW aDevMode);
 
   virtual ~nsDeviceContextSpecWin();
 
-  wchar_t*      mDriverName;
-  wchar_t*      mDeviceName;
+  nsString mDriverName;
+  nsString mDeviceName;
   LPDEVMODEW mDevMode;
 
   nsCOMPtr<nsIPrintSettings> mPrintSettings;
   int16_t mOutputFormat = nsIPrintSettings::kOutputFormatNative;
+
+#ifdef MOZ_ENABLE_SKIA_PDF
+
+  // This variable is independant of nsIPrintSettings::kOutputFormatPDF.
+  // It controls both whether normal printing is done via PDF using Skia and
+  // whether print-to-PDF uses Skia.
+  bool mPrintViaSkPDF;
+#endif
 };
 
 

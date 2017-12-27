@@ -1,7 +1,9 @@
-
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+// This file is loaded into the browser window scope.
+/* eslint-env mozilla/browser-window */
 
 /**
  * Tab previews utility, produces thumbnails
@@ -14,12 +16,13 @@ var tabPreviews = {
 
     gBrowser.tabContainer.addEventListener("TabSelect", this);
     gBrowser.tabContainer.addEventListener("SSTabRestored", this);
+  },
 
-    let screenManager = Cc["@mozilla.org/gfx/screenmanager;1"]
-                          .getService(Ci.nsIScreenManager);
-    let left = {}, top = {}, width = {}, height = {};
-    screenManager.primaryScreen.GetRectDisplayPix(left, top, width, height);
-    this.aspectRatio = height.value / width.value;
+  get aspectRatio() {
+    let { PageThumbUtils } = Cu.import("resource://gre/modules/PageThumbUtils.jsm", {});
+    let [ width, height ] = PageThumbUtils.getThumbnailSize(window);
+    delete this.aspectRatio;
+    return this.aspectRatio = height / width;
   },
 
   get: function tabPreviews_get(aTab) {
@@ -108,9 +111,9 @@ var tabPreviewPanelHelper = {
   },
   _generateHandler(host) {
     var self = this;
-    return function(event) {
+    return function listener(event) {
       if (event.target == host.panel) {
-        host.panel.removeEventListener(event.type, arguments.callee);
+        host.panel.removeEventListener(event.type, listener);
         self["_" + event.type](host);
       }
     };
@@ -213,8 +216,8 @@ var ctrlTab = {
   prefName: "browser.ctrlTab.previews",
   readPref: function ctrlTab_readPref() {
     var enable =
-      gPrefService.getBoolPref(this.prefName) &&
-      !gPrefService.getBoolPref("browser.ctrlTab.disallowForScreenReaders", false);
+      Services.prefs.getBoolPref(this.prefName) &&
+      !Services.prefs.getBoolPref("browser.ctrlTab.disallowForScreenReaders", false);
 
     if (enable)
       this.init();
@@ -545,7 +548,7 @@ var ctrlTab = {
     tabContainer[toggleEventListener]("TabClose", this);
 
     document[toggleEventListener]("keypress", this);
-    gBrowser.mTabBox.handleCtrlTab = !enable;
+    gBrowser.tabbox.handleCtrlTab = !enable;
 
     if (enable)
       PageThumbs.addExpirationFilter(this);

@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim:cindent:ts=2:et:sw=2:
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -22,13 +22,12 @@
 #include "nsStyleContext.h"
 #include "nsCSSColorUtils.h"
 #include "gfxContext.h"
-#include "nsRenderingContext.h"
 #include "nsStyleStructInlines.h"
 #include "nsCSSProps.h"
-#include "mozilla/Telemetry.h"
 #include "gfxUtils.h"
 #include "gfxGradientCache.h"
 
+#include "mozilla/layers/StackingContextHelper.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
 #include "mozilla/webrender/WebRenderTypes.h"
 #include "mozilla/webrender/WebRenderAPI.h"
@@ -287,13 +286,13 @@ RectIsBeyondLinearGradientEdge(const gfxRect& aRect,
                                Color* aOutEdgeColor)
 {
   gfxFloat topLeft = LinearGradientStopPositionForPoint(
-    aGradientStart, aGradientEnd, aPatternMatrix.Transform(aRect.TopLeft()));
+    aGradientStart, aGradientEnd, aPatternMatrix.TransformPoint(aRect.TopLeft()));
   gfxFloat topRight = LinearGradientStopPositionForPoint(
-    aGradientStart, aGradientEnd, aPatternMatrix.Transform(aRect.TopRight()));
+    aGradientStart, aGradientEnd, aPatternMatrix.TransformPoint(aRect.TopRight()));
   gfxFloat bottomLeft = LinearGradientStopPositionForPoint(
-    aGradientStart, aGradientEnd, aPatternMatrix.Transform(aRect.BottomLeft()));
+    aGradientStart, aGradientEnd, aPatternMatrix.TransformPoint(aRect.BottomLeft()));
   gfxFloat bottomRight = LinearGradientStopPositionForPoint(
-    aGradientStart, aGradientEnd, aPatternMatrix.Transform(aRect.BottomRight()));
+    aGradientStart, aGradientEnd, aPatternMatrix.TransformPoint(aRect.BottomRight()));
 
   const ColorStop& firstStop = aStops[0];
   if (topLeft < firstStop.mPosition && topRight < firstStop.mPosition &&
@@ -660,9 +659,7 @@ nsCSSGradientRenderer::Paint(gfxContext& aContext,
                              const nsRect& aDirtyRect,
                              float aOpacity)
 {
-  PROFILER_LABEL("nsCSSRendering", "PaintGradient",
-    js::ProfileEntry::Category::GRAPHICS);
-  Telemetry::AutoTimer<Telemetry::GRADIENT_DURATION, Telemetry::Microsecond> gradientTimer;
+  AUTO_PROFILER_LABEL("nsCSSGradientRenderer::Paint", GRAPHICS);
 
   if (aDest.IsEmpty() || aFillArea.IsEmpty()) {
     return;
@@ -695,7 +692,7 @@ nsCSSGradientRenderer::Paint(gfxContext& aContext,
     // right way up.
     if (mLineStart.x > mLineEnd.x || mLineStart.y > mLineEnd.y) {
       std::swap(mLineStart, mLineEnd);
-      matrix.Scale(-1, -1);
+      matrix.PreScale(-1, -1);
     }
 
     // Fit the gradient line exactly into the source rect.
@@ -868,16 +865,16 @@ nsCSSGradientRenderer::Paint(gfxContext& aContext,
       // Recall that this is the transform from user space to pattern space.
       // So to stretch the ellipse by factor of P vertically, we scale
       // user coordinates by 1/P.
-      matrix.Translate(mLineStart);
-      matrix.Scale(1.0, mRadiusX/mRadiusY);
-      matrix.Translate(-mLineStart);
+      matrix.PreTranslate(mLineStart);
+      matrix.PreScale(1.0, mRadiusX/mRadiusY);
+      matrix.PreTranslate(-mLineStart);
     }
   }
   // Use a pattern transform to take account of source and dest rects
-  matrix.Translate(gfxPoint(mPresContext->CSSPixelsToDevPixels(aSrc.x),
-                            mPresContext->CSSPixelsToDevPixels(aSrc.y)));
-  matrix.Scale(gfxFloat(mPresContext->CSSPixelsToAppUnits(aSrc.width))/aDest.width,
-               gfxFloat(mPresContext->CSSPixelsToAppUnits(aSrc.height))/aDest.height);
+  matrix.PreTranslate(gfxPoint(mPresContext->CSSPixelsToDevPixels(aSrc.x),
+                               mPresContext->CSSPixelsToDevPixels(aSrc.y)));
+  matrix.PreScale(gfxFloat(mPresContext->CSSPixelsToAppUnits(aSrc.width))/aDest.width,
+                  gfxFloat(mPresContext->CSSPixelsToAppUnits(aSrc.height))/aDest.height);
   gradientPattern->SetMatrix(matrix);
 
   if (stopDelta == 0.0) {
@@ -933,7 +930,7 @@ nsCSSGradientRenderer::Paint(gfxContext& aContext,
   gfxRect dirtyAreaToFill = nsLayoutUtils::RectToGfxRect(dirty, appUnitsPerDevPixel);
   dirtyAreaToFill.RoundOut();
 
-  gfxMatrix ctm = aContext.CurrentMatrix();
+  Matrix ctm = aContext.CurrentMatrix();
   bool isCTMPreservingAxisAlignedRectangles = ctm.PreservesAxisAlignedRectangles();
 
   // xStart/yStart are the top-left corner of the top-left tile.
@@ -976,7 +973,7 @@ nsCSSGradientRenderer::Paint(gfxContext& aContext,
         gfxMatrix transform = gfxUtils::TransformRectToRect(fillRect,
             snappedFillRectTopLeft, snappedFillRectTopRight,
             snappedFillRectBottomRight);
-        aContext.SetMatrix(transform);
+        aContext.SetMatrixDouble(transform);
       }
       aContext.NewPath();
       aContext.Rectangle(fillRect);
@@ -990,8 +987,8 @@ nsCSSGradientRenderer::Paint(gfxContext& aContext,
         edgeColor.a *= aOpacity;
         aContext.SetColor(edgeColor);
       } else {
-        aContext.SetMatrix(
-          aContext.CurrentMatrix().Copy().Translate(tileRect.TopLeft()));
+        aContext.SetMatrixDouble(
+          aContext.CurrentMatrixDouble().Copy().PreTranslate(tileRect.TopLeft()));
         aContext.SetPattern(gradientPattern);
       }
       aContext.Fill();
@@ -1002,21 +999,20 @@ nsCSSGradientRenderer::Paint(gfxContext& aContext,
 
 void
 nsCSSGradientRenderer::BuildWebRenderParameters(float aOpacity,
-                                                WrGradientExtendMode& aMode,
-                                                nsTArray<WrGradientStop>& aStops,
+                                                wr::ExtendMode& aMode,
+                                                nsTArray<wr::GradientStop>& aStops,
                                                 LayoutDevicePoint& aLineStart,
                                                 LayoutDevicePoint& aLineEnd,
                                                 LayoutDeviceSize& aGradientRadius)
 {
-  aMode = mGradient->mRepeating ? WrGradientExtendMode::Repeat : WrGradientExtendMode::Clamp;
+  aMode = mGradient->mRepeating ? wr::ExtendMode::Repeat : wr::ExtendMode::Clamp;
 
   aStops.SetLength(mStops.Length());
   for(uint32_t i = 0; i < mStops.Length(); i++) {
-    Float alpha = mStops[i].mColor.a * aOpacity;
-    aStops[i].color.r = mStops[i].mColor.r * alpha;
-    aStops[i].color.g = mStops[i].mColor.g * alpha;
-    aStops[i].color.b = mStops[i].mColor.b * alpha;
-    aStops[i].color.a = alpha;
+    aStops[i].color.r = mStops[i].mColor.r;
+    aStops[i].color.g = mStops[i].mColor.g;
+    aStops[i].color.b = mStops[i].mColor.b;
+    aStops[i].color.a = mStops[i].mColor.a * aOpacity;
     aStops[i].offset = mStops[i].mPosition;
   }
 
@@ -1027,19 +1023,20 @@ nsCSSGradientRenderer::BuildWebRenderParameters(float aOpacity,
 
 void
 nsCSSGradientRenderer::BuildWebRenderDisplayItems(wr::DisplayListBuilder& aBuilder,
-                                                  layers::WebRenderDisplayItemLayer* aLayer,
+                                                  const layers::StackingContextHelper& aSc,
                                                   const nsRect& aDest,
                                                   const nsRect& aFillArea,
                                                   const nsSize& aRepeatSize,
                                                   const CSSIntRect& aSrc,
+                                                  bool aIsBackfaceVisible,
                                                   float aOpacity)
 {
   if (aDest.IsEmpty() || aFillArea.IsEmpty()) {
     return;
   }
 
-  WrGradientExtendMode extendMode;
-  nsTArray<WrGradientStop> stops;
+  wr::ExtendMode extendMode;
+  nsTArray<wr::GradientStop> stops;
   LayoutDevicePoint lineStart;
   LayoutDevicePoint lineEnd;
   LayoutDeviceSize gradientRadius;
@@ -1047,9 +1044,12 @@ nsCSSGradientRenderer::BuildWebRenderDisplayItems(wr::DisplayListBuilder& aBuild
 
   nscoord appUnitsPerDevPixel = mPresContext->AppUnitsPerDevPixel();
 
+  nsPoint firstTile = nsPoint(FindTileStart(aFillArea.x, aDest.x, aRepeatSize.width),
+                              FindTileStart(aFillArea.y, aDest.y, aRepeatSize.height));
+
   // Translate the parameters into device coordinates
   LayoutDeviceRect clipBounds = LayoutDevicePixel::FromAppUnits(aFillArea, appUnitsPerDevPixel);
-  LayoutDeviceRect firstTileBounds = LayoutDevicePixel::FromAppUnits(aDest, appUnitsPerDevPixel);
+  LayoutDeviceRect firstTileBounds = LayoutDevicePixel::FromAppUnits(nsRect(firstTile, aDest.Size()), appUnitsPerDevPixel);
   LayoutDeviceSize tileRepeat = LayoutDevicePixel::FromAppUnits(aRepeatSize, appUnitsPerDevPixel);
 
   // Calculate the bounds of the gradient display item, which starts at the first
@@ -1062,9 +1062,8 @@ nsCSSGradientRenderer::BuildWebRenderDisplayItems(wr::DisplayListBuilder& aBuild
   LayoutDeviceSize tileSpacing = tileRepeat - firstTileBounds.Size();
 
   // Make the rects relative to the parent stacking context
-  clipBounds = LayoutDeviceRect::FromUnknownRect(aLayer->RelativeToParent(clipBounds.ToUnknownRect()));
-  firstTileBounds = LayoutDeviceRect::FromUnknownRect(aLayer->RelativeToParent(firstTileBounds.ToUnknownRect()));
-  gradientBounds = LayoutDeviceRect::FromUnknownRect(aLayer->RelativeToParent(gradientBounds.ToUnknownRect()));
+  wr::LayoutRect wrClipBounds = aSc.ToRelativeLayoutRect(clipBounds);
+  wr::LayoutRect wrGradientBounds = aSc.ToRelativeLayoutRect(gradientBounds);
 
   // srcTransform is used for scaling the gradient to match aSrc
   LayoutDeviceRect srcTransform = LayoutDeviceRect(mPresContext->CSSPixelsToAppUnits(aSrc.x),
@@ -1080,27 +1079,29 @@ nsCSSGradientRenderer::BuildWebRenderDisplayItems(wr::DisplayListBuilder& aBuild
     lineEnd.y = (lineEnd.y - srcTransform.y) * srcTransform.height;
 
     aBuilder.PushLinearGradient(
-      mozilla::wr::ToWrRect(gradientBounds),
-      aBuilder.BuildClipRegion(mozilla::wr::ToWrRect(clipBounds)),
-      mozilla::wr::ToWrPoint(lineStart),
-      mozilla::wr::ToWrPoint(lineEnd),
+      wrGradientBounds,
+      wrClipBounds,
+      aIsBackfaceVisible,
+      mozilla::wr::ToLayoutPoint(lineStart),
+      mozilla::wr::ToLayoutPoint(lineEnd),
       stops,
       extendMode,
-      mozilla::wr::ToWrSize(firstTileBounds.Size()),
-      mozilla::wr::ToWrSize(tileSpacing));
+      mozilla::wr::ToLayoutSize(firstTileBounds.Size()),
+      mozilla::wr::ToLayoutSize(tileSpacing));
   } else {
     gradientRadius.width *= srcTransform.width;
     gradientRadius.height *= srcTransform.height;
 
     aBuilder.PushRadialGradient(
-      mozilla::wr::ToWrRect(gradientBounds),
-      aBuilder.BuildClipRegion(mozilla::wr::ToWrRect(clipBounds)),
-      mozilla::wr::ToWrPoint(lineStart),
-      mozilla::wr::ToWrSize(gradientRadius),
+      wrGradientBounds,
+      wrClipBounds,
+      aIsBackfaceVisible,
+      mozilla::wr::ToLayoutPoint(lineStart),
+      mozilla::wr::ToLayoutSize(gradientRadius),
       stops,
       extendMode,
-      mozilla::wr::ToWrSize(firstTileBounds.Size()),
-      mozilla::wr::ToWrSize(tileSpacing));
+      mozilla::wr::ToLayoutSize(firstTileBounds.Size()),
+      mozilla::wr::ToLayoutSize(tileSpacing));
   }
 }
 

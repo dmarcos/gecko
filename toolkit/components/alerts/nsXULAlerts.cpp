@@ -185,20 +185,6 @@ nsXULAlerts::ShowAlertWithIconURI(nsIAlertNotification* aAlert,
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (mDoNotDisturb) {
-    if (!inPrivateBrowsing) {
-      RefPtr<NotificationTelemetryService> telemetry =
-        NotificationTelemetryService::GetInstance();
-      if (telemetry) {
-        // Record the number of unique senders for XUL alerts. The OS X and
-        // libnotify backends will fire `alertshow` even if "do not disturb"
-        // is enabled. In that case, `NotificationObserver` will record the
-        // sender.
-        nsCOMPtr<nsIPrincipal> principal;
-        if (NS_SUCCEEDED(aAlert->GetPrincipal(getter_AddRefs(principal)))) {
-          Unused << NS_WARN_IF(NS_FAILED(telemetry->RecordSender(principal)));
-        }
-      }
-    }
     if (aAlertListener)
       aAlertListener->Observe(nullptr, "alertfinished", cookie.get());
     return NS_OK;
@@ -249,35 +235,35 @@ nsXULAlerts::ShowAlertWithIconURI(nsIAlertNotification* aAlert,
   NS_ENSURE_TRUE(scriptableImageUrl, NS_ERROR_FAILURE);
 
   scriptableImageUrl->SetData(imageUrl);
-  rv = argsArray->AppendElement(scriptableImageUrl, /*weak =*/ false);
+  rv = argsArray->AppendElement(scriptableImageUrl);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsISupportsString> scriptableAlertTitle (do_CreateInstance(NS_SUPPORTS_STRING_CONTRACTID));
   NS_ENSURE_TRUE(scriptableAlertTitle, NS_ERROR_FAILURE);
 
   scriptableAlertTitle->SetData(title);
-  rv = argsArray->AppendElement(scriptableAlertTitle, /*weak =*/ false);
+  rv = argsArray->AppendElement(scriptableAlertTitle);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsISupportsString> scriptableAlertText (do_CreateInstance(NS_SUPPORTS_STRING_CONTRACTID));
   NS_ENSURE_TRUE(scriptableAlertText, NS_ERROR_FAILURE);
 
   scriptableAlertText->SetData(text);
-  rv = argsArray->AppendElement(scriptableAlertText, /*weak =*/ false);
+  rv = argsArray->AppendElement(scriptableAlertText);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsISupportsPRBool> scriptableIsClickable (do_CreateInstance(NS_SUPPORTS_PRBOOL_CONTRACTID));
   NS_ENSURE_TRUE(scriptableIsClickable, NS_ERROR_FAILURE);
 
   scriptableIsClickable->SetData(textClickable);
-  rv = argsArray->AppendElement(scriptableIsClickable, /*weak =*/ false);
+  rv = argsArray->AppendElement(scriptableIsClickable);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsISupportsString> scriptableAlertCookie (do_CreateInstance(NS_SUPPORTS_STRING_CONTRACTID));
   NS_ENSURE_TRUE(scriptableAlertCookie, NS_ERROR_FAILURE);
 
   scriptableAlertCookie->SetData(cookie);
-  rv = argsArray->AppendElement(scriptableAlertCookie, /*weak =*/ false);
+  rv = argsArray->AppendElement(scriptableAlertCookie);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsISupportsPRInt32> scriptableOrigin (do_CreateInstance(NS_SUPPORTS_PRINT32_CONTRACTID));
@@ -287,28 +273,28 @@ nsXULAlerts::ShowAlertWithIconURI(nsIAlertNotification* aAlert,
     LookAndFeel::GetInt(LookAndFeel::eIntID_AlertNotificationOrigin);
   scriptableOrigin->SetData(origin);
 
-  rv = argsArray->AppendElement(scriptableOrigin, /*weak =*/ false);
+  rv = argsArray->AppendElement(scriptableOrigin);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsISupportsString> scriptableBidi (do_CreateInstance(NS_SUPPORTS_STRING_CONTRACTID));
   NS_ENSURE_TRUE(scriptableBidi, NS_ERROR_FAILURE);
 
   scriptableBidi->SetData(bidi);
-  rv = argsArray->AppendElement(scriptableBidi, /*weak =*/ false);
+  rv = argsArray->AppendElement(scriptableBidi);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsISupportsString> scriptableLang (do_CreateInstance(NS_SUPPORTS_STRING_CONTRACTID));
   NS_ENSURE_TRUE(scriptableLang, NS_ERROR_FAILURE);
 
   scriptableLang->SetData(lang);
-  rv = argsArray->AppendElement(scriptableLang, /*weak =*/ false);
+  rv = argsArray->AppendElement(scriptableLang);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsISupportsPRBool> scriptableRequireInteraction (do_CreateInstance(NS_SUPPORTS_PRBOOL_CONTRACTID));
   NS_ENSURE_TRUE(scriptableRequireInteraction, NS_ERROR_FAILURE);
 
   scriptableRequireInteraction->SetData(requireInteraction);
-  rv = argsArray->AppendElement(scriptableRequireInteraction, /*weak =*/ false);
+  rv = argsArray->AppendElement(scriptableRequireInteraction);
   NS_ENSURE_SUCCESS(rv, rv);
 
   // Alerts with the same name should replace the old alert in the same position.
@@ -319,7 +305,7 @@ nsXULAlerts::ShowAlertWithIconURI(nsIAlertNotification* aAlert,
   mozIDOMWindowProxy* previousAlert = mNamedWindows.GetWeak(name);
   replacedWindow->SetData(previousAlert);
   replacedWindow->SetDataIID(&NS_GET_IID(mozIDOMWindowProxy));
-  rv = argsArray->AppendElement(replacedWindow, /*weak =*/ false);
+  rv = argsArray->AppendElement(replacedWindow);
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (requireInteraction) {
@@ -334,7 +320,7 @@ nsXULAlerts::ShowAlertWithIconURI(nsIAlertNotification* aAlert,
   nsCOMPtr<nsISupports> iSupports(do_QueryInterface(alertObserver));
   ifptr->SetData(iSupports);
   ifptr->SetDataIID(&NS_GET_IID(nsIObserver));
-  rv = argsArray->AppendElement(ifptr, /*weak =*/ false);
+  rv = argsArray->AppendElement(ifptr);
   NS_ENSURE_SUCCESS(rv, rv);
 
   // The source contains the host and port of the site that sent the
@@ -342,7 +328,7 @@ nsXULAlerts::ShowAlertWithIconURI(nsIAlertNotification* aAlert,
   nsCOMPtr<nsISupportsString> scriptableAlertSource (do_CreateInstance(NS_SUPPORTS_STRING_CONTRACTID));
   NS_ENSURE_TRUE(scriptableAlertSource, NS_ERROR_FAILURE);
   scriptableAlertSource->SetData(source);
-  rv = argsArray->AppendElement(scriptableAlertSource, /*weak =*/ false);
+  rv = argsArray->AppendElement(scriptableAlertSource);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsISupportsCString> scriptableIconURL (do_CreateInstance(NS_SUPPORTS_CSTRING_CONTRACTID));
@@ -353,7 +339,7 @@ nsXULAlerts::ShowAlertWithIconURI(nsIAlertNotification* aAlert,
     NS_ENSURE_SUCCESS(rv, rv);
     scriptableIconURL->SetData(iconURL);
   }
-  rv = argsArray->AppendElement(scriptableIconURL, /*weak =*/ false);
+  rv = argsArray->AppendElement(scriptableIconURL);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<mozIDOMWindowProxy> newWindow;

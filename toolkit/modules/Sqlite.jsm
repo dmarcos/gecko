@@ -11,30 +11,25 @@ this.EXPORTED_SYMBOLS = [
 const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 // The time to wait before considering a transaction stuck and rejecting it.
-const TRANSACTIONS_QUEUE_TIMEOUT_MS = 240000 // 4 minutes
+const TRANSACTIONS_QUEUE_TIMEOUT_MS = 240000; // 4 minutes
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "AsyncShutdown",
-                                  "resource://gre/modules/AsyncShutdown.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
-                                  "resource://gre/modules/Services.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "OS",
-                                  "resource://gre/modules/osfile.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Log",
-                                  "resource://gre/modules/Log.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
-                                  "resource://gre/modules/FileUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Task",
-                                  "resource://gre/modules/Task.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
+  Services: "resource://gre/modules/Services.jsm",
+  OS: "resource://gre/modules/osfile.jsm",
+  Log: "resource://gre/modules/Log.jsm",
+  FileUtils: "resource://gre/modules/FileUtils.jsm",
+  Task: "resource://gre/modules/Task.jsm",
+  PromiseUtils: "resource://gre/modules/PromiseUtils.jsm",
+  console: "resource://gre/modules/Console.jsm",
+});
+
 XPCOMUtils.defineLazyServiceGetter(this, "FinalizationWitnessService",
                                    "@mozilla.org/toolkit/finalizationwitness;1",
                                    "nsIFinalizationWitnessService");
-XPCOMUtils.defineLazyModuleGetter(this, "PromiseUtils",
-                                  "resource://gre/modules/PromiseUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "console",
-                                  "resource://gre/modules/Console.jsm");
 
 // Regular expression used by isInvalidBoundLikeQuery
 var likeSqlRegex = /\bLIKE\b\s(?![@:?])/i;
@@ -90,17 +85,16 @@ function logScriptError(message) {
 }
 
 /**
- * Gets connection identifier from its database file path.
+ * Gets connection identifier from its database file name.
  *
- * @param path
- *        A file string path pointing to a database file.
+ * @param fileName
+ *        A database file string name.
  * @return the connection identifier.
  */
-function getIdentifierByPath(path) {
-  let basename = OS.Path.basename(path);
-  let number = connectionCounters.get(basename) || 0;
-  connectionCounters.set(basename, number + 1);
-  return basename + "#" + number;
+function getIdentifierByFileName(fileName) {
+  let number = connectionCounters.get(fileName) || 0;
+  connectionCounters.set(fileName, number + 1);
+  return fileName + "#" + number;
 }
 
 /**
@@ -155,8 +149,8 @@ XPCOMUtils.defineLazyGetter(this, "Barriers", () => {
    * - waits for all connections to be closed before shutdown.
    */
   AsyncShutdown.profileBeforeChange.addBlocker("Sqlite.jsm shutdown blocker",
-    Task.async(function* () {
-      yield Barriers.shutdown.wait();
+    async function() {
+      await Barriers.shutdown.wait();
       // At this stage, all clients have had a chance to open (and close)
       // their databases. Some previous close operations may still be pending,
       // so we need to wait until they are complete before proceeding.
@@ -165,11 +159,11 @@ XPCOMUtils.defineLazyGetter(this, "Barriers", () => {
       isClosed = true;
 
       // Now, wait until all databases are closed
-      yield Barriers.connections.wait();
+      await Barriers.connections.wait();
 
       // Everything closed, no finalization events to catch
       Services.obs.removeObserver(finalizationObserver, "sqlite-finalization-witness");
-    }),
+    },
 
     function status() {
       if (isClosed) {
@@ -215,7 +209,7 @@ function ConnectionData(connection, identifier, options = {}) {
   this._dbConn = connection;
 
   // This is a unique identifier for the connection, generated through
-  // getIdentifierByPath.  It may be used for logging or as a key in Maps.
+  // getIdentifierByFileName.  It may be used for logging or as a key in Maps.
   this._identifier = identifier;
 
   this._open = true;
@@ -337,37 +331,37 @@ ConnectionData.prototype = Object.freeze({
     // concurrently.
     let loggedDb = Object.create(parent, {
       execute: {
-        value: Task.async(function*(sql, ...rest) {
+        value: async (sql, ...rest) => {
           status.isPending = true;
           status.command = sql;
           try {
-            return (yield this.execute(sql, ...rest));
+            return (await this.execute(sql, ...rest));
           } finally {
             status.isPending = false;
           }
-        }.bind(this))
+        }
       },
       close: {
-        value: Task.async(function*() {
+        value: async () => {
           status.isPending = false;
           status.command = "<close>";
           try {
-            return (yield this.close());
+            return (await this.close());
           } finally {
             status.isPending = false;
           }
-        }.bind(this))
+        }
       },
       executeCached: {
-        value: Task.async(function*(sql, ...rest) {
+        value: async (sql, ...rest) => {
           status.isPending = false;
           status.command = sql;
           try {
-            return (yield this.executeCached(sql, ...rest));
+            return (await this.executeCached(sql, ...rest));
           } finally {
             status.isPending = false;
           }
-        }.bind(this))
+        }
       },
     });
 
@@ -381,13 +375,13 @@ ConnectionData.prototype = Object.freeze({
       fetchState: () => status
     });
 
-    return Task.spawn(function*() {
+    return (async () => {
       try {
-        return (yield promiseResult);
+        return (await promiseResult);
       } finally {
-        this._barrier.client.removeBlocker(key, promiseComplete)
+        this._barrier.client.removeBlocker(key, promiseComplete);
       }
-    }.bind(this));
+    })();
   },
   close() {
     this._closeRequested = true;
@@ -458,7 +452,7 @@ ConnectionData.prototype = Object.freeze({
       // a blocker for Barriers.connections.
       Barriers.connections.client.removeBlocker(this._deferredClose.promise);
       this._deferredClose.resolve();
-    }
+    };
     if (wrappedConnections.has(this._identifier)) {
       wrappedConnections.delete(this._identifier);
       this._dbConn = null;
@@ -560,7 +554,7 @@ ConnectionData.prototype = Object.freeze({
         throw new Error("Transaction canceled due to a closed connection.");
       }
 
-      let transactionPromise = Task.spawn(function* () {
+      let transactionPromise = (async () => {
         // At this point we should never have an in progress transaction, since
         // they are enqueued.
         if (this._hasInProgressTransaction) {
@@ -570,7 +564,7 @@ ConnectionData.prototype = Object.freeze({
         try {
           // We catch errors in statement execution to detect nested transactions.
           try {
-            yield this.execute("BEGIN " + type + " TRANSACTION");
+            await this.execute("BEGIN " + type + " TRANSACTION");
           } catch (ex) {
             // Unfortunately, if we are wrapping an existing connection, a
             // transaction could have been started by a client of the same
@@ -590,7 +584,13 @@ ConnectionData.prototype = Object.freeze({
 
           let result;
           try {
-            result = yield Task.spawn(func);
+            // Keep Task.spawn here to preserve API compat; unfortunately
+            // func was a generator rather than a task here.
+            result = func();
+            if (Object.prototype.toString.call(result) == "[object Generator]")
+              result = await Task.spawn(func); // eslint-disable-line mozilla/no-task
+            else
+              result = await result;
           } catch (ex) {
             // It's possible that the exception has been caused by trying to
             // close the connection in the middle of a transaction.
@@ -601,7 +601,7 @@ ConnectionData.prototype = Object.freeze({
               // If we began a transaction, we must rollback it.
               if (this._hasInProgressTransaction) {
                 try {
-                  yield this.execute("ROLLBACK TRANSACTION");
+                  await this.execute("ROLLBACK TRANSACTION");
                 } catch (inner) {
                   this._log.warn("Could not roll back transaction", inner);
                 }
@@ -620,7 +620,7 @@ ConnectionData.prototype = Object.freeze({
           // If we began a transaction, we must commit it.
           if (this._hasInProgressTransaction) {
             try {
-              yield this.execute("COMMIT TRANSACTION");
+              await this.execute("COMMIT TRANSACTION");
             } catch (ex) {
               this._log.warn("Error committing transaction", ex);
               throw ex;
@@ -631,7 +631,7 @@ ConnectionData.prototype = Object.freeze({
         } finally {
           this._hasInProgressTransaction = false;
         }
-      }.bind(this));
+      })();
 
       // If a transaction yields on a never resolved promise, or is mistakenly
       // nested, it could hang the transactions queue forever.  Thus we timeout
@@ -645,7 +645,7 @@ ConnectionData.prototype = Object.freeze({
     });
     // Atomically update the queue before anyone else has a chance to enqueue
     // further transactions.
-    this._transactionQueue = promise.catch(ex => { console.error(ex) });
+    this._transactionQueue = promise.catch(ex => { console.error(ex); });
 
     // Make sure that we do not shutdown the connection during a transaction.
     this._barrier.client.addBlocker(`Transaction (${this._getOperationId()})`,
@@ -668,6 +668,12 @@ ConnectionData.prototype = Object.freeze({
     this._cachedStatements.clear();
     this._log.debug("Discarded " + count + " cached statements.");
     return count;
+  },
+
+  interrupt() {
+    this._log.info("Trying to interrupt.");
+    this.ensureOpen();
+    this._dbConn.interrupt();
   },
 
   /**
@@ -771,14 +777,11 @@ ConnectionData.prototype = Object.freeze({
           handledRow = true;
 
           try {
-            onRow(row);
-          } catch (e) {
-            if (e instanceof StopIteration) {
+            onRow(row, () => {
               userCancelled = true;
               pending.cancel();
-              break;
-            }
-
+            });
+          } catch (e) {
             self._log.warn("Exception when calling onRow callback", e);
           }
         }
@@ -796,22 +799,11 @@ ConnectionData.prototype = Object.freeze({
 
         switch (reason) {
           case Ci.mozIStorageStatementCallback.REASON_FINISHED:
+          case Ci.mozIStorageStatementCallback.REASON_CANCELED:
             // If there is an onRow handler, we always instead resolve to a
             // boolean indicating whether the onRow handler was called or not.
             let result = onRow ? handledRow : rows;
             deferred.resolve(result);
-            break;
-
-          case Ci.mozIStorageStatementCallback.REASON_CANCELED:
-            // It is not an error if the user explicitly requested cancel via
-            // the onRow handler.
-            if (userCancelled) {
-              let result = onRow ? handledRow : rows;
-              deferred.resolve(result);
-            } else {
-              deferred.reject(new Error("Statement was cancelled."));
-            }
-
             break;
 
           case Ci.mozIStorageStatementCallback.REASON_ERROR:
@@ -930,7 +922,7 @@ function openConnection(options) {
   }
 
   let file = FileUtils.File(path);
-  let identifier = getIdentifierByPath(path);
+  let identifier = getIdentifierByFileName(OS.Path.basename(path));
 
   log.info("Opening database: " + path + " (" + identifier + ")");
 
@@ -1026,7 +1018,7 @@ function cloneStorageConnection(options) {
   }
 
   let path = source.databaseFile.path;
-  let identifier = getIdentifierByPath(path);
+  let identifier = getIdentifierByFileName(OS.Path.basename(path));
 
   log.info("Cloning database: " + path + " (" + identifier + ")");
 
@@ -1079,10 +1071,9 @@ function wrapStorageConnection(options) {
     throw new Error("Sqlite.jsm has been shutdown. Cannot wrap connection to: " + connection.database.path);
   }
 
-  let path = connection.databaseFile.path;
-  let identifier = getIdentifierByPath(path);
+  let identifier = getIdentifierByFileName(connection.databaseFile.leafName);
 
-  log.info("Wrapping database: " + path + " (" + identifier + ")");
+  log.info("Wrapping database: " + identifier);
   return new Promise(resolve => {
     try {
       let conn = connection.QueryInterface(Ci.mozIStorageAsyncConnection);
@@ -1284,14 +1275,14 @@ OpenedConnection.prototype = Object.freeze({
    * handler. Otherwise, the buffering may consume unacceptable amounts of
    * resources.
    *
-   * If a `StopIteration` is thrown during execution of an `onRow` handler,
-   * the execution of the statement is immediately cancelled. Subsequent
-   * rows will not be processed and no more `onRow` invocations will be made.
-   * The promise is resolved immediately.
+   * If the second parameter of an `onRow` handler is called during execution
+   * of the `onRow` handler, the execution of the statement is immediately
+   * cancelled. Subsequent rows will not be processed and no more `onRow`
+   * invocations will be made. The promise is resolved immediately.
    *
-   * If a non-`StopIteration` exception is thrown by the `onRow` handler, the
-   * exception is logged and processing of subsequent rows occurs as if nothing
-   * happened. The promise is still resolved (not rejected).
+   * If an exception is thrown by the `onRow` handler, the exception is logged
+   * and processing of subsequent rows occurs as if nothing happened. The
+   * promise is still resolved (not rejected).
    *
    * The return value is a promise that will be resolved when the statement
    * has completed fully.
@@ -1453,6 +1444,15 @@ OpenedConnection.prototype = Object.freeze({
   discardCachedStatements() {
     return this._connectionData.discardCachedStatements();
   },
+
+  /**
+   * Interrupts pending database operations returning at the first opportunity.
+   * Statement execution will throw an NS_ERROR_ABORT failure.
+   * Can only be used on read-only connections.
+   */
+  interrupt() {
+    this._connectionData.interrupt();
+  },
 });
 
 this.Sqlite = {
@@ -1467,5 +1467,8 @@ this.Sqlite = {
    */
   get shutdown() {
     return Barriers.shutdown.client;
-  }
+  },
+  failTestsOnAutoClose(enabled) {
+    Debugging.failTestsOnAutoClose = enabled;
+  },
 };

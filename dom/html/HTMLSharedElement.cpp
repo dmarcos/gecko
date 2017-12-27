@@ -31,35 +31,9 @@ HTMLSharedElement::~HTMLSharedElement()
 {
 }
 
-NS_IMPL_ADDREF_INHERITED(HTMLSharedElement, Element)
-NS_IMPL_RELEASE_INHERITED(HTMLSharedElement, Element)
-
-// QueryInterface implementation for HTMLSharedElement
-NS_INTERFACE_MAP_BEGIN(HTMLSharedElement)
-  NS_INTERFACE_MAP_ENTRY_IF_TAG(nsIDOMHTMLBaseElement, base)
-  NS_INTERFACE_MAP_ENTRY_IF_TAG(nsIDOMHTMLDirectoryElement, dir)
-  NS_INTERFACE_MAP_ENTRY_IF_TAG(nsIDOMHTMLQuoteElement, q)
-  NS_INTERFACE_MAP_ENTRY_IF_TAG(nsIDOMHTMLQuoteElement, blockquote)
-  NS_INTERFACE_MAP_ENTRY_IF_TAG(nsIDOMHTMLHeadElement, head)
-  NS_INTERFACE_MAP_ENTRY_IF_TAG(nsIDOMHTMLHtmlElement, html)
-NS_INTERFACE_MAP_END_INHERITING(nsGenericHTMLElement)
-
-
 NS_IMPL_ELEMENT_CLONE(HTMLSharedElement)
 
-// nsIDOMHTMLQuoteElement
-NS_IMPL_URI_ATTR(HTMLSharedElement, Cite, cite)
-
-// nsIDOMHTMLHeadElement
-// Empty
-
-// nsIDOMHTMLHtmlElement
-NS_IMPL_STRING_ATTR(HTMLSharedElement, Version, version)
-
-// nsIDOMHTMLBaseElement
-NS_IMPL_STRING_ATTR(HTMLSharedElement, Target, target)
-
-NS_IMETHODIMP
+void
 HTMLSharedElement::GetHref(nsAString& aValue)
 {
   MOZ_ASSERT(mNodeInfo->Equals(nsGkAtoms::base),
@@ -74,27 +48,19 @@ HTMLSharedElement::GetHref(nsAString& aValue)
 
   if (!uri) {
     aValue = href;
-    return NS_OK;
+    return;
   }
-  
+
   nsAutoCString spec;
   uri->GetSpec(spec);
   CopyUTF8toUTF16(spec, aValue);
-
-  return NS_OK;
 }
-
-NS_IMETHODIMP
-HTMLSharedElement::SetHref(const nsAString& aValue)
-{
-  return SetAttrHelper(nsGkAtoms::href, aValue);
-}
-
 
 bool
 HTMLSharedElement::ParseAttribute(int32_t aNamespaceID,
-                                  nsIAtom* aAttribute,
+                                  nsAtom* aAttribute,
                                   const nsAString& aValue,
+                                  nsIPrincipal* aMaybeScriptedPrincipal,
                                   nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None &&
@@ -108,7 +74,7 @@ HTMLSharedElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                              aResult);
+                                              aMaybeScriptedPrincipal, aResult);
 }
 
 static void
@@ -133,15 +99,15 @@ DirectoryMapAttributesIntoRule(const nsMappedAttributes* aAttributes,
 }
 
 NS_IMETHODIMP_(bool)
-HTMLSharedElement::IsAttributeMapped(const nsIAtom* aAttribute) const
+HTMLSharedElement::IsAttributeMapped(const nsAtom* aAttribute) const
 {
   if (mNodeInfo->Equals(nsGkAtoms::dir)) {
     static const MappedAttributeEntry attributes[] = {
       { &nsGkAtoms::type },
       // { &nsGkAtoms::compact }, // XXX
-      { nullptr} 
+      { nullptr}
     };
-  
+
     static const MappedAttributeEntry* const map[] = {
       attributes,
       sCommonAttributeMap,
@@ -230,52 +196,35 @@ SetBaseTargetUsingFirstBaseWithTarget(nsIDocument* aDocument,
 }
 
 nsresult
-HTMLSharedElement::SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                           nsIAtom* aPrefix, const nsAString& aValue,
-                           bool aNotify)
+HTMLSharedElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
+                                const nsAttrValue* aValue,
+                                const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
+                                bool aNotify)
 {
-  nsresult rv = nsGenericHTMLElement::SetAttr(aNameSpaceID, aName, aPrefix,
-                                              aValue, aNotify);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  // If the href attribute of a <base> tag is changing, we may need to update
-  // the document's base URI, which will cause all the links on the page to be
-  // re-resolved given the new base.  If the target attribute is changing, we
-  // similarly need to change the base target.
-  if (mNodeInfo->Equals(nsGkAtoms::base) &&
-      aNameSpaceID == kNameSpaceID_None &&
-      IsInUncomposedDoc()) {
+  if (aNamespaceID == kNameSpaceID_None) {
     if (aName == nsGkAtoms::href) {
-      SetBaseURIUsingFirstBaseWithHref(GetUncomposedDoc(), this);
+      // If the href attribute of a <base> tag is changing, we may need to
+      // update the document's base URI, which will cause all the links on the
+      // page to be re-resolved given the new base.
+      // If the href is being unset (aValue is null), we will need to find a new
+      // <base>.
+      if (mNodeInfo->Equals(nsGkAtoms::base) && IsInUncomposedDoc()) {
+        SetBaseURIUsingFirstBaseWithHref(GetUncomposedDoc(),
+                                         aValue ? this : nullptr);
+      }
     } else if (aName == nsGkAtoms::target) {
-      SetBaseTargetUsingFirstBaseWithTarget(GetUncomposedDoc(), this);
+      // The target attribute is in pretty much the same situation as the href
+      // attribute, above.
+      if (mNodeInfo->Equals(nsGkAtoms::base) && IsInUncomposedDoc()) {
+        SetBaseTargetUsingFirstBaseWithTarget(GetUncomposedDoc(),
+                                              aValue ? this : nullptr);
+      }
     }
   }
 
-  return NS_OK;
-}
-
-nsresult
-HTMLSharedElement::UnsetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                             bool aNotify)
-{
-  nsresult rv = nsGenericHTMLElement::UnsetAttr(aNameSpaceID, aName, aNotify);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  // If we're the first <base> with an href and our href attribute is being
-  // unset, then we're no longer the first <base> with an href, and we need to
-  // find the new one.  Similar for target.
-  if (mNodeInfo->Equals(nsGkAtoms::base) &&
-      aNameSpaceID == kNameSpaceID_None &&
-      IsInUncomposedDoc()) {
-    if (aName == nsGkAtoms::href) {
-      SetBaseURIUsingFirstBaseWithHref(GetUncomposedDoc(), nullptr);
-    } else if (aName == nsGkAtoms::target) {
-      SetBaseTargetUsingFirstBaseWithTarget(GetUncomposedDoc(), nullptr);
-    }
-  }
-
-  return NS_OK;
+  return nsGenericHTMLElement::AfterSetAttr(aNamespaceID, aName, aValue,
+                                            aOldValue, aSubjectPrincipal, aNotify);
 }
 
 nsresult

@@ -158,21 +158,27 @@ add_task(function* () {
   // page has actually made at least one request.
   let { tab, monitor } = yield initNetMonitor(SIMPLE_URL);
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire, connector } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   tab.linkedBrowser.loadURI(TOP_URL, null, null);
 
   yield waitForNetworkEvents(monitor, REQUEST_COUNT);
 
-  is(gStore.getState().requests.requests.size, REQUEST_COUNT,
+  is(store.getState().requests.requests.size, REQUEST_COUNT,
     "All the page events should be recorded.");
+
+  // Fetch stack-trace data from the backend and wait till
+  // all packets are received.
+  let requests = getSortedRequests(store.getState());
+  yield Promise.all(requests.map(requestItem =>
+    connector.requestData(requestItem.id, "stackTrace")));
 
   // While there is a defined order for requests in each document separately, the requests
   // from different documents may interleave in various ways that change per test run, so
@@ -180,7 +186,7 @@ add_task(function* () {
   let currentTop = 0;
   let currentSub = 0;
   for (let i = 0; i < REQUEST_COUNT; i++) {
-    let requestItem = getSortedRequests(gStore.getState()).get(i);
+    let requestItem = getSortedRequests(store.getState()).get(i);
 
     let itemUrl = requestItem.url;
     let itemCauseUri = requestItem.cause.loadingDocumentUri;
@@ -194,14 +200,14 @@ add_task(function* () {
 
     verifyRequestItemTarget(
       document,
-      getDisplayedRequests(gStore.getState()),
+      getDisplayedRequests(store.getState()),
       requestItem,
       method,
       url,
       { cause: { type: causeType, loadingDocumentUri: causeUri } }
     );
 
-    let { stacktrace } = requestItem.cause;
+    let { stacktrace } = requestItem;
     let stackLen = stacktrace ? stacktrace.length : 0;
 
     if (stack) {

@@ -24,7 +24,7 @@ nsSimpleNestedURI::nsSimpleNestedURI(nsIURI* innerURI)
     NS_ASSERTION(innerURI, "Must have inner URI");
     NS_TryToSetImmutable(innerURI);
 }
-    
+
 // nsISerializable
 
 NS_IMETHODIMP
@@ -107,7 +107,7 @@ NS_IMETHODIMP
 nsSimpleNestedURI::GetInnerURI(nsIURI** uri)
 {
     NS_ENSURE_TRUE(mInnerURI, NS_ERROR_NOT_INITIALIZED);
-    
+
     return NS_EnsureSafeToReturn(mInnerURI, uri);
 }
 
@@ -125,7 +125,7 @@ nsSimpleNestedURI::EqualsInternal(nsIURI* other,
 {
     *result = false;
     NS_ENSURE_TRUE(mInnerURI, NS_ERROR_NOT_INITIALIZED);
-    
+
     if (other) {
         bool correctScheme;
         nsresult rv = other->SchemeIs(mScheme.get(), &correctScheme);
@@ -153,7 +153,7 @@ nsSimpleNestedURI::StartClone(nsSimpleURI::RefHandlingEnum refHandlingMode,
                               const nsACString& newRef)
 {
     NS_ENSURE_TRUE(mInnerURI, nullptr);
-    
+
     nsCOMPtr<nsIURI> innerClone;
     nsresult rv;
     if (refHandlingMode == eHonorRef) {
@@ -177,12 +177,26 @@ nsSimpleNestedURI::StartClone(nsSimpleURI::RefHandlingEnum refHandlingMode,
 
 // nsIClassInfo overrides
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsSimpleNestedURI::GetClassIDNoAlloc(nsCID *aClassIDNoAlloc)
 {
     static NS_DEFINE_CID(kSimpleNestedURICID, NS_SIMPLENESTEDURI_CID);
 
     *aClassIDNoAlloc = kSimpleNestedURICID;
+    return NS_OK;
+}
+
+NS_IMPL_ISUPPORTS(nsSimpleNestedURI::Mutator, nsIURISetters, nsIURIMutator)
+
+NS_IMETHODIMP
+nsSimpleNestedURI::Mutate(nsIURIMutator** aMutator)
+{
+    RefPtr<nsSimpleNestedURI::Mutator> mutator = new nsSimpleNestedURI::Mutator();
+    nsresult rv = mutator->InitFromURI(this);
+    if (NS_FAILED(rv)) {
+        return rv;
+    }
+    mutator.forget(aMutator);
     return NS_OK;
 }
 

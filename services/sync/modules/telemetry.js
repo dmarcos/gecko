@@ -8,21 +8,28 @@ const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 this.EXPORTED_SYMBOLS = ["SyncTelemetry"];
 
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://services-sync/browserid_identity.js");
 Cu.import("resource://services-sync/main.js");
 Cu.import("resource://services-sync/status.js");
 Cu.import("resource://services-sync/util.js");
+Cu.import("resource://services-sync/resource.js");
 Cu.import("resource://services-common/observers.js");
 Cu.import("resource://services-common/async.js");
-Cu.import("resource://gre/modules/Log.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/osfile.jsm", this);
 
 let constants = {};
 Cu.import("resource://services-sync/constants.js", constants);
 
 XPCOMUtils.defineLazyModuleGetter(this, "TelemetryController",
                               "resource://gre/modules/TelemetryController.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "TelemetryUtils",
+                                  "resource://gre/modules/TelemetryUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "TelemetryEnvironment",
+                                  "resource://gre/modules/TelemetryEnvironment.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "OS",
+                                  "resource://gre/modules/osfile.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "Telemetry",
                                    "@mozilla.org/base/telemetry;1",
@@ -53,7 +60,8 @@ const EMPTY_UID = "0".repeat(32);
 
 // The set of engines we record telemetry for - any other engines are ignored.
 const ENGINES = new Set(["addons", "bookmarks", "clients", "forms", "history",
-                         "passwords", "prefs", "tabs", "extension-storage"]);
+                         "passwords", "prefs", "tabs", "extension-storage",
+                         "addresses", "creditcards"]);
 
 // A regex we can use to replace the profile dir in error messages. We use a
 // regexp so we can simply replace all case-insensitive occurences.
@@ -210,7 +218,7 @@ class EngineRecord {
 }
 
 class TelemetryRecord {
-  constructor(allowedEngines) {
+  constructor(allowedEngines, why) {
     this.allowedEngines = allowedEngines;
     // Our failure reason. This property only exists in the generated ping if an
     // error actually occurred.
@@ -219,6 +227,7 @@ class TelemetryRecord {
     this.when = Date.now();
     this.startTime = tryGetMonotonicTimestamp();
     this.took = 0; // will be set later.
+    this.why = why;
 
     // All engines that have finished (ie, does not include the "current" one)
     // We omit this from the ping if it's empty.
@@ -235,6 +244,9 @@ class TelemetryRecord {
       status: this.status,
       devices: this.devices,
     };
+    if (this.why) {
+      result.why = this.why;
+    }
     let engines = [];
     for (let engine of this.engines) {
       engines.push(engine.toJSON());
@@ -397,9 +409,26 @@ class TelemetryRecord {
   }
 }
 
+function cleanErrorMessage(error) {
+  // There's a chance the profiledir is in the error string which is PII we
+  // want to avoid including in the ping.
+  error = error.replace(reProfileDir, "[profileDir]");
+  // MSG_INVALID_URL from /dom/bindings/Errors.msg -- no way to access this
+  // directly from JS.
+  if (error.endsWith("is not a valid URL.")) {
+    error = "<URL> is not a valid URL.";
+  }
+  // Try to filter things that look somewhat like a URL (in that they contain a
+  // colon in the middle of non-whitespace), in case anything else is including
+  // these in error messages. Note that JSON.stringified stuff comes through
+  // here, so we explicitly ignore double-quotes as well.
+  error = error.replace(/[^\s"]+:[^\s"]+/g, "<URL>");
+  return error;
+}
+
 class SyncTelemetryImpl {
   constructor(allowedEngines) {
-    log.level = Log.Level[Svc.Prefs.get("log.logger.telemetry", "Trace")];
+    log.manageLevelFromPref("services.sync.log.logger.telemetry");
     // This is accessible so we can enable custom engines during tests.
     this.allowedEngines = allowedEngines;
     this.current = null;
@@ -414,16 +443,21 @@ class SyncTelemetryImpl {
     this.lastSubmissionTime = Telemetry.msSinceProcessStart();
     this.lastUID = EMPTY_UID;
     this.lastDeviceID = undefined;
+    let sessionStartDate = Services.startup.getStartupInfo().main;
+    this.sessionStartDate = TelemetryUtils.toLocalTimeISOString(
+      TelemetryUtils.truncateToHours(sessionStartDate));
   }
 
   getPingJSON(reason) {
     return {
+      os: TelemetryEnvironment.currentEnvironment.system.os,
       why: reason,
       discarded: this.discarded || undefined,
       version: PING_FORMAT_VERSION,
       syncs: this.payloads.slice(),
       uid: this.lastUID,
       deviceID: this.lastDeviceID,
+      sessionStartDate: this.sessionStartDate,
       events: this.events.length == 0 ? undefined : this.events,
     };
   }
@@ -458,22 +492,24 @@ class SyncTelemetryImpl {
     }
     // We still call submit() with possibly illegal payloads so that tests can
     // know that the ping was built. We don't end up submitting them, however.
-    if (record.syncs.length) {
-      log.trace(`submitting ${record.syncs.length} sync record(s) to telemetry`);
+    let numEvents = record.events ? record.events.length : 0;
+    if (record.syncs.length || numEvents) {
+      log.trace(`submitting ${record.syncs.length} sync record(s) and ` +
+                `${numEvents} event(s) to telemetry`);
       TelemetryController.submitExternalPing("sync", record);
       return true;
     }
     return false;
   }
 
-
-  onSyncStarted() {
+  onSyncStarted(data) {
+    const why = data && JSON.parse(data).why;
     if (this.current) {
       log.warn("Observed weave:service:sync:start, but we're already recording a sync!");
       // Just discard the old record, consistent with our handling of engines, above.
       this.current = null;
     }
-    this.current = new TelemetryRecord(this.allowedEngines);
+    this.current = new TelemetryRecord(this.allowedEngines, why);
   }
 
   _checkCurrent(topic) {
@@ -544,6 +580,9 @@ class SyncTelemetryImpl {
     log.debug("recording event", eventDetails);
 
     let { object, method, value, extra } = eventDetails;
+    if (extra && Resource.serverTime && !extra.serverTime) {
+      extra.serverTime = String(Resource.serverTime);
+    }
     let category = "sync";
     let ts = Math.floor(tryGetMonotonicTimestamp());
 
@@ -556,9 +595,9 @@ class SyncTelemetryImpl {
         event.push(extra);
       }
     } else if (extra) {
-        event.push(null); // a null for the empty value.
-        event.push(extra);
-      }
+      event.push(null); // a null for the empty value.
+      event.push(extra);
+    }
     this.events.push(event);
   }
 
@@ -572,7 +611,7 @@ class SyncTelemetryImpl {
 
       /* sync itself state changes */
       case "weave:service:sync:start":
-        this.onSyncStarted();
+        this.onSyncStarted(data);
         break;
 
       case "weave:service:sync:finish":
@@ -645,6 +684,12 @@ class SyncTelemetryImpl {
   // happen (for example, when including an error in the |extra| field of
   // event telemetry)
   transformError(error) {
+    // Certain parts of sync will use this pattern as a way to communicate to
+    // processIncoming to abort the processing. However, there's no guarantee
+    // this can only happen then.
+    if (typeof error == "object" && error.code && error.cause) {
+      error = error.cause;
+    }
     if (Async.isShutdownException(error)) {
       return { name: "shutdownerror" };
     }
@@ -654,9 +699,7 @@ class SyncTelemetryImpl {
         // This is hacky, but I can't imagine that it's not also accurate.
         return { name: "othererror", error };
       }
-      // There's a chance the profiledir is in the error string which is PII we
-      // want to avoid including in the ping.
-      error = error.replace(reProfileDir, "[profileDir]");
+      error = cleanErrorMessage(error);
       return { name: "unexpectederror", error };
     }
 
@@ -666,10 +709,6 @@ class SyncTelemetryImpl {
 
     if (error instanceof AuthenticationError) {
       return { name: "autherror", from: error.source };
-    }
-
-    if (error instanceof Ci.mozIStorageError) {
-      return { name: "sqlerror", code: error.result };
     }
 
     let httpCode = error.status ||
@@ -683,14 +722,26 @@ class SyncTelemetryImpl {
     if (error.result) {
       return { name: "nserror", code: error.result };
     }
-
+    // It's probably an Error object, but it also could be some
+    // other object that may or may not override toString to do
+    // something useful.
+    let msg = String(error);
+    if (msg.startsWith("[object")) {
+      // Nothing useful in the default, check for a string "message" property.
+      if (typeof error.message == "string") {
+        msg = String(error.message);
+      } else {
+        // Hopefully it won't come to this...
+        msg = JSON.stringify(error);
+      }
+    }
     return {
       name: "unexpectederror",
-      // as above, remove the profile dir value.
-      error: String(error).replace(reProfileDir, "[profileDir]")
-    }
+      error: cleanErrorMessage(msg)
+    };
   }
 
 }
 
+/* global SyncTelemetry */
 this.SyncTelemetry = new SyncTelemetryImpl(ENGINES);

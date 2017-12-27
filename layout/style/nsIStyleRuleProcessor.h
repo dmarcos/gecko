@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -37,8 +38,8 @@ class nsPresContext;
 
 /* The style rule processor interface is a mechanism to separate the matching
  * of style rules from style sheet instances.
- * Simple style sheets can and will act as their own processor. 
- * Sheets where rule ordering interlaces between multiple sheets, will need to 
+ * Simple style sheets can and will act as their own processor.
+ * Sheets where rule ordering interlaces between multiple sheets, will need to
  * share a single rule processor between them (CSS sheets do this for cascading order)
  *
  * @see nsIStyleRule (for significantly more detailed comments)

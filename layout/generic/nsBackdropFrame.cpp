@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim:cindent:ts=2:et:sw=2:
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,12 +13,6 @@
 using namespace mozilla;
 
 NS_IMPL_FRAMEARENA_HELPERS(nsBackdropFrame)
-
-/* virtual */ nsIAtom*
-nsBackdropFrame::GetType() const
-{
-  return nsGkAtoms::backdropFrame;
-}
 
 #ifdef DEBUG_FRAME_DUMP
 nsresult
@@ -39,7 +33,6 @@ nsBackdropFrame::GetParentStyleContext(nsIFrame** aProviderFrame) const
 
 /* virtual */ void
 nsBackdropFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
-                                  const nsRect& aDirtyRect,
                                   const nsDisplayListSet& aLists)
 {
   DO_GLOBAL_REFLOW_COUNT_DSP("nsBackdropFrame");
@@ -56,7 +49,7 @@ nsBackdropFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
 }
 
 /* virtual */ LogicalSize
-nsBackdropFrame::ComputeAutoSize(nsRenderingContext* aRenderingContext,
+nsBackdropFrame::ComputeAutoSize(gfxContext*         aRenderingContext,
                                  WritingMode         aWM,
                                  const LogicalSize&  aCBSize,
                                  nscoord             aAvailableISize,
@@ -85,6 +78,7 @@ nsBackdropFrame::Reflow(nsPresContext* aPresContext,
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsBackdropFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
+  MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
 
   // Note that this frame is a child of the viewport frame.
   WritingMode wm = aReflowInput.GetWritingMode();
@@ -92,5 +86,4 @@ nsBackdropFrame::Reflow(nsPresContext* aPresContext,
   nscoord isize = aReflowInput.ComputedISize() + borderPadding.IStartEnd(wm);
   nscoord bsize = aReflowInput.ComputedBSize() + borderPadding.BStartEnd(wm);
   aDesiredSize.SetSize(wm, LogicalSize(wm, isize, bsize));
-  aStatus.Reset();
 }

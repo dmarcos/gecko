@@ -20,8 +20,13 @@
 #include "nsString.h"
 #include "nsWrapperCache.h"
 
-class nsIAtom;
+class nsAtom;
 class nsIDocument;
+namespace mozilla {
+namespace dom {
+class DocGroup;
+} // namespace dom
+} // namespace mozilla
 
 /**
  * Structure used as a key for caching Attrs in nsDOMAttributeMap's mAttributeCache.
@@ -40,7 +45,7 @@ public:
    */
   void* mLocalName;
 
-  nsAttrKey(int32_t aNs, nsIAtom* aName)
+  nsAttrKey(int32_t aNs, nsAtom* aName)
     : mNamespaceID(aNs), mLocalName(aName) {}
 
   nsAttrKey(const nsAttrKey& aAttr)
@@ -87,6 +92,7 @@ class nsDOMAttributeMap final : public nsIDOMMozNamedAttrMap
 {
 public:
   typedef mozilla::dom::Attr Attr;
+  typedef mozilla::dom::DocGroup DocGroup;
   typedef mozilla::dom::Element Element;
   typedef mozilla::ErrorResult ErrorResult;
 
@@ -115,7 +121,7 @@ public:
    * Drop an attribute from the map's cache (does not remove the attribute
    * from the node!)
    */
-  void DropAttribute(int32_t aNamespaceID, nsIAtom* aLocalName);
+  void DropAttribute(int32_t aNamespaceID, nsAtom* aLocalName);
 
   /**
    * Returns the number of attribute nodes currently in the map.
@@ -135,6 +141,7 @@ public:
     return mContent;
   }
   virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
+  DocGroup* GetDocGroup() const;
 
   // WebIDL
   Attr* GetNamedItem(const nsAString& aAttrName);
@@ -143,7 +150,7 @@ public:
   RemoveNamedItem(mozilla::dom::NodeInfo* aNodeInfo, ErrorResult& aError);
   already_AddRefed<Attr>
   RemoveNamedItem(const nsAString& aName, ErrorResult& aError);
- 
+
   Attr* Item(uint32_t aIndex);
   Attr* IndexedGetter(uint32_t aIndex, bool& aFound);
   uint32_t Length() const;

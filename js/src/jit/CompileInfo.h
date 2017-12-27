@@ -197,7 +197,7 @@ enum AnalysisMode {
 class CompileInfo
 {
   public:
-    CompileInfo(JSScript* script, JSFunction* fun, jsbytecode* osrPc,
+    CompileInfo(CompileRuntime* runtime, JSScript* script, JSFunction* fun, jsbytecode* osrPc,
                 AnalysisMode analysisMode, bool scriptNeedsArgsObj,
                 InlineScriptTree* inlineScriptTree)
       : script_(script), fun_(fun), osrPc_(osrPc),
@@ -221,7 +221,12 @@ class CompileInfo
                    + (fun ? 1 : 0);                         /* this */
         nargs_ = fun ? fun->nargs() : 0;
         nlocals_ = script->nfixed();
-        nstack_ = Max<unsigned>(script->nslots() - script->nfixed(), MinJITStackSize);
+
+        // An extra slot is needed for global scopes because INITGLEXICAL (stack
+        // depth 1) is compiled as a SETPROP (stack depth 2) on the global lexical
+        // scope.
+        uint32_t extra = script->isGlobalCode() ? 1 : 0;
+        nstack_ = Max<unsigned>(script->nslots() - script->nfixed(), MinJITStackSize) + extra;
         nslots_ = nimplicit_ + nargs_ + nlocals_ + nstack_;
 
         // For derived class constructors, find and cache the frame slot for
@@ -229,7 +234,6 @@ class CompileInfo
         // observable. See isObservableFrameSlot.
         if (script->isDerivedClassConstructor()) {
             MOZ_ASSERT(script->functionHasThisBinding());
-            CompileRuntime* runtime = GetJitContext()->runtime;
             for (BindingIter bi(script); bi; bi++) {
                 if (bi.name() != runtime->names().dotThis)
                     continue;

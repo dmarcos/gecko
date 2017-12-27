@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -33,10 +33,10 @@ void
 AnimationEffectTiming::SetDelay(double aDelay)
 {
   TimeDuration delay = TimeDuration::FromMilliseconds(aDelay);
-  if (mTiming.mDelay == delay) {
+  if (mTiming.Delay() == delay) {
     return;
   }
-  mTiming.mDelay = delay;
+  mTiming.SetDelay(delay);
 
   PostSpecifiedTimingUpdated(mEffect);
 }
@@ -45,10 +45,10 @@ void
 AnimationEffectTiming::SetEndDelay(double aEndDelay)
 {
   TimeDuration endDelay = TimeDuration::FromMilliseconds(aEndDelay);
-  if (mTiming.mEndDelay == endDelay) {
+  if (mTiming.EndDelay() == endDelay) {
     return;
   }
-  mTiming.mEndDelay = endDelay;
+  mTiming.SetEndDelay(endDelay);
 
   PostSpecifiedTimingUpdated(mEffect);
 }
@@ -56,10 +56,10 @@ AnimationEffectTiming::SetEndDelay(double aEndDelay)
 void
 AnimationEffectTiming::SetFill(const FillMode& aFill)
 {
-  if (mTiming.mFill == aFill) {
+  if (mTiming.Fill() == aFill) {
     return;
   }
-  mTiming.mFill = aFill;
+  mTiming.SetFill(aFill);
 
   PostSpecifiedTimingUpdated(mEffect);
 }
@@ -68,7 +68,7 @@ void
 AnimationEffectTiming::SetIterationStart(double aIterationStart,
                                          ErrorResult& aRv)
 {
-  if (mTiming.mIterationStart == aIterationStart) {
+  if (mTiming.IterationStart() == aIterationStart) {
     return;
   }
 
@@ -77,7 +77,7 @@ AnimationEffectTiming::SetIterationStart(double aIterationStart,
     return;
   }
 
-  mTiming.mIterationStart = aIterationStart;
+  mTiming.SetIterationStart(aIterationStart);
 
   PostSpecifiedTimingUpdated(mEffect);
 }
@@ -85,7 +85,7 @@ AnimationEffectTiming::SetIterationStart(double aIterationStart,
 void
 AnimationEffectTiming::SetIterations(double aIterations, ErrorResult& aRv)
 {
-  if (mTiming.mIterations == aIterations) {
+  if (mTiming.Iterations() == aIterations) {
     return;
   }
 
@@ -94,7 +94,7 @@ AnimationEffectTiming::SetIterations(double aIterations, ErrorResult& aRv)
     return;
   }
 
-  mTiming.mIterations = aIterations;
+  mTiming.SetIterations(aIterations);
 
   PostSpecifiedTimingUpdated(mEffect);
 }
@@ -109,11 +109,11 @@ AnimationEffectTiming::SetDuration(const UnrestrictedDoubleOrString& aDuration,
     return;
   }
 
-  if (mTiming.mDuration == newDuration) {
+  if (mTiming.Duration() == newDuration) {
     return;
   }
 
-  mTiming.mDuration = newDuration;
+  mTiming.SetDuration(Move(newDuration));
 
   PostSpecifiedTimingUpdated(mEffect);
 }
@@ -121,11 +121,11 @@ AnimationEffectTiming::SetDuration(const UnrestrictedDoubleOrString& aDuration,
 void
 AnimationEffectTiming::SetDirection(const PlaybackDirection& aDirection)
 {
-  if (mTiming.mDirection == aDirection) {
+  if (mTiming.Direction() == aDirection) {
     return;
   }
 
-  mTiming.mDirection = aDirection;
+  mTiming.SetDirection(aDirection);
 
   PostSpecifiedTimingUpdated(mEffect);
 }
@@ -139,11 +139,11 @@ AnimationEffectTiming::SetEasing(const nsAString& aEasing, ErrorResult& aRv)
     return;
   }
 
-  if (mTiming.mFunction == newFunction) {
+  if (mTiming.TimingFunction() == newFunction) {
     return;
   }
 
-  mTiming.mFunction = newFunction;
+  mTiming.SetTimingFunction(Move(newFunction));
 
   PostSpecifiedTimingUpdated(mEffect);
 }

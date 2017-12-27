@@ -10,7 +10,6 @@ Cu.import("resource://services-common/rest.js");
 Cu.import("resource://gre/modules/FxAccountsCommon.js");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "fxAccounts",
                                   "resource://gre/modules/FxAccounts.jsm");
@@ -25,32 +24,38 @@ const CONFIG_PREFS = [
   "identity.sync.tokenserver.uri",
   "identity.fxaccounts.remote.webchannel.uri",
   "identity.fxaccounts.settings.uri",
+  "identity.fxaccounts.settings.devices.uri",
   "identity.fxaccounts.remote.signup.uri",
   "identity.fxaccounts.remote.signin.uri",
+  "identity.fxaccounts.remote.email.uri",
+  "identity.fxaccounts.remote.connectdevice.uri",
   "identity.fxaccounts.remote.force_auth.uri",
 ];
 
 this.FxAccountsConfig = {
 
-  // Returns a promise that resolves with the URI of the remote UI flows.
-  promiseAccountsSignUpURI: Task.async(function*() {
-    yield this.ensureConfigured();
-    let url = Services.urlFormatter.formatURLPref("identity.fxaccounts.remote.signup.uri");
+  async _getPrefURL(prefName) {
+    await this.ensureConfigured();
+    let url = Services.urlFormatter.formatURLPref(prefName);
     if (fxAccounts.requiresHttps() && !/^https:/.test(url)) { // Comment to un-break emacs js-mode highlighting
       throw new Error("Firefox Accounts server must use HTTPS");
     }
     return url;
-  }),
+  },
 
   // Returns a promise that resolves with the URI of the remote UI flows.
-  promiseAccountsSignInURI: Task.async(function*() {
-    yield this.ensureConfigured();
-    let url = Services.urlFormatter.formatURLPref("identity.fxaccounts.remote.signin.uri");
-    if (fxAccounts.requiresHttps() && !/^https:/.test(url)) { // Comment to un-break emacs js-mode highlighting
-      throw new Error("Firefox Accounts server must use HTTPS");
-    }
-    return url;
-  }),
+  promiseAccountsSignUpURI() {
+    return this._getPrefURL("identity.fxaccounts.remote.signup.uri");
+  },
+
+  // Returns a promise that resolves with the URI of the remote UI flows.
+  promiseAccountsSignInURI() {
+    return this._getPrefURL("identity.fxaccounts.remote.signin.uri");
+  },
+
+  promiseAccountsEmailURI() {
+    return this._getPrefURL("identity.fxaccounts.remote.email.uri");
+  },
 
   resetConfigURLs() {
     let autoconfigURL = this.getAutoConfigURL();
@@ -64,22 +69,6 @@ this.FxAccountsConfig = {
     }
     // Reset the webchannel.
     EnsureFxAccountsWebChannel();
-    if (!Services.prefs.prefHasUserValue("webchannel.allowObject.urlWhitelist")) {
-      return;
-    }
-    let whitelistValue = Services.prefs.getCharPref("webchannel.allowObject.urlWhitelist");
-    if (whitelistValue.startsWith(autoconfigURL + " ")) {
-      whitelistValue = whitelistValue.slice(autoconfigURL.length + 1);
-      // Check and see if the value will be the default, and just clear the pref if it would
-      // to avoid it showing up as changed in about:config.
-      let defaultWhitelist = Services.prefs.getDefaultBranch("webchannel.allowObject.").getCharPref("urlWhitelist", "");
-
-      if (defaultWhitelist === whitelistValue) {
-        Services.prefs.clearUserPref("webchannel.allowObject.urlWhitelist");
-      } else {
-        Services.prefs.setCharPref("webchannel.allowObject.urlWhitelist", whitelistValue);
-      }
-    }
   },
 
   getAutoConfigURL() {
@@ -95,25 +84,25 @@ this.FxAccountsConfig = {
     return rootURL;
   },
 
-  ensureConfigured: Task.async(function*() {
-    let isSignedIn = !!(yield fxAccounts.getSignedInUser());
+  async ensureConfigured() {
+    let isSignedIn = !!(await fxAccounts.getSignedInUser());
     if (!isSignedIn) {
-      yield this.fetchConfigURLs();
+      await this.fetchConfigURLs();
     }
-  }),
+  },
 
   // Read expected client configuration from the fxa auth server
   // (from `identity.fxaccounts.autoconfig.uri`/.well-known/fxa-client-configuration)
   // and replace all the relevant our prefs with the information found there.
   // This is only done before sign-in and sign-up, and even then only if the
   // `identity.fxaccounts.autoconfig.uri` preference is set.
-  fetchConfigURLs: Task.async(function*() {
+  async fetchConfigURLs() {
     let rootURL = this.getAutoConfigURL();
     if (!rootURL) {
       return;
     }
     let configURL = rootURL + "/.well-known/fxa-client-configuration";
-    let jsonStr = yield new Promise((resolve, reject) => {
+    let jsonStr = await new Promise((resolve, reject) => {
       let request = new RESTRequest(configURL);
       request.setHeader("Accept", "application/json");
       request.get(error => {
@@ -137,7 +126,7 @@ this.FxAccountsConfig = {
     log.debug("Got successful configuration response", jsonStr);
     try {
       // Update the prefs directly specified by the config.
-      let config = JSON.parse(jsonStr)
+      let config = JSON.parse(jsonStr);
       let authServerBase = config.auth_server_base_url;
       if (!authServerBase.endsWith("/v1")) {
         authServerBase += "/v1";
@@ -153,21 +142,19 @@ this.FxAccountsConfig = {
 
       Services.prefs.setCharPref("identity.fxaccounts.remote.webchannel.uri", rootURL);
       Services.prefs.setCharPref("identity.fxaccounts.settings.uri", rootURL + "/settings?service=sync&context=" + contextParam);
+      Services.prefs.setCharPref("identity.fxaccounts.settings.devices.uri", rootURL + "/settings/clients?service=sync&context=" + contextParam);
       Services.prefs.setCharPref("identity.fxaccounts.remote.signup.uri", rootURL + "/signup?service=sync&context=" + contextParam);
       Services.prefs.setCharPref("identity.fxaccounts.remote.signin.uri", rootURL + "/signin?service=sync&context=" + contextParam);
+      Services.prefs.setCharPref("identity.fxaccounts.remote.email.uri", rootURL + "/?service=sync&context=" + contextParam + "&action=email");
+      Services.prefs.setCharPref("identity.fxaccounts.remote.connectdevice.uri", rootURL + "/connect_another_device?service=sync&context=" + contextParam);
       Services.prefs.setCharPref("identity.fxaccounts.remote.force_auth.uri", rootURL + "/force_auth?service=sync&context=" + contextParam);
 
-      let whitelistValue = Services.prefs.getCharPref("webchannel.allowObject.urlWhitelist");
-      if (!whitelistValue.includes(rootURL)) {
-        whitelistValue = `${rootURL} ${whitelistValue}`;
-        Services.prefs.setCharPref("webchannel.allowObject.urlWhitelist", whitelistValue);
-      }
       // Ensure the webchannel is pointed at the correct uri
       EnsureFxAccountsWebChannel();
     } catch (e) {
       log.error("Failed to initialize configuration preferences from autoconfig object", e);
       throw e;
     }
-  }),
+  },
 
 };

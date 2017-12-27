@@ -15,16 +15,18 @@ import android.support.annotation.WorkerThread;
 import android.text.TextUtils;
 
 import android.util.Log;
-import org.mozilla.gecko.AppConstants;
+
 import org.mozilla.gecko.GeckoApp;
 import org.mozilla.gecko.GeckoProfile;
 import org.mozilla.gecko.GeckoSharedPrefs;
 import org.mozilla.gecko.Locales;
+import org.mozilla.gecko.mma.MmaDelegate;
 import org.mozilla.gecko.search.SearchEngine;
 import org.mozilla.gecko.sync.ExtendedJSONObject;
-import org.mozilla.gecko.telemetry.TelemetryPing;
+import org.mozilla.gecko.telemetry.TelemetryOutgoingPing;
 import org.mozilla.gecko.util.DateUtil;
 import org.mozilla.gecko.Experiments;
+import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.StringUtils;
 
 import java.text.DateFormat;
@@ -34,9 +36,9 @@ import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Builds a {@link TelemetryPing} representing a core ping.
+ * Builds a {@link TelemetryOutgoingPing} representing a core ping.
  *
- * See https://gecko.readthedocs.org/en/latest/toolkit/components/telemetry/telemetry/core-ping.html
+ * See https://firefox-source-docs.mozilla.org/toolkit/components/telemetry/telemetry/data/core-ping.html
  * for details on the core ping.
  */
 public class TelemetryCorePingBuilder extends TelemetryPingBuilder {
@@ -46,9 +48,10 @@ public class TelemetryCorePingBuilder extends TelemetryPingBuilder {
     private static final String PREF_SEQ_COUNT = "telemetry-seqCount";
 
     private static final String NAME = "core";
-    private static final int VERSION_VALUE = 8; // For version history, see toolkit/components/telemetry/docs/core-ping.rst
+    private static final int VERSION_VALUE = 9; // For version history, see toolkit/components/telemetry/docs/core-ping.rst
     private static final String OS_VALUE = "Android";
 
+    private static final String DEFAULT_BROWSER = "defaultBrowser";
     private static final String ARCHITECTURE = "arch";
     private static final String CAMPAIGN_ID = "campaignId";
     private static final String CLIENT_ID = "clientId";
@@ -86,7 +89,8 @@ public class TelemetryCorePingBuilder extends TelemetryPingBuilder {
         final Calendar nowCalendar = Calendar.getInstance();
         final DateFormat pingCreationDateFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
 
-        payload.put(ARCHITECTURE, AppConstants.ANDROID_CPU_ARCH);
+        payload.put(DEFAULT_BROWSER, MmaDelegate.isDefaultBrowser(context));
+        payload.put(ARCHITECTURE, HardwareUtils.getRealAbi());
         payload.put(DEVICE, deviceDescriptor);
         payload.put(LOCALE, Locales.getLanguageTag(Locale.getDefault()));
         payload.put(OS_VERSION, Integer.toString(Build.VERSION.SDK_INT)); // A String for cross-platform reasons.

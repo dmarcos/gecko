@@ -8,6 +8,16 @@
 const TEST_URL = "data:text/html,<html><head><title>Test for the " +
                  "highlighter keybindings</title></head><body>" +
                  "<h1>Keybindings!</h1></body></html>"
+
+// Use the new debugger frontend because the old one swallows the netmonitor shortcut:
+// https://bugzilla.mozilla.org/show_bug.cgi?id=1370442#c7
+Services.prefs.setBoolPref("devtools.debugger.new-debugger-frontend", true);
+registerCleanupFunction(function* () {
+  Services.prefs.clearUserPref("devtools.debugger.new-debugger-frontend");
+});
+
+const {gDevToolsBrowser} = require("devtools/client/framework/devtools-browser");
+
 function test()
 {
   waitForExplicitFinish();
@@ -18,7 +28,7 @@ function test()
   let keysetMap = { };
 
   addTab(TEST_URL).then(function () {
-    doc = content.document;
+    doc = gBrowser.contentDocumentAsCPOW;
     node = doc.querySelector("h1");
     waitForFocus(setupKeyBindingsTest);
   });

@@ -1,10 +1,12 @@
-/* -*- Mode: C++; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* vim: set sts=2 ts=8 sw=2 tw=99 et: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "gfxConfig.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/Unused.h"
+#include "mozilla/gfx/GPUParent.h"
 #include "mozilla/gfx/GraphicsMessages.h"
 #include "plstr.h"
 
@@ -143,6 +145,13 @@ gfxConfig::Reenable(Feature aFeature, Fallback aFallback)
 }
 
 /* static */ void
+gfxConfig::Reset(Feature aFeature)
+{
+  FeatureState& state = sConfig->GetState(aFeature);
+  state.Reset();
+}
+
+/* static */ void
 gfxConfig::Inherit(Feature aFeature, FeatureStatus aStatus)
 {
   FeatureState& state = sConfig->GetState(aFeature);
@@ -178,7 +187,23 @@ gfxConfig::UseFallback(Fallback aFallback)
 /* static */ void
 gfxConfig::EnableFallback(Fallback aFallback, const char* aMessage)
 {
-  // Ignore aMessage for now.
+  if (!NS_IsMainThread()) {
+    nsCString message(aMessage);
+    NS_DispatchToMainThread(
+      NS_NewRunnableFunction("gfxConfig::EnableFallback",
+                             [=]() -> void {
+
+        gfxConfig::EnableFallback(aFallback, message.get());
+      }));
+    return;
+  }
+
+  if (XRE_IsGPUProcess()) {
+    nsCString message(aMessage);
+    Unused << GPUParent::GetSingleton()->SendUsedFallback(aFallback, message);
+    return;
+  }
+
   sConfig->EnableFallbackImpl(aFallback, aMessage);
 }
 

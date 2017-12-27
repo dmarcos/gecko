@@ -10,7 +10,7 @@
 #include "nsIObserver.h"
 #include "nsITimer.h"
 #include "nsWeakReference.h"
-#include "nsTArray.h"
+#include "nsTObserverArray.h"
 #include "nsString.h"
 
 namespace mozilla {
@@ -51,15 +51,24 @@ public:
               const nsAString& aOriginAttributesPattern = EmptyString(),
               const nsACString& aOriginScope = EmptyCString());
 
+  void
+  NoteBackgroundThread(nsIEventTarget* aBackgroundThread);
+
 private:
   virtual ~StorageObserver() {}
+
+  nsresult
+  ClearMatchingOrigin(const char16_t* aData,
+                      nsACString& aOriginScope);
 
   static void TestingPrefChanged(const char* aPrefName, void* aClosure);
 
   static StorageObserver* sSelf;
 
+  nsCOMPtr<nsIEventTarget> mBackgroundThread;
+
   // Weak references
-  nsTArray<StorageObserverSink*> mSinks;
+  nsTObserverArray<StorageObserverSink*> mSinks;
   nsCOMPtr<nsITimer> mDBThreadStartDelayTimer;
 };
 

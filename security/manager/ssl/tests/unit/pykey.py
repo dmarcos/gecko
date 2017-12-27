@@ -41,6 +41,13 @@ import mock
 import rsa
 import sys
 
+# "constants" to make it easier for consumers to specify hash algorithms
+HASH_MD5 = 'hash:md5'
+HASH_SHA1 = 'hash:sha1'
+HASH_SHA256 = 'hash:sha256'
+HASH_SHA384 = 'hash:sha384'
+HASH_SHA512 = 'hash:sha512'
+
 def byteStringToHexifiedBitString(string):
     """Takes a string of bytes and returns a hex string representing
     those bytes for use with pyasn1.type.univ.BitString. It must be of
@@ -65,6 +72,25 @@ class UnknownKeySpecificationError(UnknownBaseError):
     def __init__(self, value):
         UnknownBaseError.__init__(self, value)
         self.category = 'key specification'
+
+
+class UnknownHashAlgorithmError(UnknownBaseError):
+    """Helper exception type to handle unknown key specifications."""
+
+    def __init__(self, value):
+        UnknownBaseError.__init__(self, value)
+        self.category = 'hash algorithm'
+
+
+class UnsupportedHashAlgorithmError(Exception):
+    """Helper exception type for unsupported hash algorithms."""
+    def __init__(self, value):
+        super(UnsupportedHashAlgorithmError, self).__init__()
+        self.value = value
+
+    def __str__(self):
+        return 'Unsupported hash algorithm "%s"' % repr(self.value)
+
 
 class RSAPublicKey(univ.Sequence):
     """Helper type for encoding an RSA public key"""
@@ -509,23 +535,25 @@ class RSAKey(object):
 
     def toDER(self):
         privateKeyInfo = PrivateKeyInfo()
-        privateKeyInfo.setComponentByName('version', 0)
+        privateKeyInfo['version'] = 0
         algorithmIdentifier = rfc2459.AlgorithmIdentifier()
-        algorithmIdentifier.setComponentByName('algorithm', rfc2459.rsaEncryption)
-        algorithmIdentifier.setComponentByName('parameters', univ.Null())
-        privateKeyInfo.setComponentByName('privateKeyAlgorithm', algorithmIdentifier)
+        algorithmIdentifier['algorithm'] = rfc2459.rsaEncryption
+        # Directly setting parameters to univ.Null doesn't currently work.
+        nullEncapsulated = encoder.encode(univ.Null())
+        algorithmIdentifier['parameters'] = univ.Any(nullEncapsulated)
+        privateKeyInfo['privateKeyAlgorithm'] = algorithmIdentifier
         rsaPrivateKey = RSAPrivateKey()
-        rsaPrivateKey.setComponentByName('version', 0)
-        rsaPrivateKey.setComponentByName('modulus', self.RSA_N)
-        rsaPrivateKey.setComponentByName('publicExponent', self.RSA_E)
-        rsaPrivateKey.setComponentByName('privateExponent', self.RSA_D)
-        rsaPrivateKey.setComponentByName('prime1', self.RSA_P)
-        rsaPrivateKey.setComponentByName('prime2', self.RSA_Q)
-        rsaPrivateKey.setComponentByName('exponent1', self.RSA_exp1)
-        rsaPrivateKey.setComponentByName('exponent2', self.RSA_exp2)
-        rsaPrivateKey.setComponentByName('coefficient', self.RSA_coef)
+        rsaPrivateKey['version'] = 0
+        rsaPrivateKey['modulus'] = self.RSA_N
+        rsaPrivateKey['publicExponent'] = self.RSA_E
+        rsaPrivateKey['privateExponent'] = self.RSA_D
+        rsaPrivateKey['prime1'] = self.RSA_P
+        rsaPrivateKey['prime2'] = self.RSA_Q
+        rsaPrivateKey['exponent1'] = self.RSA_exp1
+        rsaPrivateKey['exponent2'] = self.RSA_exp2
+        rsaPrivateKey['coefficient'] = self.RSA_coef
         rsaPrivateKeyEncoded = encoder.encode(rsaPrivateKey)
-        privateKeyInfo.setComponentByName('privateKey', univ.OctetString(rsaPrivateKeyEncoded))
+        privateKeyInfo['privateKey'] = univ.OctetString(rsaPrivateKeyEncoded)
         return encoder.encode(privateKeyInfo)
 
     def toPEM(self):
@@ -535,28 +563,43 @@ class RSAKey(object):
         while b64:
             output += '\n' + b64[:64]
             b64 = b64[64:]
-        output += '\n-----END PRIVATE KEY-----'
+        output += '\n-----END PRIVATE KEY-----\n'
         return output
 
     def asSubjectPublicKeyInfo(self):
         """Returns a subject public key info representing
         this key for use by pyasn1."""
         algorithmIdentifier = rfc2459.AlgorithmIdentifier()
-        algorithmIdentifier.setComponentByName('algorithm', rfc2459.rsaEncryption)
-        algorithmIdentifier.setComponentByName('parameters', univ.Null())
+        algorithmIdentifier['algorithm'] = rfc2459.rsaEncryption
+        # Directly setting parameters to univ.Null doesn't currently work.
+        nullEncapsulated = encoder.encode(univ.Null())
+        algorithmIdentifier['parameters'] = univ.Any(nullEncapsulated)
         spki = rfc2459.SubjectPublicKeyInfo()
-        spki.setComponentByName('algorithm', algorithmIdentifier)
+        spki['algorithm'] = algorithmIdentifier
         rsaKey = RSAPublicKey()
-        rsaKey.setComponentByName('N', univ.Integer(self.RSA_N))
-        rsaKey.setComponentByName('E', univ.Integer(self.RSA_E))
+        rsaKey['N'] = univ.Integer(self.RSA_N)
+        rsaKey['E'] = univ.Integer(self.RSA_E)
         subjectPublicKey = univ.BitString(byteStringToHexifiedBitString(encoder.encode(rsaKey)))
-        spki.setComponentByName('subjectPublicKey', subjectPublicKey)
+        spki['subjectPublicKey'] = subjectPublicKey
         return spki
 
-    def sign(self, data, hashAlgorithmName):
+    def sign(self, data, hashAlgorithm):
         """Returns a hexified bit string representing a
         signature by this key over the specified data.
         Intended for use with pyasn1.type.univ.BitString"""
+        hashAlgorithmName = None
+        if hashAlgorithm == HASH_MD5:
+            hashAlgorithmName = "MD5"
+        elif hashAlgorithm == HASH_SHA1:
+            hashAlgorithmName = "SHA-1"
+        elif hashAlgorithm == HASH_SHA256:
+            hashAlgorithmName = "SHA-256"
+        elif hashAlgorithm == HASH_SHA384:
+            hashAlgorithmName = "SHA-384"
+        elif hashAlgorithm == HASH_SHA512:
+            hashAlgorithmName = "SHA-512"
+        else:
+            raise UnknownHashAlgorithmError(hashAlgorithm)
         rsaPrivateKey = rsa.PrivateKey(self.RSA_N, self.RSA_E, self.RSA_D, self.RSA_P, self.RSA_Q)
         signature = rsa.sign(data, rsaPrivateKey, hashAlgorithmName)
         return byteStringToHexifiedBitString(signature)
@@ -645,10 +688,10 @@ class ECCKey(object):
         """Returns a subject public key info representing
         this key for use by pyasn1."""
         algorithmIdentifier = rfc2459.AlgorithmIdentifier()
-        algorithmIdentifier.setComponentByName('algorithm', ecPublicKey)
-        algorithmIdentifier.setComponentByName('parameters', self.keyOID)
+        algorithmIdentifier['algorithm'] = ecPublicKey
+        algorithmIdentifier['parameters'] = self.keyOID
         spki = rfc2459.SubjectPublicKeyInfo()
-        spki.setComponentByName('algorithm', algorithmIdentifier)
+        spki['algorithm'] = algorithmIdentifier
         # We need to extract the point that represents this key.
         # The library encoding of the key is an 8-byte id, followed by 2
         # bytes for the key length in bits, followed by the point on the
@@ -661,29 +704,38 @@ class ECCKey(object):
         hexifiedBitString = "'%s%s%s'H" % ('04', longToEvenLengthHexString(points[0]),
                                            longToEvenLengthHexString(points[1]))
         subjectPublicKey = univ.BitString(hexifiedBitString)
-        spki.setComponentByName('subjectPublicKey', subjectPublicKey)
+        spki['subjectPublicKey'] = subjectPublicKey
         return spki
 
-    def sign(self, data, hashAlgorithmName):
-        """Returns a hexified bit string representing a
-        signature by this key over the specified data.
-        Intended for use with pyasn1.type.univ.BitString"""
+    def signRaw(self, data, hashAlgorithm):
+        """Performs the ECDSA signature algorithm over the given data.
+        The returned value is a string representing the bytes of the
+        resulting point when encoded by left-padding each of (r, s) to
+        the key size and concatenating them.
+        """
         # There is some non-determinism in ECDSA signatures. Work around
         # this by patching ecc.ecdsa.urandom to not be random.
         with mock.patch('ecc.ecdsa.urandom', side_effect=notRandom):
-            # For some reason Key.sign returns an encoded point.
-            # Decode it so we can encode it as a BITSTRING consisting
-            # of a SEQUENCE of two INTEGERs.
-            # Also patch in secp256k1 if applicable.
+            # Patch in secp256k1 if applicable.
             if self.keyOID == secp256k1:
                 with mock.patch('ecc.curves.DOMAINS', {256: secp256k1Params}):
-                    x, y = encoding.dec_point(self.key.sign(data, hashAlgorithmName))
+                    return self.key.sign(data, hashAlgorithm.split(':')[-1])
             else:
-                x, y = encoding.dec_point(self.key.sign(data, hashAlgorithmName))
-            point = ECPoint()
-            point.setComponentByName('x', x)
-            point.setComponentByName('y', y)
-            return byteStringToHexifiedBitString(encoder.encode(point))
+                return self.key.sign(data, hashAlgorithm.split(':')[-1])
+
+    def sign(self, data, hashAlgorithm):
+        """Returns a hexified bit string representing a
+        signature by this key over the specified data.
+        Intended for use with pyasn1.type.univ.BitString"""
+        # ecc.Key.sign returns an encoded point, which is useful in some
+        # situations. However, for signatures on X509 certificates, we
+        # need to decode it so we can encode it as a BITSTRING
+        # consisting of a SEQUENCE of two INTEGERs.
+        x, y = encoding.dec_point(self.signRaw(data, hashAlgorithm))
+        point = ECPoint()
+        point['x'] = x
+        point['y'] = y
+        return byteStringToHexifiedBitString(encoder.encode(point))
 
 
 def keyFromSpecification(specification):
@@ -699,6 +751,7 @@ def keyFromSpecification(specification):
 def main(output, inputPath):
     with open(inputPath) as configStream:
         output.write(keyFromSpecification(configStream.read().strip()).toPEM())
+
 
 # When run as a standalone program, this will read a specification from
 # stdin and output the certificate as PEM to stdout.

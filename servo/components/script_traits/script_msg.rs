@@ -12,17 +12,16 @@ use LoadData;
 use MozBrowserEvent;
 use WorkerGlobalScopeInit;
 use WorkerScriptLoadOrigin;
-use canvas_traits::CanvasMsg;
+use canvas_traits::canvas::CanvasMsg;
 use devtools_traits::{ScriptToDevtoolsControlMsg, WorkerId};
-use euclid::point::Point2D;
-use euclid::size::{Size2D, TypedSize2D};
-use gfx_traits::ScrollRootId;
-use ipc_channel::ipc::IpcSender;
-use msg::constellation_msg::{FrameId, FrameType, PipelineId, TraversalDirection};
+use euclid::{Point2D, Size2D, TypedSize2D};
+use gfx_traits::Epoch;
+use ipc_channel::ipc::{IpcReceiver, IpcSender};
+use msg::constellation_msg::{BrowsingContextId, FrameType, PipelineId, TraversalDirection};
 use msg::constellation_msg::{Key, KeyModifiers, KeyState};
 use net_traits::CoreResourceMsg;
+use net_traits::request::RequestInit;
 use net_traits::storage_thread::StorageType;
-use offscreen_gl_context::{GLContextAttributes, GLLimits};
 use servo_url::ImmutableOrigin;
 use servo_url::ServoUrl;
 use style_traits::CSSPixel;
@@ -34,8 +33,11 @@ use style_traits::viewport::ViewportConstraints;
 pub enum LayoutMsg {
     /// Indicates whether this pipeline is currently running animations.
     ChangeRunningAnimationsState(PipelineId, AnimationState),
-    /// Inform the constellation of the size of the pipeline's viewport.
-    FrameSizes(Vec<(PipelineId, TypedSize2D<f32, CSSPixel>)>),
+    /// Inform the constellation of the size of the iframe's viewport.
+    IFrameSizes(Vec<(BrowsingContextId, TypedSize2D<f32, CSSPixel>)>),
+    /// Requests that the constellation inform the compositor that it needs to record
+    /// the time when the frame with the given ID (epoch) is painted.
+    PendingPaintMetric(PipelineId, Epoch),
     /// Requests that the constellation inform the compositor of the a cursor change.
     SetCursor(Cursor),
     /// Notifies the constellation that the viewport has been constrained in some manner
@@ -67,76 +69,73 @@ pub enum LogEntry {
 /// Messages from the script to the constellation.
 #[derive(Deserialize, Serialize)]
 pub enum ScriptMsg {
+    /// Requests are sent to constellation and fetches are checked manually
+    /// for cross-origin loads
+    InitiateNavigateRequest(RequestInit, /* cancellation_chan */ IpcReceiver<()>),
     /// Broadcast a storage event to every same-origin pipeline.
     /// The strings are key, old value and new value.
-    BroadcastStorageEvent(PipelineId, StorageType, ServoUrl, Option<String>, Option<String>, Option<String>),
+    BroadcastStorageEvent(StorageType, ServoUrl, Option<String>, Option<String>, Option<String>),
     /// Indicates whether this pipeline is currently running animations.
-    ChangeRunningAnimationsState(PipelineId, AnimationState),
+    ChangeRunningAnimationsState(AnimationState),
     /// Requests that a new 2D canvas thread be created. (This is done in the constellation because
     /// 2D canvases may use the GPU and we don't want to give untrusted content access to the GPU.)
     CreateCanvasPaintThread(Size2D<i32>, IpcSender<IpcSender<CanvasMsg>>),
-    /// Requests that a new WebGL thread be created. (This is done in the constellation because
-    /// WebGL uses the GPU and we don't want to give untrusted content access to the GPU.)
-    CreateWebGLPaintThread(Size2D<i32>,
-                           GLContextAttributes,
-                           IpcSender<Result<(IpcSender<CanvasMsg>, GLLimits), String>>),
     /// Notifies the constellation that this frame has received focus.
-    Focus(PipelineId),
+    Focus,
     /// Forward an event that was sent to the parent window.
     ForwardEvent(PipelineId, CompositorEvent),
     /// Requests that the constellation retrieve the current contents of the clipboard
     GetClipboardContents(IpcSender<String>),
-    /// Get the frame id for a given pipeline.
-    GetFrameId(PipelineId, IpcSender<Option<FrameId>>),
+    /// Get the browsing context id for a given pipeline.
+    GetBrowsingContextId(PipelineId, IpcSender<Option<BrowsingContextId>>),
     /// Get the parent info for a given pipeline.
     GetParentInfo(PipelineId, IpcSender<Option<(PipelineId, FrameType)>>),
     /// <head> tag finished parsing
     HeadParsed,
     /// All pending loads are complete, and the `load` event for this pipeline
     /// has been dispatched.
-    LoadComplete(PipelineId),
+    LoadComplete,
     /// A new load has been requested, with an option to replace the current entry once loaded
     /// instead of adding a new entry.
-    LoadUrl(PipelineId, LoadData, bool),
+    LoadUrl(LoadData, bool),
+    /// Abort loading after sending a LoadUrl message.
+    AbortLoadUrl,
     /// Post a message to the currently active window of a given browsing context.
-    PostMessage(FrameId, Option<ImmutableOrigin>, Vec<u8>),
-    /// Dispatch a mozbrowser event to the parent of this pipeline.
-    /// The first PipelineId is for the parent, the second is for the originating pipeline.
-    MozBrowserEvent(PipelineId, PipelineId, MozBrowserEvent),
+    PostMessage(BrowsingContextId, Option<ImmutableOrigin>, Vec<u8>),
+    /// Dispatch a mozbrowser event to the parent of a mozbrowser iframe.
+    MozBrowserEvent(PipelineId, MozBrowserEvent),
     /// HTMLIFrameElement Forward or Back traversal.
-    TraverseHistory(Option<PipelineId>, TraversalDirection),
+    TraverseHistory(TraversalDirection),
     /// Gets the length of the joint session history from the constellation.
-    JointSessionHistoryLength(PipelineId, IpcSender<u32>),
+    JointSessionHistoryLength(IpcSender<u32>),
     /// Favicon detected
     NewFavicon(ServoUrl),
     /// Status message to be displayed in the chrome, eg. a link URL on mouseover.
     NodeStatus(Option<String>),
     /// Notification that this iframe should be removed.
     /// Returns a list of pipelines which were closed.
-    RemoveIFrame(FrameId, IpcSender<Vec<PipelineId>>),
+    RemoveIFrame(BrowsingContextId, IpcSender<Vec<PipelineId>>),
     /// Change pipeline visibility
-    SetVisible(PipelineId, bool),
+    SetVisible(bool),
     /// Notifies constellation that an iframe's visibility has been changed.
-    VisibilityChangeComplete(PipelineId, bool),
+    VisibilityChangeComplete(bool),
     /// A load has been requested in an IFrame.
     ScriptLoadedURLInIFrame(IFrameLoadInfoWithData),
-    /// A load of `about:blank` has been completed in an IFrame.
-    ScriptLoadedAboutBlankInIFrame(IFrameLoadInfo, IpcSender<LayoutControlMsg>),
+    /// A load of the initial `about:blank` has been completed in an IFrame.
+    ScriptNewIFrame(IFrameLoadInfo, IpcSender<LayoutControlMsg>),
     /// Requests that the constellation set the contents of the clipboard
     SetClipboardContents(String),
     /// Mark a new document as active
-    ActivateDocument(PipelineId),
+    ActivateDocument,
     /// Set the document state for a pipeline (used by screenshot / reftests)
-    SetDocumentState(PipelineId, DocumentState),
+    SetDocumentState(DocumentState),
     /// Update the pipeline Url, which can change after redirections.
-    SetFinalUrl(PipelineId, ServoUrl),
+    SetFinalUrl(ServoUrl),
     /// Check if an alert dialog box should be presented
-    Alert(PipelineId, String, IpcSender<bool>),
-    /// Scroll a page in a window
-    ScrollFragmentPoint(PipelineId, ScrollRootId, Point2D<f32>, bool),
+    Alert(String, IpcSender<bool>),
     /// Set title of current page
-    /// https://html.spec.whatwg.org/multipage/#document.title
-    SetTitle(PipelineId, Option<String>),
+    /// <https://html.spec.whatwg.org/multipage/#document.title>
+    SetTitle(Option<String>),
     /// Send a key event
     SendKeyEvent(Option<char>, Key, KeyState, KeyModifiers),
     /// Get Window Informations size and position
@@ -147,10 +146,10 @@ pub enum ScriptMsg {
     ResizeTo(Size2D<u32>),
     /// Script has handled a touch event, and either prevented or allowed default actions.
     TouchEventProcessed(EventResult),
-    /// A log entry, with the top-level frame id and thread name
-    LogEntry(Option<FrameId>, Option<String>, LogEntry),
+    /// A log entry, with the top-level browsing context id and thread name
+    LogEntry(Option<String>, LogEntry),
     /// Notifies the constellation that this pipeline has exited.
-    PipelineExited(PipelineId),
+    PipelineExited,
     /// Send messages from postMessage calls from serviceworker
     /// to constellation for storing in service worker manager
     ForwardDOMMessage(DOMMessage, ServoUrl),
@@ -158,12 +157,16 @@ pub enum ScriptMsg {
     RegisterServiceWorker(ScopeThings, ServoUrl),
     /// Enter or exit fullscreen
     SetFullscreenState(bool),
+    /// Get the screen size (pixel)
+    GetScreenSize(IpcSender<(Size2D<u32>)>),
+    /// Get the available screen size (pixel)
+    GetScreenAvailSize(IpcSender<(Size2D<u32>)>),
     /// Requests that the compositor shut down.
     Exit,
 }
 
 /// Entities required to spawn service workers
-#[derive(Deserialize, Serialize, Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct ScopeThings {
     /// script resource url
     pub script_url: ServoUrl,
@@ -178,7 +181,7 @@ pub struct ScopeThings {
 }
 
 /// Message that gets passed to service worker scope on postMessage
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DOMMessage(pub Vec<u8>);
 
 /// Channels to allow service worker manager to communicate with constellation and resource thread

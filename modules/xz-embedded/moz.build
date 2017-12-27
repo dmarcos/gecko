@@ -19,7 +19,7 @@ UNIFIED_SOURCES += [
     'src/xz_dec_stream.c',
 ]
 
-ALLOW_COMPILER_WARNINGS = True
+AllowCompilerWarnings()
 
 if CONFIG['TARGET_CPU'].startswith('arm'):
     # Accept arm, armv7, etc.
@@ -32,5 +32,8 @@ elif '86' in CONFIG['TARGET_CPU']:
     DEFINES['XZ_DEC_X86'] = 1
 
 DEFINES['XZ_USE_CRC64'] = 1
+
+if CONFIG['OS_ARCH'] == 'WINNT':
+    USE_STATIC_LIBS = True
 
 Library('xz-embedded')

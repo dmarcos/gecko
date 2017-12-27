@@ -15,6 +15,7 @@
 #include "nsAccUtils.h"
 #include "nsCoreUtils.h"
 #include "nsIAccessibleEvent.h"
+#include "nsWindowsHelpers.h"
 #include "nsWinUtils.h"
 #include "mozilla/a11y/ProxyAccessible.h"
 #include "ProxyWrappers.h"
@@ -42,6 +43,7 @@
 #include "nsEventMap.h"
 #include "nsArrayUtils.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/ReverseIterator.h"
 #include "nsIXULRuntime.h"
 #include "mozilla/mscom/AsyncInvoker.h"
 
@@ -81,7 +83,7 @@ AccessibleWrap::AccessibleWrap(nsIContent* aContent, DocAccessible* aDoc) :
 AccessibleWrap::~AccessibleWrap()
 {
   if (mID != kNoID) {
-    sIDGen.ReleaseID(this);
+    sIDGen.ReleaseID(WrapNotNull(this));
   }
 }
 
@@ -117,6 +119,14 @@ AccessibleWrap::QueryInterface(REFIID iid, void** ppv)
 
   *ppv = nullptr;
 
+  if (IID_IClientSecurity == iid) {
+    // Some code might QI(IID_IClientSecurity) to detect whether or not we are
+    // a proxy. Right now that can potentially happen off the main thread, so we
+    // look for this condition immediately so that we don't trigger other code
+    // that might not be thread-safe.
+    return E_NOINTERFACE;
+  }
+
   if (IID_IUnknown == iid)
     *ppv = static_cast<IAccessible*>(this);
   else if (IID_IDispatch == iid || IID_IAccessible == iid)
@@ -133,7 +143,7 @@ AccessibleWrap::QueryInterface(REFIID iid, void** ppv)
     if (IsDefunct() || (!HasOwnContent() && !IsDoc()))
       return E_NOINTERFACE;
 
-    *ppv = static_cast<ISimpleDOMNode*>(new sdnAccessible(GetNode()));
+    *ppv = static_cast<ISimpleDOMNode*>(new sdnAccessible(WrapNotNull(this)));
   }
 
   if (nullptr == *ppv) {
@@ -485,8 +495,12 @@ AccessibleWrap::get_accRole(
 
   if (content->IsElement()) {
     nsAutoString roleString;
-    if (msaaRole != ROLE_SYSTEM_CLIENT &&
-        !content->GetAttr(kNameSpaceID_None, nsGkAtoms::role, roleString)) {
+    // Try the role attribute.
+    content->GetAttr(kNameSpaceID_None, nsGkAtoms::role, roleString);
+
+    if (roleString.IsEmpty()) {
+      // No role attribute (or it is an empty string).
+      // Use the tag name.
       nsIDocument * document = content->GetUncomposedDoc();
       if (!document)
         return E_FAIL;
@@ -832,7 +846,8 @@ AccessibleWrap::accSelect(
       // is happening, so we dispatch TakeFocus from the main thread to
       // guarantee that we are outside any IPC.
       nsCOMPtr<nsIRunnable> runnable =
-        mozilla::NewRunnableMethod(this, &Accessible::TakeFocus);
+        mozilla::NewRunnableMethod("Accessible::TakeFocus",
+                                   this, &Accessible::TakeFocus);
       NS_DispatchToMainThread(runnable, NS_DISPATCH_NORMAL);
       return S_OK;
     }
@@ -1126,6 +1141,35 @@ AccessibleWrap::SetID(uint32_t aID)
   mID = aID;
 }
 
+static bool
+IsHandlerInvalidationNeeded(uint32_t aEvent)
+{
+  // We want to return true for any events that would indicate that something
+  // in the handler cache is out of date.
+  switch (aEvent) {
+    case EVENT_OBJECT_STATECHANGE:
+    case EVENT_OBJECT_LOCATIONCHANGE:
+    case EVENT_OBJECT_NAMECHANGE:
+    case EVENT_OBJECT_DESCRIPTIONCHANGE:
+    case EVENT_OBJECT_VALUECHANGE:
+    case IA2_EVENT_ACTION_CHANGED:
+    case IA2_EVENT_DOCUMENT_LOAD_COMPLETE:
+    case IA2_EVENT_DOCUMENT_LOAD_STOPPED:
+    case IA2_EVENT_DOCUMENT_ATTRIBUTE_CHANGED:
+    case IA2_EVENT_DOCUMENT_CONTENT_CHANGED:
+    case IA2_EVENT_PAGE_CHANGED:
+    case IA2_EVENT_TEXT_ATTRIBUTE_CHANGED:
+    case IA2_EVENT_TEXT_CHANGED:
+    case IA2_EVENT_TEXT_INSERTED:
+    case IA2_EVENT_TEXT_REMOVED:
+    case IA2_EVENT_TEXT_UPDATED:
+    case IA2_EVENT_OBJECT_ATTRIBUTE_CHANGED:
+      return true;
+    default:
+      return false;
+  }
+}
+
 void
 AccessibleWrap::FireWinEvent(Accessible* aTarget, uint32_t aEventType)
 {
@@ -1146,6 +1190,10 @@ AccessibleWrap::FireWinEvent(Accessible* aTarget, uint32_t aEventType)
   HWND hwnd = GetHWNDFor(aTarget);
   if (!hwnd) {
     return;
+  }
+
+  if (IsHandlerInvalidationNeeded(winEvent)) {
+    InvalidateHandlers();
   }
 
   // Fire MSAA event for client area window.
@@ -1388,6 +1436,19 @@ GetProxiedAccessibleInSubtree(const DocAccessibleParent* aDoc,
   return disp.forget();
 }
 
+bool
+AccessibleWrap::IsRootForHWND()
+{
+  if (IsRoot()) {
+    return true;
+  }
+  HWND thisHwnd = GetHWNDFor(this);
+  AccessibleWrap* parent = static_cast<AccessibleWrap*>(Parent());
+  MOZ_ASSERT(parent);
+  HWND parentHwnd = GetHWNDFor(parent);
+  return thisHwnd != parentHwnd;
+}
+
 already_AddRefed<IAccessible>
 AccessibleWrap::GetIAccessibleFor(const VARIANT& aVarChild, bool* aIsDefunct)
 {
@@ -1432,11 +1493,20 @@ AccessibleWrap::GetIAccessibleFor(const VARIANT& aVarChild, bool* aIsDefunct)
   // accessible is part of the chrome process and is part of the xul browser
   // window and the child id points in the content documents. Thus we need to
   // make sure that it is never called on proxies.
-  if (XRE_IsParentProcess() && !IsProxy() && !sIDGen.IsChromeID(varChild.lVal)) {
+  // Bug 1422674: We must only handle remote ids here (< 0), not child indices.
+  // Child indices (> 0) are handled below for both local and remote children.
+  if (XRE_IsParentProcess() && !IsProxy() &&
+      varChild.lVal < 0 && !sIDGen.IsChromeID(varChild.lVal)) {
+    if (!IsRootForHWND()) {
+      // Bug 1422201, 1424657: accChild with a remote id is only valid on the
+      // root accessible for an HWND.
+      // Otherwise, we might return remote accessibles which aren't descendants
+      // of this accessible. This would confuse clients which use accChild to
+      // check whether something is a descendant of a document.
+      return nullptr;
+    }
     return GetRemoteIAccessibleFor(varChild);
   }
-  MOZ_ASSERT(XRE_IsParentProcess() ||
-             sIDGen.IsIDForThisContentProcess(varChild.lVal));
 
   if (varChild.lVal > 0) {
     // Gecko child indices are 0-based in contrast to indices used in MSAA.
@@ -1503,7 +1573,7 @@ AccessibleWrap::GetIAccessibleFor(const VARIANT& aVarChild, bool* aIsDefunct)
 already_AddRefed<IAccessible>
 AccessibleWrap::GetRemoteIAccessibleFor(const VARIANT& aVarChild)
 {
-  DocAccessible* doc = Document();
+  a11y::RootAccessible* root = RootAccessible();
   const nsTArray<DocAccessibleParent*>* remoteDocs =
     DocManager::TopLevelRemoteDocs();
   if (!remoteDocs) {
@@ -1512,8 +1582,10 @@ AccessibleWrap::GetRemoteIAccessibleFor(const VARIANT& aVarChild)
 
   RefPtr<IAccessible> result;
 
-  size_t docCount = remoteDocs->Length();
-  for (size_t i = 0; i < docCount; i++) {
+  // We intentionally leave the call to remoteDocs->Length() inside the loop
+  // condition because it is possible for reentry to occur in the call to
+  // GetProxiedAccessibleInSubtree() such that remoteDocs->Length() is mutated.
+  for (size_t i = 0; i < remoteDocs->Length(); i++) {
     DocAccessibleParent* remoteDoc = remoteDocs->ElementAt(i);
 
     uint32_t remoteDocMsaaId = WrapperFor(remoteDoc)->GetExistingID();
@@ -1526,7 +1598,7 @@ AccessibleWrap::GetRemoteIAccessibleFor(const VARIANT& aVarChild)
       continue;
     }
 
-    if (outerDoc->Document() != doc) {
+    if (outerDoc->RootAccessible() != root) {
       continue;
     }
 
@@ -1548,7 +1620,7 @@ AccessibleWrap::GetRemoteIAccessibleFor(const VARIANT& aVarChild)
 void
 AccessibleWrap::UpdateSystemCaretFor(Accessible* aAccessible)
 {
-  // Move the system caret so that Windows Tablet Edition and tradional ATs with 
+  // Move the system caret so that Windows Tablet Edition and tradional ATs with
   // off-screen model can follow the caret
   ::DestroyCaret();
 
@@ -1558,20 +1630,43 @@ AccessibleWrap::UpdateSystemCaretFor(Accessible* aAccessible)
 
   nsIWidget* widget = nullptr;
   LayoutDeviceIntRect caretRect = text->GetCaretRect(&widget);
-  HWND caretWnd;
-  if (caretRect.IsEmpty() || !(caretWnd = (HWND)widget->GetNativeData(NS_NATIVE_WINDOW))) {
+
+  if (!widget) {
+    return;
+  }
+
+  HWND caretWnd = reinterpret_cast<HWND>(widget->GetNativeData(NS_NATIVE_WINDOW));
+  UpdateSystemCaretFor(caretWnd, caretRect);
+}
+
+/* static */ void
+AccessibleWrap::UpdateSystemCaretFor(ProxyAccessible* aProxy,
+                                     const LayoutDeviceIntRect& aCaretRect)
+{
+  ::DestroyCaret();
+
+  // The HWND should be the real widget HWND, not an emulated HWND.
+  // We get the HWND from the proxy's outer doc to bypass window emulation.
+  Accessible* outerDoc = aProxy->OuterDocOfRemoteBrowser();
+  UpdateSystemCaretFor(GetHWNDFor(outerDoc), aCaretRect);
+}
+
+/* static */ void
+AccessibleWrap::UpdateSystemCaretFor(HWND aCaretWnd,
+                                     const LayoutDeviceIntRect& aCaretRect)
+{
+  if (!aCaretWnd || aCaretRect.IsEmpty()) {
     return;
   }
 
   // Create invisible bitmap for caret, otherwise its appearance interferes
   // with Gecko caret
-  HBITMAP caretBitMap = CreateBitmap(1, caretRect.height, 1, 1, nullptr);
-  if (::CreateCaret(caretWnd, caretBitMap, 1, caretRect.height)) {  // Also destroys the last caret
-    ::ShowCaret(caretWnd);
+  nsAutoBitmap caretBitMap(CreateBitmap(1, aCaretRect.height, 1, 1, nullptr));
+  if (::CreateCaret(aCaretWnd, caretBitMap, 1, aCaretRect.height)) {  // Also destroys the last caret
+    ::ShowCaret(aCaretWnd);
     RECT windowRect;
-    ::GetWindowRect(caretWnd, &windowRect);
-    ::SetCaretPos(caretRect.x - windowRect.left, caretRect.y - windowRect.top);
-    ::DeleteObject(caretBitMap);
+    ::GetWindowRect(aCaretWnd, &windowRect);
+    ::SetCaretPos(aCaretRect.x - windowRect.left, aCaretRect.y - windowRect.top);
   }
 }
 
@@ -1628,6 +1723,38 @@ AccessibleWrap::SetHandlerControl(DWORD aPid, RefPtr<IHandlerControl> aCtrl)
   sHandlerControllers->AppendElement(Move(ctrlData));
 }
 
+/* static */
+void
+AccessibleWrap::InvalidateHandlers()
+{
+  static const HRESULT kErrorServerDied =
+    HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE);
+
+  MOZ_ASSERT(XRE_IsParentProcess());
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (!sHandlerControllers || sHandlerControllers->IsEmpty()) {
+    return;
+  }
+
+  // We iterate in reverse so that we may safely remove defunct elements while
+  // executing the loop.
+  for (auto& controller : Reversed(*sHandlerControllers)) {
+    MOZ_ASSERT(controller.mPid);
+    MOZ_ASSERT(controller.mCtrl);
+
+    ASYNC_INVOKER_FOR(IHandlerControl) invoker(controller.mCtrl,
+                                               Some(controller.mIsProxy));
+
+    HRESULT hr = ASYNC_INVOKE(invoker, Invalidate);
+
+    if (hr == CO_E_OBJNOTCONNECTED || hr == kErrorServerDied) {
+      sHandlerControllers->RemoveElement(controller);
+    } else {
+      NS_WARN_IF(FAILED(hr));
+    }
+  }
+}
 
 bool
 AccessibleWrap::DispatchTextChangeToHandler(bool aIsInsert,
@@ -1685,3 +1812,14 @@ AccessibleWrap::DispatchTextChangeToHandler(bool aIsInsert,
   return SUCCEEDED(hr);
 }
 
+/* static */ void
+AccessibleWrap::AssignChildIDTo(NotNull<sdnAccessible*> aSdnAcc)
+{
+  aSdnAcc->SetUniqueID(sIDGen.GetID());
+}
+
+/* static */ void
+AccessibleWrap::ReleaseChildID(NotNull<sdnAccessible*> aSdnAcc)
+{
+  sIDGen.ReleaseID(aSdnAcc);
+}

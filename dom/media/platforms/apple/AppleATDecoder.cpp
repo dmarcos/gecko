@@ -4,17 +4,19 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "AppleATDecoder.h"
 #include "AppleUtils.h"
 #include "MP4Decoder.h"
-#include "mp4_demuxer/Adts.h"
+#include "Adts.h"
 #include "MediaInfo.h"
-#include "AppleATDecoder.h"
 #include "mozilla/Logging.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/SyncRunnable.h"
 #include "mozilla/UniquePtr.h"
+#include "VideoUtils.h"
 
-#define LOG(...) MOZ_LOG(sPDMLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
+#define LOG(...) DDMOZ_LOG(sPDMLog, mozilla::LogLevel::Debug, __VA_ARGS__)
+#define LOGEX(_this, ...)                                                      \
+  DDMOZ_LOGEX(_this, sPDMLog, mozilla::LogLevel::Debug, __VA_ARGS__)
 #define FourCC2Str(n) ((char[5]){(char)(n >> 24), (char)(n >> 16), (char)(n >> 8), (char)(n), 0})
 
 namespace mozilla {
@@ -56,8 +58,10 @@ RefPtr<MediaDataDecoder::InitPromise>
 AppleATDecoder::Init()
 {
   if (!mFormatID) {
-    NS_ERROR("Non recognised format");
-    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
+    return InitPromise::CreateAndReject(
+      MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                  RESULT_DETAIL("Non recognised format")),
+      __func__);
   }
 
   return InitPromise::CreateAndResolve(TrackType::kAudioTrack, __func__);
@@ -67,13 +71,13 @@ RefPtr<MediaDataDecoder::DecodePromise>
 AppleATDecoder::Decode(MediaRawData* aSample)
 {
   LOG("mp4 input sample %p %lld us %lld pts%s %llu bytes audio", aSample,
-      aSample->mDuration.ToMicroseconds(), aSample->mTime,
+      aSample->mDuration.ToMicroseconds(), aSample->mTime.ToMicroseconds(),
       aSample->mKeyframe ? " keyframe" : "",
       (unsigned long long)aSample->Size());
   RefPtr<AppleATDecoder> self = this;
   RefPtr<MediaRawData> sample = aSample;
-  return InvokeAsync(mTaskQueue, __func__, [self, this, sample] {
-    return ProcessDecode(sample);
+  return InvokeAsync(mTaskQueue, __func__, [self, sample] {
+    return self->ProcessDecode(sample);
   });
 }
 
@@ -120,8 +124,8 @@ RefPtr<ShutdownPromise>
 AppleATDecoder::Shutdown()
 {
   RefPtr<AppleATDecoder> self = this;
-  return InvokeAsync(mTaskQueue, __func__, [self, this]() {
-    ProcessShutdown();
+  return InvokeAsync(mTaskQueue, __func__, [self]() {
+    self->ProcessShutdown();
     return ShutdownPromise::CreateAndResolve(true, __func__);
   });
 }
@@ -270,7 +274,7 @@ AppleATDecoder::DecodeSample(MediaRawData* aSample)
       LOG("Error decoding audio sample: %d\n", static_cast<int>(rv));
       return MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,
                          RESULT_DETAIL("Error decoding audio sample: %d @ %lld",
-                                       static_cast<int>(rv), aSample->mTime));
+                                       static_cast<int>(rv), aSample->mTime.ToMicroseconds()));
     }
 
     if (numFrames) {
@@ -324,7 +328,7 @@ AppleATDecoder::DecodeSample(MediaRawData* aSample)
 
   RefPtr<AudioData> audio = new AudioData(aSample->mOffset,
                                           aSample->mTime,
-                                          duration.ToMicroseconds(),
+                                          duration,
                                           numFrames,
                                           data.Forget(),
                                           channels,
@@ -389,7 +393,7 @@ AppleATDecoder::GetInputAudioDescription(AudioStreamBasicDescription& aDesc,
   if (rv) {
     return NS_OK;
   }
-  LOG("found %" PRIuSIZE " available audio stream(s)",
+  LOG("found %zu available audio stream(s)",
       formatListSize / sizeof(AudioFormatListItem));
   // Get the index number of the first playable format.
   // This index number will be for the highest quality layer the platform
@@ -620,7 +624,7 @@ _MetadataCallback(void* aAppleATDecoder,
   AppleATDecoder* decoder = static_cast<AppleATDecoder*>(aAppleATDecoder);
   MOZ_RELEASE_ASSERT(decoder->mTaskQueue->IsCurrentThreadIn());
 
-  LOG("MetadataCallback receiving: '%s'", FourCC2Str(aProperty));
+  LOGEX(decoder, "MetadataCallback receiving: '%s'", FourCC2Str(aProperty));
   if (aProperty == kAudioFileStreamProperty_MagicCookieData) {
     UInt32 size;
     Boolean writeable;
@@ -629,8 +633,10 @@ _MetadataCallback(void* aAppleATDecoder,
                                                  &size,
                                                  &writeable);
     if (rv) {
-      LOG("Couldn't get property info for '%s' (%s)",
-          FourCC2Str(aProperty), FourCC2Str(rv));
+      LOGEX(decoder,
+            "Couldn't get property info for '%s' (%s)",
+            FourCC2Str(aProperty),
+            FourCC2Str(rv));
       decoder->mFileStreamError = true;
       return;
     }
@@ -638,8 +644,10 @@ _MetadataCallback(void* aAppleATDecoder,
     rv = AudioFileStreamGetProperty(aStream, aProperty,
                                     &size, data.get());
     if (rv) {
-      LOG("Couldn't get property '%s' (%s)",
-          FourCC2Str(aProperty), FourCC2Str(rv));
+      LOGEX(decoder,
+            "Couldn't get property '%s' (%s)",
+            FourCC2Str(aProperty),
+            FourCC2Str(rv));
       decoder->mFileStreamError = true;
       return;
     }
@@ -666,13 +674,12 @@ AppleATDecoder::GetImplicitAACMagicCookie(const MediaRawData* aSample)
   if (!adtssample) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
-  int8_t frequency_index =
-    mp4_demuxer::Adts::GetFrequencyIndex(mConfig.mRate);
+  int8_t frequency_index = Adts::GetFrequencyIndex(mConfig.mRate);
 
-  bool rv = mp4_demuxer::Adts::ConvertSample(mConfig.mChannels,
-                                             frequency_index,
-                                             mConfig.mProfile,
-                                             adtssample);
+  bool rv = Adts::ConvertSample(mConfig.mChannels,
+                                frequency_index,
+                                mConfig.mProfile,
+                                adtssample);
   if (!rv) {
     NS_WARNING("Failed to apply ADTS header");
     return NS_ERROR_FAILURE;
@@ -708,3 +715,6 @@ AppleATDecoder::GetImplicitAACMagicCookie(const MediaRawData* aSample)
 }
 
 } // namespace mozilla
+
+#undef LOG
+#undef LOGEX

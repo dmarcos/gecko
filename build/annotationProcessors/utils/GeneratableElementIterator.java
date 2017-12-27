@@ -77,8 +77,8 @@ public class GeneratableElementIterator implements Iterator<AnnotatableEntity> {
         int count = 0;
 
         for (int i = 0; i < candidates.length; ++i) {
-            final GeneratableElementIterator testIterator
-                    = new GeneratableElementIterator(new ClassWithOptions(candidates[i], null));
+            final GeneratableElementIterator testIterator = new GeneratableElementIterator(
+                    new ClassWithOptions(candidates[i], null, /* ifdef */ ""));
             if (testIterator.hasNext()
                     || testIterator.getFilteredInnerClasses() != null) {
                 count++;
@@ -108,7 +108,9 @@ public class GeneratableElementIterator implements Iterator<AnnotatableEntity> {
         for (Class<?> candidate : candidates) {
             if (candidate != null) {
                 ret[count++] = new ClassWithOptions(
-                        candidate, mClass.generatedName + "::" + candidate.getSimpleName());
+                        candidate,
+                        mClass.generatedName + "::" + candidate.getSimpleName(),
+                        /* ifdef */ "");
             }
         }
         assert ret.length == count;
@@ -119,32 +121,6 @@ public class GeneratableElementIterator implements Iterator<AnnotatableEntity> {
             }
         });
         return ret;
-    }
-
-    private static <T extends Enum<T>> T getEnumValue(Class<T> type, String name)
-            throws NoSuchMethodException, IllegalAccessException, InvocationTargetException {
-        try {
-            return Enum.valueOf(type, name.toUpperCase());
-
-        } catch (IllegalArgumentException e) {
-            Object[] values = (Object[]) type.getDeclaredMethod("values").invoke(null);
-            StringBuilder names = new StringBuilder();
-
-            for (int i = 0; i < values.length; i++) {
-                if (i != 0) {
-                    names.append(", ");
-                }
-                names.append(values[i].toString().toLowerCase());
-            }
-
-            System.err.println("***");
-            System.err.println("*** Invalid value \"" + name + "\" for " + type.getSimpleName());
-            System.err.println("*** Specify one of " + names.toString());
-            System.err.println("***");
-            e.printStackTrace(System.err);
-            System.exit(6);
-            return null;
-        }
     }
 
     private AnnotationInfo buildAnnotationInfo(AnnotatedElement element, Annotation annotation) {
@@ -158,6 +134,7 @@ public class GeneratableElementIterator implements Iterator<AnnotatableEntity> {
         AnnotationInfo.ExceptionMode exceptionMode = null;
         AnnotationInfo.CallingThread callingThread = null;
         AnnotationInfo.DispatchTarget dispatchTarget = null;
+        boolean noLiteral = false;
 
         try {
             final Method skipMethod = annotationType.getDeclaredMethod("skip");
@@ -174,21 +151,25 @@ public class GeneratableElementIterator implements Iterator<AnnotatableEntity> {
 
             final Method exceptionModeMethod = annotationType.getDeclaredMethod("exceptionMode");
             exceptionModeMethod.setAccessible(true);
-            exceptionMode = getEnumValue(
+            exceptionMode = Utils.getEnumValue(
                     AnnotationInfo.ExceptionMode.class,
                     (String) exceptionModeMethod.invoke(annotation));
 
             final Method calledFromMethod = annotationType.getDeclaredMethod("calledFrom");
             calledFromMethod.setAccessible(true);
-            callingThread = getEnumValue(
+            callingThread = Utils.getEnumValue(
                     AnnotationInfo.CallingThread.class,
                     (String) calledFromMethod.invoke(annotation));
 
             final Method dispatchToMethod = annotationType.getDeclaredMethod("dispatchTo");
             dispatchToMethod.setAccessible(true);
-            dispatchTarget = getEnumValue(
+            dispatchTarget = Utils.getEnumValue(
                     AnnotationInfo.DispatchTarget.class,
                     (String) dispatchToMethod.invoke(annotation));
+
+            final Method noLiteralMethod = annotationType.getDeclaredMethod("noLiteral");
+            noLiteralMethod.setAccessible(true);
+            noLiteral = (Boolean) noLiteralMethod.invoke(annotation);
 
         } catch (NoSuchMethodException e) {
             System.err.println("Unable to find expected field on WrapForJNI annotation. Did the signature change?");
@@ -209,7 +190,8 @@ public class GeneratableElementIterator implements Iterator<AnnotatableEntity> {
             stubName = Utils.getNativeName(element);
         }
 
-        return new AnnotationInfo(stubName, exceptionMode, callingThread, dispatchTarget);
+        return new AnnotationInfo(stubName, exceptionMode, callingThread, dispatchTarget,
+                                  noLiteral);
     }
 
     /**
@@ -240,7 +222,8 @@ public class GeneratableElementIterator implements Iterator<AnnotatableEntity> {
                     Utils.getNativeName(candidateElement),
                     mClassInfo.exceptionMode,
                     mClassInfo.callingThread,
-                    mClassInfo.dispatchTarget);
+                    mClassInfo.dispatchTarget,
+                    mClassInfo.noLiteral);
                 mNextReturnValue = new AnnotatableEntity(candidateElement, annotationInfo);
                 return;
             }

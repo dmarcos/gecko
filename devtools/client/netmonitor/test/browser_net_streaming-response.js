@@ -12,14 +12,14 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(CUSTOM_GET_URL);
 
   info("Starting test... ");
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   const REQUESTS = [
     [ "hls-m3u8", /^#EXTM3U/ ],
@@ -35,11 +35,19 @@ add_task(function* () {
   }
   yield wait;
 
+  let requestItems = document.querySelectorAll(".request-list-item");
+  for (let requestItem of requestItems) {
+    requestItem.scrollIntoView();
+    let requestsListStatus = requestItem.querySelector(".requests-list-status");
+    EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+    yield waitUntil(() => requestsListStatus.title);
+  }
+
   REQUESTS.forEach(([ fmt ], i) => {
     verifyRequestItemTarget(
       document,
-      getDisplayedRequests(gStore.getState()),
-      getSortedRequests(gStore.getState()).get(i),
+      getDisplayedRequests(store.getState()),
+      getSortedRequests(store.getState()).get(i),
       "GET",
       CONTENT_TYPE_SJS + "?fmt=" + fmt,
       {
@@ -55,31 +63,17 @@ add_task(function* () {
     document.querySelector("#response-tab"));
   yield wait;
 
-  gStore.dispatch(Actions.selectRequest(null));
+  store.dispatch(Actions.selectRequest(null));
 
-  yield selectIndexAndWaitForSourceEditor(0);
+  yield selectIndexAndWaitForSourceEditor(monitor, 0);
   // the hls-m3u8 part
   testEditorContent(REQUESTS[0]);
 
-  yield selectIndexAndWaitForSourceEditor(1);
+  yield selectIndexAndWaitForSourceEditor(monitor, 1);
   // the mpeg-dash part
   testEditorContent(REQUESTS[1]);
 
   return teardown(monitor);
-
-  function* selectIndexAndWaitForSourceEditor(index) {
-    let editor = document.querySelector("#response-panel .CodeMirror-code");
-    if (!editor) {
-      let waitDOM = waitForDOM(document, "#response-panel .CodeMirror-code");
-      EventUtils.sendMouseEvent({ type: "mousedown" },
-        document.querySelectorAll(".request-list-item")[index]);
-      document.querySelector("#response-tab").click();
-      yield waitDOM;
-    } else {
-      EventUtils.sendMouseEvent({ type: "mousedown" },
-        document.querySelectorAll(".request-list-item")[index]);
-    }
-  }
 
   function testEditorContent([ fmt, textRe ]) {
     ok(document.querySelector(".CodeMirror-line").textContent.match(textRe),

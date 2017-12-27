@@ -14,18 +14,16 @@ DIRS += [
 ]
 
 DevToolsModules(
-    'about-devtools-toolbox.js',
     'attach-thread.js',
     'browser-menus.js',
     'devtools-browser.js',
     'devtools.js',
     'gDevTools.jsm',
-    'location-store.js',
     'menu-item.js',
     'menu.js',
     'selection.js',
     'sidebar.js',
-    'source-map-service.js',
+    'source-map-url-service.js',
     'target-from-url.js',
     'target.js',
     'toolbox-highlighter-utils.js',

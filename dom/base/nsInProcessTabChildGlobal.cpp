@@ -11,13 +11,13 @@
 #include "nsIComponentManager.h"
 #include "nsIServiceManager.h"
 #include "nsComponentManagerUtils.h"
-#include "nsScriptLoader.h"
 #include "nsFrameLoader.h"
 #include "xpcpublic.h"
 #include "nsIMozBrowserFrame.h"
 #include "nsDOMClassInfoID.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/dom/SameProcessMessageQueue.h"
+#include "mozilla/dom/ScriptLoader.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -143,7 +143,7 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(nsInProcessTabChildGlobal)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(nsInProcessTabChildGlobal,
                                                   DOMEventTargetHelper)
    NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMessageManager)
-   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mGlobal)
+   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocShell)
    tmp->TraverseHostObjectURIs(cb);
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
@@ -155,12 +155,12 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_END
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(nsInProcessTabChildGlobal,
                                                 DOMEventTargetHelper)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mMessageManager)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mGlobal)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mAnonymousGlobalScopes)
-   tmp->UnlinkHostObjectURIs();
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocShell)
+  tmp->nsMessageManagerScriptExecutor::Unlink();
+  tmp->UnlinkHostObjectURIs();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(nsInProcessTabChildGlobal)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsInProcessTabChildGlobal)
   NS_INTERFACE_MAP_ENTRY(nsIMessageListenerManager)
   NS_INTERFACE_MAP_ENTRY(nsIMessageSender)
   NS_INTERFACE_MAP_ENTRY(nsISyncMessageSender)
@@ -201,6 +201,14 @@ nsInProcessTabChildGlobal::GetDocShell(nsIDocShell** aDocShell)
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsInProcessTabChildGlobal::GetTabEventTarget(nsIEventTarget** aTarget)
+{
+  nsCOMPtr<nsIEventTarget> target = GetMainThreadEventTarget();
+  target.forget(aTarget);
+  return NS_OK;
+}
+
 void
 nsInProcessTabChildGlobal::FireUnloadEvent()
 {
@@ -222,7 +230,6 @@ nsInProcessTabChildGlobal::DisconnectEventListeners()
 {
   if (mDocShell) {
     if (nsCOMPtr<nsPIDOMWindowOuter> win = mDocShell->GetWindow()) {
-      MOZ_ASSERT(win->IsOuterWindow());
       win->SetChromeEventHandler(win->GetChromeEventHandler());
     }
   }
@@ -270,7 +277,7 @@ nsInProcessTabChildGlobal::GetEventTargetParent(EventChainPreVisitor& aVisitor)
 #endif
 
   if (mPreventEventsEscaping) {
-    aVisitor.mParentTarget = nullptr;
+    aVisitor.SetParentTarget(nullptr, false);
     return NS_OK;
   }
 
@@ -278,11 +285,13 @@ nsInProcessTabChildGlobal::GetEventTargetParent(EventChainPreVisitor& aVisitor)
       (!mOwner || !nsContentUtils::IsInChromeDocshell(mOwner->OwnerDoc()))) {
     if (mOwner) {
       if (nsPIDOMWindowInner* innerWindow = mOwner->OwnerDoc()->GetInnerWindow()) {
-        aVisitor.mParentTarget = innerWindow->GetParentTarget();
+        // 'this' is already a "chrome handler", so we consider window's
+        // parent target to be part of that same part of the event path.
+        aVisitor.SetParentTarget(innerWindow->GetParentTarget(), false);
       }
     }
   } else {
-    aVisitor.mParentTarget = mOwner;
+    aVisitor.SetParentTarget(mOwner, false);
   }
 
   return NS_OK;
@@ -311,9 +320,15 @@ nsInProcessTabChildGlobal::InitTabChildGlobal()
 class nsAsyncScriptLoad : public Runnable
 {
 public:
-    nsAsyncScriptLoad(nsInProcessTabChildGlobal* aTabChild, const nsAString& aURL,
-                      bool aRunInGlobalScope)
-      : mTabChild(aTabChild), mURL(aURL), mRunInGlobalScope(aRunInGlobalScope) {}
+  nsAsyncScriptLoad(nsInProcessTabChildGlobal* aTabChild,
+                    const nsAString& aURL,
+                    bool aRunInGlobalScope)
+    : mozilla::Runnable("nsAsyncScriptLoad")
+    , mTabChild(aTabChild)
+    , mURL(aURL)
+    , mRunInGlobalScope(aRunInGlobalScope)
+  {
+  }
 
   NS_IMETHOD Run() override
   {

@@ -34,7 +34,11 @@ MozAVLink(const char* aName)
   PRLibSpec lspec;
   lspec.type = PR_LibSpec_Pathname;
   lspec.value.pathname = aName;
+#ifdef MOZ_WIDGET_ANDROID
+  PRLibrary* lib = PR_LoadLibraryWithFlags(lspec, PR_LD_NOW | PR_LD_GLOBAL);
+#else
   PRLibrary* lib = PR_LoadLibraryWithFlags(lspec, PR_LD_NOW | PR_LD_LOCAL);
+#endif
   if (!lib) {
     FFMPEG_LOG("unable to load library %s", aName);
   }
@@ -66,10 +70,10 @@ FFVPXRuntimeLinker::Init()
   nsCOMPtr<nsIFile> xulFile = do_CreateInstance(NS_LOCAL_FILE_CONTRACTID);
   if (!xulFile ||
       NS_FAILED(xulFile->InitWithNativePath(nsDependentCString(path)))) {
-    PR_Free(path);
+    PR_Free(path); // PR_GetLibraryFilePathname() uses PR_Malloc().
     return false;
   }
-  PR_Free(path);
+  PR_Free(path); // PR_GetLibraryFilePathname() uses PR_Malloc().
 
   nsCOMPtr<nsIFile> rootDir;
   if (NS_FAILED(xulFile->GetParent(getter_AddRefs(rootDir))) || !rootDir) {

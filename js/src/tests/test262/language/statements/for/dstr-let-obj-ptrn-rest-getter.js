@@ -5,7 +5,7 @@
 description: Getter is called when obj is being deconstructed to a rest Object (for statement)
 esid: sec-for-statement-runtime-semantics-labelledevaluation
 es6id: 13.7.4.7
-features: [destructuring-binding]
+features: [object-rest, destructuring-binding]
 flags: [generated]
 includes: [propertyHelper.js]
 info: |
@@ -42,13 +42,14 @@ var count = 0;
 var iterCount = 0;
 
 for (let {...x} = { get v() { count++; return 2; } }; iterCount < 1; ) {
-  assert.sameValue(x.v, 2);
   assert.sameValue(count, 1);
 
-  verifyEnumerable(x, "v");
-  verifyWritable(x, "v");
-  verifyConfigurable(x, "v");
-
+  verifyProperty(x, "v", {
+    enumerable: true,
+    writable: true,
+    configurable: true,
+    value: 2
+  });
 
   iterCount += 1;
 }

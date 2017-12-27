@@ -4,7 +4,7 @@
 /* import-globals-from ../../framework/test/shared-head.js */
 /* exported Toolbox, restartNetMonitor, teardown, waitForExplicitFinish,
    verifyRequestItemTarget, waitFor, testFilterButtons, loadCommonFrameScript,
-   performRequestsInContent, waitForNetworkEvents */
+   performRequestsInContent, waitForNetworkEvents, selectIndexAndWaitForSourceEditor */
 
 "use strict";
 
@@ -13,13 +13,19 @@ Services.scriptloader.loadSubScript(
   "chrome://mochitests/content/browser/devtools/client/framework/test/shared-head.js",
   this);
 
-const { EVENTS } = require("devtools/client/netmonitor/src/constants");
+const {
+  getFormattedIPAndPort,
+  getFormattedTime,
+} = require("devtools/client/netmonitor/src/utils/format-utils");
 const {
   decodeUnicodeUrl,
+  getFormattedProtocol,
   getUrlBaseName,
-  getUrlQuery,
   getUrlHost,
+  getUrlQuery,
+  getUrlScheme,
 } = require("devtools/client/netmonitor/src/utils/request-utils");
+const { EVENTS } = require("devtools/client/netmonitor/src/constants");
 
 /* eslint-disable no-unused-vars, max-len */
 const EXAMPLE_URL = "http://example.com/browser/devtools/client/netmonitor/test/";
@@ -54,8 +60,10 @@ const CURL_URL = EXAMPLE_URL + "html_copy-as-curl.html";
 const CURL_UTILS_URL = EXAMPLE_URL + "html_curl-utils.html";
 const SEND_BEACON_URL = EXAMPLE_URL + "html_send-beacon.html";
 const CORS_URL = EXAMPLE_URL + "html_cors-test-page.html";
+const PAUSE_URL = EXAMPLE_URL + "html_pause-test-page.html";
 
 const SIMPLE_SJS = EXAMPLE_URL + "sjs_simple-test-server.sjs";
+const SIMPLE_UNSORTED_COOKIES_SJS = EXAMPLE_URL + "sjs_simple-unsorted-cookies-test-server.sjs";
 const CONTENT_TYPE_SJS = EXAMPLE_URL + "sjs_content-type-test-server.sjs";
 const HTTPS_CONTENT_TYPE_SJS = HTTPS_EXAMPLE_URL + "sjs_content-type-test-server.sjs";
 const STATUS_CODES_SJS = EXAMPLE_URL + "sjs_status-codes-test-server.sjs";
@@ -86,12 +94,22 @@ Services.prefs.setBoolPref("devtools.debugger.log", false);
 // Always reset some prefs to their original values after the test finishes.
 const gDefaultFilters = Services.prefs.getCharPref("devtools.netmonitor.filters");
 
+// Reveal many columns for test
+Services.prefs.setCharPref(
+  "devtools.netmonitor.visibleColumns",
+  "[\"cause\",\"contentSize\",\"cookies\",\"domain\",\"duration\"," +
+  "\"endTime\",\"file\",\"latency\",\"method\",\"protocol\"," +
+  "\"remoteip\",\"responseTime\",\"scheme\",\"setCookies\"," +
+  "\"startTime\",\"status\",\"transferred\",\"type\",\"waterfall\"]"
+);
+
 registerCleanupFunction(() => {
   info("finish() was called, cleaning up...");
 
   Services.prefs.setBoolPref("devtools.debugger.log", gEnableLogging);
   Services.prefs.setCharPref("devtools.netmonitor.filters", gDefaultFilters);
   Services.prefs.clearUserPref("devtools.cache.disabled");
+  Services.cookies.removeAll();
 });
 
 function waitForNavigation(target) {
@@ -159,23 +177,22 @@ function waitForTimelineMarkers(monitor) {
  */
 function waitForAllRequestsFinished(monitor) {
   let window = monitor.panelWin;
-  let { windowRequire } = window;
-  let { NetMonitorController } =
-    windowRequire("devtools/client/netmonitor/src/netmonitor-controller");
+  let { connector } = window;
+  let { getNetworkRequest } = connector;
 
   return new Promise(resolve => {
     // Key is the request id, value is a boolean - is request finished or not?
     let requests = new Map();
 
     function onRequest(_, id) {
-      let networkInfo = NetMonitorController.webConsoleClient.getNetworkRequest(id);
+      let networkInfo = getNetworkRequest(id);
       let { url } = networkInfo.request;
       info(`Request ${id} for ${url} not yet done, keep waiting...`);
       requests.set(id, false);
     }
 
     function onTimings(_, id) {
-      let networkInfo = NetMonitorController.webConsoleClient.getNetworkRequest(id);
+      let networkInfo = getNetworkRequest(id);
       let { url } = networkInfo.request;
       info(`Request ${id} for ${url} done`);
       requests.set(id, true);
@@ -190,14 +207,65 @@ function waitForAllRequestsFinished(monitor) {
 
       // All requests are done - unsubscribe from events and resolve!
       window.off(EVENTS.NETWORK_EVENT, onRequest);
-      window.off(EVENTS.RECEIVED_EVENT_TIMINGS, onTimings);
+      window.off(EVENTS.PAYLOAD_READY, onTimings);
       info("All requests finished");
       resolve();
     }
 
     window.on(EVENTS.NETWORK_EVENT, onRequest);
-    window.on(EVENTS.RECEIVED_EVENT_TIMINGS, onTimings);
+    window.on(EVENTS.PAYLOAD_READY, onTimings);
   });
+}
+
+let finishedQueue = {};
+let updatingTypes = [
+  "NetMonitor:NetworkEventUpdating:RequestCookies",
+  "NetMonitor:NetworkEventUpdating:ResponseCookies",
+  "NetMonitor:NetworkEventUpdating:RequestHeaders",
+  "NetMonitor:NetworkEventUpdating:ResponseHeaders",
+  "NetMonitor:NetworkEventUpdating:RequestPostData",
+  "NetMonitor:NetworkEventUpdating:ResponseContent",
+  "NetMonitor:NetworkEventUpdating:SecurityInfo",
+  "NetMonitor:NetworkEventUpdating:EventTimings",
+];
+let updatedTypes = [
+  "NetMonitor:NetworkEventUpdated:RequestCookies",
+  "NetMonitor:NetworkEventUpdated:ResponseCookies",
+  "NetMonitor:NetworkEventUpdated:RequestHeaders",
+  "NetMonitor:NetworkEventUpdated:ResponseHeaders",
+  "NetMonitor:NetworkEventUpdated:RequestPostData",
+  "NetMonitor:NetworkEventUpdated:ResponseContent",
+  "NetMonitor:NetworkEventUpdated:SecurityInfo",
+  "NetMonitor:NetworkEventUpdated:EventTimings",
+];
+
+// Start collecting all networkEventUpdate event when panel is opened.
+// removeTab() should be called once all corresponded RECEIVED_* events finished.
+function startNetworkEventUpdateObserver(panelWin) {
+  updatingTypes.forEach((type) => panelWin.on(type, (event, actor) => {
+    let key = actor + "-" + updatedTypes[updatingTypes.indexOf(event)];
+    finishedQueue[key] = finishedQueue[key] ? finishedQueue[key] + 1 : 1;
+  }));
+
+  updatedTypes.forEach((type) => panelWin.on(type, (event, actor) => {
+    let key = actor + "-" + event;
+    finishedQueue[key] = finishedQueue[key] ? finishedQueue[key] - 1 : -1;
+  }));
+}
+
+function* waitForAllNetworkUpdateEvents() {
+  function checkNetworkEventUpdateState() {
+    for (let key in finishedQueue) {
+      if (finishedQueue[key] > 0) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+  info("Wait for completion of all NetworkUpdateEvents packets...");
+  yield waitUntil(() => checkNetworkEventUpdateState());
+  finishedQueue = {};
 }
 
 function initNetMonitor(url, enableCache) {
@@ -217,9 +285,13 @@ function initNetMonitor(url, enableCache) {
 
     let monitor = toolbox.getCurrentPanel();
 
+    startNetworkEventUpdateObserver(monitor.panelWin);
+
     if (!enableCache) {
       let panel = monitor.panelWin;
-      let { gStore, windowRequire } = panel;
+      let { store, windowRequire } = panel;
+      let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
+
       info("Disabling cache and reloading page.");
       let requestsDone = waitForAllRequestsFinished(monitor);
       let markersDone = waitForTimelineMarkers(monitor);
@@ -233,11 +305,11 @@ function initNetMonitor(url, enableCache) {
       info("Clearing requests in the console client.");
       target.activeConsole.clearNetworkRequests();
       info("Clearing requests in the UI.");
-      let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
-      gStore.dispatch(Actions.clearRequests());
+
+      store.dispatch(Actions.clearRequests());
     }
 
-    return {tab, monitor};
+    return {tab, monitor, toolbox};
   });
 }
 
@@ -247,6 +319,9 @@ function restartNetMonitor(monitor, newUrl) {
   return Task.spawn(function* () {
     let tab = monitor.toolbox.target.tab;
     let url = newUrl || tab.linkedBrowser.currentURI.spec;
+
+    yield waitForAllNetworkUpdateEvents();
+    info("All pending requests finished.");
 
     let onDestroyed = monitor.once("destroyed");
     yield removeTab(tab);
@@ -262,103 +337,64 @@ function teardown(monitor) {
   return Task.spawn(function* () {
     let tab = monitor.toolbox.target.tab;
 
+    yield waitForAllNetworkUpdateEvents();
+    info("All pending requests finished.");
+
     let onDestroyed = monitor.once("destroyed");
     yield removeTab(tab);
     yield onDestroyed;
   });
 }
 
-function waitForNetworkEvents(monitor, getRequests, postRequests = 0) {
+function waitForNetworkEvents(monitor, getRequests) {
   return new Promise((resolve) => {
     let panel = monitor.panelWin;
-    let { windowRequire } = panel;
-    let { NetMonitorController } =
-      windowRequire("devtools/client/netmonitor/src/netmonitor-controller");
-    let progress = {};
-    let genericEvents = 0;
-    let postEvents = 0;
-    let awaitedEventsToListeners = [
-      ["UPDATING_REQUEST_HEADERS", onGenericEvent],
-      ["RECEIVED_REQUEST_HEADERS", onGenericEvent],
-      ["UPDATING_REQUEST_COOKIES", onGenericEvent],
-      ["RECEIVED_REQUEST_COOKIES", onGenericEvent],
-      ["UPDATING_REQUEST_POST_DATA", onPostEvent],
-      ["RECEIVED_REQUEST_POST_DATA", onPostEvent],
-      ["UPDATING_RESPONSE_HEADERS", onGenericEvent],
-      ["RECEIVED_RESPONSE_HEADERS", onGenericEvent],
-      ["UPDATING_RESPONSE_COOKIES", onGenericEvent],
-      ["RECEIVED_RESPONSE_COOKIES", onGenericEvent],
-      ["STARTED_RECEIVING_RESPONSE", onGenericEvent],
-      ["UPDATING_RESPONSE_CONTENT", onGenericEvent],
-      ["RECEIVED_RESPONSE_CONTENT", onGenericEvent],
-      ["UPDATING_EVENT_TIMINGS", onGenericEvent],
-      ["RECEIVED_EVENT_TIMINGS", onGenericEvent]
-    ];
+    let { getNetworkRequest } = panel.connector;
+    let networkEvent = 0;
+    let payloadReady = 0;
 
-    function initProgressForURL(url) {
-      if (progress[url]) {
-        return;
-      }
-      progress[url] = {};
-      awaitedEventsToListeners.forEach(function ([e]) {
-        progress[url][e] = 0;
-      });
-    }
-
-    function updateProgressForURL(url, event) {
-      initProgressForURL(url);
-      progress[url][Object.keys(EVENTS).find(e => EVENTS[e] == event)] = 1;
-    }
-
-    function onGenericEvent(event, actor) {
-      let networkInfo = NetMonitorController.webConsoleClient.getNetworkRequest(actor);
+    function onNetworkEvent(event, actor) {
+      let networkInfo = getNetworkRequest(actor);
       if (!networkInfo) {
         // Must have been related to reloading document to disable cache.
         // Ignore the event.
         return;
       }
-      genericEvents++;
+      networkEvent++;
       maybeResolve(event, actor, networkInfo);
     }
 
-    function onPostEvent(event, actor) {
-      let networkInfo = NetMonitorController.webConsoleClient.getNetworkRequest(actor);
+    function onPayloadReady(event, actor) {
+      let networkInfo = getNetworkRequest(actor);
       if (!networkInfo) {
         // Must have been related to reloading document to disable cache.
         // Ignore the event.
         return;
       }
-      postEvents++;
+      payloadReady++;
       maybeResolve(event, actor, networkInfo);
     }
 
     function maybeResolve(event, actor, networkInfo) {
-      info("> Network events progress: " +
-        genericEvents + "/" + ((getRequests + postRequests) * 13) + ", " +
-        postEvents + "/" + (postRequests * 2) + ", " +
+      info("> Network event progress: " +
+        "NetworkEvent: " + networkEvent + "/" + getRequests + ", " +
+        "PayloadReady: " + payloadReady + "/" + getRequests + ", " +
         "got " + event + " for " + actor);
 
-      let url = networkInfo.request.url;
-      updateProgressForURL(url, event);
-
-      // Uncomment this to get a detailed progress logging (when debugging a test)
-      // info("> Current state: " + JSON.stringify(progress, null, 2));
-
-      // There are 15 updates which need to be fired for a request to be
-      // considered finished. The "requestPostData" packet isn't fired for
-      // non-POST requests.
-      if (genericEvents >= (getRequests + postRequests) * 13 &&
-        postEvents >= postRequests * 2) {
-        awaitedEventsToListeners.forEach(([e, l]) => panel.off(EVENTS[e], l));
+      // Wait until networkEvent & payloadReady finish for each request.
+      if (networkEvent >= getRequests && payloadReady >= getRequests) {
+        panel.off(EVENTS.NETWORK_EVENT, onNetworkEvent);
+        panel.off(EVENTS.PAYLOAD_READY, onPayloadReady);
         executeSoon(resolve);
       }
     }
 
-    awaitedEventsToListeners.forEach(([e, l]) => panel.on(EVENTS[e], l));
+    panel.on(EVENTS.NETWORK_EVENT, onNetworkEvent);
+    panel.on(EVENTS.PAYLOAD_READY, onPayloadReady);
   });
 }
 
-function verifyRequestItemTarget(document, requestList, requestItem, method,
+function* verifyRequestItemTarget(document, requestList, requestItem, method,
                                  url, data = {}) {
   info("> Verifying: " + method + " " + url + " " + data.toSource());
 
@@ -370,18 +406,30 @@ function verifyRequestItemTarget(document, requestList, requestItem, method,
         transferred, size, time, displayedStatus } = data;
 
   let target = document.querySelectorAll(".request-list-item")[visibleIndex];
-  let unicodeUrl = decodeUnicodeUrl(url);
+  // Bug 1414981 - Request URL should not show #hash
+  let unicodeUrl = decodeUnicodeUrl(url).split("#")[0];
   let name = getUrlBaseName(url);
   let query = getUrlQuery(url);
-  let hostPort = getUrlHost(url);
-  let remoteAddress = requestItem.remoteAddress;
+  let host = getUrlHost(url);
+  let scheme = getUrlScheme(url);
+  let {
+    remoteAddress,
+    remotePort,
+    totalTime,
+    eventTimings = { timings: {} },
+  } = requestItem;
+  let formattedIPPort = getFormattedIPAndPort(remoteAddress, remotePort);
+  let remoteIP = remoteAddress ? `${formattedIPPort}` : "unknown";
+  let duration = getFormattedTime(totalTime);
+  let latency = getFormattedTime(eventTimings.timings.wait);
+  let protocol = getFormattedProtocol(requestItem);
 
   if (fuzzyUrl) {
     ok(requestItem.method.startsWith(method), "The attached method is correct.");
     ok(requestItem.url.startsWith(url), "The attached url is correct.");
   } else {
     is(requestItem.method, method, "The attached method is correct.");
-    is(requestItem.url, url, "The attached url is correct.");
+    is(requestItem.url, url.split("#")[0], "The attached url is correct.");
   }
 
   is(target.querySelector(".requests-list-method").textContent,
@@ -395,17 +443,48 @@ function verifyRequestItemTarget(document, requestList, requestItem, method,
       "The tooltip file is correct.");
   } else {
     is(target.querySelector(".requests-list-file").textContent,
-      name + (query ? "?" + query : ""), "The displayed file is correct.");
+      decodeURIComponent(name + (query ? "?" + query : "")),
+      "The displayed file is correct.");
     is(target.querySelector(".requests-list-file").getAttribute("title"),
       unicodeUrl, "The tooltip file is correct.");
   }
 
-  is(target.querySelector(".requests-list-domain").textContent,
-    hostPort, "The displayed domain is correct.");
+  is(target.querySelector(".requests-list-protocol").textContent,
+    protocol, "The displayed protocol is correct.");
 
-  let domainTooltip = hostPort + (remoteAddress ? " (" + remoteAddress + ")" : "");
+  is(target.querySelector(".requests-list-protocol").getAttribute("title"),
+    protocol, "The tooltip protocol is correct.");
+
+  is(target.querySelector(".requests-list-domain").textContent,
+    host, "The displayed domain is correct.");
+
+  let domainTooltip = host + (remoteAddress ? " (" + formattedIPPort + ")" : "");
   is(target.querySelector(".requests-list-domain").getAttribute("title"),
     domainTooltip, "The tooltip domain is correct.");
+
+  is(target.querySelector(".requests-list-remoteip").textContent,
+    remoteIP, "The displayed remote IP is correct.");
+
+  is(target.querySelector(".requests-list-remoteip").getAttribute("title"),
+    remoteIP, "The tooltip remote IP is correct.");
+
+  is(target.querySelector(".requests-list-scheme").textContent,
+    scheme, "The displayed scheme is correct.");
+
+  is(target.querySelector(".requests-list-scheme").getAttribute("title"),
+    scheme, "The tooltip scheme is correct.");
+
+  is(target.querySelector(".requests-list-duration").textContent,
+    duration, "The displayed duration is correct.");
+
+  is(target.querySelector(".requests-list-duration").getAttribute("title"),
+    duration, "The tooltip duration is correct.");
+
+  is(target.querySelector(".requests-list-latency").textContent,
+    latency, "The displayed latency is correct.");
+
+  is(target.querySelector(".requests-list-latency").getAttribute("title"),
+    latency, "The tooltip latency is correct.");
 
   if (status !== undefined) {
     let value = target.querySelector(".requests-list-status-icon")
@@ -421,12 +500,13 @@ function verifyRequestItemTarget(document, requestList, requestItem, method,
     is(tooltip, status + " " + statusText, "The tooltip status is correct.");
   }
   if (cause !== undefined) {
-    let value = target.querySelector(".requests-list-cause > .subitem-label").textContent;
+    let value = Array.from(target.querySelector(".requests-list-cause").childNodes)
+      .filter((node) => node.nodeType === Node.TEXT_NODE)[0].textContent;
     let tooltip = target.querySelector(".requests-list-cause").getAttribute("title");
     info("Displayed cause: " + value);
     info("Tooltip cause: " + tooltip);
     is(value, cause.type, "The displayed cause is correct.");
-    is(tooltip, cause.loadingDocumentUri, "The tooltip cause is correct.");
+    is(tooltip, cause.type, "The tooltip cause is correct.");
   }
   if (type !== undefined) {
     let value = target.querySelector(".requests-list-type").textContent;
@@ -607,4 +687,26 @@ function waitForContentMessage(name) {
       resolve(msg);
     });
   });
+}
+
+/**
+ * Select a request and switch to its response panel.
+ *
+ * @param {Number} index The request index to be selected
+ */
+async function selectIndexAndWaitForSourceEditor(monitor, index) {
+  let document = monitor.panelWin.document;
+  let onResponseContent = monitor.panelWin.once(EVENTS.RECEIVED_RESPONSE_CONTENT);
+  // Select the request first, as it may try to fetch whatever is the current request's
+  // responseContent if we select the ResponseTab first.
+  EventUtils.sendMouseEvent({ type: "mousedown" },
+    document.querySelectorAll(".request-list-item")[index]);
+  // We may already be on the ResponseTab, so only select it if needed.
+  let editor = document.querySelector("#response-panel .CodeMirror-code");
+  if (!editor) {
+    let waitDOM = waitForDOM(document, "#response-panel .CodeMirror-code");
+    document.querySelector("#response-tab").click();
+    await waitDOM;
+  }
+  await onResponseContent;
 }

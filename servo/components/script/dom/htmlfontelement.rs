@@ -3,10 +3,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use cssparser::RGBA;
+use dom::attr::Attr;
 use dom::bindings::codegen::Bindings::HTMLFontElementBinding;
 use dom::bindings::codegen::Bindings::HTMLFontElementBinding::HTMLFontElementMethods;
 use dom::bindings::inheritance::Castable;
-use dom::bindings::js::{LayoutJS, Root};
+use dom::bindings::root::{DomRoot, LayoutDom};
 use dom::bindings::str::DOMString;
 use dom::document::Document;
 use dom::element::{Element, RawLayoutElementHelpers};
@@ -14,7 +15,7 @@ use dom::htmlelement::HTMLElement;
 use dom::node::Node;
 use dom::virtualmethods::VirtualMethods;
 use dom_struct::dom_struct;
-use html5ever_atoms::LocalName;
+use html5ever::{LocalName, Prefix};
 use servo_atoms::Atom;
 use style::attr::AttrValue;
 use style::str::{HTML_SPACE_CHARACTERS, read_numbers};
@@ -26,7 +27,7 @@ pub struct HTMLFontElement {
 
 
 impl HTMLFontElement {
-    fn new_inherited(local_name: LocalName, prefix: Option<DOMString>, document: &Document) -> HTMLFontElement {
+    fn new_inherited(local_name: LocalName, prefix: Option<Prefix>, document: &Document) -> HTMLFontElement {
         HTMLFontElement {
             htmlelement: HTMLElement::new_inherited(local_name, prefix, document),
         }
@@ -34,9 +35,9 @@ impl HTMLFontElement {
 
     #[allow(unrooted_must_root)]
     pub fn new(local_name: LocalName,
-               prefix: Option<DOMString>,
-               document: &Document) -> Root<HTMLFontElement> {
-        Node::reflect_node(box HTMLFontElement::new_inherited(local_name, prefix, document),
+               prefix: Option<Prefix>,
+               document: &Document) -> DomRoot<HTMLFontElement> {
+        Node::reflect_node(Box::new(HTMLFontElement::new_inherited(local_name, prefix, document)),
                            document,
                            HTMLFontElementBinding::Wrap)
     }
@@ -70,6 +71,15 @@ impl VirtualMethods for HTMLFontElement {
         Some(self.upcast::<HTMLElement>() as &VirtualMethods)
     }
 
+    fn attribute_affects_presentational_hints(&self, attr: &Attr) -> bool {
+        if attr.local_name() == &local_name!("color") {
+            return true;
+        }
+
+        // FIXME: Should also return true for `size` and `face` changes!
+        self.super_type().unwrap().attribute_affects_presentational_hints(attr)
+    }
+
     fn parse_plain_attribute(&self, name: &LocalName, value: DOMString) -> AttrValue {
         match name {
             &local_name!("face") => AttrValue::from_atomic(value.into()),
@@ -86,7 +96,7 @@ pub trait HTMLFontElementLayoutHelpers {
     fn get_size(&self) -> Option<u32>;
 }
 
-impl HTMLFontElementLayoutHelpers for LayoutJS<HTMLFontElement> {
+impl HTMLFontElementLayoutHelpers for LayoutDom<HTMLFontElement> {
     #[allow(unsafe_code)]
     fn get_color(&self) -> Option<RGBA> {
         unsafe {
@@ -120,7 +130,7 @@ impl HTMLFontElementLayoutHelpers for LayoutJS<HTMLFontElement> {
     }
 }
 
-/// https://html.spec.whatwg.org/multipage/#rules-for-parsing-a-legacy-font-size
+/// <https://html.spec.whatwg.org/multipage/#rules-for-parsing-a-legacy-font-size>
 fn parse_size(mut input: &str) -> AttrValue {
     let original_input = input;
     // Steps 1 & 2 are not relevant

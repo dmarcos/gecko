@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,6 +14,7 @@
 #include "nsDeviceContext.h"
 #include "nsIPrintProgressParams.h"
 #include "nsIPrintSettings.h"
+#include "nsISupportsImpl.h"
 #include "nsTArray.h"
 #include "nsCOMArray.h"
 
@@ -37,11 +39,11 @@ class nsIWebProgressListener;
 //------------------------------------------------------------------------
 class nsPrintData {
 public:
-
   typedef enum {eIsPrinting, eIsPrintPreview } ePrintDataType;
 
   explicit nsPrintData(ePrintDataType aType);
-  ~nsPrintData(); // non-virtual
+
+  NS_INLINE_DECL_REFCOUNTING(nsPrintData)
 
   // Listener Helper Methods
   void OnEndPrinting();
@@ -56,10 +58,8 @@ public:
 
   ePrintDataType               mType;            // the type of data this is (Printing or Print Preview)
   RefPtr<nsDeviceContext>   mPrintDC;
-  FILE                        *mDebugFilePtr;    // a file where information can go to when printing
 
   mozilla::UniquePtr<nsPrintObject> mPrintObject;
-  nsPrintObject* mSelectedPO; // This is a non-owning pointer.
 
   nsCOMArray<nsIWebProgressListener> mPrintProgressListeners;
   nsCOMPtr<nsIPrintProgressParams> mPrintProgressParams;
@@ -87,12 +87,13 @@ public:
   nsCOMPtr<nsIPrintSettings>  mPrintSettings;
   nsPrintPreviewListener*     mPPEventListeners;
 
-  char16_t*            mBrandName; //  needed as a substitute name for a document
+  nsString                    mBrandName; //  needed as a substitute name for a document
 
 private:
   nsPrintData() = delete;
   nsPrintData& operator=(const nsPrintData& aOther) = delete;
 
+  ~nsPrintData(); // non-virtual
 };
 
 #endif /* nsPrintData_h___ */

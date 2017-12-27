@@ -114,7 +114,7 @@ function check_response_id(responses, maxWindowId)
   for (var i = 0; i < responses.length; i++) {
     var id = responses[i].getHeader("X-ID");
     log("response id=" + id  + " maxWindowId=" + maxWindowId);
-    do_check_true(id < maxWindowId);
+    Assert.ok(id < maxWindowId);
   }
 }
 
@@ -155,7 +155,7 @@ function setup_http_server()
 
   });
 
-  do_register_cleanup(function() {
+  registerCleanupFunction(function() {
     server.stop(serverStopListener);
   });
 
@@ -169,6 +169,12 @@ function processResponses() {
 }
 
 function run_test() {
+  // Make sure "network.http.active_tab_priority" is true, so we can expect to
+  // receive http requests with focused window id before others.
+  var prefs = Cc["@mozilla.org/preferences-service;1"]
+                .getService(Components.interfaces.nsIPrefBranch);
+  prefs.setBoolPref("network.http.active_tab_priority", true);
+
   setup_http_server();
   setup_dummyHttpRequests();
 

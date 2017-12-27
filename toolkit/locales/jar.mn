@@ -6,7 +6,6 @@
 
 @AB_CD@.jar:
 % locale global @AB_CD@ %locale/@AB_CD@/global/
-  locale/@AB_CD@/global/about.dtd                       (%chrome/global/about.dtd)
   locale/@AB_CD@/global/aboutAbout.dtd                  (%chrome/global/aboutAbout.dtd)
   locale/@AB_CD@/global/aboutReader.properties          (%chrome/global/aboutReader.properties)
   locale/@AB_CD@/global/aboutRights.dtd                 (%chrome/global/aboutRights.dtd)
@@ -21,6 +20,8 @@
   locale/@AB_CD@/global/aboutSupport.properties         (%chrome/global/aboutSupport.properties)
   locale/@AB_CD@/global/aboutTelemetry.dtd              (%chrome/global/aboutTelemetry.dtd)
   locale/@AB_CD@/global/aboutTelemetry.properties       (%chrome/global/aboutTelemetry.properties)
+  locale/@AB_CD@/global/aboutUrlClassifier.dtd          (%chrome/global/aboutUrlClassifier.dtd)
+  locale/@AB_CD@/global/aboutUrlClassifier.properties   (%chrome/global/aboutUrlClassifier.properties)
   locale/@AB_CD@/global/aboutWebrtc.properties          (%chrome/global/aboutWebrtc.properties)
   locale/@AB_CD@/global/autocomplete.properties         (%chrome/global/autocomplete.properties)
   locale/@AB_CD@/global/appPicker.dtd                   (%chrome/global/appPicker.dtd)
@@ -57,7 +58,6 @@
   locale/@AB_CD@/global/finddialog.properties           (%chrome/global/finddialog.properties)
 #endif
   locale/@AB_CD@/global/globalKeys.dtd                  (%chrome/global/globalKeys.dtd)
-  locale/@AB_CD@/global/headsUpDisplay.properties       (%chrome/global/headsUpDisplay.properties)
   locale/@AB_CD@/global/intl.css                        (%chrome/global/intl.css)
   locale/@AB_CD@/global/intl.properties                 (%chrome/global/intl.properties)
   locale/@AB_CD@/global/keys.properties                 (%chrome/global/keys.properties)
@@ -69,9 +69,9 @@
   locale/@AB_CD@/global/notification.dtd                (%chrome/global/notification.dtd)
   locale/@AB_CD@/global/preferences.dtd                 (%chrome/global/preferences.dtd)
 #ifndef MOZ_FENNEC
-  locale/@AB_CD@/global/printdialog.dtd                 (%chrome/global/printdialog.dtd)
-  locale/@AB_CD@/global/printjoboptions.dtd             (%chrome/global/printjoboptions.dtd)
+#ifndef MOZ_GTK
   locale/@AB_CD@/global/printPageSetup.dtd              (%chrome/global/printPageSetup.dtd)
+#endif
   locale/@AB_CD@/global/printPreview.dtd                (%chrome/global/printPreview.dtd)
   locale/@AB_CD@/global/printPreviewProgress.dtd        (%chrome/global/printPreviewProgress.dtd)
   locale/@AB_CD@/global/printdialog.properties          (%chrome/global/printdialog.properties)
@@ -90,7 +90,9 @@
   locale/@AB_CD@/global/wizard.properties               (%chrome/global/wizard.properties)
   locale/@AB_CD@/global/crashes.dtd                     (%crashreporter/crashes.dtd)
   locale/@AB_CD@/global/crashes.properties              (%crashreporter/crashes.properties)
-% locale global-platform @AB_CD@ %locale/@AB_CD@/global-platform/
+% locale global-platform @AB_CD@ %locale/@AB_CD@/global-platform/unix/ os=LikeUnix os=Android
+% locale global-platform @AB_CD@ %locale/@AB_CD@/global-platform/mac/ os=Darwin
+% locale global-platform @AB_CD@ %locale/@AB_CD@/global-platform/win/ os=WINNT
   locale/@AB_CD@/global-platform/mac/platformKeys.properties  (%chrome/global-platform/mac/platformKeys.properties)
   locale/@AB_CD@/global-platform/unix/platformKeys.properties (%chrome/global-platform/unix/platformKeys.properties)
   locale/@AB_CD@/global-platform/win/platformKeys.properties  (%chrome/global-platform/win/platformKeys.properties)
@@ -107,7 +109,6 @@
   locale/@AB_CD@/mozapps/extensions/extensions.properties         (%chrome/mozapps/extensions/extensions.properties)
   locale/@AB_CD@/mozapps/extensions/blocklist.dtd                 (%chrome/mozapps/extensions/blocklist.dtd)
   locale/@AB_CD@/mozapps/extensions/about.dtd                     (%chrome/mozapps/extensions/about.dtd)
-  locale/@AB_CD@/mozapps/extensions/update.dtd                    (%chrome/mozapps/extensions/update.dtd)
   locale/@AB_CD@/mozapps/extensions/update.properties             (%chrome/mozapps/extensions/update.properties)
   locale/@AB_CD@/mozapps/extensions/newaddon.dtd                  (%chrome/mozapps/extensions/newaddon.dtd)
   locale/@AB_CD@/mozapps/extensions/newaddon.properties           (%chrome/mozapps/extensions/newaddon.properties)

@@ -298,7 +298,7 @@ MacroAssemblerX64::boxValue(JSValueType type, Register src, Register dest)
 }
 
 void
-MacroAssemblerX64::handleFailureWithHandlerTail(void* handler)
+MacroAssemblerX64::handleFailureWithHandlerTail(void* handler, Label* profilerExitTail)
 {
     // Reserve space for exception information.
     subq(Imm32(sizeof(ResumeFromException)), rsp);
@@ -307,13 +307,14 @@ MacroAssemblerX64::handleFailureWithHandlerTail(void* handler)
     // Call the handler.
     asMasm().setupUnalignedABICall(rcx);
     asMasm().passABIArg(rax);
-    asMasm().callWithABI(handler);
+    asMasm().callWithABI(handler, MoveOp::GENERAL, CheckUnsafeCallWithABI::DontCheckHasExitFrame);
 
     Label entryFrame;
     Label catch_;
     Label finally;
     Label return_;
     Label bailout;
+    Label wasm;
 
     load32(Address(rsp, offsetof(ResumeFromException, kind)), rax);
     asMasm().branch32(Assembler::Equal, rax, Imm32(ResumeFromException::RESUME_ENTRY_FRAME), &entryFrame);
@@ -321,13 +322,14 @@ MacroAssemblerX64::handleFailureWithHandlerTail(void* handler)
     asMasm().branch32(Assembler::Equal, rax, Imm32(ResumeFromException::RESUME_FINALLY), &finally);
     asMasm().branch32(Assembler::Equal, rax, Imm32(ResumeFromException::RESUME_FORCED_RETURN), &return_);
     asMasm().branch32(Assembler::Equal, rax, Imm32(ResumeFromException::RESUME_BAILOUT), &bailout);
+    asMasm().branch32(Assembler::Equal, rax, Imm32(ResumeFromException::RESUME_WASM), &wasm);
 
     breakpoint(); // Invalid kind.
 
     // No exception handler. Load the error value, load the new stack pointer
     // and return from the entry frame.
     bind(&entryFrame);
-    moveValue(MagicValue(JS_ION_ERROR), JSReturnOperand);
+    asMasm().moveValue(MagicValue(JS_ION_ERROR), JSReturnOperand);
     loadPtr(Address(rsp, offsetof(ResumeFromException, stackPointer)), rsp);
     ret();
 
@@ -368,7 +370,7 @@ MacroAssemblerX64::handleFailureWithHandlerTail(void* handler)
         Label skipProfilingInstrumentation;
         AbsoluteAddress addressOfEnabled(GetJitContext()->runtime->geckoProfiler().addressOfEnabled());
         asMasm().branch32(Assembler::Equal, addressOfEnabled, Imm32(0), &skipProfilingInstrumentation);
-        profilerExitFrame();
+        jump(profilerExitTail);
         bind(&skipProfilingInstrumentation);
     }
 
@@ -380,6 +382,14 @@ MacroAssemblerX64::handleFailureWithHandlerTail(void* handler)
     loadPtr(Address(esp, offsetof(ResumeFromException, bailoutInfo)), r9);
     mov(ImmWord(BAILOUT_RETURN_OK), rax);
     jmp(Operand(rsp, offsetof(ResumeFromException, target)));
+
+    // If we are throwing and the innermost frame was a wasm frame, reset SP and
+    // FP; SP is pointing to the unwound return address to the wasm entry, so
+    // we can just ret().
+    bind(&wasm);
+    loadPtr(Address(rsp, offsetof(ResumeFromException, framePointer)), rbp);
+    loadPtr(Address(rsp, offsetof(ResumeFromException, stackPointer)), rsp);
+    masm.ret();
 }
 
 void
@@ -394,7 +404,7 @@ MacroAssemblerX64::profilerEnterFrame(Register framePtr, Register scratch)
 void
 MacroAssemblerX64::profilerExitFrame()
 {
-    jmp(GetJitContext()->runtime->jitRuntime()->getProfilerExitFrameTail());
+    jump(GetJitContext()->runtime->jitRuntime()->getProfilerExitFrameTail());
 }
 
 MacroAssembler&
@@ -561,6 +571,49 @@ MacroAssembler::callWithABINoProfiler(const Address& fun, MoveOp::Type result)
 }
 
 // ===============================================================
+// Move instructions
+
+void
+MacroAssembler::moveValue(const TypedOrValueRegister& src, const ValueOperand& dest)
+{
+    if (src.hasValue()) {
+        moveValue(src.valueReg(), dest);
+        return;
+    }
+
+    MIRType type = src.type();
+    AnyRegister reg = src.typedReg();
+
+    if (!IsFloatingPointType(type)) {
+        boxValue(ValueTypeFromMIRType(type), reg.gpr(), dest.valueReg());
+        return;
+    }
+
+    ScratchDoubleScope scratch(*this);
+    FloatRegister freg = reg.fpu();
+    if (type == MIRType::Float32) {
+        convertFloat32ToDouble(freg, scratch);
+        freg = scratch;
+    }
+    vmovq(freg, dest.valueReg());
+}
+
+void
+MacroAssembler::moveValue(const ValueOperand& src, const ValueOperand& dest)
+{
+    if (src == dest)
+        return;
+    movq(src.valueReg(), dest.valueReg());
+}
+
+void
+MacroAssembler::moveValue(const Value& src, const ValueOperand& dest)
+{
+    movWithPatch(ImmWord(src.asRawBits()), dest.valueReg());
+    writeDataRelocation(src);
+}
+
+// ===============================================================
 // Branch functions
 
 void
@@ -618,7 +671,7 @@ MacroAssembler::branchTestValue(Condition cond, const ValueOperand& lhs,
     MOZ_ASSERT(cond == Equal || cond == NotEqual);
     ScratchRegisterScope scratch(*this);
     MOZ_ASSERT(lhs.valueReg() != scratch);
-    moveValue(rhs, scratch);
+    moveValue(rhs, ValueOperand(scratch));
     cmpPtr(lhs.valueReg(), scratch);
     j(cond, label);
 }
@@ -737,7 +790,8 @@ MacroAssembler::wasmLoad(const wasm::MemoryAccessDesc& access, Operand srcAddr, 
 void
 MacroAssembler::wasmLoadI64(const wasm::MemoryAccessDesc& access, Operand srcAddr, Register64 out)
 {
-    MOZ_ASSERT(!access.isAtomic());
+    memoryBarrier(access.barrierBefore());
+
     MOZ_ASSERT(!access.isSimd());
 
     size_t loadOffset = size();
@@ -776,6 +830,8 @@ MacroAssembler::wasmLoadI64(const wasm::MemoryAccessDesc& access, Operand srcAdd
         MOZ_CRASH("unexpected array type");
     }
     append(access, loadOffset, framePushed());
+
+    memoryBarrier(access.barrierAfter());
 }
 
 void

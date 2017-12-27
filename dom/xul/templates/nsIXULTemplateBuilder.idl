@@ -5,7 +5,6 @@
 
 #include "domstubs.idl"
 
-interface nsIAtom;
 interface nsIContent;
 interface nsIXULBuilderListener;
 interface nsIXULTemplateResult;
@@ -14,6 +13,12 @@ interface nsIXULTemplateQueryProcessor;
 interface nsIRDFResource;
 interface nsIRDFCompositeDataSource;
 interface nsIDOMDataTransfer;
+
+%{C++
+class nsAtom;
+%}
+[ptr] native nsAtomPtr(nsAtom);
+[ptr] native Element (mozilla::dom::Element);
 
 /**
  * A template builder, given an input source of data, a template, and a
@@ -267,7 +272,8 @@ interface nsIXULTemplateBuilder : nsISupports
      * @param aNode node to check
      * @param aTag tag that must match
      */
-    boolean hasGeneratedContent(in nsIRDFResource aNode, in nsIAtom aTag);
+    [noscript] boolean hasGeneratedContent(in nsIRDFResource aNode,
+                                           in nsAtomPtr aTag);
 
     /**
      * Adds a rule filter for a given rule, which may be used for specialized
@@ -283,20 +289,12 @@ interface nsIXULTemplateBuilder : nsISupports
     void addRuleFilter(in nsIDOMNode aRule, in nsIXULTemplateRuleFilter aFilter);
 
     /**
-     * Called to initialize a XUL content builder on a particular root
-     * element. This element presumably has a ``datasources''
-     * attribute, which the builder will parse to set up the template
-     * builder's datasources.
-     */
-    [noscript] void init(in nsIContent aElement);
-
-    /**
      * Invoked lazily by a XUL element that needs its child content built.
      * If aForceCreation is true, then the contents of an element will be
      * generated even if it is closed. If false, the element will only
      * generate its contents if it is open. This behaviour is used with menus.
      */
-    [noscript] void createContents(in nsIContent aElement,
+    [noscript] void createContents(in Element aElement,
                                    in boolean aForceCreation);
 
     /**

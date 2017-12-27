@@ -12,6 +12,7 @@
 #include "mozilla/gfx/Blur.h"
 #include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/SystemGroup.h"
 #include "nsExpirationTracker.h"
 #include "nsClassHashtable.h"
 #include "gfxUtils.h"
@@ -27,9 +28,6 @@ gfxAlphaBoxBlur::gfxAlphaBoxBlur()
 
 gfxAlphaBoxBlur::~gfxAlphaBoxBlur()
 {
-  if (mData) {
-    free(mData);
-  }
 }
 
 already_AddRefed<gfxContext>
@@ -38,21 +36,23 @@ gfxAlphaBoxBlur::Init(gfxContext* aDestinationCtx,
                       const IntSize& aSpreadRadius,
                       const IntSize& aBlurRadius,
                       const gfxRect* aDirtyRect,
-                      const gfxRect* aSkipRect)
+                      const gfxRect* aSkipRect,
+                      bool aUseHardwareAccel)
 {
   DrawTarget* refDT = aDestinationCtx->GetDrawTarget();
   Maybe<Rect> dirtyRect = aDirtyRect ? Some(ToRect(*aDirtyRect)) : Nothing();
   Maybe<Rect> skipRect = aSkipRect ? Some(ToRect(*aSkipRect)) : Nothing();
   RefPtr<DrawTarget> dt =
     InitDrawTarget(refDT, ToRect(aRect), aSpreadRadius, aBlurRadius,
-                   dirtyRect.ptrOr(nullptr), skipRect.ptrOr(nullptr));
+                   dirtyRect.ptrOr(nullptr), skipRect.ptrOr(nullptr),
+                   aUseHardwareAccel);
   if (!dt) {
     return nullptr;
   }
 
   RefPtr<gfxContext> context = gfxContext::CreateOrNull(dt);
   MOZ_ASSERT(context); // already checked for target above
-  context->SetMatrix(gfxMatrix::Translation(-mBlur.GetRect().TopLeft()));
+  context->SetMatrix(Matrix::Translation(-mBlur.GetRect().TopLeft()));
   return context.forget();
 }
 
@@ -62,7 +62,8 @@ gfxAlphaBoxBlur::InitDrawTarget(const DrawTarget* aReferenceDT,
                                 const IntSize& aSpreadRadius,
                                 const IntSize& aBlurRadius,
                                 const Rect* aDirtyRect,
-                                const Rect* aSkipRect)
+                                const Rect* aSkipRect,
+                                bool aUseHardwareAccel)
 {
   mBlur.Init(aRect, aSpreadRadius, aBlurRadius, aDirtyRect, aSkipRect);
   size_t blurDataSize = mBlur.GetSurfaceAllocationSize();
@@ -75,9 +76,27 @@ gfxAlphaBoxBlur::InitDrawTarget(const DrawTarget* aReferenceDT,
   // Check if the backend has an accelerated DrawSurfaceWithShadow.
   // Currently, only D2D1.1 supports this.
   // Otherwise, DrawSurfaceWithShadow only supports square blurs without spread.
+  // When blurring small draw targets such as short spans text, the cost of
+  // creating and flushing an accelerated draw target may exceed the speedup
+  // gained from the faster blur. It's up to the users of this blur
+  // to determine whether they want to use hardware acceleration.
   if (aBlurRadius.IsSquare() && aSpreadRadius.IsEmpty() &&
+      aUseHardwareAccel &&
       backend == BackendType::DIRECT2D1_1) {
     mAccelerated = true;
+  }
+
+  if (aReferenceDT->IsCaptureDT()) {
+    if (mAccelerated) {
+      mDrawTarget = Factory::CreateCaptureDrawTarget(backend, mBlur.GetSize(), SurfaceFormat::A8);
+    } else {
+      mDrawTarget =
+        Factory::CreateCaptureDrawTargetForData(backend, mBlur.GetSize(), SurfaceFormat::A8,
+                                                mBlur.GetStride(), blurDataSize);
+    }
+  } else if (mAccelerated) {
+    // Note: CreateShadowDrawTarget is only implemented for Cairo, so we don't
+    // care about mimicking this in the DrawTargetCapture case.
     mDrawTarget =
       aReferenceDT->CreateShadowDrawTarget(mBlur.GetSize(),
                                            SurfaceFormat::A8,
@@ -85,6 +104,7 @@ gfxAlphaBoxBlur::InitDrawTarget(const DrawTarget* aReferenceDT,
   } else {
     // Make an alpha-only surface to draw on. We will play with the data after
     // everything is drawn to create a blur effect.
+    // This will be freed when the DrawTarget dies
     mData = static_cast<uint8_t*>(calloc(1, blurDataSize));
     if (!mData) {
       return nullptr;
@@ -103,8 +123,19 @@ gfxAlphaBoxBlur::InitDrawTarget(const DrawTarget* aReferenceDT,
   }
 
   if (!mDrawTarget || !mDrawTarget->IsValid()) {
+    if (mData) {
+      free(mData);
+    }
+
     return nullptr;
   }
+
+  if (mData) {
+    mDrawTarget->AddUserData(reinterpret_cast<UserDataKey*>(mDrawTarget.get()),
+                              mData,
+                              free);
+  }
+
   mDrawTarget->SetTransform(Matrix::Translation(-mBlur.GetRect().TopLeft()));
   return do_AddRef(mDrawTarget);
 }
@@ -112,20 +143,18 @@ gfxAlphaBoxBlur::InitDrawTarget(const DrawTarget* aReferenceDT,
 already_AddRefed<SourceSurface>
 gfxAlphaBoxBlur::DoBlur(const Color* aShadowColor, IntPoint* aOutTopLeft)
 {
-  if (mData) {
-    mBlur.Blur(mData);
-  }
-
   if (aOutTopLeft) {
     *aOutTopLeft = mBlur.GetRect().TopLeft();
   }
 
-  RefPtr<SourceSurface> blurMask = mDrawTarget->Snapshot();
-  if (mAccelerated) {
+  RefPtr<SourceSurface> blurMask;
+  if (mData) {
+    mBlur.Blur(mData);
+    blurMask = mDrawTarget->Snapshot();
+  } else if (mAccelerated) {
+    blurMask = mDrawTarget->Snapshot();
     RefPtr<DrawTarget> blurDT =
-      Factory::CreateDrawTarget(mDrawTarget->GetBackendType(),
-                                blurMask->GetSize(),
-                                SurfaceFormat::A8);
+      mDrawTarget->CreateSimilarDrawTarget(blurMask->GetSize(), SurfaceFormat::A8);
     if (!blurDT) {
       return nullptr;
     }
@@ -133,6 +162,9 @@ gfxAlphaBoxBlur::DoBlur(const Color* aShadowColor, IntPoint* aOutTopLeft)
                                   AlphaBoxBlur::CalculateBlurSigma(mBlur.GetBlurRadius().width),
                                   CompositionOp::OP_OVER);
     blurMask = blurDT->Snapshot();
+  } else if (mDrawTarget->IsCaptureDT()) {
+    mDrawTarget->Blur(mBlur);
+    blurMask = mDrawTarget->Snapshot();
   }
 
   if (!aShadowColor) {
@@ -140,9 +172,7 @@ gfxAlphaBoxBlur::DoBlur(const Color* aShadowColor, IntPoint* aOutTopLeft)
   }
 
   RefPtr<DrawTarget> shadowDT =
-    Factory::CreateDrawTarget(mDrawTarget->GetBackendType(),
-                              blurMask->GetSize(),
-                              SurfaceFormat::B8G8R8A8);
+    mDrawTarget->CreateSimilarDrawTarget(blurMask->GetSize(), SurfaceFormat::B8G8R8A8);
   if (!shadowDT) {
     return nullptr;
   }
@@ -155,7 +185,7 @@ gfxAlphaBoxBlur::DoBlur(const Color* aShadowColor, IntPoint* aOutTopLeft)
 void
 gfxAlphaBoxBlur::Paint(gfxContext* aDestinationCtx)
 {
-  if (!mAccelerated && !mData) {
+  if ((mDrawTarget && !mDrawTarget->IsCaptureDT()) && !mAccelerated && !mData) {
     return;
   }
 
@@ -255,6 +285,8 @@ struct BlurCacheKey : public PLDHashEntryHdr {
     , mInnerMinSize(aInnerMinSize)
   { }
 
+  BlurCacheKey(BlurCacheKey&&) = default;
+
   static PLDHashNumber
   HashKey(const KeyTypePointer aKey)
   {
@@ -314,17 +346,13 @@ struct BlurCacheKey : public PLDHashEntryHdr {
  * to the cache entry to be able to be tracked by the nsExpirationTracker.
  * */
 struct BlurCacheData {
-  BlurCacheData(SourceSurface* aBlur, const IntMargin& aBlurMargin, const BlurCacheKey& aKey)
+  BlurCacheData(SourceSurface* aBlur, const IntMargin& aBlurMargin, BlurCacheKey&& aKey)
     : mBlur(aBlur)
     , mBlurMargin(aBlurMargin)
-    , mKey(aKey)
+    , mKey(Move(aKey))
   {}
 
-  BlurCacheData(const BlurCacheData& aOther)
-    : mBlur(aOther.mBlur)
-    , mBlurMargin(aOther.mBlurMargin)
-    , mKey(aOther.mKey)
-  { }
+  BlurCacheData(BlurCacheData&& aOther) = default;
 
   nsExpirationState *GetExpirationState() {
     return &mExpirationState;
@@ -346,7 +374,8 @@ class BlurCache final : public nsExpirationTracker<BlurCacheData,4>
 {
   public:
     BlurCache()
-      : nsExpirationTracker<BlurCacheData, 4>(GENERATION_MS, "BlurCache")
+      : nsExpirationTracker<BlurCacheData, 4>(GENERATION_MS, "BlurCache",
+                                              SystemGroup::EventTargetFor(TaskCategory::Other))
     {
     }
 
@@ -475,7 +504,7 @@ CacheBlur(DrawTarget* aDT,
           SourceSurface* aBoxShadow)
 {
   BlurCacheKey key(aMinSize, aBlurRadius, aCornerRadii, aShadowColor, aDT->GetBackendType());
-  BlurCacheData* data = new BlurCacheData(aBoxShadow, aBlurMargin, key);
+  BlurCacheData* data = new BlurCacheData(aBoxShadow, aBlurMargin, Move(key));
   if (!gBlurCache->RegisterEntry(data)) {
     delete data;
   }
@@ -498,7 +527,7 @@ CreateBoxShadow(DrawTarget* aDestDrawTarget,
   // Use ceil to preserve the remaining 1x1 middle area for minimized box
   // shadows.
   if (aMirrorCorners) {
-    blurRect.SizeTo(ceil(blurRect.width * 0.5f), ceil(blurRect.height * 0.5f));
+    blurRect.SizeTo(ceil(blurRect.Width() * 0.5f), ceil(blurRect.Height() * 0.5f));
   }
   IntSize zeroSpread(0, 0);
   RefPtr<DrawTarget> blurDT =
@@ -552,8 +581,14 @@ GetBlur(gfxContext* aDestinationCtx,
   // We can get seams using the min size rect when drawing to the destination rect
   // if we have a non-pixel aligned destination transformation. In those cases,
   // fallback to just rendering the destination rect.
-  Matrix destMatrix = ToMatrix(aDestinationCtx->CurrentMatrix());
-  bool useDestRect = !destMatrix.IsRectilinear() || destMatrix.HasNonIntegerTranslation();
+  // During printing, we record all the Moz 2d commands and replay them on the parent side
+  // with Cairo. Cairo printing uses StretchDIBits to stretch the surface. However,
+  // since our source image is only 1px for some parts, we make thousands of calls.
+  // Instead just render the blur ourself here as one image and send it over for printing.
+  // TODO: May need to change this with the blob renderer in WR since it also records.
+  Matrix destMatrix = aDestinationCtx->CurrentMatrix();
+  bool useDestRect = !destMatrix.IsRectilinear() || destMatrix.HasNonIntegerTranslation() ||
+                     aDestinationCtx->GetDrawTarget()->IsRecording();
   if (useDestRect) {
     minSize = aRectSize;
   }
@@ -578,6 +613,10 @@ GetBlur(gfxContext* aDestinationCtx,
                     aShadowColor, aMirrorCorners, aOutBlurMargin);
   if (!boxShadow) {
     return nullptr;
+  }
+
+  if (RefPtr<SourceSurface> opt = destDT->OptimizeSourceSurface(boxShadow)) {
+    boxShadow = opt;
   }
 
   if (!useDestRect) {
@@ -728,8 +767,8 @@ DrawMirroredRect(DrawTarget* aDT,
                          Matrix::Scaling(aScaleX, aScaleY)
                            .PreTranslate(-aSrc)
                            .PostTranslate(
-                             aScaleX < 0 ? aDest.XMost() : aDest.x,
-                             aScaleY < 0 ? aDest.YMost() : aDest.y));
+                             aScaleX < 0 ? aDest.XMost() : aDest.X(),
+                             aScaleY < 0 ? aDest.YMost() : aDest.Y()));
   aDT->FillRect(aDest, pattern);
 }
 
@@ -738,14 +777,14 @@ DrawMirroredBoxShadow(DrawTarget* aDT,
                       SourceSurface* aSurface,
                       const Rect& aDestRect)
 {
-  Point center(ceil(aDestRect.x + aDestRect.width / 2),
-               ceil(aDestRect.y + aDestRect.height / 2));
-  Rect topLeft(aDestRect.x, aDestRect.y,
-               center.x - aDestRect.x,
-               center.y - aDestRect.y);
+  Point center(ceil(aDestRect.X() + aDestRect.Width() / 2),
+               ceil(aDestRect.Y() + aDestRect.Height() / 2));
+  Rect topLeft(aDestRect.X(), aDestRect.Y(),
+               center.x - aDestRect.X(),
+               center.y - aDestRect.Y());
   Rect bottomRight(topLeft.BottomRight(), aDestRect.Size() - topLeft.Size());
-  Rect topRight(bottomRight.x, topLeft.y, bottomRight.width, topLeft.height);
-  Rect bottomLeft(topLeft.x, bottomRight.y, topLeft.width, bottomRight.height);
+  Rect topRight(bottomRight.X(), topLeft.Y(), bottomRight.Width(), topLeft.Height());
+  Rect bottomLeft(topLeft.X(), bottomRight.Y(), topLeft.Width(), bottomRight.Height());
   DrawMirroredRect(aDT, aSurface, topLeft, Point(), 1, 1);
   DrawMirroredRect(aDT, aSurface, topRight, Point(), -1, 1);
   DrawMirroredRect(aDT, aSurface, bottomLeft, Point(), 1, -1);
@@ -774,8 +813,8 @@ RepeatOrStretchMirroredSurface(DrawTarget* aDT, SourceSurface* aSurface,
   }
 
   if (ShouldStretchSurface(aDT, aSurface)) {
-    aScaleX *= aDest.width / aSrc.width;
-    aScaleY *= aDest.height / aSrc.height;
+    aScaleX *= aDest.Width() / aSrc.Width();
+    aScaleY *= aDest.Height() / aSrc.Height();
     DrawMirroredRect(aDT, aSurface, aDest, aSrc.TopLeft(), aScaleX, aScaleY);
     return;
   }
@@ -784,8 +823,8 @@ RepeatOrStretchMirroredSurface(DrawTarget* aDT, SourceSurface* aSurface,
                          Matrix::Scaling(aScaleX, aScaleY)
                            .PreTranslate(-aSrc.TopLeft())
                            .PostTranslate(
-                             aScaleX < 0 ? aDest.XMost() : aDest.x,
-                             aScaleY < 0 ? aDest.YMost() : aDest.y),
+                             aScaleX < 0 ? aDest.XMost() : aDest.X(),
+                             aScaleY < 0 ? aDest.YMost() : aDest.Y()),
                          SamplingFilter::GOOD, RoundedToInt(aSrc));
   aDT->FillRect(aDest, pattern);
 }
@@ -799,26 +838,26 @@ DrawMirroredMinBoxShadow(DrawTarget* aDestDrawTarget, SourceSurface* aSourceBlur
   // Corners: top left, top right, bottom left, bottom right
   // Compute quadrant bounds and then clip them to corners along
   // dimensions where we need to stretch from min size.
-  Point center(ceil(aDstOuter.x + aDstOuter.width / 2),
-               ceil(aDstOuter.y + aDstOuter.height / 2));
-  Rect topLeft(aDstOuter.x, aDstOuter.y,
-               center.x - aDstOuter.x,
-               center.y - aDstOuter.y);
+  Point center(ceil(aDstOuter.X() + aDstOuter.Width() / 2),
+               ceil(aDstOuter.Y() + aDstOuter.Height() / 2));
+  Rect topLeft(aDstOuter.X(), aDstOuter.Y(),
+               center.x - aDstOuter.X(),
+               center.y - aDstOuter.Y());
   Rect bottomRight(topLeft.BottomRight(), aDstOuter.Size() - topLeft.Size());
-  Rect topRight(bottomRight.x, topLeft.y, bottomRight.width, topLeft.height);
-  Rect bottomLeft(topLeft.x, bottomRight.y, topLeft.width, bottomRight.height);
+  Rect topRight(bottomRight.X(), topLeft.Y(), bottomRight.Width(), topLeft.Height());
+  Rect bottomLeft(topLeft.X(), bottomRight.Y(), topLeft.Width(), bottomRight.Height());
 
   // Check if the middle part has been minimized along each dimension.
   // If so, those will be strecthed/drawn separately and need to be clipped out.
-  if (aSrcInner.width == 1) {
-    topLeft.SetRightEdge(aDstInner.x);
+  if (aSrcInner.Width() == 1) {
+    topLeft.SetRightEdge(aDstInner.X());
     topRight.SetLeftEdge(aDstInner.XMost());
-    bottomLeft.SetRightEdge(aDstInner.x);
+    bottomLeft.SetRightEdge(aDstInner.X());
     bottomRight.SetLeftEdge(aDstInner.XMost());
   }
-  if (aSrcInner.height == 1) {
-    topLeft.SetBottomEdge(aDstInner.y);
-    topRight.SetBottomEdge(aDstInner.y);
+  if (aSrcInner.Height() == 1) {
+    topLeft.SetBottomEdge(aDstInner.Y());
+    topRight.SetBottomEdge(aDstInner.Y());
     bottomLeft.SetTopEdge(aDstInner.YMost());
     bottomRight.SetTopEdge(aDstInner.YMost());
   }
@@ -836,7 +875,7 @@ DrawMirroredMinBoxShadow(DrawTarget* aDestDrawTarget, SourceSurface* aSourceBlur
   // Draw middle edges where they need to be stretched. The top and left
   // sections that are part of the top-left quadrant will be mirrored to
   // the bottom and right sections, respectively.
-  if (aSrcInner.width == 1) {
+  if (aSrcInner.Width() == 1) {
     Rect dstTop = RectWithEdgesTRBL(aDstOuter.Y(), aDstInner.XMost(),
                                     aDstInner.Y(), aDstInner.X());
     Rect srcTop = RectWithEdgesTRBL(aSrcOuter.Y(), aSrcInner.XMost(),
@@ -848,11 +887,11 @@ DrawMirroredMinBoxShadow(DrawTarget* aDestDrawTarget, SourceSurface* aSourceBlur
     // If we only need to stretch along the X axis and we're drawing
     // the middle section, just sample all the way to the center of the
     // source on the Y axis to avoid extra draw calls.
-    if (aMiddle && aSrcInner.height != 1) {
+    if (aMiddle && aSrcInner.Height() != 1) {
       dstTop.SetBottomEdge(center.y);
-      srcTop.height = dstTop.height;
+      srcTop.SetHeight(dstTop.Height());
       dstBottom.SetTopEdge(dstTop.YMost());
-      srcBottom.height = dstBottom.height;
+      srcBottom.SetHeight(dstBottom.Height());
     }
     RepeatOrStretchMirroredSurface(aDestDrawTarget, aSourceBlur,
                                    dstTop, srcTop, aSkipRect, 1, 1);
@@ -860,7 +899,7 @@ DrawMirroredMinBoxShadow(DrawTarget* aDestDrawTarget, SourceSurface* aSourceBlur
                                    dstBottom, srcBottom, aSkipRect, 1, -1);
   }
 
-  if (aSrcInner.height == 1) {
+  if (aSrcInner.Height() == 1) {
     Rect dstLeft = RectWithEdgesTRBL(aDstInner.Y(), aDstInner.X(),
                                      aDstInner.YMost(), aDstOuter.X());
     Rect srcLeft = RectWithEdgesTRBL(aSrcInner.Y(), aSrcInner.X(),
@@ -870,11 +909,11 @@ DrawMirroredMinBoxShadow(DrawTarget* aDestDrawTarget, SourceSurface* aSourceBlur
     Rect srcRight = RectWithEdgesTRBL(aSrcInner.Y(), aSrcInner.X(),
                                       aSrcInner.YMost(), aSrcOuter.X());
     // Only stretching on Y axis, so sample source to the center of the X axis.
-    if (aMiddle && aSrcInner.width != 1) {
+    if (aMiddle && aSrcInner.Width() != 1) {
       dstLeft.SetRightEdge(center.x);
-      srcLeft.width = dstLeft.width;
+      srcLeft.SetWidth(dstLeft.Width());
       dstRight.SetLeftEdge(dstLeft.XMost());
-      srcRight.width = dstRight.width;
+      srcRight.SetWidth(dstRight.Width());
     }
     RepeatOrStretchMirroredSurface(aDestDrawTarget, aSourceBlur,
                                    dstLeft, srcLeft, aSkipRect, 1, 1);
@@ -884,7 +923,7 @@ DrawMirroredMinBoxShadow(DrawTarget* aDestDrawTarget, SourceSurface* aSourceBlur
 
   // If we need to stretch along both dimensions, then the middle part
   // must be drawn separately.
-  if (aMiddle && aSrcInner.width == 1 && aSrcInner.height == 1) {
+  if (aMiddle && aSrcInner.Width() == 1 && aSrcInner.Height() == 1) {
     RepeatOrStretchSurface(aDestDrawTarget, aSourceBlur,
                            RectWithEdgesTRBL(aDstInner.Y(), aDstInner.XMost(),
                                              aDstInner.YMost(), aDstInner.X()),
@@ -1047,7 +1086,7 @@ CacheInsetBlur(const IntSize& aMinOuterSize,
                    aShadowColor, isInsetBlur,
                    aBackendType);
   IntMargin blurMargin(0, 0, 0, 0);
-  BlurCacheData* data = new BlurCacheData(aBoxShadow, blurMargin, key);
+  BlurCacheData* data = new BlurCacheData(aBoxShadow, blurMargin, Move(key));
   if (!gBlurCache->RegisterEntry(data)) {
     delete data;
   }
@@ -1088,7 +1127,7 @@ gfxAlphaBoxBlur::GetInsetBlur(const Rect& aOuterRect,
   // Use ceil to preserve the remaining 1x1 middle area for minimized box
   // shadows.
   if (aMirrorCorners) {
-    blurRect.SizeTo(ceil(blurRect.width * 0.5f), ceil(blurRect.height * 0.5f));
+    blurRect.SizeTo(ceil(blurRect.Width() * 0.5f), ceil(blurRect.Height() * 0.5f));
   }
   IntSize zeroSpread(0, 0);
   RefPtr<DrawTarget> minDrawTarget =
@@ -1120,6 +1159,10 @@ gfxAlphaBoxBlur::GetInsetBlur(const Rect& aOuterRect,
   RefPtr<SourceSurface> minInsetBlur = DoBlur(&aShadowColor);
   if (!minInsetBlur) {
     return nullptr;
+  }
+
+  if (RefPtr<SourceSurface> opt = aDestDrawTarget->OptimizeSourceSurface(minInsetBlur)) {
+    minInsetBlur = opt;
   }
 
   if (!aIsDestRect) {
@@ -1201,8 +1244,8 @@ GetInsetBoxShadowRects(const Margin& aBlurMargin,
   // If the inner white space rect is larger than the shadow clip rect
   // our approach does not work as we'll just copy one corner
   // and cover the destination. In those cases, fallback to the destination rect
-  bool useDestRect = (aShadowClipRect.width <= aInnerMargin.LeftRight()) ||
-                     (aShadowClipRect.height <= aInnerMargin.TopBottom());
+  bool useDestRect = (aShadowClipRect.Width() <= aInnerMargin.LeftRight()) ||
+                     (aShadowClipRect.Height() <= aInnerMargin.TopBottom());
 
   if (useDestRect) {
     aOutWhitespaceRect = aShadowClipRect;

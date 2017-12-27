@@ -13,6 +13,7 @@
 
 #include "nsSound.h"
 
+#include "HeadlessSound.h"
 #include "nsIURL.h"
 #include "nsIFileURL.h"
 #include "nsNetUtil.h"
@@ -24,9 +25,11 @@
 #include "mozilla/FileUtils.h"
 #include "mozilla/Services.h"
 #include "mozilla/Unused.h"
-#include "nsIStringBundle.h"
+#include "mozilla/WidgetUtils.h"
 #include "nsIXULAppInfo.h"
 #include "nsContentUtils.h"
+#include "gfxPlatform.h"
+#include "mozilla/ClearOnShutdown.h"
 
 #include <stdio.h>
 #include <unistd.h>
@@ -122,22 +125,11 @@ ca_context_get_default()
         }
     }
 
-    nsCOMPtr<nsIStringBundleService> bundleService =
-        mozilla::services::GetStringBundleService();
-    if (bundleService) {
-        nsCOMPtr<nsIStringBundle> brandingBundle;
-        bundleService->CreateBundle("chrome://branding/locale/brand.properties",
-                                    getter_AddRefs(brandingBundle));
-        if (brandingBundle) {
-            nsAutoString wbrand;
-            brandingBundle->GetStringFromName(u"brandShortName",
-                                              getter_Copies(wbrand));
-            NS_ConvertUTF16toUTF8 brand(wbrand);
-
-            ca_context_change_props(ctx, "application.name", brand.get(),
-                                    nullptr);
-        }
-    }
+    nsAutoString wbrand;
+    mozilla::widget::WidgetUtils::GetBrandShortName(wbrand);
+    ca_context_change_props(ctx, "application.name",
+                            NS_ConvertUTF16toUTF8(wbrand).get(),
+                            nullptr);
 
     nsCOMPtr<nsIXULAppInfo> appInfo = do_GetService("@mozilla.org/xre/app-info;1");
     if (appInfo) {
@@ -219,6 +211,29 @@ nsSound::Shutdown()
         PR_UnloadLibrary(libcanberra);
         libcanberra = nullptr;
     }
+}
+
+namespace mozilla {
+namespace sound {
+StaticRefPtr<nsISound> sInstance;
+}
+}
+/* static */ already_AddRefed<nsISound>
+nsSound::GetInstance()
+{
+    using namespace mozilla::sound;
+
+    if (!sInstance) {
+        if (gfxPlatform::IsHeadless()) {
+            sInstance = new mozilla::widget::HeadlessSound();
+        } else {
+            sInstance = new nsSound();
+        }
+        ClearOnShutdown(&sInstance);
+    }
+
+    RefPtr<nsISound> service = sInstance.get();
+    return service.forget();
 }
 
 NS_IMETHODIMP nsSound::OnStreamComplete(nsIStreamLoader *aLoader,

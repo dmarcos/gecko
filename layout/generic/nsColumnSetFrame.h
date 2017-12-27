@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -20,7 +21,7 @@
 class nsColumnSetFrame final : public nsContainerFrame
 {
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsColumnSetFrame)
 
   explicit nsColumnSetFrame(nsStyleContext* aContext);
 
@@ -41,8 +42,8 @@ public:
                            nsIFrame*       aOldFrame) override;
 #endif
 
-  virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
-  virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
+  virtual nscoord GetMinISize(gfxContext *aRenderingContext) override;
+  virtual nscoord GetPrefISize(gfxContext *aRenderingContext) override;
 
   /**
    * Retrieve the available height for content of this frame. The available content
@@ -67,10 +68,7 @@ public:
    }
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
-
-  virtual nsIAtom* GetType() const override;
 
   /**
    * Similar to nsBlockFrame::DrainOverflowLines. Locate any columns not
@@ -79,12 +77,8 @@ public:
    */
   void DrainOverflowColumns();
 
-  /**
-   * Update the style on our column-content frames.
-   */
-  void DoUpdateStyleOfOwnedAnonBoxes(mozilla::ServoStyleSet& aStyleSet,
-                                     nsStyleChangeList& aChangeList,
-                                     nsChangeHint aHintForThisFrame) override;
+  // Return the column-content frame.
+  void AppendDirectlyOwnedAnonBoxes(nsTArray<OwnedAnonBox>& aResult) override;
 
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override {
@@ -92,8 +86,9 @@ public:
   }
 #endif
 
+  nsRect CalculateBounds(const nsPoint& aOffset);
   void CreateBorderRenderers(nsTArray<nsCSSBorderRenderer>& aBorderRenderers,
-                             nsRenderingContext* aCtx,
+                             gfxContext* aCtx,
                              const nsRect& aDirtyRect,
                              const nsPoint& aPt);
 
@@ -232,6 +227,9 @@ protected:
                         bool aLastColumnUnbounded,
                         nsCollapsingMargin* aCarriedOutBEndMargin,
                         ColumnBalanceData& aColData);
+
+  void ForEachColumn(const std::function<void(const nsRect& lineRect)>& aSetLineRect,
+                     const nsPoint& aPt);
 };
 
 #endif // nsColumnSetFrame_h___

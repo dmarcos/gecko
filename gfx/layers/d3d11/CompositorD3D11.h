@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -12,6 +13,7 @@
 #include "TextureD3D11.h"
 #include <d3d11.h>
 #include <dxgi1_2.h>
+#include "ShaderDefinitionsD3D11.h"
 
 class nsWidget;
 
@@ -20,26 +22,7 @@ namespace layers {
 
 #define LOGD3D11(param)
 
-struct VertexShaderConstants
-{
-  float layerTransform[4][4];
-  float projection[4][4];
-  float renderTargetOffset[4];
-  gfx::Rect textureCoords;
-  gfx::Rect layerQuad;
-  float maskTransform[4][4];
-  float backdropTransform[4][4];
-};
-
-struct PixelShaderConstants
-{
-  float layerColor[4];
-  float layerOpacity[4];
-  int blendConfig[4];
-  float yuvColorMatrix[3][4];
-};
-
-struct DeviceAttachmentsD3D11;
+class DeviceAttachmentsD3D11;
 class DiagnosticsD3D11;
 
 class CompositorD3D11 : public Compositor
@@ -233,7 +216,7 @@ private:
 
   RefPtr<ID3D11Query> mQuery;
 
-  DeviceAttachmentsD3D11* mAttachments;
+  RefPtr<DeviceAttachmentsD3D11> mAttachments;
   UniquePtr<DiagnosticsD3D11> mDiagnostics;
 
   LayoutDeviceIntSize mSize;
@@ -254,8 +237,7 @@ private:
   gfx::IntRect mCurrentClip;
 
   bool mVerifyBuffersFailed;
-
-  size_t mMaximumTriangles;
+  bool mUseMutexOnPresent;
 };
 
 }

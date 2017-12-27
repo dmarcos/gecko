@@ -10,16 +10,14 @@
 #include "mozilla/EventStates.h"
 #include "mozilla/TypedEnumBits.h"
 #include "mozilla/dom/BorrowedAttrInfo.h"
+#include "mozilla/dom/Element.h"
 #include "nsAttrName.h"
 #include "nsAttrValue.h"
 #include "nsChangeHint.h"
-#include "nsIAtom.h"
+#include "nsGkAtoms.h"
+#include "nsAtom.h"
 
 namespace mozilla {
-
-namespace dom {
-class Element;
-} // namespace dom
 
 /**
  * A structure representing a single attribute name and value.
@@ -46,7 +44,9 @@ enum class ServoElementSnapshotFlags : uint8_t
 {
   State = 1 << 0,
   Attributes = 1 << 1,
-  All = State | Attributes
+  Id = 1 << 2,
+  MaybeClass = 1 << 3,
+  OtherPseudoClassState = 1 << 4,
 };
 
 MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(ServoElementSnapshotFlags)
@@ -68,11 +68,20 @@ public:
   typedef ServoElementSnapshotFlags Flags;
 
   explicit ServoElementSnapshot(const Element* aElement);
-  ~ServoElementSnapshot();
 
-  bool HasAttrs() { return HasAny(Flags::Attributes); }
+  ~ServoElementSnapshot()
+  {
+    MOZ_COUNT_DTOR(ServoElementSnapshot);
+  }
 
-  bool HasState() { return HasAny(Flags::State); }
+  bool HasAttrs() const { return HasAny(Flags::Attributes); }
+
+  bool HasState() const { return HasAny(Flags::State); }
+
+  bool HasOtherPseudoClassState() const
+  {
+    return HasAny(Flags::OtherPseudoClassState);
+  }
 
   /**
    * Captures the given state (if not previously captured).
@@ -87,28 +96,39 @@ public:
 
   /**
    * Captures the given element attributes (if not previously captured).
+   *
+   * The attribute name and namespace are used to note which kind of attribute
+   * has changed.
    */
-  void AddAttrs(Element* aElement);
+  inline void AddAttrs(Element*, int32_t aNameSpaceID, nsAtom* aAttribute);
+
+  /**
+   * Captures some other pseudo-class matching state not included in
+   * EventStates.
+   */
+  void AddOtherPseudoClassState(Element* aElement);
 
   /**
    * Needed methods for attribute matching.
    */
   BorrowedAttrInfo GetAttrInfoAt(uint32_t aIndex) const
   {
+    MOZ_ASSERT(HasAttrs());
     if (aIndex >= mAttrs.Length()) {
       return BorrowedAttrInfo(nullptr, nullptr);
     }
     return BorrowedAttrInfo(&mAttrs[aIndex].mName, &mAttrs[aIndex].mValue);
   }
 
-  const nsAttrValue* GetParsedAttr(nsIAtom* aLocalName) const
+  const nsAttrValue* GetParsedAttr(nsAtom* aLocalName) const
   {
     return GetParsedAttr(aLocalName, kNameSpaceID_None);
   }
 
-  const nsAttrValue* GetParsedAttr(nsIAtom* aLocalName,
+  const nsAttrValue* GetParsedAttr(nsAtom* aLocalName,
                                    int32_t aNamespaceID) const
   {
+    MOZ_ASSERT(HasAttrs());
     uint32_t i, len = mAttrs.Length();
     if (aNamespaceID == kNameSpaceID_None) {
       // This should be the common case so lets make an optimized loop
@@ -130,24 +150,91 @@ public:
     return nullptr;
   }
 
-  bool IsInChromeDocument() const
+  const nsAttrValue* DoGetClasses() const
   {
-    return mIsInChromeDocument;
+    MOZ_ASSERT(HasAttrs());
+    return &mClass;
   }
 
-  bool HasAny(Flags aFlags) { return bool(mContains & aFlags); }
+  bool IsInChromeDocument() const { return mIsInChromeDocument; }
+  bool SupportsLangAttr() const { return mSupportsLangAttr; }
+
+  bool HasAny(Flags aFlags) const { return bool(mContains & aFlags); }
+
+  bool IsTableBorderNonzero() const
+  {
+    MOZ_ASSERT(HasOtherPseudoClassState());
+    return mIsTableBorderNonzero;
+  }
+
+  bool IsMozBrowserFrame() const
+  {
+    MOZ_ASSERT(HasOtherPseudoClassState());
+    return mIsMozBrowserFrame;
+  }
 
 private:
   // TODO: Profile, a 1 or 2 element AutoTArray could be worth it, given we know
   // we're dealing with attribute changes when we take snapshots of attributes,
   // though it can be wasted space if we deal with a lot of state-only
   // snapshots.
-  Flags mContains;
   nsTArray<ServoAttrSnapshot> mAttrs;
+  nsAttrValue mClass;
   ServoStateType mState;
-  bool mIsHTMLElementInHTMLDocument;
-  bool mIsInChromeDocument;
+  Flags mContains;
+  bool mIsHTMLElementInHTMLDocument : 1;
+  bool mIsInChromeDocument : 1;
+  bool mSupportsLangAttr : 1;
+  bool mIsTableBorderNonzero : 1;
+  bool mIsMozBrowserFrame : 1;
+  bool mClassAttributeChanged : 1;
+  bool mIdAttributeChanged : 1;
+  bool mOtherAttributeChanged : 1;
 };
+
+
+inline void
+ServoElementSnapshot::AddAttrs(mozilla::dom::Element* aElement,
+                               int32_t aNameSpaceID,
+                               nsAtom* aAttribute)
+{
+  if (aNameSpaceID == kNameSpaceID_None) {
+    if (aAttribute == nsGkAtoms::_class) {
+      mClassAttributeChanged = true;
+    } else if (aAttribute == nsGkAtoms::id) {
+      mIdAttributeChanged = true;
+    } else {
+      mOtherAttributeChanged = true;
+    }
+  } else {
+    mOtherAttributeChanged = true;
+  }
+
+  if (HasAttrs()) {
+    return;
+  }
+
+  uint32_t attrCount = aElement->GetAttrCount();
+  mAttrs.SetCapacity(attrCount);
+  for (uint32_t i = 0; i < attrCount; ++i) {
+    const BorrowedAttrInfo info = aElement->GetAttrInfoAt(i);
+    MOZ_ASSERT(info);
+    mAttrs.AppendElement(ServoAttrSnapshot { *info.mName, *info.mValue });
+  }
+
+  mContains |= Flags::Attributes;
+  if (aElement->HasID()) {
+    mContains |= Flags::Id;
+  }
+
+  if (const nsAttrValue* classValue = aElement->GetClasses()) {
+    // FIXME(emilio): It's pretty unfortunate that this is only relevant for
+    // SVG, yet it's a somewhat expensive copy. We should be able to do
+    // better!
+    mClass = *classValue;
+    mContains |= Flags::MaybeClass;
+  }
+}
 
 } // namespace mozilla
 

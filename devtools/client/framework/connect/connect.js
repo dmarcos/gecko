@@ -12,7 +12,7 @@ var Services = require("Services");
 var {gDevTools} = require("devtools/client/framework/devtools");
 var {TargetFactory} = require("devtools/client/framework/target");
 var {Toolbox} = require("devtools/client/framework/toolbox");
-var {DebuggerClient} = require("devtools/shared/client/main");
+var {DebuggerClient} = require("devtools/shared/client/debugger-client");
 var {Task} = require("devtools/shared/task");
 var {LocalizationHelper} = require("devtools/shared/l10n");
 var L10N = new LocalizationHelper("devtools/client/locales/connection-screen.properties");
@@ -164,8 +164,9 @@ var onConnectionReady = Task.async(function* ([aType, aTraits]) {
  */
 function buildAddonLink(addon, parent) {
   let a = document.createElement("a");
-  a.onclick = function () {
-    openToolbox(addon, true, "jsdebugger", false);
+  a.onclick = async function () {
+    const isTabActor = addon.isWebExtension;
+    openToolbox(addon, true, "webconsole", isTabActor);
   };
 
   a.textContent = addon.name;

@@ -5,6 +5,7 @@
 #ifndef __FFmpegLibWrapper_h__
 #define __FFmpegLibWrapper_h__
 
+#include "mozilla/Attributes.h"
 #include "mozilla/Types.h"
 
 struct AVCodec;
@@ -15,8 +16,7 @@ struct AVDictionary;
 struct AVCodecParserContext;
 struct PRLibrary;
 
-namespace mozilla
-{
+namespace mozilla {
 
 struct MOZ_ONLY_USED_TO_AVOID_STATIC_CONSTRUCTORS FFmpegLibWrapper
 {

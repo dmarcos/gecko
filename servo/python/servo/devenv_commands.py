@@ -8,9 +8,12 @@
 # except according to those terms.
 
 from __future__ import print_function, unicode_literals
-from os import path, getcwd, listdir
+from os import path, listdir
+from time import time
 
 import sys
+import urllib2
+import json
 
 from mach.decorators import (
     CommandArgument,
@@ -19,10 +22,46 @@ from mach.decorators import (
 )
 
 from servo.command_base import CommandBase, cd, call
+from servo.build_commands import notify_build_done
+from servo.util import STATIC_RUST_LANG_ORG_DIST, URLOPEN_KWARGS
 
 
 @CommandProvider
 class MachCommands(CommandBase):
+    def run_cargo(self, params, geckolib=False, check=False):
+        if not params:
+            params = []
+
+        self.ensure_bootstrapped()
+        self.ensure_clobbered()
+        env = self.build_env(geckolib=geckolib)
+
+        if check:
+            params = ['check'] + params
+
+        if geckolib:
+            # for c in $(cargo --list | tail -$(($(cargo --list | wc -l) - 1))); do
+            #   (cargo help $c 2>&1 | grep "\\--package" >/dev/null 2>&1) && echo $c
+            # done
+            if params[0] and params[0] in [
+                'bench', 'build', 'check', 'clean', 'doc', 'fmt', 'pkgid',
+                'run', 'rustc', 'rustdoc', 'test', 'update',
+            ]:
+                params[1:1] = ['--package', 'geckoservo']
+
+            self.set_use_stable_rust()
+
+        build_start = time()
+        status = call(['cargo'] + params, env=env)
+        elapsed = time() - build_start
+
+        notify_build_done(self.config, elapsed, status == 0)
+
+        if check and status == 0:
+            print('Finished checking, binary NOT updated. Consider ./mach build before ./mach run')
+
+        return status
+
     @Command('cargo',
              description='Run Cargo',
              category='devenv')
@@ -30,15 +69,7 @@ class MachCommands(CommandBase):
         'params', default=None, nargs='...',
         help="Command-line arguments to be passed through to Cargo")
     def cargo(self, params):
-        if not params:
-            params = []
-
-        self.ensure_bootstrapped()
-
-        if self.context.topdir == getcwd():
-            with cd(path.join('components', 'servo')):
-                return call(["cargo"] + params, env=self.build_env())
-        return call(['cargo'] + params, env=self.build_env())
+        return self.run_cargo(params)
 
     @Command('cargo-geckolib',
              description='Run Cargo with the same compiler version and root crate as build-geckolib',
@@ -47,17 +78,25 @@ class MachCommands(CommandBase):
         'params', default=None, nargs='...',
         help="Command-line arguments to be passed through to Cargo")
     def cargo_geckolib(self, params):
-        if not params:
-            params = []
+        return self.run_cargo(params, geckolib=True)
 
-        self.set_use_stable_rust()
-        self.ensure_bootstrapped()
-        env = self.build_env(geckolib=True)
+    @Command('check',
+             description='Run "cargo check"',
+             category='devenv')
+    @CommandArgument(
+        'params', default=None, nargs='...',
+        help="Command-line arguments to be passed through to cargo check")
+    def check(self, params):
+        return self.run_cargo(params, check=True)
 
-        if self.context.topdir == getcwd():
-            with cd(path.join('ports', 'geckolib')):
-                return call(["cargo"] + params, env=env)
-        return call(['cargo'] + params, env=env)
+    @Command('check-geckolib',
+             description='Run "cargo check" with the same compiler version and root crate as build-geckolib',
+             category='devenv')
+    @CommandArgument(
+        'params', default=None, nargs='...',
+        help="Command-line arguments to be passed through to cargo check")
+    def check_geckolib(self, params):
+        return self.run_cargo(params, check=True, geckolib=True)
 
     @Command('cargo-update',
              description='Same as update-cargo',
@@ -100,7 +139,6 @@ class MachCommands(CommandBase):
 
         if dry_run:
             import toml
-            import json
             import httplib
             import colorama
 
@@ -223,6 +261,23 @@ class MachCommands(CommandBase):
             ["git"] + ["grep"] + params + ['--'] + grep_paths + [':(exclude)*.min.js', ':(exclude)*.min.css'],
             env=self.build_env())
 
+    @Command('rustup',
+             description='Update the Rust version to latest Nightly',
+             category='devenv')
+    def rustup(self):
+        url = STATIC_RUST_LANG_ORG_DIST + "/channel-rust-nightly-date.txt"
+        nightly_date = urllib2.urlopen(url, **URLOPEN_KWARGS).read()
+        filename = path.join(self.context.topdir, "rust-toolchain")
+        with open(filename, "w") as f:
+            f.write("nightly-%s\n" % nightly_date)
+
+        # Reset self.config["tools"]["rust-root"] and self.config["tools"]["cargo-root"]
+        self._rust_nightly_date = None
+        self.set_use_stable_rust(False)
+        self.set_cargo_root()
+
+        self.fetch()
+
     @Command('fetch',
              description='Fetch Rust, Cargo and Cargo dependencies',
              category='devenv')
@@ -233,29 +288,3 @@ class MachCommands(CommandBase):
         # Fetch Cargo dependencies
         with cd(self.context.topdir):
             call(["cargo", "fetch"], env=self.build_env())
-
-    @Command('wptrunner-upgrade',
-             description='upgrade wptrunner.',
-             category='devenv')
-    def upgrade_wpt_runner(self):
-        env = self.build_env()
-        with cd(path.join(self.context.topdir, 'tests', 'wpt', 'harness')):
-            code = call(["git", "init"], env=env)
-            if code:
-                return code
-            # No need to report an error if this fails, as it will for the first use
-            call(["git", "remote", "rm", "upstream"], env=env)
-            code = call(
-                ["git", "remote", "add", "upstream", "https://github.com/w3c/wptrunner.git"], env=env)
-            if code:
-                return code
-            code = call(["git", "fetch", "upstream"], env=env)
-            if code:
-                return code
-            code = call(["git", "reset", "--hard", "remotes/upstream/master"], env=env)
-            if code:
-                return code
-            code = call(["rm", "-rf", ".git"], env=env)
-            if code:
-                return code
-            return 0

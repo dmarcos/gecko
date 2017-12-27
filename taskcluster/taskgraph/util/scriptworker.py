@@ -15,16 +15,23 @@ happen on mozilla-beta and mozilla-release.
 """
 from __future__ import absolute_import, print_function, unicode_literals
 import functools
+import json
 import os
 
 
 # constants {{{1
 GECKO = os.path.realpath(os.path.join(__file__, '..', '..', '..', '..'))
 VERSION_PATH = os.path.join(GECKO, "browser", "config", "version_display.txt")
+APP_VERSION_PATH = os.path.join(GECKO, "browser", "config", "version.txt")
 
 """Map signing scope aliases to sets of projects.
 
-Currently m-c and m-a use nightly signing; m-b and m-r use release signing.
+Currently m-c and DevEdition on m-b use nightly signing; Beta on m-b and m-r
+use release signing. These data structures aren't set-up to handle different
+scopes on the same repo, so we use a different set of them for DevEdition, and
+callers are responsible for using the correct one (by calling the appropriate
+helper below). More context on this in https://bugzilla.mozilla.org/show_bug.cgi?id=1358601.
+
 We will need to add esr support at some point. Eventually we want to add
 nuance so certain m-b and m-r tasks use dep or nightly signing, and we only
 release sign when we have a signed-off set of candidate builds.  This current
@@ -35,7 +42,6 @@ This is a list of list-pairs, for ordering.
 SIGNING_SCOPE_ALIAS_TO_PROJECT = [[
     'all-nightly-branches', set([
         'mozilla-central',
-        'mozilla-aurora',
     ])
 ], [
     'all-release-branches', set([
@@ -52,12 +58,22 @@ SIGNING_CERT_SCOPES = {
     'default': 'project:releng:signing:cert:dep-signing',
 }
 
+DEVEDITION_SIGNING_SCOPE_ALIAS_TO_PROJECT = [[
+    'beta', set([
+        'mozilla-beta',
+    ])
+]]
+
+DEVEDITION_SIGNING_CERT_SCOPES = {
+    'beta': 'project:releng:signing:cert:nightly-signing',
+    'default': 'project:releng:signing:cert:dep-signing',
+}
+
 """Map beetmover scope aliases to sets of projects.
 """
 BEETMOVER_SCOPE_ALIAS_TO_PROJECT = [[
     'all-nightly-branches', set([
         'mozilla-central',
-        'mozilla-aurora',
         'mozilla-beta',
         'mozilla-release',
     ])
@@ -72,9 +88,20 @@ BEETMOVER_SCOPE_ALIAS_TO_PROJECT = [[
 
 Used for both `BEETMOVER_SCOPE_ALIAS_TO_TARGET_TASK` and `get_release_build_number`
 """
-BEETMOVER_RELEASE_TARGET_TASKS = set([
-    'candidates_fennec',
+BEETMOVER_CANDIDATES_TARGET_TASKS = set([
+    'promote_fennec',
+    'promote_firefox',
+    'promote_devedition'
 ])
+BEETMOVER_PUSH_TARGET_TASKS = set([
+    'push_fennec',
+    'ship_fennec',
+    'push_firefox',
+    'ship_firefox',
+    'push_devedition',
+    'ship_devedition',
+])
+BEETMOVER_RELEASE_TARGET_TASKS = BEETMOVER_CANDIDATES_TARGET_TASKS | BEETMOVER_PUSH_TARGET_TASKS
 
 """Map beetmover tasks aliases to sets of target task methods.
 
@@ -84,17 +111,26 @@ BEETMOVER_SCOPE_ALIAS_TO_TARGET_TASK = [[
     'all-nightly-tasks', set([
         'nightly_fennec',
         'nightly_linux',
+        'nightly_macosx',
+        'nightly_win32',
+        'nightly_win64',
+        'nightly_desktop',
         'mozilla_beta_tasks',
         'mozilla_release_tasks',
     ])
 ], [
-    'all-release-tasks', BEETMOVER_RELEASE_TARGET_TASKS
+    'all-candidates-tasks', BEETMOVER_CANDIDATES_TARGET_TASKS
+], [
+    'all-push-tasks', BEETMOVER_PUSH_TARGET_TASKS
 ]]
 
 """Map the beetmover scope aliases to the actual scopes.
 """
 BEETMOVER_BUCKET_SCOPES = {
-    'all-release-tasks': {
+    'all-candidates-tasks': {
+        'all-release-branches': 'project:releng:beetmover:bucket:release',
+    },
+    'all-push-tasks': {
         'all-release-branches': 'project:releng:beetmover:bucket:release',
     },
     'all-nightly-tasks': {
@@ -106,9 +142,19 @@ BEETMOVER_BUCKET_SCOPES = {
 """Map the beetmover tasks aliases to the actual action scopes.
 """
 BEETMOVER_ACTION_SCOPES = {
-    'all-release-tasks': 'project:releng:beetmover:action:push-to-candidates',
+    'all-candidates-tasks': 'project:releng:beetmover:action:push-to-candidates',
+    'all-push-tasks': 'project:releng:beetmover:action:push-to-releases',
     'all-nightly-tasks': 'project:releng:beetmover:action:push-to-nightly',
     'default': 'project:releng:beetmover:action:push-to-staging',
+}
+
+
+"""Map the beetmover tasks aliases to phases.
+"""
+PHASES = {
+    'all-candidates-tasks': 'promote',
+    'all-push-tasks': 'push',
+    'default': None,
 }
 
 """Map balrog scope aliases to sets of projects.
@@ -118,10 +164,6 @@ This is a list of list-pairs, for ordering.
 BALROG_SCOPE_ALIAS_TO_PROJECT = [[
     'nightly', set([
         'mozilla-central',
-    ])
-], [
-    'aurora', set([
-        'mozilla-aurora',
     ])
 ], [
     'beta', set([
@@ -152,7 +194,9 @@ BALROG_SERVER_SCOPES = {
 """
 BALROG_CHANNEL_SCOPES = {
     'nightly': [
-        'project:releng:balrog:channel:nightly'
+        'project:releng:balrog:channel:nightly',
+        'project:releng:balrog:channel:nightly-old-id',
+        'project:releng:balrog:channel:aurora'
     ],
     'aurora': [
         'project:releng:balrog:channel:aurora'
@@ -173,14 +217,15 @@ BALROG_CHANNEL_SCOPES = {
         'project:releng:balrog:channel:esr-cdntest'
     ],
     'default': [
-        'project:releng:balrog:channel:nightly'
+        'project:releng:balrog:channel:nightly',
+        'project:releng:balrog:channel:nightly-old-id',
         'project:releng:balrog:channel:aurora'
         'project:releng:balrog:channel:beta',
         'project:releng:balrog:channel:beta-localtest',
-        'project:releng:balrog:channel:beta-cdntest'
+        'project:releng:balrog:channel:beta-cdntest',
         'project:releng:balrog:channel:release',
         'project:releng:balrog:channel:release-localtest',
-        'project:releng:balrog:channel:release-cdntest'
+        'project:releng:balrog:channel:release-cdntest',
         'project:releng:balrog:channel:esr',
         'project:releng:balrog:channel:esr-localtest',
         'project:releng:balrog:channel:esr-cdntest'
@@ -189,8 +234,8 @@ BALROG_CHANNEL_SCOPES = {
 
 
 PUSH_APK_SCOPE_ALIAS_TO_PROJECT = [[
-    'aurora', set([
-        'mozilla-aurora',
+    'central', set([
+        'mozilla-central',
     ])
 ], [
     'beta', set([
@@ -204,7 +249,7 @@ PUSH_APK_SCOPE_ALIAS_TO_PROJECT = [[
 
 
 PUSH_APK_SCOPES = {
-    'aurora': 'project:releng:googleplay:aurora',
+    'central': 'project:releng:googleplay:aurora',
     'beta': 'project:releng:googleplay:beta',
     'release': 'project:releng:googleplay:release',
     'default': 'project:releng:googleplay:invalid',
@@ -212,28 +257,33 @@ PUSH_APK_SCOPES = {
 
 # See https://github.com/mozilla-releng/pushapkscript#aurora-beta-release-vs-alpha-beta-production
 PUSH_APK_GOOGLE_PLAY_TRACT = {
-    'aurora': 'beta',
-    'beta': 'production',
-    'release': 'production',
+    'central': 'beta',
+    'beta': 'rollout',
+    'release': 'rollout',
     'default': 'invalid',
 }
 
 PUSH_APK_BREAKPOINT_WORKER_TYPE = {
-    'aurora': 'aws-provisioner-v1/taskcluster-generic',
+    'central': 'aws-provisioner-v1/taskcluster-generic',
     'beta': 'null-provisioner/human-breakpoint',
     'release': 'null-provisioner/human-breakpoint',
+    'maple': 'aws-provisioner-v1/taskcluster-generic',
     'default': 'invalid/invalid',
 }
 
-PUSH_APK_DRY_RUN_OPTION = {
-    'aurora': False,
-    'beta': False,
+PUSH_APK_COMMIT_OPTION = {
+    'central': True,
+    'beta': True,
+    'maple': False,
     'release': True,
-    'default': True,
+    'default': False,
 }
 
 PUSH_APK_ROLLOUT_PERCENTAGE = {
+    # XXX Please make sure to change PUSH_APK_GOOGLE_PLAY_TRACT to 'rollout' if you add a new
+    # supported project
     'release': 10,
+    'beta': 10,
     'default': None,
 }
 
@@ -311,6 +361,12 @@ get_signing_cert_scope = functools.partial(
     SIGNING_CERT_SCOPES
 )
 
+get_devedition_signing_cert_scope = functools.partial(
+    get_scope_from_project,
+    DEVEDITION_SIGNING_SCOPE_ALIAS_TO_PROJECT,
+    DEVEDITION_SIGNING_CERT_SCOPES
+)
+
 get_beetmover_bucket_scope = functools.partial(
     get_scope_from_target_method_and_project,
     BEETMOVER_SCOPE_ALIAS_TO_TARGET_TASK,
@@ -322,6 +378,12 @@ get_beetmover_action_scope = functools.partial(
     get_scope_from_target_method,
     BEETMOVER_SCOPE_ALIAS_TO_TARGET_TASK,
     BEETMOVER_ACTION_SCOPES
+)
+
+get_phase = functools.partial(
+    get_scope_from_target_method,
+    BEETMOVER_SCOPE_ALIAS_TO_TARGET_TASK,
+    PHASES
 )
 
 get_balrog_server_scope = functools.partial(
@@ -354,10 +416,10 @@ get_push_apk_breakpoint_worker_type = functools.partial(
     PUSH_APK_BREAKPOINT_WORKER_TYPE
 )
 
-get_push_apk_dry_run_option = functools.partial(
+get_push_apk_commit_option = functools.partial(
     get_scope_from_project,
     PUSH_APK_SCOPE_ALIAS_TO_PROJECT,
-    PUSH_APK_DRY_RUN_OPTION
+    PUSH_APK_COMMIT_OPTION
 )
 
 get_push_apk_rollout_percentage = functools.partial(
@@ -376,21 +438,53 @@ def get_release_config(config):
     Args:
         config (dict): the task config that defines the target task method.
 
-    Raises:
-        ValueError: if a release graph doesn't define a valid
-            `os.environ['BUILD_NUMBER']`
-
     Returns:
         dict: containing both `build_number` and `version`.  This can be used to
             update `task.payload`.
     """
     release_config = {}
-    if config.params['target_tasks_method'] in BEETMOVER_RELEASE_TARGET_TASKS:
-        build_number = str(os.environ.get("BUILD_NUMBER", ""))
-        if not build_number.isdigit():
-            raise ValueError("Release graphs must specify `BUILD_NUMBER` in the environment!")
-        release_config['build_number'] = int(build_number)
-        with open(VERSION_PATH, "r") as fh:
-            version = fh.readline().rstrip()
-        release_config['version'] = version
+
+    partial_updates = os.environ.get("PARTIAL_UPDATES", "")
+    if partial_updates != "" and config.kind in ('release-bouncer-sub',
+                                                 'release-uptake-monitoring',
+                                                 'release-updates-builder',
+                                                 ):
+        partial_updates = json.loads(partial_updates)
+        release_config['partial_versions'] = ', '.join([
+            '{}build{}'.format(v, info['buildNumber'])
+            for v, info in partial_updates.items()
+        ])
+        if release_config['partial_versions'] == "{}":
+            del release_config['partial_versions']
+
+    uptake_monitoring_platforms = os.environ.get("UPTAKE_MONITORING_PLATFORMS", "[]")
+    if uptake_monitoring_platforms != "[]" and \
+            config.kind in ('release-uptake-monitoring',):
+        uptake_monitoring_platforms = json.loads(uptake_monitoring_platforms)
+        release_config['platforms'] = ', '.join(uptake_monitoring_platforms)
+        if release_config['platforms'] == "[]":
+            del release_config['platforms']
+
+    with open(VERSION_PATH, "r") as fh:
+        version = fh.readline().rstrip()
+    release_config['version'] = version
+    with open(APP_VERSION_PATH, "r") as fh:
+        appVersion = fh.readline().rstrip()
+    release_config['appVersion'] = appVersion
+
+    release_config['next_version'] = str(config.params['next_version'])
+    release_config['build_number'] = config.params['build_number']
     return release_config
+
+
+def get_signing_cert_scope_per_platform(build_platform, is_nightly, config):
+    if build_platform in (
+        'linux-devedition-nightly', 'linux64-devedition-nightly',
+        'macosx64-devedition-nightly',
+        'win32-devedition-nightly', 'win64-devedition-nightly',
+    ):
+        return get_devedition_signing_cert_scope(config)
+    elif is_nightly:
+        return get_signing_cert_scope(config)
+    else:
+        return 'project:releng:signing:cert:dep-signing'

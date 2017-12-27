@@ -156,7 +156,7 @@ nsXULPrototypeDocument::Read(nsIObjectInputStream* aStream)
     }
     nsAutoString namespaceURI, prefixStr, localName;
     bool prefixIsNull;
-    nsCOMPtr<nsIAtom> prefix;
+    RefPtr<nsAtom> prefix;
     for (i = 0; i < count; ++i) {
         tmp = aStream->ReadString(namespaceURI);
         if (NS_FAILED(tmp)) {
@@ -278,7 +278,7 @@ nsXULPrototypeDocument::Write(nsIObjectOutputStream* aStream)
     nsresult rv;
 
     rv = aStream->WriteCompoundObject(mURI, NS_GET_IID(nsIURI), true);
-    
+
     uint32_t count;
 
     count = mStyleSheetReferences.Count();
@@ -302,7 +302,7 @@ nsXULPrototypeDocument::Write(nsIObjectOutputStream* aStream)
     if (NS_FAILED(tmp)) {
       rv = tmp;
     }
-    
+
 #ifdef DEBUG
     // XXX Worrisome if we're caching things without system principal.
     if (!nsContentUtils::IsSystemPrincipal(mNodeInfoManager->DocumentPrincipal())) {
@@ -373,7 +373,7 @@ nsXULPrototypeDocument::Write(nsIObjectOutputStream* aStream)
         rv = tmp;
       }
     }
- 
+
     return rv;
 }
 
@@ -390,7 +390,7 @@ nsXULPrototypeDocument::InitPrincipal(nsIURI* aURI, nsIPrincipal* aPrincipal)
     mNodeInfoManager->SetDocumentPrincipal(aPrincipal);
     return NS_OK;
 }
-    
+
 
 nsIURI*
 nsXULPrototypeDocument::GetURI()
@@ -446,7 +446,7 @@ nsXULPrototypeDocument::GetStyleSheetReferences() const
 }
 
 NS_IMETHODIMP
-nsXULPrototypeDocument::GetHeaderData(nsIAtom* aField, nsAString& aData) const
+nsXULPrototypeDocument::GetHeaderData(nsAtom* aField, nsAString& aData) const
 {
     // XXX Not implemented
     aData.Truncate();
@@ -455,7 +455,7 @@ nsXULPrototypeDocument::GetHeaderData(nsIAtom* aField, nsAString& aData) const
 
 
 NS_IMETHODIMP
-nsXULPrototypeDocument::SetHeaderData(nsIAtom* aField, const nsAString& aData)
+nsXULPrototypeDocument::SetHeaderData(nsAtom* aField, const nsAString& aData)
 {
     // XXX Not implemented
     return NS_OK;
@@ -530,14 +530,17 @@ nsXULPrototypeDocument::NotifyLoadDone()
 }
 
 void
-nsXULPrototypeDocument::TraceProtos(JSTracer* aTrc, uint32_t aGCNumber)
+nsXULPrototypeDocument::TraceProtos(JSTracer* aTrc)
 {
-  // Only trace the protos once per GC.
-  if (mGCNumber == aGCNumber) {
-    return;
+  // Only trace the protos once per GC if we are marking.
+  if (aTrc->isMarkingTracer()) {
+    uint32_t currentGCNumber = aTrc->gcNumberForMarking();
+    if (mGCNumber == currentGCNumber) {
+      return;
+    }
+    mGCNumber = currentGCNumber;
   }
 
-  mGCNumber = aGCNumber;
   if (mRoot) {
     mRoot->TraceAllScripts(aTrc);
   }

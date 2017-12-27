@@ -12,28 +12,26 @@
 // document process. For example, it shouldn't be evaluated in the parent
 // process until we try to debug a document living in the parent process.
 
-var { Ci, Cu, Cr } = require("chrome");
+var { Ci, Cu, Cr, Cc } = require("chrome");
 var Services = require("Services");
 var { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
 var promise = require("promise");
 var {
-  ActorPool, createExtraActors, appendExtraActors, GeneratedLocation
+  ActorPool, createExtraActors, appendExtraActors
 } = require("devtools/server/actors/common");
 var { DebuggerServer } = require("devtools/server/main");
 var DevToolsUtils = require("devtools/shared/DevToolsUtils");
 var { assert } = DevToolsUtils;
 var { TabSources } = require("./utils/TabSources");
 var makeDebugger = require("./utils/make-debugger");
+const EventEmitter = require("devtools/shared/event-emitter");
+
+const EXTENSION_CONTENT_JSM = "resource://gre/modules/ExtensionContent.jsm";
 
 loader.lazyRequireGetter(this, "ThreadActor", "devtools/server/actors/script", true);
 loader.lazyRequireGetter(this, "unwrapDebuggerObjectGlobal", "devtools/server/actors/script", true);
 loader.lazyRequireGetter(this, "WorkerActorList", "devtools/server/actors/worker-list", true);
-loader.lazyImporter(this, "ExtensionContent", "resource://gre/modules/ExtensionContent.jsm");
-
-// Assumptions on events module:
-// events needs to be dispatched synchronously,
-// by calling the listeners in the order or registration.
-loader.lazyRequireGetter(this, "events", "sdk/event/core");
+loader.lazyImporter(this, "ExtensionContent", EXTENSION_CONTENT_JSM);
 
 loader.lazyRequireGetter(this, "StyleSheetActor", "devtools/server/actors/stylesheets", true);
 
@@ -195,6 +193,10 @@ function getInnerId(window) {
  *        The conection to the client.
  */
 function TabActor(connection) {
+  // This usage of decorate should be removed in favor of using ES6 extends EventEmitter.
+  // See Bug 1394816.
+  EventEmitter.decorate(this);
+
   this.conn = connection;
   this._tabActorPool = null;
   // A map of actor names to actor instances provided by extensions.
@@ -226,7 +228,9 @@ function TabActor(connection) {
     frames: true,
     // Do not require to send reconfigure request to reset the document state
     // to what it was before using the TabActor
-    noTabReconfigureOnClose: true
+    noTabReconfigureOnClose: true,
+    // Supports the logErrorInPage request.
+    logErrorInPage: true,
   };
 
   this._workerActorList = null;
@@ -334,8 +338,11 @@ TabActor.prototype = {
    * current tab content's DOM window.
    */
   get webextensionsContentScriptGlobals() {
-    // Ignore xpcshell runtime which spawn TabActors without a window.
-    if (this.window) {
+    // Ignore xpcshell runtime which spawn TabActors without a window
+    // and only retrieve the content scripts globals if the ExtensionContent JSM module
+    // has been already loaded (which is true if the WebExtensions internals have already
+    // been loaded in the same content process).
+    if (this.window && Cu.isModuleLoaded(EXTENSION_CONTENT_JSM)) {
       return ExtensionContent.getContentScriptGlobals(this.window);
     }
 
@@ -525,6 +532,7 @@ TabActor.prototype = {
       return true;
     }
 
+    // Otherwise, check if it is a WebExtension content script sandbox
     let global = unwrapDebuggerObjectGlobal(wrappedGlobal);
     if (!global) {
       return false;
@@ -597,6 +605,12 @@ TabActor.prototype = {
     this._updateChildDocShells();
   },
 
+  _unwatchDocShell(docShell) {
+    if (this._progressListener) {
+      this._progressListener.unwatch(docShell);
+    }
+  },
+
   onSwitchToFrame(request) {
     let windowId = request.windowId;
     let win;
@@ -655,6 +669,17 @@ TabActor.prototype = {
     });
   },
 
+  onLogErrorInPage(request) {
+    let {text, category} = request;
+    let scriptErrorClass = Cc["@mozilla.org/scripterror;1"];
+    let scriptError = scriptErrorClass.createInstance(Ci.nsIScriptError);
+    scriptError.initWithWindowID(text, null, null, 0, 0, 1,
+                                 category, getInnerId(this.window));
+    let console = Cc["@mozilla.org/consoleservice;1"].getService(Ci.nsIConsoleService);
+    console.logMessage(scriptError);
+    return {};
+  },
+
   _onWorkerActorListChanged() {
     this._workerActorList.onListChanged = null;
     this.conn.sendActorEvent(this.actorID, "workerListChanged");
@@ -666,8 +691,10 @@ TabActor.prototype = {
     if (!this.attached) {
       return;
     }
+
+    subject.QueryInterface(Ci.nsIDocShell);
+
     if (topic == "webnavigation-create") {
-      subject.QueryInterface(Ci.nsIDocShell);
       this._onDocShellCreated(subject);
     } else if (topic == "webnavigation-destroy") {
       this._onDocShellDestroy(subject);
@@ -700,9 +727,43 @@ TabActor.prototype = {
   },
 
   _onDocShellDestroy(docShell) {
+    // Stop watching this docshell (the unwatch() method will check if we
+    // started watching it before).
+    this._unwatchDocShell(docShell);
+
     let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
                               .getInterface(Ci.nsIWebProgress);
     this._notifyDocShellDestroy(webProgress);
+
+    if (webProgress.DOMWindow == this._originalWindow) {
+      // If the original top level document we connected to is removed,
+      // we try to switch to any other top level document
+      let rootDocShells = this.docShells
+                              .filter(d => {
+                                return d != this.docShell &&
+                                       this._isRootDocShell(d);
+                              });
+      if (rootDocShells.length > 0) {
+        let newRoot = rootDocShells[0];
+        this._originalWindow = newRoot.DOMWindow;
+        this._changeTopLevelDocument(this._originalWindow);
+      } else {
+        // If for some reason (typically during Firefox shutdown), the original
+        // document is destroyed, and there is no other top level docshell,
+        // we detach the tab actor to unregister all listeners and prevent any
+        // exception
+        this.exit();
+      }
+      return;
+    }
+
+    // If the currently targeted context is destroyed,
+    // and we aren't on the top-level document,
+    // we have to switch to the top-level one.
+    if (webProgress.DOMWindow == this.window &&
+        this.window != this._originalWindow) {
+      this._changeTopLevelDocument(this._originalWindow);
+    }
   },
 
   _isRootDocShell(docShell) {
@@ -715,36 +776,34 @@ TabActor.prototype = {
     return !docShell.parent;
   },
 
+  _docShellToWindow(docShell) {
+    let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
+                              .getInterface(Ci.nsIWebProgress);
+    let window = webProgress.DOMWindow;
+    let id = window.QueryInterface(Ci.nsIInterfaceRequestor)
+                   .getInterface(Ci.nsIDOMWindowUtils)
+                   .outerWindowID;
+    let parentID = undefined;
+    // Ignore the parent of the original document on non-e10s firefox,
+    // as we get the xul window as parent and don't care about it.
+    if (window.parent && window != this._originalWindow) {
+      parentID = window.parent
+                       .QueryInterface(Ci.nsIInterfaceRequestor)
+                       .getInterface(Ci.nsIDOMWindowUtils)
+                       .outerWindowID;
+    }
+
+    return {
+      id,
+      parentID,
+      url: window.location.href,
+      title: window.document.title,
+    };
+  },
+
   // Convert docShell list to windows objects list being sent to the client
   _docShellsToWindows(docshells) {
-    return docshells.map(docShell => {
-      let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
-                                .getInterface(Ci.nsIWebProgress);
-      let window = webProgress.DOMWindow;
-      let id = window.QueryInterface(Ci.nsIInterfaceRequestor)
-                     .getInterface(Ci.nsIDOMWindowUtils)
-                     .outerWindowID;
-      let parentID = undefined;
-      // Ignore the parent of the original document on non-e10s firefox,
-      // as we get the xul window as parent and don't care about it.
-      if (window.parent && window != this._originalWindow) {
-        parentID = window.parent
-                         .QueryInterface(Ci.nsIInterfaceRequestor)
-                         .getInterface(Ci.nsIDOMWindowUtils)
-                         .outerWindowID;
-      }
-
-      // Collect the addonID from the document origin attributes.
-      let addonID = window.document.nodePrincipal.addonId;
-
-      return {
-        id,
-        parentID,
-        addonID,
-        url: window.location.href,
-        title: window.document.title,
-      };
-    });
+    return docshells.map(docShell => this._docShellToWindow(docShell));
   },
 
   _notifyDocShellsUpdate(docshells) {
@@ -780,41 +839,6 @@ TabActor.prototype = {
         destroy: true
       }]
     });
-
-    // Stop watching this docshell (the unwatch() method will check if we
-    // started watching it before).
-    webProgress.QueryInterface(Ci.nsIDocShell);
-    this._progressListener.unwatch(webProgress);
-
-    if (webProgress.DOMWindow == this._originalWindow) {
-      // If the original top level document we connected to is removed,
-      // we try to switch to any other top level document
-      let rootDocShells = this.docShells
-                              .filter(d => {
-                                return d != this.docShell &&
-                                       this._isRootDocShell(d);
-                              });
-      if (rootDocShells.length > 0) {
-        let newRoot = rootDocShells[0];
-        this._originalWindow = newRoot.DOMWindow;
-        this._changeTopLevelDocument(this._originalWindow);
-      } else {
-        // If for some reason (typically during Firefox shutdown), the original
-        // document is destroyed, and there is no other top level docshell,
-        // we detach the tab actor to unregister all listeners and prevent any
-        // exception
-        this.exit();
-      }
-      return;
-    }
-
-    // If the currently targeted context is destroyed,
-    // and we aren't on the top-level document,
-    // we have to switch to the top-level one.
-    if (webProgress.DOMWindow == this.window &&
-        this.window != this._originalWindow) {
-      this._changeTopLevelDocument(this._originalWindow);
-    }
   },
 
   _notifyDocShellDestroyAll() {
@@ -866,7 +890,7 @@ TabActor.prototype = {
     // Check for docShell availability, as it can be already gone
     // during Firefox shutdown.
     if (this.docShell) {
-      this._progressListener.unwatch(this.docShell);
+      this._unwatchDocShell(this.docShell);
       this._restoreDocumentSettings();
     }
     if (this._progressListener) {
@@ -1165,6 +1189,12 @@ TabActor.prototype = {
     this._setWindow(window);
 
     DevToolsUtils.executeSoon(() => {
+      // No need to do anything more if the actor is not attached anymore
+      // e.g. the client has been closed and the actors destroyed in the meantime.
+      if (!this.attached) {
+        return;
+      }
+
       // Then fake window-ready and navigate on the given document
       this._windowReady(window, true);
       DevToolsUtils.executeSoon(() => {
@@ -1185,7 +1215,7 @@ TabActor.prototype = {
       enumerable: true,
       configurable: true
     });
-    events.emit(this, "changed-toplevel-document");
+    this.emit("changed-toplevel-document");
     this.conn.send({
       from: this.actorID,
       type: "frameUpdate",
@@ -1207,7 +1237,7 @@ TabActor.prototype = {
       this._updateChildDocShells();
     }
 
-    events.emit(this, "window-ready", {
+    this.emit("window-ready", {
       window: window,
       isTopLevel: isTopLevel,
       id: getWindowID(window)
@@ -1234,7 +1264,7 @@ TabActor.prototype = {
   },
 
   _windowDestroyed(window, id = null, isFrozen = false) {
-    events.emit(this, "window-destroyed", {
+    this.emit("window-destroyed", {
       window: window,
       isTopLevel: window == this.window,
       id: id || getWindowID(window),
@@ -1271,7 +1301,7 @@ TabActor.prototype = {
     // This event fires once navigation starts,
     // (all pending user prompts are dealt with),
     // but before the first request starts.
-    events.emit(this, "will-navigate", {
+    this.emit("will-navigate", {
       window: window,
       isTopLevel: isTopLevel,
       newURI: newURI,
@@ -1320,7 +1350,7 @@ TabActor.prototype = {
     // by calling the listeners in the order or registration.
     // This event is fired once the document is loaded,
     // after the load event, it's document ready-state is 'complete'.
-    events.emit(this, "navigate", {
+    this.emit("navigate", {
       window: window,
       isTopLevel: isTopLevel
     });
@@ -1388,7 +1418,7 @@ TabActor.prototype = {
     this._styleSheetActors.set(styleSheet, actor);
 
     this._tabPool.addActor(actor);
-    events.emit(this, "stylesheet-added", actor);
+    this.emit("stylesheet-added", actor);
 
     return actor;
   },
@@ -1401,51 +1431,6 @@ TabActor.prototype = {
       }
       delete this._extraActors[name];
     }
-  },
-
-  /**
-   * Takes a packet containing a url, line and column and returns
-   * the updated url, line and column based on the current source mapping
-   * (source mapped files, pretty prints).
-   *
-   * @param {String} request.url
-   * @param {Number} request.line
-   * @param {Number?} request.column
-   * @return {Promise<Object>}
-   */
-  onResolveLocation(request) {
-    let { url, line } = request;
-    let column = request.column || 0;
-    const scripts = this.threadActor.dbg.findScripts({ url });
-
-    if (!scripts[0] || !scripts[0].source) {
-      return promise.resolve({
-        from: this.actorID,
-        type: "resolveLocation",
-        error: "SOURCE_NOT_FOUND"
-      });
-    }
-    const source = scripts[0].source;
-    const generatedActor = this.sources.createNonSourceMappedActor(source);
-    let generatedLocation = new GeneratedLocation(
-      generatedActor, line, column);
-    return this.sources.getOriginalLocation(generatedLocation).then(loc => {
-      // If no map found, return this packet
-      if (loc.originalLine == null) {
-        return {
-          type: "resolveLocation",
-          error: "MAP_NOT_FOUND"
-        };
-      }
-
-      loc = loc.toJSON();
-      return {
-        from: this.actorID,
-        url: loc.source.url,
-        column: loc.column,
-        line: loc.line
-      };
-    });
   },
 };
 
@@ -1462,7 +1447,7 @@ TabActor.prototype.requestTypes = {
   "switchToFrame": TabActor.prototype.onSwitchToFrame,
   "listFrames": TabActor.prototype.onListFrames,
   "listWorkers": TabActor.prototype.onListWorkers,
-  "resolveLocation": TabActor.prototype.onResolveLocation
+  "logErrorInPage": TabActor.prototype.onLogErrorInPage,
 };
 
 exports.TabActor = TabActor;
@@ -1570,19 +1555,23 @@ DebuggerProgressListener.prototype = {
       return;
     }
 
-    // pageshow events for non-persisted pages have already been handled by a
-    // prior DOMWindowCreated event. For persisted pages, act as if the window
-    // had just been created since it's been unfrozen from bfcache.
-    if (evt.type == "pageshow" && !evt.persisted) {
+    let window = evt.target.defaultView;
+    let innerID = getWindowID(window);
+
+    // This method is alled on DOMWindowCreated and pageshow
+    // The common scenario is DOMWindowCreated, which is fired when the document
+    // loads. But we are to listen for pageshow in order to handle BFCache.
+    // When a page does into the BFCache, a pagehide event is fired with persisted=true
+    // but it doesn't necessarely mean persisted will be true for the pageshow
+    // event fired when the page is reloaded from the BFCache (see bug 1378133)
+    // So just check if we already know this window and accept any that isn't known yet
+    if (this._knownWindowIDs.has(innerID)) {
       return;
     }
 
-    let window = evt.target.defaultView;
     this._tabActor._windowReady(window);
 
-    if (evt.type !== "pageshow") {
-      this._knownWindowIDs.set(getWindowID(window), window);
-    }
+    this._knownWindowIDs.set(innerID, window);
   }, "DebuggerProgressListener.prototype.onWindowCreated"),
 
   onWindowHidden: DevToolsUtils.makeInfallible(function (evt) {
@@ -1600,6 +1589,7 @@ DebuggerProgressListener.prototype = {
 
     let window = evt.target.defaultView;
     this._tabActor._windowDestroyed(window, null, true);
+    this._knownWindowIDs.delete(getWindowID(window));
   }, "DebuggerProgressListener.prototype.onWindowHidden"),
 
   observe: DevToolsUtils.makeInfallible(function (subject, topic) {

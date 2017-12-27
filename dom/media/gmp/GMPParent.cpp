@@ -7,11 +7,13 @@
 #include "mozilla/Logging.h"
 #include "nsComponentManagerUtils.h"
 #include "nsComponentManagerUtils.h"
+#include "nsPrintfCString.h"
 #include "nsThreadUtils.h"
 #include "nsIRunnable.h"
 #include "nsIWritablePropertyBag2.h"
 #include "mozIGeckoMediaPluginService.h"
 #include "mozilla/AbstractThread.h"
+#include "mozilla/ipc/CrashReporterHost.h"
 #include "mozilla/ipc/GeckoChildProcessHost.h"
 #include "mozilla/SSE.h"
 #include "mozilla/SyncRunnable.h"
@@ -28,12 +30,8 @@
 
 using mozilla::ipc::GeckoChildProcessHost;
 
-#ifdef MOZ_CRASHREPORTER
-#include "nsPrintfCString.h"
-#include "mozilla/ipc/CrashReporterHost.h"
 using CrashReporter::AnnotationTable;
 using CrashReporter::GetIDFromMinidump;
-#endif
 
 #include "mozilla/Telemetry.h"
 
@@ -42,7 +40,6 @@ using CrashReporter::GetIDFromMinidump;
 #endif
 
 #include "mozilla/dom/WidevineCDMManifestBinding.h"
-#include "widevine-adapter/WidevineAdapter.h"
 #include "ChromiumCDMAdapter.h"
 
 namespace mozilla {
@@ -86,7 +83,7 @@ GMPParent::~GMPParent()
 nsresult
 GMPParent::CloneFrom(const GMPParent* aOther)
 {
-  MOZ_ASSERT(GMPThread() == NS_GetCurrentThread());
+  MOZ_ASSERT(GMPEventTarget()->IsOnCurrentThread());
   MOZ_ASSERT(aOther->mDirectory && aOther->mService, "null plugin directory");
 
   mService = aOther->mService;
@@ -110,7 +107,7 @@ GMPParent::Init(GeckoMediaPluginServiceParent* aService, nsIFile* aPluginDir)
 {
   MOZ_ASSERT(aPluginDir);
   MOZ_ASSERT(aService);
-  MOZ_ASSERT(GMPThread() == NS_GetCurrentThread());
+  MOZ_ASSERT(GMPEventTarget()->IsOnCurrentThread());
 
   mService = aService;
   mDirectory = aPluginDir;
@@ -119,12 +116,12 @@ GMPParent::Init(GeckoMediaPluginServiceParent* aService, nsIFile* aPluginDir)
   // where <gmp-plugin-id> should be gmp-gmpopenh264
   nsCOMPtr<nsIFile> parent;
   nsresult rv = aPluginDir->GetParent(getter_AddRefs(parent));
-  if (NS_FAILED(rv)) {
+  if (NS_WARN_IF(NS_FAILED(rv))) {
     return GenericPromise::CreateAndReject(rv, __func__);
   }
   nsAutoString parentLeafName;
   rv = parent->GetLeafName(parentLeafName);
-  if (NS_FAILED(rv)) {
+  if (NS_WARN_IF(NS_FAILED(rv))) {
     return GenericPromise::CreateAndReject(rv, __func__);
   }
   LOGD("%s: for %s", __FUNCTION__, NS_LossyConvertUTF16toASCII(parentLeafName).get());
@@ -147,11 +144,11 @@ nsresult
 GMPParent::LoadProcess()
 {
   MOZ_ASSERT(mDirectory, "Plugin directory cannot be NULL!");
-  MOZ_ASSERT(GMPThread() == NS_GetCurrentThread());
+  MOZ_ASSERT(GMPEventTarget()->IsOnCurrentThread());
   MOZ_ASSERT(mState == GMPStateNotLoaded);
 
   nsAutoString path;
-  if (NS_FAILED(mDirectory->GetPath(path))) {
+  if (NS_WARN_IF(NS_FAILED(mDirectory->GetPath(path)))) {
     return NS_ERROR_FAILURE;
   }
   LOGD("%s: for %s", __FUNCTION__, NS_ConvertUTF16toUTF8(path).get());
@@ -222,7 +219,7 @@ GMPParent::RecvPGMPContentChildDestroyed()
 void
 GMPParent::CloseIfUnused()
 {
-  MOZ_ASSERT(GMPThread() == NS_GetCurrentThread());
+  MOZ_ASSERT(GMPEventTarget()->IsOnCurrentThread());
   LOGD("%s", __FUNCTION__);
 
   if ((mDeleteProcessOnlyOnUnload ||
@@ -247,7 +244,7 @@ void
 GMPParent::CloseActive(bool aDieWhenUnloaded)
 {
   LOGD("%s: state %d", __FUNCTION__, mState);
-  MOZ_ASSERT(GMPThread() == NS_GetCurrentThread());
+  MOZ_ASSERT(GMPEventTarget()->IsOnCurrentThread());
 
   if (aDieWhenUnloaded) {
     mDeleteProcessOnlyOnUnload = true; // don't allow this to go back...
@@ -278,7 +275,7 @@ void
 GMPParent::Shutdown()
 {
   LOGD("%s", __FUNCTION__);
-  MOZ_ASSERT(GMPThread() == NS_GetCurrentThread());
+  MOZ_ASSERT(GMPEventTarget()->IsOnCurrentThread());
 
   if (mAbnormalShutdownInProgress) {
     return;
@@ -324,20 +321,21 @@ void
 GMPParent::ChildTerminated()
 {
   RefPtr<GMPParent> self(this);
-  nsCOMPtr<nsIThread> gmpThread = GMPThread();
+  nsCOMPtr<nsISerialEventTarget> gmpEventTarget = GMPEventTarget();
 
-  if (!gmpThread) {
+  if (!gmpEventTarget) {
     // Bug 1163239 - this can happen on shutdown.
     // PluginTerminated removes the GMP from the GMPService.
     // On shutdown we can have this case where it is already been
     // removed so there is no harm in not trying to remove it again.
-    LOGD("%s::%s: GMPThread() returned nullptr.", __CLASS__, __FUNCTION__);
+    LOGD("%s::%s: GMPEventTarget() returned nullptr.", __CLASS__, __FUNCTION__);
   } else {
-    gmpThread->Dispatch(NewRunnableMethod<RefPtr<GMPParent>>(
-                         mService,
-                         &GeckoMediaPluginServiceParent::PluginTerminated,
-                         self),
-                         NS_DISPATCH_NORMAL);
+    gmpEventTarget->Dispatch(NewRunnableMethod<RefPtr<GMPParent>>(
+                               "gmp::GeckoMediaPluginServiceParent::PluginTerminated",
+                               mService,
+                               &GeckoMediaPluginServiceParent::PluginTerminated,
+                               self),
+                             NS_DISPATCH_NORMAL);
   }
 }
 
@@ -352,7 +350,8 @@ GMPParent::DeleteProcess()
     mState = GMPStateClosing;
     Close();
   }
-  mProcess->Delete(NewRunnableMethod(this, &GMPParent::ChildTerminated));
+  mProcess->Delete(NewRunnableMethod(
+    "gmp::GMPParent::ChildTerminated", this, &GMPParent::ChildTerminated));
   LOGD("%s: Shut down process", __FUNCTION__);
   mProcess = nullptr;
   mState = GMPStateNotLoaded;
@@ -373,8 +372,8 @@ GMPParent::State() const
   return mState;
 }
 
-nsCOMPtr<nsIThread>
-GMPParent::GMPThread()
+nsCOMPtr<nsISerialEventTarget>
+GMPParent::GMPEventTarget()
 {
   nsCOMPtr<mozIGeckoMediaPluginService> mps =
     do_GetService("@mozilla.org/gecko-media-plugin-service;1");
@@ -386,7 +385,7 @@ GMPParent::GMPThread()
   // nullptr if the GeckoMediaPluginService has started shutdown.
   nsCOMPtr<nsIThread> gmpThread;
   mps->GetThread(getter_AddRefs(gmpThread));
-  return gmpThread;
+  return gmpThread ? gmpThread->SerialEventTarget() : nullptr;
 }
 
 /* static */
@@ -451,7 +450,6 @@ GMPParent::EnsureProcessLoaded()
   return NS_SUCCEEDED(rv);
 }
 
-#ifdef MOZ_CRASHREPORTER
 void
 GMPParent::WriteExtraDataForMinidump()
 {
@@ -496,12 +494,12 @@ GMPNotifyObservers(const uint32_t aPluginID, const nsACString& aPluginName, cons
     service->RunPluginCrashCallbacks(aPluginID, aPluginName);
   }
 }
-#endif
+
 void
 GMPParent::ActorDestroy(ActorDestroyReason aWhy)
 {
   LOGD("%s: (%d)", __FUNCTION__, (int)aWhy);
-#ifdef MOZ_CRASHREPORTER
+
   if (AbnormalShutdown == aWhy) {
     Telemetry::Accumulate(Telemetry::SUBPROCESS_ABNORMAL_ABORT,
                           NS_LITERAL_CSTRING("gmplugin"), 1);
@@ -518,7 +516,7 @@ GMPParent::ActorDestroy(ActorDestroyReason aWhy)
       &GMPNotifyObservers, mPluginId, mDisplayName, dumpID);
     mMainThread->Dispatch(r.forget());
   }
-#endif
+
   // warn us off trying to close again
   mState = GMPStateClosing;
   mAbnormalShutdownInProgress = true;
@@ -539,12 +537,11 @@ GMPParent::ActorDestroy(ActorDestroyReason aWhy)
 mozilla::ipc::IPCResult
 GMPParent::RecvInitCrashReporter(Shmem&& aShmem, const NativeThreadId& aThreadId)
 {
-#ifdef MOZ_CRASHREPORTER
   mCrashReporter = MakeUnique<ipc::CrashReporterHost>(
     GeckoProcessType_GMPlugin,
     aShmem,
     aThreadId);
-#endif
+
   return IPC_OK();
 }
 
@@ -584,8 +581,8 @@ GMPParent::RecvPGMPTimerConstructor(PGMPTimerParent* actor)
 PGMPTimerParent*
 GMPParent::AllocPGMPTimerParent()
 {
-  nsCOMPtr<nsIThread> thread = GMPThread();
-  GMPTimerParent* p = new GMPTimerParent(thread);
+  nsCOMPtr<nsISerialEventTarget> target = GMPEventTarget();
+  GMPTimerParent* p = new GMPTimerParent(target);
   mTimers.AppendElement(p); // Released in DeallocPGMPTimerParent, or on shutdown.
   return p;
 }
@@ -617,7 +614,7 @@ GMPParent::ReadGMPMetaData()
 
   nsCOMPtr<nsIFile> infoFile;
   nsresult rv = mDirectory->Clone(getter_AddRefs(infoFile));
-  if (NS_FAILED(rv)) {
+  if (NS_WARN_IF(NS_FAILED(rv))) {
     return GenericPromise::CreateAndReject(rv, __func__);
   }
   infoFile->AppendRelativePath(mName + NS_LITERAL_STRING(".info"));
@@ -629,7 +626,7 @@ GMPParent::ReadGMPMetaData()
   // Maybe this is the Widevine adapted plugin?
   nsCOMPtr<nsIFile> manifestFile;
   rv = mDirectory->Clone(getter_AddRefs(manifestFile));
-  if (NS_FAILED(rv)) {
+  if (NS_WARN_IF(NS_FAILED(rv))) {
     return GenericPromise::CreateAndReject(rv, __func__);
   }
   manifestFile->AppendRelativePath(NS_LITERAL_STRING("manifest.json"));
@@ -690,22 +687,6 @@ GMPParent::ReadGMPInfoFile(nsIFile* aFile)
       }
     }
 
-    if (cap.mAPIName.EqualsLiteral(GMP_API_DECRYPTOR)) {
-      mCanDecrypt = true;
-
-#if defined(XP_LINUX) && defined(MOZ_GMP_SANDBOX)
-      if (!mozilla::SandboxInfo::Get().CanSandboxMedia()) {
-        nsPrintfCString msg(
-          "GMPParent::ReadGMPMetaData: Plugin \"%s\" is an EME CDM"
-          " but this system can't sandbox it; not loading.",
-          mDisplayName.get());
-        printf_stderr("%s\n", msg.get());
-        LOGD("%s", msg.get());
-        return GenericPromise::CreateAndReject(NS_ERROR_FAILURE, __func__);
-      }
-#endif
-    }
-
     mCapabilities.AppendElement(Move(cap));
   }
 
@@ -725,7 +706,7 @@ GMPParent::ReadChromiumManifestFile(nsIFile* aFile)
   }
 
   // DOM JSON parsing needs to run on the main thread.
-  return InvokeAsync<nsString&&>(
+  return InvokeAsync(
     mMainThread, this, __func__,
     &GMPParent::ParseChromiumManifest, NS_ConvertUTF8toUTF16(json));
 }
@@ -738,11 +719,7 @@ IsCDMAPISupported(const mozilla::dom::WidevineCDMManifest& aManifest)
   int32_t interfaceVersion =
     aManifest.mX_cdm_interface_versions.ToInteger(&ignored);
   int32_t hostVersion = aManifest.mX_cdm_host_versions.ToInteger(&ignored);
-  if (MediaPrefs::EMEChromiumAPIEnabled()) {
-    return ChromiumCDMAdapter::Supports(
-      moduleVersion, interfaceVersion, hostVersion);
-  }
-  return WidevineAdapter::Supports(
+  return ChromiumCDMAdapter::Supports(
     moduleVersion, interfaceVersion, hostVersion);
 }
 
@@ -789,6 +766,13 @@ GMPParent::ParseChromiumManifest(const nsAString& aJSON)
   } else if (mDisplayName.EqualsASCII("WidevineCdm")) {
     kEMEKeySystem = kEMEKeySystemWidevine;
 #if XP_WIN
+    // psapi.dll added for GetMappedFileNameW, which could possibly be avoided
+    // in future versions, see bug 1383611 for details.
+    mLibs = NS_LITERAL_CSTRING("dxva2.dll, psapi.dll");
+#endif
+  } else if (mDisplayName.EqualsASCII("fake")) {
+    kEMEKeySystem = NS_LITERAL_CSTRING("fake");
+#if XP_WIN
     mLibs = NS_LITERAL_CSTRING("dxva2.dll");
 #endif
   } else {
@@ -818,17 +802,9 @@ GMPParent::ParseChromiumManifest(const nsAString& aJSON)
 
   video.mAPITags.AppendElement(kEMEKeySystem);
 
-  if (MediaPrefs::EMEChromiumAPIEnabled()) {
-    video.mAPIName = NS_LITERAL_CSTRING(CHROMIUM_CDM_API);
-    mAdapter = NS_LITERAL_STRING("chromium");
-  } else {
-    video.mAPIName = NS_LITERAL_CSTRING(GMP_API_VIDEO_DECODER);
-    mAdapter = NS_LITERAL_STRING("widevine");
+  video.mAPIName = NS_LITERAL_CSTRING(CHROMIUM_CDM_API);
+  mAdapter = NS_LITERAL_STRING("chromium");
 
-    GMPCapability decrypt(NS_LITERAL_CSTRING(GMP_API_DECRYPTOR));
-    decrypt.mAPITags.AppendElement(kEMEKeySystem);
-    mCapabilities.AppendElement(Move(decrypt));
-  }
   mCapabilities.AppendElement(Move(video));
 
   return GenericPromise::CreateAndResolve(true, __func__);
@@ -891,13 +867,13 @@ GMPParent::ResolveGetContentParentPromises()
 bool
 GMPParent::OpenPGMPContent()
 {
-  MOZ_ASSERT(GMPThread() == NS_GetCurrentThread());
+  MOZ_ASSERT(GMPEventTarget()->IsOnCurrentThread());
   MOZ_ASSERT(!mGMPContentParent);
 
   Endpoint<PGMPContentParent> parent;
   Endpoint<PGMPContentChild> child;
-  if (NS_FAILED(PGMPContent::CreateEndpoints(base::GetCurrentProcId(),
-                                             OtherPid(), &parent, &child))) {
+  if (NS_WARN_IF(NS_FAILED(PGMPContent::CreateEndpoints(
+        base::GetCurrentProcId(), OtherPid(), &parent, &child)))) {
     return false;
   }
 
@@ -931,7 +907,7 @@ void
 GMPParent::GetGMPContentParent(UniquePtr<MozPromiseHolder<GetGMPContentParentPromise>>&& aPromiseHolder)
 {
   LOGD("%s %p", __FUNCTION__, this);
-  MOZ_ASSERT(GMPThread() == NS_GetCurrentThread());
+  MOZ_ASSERT(GMPEventTarget()->IsOnCurrentThread());
 
   if (mGMPContentParent) {
     RefPtr<GMPContentParent::CloseBlocker> blocker(new GMPContentParent::CloseBlocker(mGMPContentParent));

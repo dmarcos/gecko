@@ -13,8 +13,6 @@ Components.utils.import("resource://gre/modules/TelemetryStopwatch.jsm");
 Components.utils.import("resource://gre/modules/Services.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "MigrationUtils",
                                   "resource:///modules/MigrationUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Task",
-                                  "resource://gre/modules/Task.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "BookmarkJSONUtils",
                                   "resource://gre/modules/BookmarkJSONUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesBackups",
@@ -285,9 +283,9 @@ var PlacesOrganizer = {
     let itemId = aNode.itemId;
 
     if (PlacesUtils.nodeIsHistoryContainer(aNode) ||
-        itemId == PlacesUIUtils.leftPaneQueries["History"]) {
+        itemId == PlacesUIUtils.leftPaneQueries.History) {
       PlacesQueryBuilder.setScope("history");
-    } else if (itemId == PlacesUIUtils.leftPaneQueries["Downloads"]) {
+    } else if (itemId == PlacesUIUtils.leftPaneQueries.Downloads) {
       PlacesQueryBuilder.setScope("downloads");
     } else {
       // Default to All Bookmarks for all other nodes, per bug 469437.
@@ -376,7 +374,7 @@ var PlacesOrganizer = {
       if (aResult != Ci.nsIFilePicker.returnCancel && fp.fileURL) {
         Components.utils.import("resource://gre/modules/BookmarkHTMLUtils.jsm");
         BookmarkHTMLUtils.importFromURL(fp.fileURL.spec, false)
-                         .then(null, Components.utils.reportError);
+                         .catch(Components.utils.reportError);
       }
     };
 
@@ -395,7 +393,7 @@ var PlacesOrganizer = {
       if (aResult != Ci.nsIFilePicker.returnCancel) {
         Components.utils.import("resource://gre/modules/BookmarkHTMLUtils.jsm");
         BookmarkHTMLUtils.exportToFile(fp.file.path)
-                         .then(null, Components.utils.reportError);
+                         .catch(Components.utils.reportError);
       }
     };
 
@@ -421,14 +419,14 @@ var PlacesOrganizer = {
     while (restorePopup.childNodes.length > 1)
       restorePopup.firstChild.remove();
 
-    Task.spawn(function* () {
-      let backupFiles = yield PlacesBackups.getBackupFiles();
+    (async function() {
+      let backupFiles = await PlacesBackups.getBackupFiles();
       if (backupFiles.length == 0)
         return;
 
       // Populate menu with backups.
       for (let i = 0; i < backupFiles.length; i++) {
-        let fileSize = (yield OS.File.stat(backupFiles[i])).size;
+        let fileSize = (await OS.File.stat(backupFiles[i])).size;
         let [size, unit] = DownloadUtils.convertByteUnits(fileSize);
         let sizeString = PlacesUtils.getFormattedString("backupFileSizeText",
                                                         [size, unit]);
@@ -456,37 +454,35 @@ var PlacesOrganizer = {
       // Add the restoreFromFile item.
       restorePopup.insertBefore(document.createElement("menuseparator"),
                                 document.getElementById("restoreFromFile"));
-    });
+    })();
   },
 
   /**
    * Called when a menuitem is selected from the restore menu.
    */
-  onRestoreMenuItemClick: Task.async(function* (aMenuItem) {
+  async onRestoreMenuItemClick(aMenuItem) {
     let backupName = aMenuItem.getAttribute("value");
-    let backupFilePaths = yield PlacesBackups.getBackupFiles();
+    let backupFilePaths = await PlacesBackups.getBackupFiles();
     for (let backupFilePath of backupFilePaths) {
       if (OS.Path.basename(backupFilePath) == backupName) {
         PlacesOrganizer.restoreBookmarksFromFile(backupFilePath);
         break;
       }
     }
-  }),
+  },
 
   /**
    * Called when 'Choose File...' is selected from the restore menu.
    * Prompts for a file and restores bookmarks to those in the file.
    */
   onRestoreBookmarksFromFile: function PO_onRestoreBookmarksFromFile() {
-    let dirSvc = Cc["@mozilla.org/file/directory_service;1"].
-                 getService(Ci.nsIProperties);
-    let backupsDir = dirSvc.get("Desk", Ci.nsILocalFile);
+    let backupsDir = Services.dirsvc.get("Desk", Ci.nsIFile);
     let fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
-    let fpCallback = function fpCallback_done(aResult) {
+    let fpCallback = aResult => {
       if (aResult != Ci.nsIFilePicker.returnCancel) {
         this.restoreBookmarksFromFile(fp.file.path);
       }
-    }.bind(this);
+    };
 
     fp.init(window, PlacesUIUtils.getString("bookmarksRestoreTitle"),
             Ci.nsIFilePicker.modeOpen);
@@ -509,29 +505,25 @@ var PlacesOrganizer = {
     }
 
     // confirm ok to delete existing bookmarks
-    var prompts = Cc["@mozilla.org/embedcomp/prompt-service;1"].
-                  getService(Ci.nsIPromptService);
-    if (!prompts.confirm(null,
-                         PlacesUIUtils.getString("bookmarksRestoreAlertTitle"),
-                         PlacesUIUtils.getString("bookmarksRestoreAlert")))
+    if (!Services.prompt.confirm(null,
+           PlacesUIUtils.getString("bookmarksRestoreAlertTitle"),
+           PlacesUIUtils.getString("bookmarksRestoreAlert")))
       return;
 
-    Task.spawn(function* () {
+    (async function() {
       try {
-        yield BookmarkJSONUtils.importFromFile(aFilePath, true);
+        await BookmarkJSONUtils.importFromFile(aFilePath, true);
       } catch (ex) {
         PlacesOrganizer._showErrorAlert(PlacesUIUtils.getString("bookmarksRestoreParseError"));
       }
-    });
+    })();
   },
 
   _showErrorAlert: function PO__showErrorAlert(aMsg) {
     var brandShortName = document.getElementById("brandStrings").
                                   getString("brandShortName");
 
-    Cc["@mozilla.org/embedcomp/prompt-service;1"].
-      getService(Ci.nsIPromptService).
-      alert(window, brandShortName, aMsg);
+    Services.prompt.alert(window, brandShortName, aMsg);
   },
 
   /**
@@ -540,9 +532,7 @@ var PlacesOrganizer = {
    * of those items.
    */
   backupBookmarks: function PO_backupBookmarks() {
-    let dirSvc = Cc["@mozilla.org/file/directory_service;1"].
-                 getService(Ci.nsIProperties);
-    let backupsDir = dirSvc.get("Desk", Ci.nsILocalFile);
+    let backupsDir = Services.dirsvc.get("Desk", Ci.nsIFile);
     let fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
     let fpCallback = function fpCallback_done(aResult) {
       if (aResult != Ci.nsIFilePicker.returnCancel) {
@@ -644,16 +634,16 @@ var PlacesOrganizer = {
     if (selectedNode && !PlacesUtils.nodeIsSeparator(selectedNode)) {
       detailsDeck.selectedIndex = 1;
 
-      gEditItemOverlay.initPanel({ node: selectedNode
-                                 , hiddenRows: ["folderPicker"] });
+      gEditItemOverlay.initPanel({ node: selectedNode,
+                                   hiddenRows: ["folderPicker"] });
 
       this._detectAndSetDetailsPaneMinimalState(selectedNode);
     } else if (!selectedNode && aNodeList[0]) {
       if (aNodeList.every(PlacesUtils.nodeIsURI)) {
         let uris = aNodeList.map(node => PlacesUtils._uri(node.uri));
         detailsDeck.selectedIndex = 1;
-        gEditItemOverlay.initPanel({ uris
-                                   , hiddenRows: ["folderPicker",
+        gEditItemOverlay.initPanel({ uris,
+                                     hiddenRows: ["folderPicker",
                                                   "loadInSidebar",
                                                   "location",
                                                   "keyword",
@@ -757,7 +747,8 @@ var PlacesSearchBox = {
     if (this._folders.length == 0) {
       this._folders.push(PlacesUtils.bookmarksMenuFolderId,
                          PlacesUtils.unfiledBookmarksFolderId,
-                         PlacesUtils.toolbarFolderId);
+                         PlacesUtils.toolbarFolderId,
+                         PlacesUtils.mobileFolderId);
     }
     return this._folders;
   },
@@ -785,7 +776,6 @@ var PlacesSearchBox = {
     }
 
     let currentView = ContentArea.currentView;
-    let currentOptions = PO.getCurrentOptions();
 
     // Search according to the current scope, which was set by
     // PQB_setScope()
@@ -794,6 +784,7 @@ var PlacesSearchBox = {
         currentView.applyFilter(filterString, this.folders);
         break;
       case "history": {
+        let currentOptions = PO.getCurrentOptions();
         if (currentOptions.queryType != Ci.nsINavHistoryQueryOptions.QUERY_TYPE_HISTORY) {
           let query = PlacesUtils.history.getNewQuery();
           query.searchTerms = filterString;
@@ -811,20 +802,8 @@ var PlacesSearchBox = {
         break;
       }
       case "downloads": {
-        if (currentView == ContentTree.view) {
-          let query = PlacesUtils.history.getNewQuery();
-          query.searchTerms = filterString;
-          query.setTransitions([Ci.nsINavHistoryService.TRANSITION_DOWNLOAD], 1);
-          let options = currentOptions.clone();
-          // Make sure we're getting uri results.
-          options.resultType = currentOptions.RESULTS_AS_URI;
-          options.queryType = Ci.nsINavHistoryQueryOptions.QUERY_TYPE_HISTORY;
-          options.includeHidden = true;
-          currentView.load([query], options);
-        } else {
-          // The new downloads view doesn't use places for searching downloads.
-          currentView.searchTerm = filterString;
-        }
+        // The new downloads view doesn't use places for searching downloads.
+        currentView.searchTerm = filterString;
         break;
       }
       default:
@@ -943,7 +922,8 @@ var PlacesQueryBuilder = {
         filterCollection = "bookmarks";
         folders.push(PlacesUtils.bookmarksMenuFolderId,
                      PlacesUtils.toolbarFolderId,
-                     PlacesUtils.unfiledBookmarksFolderId);
+                     PlacesUtils.unfiledBookmarksFolderId,
+                     PlacesUtils.mobileFolderId);
         break;
       case "downloads":
         filterCollection = "downloads";
@@ -1210,7 +1190,7 @@ var ViewMenu = {
     result.sortingAnnotation = colLookupTable[columnId].anno || "";
     result.sortingMode = Ci.nsINavHistoryQueryOptions[sortConst];
   }
-}
+};
 
 var ContentArea = {
   _specialViews: new Map(),
@@ -1365,7 +1345,7 @@ var ContentTree = {
 
   openSelectedNode: function CT_openSelectedNode(aEvent) {
     let view = this.view;
-    PlacesUIUtils.openNodeWithEvent(view.selectedNode, aEvent, view);
+    PlacesUIUtils.openNodeWithEvent(view.selectedNode, aEvent);
   },
 
   onClick: function CT_onClick(aEvent) {

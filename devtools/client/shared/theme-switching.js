@@ -9,7 +9,8 @@
   const { require } = Cu.import("resource://devtools/shared/Loader.jsm", {});
   const Services = require("Services");
   const { gDevTools } = require("devtools/client/framework/devtools");
-  const { watchCSS } = require("devtools/client/shared/css-reload");
+  const { appendStyleSheet } = require("devtools/client/shared/stylesheet-utils");
+
   let documentElement = document.documentElement;
 
   let os;
@@ -50,34 +51,6 @@
   }
 
   /*
-   * Append a new processing instruction and return an object with
-   *  - styleSheet: DOMNode
-   *  - loadPromise: Promise that resolves once the sheets loads or errors
-   */
-  function appendStyleSheet(url) {
-    let styleSheetAttr = `href="${url}" type="text/css"`;
-    let styleSheet = document.createProcessingInstruction(
-      "xml-stylesheet", styleSheetAttr);
-    let loadPromise = new Promise((resolve, reject) => {
-      function onload() {
-        styleSheet.removeEventListener("load", onload);
-        styleSheet.removeEventListener("error", onerror);
-        resolve();
-      }
-      function onerror() {
-        styleSheet.removeEventListener("load", onload);
-        styleSheet.removeEventListener("error", onerror);
-        reject("Failed to load theme file " + url);
-      }
-
-      styleSheet.addEventListener("load", onload);
-      styleSheet.addEventListener("error", onerror);
-    });
-    document.insertBefore(styleSheet, documentElement);
-    return {styleSheet, loadPromise};
-  }
-
-  /*
    * Notify the window that a theme switch finished so tests can check the DOM
    */
   function notifyWindow() {
@@ -112,13 +85,13 @@
 
     let loadEvents = [];
     for (let url of newThemeDef.stylesheets) {
-      let {styleSheet, loadPromise} = appendStyleSheet(url);
+      let {styleSheet, loadPromise} = appendStyleSheet(document, url);
       devtoolsStyleSheets.get(newThemeDef).push(styleSheet);
       loadEvents.push(loadPromise);
     }
 
     try {
-      const StylesheetUtils = require("sdk/stylesheet/utils");
+      const StylesheetUtils = require("devtools/shared/layout/utils");
       const SCROLLBARS_URL = "chrome://devtools/skin/floating-scrollbars-dark-theme.css";
 
       // TODO: extensions might want to customize scrollbar styles too.
@@ -180,6 +153,4 @@
       Services.prefs.removeObserver("devtools.theme", handlePrefChange);
     }, { once: true });
   }
-
-  watchCSS(window);
 })();

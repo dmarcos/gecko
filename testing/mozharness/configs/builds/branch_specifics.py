@@ -35,6 +35,14 @@ config = {
         "update_channel": "nightly",
         "graph_server_branch_name": "Firefox",
         'stage_server': 'upload.ffxbld.productdelivery.prod.mozaws.net',
+        'platform_overrides': {
+            'android-api-16-old-id': {
+                "update_channel": "nightly-old-id",
+            },
+            'android-x86-old-id': {
+                "update_channel": "nightly-old-id",
+            },
+        }
     },
     'mozilla-release': {
         'enable_release_promotion': True,
@@ -44,23 +52,23 @@ config = {
         'stage_server': 'upload.ffxbld.productdelivery.prod.mozaws.net',
         'platform_overrides': {
             'linux': {
-                'src_mozconfig': 'browser/config/mozconfigs/linux32/release',
+                'mozconfig_variant': 'release',
                 'force_clobber': True,
             },
             'linux64': {
-                'src_mozconfig': 'browser/config/mozconfigs/linux64/release',
+                'mozconfig_variant': 'release',
                 'force_clobber': True,
             },
             'macosx64': {
-                'src_mozconfig': 'browser/config/mozconfigs/macosx64/release',
+                'mozconfig_variant': 'release',
                 'force_clobber': True,
             },
             'win32': {
-                'src_mozconfig': 'browser/config/mozconfigs/win32/release',
+                'mozconfig_variant': 'release',
                 'force_clobber': True,
             },
             'win64': {
-                'src_mozconfig': 'browser/config/mozconfigs/win64/release',
+                'mozconfig_variant': 'release',
                 'force_clobber': True,
             },
             'linux-debug': {
@@ -118,24 +126,39 @@ config = {
         'stage_server': 'upload.ffxbld.productdelivery.prod.mozaws.net',
         'platform_overrides': {
             'linux': {
-                'src_mozconfig': 'browser/config/mozconfigs/linux32/beta',
+                'mozconfig_variant': 'beta',
                 'force_clobber': True,
             },
             'linux64': {
-                'src_mozconfig': 'browser/config/mozconfigs/linux64/beta',
+                'mozconfig_variant': 'beta',
                 'force_clobber': True,
             },
             'macosx64': {
-                'src_mozconfig': 'browser/config/mozconfigs/macosx64/beta',
+                'mozconfig_variant': 'beta',
                 'force_clobber': True,
             },
             'win32': {
-                'src_mozconfig': 'browser/config/mozconfigs/win32/beta',
+                'mozconfig_variant': 'beta',
                 'force_clobber': True,
             },
             'win64': {
-                'src_mozconfig': 'browser/config/mozconfigs/win64/beta',
+                'mozconfig_variant': 'beta',
                 'force_clobber': True,
+            },
+            'linux-devedition': {
+                "update_channel": "aurora",
+            },
+            'linux64-devedition': {
+                "update_channel": "aurora",
+            },
+            'macosx64-devedition': {
+                "update_channel": "aurora",
+            },
+            'win32-devedition': {
+                "update_channel": "aurora",
+            },
+            'win64-devedition': {
+                "update_channel": "aurora",
             },
             'linux-debug': {
                 'update_channel': 'default',
@@ -226,6 +249,14 @@ config = {
     'date': {
         'update_channel': 'nightly-date',
         'stage_server': 'upload.ffxbld.productdelivery.prod.mozaws.net',
+        'platform_overrides': {
+            'android-api-16-old-id': {
+                "update_channel": "nightly-old-id",
+            },
+            'android-x86-old-id': {
+                "update_channel": "nightly-old-id",
+            },
+        }
     },
     'cypress': {
         # bug 1164935
@@ -256,17 +287,17 @@ config = {
     },
     # 'holly': {},
     'jamun': {
-        'update_channel': 'beta-dev',
+        'update_channel': 'beta',
         'enable_release_promotion': 1,
         'platform_overrides': {
             'linux': {
-                'src_mozconfig': 'browser/config/mozconfigs/linux32/release',
+                'mozconfig_variant': 'release',
             },
             'linux-debug': {
                 'update_channel': 'default',
             },
             'linux64': {
-                'src_mozconfig': 'browser/config/mozconfigs/linux64/release',
+                'mozconfig_variant': 'release',
             },
             'linux64-debug': {
                 'update_channel': 'default',
@@ -284,7 +315,7 @@ config = {
                 'update_channel': 'default',
             },
             'macosx64': {
-                'src_mozconfig': 'browser/config/mozconfigs/macosx64/release',
+                'mozconfig_variant': 'release',
             },
             'macosx64-debug': {
                 'update_channel': 'default',
@@ -296,16 +327,31 @@ config = {
                 'update_channel': 'default',
             },
             'win32': {
-                'src_mozconfig': 'browser/config/mozconfigs/win32/release',
+                'mozconfig_variant': 'release',
             },
             'win32-debug': {
                 'update_channel': 'default',
             },
             'win64': {
-                'src_mozconfig': 'browser/config/mozconfigs/win64/release',
+                'mozconfig_variant': 'release',
             },
             'win64-debug': {
                 'update_channel': 'default',
+            },
+            'linux-devedition': {
+                "update_channel": "aurora",
+            },
+            'linux64-devedition': {
+                "update_channel": "aurora",
+            },
+            'macosx64-devedition': {
+                "update_channel": "aurora",
+            },
+            'win32-devedition': {
+                "update_channel": "aurora",
+            },
+            'win64-devedition': {
+                "update_channel": "aurora",
             },
         },
         'stage_server': 'upload.ffxbld.productdelivery.prod.mozaws.net',

@@ -34,6 +34,7 @@
 #include "nsXULTemplateQueryProcessorRDF.h"
 #include "nsXULSortService.h"
 #include "nsIDocument.h"
+#include "nsIRDFCompositeDataSource.h"
 
 //----------------------------------------------------------------------
 
@@ -129,7 +130,7 @@ nsXULTemplateQueryProcessorRDF::InitGlobals()
         if (NS_FAILED(rv))
             return rv;
     }
-  
+
     if (!kNC_BookmarkSeparator) {
         gRDFService->GetResource(
           NS_LITERAL_CSTRING(NC_NAMESPACE_URI "BookmarkSeparator"),
@@ -172,7 +173,7 @@ nsXULTemplateQueryProcessorRDF::GetDatasource(nsIArray* aDataSources,
     NS_ENSURE_SUCCESS(rv, rv);
 
     // create a database for the builder
-    compDB = do_CreateInstance(NS_RDF_DATASOURCE_CONTRACTID_PREFIX 
+    compDB = do_CreateInstance(NS_RDF_DATASOURCE_CONTRACTID_PREFIX
                                "composite-datasource");
     if (!compDB) {
         NS_ERROR("unable to construct new composite data source");
@@ -334,8 +335,8 @@ nsXULTemplateQueryProcessorRDF::Done()
 NS_IMETHODIMP
 nsXULTemplateQueryProcessorRDF::CompileQuery(nsIXULTemplateBuilder* aBuilder,
                                              nsIDOMNode* aQueryNode,
-                                             nsIAtom* aRefVariable,
-                                             nsIAtom* aMemberVariable,
+                                             nsAtom* aRefVariable,
+                                             nsAtom* aMemberVariable,
                                              nsISupports** _retval)
 {
     RefPtr<nsRDFQuery> query = new nsRDFQuery(this);
@@ -363,14 +364,14 @@ nsXULTemplateQueryProcessorRDF::CompileQuery(nsIXULTemplateBuilder* aBuilder,
         NS_ASSERTION(!mSimpleRuleMemberTest,
                      "CompileQuery called twice with the same template");
         if (!mSimpleRuleMemberTest)
-            rv = CompileSimpleQuery(query, content, &lastnode);
+            rv = CompileSimpleQuery(query, content->AsElement(), &lastnode);
         else
             rv = NS_ERROR_FAILURE;
     }
     else if (content->NodeInfo()->Equals(nsGkAtoms::rule, kNameSpaceID_XUL)) {
         // simplified syntax with at least one rule
         query->SetSimple();
-        rv = CompileSimpleQuery(query, content, &lastnode);
+        rv = CompileSimpleQuery(query, content->AsElement(), &lastnode);
     }
     else {
         rv = CompileExtendedQuery(query, content, &lastnode);
@@ -385,7 +386,7 @@ nsXULTemplateQueryProcessorRDF::CompileQuery(nsIXULTemplateBuilder* aBuilder,
 
     // this and other functions always add nodes to mAllTests first. That
     // way if something fails, the node will just sit harmlessly in mAllTests
-    // where it can be deleted later. 
+    // where it can be deleted later.
     rv = mAllTests.Add(instnode);
     if (NS_FAILED(rv)) {
         delete instnode;
@@ -511,8 +512,8 @@ nsXULTemplateQueryProcessorRDF::GenerateResults(nsISupports* aDatasource,
 
 NS_IMETHODIMP
 nsXULTemplateQueryProcessorRDF::AddBinding(nsIDOMNode* aRuleNode,
-                                           nsIAtom* aVar,
-                                           nsIAtom* aRef,
+                                           nsAtom* aVar,
+                                           nsAtom* aRef,
                                            const nsAString& aExpr)
 {
     // add a <binding> to a rule. When a result is matched, the bindings are
@@ -562,7 +563,7 @@ nsXULTemplateQueryProcessorRDF::TranslateRef(nsISupports* aDatasource,
 NS_IMETHODIMP
 nsXULTemplateQueryProcessorRDF::CompareResults(nsIXULTemplateResult* aLeft,
                                                nsIXULTemplateResult* aRight,
-                                               nsIAtom* aVar,
+                                               nsAtom* aVar,
                                                uint32_t aSortHints,
                                                int32_t* aResult)
 {
@@ -690,7 +691,7 @@ nsXULTemplateQueryProcessorRDF::CompareResults(nsIXULTemplateResult* aLeft,
                 l->GetLength(&llen);
                 r->GetValue(&rval);
                 r->GetLength(&rlen);
-                
+
                 collation->CompareRawSortKey(lval, llen, rval, rlen, aResult);
             }
         }
@@ -792,7 +793,7 @@ nsXULTemplateQueryProcessorRDF::OnMove(nsIRDFDataSource* aDataSource,
     if (mUpdateBatchNest)
         return NS_OK;
 
-    NS_NOTYETIMPLEMENTED("write me");
+    MOZ_ASSERT_UNREACHABLE("write me");
     return NS_ERROR_NOT_IMPLEMENTED;
 }
 
@@ -1012,7 +1013,7 @@ nsXULTemplateQueryProcessorRDF::Log(const char* aOperation,
             return rv;
 
         nsAutoCString targetstrC;
-        targetstrC.AssignWithConversion(targetStr);
+        LossyCopyUTF16toASCII(targetStr, targetstrC);
         MOZ_LOG(gXULTemplateLog, LogLevel::Debug,
                ("                        --[%s]-->[%s]",
                 propertyStr,
@@ -1185,7 +1186,7 @@ nsXULTemplateQueryProcessorRDF::CompileExtendedQuery(nsRDFQuery* aQuery,
             nsAutoString tagstr;
             condition->GetAttr(kNameSpaceID_None, nsGkAtoms::tag, tagstr);
 
-            nsCOMPtr<nsIAtom> tag;
+            RefPtr<nsAtom> tag;
             if (! tagstr.IsEmpty()) {
                 tag = NS_Atomize(tagstr);
             }
@@ -1219,7 +1220,7 @@ nsXULTemplateQueryProcessorRDF::CompileExtendedQuery(nsRDFQuery* aQuery,
 }
 
 nsresult
-nsXULTemplateQueryProcessorRDF::CompileQueryChild(nsIAtom* aTag,
+nsXULTemplateQueryProcessorRDF::CompileQueryChild(nsAtom* aTag,
                                                   nsRDFQuery* aQuery,
                                                   nsIContent* aCondition,
                                                   TestNode* aParentNode,
@@ -1238,7 +1239,7 @@ nsXULTemplateQueryProcessorRDF::CompileQueryChild(nsIAtom* aTag,
         aTag->ToString(tagstr);
 
         nsAutoCString tagstrC;
-        tagstrC.AssignWithConversion(tagstr);
+        LossyCopyUTF16toASCII(tagstr, tagstrC);
         MOZ_LOG(gXULTemplateLog, LogLevel::Info,
                ("xultemplate[%p] unrecognized condition test <%s>",
                 this, tagstrC.get()));
@@ -1248,7 +1249,7 @@ nsXULTemplateQueryProcessorRDF::CompileQueryChild(nsIAtom* aTag,
 }
 
 nsresult
-nsXULTemplateQueryProcessorRDF::ParseLiteral(const nsString& aParseType, 
+nsXULTemplateQueryProcessorRDF::ParseLiteral(const nsString& aParseType,
                                              const nsString& aValue,
                                              nsIRDFNode** aResult)
 {
@@ -1262,14 +1263,14 @@ nsXULTemplateQueryProcessorRDF::ParseLiteral(const nsString& aParseType,
         if (NS_FAILED(errorCode))
             return NS_ERROR_FAILURE;
         rv = gRDFService->GetIntLiteral(intValue, getter_AddRefs(intLiteral));
-        if (NS_FAILED(rv)) 
+        if (NS_FAILED(rv))
             return rv;
         intLiteral.forget(aResult);
     }
     else {
         nsCOMPtr<nsIRDFLiteral> literal;
         rv = gRDFService->GetLiteral(aValue.get(), getter_AddRefs(literal));
-        if (NS_FAILED(rv)) 
+        if (NS_FAILED(rv))
             return rv;
         literal.forget(aResult);
     }
@@ -1295,7 +1296,7 @@ nsXULTemplateQueryProcessorRDF::CompileTripleCondition(nsRDFQuery* aQuery,
     nsAutoString subject;
     aCondition->GetAttr(kNameSpaceID_None, nsGkAtoms::subject, subject);
 
-    nsCOMPtr<nsIAtom> svar;
+    RefPtr<nsAtom> svar;
     nsCOMPtr<nsIRDFResource> sres;
     if (subject.IsEmpty()) {
         nsXULContentUtils::LogTemplateError(ERROR_TEMPLATE_TRIPLE_BAD_SUBJECT);
@@ -1321,7 +1322,7 @@ nsXULTemplateQueryProcessorRDF::CompileTripleCondition(nsRDFQuery* aQuery,
     nsAutoString object;
     aCondition->GetAttr(kNameSpaceID_None, nsGkAtoms::object, object);
 
-    nsCOMPtr<nsIAtom> ovar;
+    RefPtr<nsAtom> ovar;
     nsCOMPtr<nsIRDFNode> onode;
     if (object.IsEmpty()) {
         nsXULContentUtils::LogTemplateError(ERROR_TEMPLATE_TRIPLE_BAD_OBJECT);
@@ -1398,7 +1399,7 @@ nsXULTemplateQueryProcessorRDF::CompileMemberCondition(nsRDFQuery* aQuery,
         return NS_OK;
     }
 
-    nsCOMPtr<nsIAtom> containervar = NS_Atomize(container);
+    RefPtr<nsAtom> containervar = NS_Atomize(container);
 
     // child
     nsAutoString child;
@@ -1409,7 +1410,7 @@ nsXULTemplateQueryProcessorRDF::CompileMemberCondition(nsRDFQuery* aQuery,
         return NS_OK;
     }
 
-    nsCOMPtr<nsIAtom> childvar = NS_Atomize(child);
+    RefPtr<nsAtom> childvar = NS_Atomize(child);
 
     TestNode* testnode =
         new nsRDFConMemberTestNode(aParentNode,
@@ -1480,7 +1481,7 @@ nsXULTemplateQueryProcessorRDF::AddDefaultSimpleRules(nsRDFQuery* aQuery,
 
 nsresult
 nsXULTemplateQueryProcessorRDF::CompileSimpleQuery(nsRDFQuery* aQuery,
-                                                   nsIContent* aQueryElement,
+                                                   Element* aQueryElement,
                                                    TestNode** aLastNode)
 {
     // Compile a "simple" (or old-school style) <template> query.
@@ -1493,8 +1494,6 @@ nsXULTemplateQueryProcessorRDF::CompileSimpleQuery(nsRDFQuery* aQuery,
         if (NS_FAILED(rv))
             return rv;
     }
-
-    bool hasContainerTest = false;
 
     TestNode* prevnode = mSimpleRuleMemberTest;
 
@@ -1514,7 +1513,7 @@ nsXULTemplateQueryProcessorRDF::CompileSimpleQuery(nsRDFQuery* aQuery,
         int32_t attrNameSpaceID = name->NamespaceID();
         if (attrNameSpaceID == kNameSpaceID_XMLNS)
           continue;
-        nsIAtom* attr = name->LocalName();
+        nsAtom* attr = name->LocalName();
 
         nsAutoString value;
         aQueryElement->GetAttr(attrNameSpaceID, attr, value);
@@ -1523,11 +1522,6 @@ nsXULTemplateQueryProcessorRDF::CompileSimpleQuery(nsRDFQuery* aQuery,
 
         if (name->Equals(nsGkAtoms::iscontainer, kNameSpaceID_None) ||
             name->Equals(nsGkAtoms::isempty, kNameSpaceID_None)) {
-            // Tests about containerhood and emptiness. These can be
-            // globbed together, mostly. Check to see if we've already
-            // added a container test: we only need one.
-            if (hasContainerTest)
-                continue;
 
             nsRDFConInstanceTestNode::Test iscontainer =
                 nsRDFConInstanceTestNode::eDontCare;
@@ -1584,7 +1578,7 @@ nsXULTemplateQueryProcessorRDF::CompileSimpleQuery(nsRDFQuery* aQuery,
 
                 target = do_QueryInterface(resource);
             }
-            else {                
+            else {
               nsAutoString parseType;
               aQueryElement->GetAttr(kNameSpaceID_None, nsGkAtoms::parsetype, parseType);
               rv = ParseLiteral(parseType, value, getter_AddRefs(target));
@@ -1610,7 +1604,7 @@ nsXULTemplateQueryProcessorRDF::CompileSimpleQuery(nsRDFQuery* aQuery,
                 rv = prevnode->AddChild(testnode);
                 if (NS_FAILED(rv))
                     return rv;
-            }                
+            }
             else {
                 aQuery->SetRoot(testnode);
             }
@@ -1801,7 +1795,7 @@ nsXULTemplateQueryProcessorRDF::GetSortValue(nsIXULTemplateResult* aResult,
     nsresult rv = aResult->GetResource(getter_AddRefs(source));
     if (NS_FAILED(rv))
         return rv;
-    
+
     nsCOMPtr<nsIRDFNode> value;
     if (source && mDB) {
         // first check predicate?sort=true so that datasources may use a

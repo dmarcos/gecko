@@ -13,7 +13,7 @@ function test() {
   var triggers = encodeURIComponent(JSON.stringify({
     "Untrusted Signed XPI": TESTROOT + "signed-untrusted.xpi"
   }));
-  gBrowser.selectedTab = gBrowser.addTab();
+  gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
   gBrowser.loadURI(TESTROOT + "installtrigger.html?" + triggers);
 }
 
@@ -23,7 +23,6 @@ function confirm_install(window) {
   is(items[0].name, "Signed XPI Test", "Should have had the filename for the item name");
   is(items[0].url, TESTROOT + "signed-untrusted.xpi", "Should have listed the correct url for the item");
   is(items[0].icon, "", "Should have listed no icon for the item");
-  is(items[0].signed, "false", "Should have listed the item as unsigned");
   return true;
 }
 

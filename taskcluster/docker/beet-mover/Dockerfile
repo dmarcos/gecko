@@ -1,4 +1,4 @@
-FROM ubuntu:vivid
+FROM ubuntu:xenial
 
 RUN apt-get -q update \
     && apt-get install --yes -q \
@@ -7,6 +7,7 @@ RUN apt-get -q update \
     python-pip \
     python-virtualenv \
     libffi-dev \
+    liblzma-dev \
     libssl-dev \
     libyaml-dev \
     libmysqlclient-dev \

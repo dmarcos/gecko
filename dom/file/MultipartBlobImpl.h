@@ -49,8 +49,7 @@ public:
 
   void InitializeBlob(ErrorResult& aRv);
 
-  void InitializeBlob(JSContext* aCx,
-                      const Sequence<Blob::BlobPart>& aData,
+  void InitializeBlob(const Sequence<Blob::BlobPart>& aData,
                       const nsAString& aContentType,
                       bool aNativeEOL,
                       ErrorResult& aRv);
@@ -72,7 +71,7 @@ public:
     return mLength;
   }
 
-  virtual void GetInternalStream(nsIInputStream** aInputStream,
+  virtual void CreateInputStream(nsIInputStream** aInputStream,
                                  ErrorResult& aRv) override;
 
   virtual const nsTArray<RefPtr<BlobImpl>>* GetSubBlobImpls() const override
@@ -92,6 +91,8 @@ public:
   }
 
   virtual bool MayBeClonedToOtherThreads() const override;
+
+  size_t GetAllocationSize() const override;
 
 protected:
   MultipartBlobImpl(nsTArray<RefPtr<BlobImpl>>&& aBlobImpls,

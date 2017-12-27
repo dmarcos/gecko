@@ -3,9 +3,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use app_units::Au;
-use euclid::point::Point2D;
+use euclid::Point2D;
 use range::{self, EachIndex, Range, RangeIndex};
-#[cfg(any(target_feature = "sse2", target_feature = "neon"))]
+#[cfg(all(feature = "unstable", any(target_feature = "sse2", target_feature = "neon")))]
 use simd::u32x4;
 use std::{fmt, mem, u16};
 use std::cmp::{Ordering, PartialOrd};
@@ -21,7 +21,7 @@ pub use gfx_traits::ByteIndex;
 /// In the uncommon case (multiple glyphs per unicode character, large glyph index/advance, or
 /// glyph offsets), we pack the glyph count into GlyphEntry, and store the other glyph information
 /// in DetailedGlyphStore.
-#[derive(Clone, Debug, Copy, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct GlyphEntry {
     value: u32,
 }
@@ -74,6 +74,7 @@ pub type GlyphId = u32;
 // TODO: make this more type-safe.
 
 const FLAG_CHAR_IS_SPACE: u32       = 0x40000000;
+#[cfg(feature = "unstable")]
 #[cfg(any(target_feature = "sse2", target_feature = "neon"))]
 const FLAG_CHAR_IS_SPACE_SHIFT: u32 = 30;
 const FLAG_IS_SIMPLE_GLYPH: u32     = 0x80000000;
@@ -110,7 +111,7 @@ pub type DetailedGlyphCount = u16;
 impl GlyphEntry {
     #[inline(always)]
     fn advance(&self) -> Au {
-        Au(((self.value & GLYPH_ADVANCE_MASK) >> GLYPH_ADVANCE_SHIFT) as i32)
+        Au::new(((self.value & GLYPH_ADVANCE_MASK) >> GLYPH_ADVANCE_SHIFT) as i32)
     }
 
     #[inline]
@@ -147,7 +148,7 @@ impl GlyphEntry {
 
 // Stores data for a detailed glyph, in the case that several glyphs
 // correspond to one character, or the glyph's data couldn't be packed.
-#[derive(Clone, Debug, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 struct DetailedGlyph {
     id: GlyphId,
     // glyph's advance, in the text's direction (LTR or RTL)
@@ -166,7 +167,7 @@ impl DetailedGlyph {
     }
 }
 
-#[derive(PartialEq, Clone, Eq, Debug, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct DetailedGlyphRecord {
     // source string offset/GlyphEntry offset in the TextRun
     entry_offset: ByteIndex,
@@ -308,7 +309,7 @@ impl<'a> DetailedGlyphStore {
 
 // This struct is used by GlyphStore clients to provide new glyph data.
 // It should be allocated on the stack and passed by reference to GlyphStore.
-#[derive(Copy, Clone)]
+#[derive(Clone, Copy)]
 pub struct GlyphData {
     id: GlyphId,
     advance: Au,
@@ -339,7 +340,7 @@ impl GlyphData {
 // through glyphs (either for a particular TextRun offset, or all glyphs).
 // Rather than eagerly assembling and copying glyph data, it only retrieves
 // values as they are needed from the GlyphStore, using provided offsets.
-#[derive(Copy, Clone)]
+#[derive(Clone, Copy)]
 pub enum GlyphInfo<'a> {
     Simple(&'a GlyphStore, ByteIndex),
     Detail(&'a GlyphStore, ByteIndex, u16),
@@ -591,6 +592,7 @@ impl<'a> GlyphStore {
     }
 
     #[inline]
+    #[cfg(feature = "unstable")]
     #[cfg(any(target_feature = "sse2", target_feature = "neon"))]
     fn advance_for_byte_range_simple_glyphs(&self, range: &Range<ByteIndex>, extra_word_spacing: Au) -> Au {
         let advance_mask = u32x4::splat(GLYPH_ADVANCE_MASK);
@@ -629,18 +631,19 @@ impl<'a> GlyphStore {
                 leftover_spaces += 1;
             }
         }
-        Au(advance) + leftover_advance + extra_word_spacing * (spaces + leftover_spaces)
+        Au::new(advance) + leftover_advance + extra_word_spacing * (spaces + leftover_spaces)
     }
 
     /// When SIMD isn't available, fallback to the slow path.
     #[inline]
-    #[cfg(not(any(target_feature = "sse2", target_feature = "neon")))]
+    #[cfg(not(all(feature = "unstable", any(target_feature = "sse2", target_feature = "neon"))))]
     fn advance_for_byte_range_simple_glyphs(&self, range: &Range<ByteIndex>, extra_word_spacing: Au) -> Au {
         self.advance_for_byte_range_slow_path(range, extra_word_spacing)
     }
 
     /// Used for SIMD.
     #[inline]
+    #[cfg(feature = "unstable")]
     #[cfg(any(target_feature = "sse2", target_feature = "neon"))]
     #[allow(unsafe_code)]
     fn transmute_entry_buffer_to_u32_buffer(&self) -> &[u32] {
@@ -665,27 +668,27 @@ impl<'a> GlyphStore {
 
 impl fmt::Debug for GlyphStore {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(formatter, "GlyphStore:\n"));
+        write!(formatter, "GlyphStore:\n")?;
         let mut detailed_buffer = self.detail_store.detail_buffer.iter();
         for entry in self.entry_buffer.iter() {
             if entry.is_simple() {
-                try!(write!(formatter,
+                write!(formatter,
                             "  simple id={:?} advance={:?}\n",
                             entry.id(),
-                            entry.advance()));
+                            entry.advance())?;
                 continue
             }
             if entry.is_initial() {
                 continue
             }
-            try!(write!(formatter, "  complex..."));
+            write!(formatter, "  complex...")?;
             if detailed_buffer.next().is_none() {
                 continue
             }
-            try!(write!(formatter,
+            write!(formatter,
                         "  detailed id={:?} advance={:?}\n",
                         entry.id(),
-                        entry.advance()));
+                        entry.advance())?;
         }
         Ok(())
     }
@@ -696,7 +699,7 @@ pub struct GlyphIterator<'a> {
     store: &'a GlyphStore,
     byte_index: ByteIndex,
     byte_range: Range<ByteIndex>,
-    glyph_range: Option<EachIndex<isize, ByteIndex>>,
+    glyph_range: Option<EachIndex<ByteIndex>>,
 }
 
 impl<'a> GlyphIterator<'a> {

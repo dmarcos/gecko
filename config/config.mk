@@ -132,62 +132,6 @@ TOUCH ?= touch
 
 PYTHON_PATH = $(PYTHON) $(topsrcdir)/config/pythonpath.py
 
-# determine debug-related options
-_DEBUG_ASFLAGS :=
-_DEBUG_CFLAGS :=
-_DEBUG_LDFLAGS :=
-
-ifneq (,$(MOZ_DEBUG)$(MOZ_DEBUG_SYMBOLS))
-  ifeq ($(AS),$(YASM))
-    ifeq ($(OS_ARCH)_$(GNU_CC),WINNT_)
-      _DEBUG_ASFLAGS += -g cv8
-    else
-      ifneq ($(OS_ARCH),Darwin)
-        _DEBUG_ASFLAGS += -g dwarf2
-      endif
-    endif
-  else
-    _DEBUG_ASFLAGS += $(MOZ_DEBUG_FLAGS)
-  endif
-  _DEBUG_CFLAGS += $(MOZ_DEBUG_FLAGS)
-  _DEBUG_LDFLAGS += $(MOZ_DEBUG_LDFLAGS)
-endif
-
-ASFLAGS += $(_DEBUG_ASFLAGS)
-OS_CFLAGS += $(_DEBUG_CFLAGS)
-OS_CXXFLAGS += $(_DEBUG_CFLAGS)
-OS_LDFLAGS += $(_DEBUG_LDFLAGS)
-
-# XXX: What does this? Bug 482434 filed for better explanation.
-ifeq ($(OS_ARCH)_$(GNU_CC),WINNT_)
-ifndef MOZ_DEBUG
-
-# MOZ_DEBUG_SYMBOLS generates debug symbols in separate PDB files.
-# Used for generating an optimized build with debugging symbols.
-# Used in the Windows nightlies to generate symbols for crash reporting.
-ifdef MOZ_DEBUG_SYMBOLS
-ifdef HAVE_64BIT_BUILD
-OS_LDFLAGS += -DEBUG -OPT:REF,ICF
-else
-OS_LDFLAGS += -DEBUG -OPT:REF
-endif
-endif
-
-#
-# Handle DMD in optimized builds.
-#
-ifdef MOZ_DMD
-ifdef HAVE_64BIT_BUILD
-OS_LDFLAGS = -DEBUG -OPT:REF,ICF
-else
-OS_LDFLAGS = -DEBUG -OPT:REF
-endif
-endif # MOZ_DMD
-
-endif # MOZ_DEBUG
-
-endif # WINNT && !GNU_CC
-
 #
 # Build using PIC by default
 #
@@ -207,18 +151,16 @@ endif
 # Enable profile-based feedback
 ifneq (1,$(NO_PROFILE_GUIDED_OPTIMIZE))
 ifdef MOZ_PROFILE_GENERATE
-OS_CFLAGS += $(if $(filter $(notdir $<),$(notdir $(NO_PROFILE_GUIDED_OPTIMIZE))),,$(PROFILE_GEN_CFLAGS))
-OS_CXXFLAGS += $(if $(filter $(notdir $<),$(notdir $(NO_PROFILE_GUIDED_OPTIMIZE))),,$(PROFILE_GEN_CFLAGS))
-OS_LDFLAGS += $(PROFILE_GEN_LDFLAGS)
+PGO_CFLAGS += $(if $(filter $(notdir $<),$(notdir $(NO_PROFILE_GUIDED_OPTIMIZE))),,$(PROFILE_GEN_CFLAGS))
+PGO_LDFLAGS += $(PROFILE_GEN_LDFLAGS)
 ifeq (WINNT,$(OS_ARCH))
 AR_FLAGS += -LTCG
 endif
 endif # MOZ_PROFILE_GENERATE
 
 ifdef MOZ_PROFILE_USE
-OS_CFLAGS += $(if $(filter $(notdir $<),$(notdir $(NO_PROFILE_GUIDED_OPTIMIZE))),,$(PROFILE_USE_CFLAGS))
-OS_CXXFLAGS += $(if $(filter $(notdir $<),$(notdir $(NO_PROFILE_GUIDED_OPTIMIZE))),,$(PROFILE_USE_CFLAGS))
-OS_LDFLAGS += $(PROFILE_USE_LDFLAGS)
+PGO_CFLAGS += $(if $(filter $(notdir $<),$(notdir $(NO_PROFILE_GUIDED_OPTIMIZE))),,$(PROFILE_USE_CFLAGS))
+PGO_LDFLAGS += $(PROFILE_USE_LDFLAGS)
 ifeq (WINNT,$(OS_ARCH))
 AR_FLAGS += -LTCG
 endif
@@ -254,89 +196,21 @@ INCLUDES = \
   -I$(ABS_DIST)/include \
   $(NULL)
 
-ifndef IS_GYP_DIR
-# NSPR_CFLAGS and NSS_CFLAGS must appear ahead of the other flags to avoid Linux
-# builds wrongly picking up system NSPR/NSS header files.
-OS_INCLUDES := \
-  $(NSPR_CFLAGS) $(NSS_CFLAGS) \
-  $(MOZ_JPEG_CFLAGS) \
-  $(MOZ_PNG_CFLAGS) \
-  $(MOZ_ZLIB_CFLAGS) \
-  $(MOZ_PIXMAN_CFLAGS) \
-  $(NULL)
-endif
-
 include $(MOZILLA_DIR)/config/static-checking-config.mk
 
-CFLAGS		= $(OS_CPPFLAGS) $(OS_CFLAGS)
-CXXFLAGS	= $(OS_CPPFLAGS) $(OS_CXXFLAGS)
-LDFLAGS		= $(OS_LDFLAGS) $(MOZBUILD_LDFLAGS) $(MOZ_FIX_LINK_PATHS)
+LDFLAGS		= $(COMPUTED_LDFLAGS) $(PGO_LDFLAGS) $(MK_LDFLAGS)
 
-ifdef MOZ_OPTIMIZE
-ifeq (1,$(MOZ_OPTIMIZE))
-ifneq (,$(if $(MOZ_PROFILE_GENERATE)$(MOZ_PROFILE_USE),$(MOZ_PGO_OPTIMIZE_FLAGS)))
-CFLAGS		+= $(MOZ_PGO_OPTIMIZE_FLAGS)
-CXXFLAGS	+= $(MOZ_PGO_OPTIMIZE_FLAGS)
-else
-CFLAGS		+= $(MOZ_OPTIMIZE_FLAGS)
-CXXFLAGS	+= $(MOZ_OPTIMIZE_FLAGS)
-endif # neq (,$(MOZ_PROFILE_GENERATE)$(MOZ_PROFILE_USE))
-else
-CFLAGS		+= $(MOZ_OPTIMIZE_FLAGS)
-CXXFLAGS	+= $(MOZ_OPTIMIZE_FLAGS)
-endif # MOZ_OPTIMIZE == 1
-LDFLAGS		+= $(MOZ_OPTIMIZE_LDFLAGS)
-endif # MOZ_OPTIMIZE
-
-HOST_CFLAGS	+= $(_DEPEND_CFLAGS)
-HOST_CXXFLAGS	+= $(_DEPEND_CFLAGS)
-ifdef CROSS_COMPILE
-HOST_CFLAGS	+= $(HOST_OPTIMIZE_FLAGS)
-HOST_CXXFLAGS	+= $(HOST_OPTIMIZE_FLAGS)
-else
-ifdef MOZ_OPTIMIZE
-HOST_CFLAGS	+= $(MOZ_OPTIMIZE_FLAGS)
-HOST_CXXFLAGS	+= $(MOZ_OPTIMIZE_FLAGS)
-endif # MOZ_OPTIMIZE
-endif # CROSS_COMPILE
-
-CFLAGS += $(MOZ_FRAMEPTR_FLAGS)
-CXXFLAGS += $(MOZ_FRAMEPTR_FLAGS)
-
-# Check for ALLOW_COMPILER_WARNINGS (shorthand for Makefiles to request that we
-# *don't* use the warnings-as-errors compile flags)
-
-# Don't use warnings-as-errors in Windows PGO builds because it is suspected of
-# causing problems in that situation. (See bug 437002.)
-ifeq (WINNT_1,$(OS_ARCH)_$(MOZ_PROFILE_GENERATE)$(MOZ_PROFILE_USE))
-ALLOW_COMPILER_WARNINGS=1
-endif # WINNT && (MOS_PROFILE_GENERATE ^ MOZ_PROFILE_USE)
-
-# Don't use warnings-as-errors in clang-cl because it warns about many more
-# things than MSVC does.
-ifdef CLANG_CL
-ALLOW_COMPILER_WARNINGS=1
-endif # CLANG_CL
-
-# Use warnings-as-errors if ALLOW_COMPILER_WARNINGS is not set to 1 (which
-# includes the case where it's undefined).
-ifneq (1,$(ALLOW_COMPILER_WARNINGS))
-CXXFLAGS += $(WARNINGS_AS_ERRORS)
-CFLAGS   += $(WARNINGS_AS_ERRORS)
-endif # ALLOW_COMPILER_WARNINGS
-
-COMPILE_CFLAGS	= $(VISIBILITY_FLAGS) $(DEFINES) $(INCLUDES) $(OS_INCLUDES) $(DSO_CFLAGS) $(DSO_PIC_CFLAGS) $(RTL_FLAGS) $(OS_COMPILE_CFLAGS) $(_DEPEND_CFLAGS) $(CFLAGS) $(MOZBUILD_CFLAGS)
-COMPILE_CXXFLAGS = $(if $(DISABLE_STL_WRAPPING),,$(STL_FLAGS)) $(VISIBILITY_FLAGS) $(DEFINES) $(INCLUDES) $(OS_INCLUDES) $(DSO_CFLAGS) $(DSO_PIC_CFLAGS) $(RTL_FLAGS) $(OS_COMPILE_CXXFLAGS) $(_DEPEND_CFLAGS) $(CXXFLAGS) $(MOZBUILD_CXXFLAGS)
+COMPILE_CFLAGS	= $(COMPUTED_CFLAGS) $(PGO_CFLAGS) $(_DEPEND_CFLAGS) $(MK_COMPILE_DEFINES)
+COMPILE_CXXFLAGS = $(COMPUTED_CXXFLAGS) $(PGO_CFLAGS) $(_DEPEND_CFLAGS) $(MK_COMPILE_DEFINES)
 COMPILE_CMFLAGS = $(OS_COMPILE_CMFLAGS) $(MOZBUILD_CMFLAGS)
 COMPILE_CMMFLAGS = $(OS_COMPILE_CMMFLAGS) $(MOZBUILD_CMMFLAGS)
-ASFLAGS += $(MOZBUILD_ASFLAGS)
+ASFLAGS = $(COMPUTED_ASFLAGS)
+SFLAGS = $(COMPUTED_SFLAGS)
 
-ifndef CROSS_COMPILE
-HOST_CFLAGS += $(RTL_FLAGS)
-endif
-
-HOST_CFLAGS += $(HOST_DEFINES) $(MOZBUILD_HOST_CFLAGS)
-HOST_CXXFLAGS += $(HOST_DEFINES) $(MOZBUILD_HOST_CXXFLAGS)
+HOST_CFLAGS = $(COMPUTED_HOST_CFLAGS) $(_DEPEND_CFLAGS)
+HOST_CXXFLAGS = $(COMPUTED_HOST_CXXFLAGS) $(_DEPEND_CFLAGS)
+HOST_C_LDFLAGS = $(COMPUTED_HOST_C_LDFLAGS)
+HOST_CXX_LDFLAGS = $(COMPUTED_HOST_CXX_LDFLAGS)
 
 # We only add color flags if neither the flag to disable color
 # (e.g. "-fno-color-diagnostics" nor a flag to control color
@@ -478,8 +352,6 @@ ACDEFINES += -DAB_CD=$(AB_CD)
 
 ifndef L10NBASEDIR
   L10NBASEDIR = $(error L10NBASEDIR not defined by configure)
-else
-  IS_LANGUAGE_REPACK = 1
 endif
 
 EXPAND_LOCALE_SRCDIR = $(if $(filter en-US,$(AB_CD)),$(topsrcdir)/$(1)/en-US,$(or $(realpath $(L10NBASEDIR)),$(abspath $(L10NBASEDIR)))/$(AB_CD)/$(subst /locales,,$(1)))
@@ -491,8 +363,8 @@ endif
 ifdef relativesrcdir
 MAKE_JARS_FLAGS += --relativesrcdir=$(relativesrcdir)
 ifneq (en-US,$(AB_CD))
-ifdef LOCALE_MERGEDIR
-MAKE_JARS_FLAGS += --locale-mergedir=$(LOCALE_MERGEDIR)
+ifdef IS_LANGUAGE_REPACK
+MAKE_JARS_FLAGS += --locale-mergedir=$(REAL_LOCALE_MERGEDIR)
 endif
 ifdef IS_LANGUAGE_REPACK
 MAKE_JARS_FLAGS += --l10n-base=$(L10NBASEDIR)/$(AB_CD)
@@ -504,9 +376,9 @@ else
 MAKE_JARS_FLAGS += -c $(LOCALE_SRCDIR)
 endif # ! relativesrcdir
 
-ifdef LOCALE_MERGEDIR
+ifdef IS_LANGUAGE_REPACK
 MERGE_FILE = $(firstword \
-  $(wildcard $(LOCALE_MERGEDIR)/$(subst /locales,,$(relativesrcdir))/$(1)) \
+  $(wildcard $(REAL_LOCALE_MERGEDIR)/$(subst /locales,,$(relativesrcdir))/$(1)) \
   $(wildcard $(LOCALE_SRCDIR)/$(1)) \
   $(srcdir)/en-US/$(1) )
 else
@@ -546,7 +418,7 @@ EXPAND_LIBS_GEN = $(PYTHON) $(MOZILLA_DIR)/config/expandlibs_gen.py
 EXPAND_AR = $(EXPAND_LIBS_EXEC) --extract -- $(AR)
 EXPAND_CC = $(EXPAND_LIBS_EXEC) --uselist -- $(CC)
 EXPAND_CCC = $(EXPAND_LIBS_EXEC) --uselist -- $(CCC)
-EXPAND_LINK = $(EXPAND_LIBS_EXEC) --uselist -- $(LINK)
+EXPAND_LINK = $(EXPAND_LIBS_EXEC) --uselist -- $(LINKER)
 EXPAND_MKSHLIB_ARGS = --uselist
 ifdef SYMBOL_ORDER
 EXPAND_MKSHLIB_ARGS += --symbol-order $(SYMBOL_ORDER)

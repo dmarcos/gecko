@@ -10,23 +10,24 @@
 #include "mozilla/dom/BorrowedAttrInfo.h"
 #include "nsCaseTreatment.h" // for enum, cannot be forward-declared
 #include "nsINode.h"
+#include "nsStringFwd.h"
 
 // Forward declarations
-class nsAString;
-class nsIAtom;
+class nsAtom;
 class nsIURI;
-class nsRuleWalker;
 class nsAttrValue;
 class nsAttrName;
 class nsTextFragment;
 class nsIFrame;
 class nsXBLBinding;
+class nsITextControlElement;
 
 namespace mozilla {
 class EventChainPreVisitor;
 struct URLExtraData;
 namespace dom {
 class ShadowRoot;
+class HTMLSlotElement;
 } // namespace dom
 namespace widget {
 struct IMEState;
@@ -244,6 +245,14 @@ public:
     return IsInNativeAnonymousSubtree() || (!IsInShadowTree() && GetBindingParent() != nullptr);
   }
 
+  /*
+   * Return true if this node is the shadow root of an use-element shadow tree.
+   */
+  bool IsRootOfUseElementShadowTree() const {
+    return GetParent() && GetParent()->IsSVGElement(nsGkAtoms::use) &&
+           IsRootOfAnonymousSubtree();
+  }
+
   /**
    * Return true iff this node is in an HTML document (in the HTML5 sense of
    * the term, i.e. not in an XHTML/XML document).
@@ -270,7 +279,7 @@ public:
     return IsInNamespace(kNameSpaceID_XHTML);
   }
 
-  inline bool IsHTMLElement(nsIAtom* aTag) const
+  inline bool IsHTMLElement(nsAtom* aTag) const
   {
     return mNodeInfo->Equals(aTag, kNameSpaceID_XHTML);
   }
@@ -286,7 +295,7 @@ public:
     return IsInNamespace(kNameSpaceID_SVG);
   }
 
-  inline bool IsSVGElement(nsIAtom* aTag) const
+  inline bool IsSVGElement(nsAtom* aTag) const
   {
     return mNodeInfo->Equals(aTag, kNameSpaceID_SVG);
   }
@@ -302,7 +311,7 @@ public:
     return IsInNamespace(kNameSpaceID_XUL);
   }
 
-  inline bool IsXULElement(nsIAtom* aTag) const
+  inline bool IsXULElement(nsAtom* aTag) const
   {
     return mNodeInfo->Equals(aTag, kNameSpaceID_XUL);
   }
@@ -318,7 +327,7 @@ public:
     return IsInNamespace(kNameSpaceID_MathML);
   }
 
-  inline bool IsMathMLElement(nsIAtom* aTag) const
+  inline bool IsMathMLElement(nsAtom* aTag) const
   {
     return mNodeInfo->Equals(aTag, kNameSpaceID_MathML);
   }
@@ -347,43 +356,6 @@ public:
   }
 
   /**
-   * Set attribute values. All attribute values are assumed to have a
-   * canonical string representation that can be used for these
-   * methods. The SetAttr method is assumed to perform a translation
-   * of the canonical form into the underlying content specific
-   * form.
-   *
-   * @param aNameSpaceID the namespace of the attribute
-   * @param aName the name of the attribute
-   * @param aValue the value to set
-   * @param aNotify specifies how whether or not the document should be
-   *        notified of the attribute change.
-   */
-  nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                   const nsAString& aValue, bool aNotify)
-  {
-    return SetAttr(aNameSpaceID, aName, nullptr, aValue, aNotify);
-  }
-
-  /**
-   * Set attribute values. All attribute values are assumed to have a
-   * canonical String representation that can be used for these
-   * methods. The SetAttr method is assumed to perform a translation
-   * of the canonical form into the underlying content specific
-   * form.
-   *
-   * @param aNameSpaceID the namespace of the attribute
-   * @param aName the name of the attribute
-   * @param aPrefix the prefix of the attribute
-   * @param aValue the value to set
-   * @param aNotify specifies how whether or not the document should be
-   *        notified of the attribute change.
-   */
-  virtual nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                           nsIAtom* aPrefix, const nsAString& aValue,
-                           bool aNotify) = 0;
-
-  /**
    * Get the current value of the attribute. This returns a form that is
    * suitable for passing back into SetAttr.
    *
@@ -392,8 +364,10 @@ public:
    * @param aResult the value (may legitimately be the empty string) [OUT]
    * @returns true if the attribute was set (even when set to empty string)
    *          false when not set.
+   *
+   * FIXME(emilio): Move to Element.
    */
-  bool GetAttr(int32_t aNameSpaceID, nsIAtom* aName,
+  bool GetAttr(int32_t aNameSpaceID, nsAtom* aName,
                nsAString& aResult) const;
 
   /**
@@ -403,7 +377,7 @@ public:
    * @param aAttr the attribute name
    * @return whether an attribute exists
    */
-  bool HasAttr(int32_t aNameSpaceID, nsIAtom* aName) const;
+  bool HasAttr(int32_t aNameSpaceID, nsAtom* aName) const;
 
   /**
    * Test whether this content node's given attribute has the given value.  If
@@ -416,7 +390,7 @@ public:
    * @param aCaseSensitive Whether to do a case-sensitive compare on the value.
    */
   bool AttrValueIs(int32_t aNameSpaceID,
-                   nsIAtom* aName,
+                   nsAtom* aName,
                    const nsAString& aValue,
                    nsCaseTreatment aCaseSensitive) const;
 
@@ -431,8 +405,8 @@ public:
    * @param aCaseSensitive Whether to do a case-sensitive compare on the value.
    */
   bool AttrValueIs(int32_t aNameSpaceID,
-                   nsIAtom* aName,
-                   nsIAtom* aValue,
+                   nsAtom* aName,
+                   nsAtom* aValue,
                    nsCaseTreatment aCaseSensitive) const;
 
   enum {
@@ -456,51 +430,14 @@ public:
    * @return ATTR_MISSING, ATTR_VALUE_NO_MATCH or the non-negative index
    * indicating the first value of aValues that matched
    */
-  typedef nsIAtom* const* const AttrValuesArray;
+  typedef nsStaticAtom* const* const AttrValuesArray;
   virtual int32_t FindAttrValueIn(int32_t aNameSpaceID,
-                                  nsIAtom* aName,
+                                  nsAtom* aName,
                                   AttrValuesArray* aValues,
                                   nsCaseTreatment aCaseSensitive) const
   {
     return ATTR_MISSING;
   }
-
-  /**
-   * Remove an attribute so that it is no longer explicitly specified.
-   *
-   * @param aNameSpaceID the namespace id of the attribute
-   * @param aAttr the name of the attribute to unset
-   * @param aNotify specifies whether or not the document should be
-   * notified of the attribute change
-   */
-  virtual nsresult UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttr,
-                             bool aNotify) = 0;
-
-
-  /**
-   * Get the namespace / name / prefix of a given attribute.
-   *
-   * @param   aIndex the index of the attribute name
-   * @returns The name at the given index, or null if the index is
-   *          out-of-bounds.
-   * @note    The document returned by NodeInfo()->GetDocument() (if one is
-   *          present) is *not* necessarily the owner document of the element.
-   * @note    The pointer returned by this function is only valid until the
-   *          next call of either GetAttrNameAt or SetAttr on the element.
-   */
-  virtual const nsAttrName* GetAttrNameAt(uint32_t aIndex) const = 0;
-
-  /**
-   * Gets the attribute info (name and value) for this content at a given index.
-   */
-  virtual mozilla::dom::BorrowedAttrInfo GetAttrInfoAt(uint32_t aIndex) const = 0;
-
-  /**
-   * Get the number of all specified attributes.
-   *
-   * @return the number of attributes
-   */
-  virtual uint32_t GetAttrCount() const = 0;
 
   /**
    * Get direct access (but read only) to the text in the text content.
@@ -519,10 +456,12 @@ public:
    * Determines if an event attribute name (such as onclick) is valid for
    * a given element type.
    * @note calls nsContentUtils::IsEventAttributeName with right flag
-   * @note overridden by subclasses as needed
+   * @note *Internal is overridden by subclasses as needed
    * @param aName the event name to look up
    */
-  virtual bool IsEventAttributeName(nsIAtom* aName)
+  bool IsEventAttributeName(nsAtom* aName);
+
+  virtual bool IsEventAttributeNameInternal(nsAtom* aName)
   {
     return false;
   }
@@ -652,14 +591,23 @@ public:
    *
    * @return the binding parent
    */
-  virtual nsIContent *GetBindingParent() const = 0;
+  virtual nsIContent* GetBindingParent() const = 0;
 
   /**
    * Gets the current XBL binding that is bound to this element.
    *
    * @return the current binding.
    */
-  virtual nsXBLBinding *GetXBLBinding() const = 0;
+  nsXBLBinding* GetXBLBinding() const
+  {
+    if (!HasFlag(NODE_MAY_BE_IN_BINDING_MNGR)) {
+      return nullptr;
+    }
+
+    return DoGetXBLBinding();
+  }
+
+  virtual nsXBLBinding* DoGetXBLBinding() const = 0;
 
   /**
    * Sets or unsets an XBL binding for this element. Setting a
@@ -702,18 +650,33 @@ public:
   virtual mozilla::dom::ShadowRoot *GetContainingShadow() const = 0;
 
   /**
-   * Gets an array of destination insertion points where this content
-   * is distributed by web component distribution algorithms.
-   * The array is created if it does not already exist.
+   * Gets the assigned slot associated with this content.
+   *
+   * @return The assigned slot element or null.
    */
-  virtual nsTArray<nsIContent*> &DestInsertionPoints() = 0;
+  virtual mozilla::dom::HTMLSlotElement* GetAssignedSlot() const = 0;
 
   /**
-   * Same as DestInsertionPoints except that this method will return
-   * null if the array of destination insertion points does not already
-   * exist.
+   * Sets the assigned slot associated with this content.
+   *
+   * @param aSlot The assigned slot.
    */
-  virtual nsTArray<nsIContent*> *GetExistingDestInsertionPoints() const = 0;
+  virtual void SetAssignedSlot(mozilla::dom::HTMLSlotElement* aSlot) = 0;
+
+  /**
+   * Gets the assigned slot associated with this content based on parent's
+   * shadow root mode. Returns null if parent's shadow root is "closed".
+   * https://dom.spec.whatwg.org/#dom-slotable-assignedslot
+   *
+   * @return The assigned slot element or null.
+   */
+  mozilla::dom::HTMLSlotElement* GetAssignedSlotByMode() const;
+
+  nsIContent* GetXBLInsertionParent() const
+  {
+    nsIContent* ip = GetXBLInsertionPoint();
+    return ip ? ip->GetParent() : nullptr;
+  }
 
   /**
    * Gets the insertion parent element of the XBL binding.
@@ -721,14 +684,14 @@ public:
    *
    * @return the insertion parent element.
    */
-  virtual nsIContent *GetXBLInsertionParent() const = 0;
+  virtual nsIContent* GetXBLInsertionPoint() const = 0;
 
   /**
    * Sets the insertion parent element of the XBL binding.
    *
    * @param aContent The insertion parent element.
    */
-  virtual void SetXBLInsertionParent(nsIContent* aContent) = 0;
+  virtual void SetXBLInsertionPoint(nsIContent* aContent) = 0;
 
   /**
    * Same as GetFlattenedTreeParentNode, but returns null if the parent is
@@ -812,10 +775,10 @@ public:
    * This method is called when the parser finishes creating the element's children,
    * if any are present.
    *
-   * NOTE: this is currently only called for textarea, select, applet, and
-   * object elements in the HTML content sink.  If you want
-   * to call it on your element, modify the content sink of your
-   * choice to do so.  This is an efficiency measure.
+   * NOTE: this is currently only called for textarea, select, and object
+   * elements in the HTML content sink. If you want to call it on your element,
+   * modify the content sink of your choice to do so. This is an efficiency
+   * measure.
    *
    * If you also need to determine whether the parser is the one creating your
    * element (through createElement() or cloneNode() generally) then add a
@@ -832,12 +795,14 @@ public:
   }
 
   /**
-   * For HTML textarea, select, applet, and object elements, returns
-   * true if all children have been added OR if the element was not
-   * created by the parser. Returns true for all other elements.
+   * For HTML textarea, select, and object elements, returns true if all
+   * children have been added OR if the element was not created by the parser.
+   * Returns true for all other elements.
+   *
    * @returns false if the element was created by the parser and
-   *                   it is an HTML textarea, select, applet, or object
+   *                   it is an HTML textarea, select, or object
    *                   element and not all children have been added.
+   *
    * @returns true otherwise.
    */
   virtual bool IsDoneAddingChildren()
@@ -849,18 +814,12 @@ public:
    * Get the ID of this content node (the atom corresponding to the
    * value of the id attribute).  This may be null if there is no ID.
    */
-  nsIAtom* GetID() const {
+  nsAtom* GetID() const {
     if (HasID()) {
       return DoGetID();
     }
     return nullptr;
   }
-
-  /**
-   * Walk aRuleWalker over the content style rules (presentational
-   * hint rules) for this content node.
-   */
-  NS_IMETHOD WalkContentStyleRules(nsRuleWalker* aRuleWalker) = 0;
 
   /**
    * Should be called when the node can become editable or when it can stop
@@ -898,12 +857,9 @@ public:
   {
     return (IsInUncomposedDoc() || IsInShadowTree()) ? mPrimaryFrame : nullptr;
   }
-  void SetPrimaryFrame(nsIFrame* aFrame) {
-    MOZ_ASSERT(IsInUncomposedDoc() || IsInShadowTree(), "This will end badly!");
-    NS_PRECONDITION(!aFrame || !mPrimaryFrame || aFrame == mPrimaryFrame,
-                    "Losing track of existing primary frame");
-    mPrimaryFrame = aFrame;
-  }
+
+  // Defined in nsIContentInlines.h because it needs nsIFrame.
+  inline void SetPrimaryFrame(nsIFrame* aFrame);
 
   nsresult LookupNamespaceURIInternal(const nsAString& aNamespacePrefix,
                                       nsAString& aNamespaceURI) const;
@@ -921,30 +877,25 @@ public:
    */
   mozilla::dom::Element* GetEditingHost();
 
+  bool SupportsLangAttr() const {
+    return IsHTMLElement() || IsSVGElement() || IsXULElement();
+  }
+
   /**
    * Determining language. Look at the nearest ancestor element that has a lang
    * attribute in the XML namespace or is an HTML/SVG element and has a lang in
-   * no namespace attribute.  Returns false if no language was specified.
+   * no namespace attribute.
+   *
+   * Returns null if no language was specified. Can return the empty atom.
    */
+  nsAtom* GetLang() const;
+
   bool GetLang(nsAString& aResult) const {
-    for (const nsIContent* content = this; content; content = content->GetParent()) {
-      if (content->GetAttrCount() > 0) {
-        // xml:lang has precedence over lang on HTML elements (see
-        // XHTML1 section C.7).
-        bool hasAttr = content->GetAttr(kNameSpaceID_XML, nsGkAtoms::lang,
-                                          aResult);
-        if (!hasAttr && (content->IsHTMLElement() || content->IsSVGElement() ||
-            content->IsXULElement())) {
-          hasAttr = content->GetAttr(kNameSpaceID_None, nsGkAtoms::lang,
-                                     aResult);
-        }
-        NS_ASSERTION(hasAttr || aResult.IsEmpty(),
-                     "GetAttr that returns false should not make string non-empty");
-        if (hasAttr) {
-          return true;
-        }
-      }
+    if (auto* lang = GetLang()) {
+      aResult.Assign(nsDependentAtomString(lang));
+      return true;
     }
+
     return false;
   }
 
@@ -960,10 +911,13 @@ public:
   virtual already_AddRefed<nsIURI> GetBaseURI(bool aTryUseXHRDocBaseURI = false) const override;
 
   // Returns base URI for style attribute.
-  already_AddRefed<nsIURI> GetBaseURIForStyleAttr() const;
+  nsIURI* GetBaseURIForStyleAttr() const;
 
   // Returns the URL data for style attribute.
-  mozilla::URLExtraData* GetURLDataForStyleAttr() const;
+  // If aSubjectPrincipal is passed, it should be the scripted principal
+  // responsible for generating the URL data.
+  already_AddRefed<mozilla::URLExtraData>
+  GetURLDataForStyleAttr(nsIPrincipal* aSubjectPrincipal = nullptr) const;
 
   virtual nsresult GetEventTargetParent(
                      mozilla::EventChainPreVisitor& aVisitor) override;
@@ -972,15 +926,24 @@ public:
   virtual void RemovePurple() = 0;
 
   virtual bool OwnedOnlyByTheDOMTree() { return false; }
+
+  virtual already_AddRefed<nsITextControlElement> GetAsTextControlElement()
+  {
+    return nullptr;
+  }
+
 protected:
   /**
    * Hook for implementing GetID.  This is guaranteed to only be
    * called if HasID() is true.
    */
-  nsIAtom* DoGetID() const;
+  nsAtom* DoGetID() const;
 
-  // Returns base URI without considering xml:base.
-  inline nsIURI* GetBaseURIWithoutXMLBase() const;
+  /**
+   * Returns the assigned slot, if it exists, or the direct parent, if it's a
+   * fallback content of a slot.
+   */
+  nsINode* GetFlattenedTreeParentForMaybeAssignedNode() const;
 
 public:
 #ifdef DEBUG

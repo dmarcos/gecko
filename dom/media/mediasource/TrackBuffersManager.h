@@ -9,9 +9,9 @@
 
 #include "mozilla/Atomics.h"
 #include "mozilla/Maybe.h"
-#include "mozilla/Monitor.h"
+#include "mozilla/Mutex.h"
+#include "mozilla/NotNull.h"
 #include "AutoTaskQueue.h"
-#include "mozilla/dom/SourceBufferBinding.h"
 
 #include "MediaContainerType.h"
 #include "MediaData.h"
@@ -21,7 +21,6 @@
 #include "SourceBufferTask.h"
 #include "TimeUnits.h"
 #include "nsAutoPtr.h"
-#include "nsProxyRelease.h"
 #include "nsTArray.h"
 
 namespace mozilla {
@@ -36,9 +35,8 @@ class SourceBufferResource;
 class SourceBufferTaskQueue
 {
 public:
-  SourceBufferTaskQueue()
-  : mMonitor("SourceBufferTaskQueue")
-  {}
+  SourceBufferTaskQueue() { }
+
   ~SourceBufferTaskQueue()
   {
     MOZ_ASSERT(mQueue.IsEmpty(), "All tasks must have been processed");
@@ -46,13 +44,11 @@ public:
 
   void Push(SourceBufferTask* aTask)
   {
-    MonitorAutoLock mon(mMonitor);
     mQueue.AppendElement(aTask);
   }
 
   already_AddRefed<SourceBufferTask> Pop()
   {
-    MonitorAutoLock mon(mMonitor);
     if (!mQueue.Length()) {
       return nullptr;
     }
@@ -63,16 +59,15 @@ public:
 
   nsTArray<SourceBufferTask>::size_type Length() const
   {
-    MonitorAutoLock mon(mMonitor);
     return mQueue.Length();
   }
-
 private:
-  mutable Monitor mMonitor;
   nsTArray<RefPtr<SourceBufferTask>> mQueue;
 };
 
-class TrackBuffersManager
+DDLoggedTypeDeclName(TrackBuffersManager);
+
+class TrackBuffersManager : public DecoderDoctorLifeLogger<TrackBuffersManager>
 {
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(TrackBuffersManager);
@@ -98,7 +93,7 @@ public:
   // Buffer Append Algorithm
   // 3.5.5 Buffer Append Algorithm.
   // http://w3c.github.io/media-source/index.html#sourcebuffer-buffer-append
-  RefPtr<AppendPromise> AppendData(MediaByteBuffer* aData,
+  RefPtr<AppendPromise> AppendData(already_AddRefed<MediaByteBuffer> aData,
                                    const SourceBufferAttributes& aAttributes);
 
   // Queue a task to abort any pending AppendData.
@@ -174,7 +169,7 @@ private:
   friend class MediaSourceDemuxer;
   ~TrackBuffersManager();
   // All following functions run on the taskqueue.
-  RefPtr<AppendPromise> DoAppendData(MediaByteBuffer* aData,
+  RefPtr<AppendPromise> DoAppendData(already_AddRefed<MediaByteBuffer> aData,
                                      const SourceBufferAttributes& aAttributes);
   void ScheduleSegmentParserLoop();
   void SegmentParserLoop();
@@ -213,7 +208,7 @@ private:
   // Set to true once a new segment is started.
   bool mNewMediaSegmentStarted;
   bool mActiveTrack;
-  MediaContainerType mType;
+  const MediaContainerType mType;
 
   // ContainerParser objects and methods.
   // Those are used to parse the incoming input buffer.
@@ -257,6 +252,11 @@ private:
     mAudioTracks.mDemuxRequest.Complete();
     OnDemuxFailed(TrackType::kAudioTrack, aError);
   }
+
+  // Dispatches an "encrypted" event is any sample in array has initData
+  // present.
+  void MaybeDispatchEncryptedEvent(
+    const nsTArray<RefPtr<MediaRawData>>& aSamples);
 
   void DoEvictData(const media::TimeUnit& aPlaybackTime, int64_t aSizeToEvict);
 
@@ -373,8 +373,20 @@ private:
       mLastFrameDuration.reset();
       mHighestEndTimestamp.reset();
       mNeedRandomAccessPoint = true;
-
       mNextInsertionIndex.reset();
+    }
+
+    void Reset()
+    {
+      ResetAppendState();
+      mEvictionIndex.Reset();
+      for (auto& buffer : mBuffers) {
+        buffer.Clear();
+      }
+      mSizeBuffer = 0;
+      mNextGetSampleIndex.reset();
+      mBufferedRanges.Clear();
+      mSanitizedBufferedRanges.Clear();
     }
 
     void AddSizeOfResources(MediaSourceDecoder::ResourceSizes* aSizes) const;
@@ -440,15 +452,29 @@ private:
   TrackData mAudioTracks;
 
   // TaskQueue methods and objects.
-  AbstractThread* GetTaskQueue() const
+  RefPtr<AutoTaskQueue> GetTaskQueueSafe() const
   {
+    MutexAutoLock mut(mMutex);
     return mTaskQueue;
+  }
+  NotNull<AbstractThread*> TaskQueueFromTaskQueue() const
+  {
+#ifdef DEBUG
+    RefPtr<AutoTaskQueue> taskQueue = GetTaskQueueSafe();
+    MOZ_ASSERT(taskQueue && taskQueue->IsCurrentThreadIn());
+#endif
+    return WrapNotNull(mTaskQueue.get());
   }
   bool OnTaskQueue() const
   {
-    return !GetTaskQueue() || GetTaskQueue()->IsCurrentThreadIn();
+    auto taskQueue = TaskQueueFromTaskQueue();
+    return taskQueue->IsCurrentThreadIn();
   }
-  RefPtr<AutoTaskQueue> mTaskQueue;
+  void ResetTaskQueue()
+  {
+    MutexAutoLock mut(mMutex);
+    mTaskQueue = nullptr;
+  }
 
   // SourceBuffer Queues and running context.
   SourceBufferTaskQueue mQueue;
@@ -490,7 +516,11 @@ private:
   Atomic<EvictionState> mEvictionState;
 
   // Monitor to protect following objects accessed across multiple threads.
-  mutable Monitor mMonitor;
+  mutable Mutex mMutex;
+  // mTaskQueue is only ever written after construction on the task queue.
+  // As such, it can be accessed while on task queue without the need for the
+  // mutex.
+  RefPtr<AutoTaskQueue> mTaskQueue;
   // Stable audio and video track time ranges.
   media::TimeIntervals mVideoBufferedRanges;
   media::TimeIntervals mAudioBufferedRanges;

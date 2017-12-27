@@ -12,7 +12,6 @@
 #include "jsobj.h"
 
 #include "gc/Barrier.h"
-#include "gc/Zone.h"
 #include "js/Class.h"
 #include "vm/ArrayBufferObject.h"
 #include "vm/SharedArrayObject.h"
@@ -116,16 +115,7 @@ class TypedArrayObject : public NativeObject
     static const uint32_t INLINE_BUFFER_LIMIT =
         (NativeObject::MAX_FIXED_SLOTS - FIXED_DATA_START) * sizeof(Value);
 
-    static gc::AllocKind
-    AllocKindForLazyBuffer(size_t nbytes)
-    {
-        MOZ_ASSERT(nbytes <= INLINE_BUFFER_LIMIT);
-        if (nbytes == 0)
-            nbytes += sizeof(uint8_t);
-        size_t dataSlots = AlignBytes(nbytes, sizeof(Value)) / sizeof(Value);
-        MOZ_ASSERT(nbytes <= dataSlots * sizeof(Value));
-        return gc::GetGCObjectKind(FIXED_DATA_START + dataSlots);
-    }
+    static inline gc::AllocKind AllocKindForLazyBuffer(size_t nbytes);
 
     inline Scalar::Type type() const;
     inline size_t bytesPerElement() const;
@@ -182,6 +172,12 @@ class TypedArrayObject : public NativeObject
 
     Value getElement(uint32_t index);
     static void setElement(TypedArrayObject& obj, uint32_t index, double d);
+
+    /*
+     * Copy all elements from this typed array to vp. vp must point to rooted
+     * memory.
+     */
+    void getElements(Value* vp);
 
     void notifyBufferDetached(JSContext* cx, void* newData);
 
@@ -267,9 +263,7 @@ class TypedArrayObject : public NativeObject
   public:
     static void trace(JSTracer* trc, JSObject* obj);
     static void finalize(FreeOp* fop, JSObject* obj);
-    static void objectMoved(JSObject* obj, const JSObject* old);
-    static size_t objectMovedDuringMinorGC(JSTracer* trc, JSObject* obj, const JSObject* old,
-                                           gc::AllocKind allocKind);
+    static size_t objectMoved(JSObject* obj, JSObject* old);
 
     /* Initialization bits */
 
@@ -322,6 +316,11 @@ IsTypedArrayClass(const Class* clasp)
 
 bool
 IsTypedArrayConstructor(HandleValue v, uint32_t type);
+
+// In WebIDL terminology, a BufferSource is either an ArrayBuffer or a typed
+// array view. In either case, extract the dataPointer/byteLength.
+bool
+IsBufferSource(JSObject* object, SharedMem<uint8_t*>* dataPointer, size_t* byteLength);
 
 inline Scalar::Type
 TypedArrayObject::type() const
@@ -427,23 +426,6 @@ TypedArrayElemSize(Scalar::Type viewType)
 extern void
 SetDisjointTypedElements(TypedArrayObject* target, uint32_t targetOffset,
                          TypedArrayObject* unsafeSrcCrossCompartment);
-static inline bool
-IsAnyArrayBuffer(HandleObject obj)
-{
-    return IsArrayBuffer(obj) || IsSharedArrayBuffer(obj);
-}
-
-static inline bool
-IsAnyArrayBuffer(JSObject* obj)
-{
-    return IsArrayBuffer(obj) || IsSharedArrayBuffer(obj);
-}
-
-static inline bool
-IsAnyArrayBuffer(HandleValue v)
-{
-    return v.isObject() && IsAnyArrayBuffer(&v.toObject());
-}
 
 } // namespace js
 

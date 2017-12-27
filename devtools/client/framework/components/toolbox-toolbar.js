@@ -3,8 +3,10 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const {DOM, createClass, createFactory, PropTypes} = require("devtools/client/shared/vendor/react");
-const {div, button} = DOM;
+const { Component, createFactory } = require("devtools/client/shared/vendor/react");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
+const {div, button} = dom;
 
 const ToolboxTab = createFactory(require("devtools/client/framework/components/toolbox-tab"));
 const ToolboxTabs = createFactory(require("devtools/client/framework/components/toolbox-tabs"));
@@ -15,35 +17,35 @@ const ToolboxTabs = createFactory(require("devtools/client/framework/components/
  * ToolboxController component controls the changing state, and passes in everything as
  * props.
  */
-module.exports = createClass({
-  displayName: "ToolboxToolbar",
-
-  propTypes: {
-    // The currently focused item (for arrow keyboard navigation)
-    // This ID determines the tabindex being 0 or -1.
-    focusedButton: PropTypes.string,
-    // List of command button definitions.
-    toolboxButtons: PropTypes.array,
-    // The id of the currently selected tool, e.g. "inspector"
-    currentToolId: PropTypes.string,
-    // An optionally highlighted tool, e.g. "inspector"
-    highlightedTool: PropTypes.string,
-    // List of tool panel definitions.
-    panelDefinitions: PropTypes.array,
-    // Function to select a tool based on its id.
-    selectTool: PropTypes.func,
-    // Keep a record of what button is focused.
-    focusButton: PropTypes.func,
-    // The options button definition.
-    optionsPanel: PropTypes.object,
-    // Hold off displaying the toolbar until enough information is ready for it to render
-    // nicely.
-    canRender: PropTypes.bool,
-    // Localization interface.
-    L10N: PropTypes.object,
-    // The devtools toolbox
-    toolbox: PropTypes.object,
-  },
+class ToolboxToolbar extends Component {
+  static get propTypes() {
+    return {
+      // The currently focused item (for arrow keyboard navigation)
+      // This ID determines the tabindex being 0 or -1.
+      focusedButton: PropTypes.string,
+      // List of command button definitions.
+      toolboxButtons: PropTypes.array,
+      // The id of the currently selected tool, e.g. "inspector"
+      currentToolId: PropTypes.string,
+      // An optionally highlighted tool, e.g. "inspector"
+      highlightedTool: PropTypes.string,
+      // List of tool panel definitions.
+      panelDefinitions: PropTypes.array,
+      // Function to select a tool based on its id.
+      selectTool: PropTypes.func,
+      // Keep a record of what button is focused.
+      focusButton: PropTypes.func,
+      // The options button definition.
+      optionsPanel: PropTypes.object,
+      // Hold off displaying the toolbar until enough information is ready for
+      // it to render nicely.
+      canRender: PropTypes.bool,
+      // Localization interface.
+      L10N: PropTypes.object,
+      // The devtools toolbox
+      toolbox: PropTypes.object,
+    };
+  }
 
   /**
    * The render function is kept fairly short for maintainability. See the individual
@@ -65,7 +67,9 @@ module.exports = createClass({
       )
       : div(containerProps);
   }
-});
+}
+
+module.exports = ToolboxToolbar;
 
 /**
  * A little helper function to call renderToolboxButtons for buttons at the start
@@ -106,12 +110,19 @@ function renderToolboxButtons({toolboxButtons, focusedButton, focusButton}, isSt
 
   return div({id: `toolbox-buttons-${isStart ? "start" : "end"}`},
     ...visibleButtons.map(command => {
-      const {id, description, onClick, isChecked, className: buttonClass} = command;
+      const {
+        id,
+        description,
+        onClick,
+        isChecked,
+        className: buttonClass,
+        onKeyDown
+      } = command;
       return button({
         id,
         title: description,
         className: (
-          "command-button command-button-invertable devtools-button "
+          "command-button devtools-button "
           + buttonClass + (isChecked ? " checked" : "")
         ),
         onClick: (event) => {
@@ -119,9 +130,13 @@ function renderToolboxButtons({toolboxButtons, focusedButton, focusButton}, isSt
           focusButton(id);
         },
         onFocus: () => focusButton(id),
-        tabIndex: id === focusedButton ? "0" : "-1"
+        tabIndex: id === focusedButton ? "0" : "-1",
+        onKeyDown: (event) => {
+          onKeyDown(event);
+        }
       });
-    })
+    }),
+    isStart ? div({className: "devtools-separator"}) : null
   );
 }
 
@@ -150,10 +165,7 @@ function renderOptions({optionsPanel, currentToolId, selectTool, focusedButton,
  * Render a separator.
  */
 function renderSeparator() {
-  return div({
-    id: "toolbox-controls-separator",
-    className: "devtools-separator"
-  });
+  return div({className: "devtools-separator"});
 }
 
 /**

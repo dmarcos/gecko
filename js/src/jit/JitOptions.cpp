@@ -76,7 +76,7 @@ DefaultJitOptions::DefaultJitOptions()
     SET_DEFAULT(checkRangeAnalysis, false);
 
     // Toggles whether IonBuilder fallbacks to a call if we fail to inline.
-    SET_DEFAULT(disableInlineBacktracking, true);
+    SET_DEFAULT(disableInlineBacktracking, false);
 
     // Toggles whether Alignment Mask Analysis is globally disabled.
     SET_DEFAULT(disableAma, false);
@@ -185,6 +185,10 @@ DefaultJitOptions::DefaultJitOptions()
     // pc-relative jump and call instructions.
     SET_DEFAULT(jumpThreshold, UINT32_MAX);
 
+    // Whether the (ARM) simulators should always interrupt before executing any
+    // instruction.
+    SET_DEFAULT(simulatorAlwaysInterrupt, false);
+
     // Branch pruning heuristic is based on a scoring system, which is look at
     // different metrics and provide a score. The score is computed as a
     // projection where each factor defines the weight of each metric. Then this
@@ -233,12 +237,6 @@ DefaultJitOptions::DefaultJitOptions()
 
     // Test whether Atomics are allowed in asm.js code.
     SET_DEFAULT(asmJSAtomicsEnable, false);
-
-    // Test whether wasm int64 / double NaN bits testing is enabled.
-    SET_DEFAULT(wasmTestMode, false);
-
-    // Test whether wasm bounds check should always be generated.
-    SET_DEFAULT(wasmAlwaysCheckBounds, false);
 
     // Toggles the optimization whereby offsets are folded into loads and not
     // included in the bounds check.

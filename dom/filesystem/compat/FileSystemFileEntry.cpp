@@ -19,11 +19,9 @@ namespace {
 class FileCallbackRunnable final : public Runnable
 {
 public:
-  FileCallbackRunnable(FileCallback* aCallback, ErrorCallback* aErrorCallback,
-                       File* aFile)
+  FileCallbackRunnable(FileCallback* aCallback, File* aFile)
     : Runnable("FileCallbackRunnable")
     , mCallback(aCallback)
-    , mErrorCallback(aErrorCallback)
     , mFile(aFile)
   {
     MOZ_ASSERT(aCallback);
@@ -35,29 +33,7 @@ public:
   {
     // Here we clone the File object.
 
-    nsAutoString name;
-    mFile->GetName(name);
-
-    nsAutoString type;
-    mFile->GetType(type);
-
-    nsTArray<RefPtr<BlobImpl>> blobImpls;
-    blobImpls.AppendElement(mFile->Impl());
-
-    ErrorResult rv;
-    RefPtr<BlobImpl> blobImpl =
-      MultipartBlobImpl::Create(Move(blobImpls), name, type, rv);
-    if (NS_WARN_IF(rv.Failed())) {
-      if (mErrorCallback) {
-        RefPtr<DOMException> exception =
-          DOMException::Create(rv.StealNSResult());
-        mErrorCallback->HandleEvent(*exception);
-      }
-
-      return NS_OK;
-    }
-
-    RefPtr<File> file = File::Create(mFile->GetParentObject(), blobImpl);
+    RefPtr<File> file = File::Create(mFile->GetParentObject(), mFile->Impl());
     MOZ_ASSERT(file);
 
     mCallback->HandleEvent(*file);
@@ -66,7 +42,6 @@ public:
 
 private:
   RefPtr<FileCallback> mCallback;
-  RefPtr<ErrorCallback> mErrorCallback;
   RefPtr<File> mFile;
 };
 
@@ -77,7 +52,7 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(FileSystemFileEntry, FileSystemEntry, mFile)
 NS_IMPL_ADDREF_INHERITED(FileSystemFileEntry, FileSystemEntry)
 NS_IMPL_RELEASE_INHERITED(FileSystemFileEntry, FileSystemEntry)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(FileSystemFileEntry)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(FileSystemFileEntry)
 NS_INTERFACE_MAP_END_INHERITING(FileSystemEntry)
 
 FileSystemFileEntry::FileSystemFileEntry(nsIGlobalObject* aGlobal,
@@ -128,10 +103,7 @@ FileSystemFileEntry::GetFile(FileCallback& aSuccessCallback,
                              const Optional<OwningNonNull<ErrorCallback>>& aErrorCallback) const
 {
   RefPtr<FileCallbackRunnable> runnable =
-    new FileCallbackRunnable(&aSuccessCallback,
-                             aErrorCallback.WasPassed()
-                               ? &aErrorCallback.Value() : nullptr,
-                             mFile);
+    new FileCallbackRunnable(&aSuccessCallback, mFile);
 
   FileSystemUtils::DispatchRunnable(GetParentObject(), runnable.forget());
 }

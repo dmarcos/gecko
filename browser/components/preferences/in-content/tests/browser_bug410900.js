@@ -22,9 +22,11 @@ function test() {
               getService(Ci.nsIHandlerService);
   hserv.store(info);
 
-  openPreferencesViaOpenPreferencesAPI("applications", {leaveOpen: true}).then(
-      () => runTest(gBrowser.selectedBrowser.contentWindow)
-  );
+  /* eslint-disable mozilla/no-cpows-in-tests */
+  openPreferencesViaOpenPreferencesAPI("general", {leaveOpen: true})
+  .then(() => gBrowser.selectedBrowser.contentWindow.promiseLoadHandlersList)
+  .then(() => runTest(gBrowser.selectedBrowser.contentWindow));
+  /* eslint-enable mozilla/no-cpows-in-tests */
 }
 
 function runTest(win) {

@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=99: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -31,6 +31,9 @@ public:
           uint64_t* aOutInputBlockId) override;
 
   void
+  SetKeyboardMap(const KeyboardMap& aKeyboardMap) override;
+
+  void
   ZoomToRect(
           const ScrollableLayerGuid& aGuid,
           const CSSRect& aRect,
@@ -52,12 +55,6 @@ public:
           const Maybe<ZoomConstraints>& aConstraints) override;
 
   void
-  CancelAnimation(const ScrollableLayerGuid &aGuid) override;
-
-  void
-  AdjustScrollForSurfaceShift(const ScreenPoint& aShift) override;
-
-  void
   SetDPI(float aDpiValue) override;
 
   void
@@ -70,6 +67,14 @@ public:
           const ScrollableLayerGuid& aGuid,
           const AsyncDragMetrics& aDragMetrics) override;
 
+  bool
+  StartAutoscroll(
+          const ScrollableLayerGuid& aGuid,
+          const ScreenPoint& aAnchorLocation) override;
+
+  void
+  StopAutoscroll(const ScrollableLayerGuid& aGuid) override;
+
   void
   SetLongTapEnabled(bool aTapGestureEnabled) override;
 
@@ -77,9 +82,10 @@ public:
   ProcessTouchVelocity(uint32_t aTimestampMs, float aSpeedY) override;
 
   void
-  TransformEventRefPoint(
+  ProcessUnhandledEvent(
           LayoutDeviceIntPoint* aRefPoint,
-          ScrollableLayerGuid* aOutTargetGuid) override;
+          ScrollableLayerGuid*  aOutTargetGuid,
+          uint64_t*             aOutFocusSequenceNumber) override;
 
   void
   UpdateWheelTransaction(
@@ -97,6 +103,8 @@ protected:
                                                  const ScrollableLayerGuid& aGuid,
                                                  const LayoutDeviceCoord& aSpanChange,
                                                  const Modifiers& aModifiers) override;
+
+  mozilla::ipc::IPCResult RecvCancelAutoscroll(const FrameMetrics::ViewID& aScrollId) override;
 
   virtual
   ~APZCTreeManagerChild() { }

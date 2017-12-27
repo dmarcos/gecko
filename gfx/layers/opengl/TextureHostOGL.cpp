@@ -1,7 +1,8 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
-* This Source Code Form is subject to the terms of the Mozilla Public
-* License, v. 2.0. If a copy of the MPL was not distributed with this
-* file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "TextureHostOGL.h"
 
@@ -56,9 +57,14 @@ CreateTextureHostOGL(const SurfaceDescriptor& aDesc,
 #ifdef MOZ_WIDGET_ANDROID
     case SurfaceDescriptor::TSurfaceTextureDescriptor: {
       const SurfaceTextureDescriptor& desc = aDesc.get_SurfaceTextureDescriptor();
+      java::GeckoSurfaceTexture::LocalRef surfaceTexture = java::GeckoSurfaceTexture::Lookup(desc.handle());
+
       result = new SurfaceTextureHost(aFlags,
-                                      (AndroidSurfaceTexture*)desc.surfTex(),
-                                      desc.size());
+                                      surfaceTexture,
+                                      desc.size(),
+                                      desc.format(),
+                                      desc.continuous(),
+                                      desc.ignoreTransform());
       break;
     }
 #endif
@@ -335,17 +341,19 @@ GLTextureSource::IsValid() const
 #ifdef MOZ_WIDGET_ANDROID
 
 SurfaceTextureSource::SurfaceTextureSource(TextureSourceProvider* aProvider,
-                                           AndroidSurfaceTexture* aSurfTex,
+                                           mozilla::java::GeckoSurfaceTexture::Ref& aSurfTex,
                                            gfx::SurfaceFormat aFormat,
                                            GLenum aTarget,
                                            GLenum aWrapMode,
-                                           gfx::IntSize aSize)
+                                           gfx::IntSize aSize,
+                                           bool aIgnoreTransform)
   : mGL(aProvider->GetGLContext())
   , mSurfTex(aSurfTex)
   , mFormat(aFormat)
   , mTextureTarget(aTarget)
   , mWrapMode(aWrapMode)
   , mSize(aSize)
+  , mIgnoreTransform(aIgnoreTransform)
 {
 }
 
@@ -361,12 +369,7 @@ SurfaceTextureSource::BindTexture(GLenum aTextureUnit,
   }
 
   gl->fActiveTexture(aTextureUnit);
-
-  // SurfaceTexture spams us if there are any existing GL errors, so
-  // we'll clear them here in order to avoid that.
-  gl->FlushErrors();
-
-  mSurfTex->UpdateTexImage();
+  gl->fBindTexture(mTextureTarget, mSurfTex->GetTexName());
 
   ApplySamplingFilterToBoundTexture(gl, aSamplingFilter, mTextureTarget);
 }
@@ -395,7 +398,15 @@ SurfaceTextureSource::GetTextureTransform()
   MOZ_ASSERT(mSurfTex);
 
   gfx::Matrix4x4 ret;
-  mSurfTex->GetTransformMatrix(ret);
+
+  // GetTransformMatrix() returns the transform set by the producer side of
+  // the SurfaceTexture. We should ignore this if we know the transform should
+  // be identity but the producer couldn't set it correctly, like is the
+  // case for AndroidNativeWindowTextureData.
+  if (!mIgnoreTransform) {
+    const auto& surf = java::sdk::SurfaceTexture::LocalRef(java::sdk::SurfaceTexture::Ref::From(mSurfTex));
+    AndroidSurfaceTexture::GetTransformMatrix(surf, &ret);
+  }
 
   return ret;
 }
@@ -409,16 +420,50 @@ SurfaceTextureSource::DeallocateDeviceData()
 ////////////////////////////////////////////////////////////////////////
 
 SurfaceTextureHost::SurfaceTextureHost(TextureFlags aFlags,
-                                       AndroidSurfaceTexture* aSurfTex,
-                                       gfx::IntSize aSize)
+                                       mozilla::java::GeckoSurfaceTexture::Ref& aSurfTex,
+                                       gfx::IntSize aSize,
+                                       gfx::SurfaceFormat aFormat,
+                                       bool aContinuousUpdate,
+                                       bool aIgnoreTransform)
   : TextureHost(aFlags)
   , mSurfTex(aSurfTex)
   , mSize(aSize)
+  , mFormat(aFormat)
+  , mContinuousUpdate(aContinuousUpdate)
+  , mIgnoreTransform(aIgnoreTransform)
 {
+  if (!mSurfTex) {
+    return;
+  }
+
+  // Continuous update makes no sense with single buffer mode
+  MOZ_ASSERT(!mSurfTex->IsSingleBuffer() || !mContinuousUpdate);
+
+  mSurfTex->IncrementUse();
 }
 
 SurfaceTextureHost::~SurfaceTextureHost()
 {
+  if (mSurfTex) {
+    mSurfTex->DecrementUse();
+    mSurfTex = nullptr;
+  }
+}
+
+void
+SurfaceTextureHost::PrepareTextureSource(CompositableTextureSourceRef& aTexture)
+{
+  if (!mContinuousUpdate && mSurfTex) {
+    if (!EnsureAttached()) {
+      return;
+    }
+
+    // UpdateTexImage() advances the internal buffer queue, so we only want to call this
+    // once per transactionwhen we are not in continuous mode (as we are here). Otherwise,
+    // the SurfaceTexture content will be de-synced from the rest of the page in subsequent
+    // compositor passes.
+    mSurfTex->UpdateTexImage();
+  }
 }
 
 gl::GLContext*
@@ -428,34 +473,52 @@ SurfaceTextureHost::gl() const
 }
 
 bool
-SurfaceTextureHost::Lock()
+SurfaceTextureHost::EnsureAttached()
 {
-  MOZ_ASSERT(mSurfTex);
   GLContext* gl = this->gl();
   if (!gl || !gl->MakeCurrent()) {
     return false;
   }
 
+  if (!mSurfTex) {
+    return false;
+  }
+
+  if (!mSurfTex->IsAttachedToGLContext((int64_t)gl)) {
+    GLuint texName;
+    gl->fGenTextures(1, &texName);
+    if (NS_FAILED(mSurfTex->AttachToGLContext((int64_t)gl, texName))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool
+SurfaceTextureHost::Lock()
+{
+  if (!EnsureAttached()) {
+    return false;
+  }
+
+  if (mContinuousUpdate) {
+    mSurfTex->UpdateTexImage();
+  }
+
   if (!mTextureSource) {
-    gfx::SurfaceFormat format = gfx::SurfaceFormat::R8G8B8A8;
-    GLenum target = LOCAL_GL_TEXTURE_EXTERNAL;
+    GLenum target = LOCAL_GL_TEXTURE_EXTERNAL; // This is required by SurfaceTexture
     GLenum wrapMode = LOCAL_GL_CLAMP_TO_EDGE;
     mTextureSource = new SurfaceTextureSource(mProvider,
                                               mSurfTex,
-                                              format,
+                                              mFormat,
                                               target,
                                               wrapMode,
-                                              mSize);
+                                              mSize,
+                                              mIgnoreTransform);
   }
 
-  return NS_SUCCEEDED(mSurfTex->Attach(gl));
-}
-
-void
-SurfaceTextureHost::Unlock()
-{
-  MOZ_ASSERT(mSurfTex);
-  mSurfTex->Detach();
+  return true;
 }
 
 void
@@ -474,10 +537,20 @@ SurfaceTextureHost::SetTextureSourceProvider(TextureSourceProvider* aProvider)
   }
 }
 
+void
+SurfaceTextureHost::NotifyNotUsed()
+{
+  if (mSurfTex && mSurfTex->IsSingleBuffer()) {
+    mSurfTex->ReleaseTexImage();
+  }
+
+  TextureHost::NotifyNotUsed();
+}
+
 gfx::SurfaceFormat
 SurfaceTextureHost::GetFormat() const
 {
-  return mTextureSource ? mTextureSource->GetFormat() : gfx::SurfaceFormat::UNKNOWN;
+  return mFormat;
 }
 
 void
@@ -486,7 +559,11 @@ SurfaceTextureHost::DeallocateDeviceData()
   if (mTextureSource) {
     mTextureSource->DeallocateDeviceData();
   }
-  mSurfTex = nullptr;
+
+  if (mSurfTex) {
+    mSurfTex->DecrementUse();
+    mSurfTex = nullptr;
+  }
 }
 
 #endif // MOZ_WIDGET_ANDROID

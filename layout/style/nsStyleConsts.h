@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -153,9 +154,18 @@ enum class StyleShapeRadius : uint8_t {
 // Shape source type
 enum class StyleShapeSourceType : uint8_t {
   None,
-  URL,
+  URL,   // clip-path only
+  Image, // shape-outside only
   Shape,
   Box,
+};
+
+// -moz-stack-sizing
+enum class StyleStackSizing : uint8_t {
+  Ignore,
+  StretchToFit,
+  IgnoreHorizontal,
+  IgnoreVertical,
 };
 
 // text-justify
@@ -222,71 +232,6 @@ enum class StyleOrient : uint8_t {
   Vertical,
 };
 
-// stack-sizing
-#define NS_STYLE_STACK_SIZING_IGNORE         0
-#define NS_STYLE_STACK_SIZING_STRETCH_TO_FIT 1
-
-// Azimuth - See nsStyleAural
-#define NS_STYLE_AZIMUTH_LEFT_SIDE        0x00
-#define NS_STYLE_AZIMUTH_FAR_LEFT         0x01
-#define NS_STYLE_AZIMUTH_LEFT             0x02
-#define NS_STYLE_AZIMUTH_CENTER_LEFT      0x03
-#define NS_STYLE_AZIMUTH_CENTER           0x04
-#define NS_STYLE_AZIMUTH_CENTER_RIGHT     0x05
-#define NS_STYLE_AZIMUTH_RIGHT            0x06
-#define NS_STYLE_AZIMUTH_FAR_RIGHT        0x07
-#define NS_STYLE_AZIMUTH_RIGHT_SIDE       0x08
-#define NS_STYLE_AZIMUTH_BEHIND           0x80  // bits
-#define NS_STYLE_AZIMUTH_LEFTWARDS        0x10  // bits
-#define NS_STYLE_AZIMUTH_RIGHTWARDS       0x20  // bits
-
-// See nsStyleAural
-#define NS_STYLE_ELEVATION_BELOW          1
-#define NS_STYLE_ELEVATION_LEVEL          2
-#define NS_STYLE_ELEVATION_ABOVE          3
-#define NS_STYLE_ELEVATION_HIGHER         4
-#define NS_STYLE_ELEVATION_LOWER          5
-
-// See nsStyleAural
-#define NS_STYLE_PITCH_X_LOW              1
-#define NS_STYLE_PITCH_LOW                2
-#define NS_STYLE_PITCH_MEDIUM             3
-#define NS_STYLE_PITCH_HIGH               4
-#define NS_STYLE_PITCH_X_HIGH             5
-
-// See nsStyleAural
-#define NS_STYLE_SPEAK_NONE               0
-#define NS_STYLE_SPEAK_NORMAL             1
-#define NS_STYLE_SPEAK_SPELL_OUT          2
-
-// See nsStyleAural
-#define NS_STYLE_SPEAK_HEADER_ONCE        0
-#define NS_STYLE_SPEAK_HEADER_ALWAYS      1
-
-// See nsStyleAural
-#define NS_STYLE_SPEAK_NUMERAL_DIGITS     0
-#define NS_STYLE_SPEAK_NUMERAL_CONTINUOUS 1
-
-// See nsStyleAural
-#define NS_STYLE_SPEAK_PUNCTUATION_NONE   0
-#define NS_STYLE_SPEAK_PUNCTUATION_CODE   1
-
-// See nsStyleAural
-#define NS_STYLE_SPEECH_RATE_X_SLOW       0
-#define NS_STYLE_SPEECH_RATE_SLOW         1
-#define NS_STYLE_SPEECH_RATE_MEDIUM       2
-#define NS_STYLE_SPEECH_RATE_FAST         3
-#define NS_STYLE_SPEECH_RATE_X_FAST       4
-#define NS_STYLE_SPEECH_RATE_FASTER       10
-#define NS_STYLE_SPEECH_RATE_SLOWER       11
-
-// See nsStyleAural
-#define NS_STYLE_VOLUME_SILENT            0
-#define NS_STYLE_VOLUME_X_SOFT            1
-#define NS_STYLE_VOLUME_SOFT              2
-#define NS_STYLE_VOLUME_MEDIUM            3
-#define NS_STYLE_VOLUME_LOUD              4
-#define NS_STYLE_VOLUME_X_LOUD            5
 
 // See nsStyleColor
 #define NS_STYLE_COLOR_INHERIT_FROM_BODY  2  /* Can't come from CSS directly */
@@ -345,12 +290,15 @@ enum class FillMode : uint8_t;
 #define NS_STYLE_IMAGELAYER_POSITION_RIGHT           (1<<4)
 
 // See nsStyleImageLayers
-#define NS_STYLE_IMAGELAYER_REPEAT_NO_REPEAT         0x00
-#define NS_STYLE_IMAGELAYER_REPEAT_REPEAT_X          0x01
-#define NS_STYLE_IMAGELAYER_REPEAT_REPEAT_Y          0x02
-#define NS_STYLE_IMAGELAYER_REPEAT_REPEAT            0x03
-#define NS_STYLE_IMAGELAYER_REPEAT_SPACE             0x04
-#define NS_STYLE_IMAGELAYER_REPEAT_ROUND             0x05
+enum class StyleImageLayerRepeat : uint8_t {
+  NoRepeat = 0x00,
+  RepeatX,
+  RepeatY,
+  Repeat,
+  Space,
+  Round
+};
+
 
 // See nsStyleImageLayers
 #define NS_STYLE_IMAGELAYER_SIZE_CONTAIN             0
@@ -399,11 +347,13 @@ enum class FillMode : uint8_t;
 #define NS_STYLE_BORDER_IMAGE_SLICE_FILL        1
 
 // See nsStyleContent
-#define NS_STYLE_CONTENT_OPEN_QUOTE             0
-#define NS_STYLE_CONTENT_CLOSE_QUOTE            1
-#define NS_STYLE_CONTENT_NO_OPEN_QUOTE          2
-#define NS_STYLE_CONTENT_NO_CLOSE_QUOTE         3
-#define NS_STYLE_CONTENT_ALT_CONTENT            4
+enum class StyleContent : uint8_t {
+  OpenQuote,
+  CloseQuote,
+  NoOpenQuote,
+  NoCloseQuote,
+  AltContent
+};
 
 // See nsStyleColor
 #define NS_STYLE_CURSOR_AUTO                    1
@@ -640,6 +590,7 @@ enum class StyleDisplay : uint8_t {
 #define NS_STYLE_FONT_SIZE_XXXLARGE             7  // Only used by <font size="7">. Not specifiable in CSS.
 #define NS_STYLE_FONT_SIZE_LARGER               8
 #define NS_STYLE_FONT_SIZE_SMALLER              9
+#define NS_STYLE_FONT_SIZE_NO_KEYWORD          10 // Used by Servo to track the "no keyword" case
 
 // See nsStyleFont
 // We should eventually stop using the NS_STYLE_* variants here.
@@ -769,24 +720,23 @@ enum class StyleGridTrackBreadth : uint8_t {
 // See nsStyleList
 #define NS_STYLE_LIST_STYLE_CUSTOM                -1 // for @counter-style
 #define NS_STYLE_LIST_STYLE_NONE                  0
-#define NS_STYLE_LIST_STYLE_DISC                  1
-#define NS_STYLE_LIST_STYLE_CIRCLE                2
-#define NS_STYLE_LIST_STYLE_SQUARE                3
-#define NS_STYLE_LIST_STYLE_DECIMAL               4
-#define NS_STYLE_LIST_STYLE_HEBREW                5
-#define NS_STYLE_LIST_STYLE_JAPANESE_INFORMAL     6
-#define NS_STYLE_LIST_STYLE_JAPANESE_FORMAL       7
-#define NS_STYLE_LIST_STYLE_KOREAN_HANGUL_FORMAL  8
-#define NS_STYLE_LIST_STYLE_KOREAN_HANJA_INFORMAL 9
-#define NS_STYLE_LIST_STYLE_KOREAN_HANJA_FORMAL   10
-#define NS_STYLE_LIST_STYLE_SIMP_CHINESE_INFORMAL 11
-#define NS_STYLE_LIST_STYLE_SIMP_CHINESE_FORMAL   12
-#define NS_STYLE_LIST_STYLE_TRAD_CHINESE_INFORMAL 13
-#define NS_STYLE_LIST_STYLE_TRAD_CHINESE_FORMAL   14
-#define NS_STYLE_LIST_STYLE_ETHIOPIC_NUMERIC      15
-#define NS_STYLE_LIST_STYLE_DISCLOSURE_CLOSED     16
-#define NS_STYLE_LIST_STYLE_DISCLOSURE_OPEN       17
-#define NS_STYLE_LIST_STYLE__MAX                  18
+#define NS_STYLE_LIST_STYLE_DECIMAL               1
+#define NS_STYLE_LIST_STYLE_DISC                  2
+#define NS_STYLE_LIST_STYLE_CIRCLE                3
+#define NS_STYLE_LIST_STYLE_SQUARE                4
+#define NS_STYLE_LIST_STYLE_DISCLOSURE_CLOSED     5
+#define NS_STYLE_LIST_STYLE_DISCLOSURE_OPEN       6
+#define NS_STYLE_LIST_STYLE_HEBREW                7
+#define NS_STYLE_LIST_STYLE_JAPANESE_INFORMAL     8
+#define NS_STYLE_LIST_STYLE_JAPANESE_FORMAL       9
+#define NS_STYLE_LIST_STYLE_KOREAN_HANGUL_FORMAL  10
+#define NS_STYLE_LIST_STYLE_KOREAN_HANJA_INFORMAL 11
+#define NS_STYLE_LIST_STYLE_KOREAN_HANJA_FORMAL   12
+#define NS_STYLE_LIST_STYLE_SIMP_CHINESE_INFORMAL 13
+#define NS_STYLE_LIST_STYLE_SIMP_CHINESE_FORMAL   14
+#define NS_STYLE_LIST_STYLE_TRAD_CHINESE_INFORMAL 15
+#define NS_STYLE_LIST_STYLE_TRAD_CHINESE_FORMAL   16
+#define NS_STYLE_LIST_STYLE_ETHIOPIC_NUMERIC      17
 // These styles are handled as custom styles defined in counterstyles.css.
 // They are preserved here only for html attribute map.
 #define NS_STYLE_LIST_STYLE_LOWER_ROMAN           100
@@ -929,12 +879,14 @@ enum class StyleGridTrackBreadth : uint8_t {
 #define NS_STYLE_TABSIZE_INITIAL                8
 
 // See nsStyleText
-#define NS_STYLE_WHITESPACE_NORMAL               0
-#define NS_STYLE_WHITESPACE_PRE                  1
-#define NS_STYLE_WHITESPACE_NOWRAP               2
-#define NS_STYLE_WHITESPACE_PRE_WRAP             3
-#define NS_STYLE_WHITESPACE_PRE_LINE             4
-#define NS_STYLE_WHITESPACE_PRE_SPACE            5
+enum class StyleWhiteSpace : uint8_t {
+  Normal = 0,
+  Pre,
+  Nowrap,
+  PreWrap,
+  PreLine,
+  PreSpace,
+};
 
 // See nsStyleText
 #define NS_STYLE_WORDBREAK_NORMAL               0
@@ -1052,6 +1004,23 @@ enum class StyleGridTrackBreadth : uint8_t {
 #define NS_STYLE_GRADIENT_SIZE_EXPLICIT_SIZE    4
 
 // See nsStyleSVG
+
+// -moz-context-properties
+#define NS_STYLE_CONTEXT_PROPERTY_FILL          (1 << 0)
+#define NS_STYLE_CONTEXT_PROPERTY_STROKE        (1 << 1)
+#define NS_STYLE_CONTEXT_PROPERTY_FILL_OPACITY   (1 << 2)
+#define NS_STYLE_CONTEXT_PROPERTY_STROKE_OPACITY (1 << 3)
+
+/*
+ * -moz-window-shadow
+ * Also used in widget code
+ */
+
+#define NS_STYLE_WINDOW_SHADOW_NONE             0
+#define NS_STYLE_WINDOW_SHADOW_DEFAULT          1
+#define NS_STYLE_WINDOW_SHADOW_MENU             2
+#define NS_STYLE_WINDOW_SHADOW_TOOLTIP          3
+#define NS_STYLE_WINDOW_SHADOW_SHEET            4
 
 // dominant-baseline
 #define NS_STYLE_DOMINANT_BASELINE_AUTO              0
@@ -1219,6 +1188,13 @@ enum class StyleGridTrackBreadth : uint8_t {
 // See nsStyleDisplay::mScrollBehavior
 #define NS_STYLE_SCROLL_BEHAVIOR_AUTO       0
 #define NS_STYLE_SCROLL_BEHAVIOR_SMOOTH     1
+
+// See nsStyleDisplay::mOverscrollBehavior{X,Y}
+enum class StyleOverscrollBehavior : uint8_t {
+  Auto = 0,
+  Contain,
+  None,
+};
 
 // See nsStyleDisplay::mScrollSnapType{X,Y}
 #define NS_STYLE_SCROLL_SNAP_TYPE_NONE              0

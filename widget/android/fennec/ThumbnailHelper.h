@@ -28,7 +28,6 @@ namespace mozilla {
 
 class ThumbnailHelper final
     : public java::ThumbnailHelper::Natives<ThumbnailHelper>
-    , public java::ZoomedView::Natives<ThumbnailHelper>
 {
     ThumbnailHelper() = delete;
 
@@ -160,7 +159,7 @@ class ThumbnailHelper final
         RefPtr<gfxContext> context = gfxContext::CreateOrNull(dt);
         MOZ_ASSERT(context); // checked the draw target above
 
-        context->SetMatrix(context->CurrentMatrix().Scale(
+        context->SetMatrix(context->CurrentMatrix().PreScale(
                 aZoomFactor * float(aThumbWidth) / aPageRect.width,
                 aZoomFactor * float(aThumbHeight) / aPageRect.height));
 
@@ -190,30 +189,42 @@ public:
     static void Init()
     {
         java::ThumbnailHelper::Natives<ThumbnailHelper>::Init();
-        java::ZoomedView::Natives<ThumbnailHelper>::Init();
     }
 
     template<class Functor>
     static void OnNativeCall(Functor&& aCall)
     {
-        class IdleEvent : public nsAppShell::LambdaEvent<Functor>
+        class IdleEvent : public Runnable
         {
-            using Base = nsAppShell::LambdaEvent<Functor>;
+            Functor mLambda;
+            bool mIdlePass;
 
         public:
             IdleEvent(Functor&& aCall)
-                : Base(Forward<Functor>(aCall))
+                : Runnable("ThumbnailHelperIdle")
+                , mLambda(Move(aCall))
+                , mIdlePass(false)
             {}
 
-            void Run() override
+            NS_IMETHOD Run() override
             {
+                // Because we can only post to the idle queue from the main
+                // queue, we must first post to the main queue and then to the
+                // idle queue. However, we use the same runnable object for
+                // both queues, and use mIdlePass to track our progress.
+                if (mIdlePass) {
+                    mLambda();
+                    return NS_OK;
+                }
+
+                mIdlePass = true;
                 MessageLoop::current()->PostIdleTask(
-                        NS_NewRunnableFunction(Move(Base::lambda)));
+                        nsCOMPtr<nsIRunnable>(this).forget());
+                return NS_OK;
             }
         };
 
-        // Invoke RequestThumbnail on the main thread when the thread is idle.
-        nsAppShell::PostEvent(MakeUnique<IdleEvent>(Forward<Functor>(aCall)));
+        NS_DispatchToMainThread(new IdleEvent(Move(aCall)));
     }
 
     static void
@@ -260,40 +271,6 @@ public:
         const bool store = success ? ShouldStoreThumbnail(docShell) : false;
 
         java::ThumbnailHelper::NotifyThumbnail(aData, aTab, success, store);
-    }
-
-    static void
-    RequestZoomedViewData(jni::ByteBuffer::Param aData, int32_t aTabId,
-                          int32_t aX, int32_t aY,
-                          int32_t aWidth, int32_t aHeight, float aScale)
-    {
-        nsCOMPtr<mozIDOMWindowProxy> window = GetWindowForTab(aTabId);
-        if (!window || !aData) {
-            return;
-        }
-
-        nsCOMPtr<nsPIDOMWindowOuter> win = nsPIDOMWindowOuter::From(window);
-        nsCOMPtr<nsIDocShell> docShell = win->GetDocShell();
-        RefPtr<nsPresContext> presContext;
-
-        if (!docShell || NS_FAILED(docShell->GetPresContext(
-                getter_AddRefs(presContext))) || !presContext) {
-            return;
-        }
-
-        nsCOMPtr<nsIPresShell> presShell = presContext->PresShell();
-        LayoutDeviceRect rect = LayoutDeviceRect(aX, aY, aWidth, aHeight);
-        const float resolution = presShell->GetCumulativeResolution();
-        rect.Scale(1.0f / LayoutDeviceToLayerScale(resolution).scale);
-
-        docShell = GetThumbnailAndDocShell(
-                window, aData, aWidth, aHeight, CSSRect::FromAppUnits(
-                rect.ToAppUnits(rect, presContext->AppUnitsPerDevPixel())),
-                aScale);
-
-        if (docShell) {
-            java::LayerView::UpdateZoomedView(aData);
-        }
     }
 };
 

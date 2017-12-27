@@ -58,11 +58,7 @@ var tests = [
 
 ];
 
-function run_test() {
-  run_next_test();
-}
-
-add_task(function* test_notifications_onDeleteVisits() {
+add_task(async function test_notifications_onDeleteVisits() {
   // Set interval to a large value so we don't expire on it.
   setInterval(3600); // 1h
 
@@ -85,7 +81,7 @@ add_task(function* test_notifications_onDeleteVisits() {
     for (let j = 0; j < currentTest.visitsPerPage; j++) {
       for (let i = 0; i < currentTest.addPages; i++) {
         let page = "http://" + testIndex + "." + i + ".mozilla.org/";
-        yield PlacesTestUtils.addVisits({ uri: uri(page), visitDate: newTimeInMicroseconds() });
+        await PlacesTestUtils.addVisits({ uri: uri(page), visitDate: newTimeInMicroseconds() });
       }
     }
 
@@ -93,7 +89,7 @@ add_task(function* test_notifications_onDeleteVisits() {
     currentTest.bookmarks = [];
     for (let i = 0; i < currentTest.addBookmarks; i++) {
       let page = "http://" + testIndex + "." + i + ".mozilla.org/";
-      yield PlacesUtils.bookmarks.insert({
+      await PlacesUtils.bookmarks.insert({
         parentGuid: PlacesUtils.bookmarks.unfiledGuid,
         title: null,
         url: page
@@ -110,33 +106,33 @@ add_task(function* test_notifications_onDeleteVisits() {
       onTitleChanged() {},
       onDeleteURI(aURI, aGUID, aReason) {
         // Check this uri was not bookmarked.
-        do_check_eq(currentTest.bookmarks.indexOf(aURI.spec), -1);
+        Assert.equal(currentTest.bookmarks.indexOf(aURI.spec), -1);
         do_check_valid_places_guid(aGUID);
-        do_check_eq(aReason, Ci.nsINavHistoryObserver.REASON_EXPIRED);
+        Assert.equal(aReason, Ci.nsINavHistoryObserver.REASON_EXPIRED);
       },
       onPageChanged() {},
       onDeleteVisits(aURI, aTime, aGUID, aReason) {
         currentTest.receivedNotifications++;
         do_check_guid_for_uri(aURI, aGUID);
-        do_check_eq(aReason, Ci.nsINavHistoryObserver.REASON_EXPIRED);
+        Assert.equal(aReason, Ci.nsINavHistoryObserver.REASON_EXPIRED);
       },
     };
     hs.addObserver(historyObserver);
 
     // Expire now.
-    yield promiseForceExpirationStep(currentTest.limitExpiration);
+    await promiseForceExpirationStep(currentTest.limitExpiration);
 
     hs.removeObserver(historyObserver, false);
 
-    do_check_eq(currentTest.receivedNotifications,
-                currentTest.expectedNotifications);
+    Assert.equal(currentTest.receivedNotifications,
+                 currentTest.expectedNotifications);
 
     // Clean up.
-    yield PlacesUtils.bookmarks.eraseEverything();
-    yield PlacesTestUtils.clearHistory();
+    await PlacesUtils.bookmarks.eraseEverything();
+    await PlacesTestUtils.clearHistory();
   }
 
   clearMaxPages();
-  yield PlacesUtils.bookmarks.eraseEverything();
-  yield PlacesTestUtils.clearHistory();
+  await PlacesUtils.bookmarks.eraseEverything();
+  await PlacesTestUtils.clearHistory();
 });

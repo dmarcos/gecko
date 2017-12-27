@@ -116,7 +116,7 @@ PROCESSED_SUFFIX = '.processed.jar'
 CANDIDATE_TREES = (
     'mozilla-central',
     'integration/mozilla-inbound',
-    'releases/mozilla-aurora'
+    'releases/mozilla-beta'
 )
 
 class ArtifactJob(object):
@@ -129,14 +129,17 @@ class ArtifactJob(object):
         ('bin/BadCertServer', ('bin', 'bin')),
         ('bin/GenerateOCSPResponse', ('bin', 'bin')),
         ('bin/OCSPStaplingServer', ('bin', 'bin')),
+        ('bin/SymantecSanctionsServer', ('bin', 'bin')),
         ('bin/certutil', ('bin', 'bin')),
         ('bin/fileid', ('bin', 'bin')),
+        ('bin/geckodriver', ('bin', 'bin')),
         ('bin/pk12util', ('bin', 'bin')),
+        ('bin/screentopng', ('bin', 'bin')),
         ('bin/ssltunnel', ('bin', 'bin')),
         ('bin/xpcshell', ('bin', 'bin')),
         ('bin/plugins/gmp-*/*/*', ('bin/plugins', 'bin')),
         ('bin/plugins/*', ('bin/plugins', 'plugins')),
-        ('bin/components/*', ('bin/components', 'bin/components')),
+        ('bin/components/*.xpt', ('bin/components', 'bin/components')),
     }
 
     # We can tell our input is a test archive by this suffix, which happens to
@@ -345,7 +348,6 @@ class MacArtifactJob(ArtifactJob):
             # These get copied into dist/bin without the path, so "root/a/b/c" -> "dist/bin/c".
             paths_no_keep_path = ('Contents/MacOS', [
                 'crashreporter.app/Contents/MacOS/crashreporter',
-                'crashreporter.app/Contents/MacOS/minidump-analyzer',
                 'firefox',
                 'firefox-bin',
                 'libfreebl3.dylib',
@@ -369,15 +371,20 @@ class MacArtifactJob(ArtifactJob):
             ])
 
             # These get copied into dist/bin with the path, so "root/a/b/c" -> "dist/bin/a/b/c".
-            paths_keep_path = ('Contents/Resources', [
-                'browser/components/libbrowsercomps.dylib',
-                'dependentlibs.list',
-                # 'firefox',
-                'gmp-clearkey/0.1/libclearkey.dylib',
-                # 'gmp-fake/1.0/libfake.dylib',
-                # 'gmp-fakeopenh264/1.0/libfakeopenh264.dylib',
-                '**/interfaces.xpt',
-            ])
+            paths_keep_path = [
+                ('Contents/MacOS', [
+                    'crashreporter.app/Contents/MacOS/minidump-analyzer',
+                ]),
+                ('Contents/Resources', [
+                    'browser/components/libbrowsercomps.dylib',
+                    'dependentlibs.list',
+                    # 'firefox',
+                    'gmp-clearkey/0.1/libclearkey.dylib',
+                    # 'gmp-fake/1.0/libfake.dylib',
+                    # 'gmp-fakeopenh264/1.0/libfakeopenh264.dylib',
+                    '**/interfaces.xpt',
+                ]),
+            ]
 
             with JarWriter(file=processed_filename, optimize=False, compress_level=5) as writer:
                 root, paths = paths_no_keep_path
@@ -390,15 +397,15 @@ class MacArtifactJob(ArtifactJob):
                         destpath = mozpath.join('bin', os.path.basename(p))
                         writer.add(destpath.encode('utf-8'), f, mode=f.mode)
 
-                root, paths = paths_keep_path
-                finder = UnpackFinder(mozpath.join(source, root))
-                for path in paths:
-                    for p, f in finder.find(path):
-                        self.log(logging.INFO, 'artifact',
-                            {'path': p},
-                            'Adding {path} to processed archive')
-                        destpath = mozpath.join('bin', p)
-                        writer.add(destpath.encode('utf-8'), f.open(), mode=f.mode)
+                for root, paths in paths_keep_path:
+                    finder = UnpackFinder(mozpath.join(source, root))
+                    for path in paths:
+                        for p, f in finder.find(path):
+                            self.log(logging.INFO, 'artifact',
+                                     {'path': p},
+                                     'Adding {path} to processed archive')
+                            destpath = mozpath.join('bin', p)
+                            writer.add(destpath.encode('utf-8'), f.open(), mode=f.mode)
 
         finally:
             os.chdir(oldcwd)
@@ -428,9 +435,12 @@ class WinArtifactJob(ArtifactJob):
         ('bin/BadCertServer.exe', ('bin', 'bin')),
         ('bin/GenerateOCSPResponse.exe', ('bin', 'bin')),
         ('bin/OCSPStaplingServer.exe', ('bin', 'bin')),
+        ('bin/SymantecSanctionsServer.exe', ('bin', 'bin')),
         ('bin/certutil.exe', ('bin', 'bin')),
         ('bin/fileid.exe', ('bin', 'bin')),
+        ('bin/geckodriver.exe', ('bin', 'bin')),
         ('bin/pk12util.exe', ('bin', 'bin')),
+        ('bin/screenshot.exe', ('bin', 'bin')),
         ('bin/ssltunnel.exe', ('bin', 'bin')),
         ('bin/xpcshell.exe', ('bin', 'bin')),
         ('bin/plugins/gmp-*/*/*', ('bin/plugins', 'bin')),
@@ -464,9 +474,9 @@ class WinArtifactJob(ArtifactJob):
 # https://tools.taskcluster.net/index/artifacts/#gecko.v2.mozilla-central.latest/gecko.v2.mozilla-central.latest
 # The values correpsond to a pair of (<package regex>, <test archive regex>).
 JOB_DETAILS = {
-    'android-api-15-opt': (AndroidArtifactJob, (r'(public/build/fennec-(.*)\.android-arm.apk|public/build/target\.apk)',
+    'android-api-16-opt': (AndroidArtifactJob, (r'(public/build/fennec-(.*)\.android-arm.apk|public/build/target\.apk)',
                                                 r'public/build/fennec-(.*)\.common\.tests\.zip|public/build/target\.common\.tests\.zip')),
-    'android-api-15-debug': (AndroidArtifactJob, (r'public/build/target\.apk',
+    'android-api-16-debug': (AndroidArtifactJob, (r'public/build/target\.apk',
                                                   r'public/build/target\.common\.tests\.zip')),
     'android-x86-opt': (AndroidArtifactJob, (r'public/build/target\.apk',
                                              r'public/build/target\.common\.tests\.zip')),
@@ -478,18 +488,18 @@ JOB_DETAILS = {
                                        r'public/build/target\.common\.tests\.zip')),
     'linux64-debug': (LinuxArtifactJob, (r'public/build/target\.tar\.bz2',
                                          r'public/build/target\.common\.tests\.zip')),
-    'macosx64-opt': (MacArtifactJob, (r'public/build/firefox-(.*)\.mac\.dmg',
-                                      r'public/build/firefox-(.*)\.common\.tests\.zip')),
-    'macosx64-debug': (MacArtifactJob, (r'public/build/firefox-(.*)\.mac\.dmg',
-                                        r'public/build/firefox-(.*)\.common\.tests\.zip')),
-    'win32-opt': (WinArtifactJob, (r'public/build/firefox-(.*)\.win32.zip',
-                                   r'public/build/firefox-(.*)\.common\.tests\.zip')),
-    'win32-debug': (WinArtifactJob, (r'public/build/firefox-(.*)\.win32.zip',
-                                     r'public/build/firefox-(.*)\.common\.tests\.zip')),
-    'win64-opt': (WinArtifactJob, (r'public/build/firefox-(.*)\.win64.zip',
-                                   r'public/build/firefox-(.*)\.common\.tests\.zip')),
-    'win64-debug': (WinArtifactJob, (r'public/build/firefox-(.*)\.win64.zip',
-                                     r'public/build/firefox-(.*)\.common\.tests\.zip')),
+    'macosx64-opt': (MacArtifactJob, (r'public/build/firefox-(.*)\.mac\.dmg|public/build/target\.dmg',
+                                      r'public/build/firefox-(.*)\.common\.tests\.zip|public/build/target\.common\.tests\.zip')),
+    'macosx64-debug': (MacArtifactJob, (r'public/build/firefox-(.*)\.mac\.dmg|public/build/target\.dmg',
+                                        r'public/build/firefox-(.*)\.common\.tests\.zip|public/build/target\.common\.tests\.zip')),
+    'win32-opt': (WinArtifactJob, (r'public/build/firefox-(.*)\.win32\.zip|public/build/target\.zip',
+                                   r'public/build/firefox-(.*)\.common\.tests\.zip|public/build/target\.common\.tests\.zip')),
+    'win32-debug': (WinArtifactJob, (r'public/build/firefox-(.*)\.win32\.zip|public/build/target\.zip',
+                                     r'public/build/firefox-(.*)\.common\.tests\.zip|public/build/target\.common\.tests\.zip')),
+    'win64-opt': (WinArtifactJob, (r'public/build/firefox-(.*)\.win64\.zip|public/build/target\.zip',
+                                   r'public/build/firefox-(.*)\.common\.tests\.zip|public/build/target\.common\.tests\.zip')),
+    'win64-debug': (WinArtifactJob, (r'public/build/firefox-(.*)\.win64\.zip|public/build/target\.zip',
+                                     r'public/build/firefox-(.*)\.common\.tests\.zip|public/build/target\.common\.tests\.zip')),
 }
 
 
@@ -650,7 +660,7 @@ class TaskCache(CacheManager):
                  'Searching Taskcluster index with namespace: {namespace}')
         try:
             taskId = find_task_id(namespace)
-        except Exception:
+        except KeyError:
             # Not all revisions correspond to pushes that produce the job we
             # care about; and even those that do may not have completed yet.
             raise ValueError('Task for {namespace} does not exist (yet)!'.format(namespace=namespace))
@@ -736,7 +746,13 @@ class ArtifactPersistLimit(PersistLimit):
             if f.path in self._downloaded_now:
                 kept.append(f)
                 continue
-            fs.remove(f.path)
+            try:
+                fs.remove(f.path)
+            except WindowsError:
+                # For some reason, on automation, we can't remove those files.
+                # So for now, ignore the error.
+                kept.append(f)
+                continue
             self.log(logging.INFO, 'artifact',
                 {'filename': f.path},
                 'Purged artifact {filename}')
@@ -782,7 +798,9 @@ class ArtifactCache(object):
             # human readable unique name, but extracting build IDs is time consuming
             # (especially on Mac OS X, where we must mount a large DMG file).
             hash = hashlib.sha256(url).hexdigest()[:16]
-            fname = hash + '-' + os.path.basename(url)
+            # Strip query string and fragments.
+            basename = os.path.basename(urlparse.urlparse(url).path)
+            fname = hash + '-' + basename
 
         path = os.path.abspath(mozpath.join(self._cache_dir, fname))
         if self._skip_cache and os.path.exists(path):
@@ -885,7 +903,7 @@ class Artifacts(object):
         if self._substs.get('MOZ_BUILD_APP', '') == 'mobile/android':
             if self._substs['ANDROID_CPU_ARCH'] == 'x86':
                 return 'android-x86-opt'
-            return 'android-api-15' + target_suffix
+            return 'android-api-16' + target_suffix
 
         target_64bit = False
         if self._substs['target_cpu'] == 'x86_64':
@@ -968,12 +986,15 @@ class Artifacts(object):
         if self._git:
             return self._get_hg_revisions_from_git()
 
-        return subprocess.check_output([
+        # Mercurial updated the ordering of "last" in 4.3. We use revision
+        # numbers to order here to accommodate multiple versions of hg.
+        last_revs = subprocess.check_output([
             self._hg, 'log',
-            '--template', '{node}\n',
+            '--template', '{rev}:{node}\n',
             '-r', 'last(public() and ::., {num})'.format(
                 num=NUM_REVISIONS_TO_QUERY)
         ], cwd=self._topsrcdir).splitlines()
+        return [i.split(':')[-1] for i in sorted(last_revs, reverse=True)]
 
     def _find_pushheads(self):
         """Returns an iterator of recent pushhead revisions, starting with the

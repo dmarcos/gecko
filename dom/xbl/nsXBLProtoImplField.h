@@ -7,7 +7,7 @@
 #ifndef nsXBLProtoImplField_h__
 #define nsXBLProtoImplField_h__
 
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsString.h"
 #include "jsapi.h"
 #include "nsString.h"
@@ -28,7 +28,7 @@ public:
   void SetLineNumber(uint32_t aLineNumber) {
     mLineNumber = aLineNumber;
   }
-  
+
   nsXBLProtoImplField* GetNext() const { return mNext; }
   void SetNext(nsXBLProtoImplField* aNext) { mNext = aNext; }
 
@@ -45,7 +45,7 @@ public:
   const char16_t* GetName() const { return mName; }
 
   unsigned AccessorAttributes() const {
-    return JSPROP_SHARED | JSPROP_GETTER | JSPROP_SETTER |
+    return JSPROP_GETTER | JSPROP_SETTER |
            (mJSAttributes & (JSPROP_ENUMERATE | JSPROP_PERMANENT));
   }
 

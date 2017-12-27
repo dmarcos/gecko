@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=99: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -21,7 +21,7 @@ class InProcessCompositorSession final : public CompositorSession
 {
 public:
   static RefPtr<InProcessCompositorSession> Create(
-    nsIWidget* aWidget,
+    nsBaseWidget* baseWidget,
     LayerManager* aLayerManager,
     const uint64_t& aRootLayerTreeId,
     CSSToLayoutDeviceScale aScale,
@@ -32,18 +32,20 @@ public:
 
   CompositorBridgeParent* GetInProcessBridge() const override;
   void SetContentController(GeckoContentController* aController) override;
+  nsIWidget* GetWidget() const;
   RefPtr<IAPZCTreeManager> GetAPZCTreeManager() const override;
-  bool Reset(const nsTArray<LayersBackend>& aBackendHints,
-             uint64_t aSeqNo,
-             TextureFactoryIdentifier* aOutIdentifier) override;
   void Shutdown() override;
+
+  void NotifySessionLost();
 
 private:
   InProcessCompositorSession(widget::CompositorWidget* aWidget,
+                             nsBaseWidget* baseWidget,
                              CompositorBridgeChild* aChild,
                              CompositorBridgeParent* aParent);
 
 private:
+  nsBaseWidget* mWidget;
   RefPtr<CompositorBridgeParent> mCompositorBridgeParent;
   RefPtr<CompositorWidget> mCompositorWidget;
 };

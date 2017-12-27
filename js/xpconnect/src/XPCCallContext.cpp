@@ -15,7 +15,10 @@ using namespace mozilla;
 using namespace xpc;
 using namespace JS;
 
-#define IS_TEAROFF_CLASS(clazz) ((clazz) == &XPC_WN_Tearoff_JSClass)
+static inline bool IsTearoffClass(const js::Class* clazz)
+{
+    return clazz == &XPC_WN_Tearoff_JSClass;
+}
 
 XPCCallContext::XPCCallContext(JSContext* cx,
                                HandleObject obj    /* = nullptr               */,
@@ -64,7 +67,7 @@ XPCCallContext::XPCCallContext(JSContext* cx,
     const js::Class* clasp = js::GetObjectClass(unwrapped);
     if (IS_WN_CLASS(clasp)) {
         mWrapper = XPCWrappedNative::Get(unwrapped);
-    } else if (IS_TEAROFF_CLASS(clasp)) {
+    } else if (IsTearoffClass(clasp)) {
         mTearOff = (XPCWrappedNativeTearOff*)js::GetObjectPrivate(unwrapped);
         mWrapper = XPCWrappedNative::Get(
           &js::GetReservedSlot(unwrapped,
@@ -209,65 +212,4 @@ XPCCallContext::~XPCCallContext()
         DebugOnly<XPCCallContext*> old = mXPCJSContext->SetCallContext(mPrevCallContext);
         MOZ_ASSERT(old == this, "bad pop from per thread data");
     }
-}
-
-NS_IMETHODIMP
-XPCCallContext::GetCallee(nsISupports * *aCallee)
-{
-    nsCOMPtr<nsISupports> rval = mWrapper ? mWrapper->GetIdentityObject() : nullptr;
-    rval.forget(aCallee);
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-XPCCallContext::GetCalleeMethodIndex(uint16_t* aCalleeMethodIndex)
-{
-    *aCalleeMethodIndex = mMethodIndex;
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-XPCCallContext::GetCalleeInterface(nsIInterfaceInfo * *aCalleeInterface)
-{
-    nsCOMPtr<nsIInterfaceInfo> rval = mInterface->GetInterfaceInfo();
-    rval.forget(aCalleeInterface);
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-XPCCallContext::GetCalleeClassInfo(nsIClassInfo * *aCalleeClassInfo)
-{
-    nsCOMPtr<nsIClassInfo> rval = mWrapper ? mWrapper->GetClassInfo() : nullptr;
-    rval.forget(aCalleeClassInfo);
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-XPCCallContext::GetJSContext(JSContext * *aJSContext)
-{
-    JS_AbortIfWrongThread(mJSContext);
-    *aJSContext = mJSContext;
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-XPCCallContext::GetArgc(uint32_t* aArgc)
-{
-    *aArgc = (uint32_t) mArgc;
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-XPCCallContext::GetArgvPtr(Value** aArgvPtr)
-{
-    *aArgvPtr = mArgv;
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-XPCCallContext::GetPreviousCallContext(nsAXPCNativeCallContext** aResult)
-{
-  NS_ENSURE_ARG_POINTER(aResult);
-  *aResult = GetPrevCallContext();
-  return NS_OK;
 }

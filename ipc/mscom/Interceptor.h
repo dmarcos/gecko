@@ -20,6 +20,11 @@
 
 namespace mozilla {
 namespace mscom {
+namespace detail {
+
+class LiveSetAutoLock;
+
+} // namespace detail
 
 // {8831EB53-A937-42BC-9921-B3E1121FDF86}
 DEFINE_GUID(IID_IInterceptorSink,
@@ -67,7 +72,7 @@ class Interceptor final : public WeakReferenceSupport
 {
 public:
   static HRESULT Create(STAUniquePtr<IUnknown> aTarget, IInterceptorSink* aSink,
-                        REFIID aIid, void** aOutput);
+                        REFIID aInitialIid, void** aOutInterface);
 
   // IUnknown
   STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override;
@@ -106,22 +111,33 @@ private:
       , mInterceptor(aInterceptor)
       , mTargetInterface(aTargetInterface)
     {}
+
     IID               mIID;
     RefPtr<IUnknown>  mInterceptor;
     IUnknown*         mTargetInterface;
   };
 
 private:
-  Interceptor(STAUniquePtr<IUnknown> aTarget, IInterceptorSink* aSink);
+  explicit Interceptor(IInterceptorSink* aSink);
   ~Interceptor();
+  HRESULT GetInitialInterceptorForIID(detail::LiveSetAutoLock& aLiveSetLock,
+                                      REFIID aTargetIid,
+                                      STAUniquePtr<IUnknown> aTarget,
+                                      void** aOutInterface);
   MapEntry* Lookup(REFIID aIid);
-  HRESULT QueryInterfaceTarget(REFIID aIid, void** aOutput);
+  HRESULT QueryInterfaceTarget(REFIID aIid, void** aOutput,
+                               TimeDuration* aOutDuration = nullptr);
   HRESULT ThreadSafeQueryInterface(REFIID aIid,
                                    IUnknown** aOutInterface) override;
   HRESULT CreateInterceptor(REFIID aIid, IUnknown* aOuter, IUnknown** aOutput);
+  REFIID MarshalAs(REFIID aIid) const;
+  HRESULT PublishTarget(detail::LiveSetAutoLock& aLiveSetLock,
+                        RefPtr<IUnknown> aInterceptor,
+                        REFIID aTargetIid,
+                        STAUniquePtr<IUnknown> aTarget);
 
 private:
-  STAUniquePtr<IUnknown>    mTarget;
+  InterceptorTargetPtr<IUnknown>  mTarget;
   RefPtr<IInterceptorSink>  mEventSink;
   mozilla::Mutex            mMutex; // Guards mInterceptorMap
   // Using a nsTArray since the # of interfaces is not going to be very high
@@ -140,7 +156,7 @@ CreateInterceptor(STAUniquePtr<InterfaceT> aTargetInterface,
     return E_INVALIDARG;
   }
 
-  REFIID iidTarget = __uuidof(aTargetInterface);
+  REFIID iidTarget = __uuidof(InterfaceT);
 
   STAUniquePtr<IUnknown> targetUnknown(aTargetInterface.release());
   return Interceptor::Create(Move(targetUnknown), aEventSink, iidTarget,

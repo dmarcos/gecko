@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -28,7 +29,7 @@ nsPageContentFrame::Reflow(nsPresContext*           aPresContext,
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsPageContentFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
-  aStatus.Reset();  // initialize out parameter
+  MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
 
   if (GetPrevInFlow() && (GetStateBits() & NS_FRAME_FIRST_REFLOW)) {
     nsresult rv = aPresContext->PresShell()->FrameConstructor()
@@ -44,7 +45,7 @@ nsPageContentFrame::Reflow(nsPresContext*           aPresContext,
   nsSize  maxSize(aReflowInput.ComputedWidth(),
                   aReflowInput.ComputedHeight());
   SetSize(maxSize);
- 
+
   // A PageContentFrame must always have one child: the canvas frame.
   // Resize our frame allowing it only to be as big as we are
   // XXX Pay attention to the page's border and padding...
@@ -108,10 +109,13 @@ nsPageContentFrame::Reflow(nsPresContext*           aPresContext,
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowInput, aDesiredSize);
 }
 
-nsIAtom*
-nsPageContentFrame::GetType() const
+void
+nsPageContentFrame::AppendDirectlyOwnedAnonBoxes(
+  nsTArray<OwnedAnonBox>& aResult)
 {
-  return nsGkAtoms::pageContentFrame;
+  MOZ_ASSERT(mFrames.FirstChild(),
+             "pageContentFrame must have a canvasFrame child");
+  aResult.AppendElement(mFrames.FirstChild());
 }
 
 #ifdef DEBUG_FRAME_DUMP

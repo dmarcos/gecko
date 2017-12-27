@@ -19,7 +19,7 @@ MARKUPMAP(acronym,
 
 MARKUPMAP(article,
           New_HyperText,
-          roles::DOCUMENT,
+          roles::ARTICLE,
           Attr(xmlroles, article))
 
 MARKUPMAP(aside,
@@ -64,12 +64,12 @@ MARKUPMAP(form,
           roles::FORM)
 
 MARKUPMAP(footer,
-          New_HyperText,
-          roles::FOOTER)
+          New_HTMLHeaderOrFooter,
+          0)
 
 MARKUPMAP(header,
-          New_HyperText,
-          roles::HEADER)
+          New_HTMLHeaderOrFooter,
+          0)
 
 MARKUPMAP(h1,
           New_HyperText,
@@ -94,6 +94,10 @@ MARKUPMAP(h5,
 MARKUPMAP(h6,
           New_HyperText,
           roles::HEADING)
+
+MARKUPMAP(input,
+          New_HTMLInput,
+          0)
 
 MARKUPMAP(label,
           New_HTMLLabel,
@@ -314,8 +318,7 @@ MARKUPMAP(q,
 
 MARKUPMAP(section,
           New_HyperText,
-          roles::SECTION,
-          Attr(xmlroles, region))
+          roles::SECTION)
 
 MARKUPMAP(summary,
           New_HTMLSummary,

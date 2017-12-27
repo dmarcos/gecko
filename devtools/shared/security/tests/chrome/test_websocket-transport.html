@@ -14,7 +14,7 @@
 window.onload = function () {
   const {require} = Components.utils.import("resource://devtools/shared/Loader.jsm", {});
   const Services = require("Services");
-  const {DebuggerClient} = require("devtools/shared/client/main");
+  const {DebuggerClient} = require("devtools/shared/client/debugger-client");
   const {DebuggerServer} = require("devtools/server/main");
 
   Services.prefs.setBoolPref("devtools.debugger.remote-enabled", true);
@@ -26,10 +26,8 @@ window.onload = function () {
   });
 
   add_task(function* () {
-    if (!DebuggerServer.initialized) {
-      DebuggerServer.init();
-      DebuggerServer.addBrowserActors();
-    }
+    DebuggerServer.init();
+    DebuggerServer.registerAllActors();
 
     is(DebuggerServer.listeningSockets, 0, "0 listening sockets");
 

@@ -1,6 +1,7 @@
 /* vim: set ts=2 et sw=2 tw=80: */
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
+/* eslint-disable mozilla/no-arbitrary-setTimeout */
 
 "use strict";
 
@@ -72,19 +73,20 @@ add_task(function* () {
 
   color = yield getComputedStyleProperty({selector: "div", name: "color"});
   is(color, "rgb(0, 0, 255)", "div is blue after saving file");
+
+  // Ensure that the editor didn't revert.  Bug 1346662.
+  is(editor.sourceEditor.getText(), CSS_TEXT, "edits remain applied");
 });
 
 function editSCSS(editor) {
-  let deferred = defer();
+  return new Promise(resolve => {
+    editor.sourceEditor.setText(CSS_TEXT);
 
-  editor.sourceEditor.setText(CSS_TEXT);
-
-  editor.saveToFile(null, function (file) {
-    ok(file, "Scss file should be saved");
-    deferred.resolve();
+    editor.saveToFile(null, function (file) {
+      ok(file, "Scss file should be saved");
+      resolve();
+    });
   });
-
-  return deferred.promise;
 }
 
 function editCSSFile(CSSFile) {
@@ -92,14 +94,12 @@ function editCSSFile(CSSFile) {
 }
 
 function pauseForTimeChange() {
-  let deferred = defer();
-
-  // We have to wait for the system time to turn over > 1000 ms so that
-  // our file's last change time will show a change. This reflects what
-  // would happen in real life with a user manually saving the file.
-  setTimeout(deferred.resolve, 2000);
-
-  return deferred.promise;
+  return new Promise(resolve => {
+    // We have to wait for the system time to turn over > 1000 ms so that
+    // our file's last change time will show a change. This reflects what
+    // would happen in real life with a user manually saving the file.
+    setTimeout(resolve, 2000);
+  });
 }
 
 /* Helpers */
@@ -140,23 +140,21 @@ function read(srcChromeURL) {
 }
 
 function write(data, file) {
-  let deferred = defer();
+  return new Promise(resolve => {
+    let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"]
+      .createInstance(Ci.nsIScriptableUnicodeConverter);
 
-  let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"]
-    .createInstance(Ci.nsIScriptableUnicodeConverter);
+    converter.charset = "UTF-8";
 
-  converter.charset = "UTF-8";
+    let istream = converter.convertToInputStream(data);
+    let ostream = FileUtils.openSafeFileOutputStream(file);
 
-  let istream = converter.convertToInputStream(data);
-  let ostream = FileUtils.openSafeFileOutputStream(file);
-
-  NetUtil.asyncCopy(istream, ostream, function (status) {
-    if (!Components.isSuccessCode(status)) {
-      info("Coudln't write to " + file.path);
-      return;
-    }
-    deferred.resolve(file);
+    NetUtil.asyncCopy(istream, ostream, function (status) {
+      if (!Components.isSuccessCode(status)) {
+        info("Coudln't write to " + file.path);
+        return;
+      }
+      resolve(file);
+    });
   });
-
-  return deferred.promise;
 }

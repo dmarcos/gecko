@@ -10,7 +10,7 @@
 #include <stdint.h>
 #include <windows.h>
 
-#include "base/child_privileges.h"
+#include "nsXULAppAPI.h"
 
 namespace sandbox {
   class BrokerServices;
@@ -26,8 +26,15 @@ public:
 
   static void Initialize(sandbox::BrokerServices* aBrokerServices);
 
+  /**
+   * Do initialization that depends on parts of the Gecko machinery having been
+   * created first.
+   */
+  static void GeckoDependentInitialize();
+
   bool LaunchApp(const wchar_t *aPath,
                  const wchar_t *aArguments,
+                 GeckoProcessType aProcessType,
                  const bool aEnableLogging,
                  void **aProcessHandle);
   virtual ~SandboxBroker();
@@ -35,9 +42,15 @@ public:
   // Security levels for different types of processes
 #if defined(MOZ_CONTENT_SANDBOX)
   void SetSecurityLevelForContentProcess(int32_t aSandboxLevel,
-                                         base::ChildPrivileges aPrivs);
+                                         bool aIsFileProcess);
 #endif
+
+  void SetSecurityLevelForGPUProcess(int32_t aSandboxLevel);
+
   bool SetSecurityLevelForPluginProcess(int32_t aSandboxLevel);
+#ifdef MOZ_ENABLE_SKIA_PDF
+  bool SetSecurityLevelForPDFiumProcess();
+#endif
   enum SandboxLevel {
     LockDown,
     Restricted
@@ -46,8 +59,6 @@ public:
 
   // File system permissions
   bool AllowReadFile(wchar_t const *file);
-  bool AllowReadWriteFile(wchar_t const *file);
-  bool AllowDirectory(wchar_t const *dir);
 
   // Exposes AddTargetPeer from broker services, so that none sandboxed
   // processes can be added as handle duplication targets.
@@ -58,6 +69,7 @@ public:
 
 private:
   static sandbox::BrokerServices *sBrokerService;
+  static bool sRunningFromNetworkDrive;
   sandbox::TargetPolicy *mPolicy;
 };
 

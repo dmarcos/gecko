@@ -9,11 +9,13 @@
 #include "base/message_loop.h"
 #include "base/task.h"
 #include "mozilla/Hal.h"
+#include "nsExceptionHandler.h"
 #include "nsIScreen.h"
 #include "nsIScreenManager.h"
 #include "nsWindow.h"
 #include "nsThreadUtils.h"
 #include "nsICommandLineRunner.h"
+#include "nsICrashReporter.h"
 #include "nsIObserverService.h"
 #include "nsIAppStartup.h"
 #include "nsIGeolocationProvider.h"
@@ -37,6 +39,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Hal.h"
 #include "mozilla/dom/TabChild.h"
+#include "mozilla/intl/OSPreferences.h"
 #include "prenv.h"
 
 #include "AndroidBridge.h"
@@ -57,11 +60,6 @@
 #include "mozilla/Logging.h"
 #endif
 
-#ifdef MOZ_CRASHREPORTER
-#include "nsICrashReporter.h"
-#include "nsExceptionHandler.h"
-#endif
-
 #include "AndroidAlerts.h"
 #include "AndroidUiThread.h"
 #include "ANRReporter.h"
@@ -69,6 +67,7 @@
 #include "GeckoNetworkManager.h"
 #include "GeckoProcessManager.h"
 #include "GeckoScreenOrientation.h"
+#include "GeckoVRManager.h"
 #include "PrefsHelper.h"
 #include "fennec/MemoryMonitor.h"
 #include "fennec/Telemetry.h"
@@ -148,6 +147,7 @@ public:
     {
         struct NoOpRunnable : Runnable
         {
+            NoOpRunnable() : Runnable("NoOpRunnable") {}
             NS_IMETHOD Run() override { return NS_OK; }
         };
 
@@ -193,9 +193,10 @@ public:
         // We really want to send a notification like profile-before-change,
         // but profile-before-change ends up shutting some things down instead
         // of flushing data
-        nsIPrefService* prefs = Preferences::GetService();
+        Preferences* prefs = static_cast<Preferences *>(Preferences::GetService());
         if (prefs) {
-            prefs->SavePrefFile(nullptr);
+            // Force a main thread blocking save
+            prefs->SavePrefFileBlocking();
         }
     }
 
@@ -239,11 +240,18 @@ public:
 
     static int64_t RunUiThreadCallback()
     {
-        if (!AndroidBridge::Bridge()) {
-            return -1;
+        return RunAndroidUiTasks();
+    }
+
+    static void ForceQuit()
+    {
+        nsCOMPtr<nsIAppStartup> appStartup =
+            do_GetService(NS_APPSTARTUP_CONTRACTID);
+
+        if (appStartup) {
+            appStartup->Quit(nsIAppStartup::eForceQuit);
         }
 
-        return AndroidBridge::Bridge()->RunDelayedUiThreadTasks();
     }
 };
 
@@ -364,16 +372,23 @@ public:
             return;
         }
 
-        AndroidAlerts::NotifyListener(
+        widget::AndroidAlerts::NotifyListener(
                 aName->ToString(), aTopic->ToCString().get(),
                 aCookie->ToString().get());
     }
-
-    static void OnFullScreenPluginHidden(jni::Object::Param aView)
-    {
-        nsPluginInstanceOwner::ExitFullScreen(aView.Get());
-    }
 };
+
+
+class BrowserLocaleManagerSupport final
+  : public java::BrowserLocaleManager::Natives<BrowserLocaleManagerSupport>
+{
+public:
+  static void RefreshLocales()
+  {
+    intl::OSPreferences::GetInstance()->Refresh();
+  }
+};
+
 
 nsAppShell::nsAppShell()
     : mSyncRunFinished(*(sAppShellLock = new Mutex("nsAppShell")),
@@ -403,9 +418,11 @@ nsAppShell::nsAppShell()
         mozilla::GeckoProcessManager::Init();
         mozilla::GeckoScreenOrientation::Init();
         mozilla::PrefsHelper::Init();
+        mozilla::GeckoVRManager::Init();
         nsWindow::InitNatives();
 
         if (jni::IsFennec()) {
+            BrowserLocaleManagerSupport::Init();
             mozilla::ANRReporter::Init();
             mozilla::MemoryMonitor::Init();
             mozilla::widget::Telemetry::Init();
@@ -511,6 +528,7 @@ nsAppShell::Init()
         obsServ->AddObserver(this, "browser-delayed-startup-finished", false);
         obsServ->AddObserver(this, "profile-after-change", false);
         obsServ->AddObserver(this, "tab-child-created", false);
+        obsServ->AddObserver(this, "quit-application", false);
         obsServ->AddObserver(this, "quit-application-granted", false);
         obsServ->AddObserver(this, "xpcom-shutdown", false);
 
@@ -585,7 +603,7 @@ nsAppShell::Observe(nsISupports* aSubject,
         nsCOMPtr<nsIDocument> doc = do_QueryInterface(aSubject);
         MOZ_ASSERT(doc);
         nsCOMPtr<nsIWidget> widget =
-            WidgetUtils::DOMWindowToWidget(doc->GetWindow());
+            widget::WidgetUtils::DOMWindowToWidget(doc->GetWindow());
 
         // `widget` may be one of several different types in the parent
         // process, including the Android nsWindow, PuppetWidget, etc. To
@@ -606,11 +624,19 @@ nsAppShell::Observe(nsISupports* aSubject,
             const auto window = static_cast<nsWindow*>(widget.get());
             window->EnableEventDispatcher();
         }
+    } else if (!strcmp(aTopic, "quit-application")) {
+        if (jni::IsAvailable()) {
+            const bool restarting =
+                    aData && NS_LITERAL_STRING("restart").Equals(aData);
+            java::GeckoThread::SetState(
+                    restarting ?
+                    java::GeckoThread::State::RESTARTING() :
+                    java::GeckoThread::State::EXITING());
+        }
+        removeObserver = true;
+
     } else if (!strcmp(aTopic, "quit-application-granted")) {
         if (jni::IsAvailable()) {
-            java::GeckoThread::SetState(
-                    java::GeckoThread::State::EXITING());
-
             // We are told explicitly to quit, perhaps due to
             // nsIAppStartup::Quit being called. We should release our hold on
             // nsIAppStartup and let it continue to quit.
@@ -652,8 +678,8 @@ nsAppShell::Observe(nsISupports* aSubject,
         auto editableChild = java::GeckoEditableChild::New(editableParent);
         NS_ENSURE_TRUE(widget && editableChild, NS_OK);
 
-        RefPtr<GeckoEditableSupport> editableSupport =
-                new GeckoEditableSupport(editableChild);
+        RefPtr<widget::GeckoEditableSupport> editableSupport =
+                new widget::GeckoEditableSupport(editableChild);
 
         // Tell PuppetWidget to use our listener for IME operations.
         widget->SetNativeTextEventDispatcherListener(editableSupport);
@@ -674,8 +700,7 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
 {
     EVLOG("nsAppShell::ProcessNextNativeEvent %d", mayWait);
 
-    PROFILER_LABEL("nsAppShell", "ProcessNextNativeEvent",
-        js::ProfileEntry::Category::EVENTS);
+    AUTO_PROFILER_LABEL("nsAppShell::ProcessNextNativeEvent", EVENTS);
 
     mozilla::UniquePtr<Event> curEvent;
 
@@ -693,8 +718,8 @@ nsAppShell::ProcessNextNativeEvent(bool mayWait)
                 return true;
             }
 
-            PROFILER_LABEL("nsAppShell", "ProcessNextNativeEvent::Wait",
-                js::ProfileEntry::Category::EVENTS);
+            AUTO_PROFILER_LABEL("nsAppShell::ProcessNextNativeEvent:Wait",
+                                EVENTS);
             mozilla::HangMonitor::Suspend();
 
             curEvent = mEventQueue.Pop(/* mayWait */ true);

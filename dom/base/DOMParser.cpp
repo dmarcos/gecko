@@ -67,8 +67,8 @@ DOMParser::ParseFromString(const nsAString& aStr, SupportedType aType,
   return document.forget();
 }
 
-NS_IMETHODIMP 
-DOMParser::ParseFromString(const char16_t *str, 
+NS_IMETHODIMP
+DOMParser::ParseFromString(const char16_t *str,
                            const char *contentType,
                            nsIDOMDocument **aResult)
 {
@@ -157,7 +157,7 @@ DOMParser::ParseFromBuffer(const Uint8Array& aBuf, uint32_t aBufLen,
   return document.forget();
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 DOMParser::ParseFromBuffer(const uint8_t *buf,
                            uint32_t bufLen,
                            const char *contentType,
@@ -195,36 +195,37 @@ DOMParser::ParseFromStream(nsIInputStream* aStream,
   return document.forget();
 }
 
-NS_IMETHODIMP 
-DOMParser::ParseFromStream(nsIInputStream *stream, 
-                           const char *charset, 
-                           int32_t contentLength,
-                           const char *contentType,
-                           nsIDOMDocument **aResult)
+NS_IMETHODIMP
+DOMParser::ParseFromStream(nsIInputStream* aStream,
+                           const char* aCharset,
+                           int32_t aContentLength,
+                           const char* aContentType,
+                           nsIDOMDocument** aResult)
 {
-  NS_ENSURE_ARG(stream);
-  NS_ENSURE_ARG(contentType);
+  NS_ENSURE_ARG(aStream);
+  NS_ENSURE_ARG(aContentType);
   NS_ENSURE_ARG_POINTER(aResult);
   *aResult = nullptr;
 
-  bool svg = nsCRT::strcmp(contentType, "image/svg+xml") == 0;
+  bool svg = nsCRT::strcmp(aContentType, "image/svg+xml") == 0;
 
   // For now, we can only create XML documents.
   //XXXsmaug Should we create an HTMLDocument (in XHTML mode)
   //         for "application/xhtml+xml"?
-  if ((nsCRT::strcmp(contentType, "text/xml") != 0) &&
-      (nsCRT::strcmp(contentType, "application/xml") != 0) &&
-      (nsCRT::strcmp(contentType, "application/xhtml+xml") != 0) &&
+  if ((nsCRT::strcmp(aContentType, "text/xml") != 0) &&
+      (nsCRT::strcmp(aContentType, "application/xml") != 0) &&
+      (nsCRT::strcmp(aContentType, "application/xhtml+xml") != 0) &&
       !svg)
     return NS_ERROR_NOT_IMPLEMENTED;
 
   nsresult rv;
 
   // Put the nsCOMPtr out here so we hold a ref to the stream as needed
-  nsCOMPtr<nsIInputStream> bufferedStream;
+  nsCOMPtr<nsIInputStream> stream = aStream;
   if (!NS_InputStreamIsBuffered(stream)) {
-    rv = NS_NewBufferedInputStream(getter_AddRefs(bufferedStream), stream,
-                                   4096);
+    nsCOMPtr<nsIInputStream> bufferedStream;
+    rv = NS_NewBufferedInputStream(getter_AddRefs(bufferedStream),
+                                   stream.forget(), 4096);
     NS_ENSURE_SUCCESS(rv, rv);
 
     stream = bufferedStream;
@@ -235,7 +236,7 @@ DOMParser::ParseFromStream(nsIInputStream *stream,
                      getter_AddRefs(domDocument));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  // Create a fake channel 
+  // Create a fake channel
   nsCOMPtr<nsIChannel> parserChannel;
   NS_NewInputStreamChannel(getter_AddRefs(parserChannel),
                            mDocumentURI,
@@ -243,11 +244,11 @@ DOMParser::ParseFromStream(nsIInputStream *stream,
                            mPrincipal,
                            nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL,
                            nsIContentPolicy::TYPE_OTHER,
-                           nsDependentCString(contentType));
+                           nsDependentCString(aContentType));
   NS_ENSURE_STATE(parserChannel);
 
-  if (charset) {
-    parserChannel->SetContentCharset(nsDependentCString(charset));
+  if (aCharset) {
+    parserChannel->SetContentCharset(nsDependentCString(aCharset));
   }
 
   // Tell the document to start loading
@@ -265,8 +266,8 @@ DOMParser::ParseFromStream(nsIInputStream *stream,
     document->ForceEnableXULXBL();
   }
 
-  rv = document->StartDocumentLoad(kLoadAsData, parserChannel, 
-                                   nullptr, nullptr, 
+  rv = document->StartDocumentLoad(kLoadAsData, parserChannel,
+                                   nullptr, nullptr,
                                    getter_AddRefs(listener),
                                    false);
 
@@ -284,7 +285,7 @@ DOMParser::ParseFromStream(nsIInputStream *stream,
 
   if (NS_SUCCEEDED(rv) && NS_SUCCEEDED(status)) {
     rv = listener->OnDataAvailable(parserChannel, nullptr, stream, 0,
-                                   contentLength);
+                                   aContentLength);
     if (NS_FAILED(rv))
       parserChannel->Cancel(rv);
     parserChannel->GetStatus(&status);
@@ -311,7 +312,7 @@ DOMParser::Init(nsIPrincipal* principal, nsIURI* documentURI,
   mAttemptedInit = true;
   NS_ENSURE_ARG(principal || documentURI);
   mDocumentURI = documentURI;
-  
+
   if (!mDocumentURI) {
     principal->GetURI(getter_AddRefs(mDocumentURI));
     // If we have the system principal, then we'll just use the null principals
@@ -356,8 +357,8 @@ DOMParser::Init(nsIPrincipal* principal, nsIURI* documentURI,
 
   mBaseURI = baseURI;
 
-  NS_POSTCONDITION(mPrincipal, "Must have principal");
-  NS_POSTCONDITION(mDocumentURI, "Must have document URI");
+  MOZ_ASSERT(mPrincipal, "Must have principal");
+  MOZ_ASSERT(mDocumentURI, "Must have document URI");
   return NS_OK;
 }
 
@@ -461,6 +462,13 @@ DOMParser::SetUpDocument(DocumentFlavor aFlavor, nsIDOMDocument** aResult)
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
+  // Try to inherit a style backend.
+  auto styleBackend = StyleBackendType::None;
+  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(scriptHandlingObject);
+  if (window && window->GetExtantDoc()) {
+    styleBackend = window->GetExtantDoc()->GetStyleBackendType();
+  }
+
   NS_ASSERTION(mPrincipal, "Must have principal by now");
   NS_ASSERTION(mDocumentURI, "Must have document URI by now");
 
@@ -469,5 +477,6 @@ DOMParser::SetUpDocument(DocumentFlavor aFlavor, nsIDOMDocument** aResult)
                            mPrincipal,
                            true,
                            scriptHandlingObject,
-                           aFlavor);
+                           aFlavor,
+                           styleBackend);
 }

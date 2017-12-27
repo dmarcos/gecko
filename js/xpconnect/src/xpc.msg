@@ -191,7 +191,7 @@ XPC_MSG_DEF(NS_ERROR_STORAGE_CONSTRAINT             , "SQLite database operation
 /* plugin related codes (from nsPluginError.h) */
 XPC_MSG_DEF(NS_ERROR_PLUGIN_TIME_RANGE_NOT_SUPPORTED, "Clearing site data by time range not supported by plugin")
 
-/* character converter related codes (from nsIUnicodeDecoder.h) */
+/* character converter related codes */
 XPC_MSG_DEF(NS_ERROR_ILLEGAL_INPUT                  , "The input characters have illegal sequences")
 
 /* Codes related to signd jars */
@@ -203,6 +203,7 @@ XPC_MSG_DEF(NS_ERROR_SIGNED_JAR_WRONG_SIGNATURE     , "The JAR's signature is wr
 XPC_MSG_DEF(NS_ERROR_SIGNED_JAR_ENTRY_TOO_LARGE     , "An entry in the JAR is too large.")
 XPC_MSG_DEF(NS_ERROR_SIGNED_JAR_ENTRY_INVALID       , "An entry in the JAR is invalid.")
 XPC_MSG_DEF(NS_ERROR_SIGNED_JAR_MANIFEST_INVALID    , "The JAR's manifest or signature file is invalid.")
+XPC_MSG_DEF(NS_ERROR_CMS_VERIFY_NOT_SIGNED          , "The PKCS#7 information is not signed.")
 
 /* Codes related to signed manifests */
 XPC_MSG_DEF(NS_ERROR_SIGNED_APP_MANIFEST_INVALID   , "The signed app manifest or signature file is invalid.")
@@ -233,3 +234,7 @@ XPC_MSG_DEF(NS_ERROR_PHISHING_URI                     , "The URI is phishing")
 XPC_MSG_DEF(NS_ERROR_TRACKING_URI                     , "The URI is tracking")
 XPC_MSG_DEF(NS_ERROR_UNWANTED_URI                     , "The URI is unwanted")
 XPC_MSG_DEF(NS_ERROR_BLOCKED_URI                      , "The URI is blocked")
+XPC_MSG_DEF(NS_ERROR_HARMFUL_URI                      , "The URI is harmful")
+
+/* nsISocketTransport status codes */
+XPC_MSG_DEF(NS_NET_STATUS_WAITING_FOR                 , "Waiting for response")

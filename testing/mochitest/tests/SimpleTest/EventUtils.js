@@ -7,16 +7,19 @@
  *  sendString
  *  sendKey
  *  sendWheelAndPaint
+ *  sendWheelAndPaintNoFlush
  *  synthesizeMouse
  *  synthesizeMouseAtCenter
- *  synthesizePointer
  *  synthesizeWheel
  *  synthesizeWheelAtPoint
  *  synthesizeKey
  *  synthesizeNativeKey
  *  synthesizeMouseExpectEvent
  *  synthesizeKeyExpectEvent
- *  synthesizeNativeClick
+ *  synthesizeNativeOSXClick
+ *  synthesizeDragOver
+ *  synthesizeDropAfterDragOver
+ *  synthesizeDrop
  *
  *  When adding methods to this file, please add a performance test for it.
  */
@@ -75,6 +78,16 @@ function _EU_isWin(aWindow = window) {
     } catch (ex) {}
   }
   return navigator.platform.indexOf("Win") > -1;
+}
+
+function _EU_maybeWrap(o) {
+  var c = Object.getOwnPropertyDescriptor(window, 'Components');
+  return c.value && !c.writable ? o : SpecialPowers.wrap(o);
+}
+
+function _EU_maybeUnwrap(o) {
+  var c = Object.getOwnPropertyDescriptor(window, 'Components');
+  return c.value && !c.writable ? o : SpecialPowers.unwrap(o);
 }
 
 /**
@@ -142,6 +155,11 @@ function sendMouseEvent(aEvent, aTarget, aWindow) {
   return SpecialPowers.dispatchEvent(aWindow, aTarget, event);
 }
 
+function isHidden(aElement) {
+  var box = aElement.getBoundingClientRect();
+  return box.width == 0 && box.height == 0;
+}
+
 /**
  * Send a drag event to the node aTarget (aTarget can be an id, or an
  * actual node) . The "event" passed in to aEvent is just a JavaScript
@@ -155,6 +173,18 @@ function sendDragEvent(aEvent, aTarget, aWindow = window) {
 
   if (typeof aTarget == "string") {
     aTarget = aWindow.document.getElementById(aTarget);
+  }
+
+  /*
+   * Drag event cannot be performed if the element is hidden, except 'dragend'
+   * event where the element can becomes hidden after start dragging.
+   */
+  if (aEvent.type != 'dragend' && isHidden(aTarget)) {
+    var targetName = aTarget.nodeName;
+    if ("id" in aTarget && aTarget.id) {
+      targetName += "#" + aTarget.id;
+    }
+    throw new Error(`${aEvent.type} event target ${targetName} is hidden`);
   }
 
   var event = aWindow.document.createEvent('DragEvent');
@@ -332,12 +362,6 @@ function synthesizeTouch(aTarget, aOffsetX, aOffsetY, aEvent, aWindow)
   synthesizeTouchAtPoint(rect.left + aOffsetX, rect.top + aOffsetY,
        aEvent, aWindow);
 }
-function synthesizePointer(aTarget, aOffsetX, aOffsetY, aEvent, aWindow)
-{
-  var rect = aTarget.getBoundingClientRect();
-  return synthesizePointerAtPoint(rect.left + aOffsetX, rect.top + aOffsetY,
-       aEvent, aWindow);
-}
 
 /*
  * Synthesize a mouse event at a particular point in aWindow.
@@ -408,7 +432,7 @@ function synthesizeTouchAtPoint(left, top, aEvent, aWindow = window)
   if (utils) {
     var id = aEvent.id || utils.DEFAULT_TOUCH_POINTER_ID;
     var rx = aEvent.rx || 1;
-    var ry = aEvent.rx || 1;
+    var ry = aEvent.ry || 1;
     var angle = aEvent.angle || 0;
     var force = aEvent.force || 1;
     var modifiers = _parseModifiers(aEvent, aWindow);
@@ -421,35 +445,6 @@ function synthesizeTouchAtPoint(left, top, aEvent, aWindow = window)
       utils.sendTouchEvent("touchend", [id], [left], [top], [rx], [ry], [angle], [force], 1, modifiers);
     }
   }
-}
-
-function synthesizePointerAtPoint(left, top, aEvent, aWindow = window)
-{
-  var utils = _getDOMWindowUtils(aWindow);
-  var defaultPrevented = false;
-
-  if (utils) {
-    var button = computeButton(aEvent);
-    var clickCount = aEvent.clickCount || 1;
-    var modifiers = _parseModifiers(aEvent, aWindow);
-    var pressure = ("pressure" in aEvent) ? aEvent.pressure : 0;
-    var inputSource = ("inputSource" in aEvent) ? aEvent.inputSource : 0;
-    var synthesized = ("isSynthesized" in aEvent) ? aEvent.isSynthesized : true;
-    var isPrimary = ("isPrimary" in aEvent) ? aEvent.isPrimary : false;
-
-    if (("type" in aEvent) && aEvent.type) {
-      defaultPrevented = utils.sendPointerEventToWindow(aEvent.type, left, top, button,
-                                                        clickCount, modifiers, false,
-                                                        pressure, inputSource,
-                                                        synthesized, 0, 0, 0, 0, isPrimary);
-    }
-    else {
-      utils.sendPointerEventToWindow("pointerdown", left, top, button, clickCount, modifiers, false, pressure, inputSource);
-      utils.sendPointerEventToWindow("pointerup", left, top, button, clickCount, modifiers, false, pressure, inputSource);
-    }
-  }
-
-  return defaultPrevented;
 }
 
 // Call synthesizeMouse with coordinates at the center of aTarget.
@@ -571,19 +566,15 @@ function synthesizeWheel(aTarget, aOffsetX, aOffsetY, aEvent, aWindow)
                          aEvent, aWindow);
 }
 
-/**
- * This is a wrapper around synthesizeWheel that waits for the wheel event
- * to be dispatched and for the subsequent layout/paints to be flushed.
- *
- * This requires including paint_listener.js. Tests must call
- * DOMWindowUtils.restoreNormalRefresh() before finishing, if they use this
- * function.
- *
- * If no callback is provided, the caller is assumed to have its own method of
- * determining scroll completion and the refresh driver is not automatically
- * restored.
- */
-function sendWheelAndPaint(aTarget, aOffsetX, aOffsetY, aEvent, aCallback, aWindow = window) {
+const _FlushModes = {
+  FLUSH: 0,
+  NOFLUSH: 1
+};
+
+function _sendWheelAndPaint(aTarget, aOffsetX, aOffsetY,
+                            aEvent, aCallback,
+                            aFlushMode = _FlushModes.FLUSH,
+                            aWindow = window) {
   var utils = _getDOMWindowUtils(aWindow);
   if (!utils)
     return;
@@ -594,7 +585,10 @@ function sendWheelAndPaint(aTarget, aOffsetX, aOffsetY, aEvent, aCallback, aWind
     // by APZ (or its scroll offset could be overridden). To avoid problems we
     // just wait for the paint to complete.
     aWindow.waitForAllPaintsFlushed(function() {
-      sendWheelAndPaint(aTarget, aOffsetX, aOffsetY, aEvent, aCallback, aWindow);
+      _sendWheelAndPaint(aTarget, aOffsetX, aOffsetY,
+                         aEvent, aCallback,
+                         aFlushMode,
+                         aWindow);
     });
     return;
   }
@@ -630,7 +624,71 @@ function sendWheelAndPaint(aTarget, aOffsetX, aOffsetY, aEvent, aCallback, aWind
   // Listen for the system wheel event, because it happens after all of
   // the other wheel events, including legacy events.
   SpecialPowers.addSystemEventListener(aWindow, "wheel", onwheel);
-  synthesizeWheel(aTarget, aOffsetX, aOffsetY, aEvent, aWindow);
+  if (aFlushMode === _FlushModes.FLUSH) {
+    synthesizeWheel(aTarget, aOffsetX, aOffsetY, aEvent, aWindow);
+  } else {
+    synthesizeWheelAtPoint(aOffsetX, aOffsetY, aEvent, aWindow);
+  }
+}
+
+/**
+ * This is a wrapper around synthesizeWheel that waits for the wheel event
+ * to be dispatched and for the subsequent layout/paints to be flushed.
+ *
+ * This requires including paint_listener.js. Tests must call
+ * DOMWindowUtils.restoreNormalRefresh() before finishing, if they use this
+ * function.
+ *
+ * If no callback is provided, the caller is assumed to have its own method of
+ * determining scroll completion and the refresh driver is not automatically
+ * restored.
+ */
+function sendWheelAndPaint(aTarget, aOffsetX, aOffsetY,
+                           aEvent, aCallback,
+                           aWindow = window) {
+  _sendWheelAndPaint(aTarget, aOffsetX, aOffsetY,
+                     aEvent, aCallback,
+                     _FlushModes.FLUSH,
+                     aWindow);
+}
+
+/**
+ * Similar to sendWheelAndPaint but without flushing layout for obtaining
+ * |aTarget| position in |aWindow| before sending the wheel event.
+ * |aOffsetX| and |aOffsetY| should be offsets against aWindow.
+ */
+function sendWheelAndPaintNoFlush(aTarget, aOffsetX, aOffsetY,
+                                  aEvent, aCallback,
+                                  aWindow = window) {
+  _sendWheelAndPaint(aTarget, aOffsetX, aOffsetY,
+                     aEvent, aCallback,
+                     _FlushModes.NOFLUSH,
+                     aWindow);
+}
+
+function synthesizeNativeTapAtCenter(aTarget, aLongTap = false, aCallback = null, aWindow = window) {
+  let rect = aTarget.getBoundingClientRect();
+  return synthesizeNativeTap(aTarget, rect.width / 2, rect.height / 2, aLongTap, aCallback, aWindow);
+}
+
+function synthesizeNativeTap(aTarget, aOffsetX, aOffsetY, aLongTap = false, aCallback = null, aWindow = window) {
+  let utils = _getDOMWindowUtils(aWindow);
+  if (!utils)
+    return;
+
+  let scale = utils.screenPixelsPerCSSPixel;
+  let rect = aTarget.getBoundingClientRect();
+  let x = (aWindow.mozInnerScreenX + rect.left + aOffsetX) * scale;
+  let y = (aWindow.mozInnerScreenY + rect.top + aOffsetY) * scale;
+
+  let observer = {
+    observe: (subject, topic, data) => {
+      if (aCallback && topic == "mouseevent") {
+        aCallback(data);
+      }
+    }
+  };
+  utils.sendNativeTouchTap(x, y, aLongTap, observer);
 }
 
 function synthesizeNativeMouseMove(aTarget, aOffsetX, aOffsetY, aCallback, aWindow = window) {
@@ -651,6 +709,44 @@ function synthesizeNativeMouseMove(aTarget, aOffsetX, aOffsetY, aCallback, aWind
     }
   };
   utils.sendNativeMouseMove(x * scale, y * scale, null, observer);
+}
+
+/**
+ * This is a wrapper around synthesizeNativeMouseMove that waits for the mouse
+ * event to be dispatched to the target content.
+ *
+ * This API is supposed to be used in those test cases that synthesize some
+ * input events to chrome process and have some checks in content.
+ */
+function synthesizeAndWaitNativeMouseMove(aTarget, aOffsetX, aOffsetY,
+                                          aCallback, aWindow = window) {
+  let browser = gBrowser.selectedTab.linkedBrowser;
+  let mm = browser.messageManager;
+  let ContentTask =
+    _EU_Cu.import("resource://testing-common/ContentTask.jsm", null).ContentTask;
+
+  let eventRegisteredPromise = new Promise(resolve => {
+    mm.addMessageListener("Test:MouseMoveRegistered", function processed(message) {
+      mm.removeMessageListener("Test:MouseMoveRegistered", processed);
+      resolve();
+    });
+  });
+  let eventReceivedPromise = ContentTask.spawn(browser, [aOffsetX, aOffsetY],
+                                               ([clientX, clientY]) => {
+    return new Promise(resolve => {
+      addEventListener("mousemove", function onMouseMoveEvent(e) {
+        if (e.clientX == clientX && e.clientY == clientY) {
+          removeEventListener("mousemove", onMouseMoveEvent);
+          resolve();
+        }
+      });
+      sendAsyncMessage("Test:MouseMoveRegistered");
+    });
+  });
+  eventRegisteredPromise.then(() => {
+    synthesizeNativeMouseMove(aTarget, aOffsetX, aOffsetY, null, aWindow);
+  });
+  return eventReceivedPromise;
 }
 
 function _computeKeyCodeFromChar(aChar)
@@ -768,10 +864,11 @@ function _computeKeyCodeFromChar(aChar)
  *             .keyCode value is initialized with this value.
  *
  * aWindow is optional, and defaults to the current window object.
+ * aCallback is optional, use the callback for receiving notifications of TIP.
  */
-function synthesizeKey(aKey, aEvent, aWindow = window)
+function synthesizeKey(aKey, aEvent, aWindow = window, aCallback)
 {
-  var TIP = _getTIP(aWindow);
+  var TIP = _getTIP(aWindow, aCallback);
   if (!TIP) {
     return;
   }
@@ -801,6 +898,51 @@ function synthesizeKey(aKey, aEvent, aWindow = window)
   } finally {
     _emulateToInactivateModifiers(TIP, modifiers, aWindow);
   }
+}
+
+/**
+ * This is a wrapper around synthesizeKey that waits for the key event to be
+ * dispatched to the target content. It returns a promise which is resolved
+ * when the content receives the key event.
+ *
+ * This API is supposed to be used in those test cases that synthesize some
+ * input events to chrome process and have some checks in content.
+ */
+function synthesizeAndWaitKey(aKey, aEvent, aWindow = window,
+                              checkBeforeSynthesize, checkAfterSynthesize)
+{
+  let browser = gBrowser.selectedTab.linkedBrowser;
+  let mm = browser.messageManager;
+  let keyCode = _createKeyboardEventDictionary(aKey, aEvent, aWindow).dictionary.keyCode;
+  let ContentTask = _EU_Cu.import("resource://testing-common/ContentTask.jsm", null).ContentTask;
+
+  let keyRegisteredPromise = new Promise(resolve => {
+    mm.addMessageListener("Test:KeyRegistered", function processed(message) {
+      mm.removeMessageListener("Test:KeyRegistered", processed);
+      resolve();
+    });
+  });
+  let keyReceivedPromise = ContentTask.spawn(browser, keyCode, (keyCode) => {
+    return new Promise(resolve => {
+      addEventListener("keyup", function onKeyEvent(e) {
+        if (e.keyCode == keyCode) {
+          removeEventListener("keyup", onKeyEvent);
+          resolve();
+        }
+      });
+      sendAsyncMessage("Test:KeyRegistered");
+    });
+  });
+  keyRegisteredPromise.then(() => {
+    if (checkBeforeSynthesize) {
+      checkBeforeSynthesize();
+    }
+    synthesizeKey(aKey, aEvent, aWindow);
+    if (checkAfterSynthesize) {
+      checkAfterSynthesize();
+    }
+  });
+  return keyReceivedPromise;
 }
 
 function _parseNativeModifiers(aModifiers, aWindow = window)
@@ -1978,10 +2120,21 @@ function createDragEventObject(aType, aDestElement, aDestWindow, aDataTransfer,
   if ("clientY" in aDragEvent && !("screenY" in aDragEvent)) {
     aDragEvent.screenY = aDestWindow.mozInnerScreenY + aDragEvent.clientY;
   }
-  return Object.assign({ type: aType,
-                         screenX: destScreenX, screenY: destScreenY,
-                         clientX: destClientX, clientY: destClientY,
-                         dataTransfer: aDataTransfer }, aDragEvent);
+
+  // Wrap only in plain mochitests
+  let dataTransfer = _EU_maybeUnwrap(_EU_maybeWrap(aDataTransfer).mozCloneForEvent(aType));
+
+  // Copy over the drop effect. This isn't copied over by Clone, as it uses more
+  // complex logic in the actual implementation (see
+  // nsContentUtils::SetDataTransferInEvent for actual impl).
+  dataTransfer.dropEffect = aDataTransfer.dropEffect;
+
+  return Object.assign({
+    type: aType,
+    screenX: destScreenX, screenY: destScreenY,
+    clientX: destClientX, clientY: destClientY,
+    dataTransfer: dataTransfer,
+  }, aDragEvent);
 }
 
 /**
@@ -2015,23 +2168,38 @@ function synthesizeDragOver(aSrcElement, aDestElement, aDragData, aDropEffect, a
     aDestWindow = aWindow;
   }
 
-  var dataTransfer;
-  var trapDrag = function(event) {
-    dataTransfer = event.dataTransfer;
+  const obs = _EU_Cc["@mozilla.org/observer-service;1"].getService(_EU_Ci.nsIObserverService);
+  const ds = _EU_Cc["@mozilla.org/widget/dragservice;1"].getService(_EU_Ci.nsIDragService);
+
+  // This method runs before other callbacks, and acts as a way to inject the
+  // initial drag data into the DataTransfer.
+  function fillDrag(event) {
+    ds.startDragSession();
+
     if (aDragData) {
       for (var i = 0; i < aDragData.length; i++) {
         var item = aDragData[i];
         for (var j = 0; j < item.length; j++) {
-          dataTransfer.mozSetDataAt(item[j].type, item[j].data, i);
+          event.dataTransfer.mozSetDataAt(item[j].type, item[j].data, i);
         }
       }
     }
-    dataTransfer.dropEffect = aDropEffect || "move";
+    event.dataTransfer.dropEffect = aDropEffect || "move";
     event.preventDefault();
-  };
+  }
+
+  function trapDrag(subject, topic) {
+    if (topic == "on-datatransfer-available") {
+      var sess = ds.getCurrentSession();
+      sess.dataTransfer = _EU_maybeUnwrap(_EU_maybeWrap(subject).mozCloneForEvent("drop"));
+      sess.dataTransfer.dropEffect = subject.dropEffect;
+      obs.removeObserver(trapDrag, "on-datatransfer-available");
+    }
+  }
 
   // need to use real mouse action
-  aWindow.addEventListener("dragstart", trapDrag, true);
+  aWindow.addEventListener("dragstart", fillDrag, { capture: true, once: true });
+  obs.addObserver(trapDrag, "on-datatransfer-available");
   synthesizeMouseAtCenter(aSrcElement, { type: "mousedown" }, aWindow);
 
   var rect = aSrcElement.getBoundingClientRect();
@@ -2039,14 +2207,12 @@ function synthesizeDragOver(aSrcElement, aDestElement, aDragData, aDropEffect, a
   var y = rect.height / 2;
   synthesizeMouse(aSrcElement, x, y, { type: "mousemove" }, aWindow);
   synthesizeMouse(aSrcElement, x+10, y+10, { type: "mousemove" }, aWindow);
-  aWindow.removeEventListener("dragstart", trapDrag, true);
 
-  var event = createDragEventObject("dragenter", aDestElement, aDestWindow,
+  var dataTransfer = ds.getCurrentSession().dataTransfer;
+
+  // The EventStateManager will fire our dragenter event if it needs to.
+  var event = createDragEventObject("dragover", aDestElement, aDestWindow,
                                     dataTransfer, aDragEvent);
-  sendDragEvent(event, aDestElement, aDestWindow);
-
-  event = createDragEventObject("dragover", aDestElement, aDestWindow,
-                                dataTransfer, aDragEvent);
   var result = sendDragEvent(event, aDestElement, aDestWindow);
 
   return [result, dataTransfer];
@@ -2118,11 +2284,6 @@ function synthesizeDrop(aSrcElement, aDestElement, aDragData, aDropEffect, aWind
     aDestWindow = aWindow;
   }
 
-  var ds = _EU_Cc["@mozilla.org/widget/dragservice;1"]
-           .getService(_EU_Ci.nsIDragService);
-
-  ds.startDragSession();
-
   try {
     var [result, dataTransfer] = synthesizeDragOver(aSrcElement, aDestElement,
                                                     aDragData, aDropEffect,
@@ -2131,6 +2292,7 @@ function synthesizeDrop(aSrcElement, aDestElement, aDragData, aDropEffect, aWind
     return synthesizeDropAfterDragOver(result, dataTransfer, aDestElement,
                                        aDestWindow, aDragEvent);
   } finally {
+    var ds = _EU_Cc["@mozilla.org/widget/dragservice;1"].getService(_EU_Ci.nsIDragService);
     ds.endDragSession(true, _parseModifiers(aDragEvent));
   }
 }

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -43,7 +44,7 @@ GetActionType(nsIContent* aContent)
 
   if (aContent) {
     if (!aContent->GetAttr(kNameSpaceID_None, nsGkAtoms::actiontype_, value))
-      return NS_MATHML_ACTION_TYPE_NONE; 
+      return NS_MATHML_ACTION_TYPE_NONE;
   }
 
   if (value.EqualsLiteral("toggle"))
@@ -103,13 +104,13 @@ nsMathMLmactionFrame::ChildListChanged(int32_t aModType)
 }
 
 // return the frame whose number is given by the attribute selection="number"
-nsIFrame* 
+nsIFrame*
 nsMathMLmactionFrame::GetSelectedFrame()
 {
   nsAutoString value;
-  int32_t selection; 
+  int32_t selection;
 
-  if ((mActionType & NS_MATHML_ACTION_TYPE_CLASS_BITMASK) == 
+  if ((mActionType & NS_MATHML_ACTION_TYPE_CLASS_BITMASK) ==
        NS_MATHML_ACTION_TYPE_CLASS_ERROR) {
     mSelection = -1;
     mInvalidMarkup = true;
@@ -119,7 +120,7 @@ nsMathMLmactionFrame::GetSelectedFrame()
 
   // Selection is not applied to tooltip and statusline.
   // Thereby return the first child.
-  if ((mActionType & NS_MATHML_ACTION_TYPE_CLASS_BITMASK) == 
+  if ((mActionType & NS_MATHML_ACTION_TYPE_CLASS_BITMASK) ==
        NS_MATHML_ACTION_TYPE_CLASS_IGNORE_SELECTION) {
     // We don't touch mChildCount here. It's incorrect to assign it 1,
     // and it's inefficient to count the children. It's fine to leave
@@ -134,7 +135,7 @@ nsMathMLmactionFrame::GetSelectedFrame()
   if (!value.IsEmpty()) {
     nsresult errorCode;
     selection = value.ToInteger(&errorCode);
-    if (NS_FAILED(errorCode)) 
+    if (NS_FAILED(errorCode))
       selection = 1;
   }
   else selection = 1; // default is first frame
@@ -144,7 +145,7 @@ nsMathMLmactionFrame::GetSelectedFrame()
     if (selection > mChildCount || selection < 1)
       selection = -1;
     // quick return if it is identical with our cache
-    if (selection == mSelection) 
+    if (selection == mSelection)
       return mSelectedFrame;
   }
 
@@ -152,9 +153,9 @@ nsMathMLmactionFrame::GetSelectedFrame()
   int32_t count = 0;
   nsIFrame* childFrame = mFrames.FirstChild();
   while (childFrame) {
-    if (!mSelectedFrame) 
+    if (!mSelectedFrame)
       mSelectedFrame = childFrame; // default is first child
-    if (++count == selection) 
+    if (++count == selection)
       mSelectedFrame = childFrame;
 
     childFrame = childFrame->GetNextSibling();
@@ -195,10 +196,12 @@ nsMathMLmactionFrame::SetInitialChildList(ChildListID     aListID,
 
 nsresult
 nsMathMLmactionFrame::AttributeChanged(int32_t  aNameSpaceID,
-                                       nsIAtom* aAttribute,
+                                       nsAtom* aAttribute,
                                        int32_t  aModType)
 {
   bool needsReflow = false;
+
+  InvalidateFrame();
 
   if (aAttribute == nsGkAtoms::actiontype_) {
     // updating mActionType ...
@@ -211,19 +214,19 @@ nsMathMLmactionFrame::AttributeChanged(int32_t  aNameSpaceID,
       needsReflow = true;
     }
   } else if (aAttribute == nsGkAtoms::selection_) {
-    if ((mActionType & NS_MATHML_ACTION_TYPE_CLASS_BITMASK) == 
+    if ((mActionType & NS_MATHML_ACTION_TYPE_CLASS_BITMASK) ==
          NS_MATHML_ACTION_TYPE_CLASS_USE_SELECTION) {
       needsReflow = true;
     }
   } else {
     // let the base class handle other attribute changes
-    return 
-      nsMathMLContainerFrame::AttributeChanged(aNameSpaceID, 
+    return
+      nsMathMLContainerFrame::AttributeChanged(aNameSpaceID,
                                                aAttribute, aModType);
   }
 
   if (needsReflow) {
-    PresContext()->PresShell()->
+    PresShell()->
       FrameNeedsReflow(this, nsIPresShell::eTreeChange, NS_FRAME_IS_DIRTY);
   }
 
@@ -231,7 +234,7 @@ nsMathMLmactionFrame::AttributeChanged(int32_t  aNameSpaceID,
 }
 
 // ################################################################
-// Event handlers 
+// Event handlers
 // ################################################################
 
 NS_IMPL_ISUPPORTS(nsMathMLmactionFrame::MouseListener,
@@ -271,7 +274,7 @@ nsMathMLmactionFrame::MouseListener::HandleEvent(nsIDOMEvent* aEvent)
     mOwner->MouseOut();
   }
   else {
-    NS_ABORT();
+    MOZ_ASSERT_UNREACHABLE("Unexpected eventType");
   }
 
   return NS_OK;
@@ -327,10 +330,11 @@ nsMathMLmactionFrame::MouseClick()
       nsAutoString value;
       value.AppendInt(selection);
       bool notify = false; // don't yet notify the document
-      mContent->SetAttr(kNameSpaceID_None, nsGkAtoms::selection_, value, notify);
+      mContent->AsElement()->SetAttr(kNameSpaceID_None, nsGkAtoms::selection_,
+                                     value, notify);
 
       // Now trigger a content-changed reflow...
-      PresContext()->PresShell()->
+      PresShell()->
         FrameNeedsReflow(mSelectedFrame, nsIPresShell::eTreeChange,
                          NS_FRAME_IS_DIRTY);
     }

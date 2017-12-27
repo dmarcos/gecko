@@ -7,36 +7,54 @@ matrix:
       script:
          - ./mach test-tidy --no-progress --all
          - ./mach test-tidy --no-progress --self-test
+         - bash etc/ci/check_no_panic.sh
+         - bash etc/ci/manifest_changed.sh
       cache: false
     - sudo: 9000
       dist: trusty
+      before_install:
+        - sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
+        - sudo add-apt-repository 'deb http://apt.llvm.org/precise/ llvm-toolchain-precise-3.9 main' -y
+        - sudo apt-get update -q
+        - sudo apt-get install clang-3.9 llvm-3.9 llvm-3.9-runtime -y
+        - export LLVM_CONFIG=/usr/lib/llvm-3.9/bin/llvm-config
+        - export CC=gcc-5 CXX=g++-5
       script:
          - ./mach build -d --verbose
-         - ./mach test-compiletest
-         # disabled due to #15076
-         #- ./mach test-unit
-         # disabled due to #14723
-         #- ./mach build-geckolib
-         #- ./mach test-stylo
-         - bash etc/ci/check_no_panic.sh
+         - ./mach test-unit
+         - ./mach clean
+         - ./mach build-geckolib
+         - ./mach test-stylo
          - bash etc/ci/lockfile_changed.sh
-         - bash etc/ci/manifest_changed.sh
-         - ./mach cargo test -p selectors
-         - ./mach cargo test -p style
       cache:
         directories:
           - .cargo
           - .servo
           - $HOME/.ccache
+      before_cache:
+        - ./mach clean-nightlies --keep 2 --force
+        - ./mach clean-cargo-cache --keep 2 --force
       env: CCACHE=/usr/bin/ccache
       addons:
         apt:
+          sources:
+            - ubuntu-toolchain-r-test
+            - sourceline: 'ppa:jonathonf/ffmpeg-3'
           packages:
             - cmake
+            - dbus-x11
             - freeglut3-dev
+            - gcc-5
+            - g++-5
             - gperf
+            - libavcodec-dev
+            - libavformat-dev
             - libosmesa6-dev
+            - libpulse-dev
             - libgles2-mesa-dev
+            - libswscale-dev
+            - libswresample-dev
+            - pulseaudio
             - python-virtualenv
             - xorg-dev
             - ccache

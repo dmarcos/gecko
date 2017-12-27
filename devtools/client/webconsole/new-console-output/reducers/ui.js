@@ -7,32 +7,53 @@
 
 const {
   FILTER_BAR_TOGGLE,
-  MESSAGE_ADD,
-  TIMESTAMPS_TOGGLE
+  INITIALIZE,
+  PERSIST_TOGGLE,
+  SELECT_NETWORK_MESSAGE_TAB,
+  SIDEBAR_CLOSE,
+  SHOW_OBJECT_IN_SIDEBAR,
+  TIMESTAMPS_TOGGLE,
+  MESSAGES_CLEAR,
 } = require("devtools/client/webconsole/new-console-output/constants");
-const Immutable = require("devtools/client/shared/vendor/immutable");
 
-const UiState = Immutable.Record({
+const {
+  PANELS,
+} = require("devtools/client/netmonitor/src/constants");
+
+const UiState = (overrides) => Object.freeze(Object.assign({
   filterBarVisible: false,
-  filteredMessageVisible: false,
-  autoscroll: true,
+  initialized: false,
+  networkMessageActiveTabId: PANELS.HEADERS,
+  persistLogs: false,
+  sidebarVisible: false,
   timestampsVisible: true,
-});
+  gripInSidebar: null
+}, overrides));
 
-function ui(state = new UiState(), action) {
-  // Autoscroll should be set for all action types. If the last action was not message
-  // add, then turn it off. This prevents us from scrolling after someone toggles a
-  // filter, or to the bottom of the attachement when an expandable message at the bottom
-  // of the list is expanded. It does depend on the MESSAGE_ADD action being the last in
-  // its batch, though.
-  state = state.set("autoscroll", action.type == MESSAGE_ADD);
-
+function ui(state = UiState(), action) {
   switch (action.type) {
     case FILTER_BAR_TOGGLE:
-      return state.set("filterBarVisible", !state.filterBarVisible);
+      return Object.assign({}, state, {filterBarVisible: !state.filterBarVisible});
+    case PERSIST_TOGGLE:
+      return Object.assign({}, state, {persistLogs: !state.persistLogs});
     case TIMESTAMPS_TOGGLE:
-      return state.set("timestampsVisible", action.visible);
-
+      return Object.assign({}, state, {timestampsVisible: action.visible});
+    case SELECT_NETWORK_MESSAGE_TAB:
+      return Object.assign({}, state, {networkMessageActiveTabId: action.id});
+    case SIDEBAR_CLOSE:
+      return Object.assign({}, state, {
+        sidebarVisible: !state.sidebarVisible,
+        gripInSidebar: null
+      });
+    case INITIALIZE:
+      return Object.assign({}, state, {initialized: true});
+    case MESSAGES_CLEAR:
+      return Object.assign({}, state, {sidebarVisible: false, gripInSidebar: null});
+    case SHOW_OBJECT_IN_SIDEBAR:
+      if (action.grip === state.gripInSidebar) {
+        return state;
+      }
+      return Object.assign({}, state, {sidebarVisible: true, gripInSidebar: action.grip});
   }
 
   return state;

@@ -12,14 +12,12 @@
 #include "nsIDOMEventListener.h"
 #include "nsTArray.h"
 
-class nsIAtom;
+class nsAtom;
 class nsIDOMKeyEvent;
 class nsXBLPrototypeHandler;
 
 namespace mozilla {
-namespace dom {
 struct IgnoreModifierState;
-} // namespace dom
 } // namespace mozilla
 
 class nsXBLEventHandler : public nsIDOMEventListener
@@ -55,10 +53,10 @@ private:
 
 class nsXBLKeyEventHandler : public nsIDOMEventListener
 {
-  typedef mozilla::dom::IgnoreModifierState IgnoreModifierState;
+  typedef mozilla::IgnoreModifierState IgnoreModifierState;
 
 public:
-  nsXBLKeyEventHandler(nsIAtom* aEventType, uint8_t aPhase, uint8_t aType);
+  nsXBLKeyEventHandler(nsAtom* aEventType, uint8_t aPhase, uint8_t aType);
 
   NS_DECL_ISUPPORTS
 
@@ -69,7 +67,7 @@ public:
     mProtoHandlers.AppendElement(aProtoHandler);
   }
 
-  bool Matches(nsIAtom* aEventType, uint8_t aPhase, uint8_t aType) const
+  bool Matches(nsAtom* aEventType, uint8_t aPhase, uint8_t aType) const
   {
     return (mEventType == aEventType && mPhase == aPhase && mType == aType);
   }
@@ -107,7 +105,7 @@ private:
                               const IgnoreModifierState& aIgnoreModifierState);
 
   nsTArray<nsXBLPrototypeHandler*> mProtoHandlers;
-  nsCOMPtr<nsIAtom> mEventType;
+  RefPtr<nsAtom> mEventType;
   uint8_t mPhase;
   uint8_t mType;
   bool mIsBoundToChrome;
@@ -116,6 +114,6 @@ private:
 
 already_AddRefed<nsXBLEventHandler>
 NS_NewXBLEventHandler(nsXBLPrototypeHandler* aHandler,
-                      nsIAtom* aEventType);
+                      nsAtom* aEventType);
 
 #endif

@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -24,7 +26,7 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(ScreenOrientation,
                                    DOMEventTargetHelper,
                                    mScreen);
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ScreenOrientation)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ScreenOrientation)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 NS_IMPL_ADDREF_INHERITED(ScreenOrientation, DOMEventTargetHelper)
@@ -309,7 +311,7 @@ ScreenOrientation::LockInternal(ScreenOrientationInternal aOrientation, ErrorRes
     return nullptr;
   }
 
-#if !defined(MOZ_WIDGET_ANDROID) && !defined(MOZ_WIDGET_GONK)
+#if !defined(MOZ_WIDGET_ANDROID)
   // User agent does not support locking the screen orientation.
   p->MaybeReject(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
   return p.forget();
@@ -553,8 +555,10 @@ ScreenOrientation::Notify(const hal::ScreenConfiguration& aConfiguration)
       doc->SetOrientationPendingPromise(nullptr);
     }
 
-    nsCOMPtr<nsIRunnable> runnable = NewRunnableMethod(this,
-      &ScreenOrientation::DispatchChangeEvent);
+    nsCOMPtr<nsIRunnable> runnable =
+      NewRunnableMethod("dom::ScreenOrientation::DispatchChangeEvent",
+                        this,
+                        &ScreenOrientation::DispatchChangeEvent);
     rv = NS_DispatchToMainThread(runnable);
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "NS_DispatchToMainThread failed");
   }
@@ -609,7 +613,7 @@ ScreenOrientation::VisibleEventListener::HandleEvent(nsIDOMEvent* aEvent)
     return NS_OK;
   }
 
-  auto* win = nsGlobalWindow::Cast(doc->GetInnerWindow());
+  auto* win = nsGlobalWindowInner::Cast(doc->GetInnerWindow());
   if (!win) {
     return NS_OK;
   }
@@ -640,8 +644,10 @@ ScreenOrientation::VisibleEventListener::HandleEvent(nsIDOMEvent* aEvent)
       doc->SetOrientationPendingPromise(nullptr);
     }
 
-    nsCOMPtr<nsIRunnable> runnable = NewRunnableMethod(orientation,
-      &ScreenOrientation::DispatchChangeEvent);
+    nsCOMPtr<nsIRunnable> runnable =
+      NewRunnableMethod("dom::ScreenOrientation::DispatchChangeEvent",
+                        orientation,
+                        &ScreenOrientation::DispatchChangeEvent);
     rv = NS_DispatchToMainThread(runnable);
     if (NS_WARN_IF(rv.Failed())) {
       return rv.StealNSResult();

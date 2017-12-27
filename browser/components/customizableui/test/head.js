@@ -17,15 +17,12 @@ Services.scriptloader.loadSubScript("chrome://mochikit/content/tests/SimpleTest/
 Services.prefs.setBoolPref("browser.uiCustomization.skipSourceNodeCheck", true);
 registerCleanupFunction(() => Services.prefs.clearUserPref("browser.uiCustomization.skipSourceNodeCheck"));
 
-// Remove temporary e10s related new window options in customize ui,
-// they break a lot of tests.
-CustomizableUI.destroyWidget("e10s-button");
-CustomizableUI.removeWidgetFromArea("e10s-button");
-
 var {synthesizeDragStart, synthesizeDrop} = EventUtils;
 
 const kNSXUL = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 const kTabEventFailureTimeoutInMs = 20000;
+
+const kForceOverflowWidthPx = 300;
 
 function createDummyXULButton(id, label, win = window) {
   let btn = document.createElementNS(kNSXUL, "toolbarbutton");
@@ -118,32 +115,14 @@ function isInDevEdition() {
   return AppConstants.MOZ_DEV_EDITION;
 }
 
-function isInNightly() {
-  return AppConstants.NIGHTLY_BUILD;
-}
-
 function removeNonReleaseButtons(areaPanelPlacements) {
   if (isInDevEdition() && areaPanelPlacements.includes("developer-button")) {
     areaPanelPlacements.splice(areaPanelPlacements.indexOf("developer-button"), 1);
-  }
-
-  if (!isInNightly() && areaPanelPlacements.includes("webcompat-reporter-button")) {
-    areaPanelPlacements.splice(areaPanelPlacements.indexOf("webcompat-reporter-button"), 1);
   }
 }
 
 function removeNonOriginalButtons() {
   CustomizableUI.removeWidgetFromArea("sync-button");
-  if (isInNightly()) {
-    CustomizableUI.removeWidgetFromArea("webcompat-reporter-button");
-  }
-}
-
-function restoreNonOriginalButtons() {
-  CustomizableUI.addWidgetToArea("sync-button", CustomizableUI.AREA_PANEL);
-  if (isInNightly()) {
-    CustomizableUI.addWidgetToArea("webcompat-reporter-button", CustomizableUI.AREA_PANEL);
-  }
 }
 
 function assertAreaPlacements(areaId, expectedPlacements) {
@@ -202,71 +181,67 @@ function endCustomizing(aWindow = window) {
   if (aWindow.document.documentElement.getAttribute("customizing") != "true") {
     return true;
   }
-  Services.prefs.setBoolPref("browser.uiCustomization.disableAnimation", true);
-  let deferredEndCustomizing = Promise.defer();
-  function onCustomizationEnds() {
-    Services.prefs.setBoolPref("browser.uiCustomization.disableAnimation", false);
-    aWindow.gNavToolbox.removeEventListener("aftercustomization", onCustomizationEnds);
-    deferredEndCustomizing.resolve();
-  }
-  aWindow.gNavToolbox.addEventListener("aftercustomization", onCustomizationEnds);
-  aWindow.gCustomizeMode.exit();
+  return new Promise(resolve => {
+    function onCustomizationEnds() {
+      aWindow.gNavToolbox.removeEventListener("aftercustomization", onCustomizationEnds);
+      resolve();
+    }
+    aWindow.gNavToolbox.addEventListener("aftercustomization", onCustomizationEnds);
+    aWindow.gCustomizeMode.exit();
 
-  return deferredEndCustomizing.promise;
+  });
 }
 
 function startCustomizing(aWindow = window) {
   if (aWindow.document.documentElement.getAttribute("customizing") == "true") {
     return null;
   }
-  Services.prefs.setBoolPref("browser.uiCustomization.disableAnimation", true);
-  let deferred = Promise.defer();
-  function onCustomizing() {
-    aWindow.gNavToolbox.removeEventListener("customizationready", onCustomizing);
-    Services.prefs.setBoolPref("browser.uiCustomization.disableAnimation", false);
-    deferred.resolve();
-  }
-  aWindow.gNavToolbox.addEventListener("customizationready", onCustomizing);
-  aWindow.gCustomizeMode.enter();
-  return deferred.promise;
+  return new Promise(resolve => {
+    function onCustomizing() {
+      aWindow.gNavToolbox.removeEventListener("customizationready", onCustomizing);
+      resolve();
+    }
+    aWindow.gNavToolbox.addEventListener("customizationready", onCustomizing);
+    aWindow.gCustomizeMode.enter();
+  });
 }
 
 function promiseObserverNotified(aTopic) {
-  let deferred = Promise.defer();
-  Services.obs.addObserver(function onNotification(subject, topic, data) {
-    Services.obs.removeObserver(onNotification, topic);
-      deferred.resolve({subject, data});
-    }, aTopic);
-  return deferred.promise;
+  return new Promise(resolve => {
+    Services.obs.addObserver(function onNotification(subject, topic, data) {
+      Services.obs.removeObserver(onNotification, topic);
+        resolve({subject, data});
+      }, aTopic);
+  });
 }
 
 function openAndLoadWindow(aOptions, aWaitForDelayedStartup = false) {
-  let deferred = Promise.defer();
-  let win = OpenBrowserWindow(aOptions);
-  if (aWaitForDelayedStartup) {
-    Services.obs.addObserver(function onDS(aSubject, aTopic, aData) {
-      if (aSubject != win) {
-        return;
-      }
-      Services.obs.removeObserver(onDS, "browser-delayed-startup-finished");
-      deferred.resolve(win);
-    }, "browser-delayed-startup-finished");
+  return new Promise(resolve => {
+    let win = OpenBrowserWindow(aOptions);
+    if (aWaitForDelayedStartup) {
+      Services.obs.addObserver(function onDS(aSubject, aTopic, aData) {
+        if (aSubject != win) {
+          return;
+        }
+        Services.obs.removeObserver(onDS, "browser-delayed-startup-finished");
+        resolve(win);
+      }, "browser-delayed-startup-finished");
 
-  } else {
-    win.addEventListener("load", function() {
-      deferred.resolve(win);
-    }, {once: true});
-  }
-  return deferred.promise;
+    } else {
+      win.addEventListener("load", function() {
+        resolve(win);
+      }, {once: true});
+    }
+  });
 }
 
 function promiseWindowClosed(win) {
-  let deferred = Promise.defer();
-  win.addEventListener("unload", function() {
-    deferred.resolve();
-  }, {once: true});
-  win.close();
-  return deferred.promise;
+  return new Promise(resolve => {
+    win.addEventListener("unload", function() {
+      resolve();
+    }, {once: true});
+    win.close();
+  });
 }
 
 function promisePanelShown(win) {
@@ -280,17 +255,17 @@ function promiseOverflowShown(win) {
 }
 
 function promisePanelElementShown(win, aPanel) {
-  let deferred = Promise.defer();
-  let timeoutId = win.setTimeout(() => {
-    deferred.reject("Panel did not show within 20 seconds.");
-  }, 20000);
-  function onPanelOpen(e) {
-    aPanel.removeEventListener("popupshown", onPanelOpen);
-    win.clearTimeout(timeoutId);
-    deferred.resolve();
-  }
-  aPanel.addEventListener("popupshown", onPanelOpen);
-  return deferred.promise;
+  return new Promise((resolve, reject) => {
+    let timeoutId = win.setTimeout(() => {
+      reject("Panel did not show within 20 seconds.");
+    }, 20000);
+    function onPanelOpen(e) {
+      aPanel.removeEventListener("popupshown", onPanelOpen);
+      win.clearTimeout(timeoutId);
+      resolve();
+    }
+    aPanel.addEventListener("popupshown", onPanelOpen);
+  });
 }
 
 function promisePanelHidden(win) {
@@ -299,56 +274,61 @@ function promisePanelHidden(win) {
 }
 
 function promiseOverflowHidden(win) {
-  let panelEl = document.getElementById("widget-overflow");
+  let panelEl = win.PanelUI.overflowPanel;
   return promisePanelElementHidden(win, panelEl);
 }
 
 function promisePanelElementHidden(win, aPanel) {
-  let deferred = Promise.defer();
-  let timeoutId = win.setTimeout(() => {
-    deferred.reject("Panel did not hide within 20 seconds.");
-  }, 20000);
-  function onPanelClose(e) {
-    aPanel.removeEventListener("popuphidden", onPanelClose);
-    win.clearTimeout(timeoutId);
-    deferred.resolve();
-  }
-  aPanel.addEventListener("popuphidden", onPanelClose);
-  return deferred.promise;
+  return new Promise((resolve, reject) => {
+    let timeoutId = win.setTimeout(() => {
+      reject("Panel did not hide within 20 seconds.");
+    }, 20000);
+    function onPanelClose(e) {
+      aPanel.removeEventListener("popuphidden", onPanelClose);
+      win.clearTimeout(timeoutId);
+      executeSoon(resolve);
+    }
+    aPanel.addEventListener("popuphidden", onPanelClose);
+  });
 }
 
 function isPanelUIOpen() {
   return PanelUI.panel.state == "open" || PanelUI.panel.state == "showing";
 }
 
+function isOverflowOpen() {
+  let panel = document.getElementById("widget-overflow");
+  return panel.state == "open" || panel.state == "showing";
+}
+
 function subviewShown(aSubview) {
-  let deferred = Promise.defer();
-  let win = aSubview.ownerGlobal;
-  let timeoutId = win.setTimeout(() => {
-    deferred.reject("Subview (" + aSubview.id + ") did not show within 20 seconds.");
-  }, 20000);
-  function onViewShowing(e) {
-    aSubview.removeEventListener("ViewShowing", onViewShowing);
-    win.clearTimeout(timeoutId);
-    deferred.resolve();
-  }
-  aSubview.addEventListener("ViewShowing", onViewShowing);
-  return deferred.promise;
+  return new Promise((resolve, reject) => {
+    let win = aSubview.ownerGlobal;
+    let timeoutId = win.setTimeout(() => {
+      reject("Subview (" + aSubview.id + ") did not show within 20 seconds.");
+    }, 20000);
+    function onViewShown(e) {
+      aSubview.removeEventListener("ViewShown", onViewShown);
+      win.clearTimeout(timeoutId);
+      resolve();
+    }
+    aSubview.addEventListener("ViewShown", onViewShown);
+  });
 }
 
 function subviewHidden(aSubview) {
-  let deferred = Promise.defer();
-  let win = aSubview.ownerGlobal;
-  let timeoutId = win.setTimeout(() => {
-    deferred.reject("Subview (" + aSubview.id + ") did not hide within 20 seconds.");
-  }, 20000);
-  function onViewHiding(e) {
-    aSubview.removeEventListener("ViewHiding", onViewHiding);
-    win.clearTimeout(timeoutId);
-    deferred.resolve();
-  }
-  aSubview.addEventListener("ViewHiding", onViewHiding);
-  return deferred.promise;
+  return new Promise((resolve, reject) => {
+    let win = aSubview.ownerGlobal;
+    let timeoutId = win.setTimeout(() => {
+      reject("Subview (" + aSubview.id + ") did not hide within 20 seconds.");
+    }, 20000);
+    function onViewHiding(e) {
+      aSubview.removeEventListener("ViewHiding", onViewHiding);
+      win.clearTimeout(timeoutId);
+      resolve();
+    }
+    aSubview.addEventListener("ViewHiding", onViewHiding);
+  });
 }
 
 function waitForCondition(aConditionFn, aMaxTries = 50, aCheckInterval = 100) {
@@ -372,9 +352,9 @@ function waitForCondition(aConditionFn, aMaxTries = 50, aCheckInterval = 100) {
 }
 
 function waitFor(aTimeout = 100) {
-  let deferred = Promise.defer();
-  setTimeout(() => deferred.resolve(), aTimeout);
-  return deferred.promise;
+  return new Promise(resolve => {
+    setTimeout(() => resolve(), aTimeout);
+  });
 }
 
 /**
@@ -401,29 +381,29 @@ function promiseTabLoadEvent(aTab, aURL) {
  * @return {Promise} resolved when navigation has finished.
  */
 function promiseTabHistoryNavigation(aDirection = -1, aConditionFn) {
-  let deferred = Promise.defer();
+  return new Promise((resolve, reject) => {
 
-  let timeoutId = setTimeout(() => {
-    gBrowser.removeEventListener("pageshow", listener, true);
-    deferred.reject("Pageshow did not happen within " + kTabEventFailureTimeoutInMs + "ms");
-  }, kTabEventFailureTimeoutInMs);
+    let timeoutId = setTimeout(() => {
+      gBrowser.removeEventListener("pageshow", listener, true);
+      reject("Pageshow did not happen within " + kTabEventFailureTimeoutInMs + "ms");
+    }, kTabEventFailureTimeoutInMs);
 
-  function listener(event) {
-    gBrowser.removeEventListener("pageshow", listener, true);
-    clearTimeout(timeoutId);
+    function listener(event) {
+      gBrowser.removeEventListener("pageshow", listener, true);
+      clearTimeout(timeoutId);
 
-    if (aConditionFn) {
-      waitForCondition(aConditionFn).then(() => deferred.resolve(),
-                                          aReason => deferred.reject(aReason));
-    } else {
-      deferred.resolve();
+      if (aConditionFn) {
+        waitForCondition(aConditionFn).then(() => resolve(),
+                                            aReason => reject(aReason));
+      } else {
+        resolve();
+      }
     }
-  }
-  gBrowser.addEventListener("pageshow", listener, true);
+    gBrowser.addEventListener("pageshow", listener, true);
 
-  content.history.go(aDirection);
+    gBrowser.contentWindowAsCPOW.history.go(aDirection);
 
-  return deferred.promise;
+  });
 }
 
 /**
@@ -479,16 +459,16 @@ function popupHidden(aPopup) {
  *  yield popupHiddenPromise;
  */
 function promisePopupEvent(aPopup, aEventSuffix) {
-  let deferred = Promise.defer();
-  let eventType = "popup" + aEventSuffix;
+  return new Promise(resolve => {
+    let eventType = "popup" + aEventSuffix;
 
-  function onPopupEvent(e) {
-    aPopup.removeEventListener(eventType, onPopupEvent);
-    deferred.resolve();
-  }
+    function onPopupEvent(e) {
+      aPopup.removeEventListener(eventType, onPopupEvent);
+      resolve();
+    }
 
-  aPopup.addEventListener(eventType, onPopupEvent);
-  return deferred.promise;
+    aPopup.addEventListener(eventType, onPopupEvent);
+  });
 }
 
 // This is a simpler version of the context menu check that
@@ -518,4 +498,15 @@ function checkContextMenu(aContextMenu, aExpectedEntries, aWindow = window) {
       ok(false, "Exception when checking context menu: " + e);
     }
   }
+}
+
+function waitForOverflowButtonShown(win = window) {
+  let dwu = win.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowUtils);
+  return BrowserTestUtils.waitForCondition(() => {
+    info("Waiting for overflow button to have non-0 size");
+    let ov = win.document.getElementById("nav-bar-overflow-button");
+    let icon = win.document.getAnonymousElementByAttribute(ov, "class", "toolbarbutton-icon");
+    let bounds = dwu.getBoundsWithoutFlushing(icon);
+    return bounds.width > 0 && bounds.height > 0;
+  });
 }

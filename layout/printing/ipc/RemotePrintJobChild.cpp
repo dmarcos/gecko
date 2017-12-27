@@ -8,7 +8,8 @@
 
 #include "mozilla/Unused.h"
 #include "nsPagePrintTimer.h"
-#include "nsPrintEngine.h"
+#include "nsPrintJob.h"
+#include "private/pprio.h"
 
 namespace mozilla {
 namespace layout {
@@ -30,34 +31,56 @@ RemotePrintJobChild::InitializePrint(const nsString& aDocumentTitle,
   // need to spin a nested event loop until initialization completes.
   Unused << SendInitializePrint(aDocumentTitle, aPrintToFile, aStartPage,
                                 aEndPage);
-  while (!mPrintInitialized) {
-    Unused << NS_ProcessNextEvent();
-  }
+  mozilla::SpinEventLoopUntil([&]() { return mPrintInitialized; });
 
   return mInitializationResult;
 }
 
 mozilla::ipc::IPCResult
-RemotePrintJobChild::RecvPrintInitializationResult(const nsresult& aRv)
+RemotePrintJobChild::RecvPrintInitializationResult(
+  const nsresult& aRv,
+  const mozilla::ipc::FileDescriptor& aFd)
 {
   mPrintInitialized = true;
   mInitializationResult = aRv;
+  if (NS_SUCCEEDED(aRv)) {
+    SetNextPageFD(aFd);
+  }
   return IPC_OK();
 }
 
+PRFileDesc*
+RemotePrintJobChild::GetNextPageFD()
+{
+  MOZ_ASSERT(mNextPageFD);
+  PRFileDesc* fd = mNextPageFD;
+  mNextPageFD = nullptr;
+  return fd;
+}
+
 void
-RemotePrintJobChild::ProcessPage(const nsCString& aPageFileName)
+RemotePrintJobChild::SetNextPageFD(const mozilla::ipc::FileDescriptor& aFd)
+{
+  auto handle = aFd.ClonePlatformHandle();
+  mNextPageFD = PR_ImportFile(PROsfd(handle.release()));
+}
+
+void
+RemotePrintJobChild::ProcessPage()
 {
   MOZ_ASSERT(mPagePrintTimer);
 
   mPagePrintTimer->WaitForRemotePrint();
-  Unused << SendProcessPage(aPageFileName);
+  if (!mDestroyed) {
+    Unused << SendProcessPage();
+  }
 }
 
 mozilla::ipc::IPCResult
-RemotePrintJobChild::RecvPageProcessed()
+RemotePrintJobChild::RecvPageProcessed(const mozilla::ipc::FileDescriptor& aFd)
 {
   MOZ_ASSERT(mPagePrintTimer);
+  SetNextPageFD(aFd);
 
   mPagePrintTimer->RemotePrintFinished();
   return IPC_OK();
@@ -66,9 +89,9 @@ RemotePrintJobChild::RecvPageProcessed()
 mozilla::ipc::IPCResult
 RemotePrintJobChild::RecvAbortPrint(const nsresult& aRv)
 {
-  MOZ_ASSERT(mPrintEngine);
+  MOZ_ASSERT(mPrintJob);
 
-  mPrintEngine->CleanupOnFailure(aRv, true);
+  mPrintJob->CleanupOnFailure(aRv, true);
   return IPC_OK();
 }
 
@@ -81,11 +104,11 @@ RemotePrintJobChild::SetPagePrintTimer(nsPagePrintTimer* aPagePrintTimer)
 }
 
 void
-RemotePrintJobChild::SetPrintEngine(nsPrintEngine* aPrintEngine)
+RemotePrintJobChild::SetPrintJob(nsPrintJob* aPrintJob)
 {
-  MOZ_ASSERT(aPrintEngine);
+  MOZ_ASSERT(aPrintJob);
 
-  mPrintEngine = aPrintEngine;
+  mPrintJob = aPrintJob;
 }
 
 // nsIWebProgressListener
@@ -95,7 +118,10 @@ RemotePrintJobChild::OnStateChange(nsIWebProgress* aProgress,
                                    nsIRequest* aRequest, uint32_t aStateFlags,
                                    nsresult aStatus)
 {
-  Unused << SendStateChange(aStateFlags, aStatus);
+  if (!mDestroyed) {
+    Unused << SendStateChange(aStateFlags, aStatus);
+  }
+
   return NS_OK;
 }
 
@@ -107,8 +133,11 @@ RemotePrintJobChild::OnProgressChange(nsIWebProgress * aProgress,
                                       int32_t aCurTotalProgress,
                                       int32_t aMaxTotalProgress)
 {
-  Unused << SendProgressChange(aCurSelfProgress, aMaxSelfProgress,
-                               aCurTotalProgress, aMaxTotalProgress);
+  if (!mDestroyed) {
+    Unused << SendProgressChange(aCurSelfProgress, aMaxSelfProgress,
+                                 aCurTotalProgress, aMaxTotalProgress);
+  }
+
   return NS_OK;
 }
 
@@ -125,7 +154,10 @@ RemotePrintJobChild::OnStatusChange(nsIWebProgress* aProgress,
                                     nsIRequest* aRequest, nsresult aStatus,
                                     const char16_t* aMessage)
 {
-  Unused << SendStatusChange(aStatus);
+  if (!mDestroyed) {
+    Unused << SendStatusChange(aStatus);
+  }
+
   return NS_OK;
 }
 
@@ -146,7 +178,9 @@ void
 RemotePrintJobChild::ActorDestroy(ActorDestroyReason aWhy)
 {
   mPagePrintTimer = nullptr;
-  mPrintEngine = nullptr;
+  mPrintJob = nullptr;
+
+  mDestroyed = true;
 }
 
 } // namespace layout

@@ -16,22 +16,23 @@ requestLongerTimeout(2);
  * backlogged crash reports, that we offer to do that, and
  * that the user can accept that offer.
  */
-add_task(function* test_show_form() {
-  yield SpecialPowers.pushPrefEnv({
+add_task(async function test_show_form() {
+  await SpecialPowers.pushPrefEnv({
     set: [[AUTOSUBMIT_PREF, false]],
-  })
+  });
 
-  return BrowserTestUtils.withNewTab({
+  await BrowserTestUtils.withNewTab({
     gBrowser,
     url: PAGE,
-  }, function*(browser) {
+  }, async function(browser) {
     // Make sure we've flushed the browser messages so that
     // we can restore it.
-    yield TabStateFlusher.flush(browser);
+    await TabStateFlusher.flush(browser);
 
     // Now crash the browser.
-    yield BrowserTestUtils.crashBrowser(browser);
+    await BrowserTestUtils.crashBrowser(browser);
 
+    // eslint-disable-next-line mozilla/no-cpows-in-tests
     let doc = browser.contentDocument;
 
     // Ensure the request is visible. We can safely reach into
@@ -44,14 +45,14 @@ add_task(function* test_show_form() {
     // unchecked.
     let autoSubmit = doc.getElementById("autoSubmit");
     Assert.ok(!autoSubmit.checked,
-              "Checkbox for autosubmission is not checked.")
+              "Checkbox for autosubmission is not checked.");
 
     // Check the checkbox, and then restore the tab.
     autoSubmit.checked = true;
     let restoreButton = doc.getElementById("restoreTab");
     restoreButton.click();
 
-    yield BrowserTestUtils.browserLoaded(browser, false, PAGE);
+    await BrowserTestUtils.browserLoaded(browser, false, PAGE);
 
     // The autosubmission pref should now be set.
     Assert.ok(Services.prefs.getBoolPref(AUTOSUBMIT_PREF),
@@ -63,19 +64,20 @@ add_task(function* test_show_form() {
  * Tests that if the user is autosubmitting backlogged crash reports
  * that we don't make the offer again.
  */
-add_task(function* test_show_form() {
-  yield SpecialPowers.pushPrefEnv({
+add_task(async function test_show_form() {
+  await SpecialPowers.pushPrefEnv({
     set: [[AUTOSUBMIT_PREF, true]],
-  })
+  });
 
-  return BrowserTestUtils.withNewTab({
+  await BrowserTestUtils.withNewTab({
     gBrowser,
     url: PAGE,
-  }, function*(browser) {
-    yield TabStateFlusher.flush(browser);
+  }, async function(browser) {
+    await TabStateFlusher.flush(browser);
     // Now crash the browser.
-    yield BrowserTestUtils.crashBrowser(browser);
+    await BrowserTestUtils.crashBrowser(browser);
 
+    // eslint-disable-next-line mozilla/no-cpows-in-tests
     let doc = browser.contentDocument;
 
     // Ensure the request is NOT visible. We can safely reach into
@@ -88,10 +90,65 @@ add_task(function* test_show_form() {
     let restoreButton = doc.getElementById("restoreTab");
     restoreButton.click();
 
-    yield BrowserTestUtils.browserLoaded(browser, false, PAGE);
+    await BrowserTestUtils.browserLoaded(browser, false, PAGE);
 
     // The autosubmission pref should still be set to true.
     Assert.ok(Services.prefs.getBoolPref(AUTOSUBMIT_PREF),
               "Autosubmission pref should have been set.");
   });
+});
+
+/**
+ * Tests that we properly set the autoSubmit preference if the user is
+ * presented with a tabcrashed page without a crash report.
+ */
+add_task(async function test_no_offer() {
+  // We should default to sending the report.
+  Assert.ok(TabCrashHandler.prefs.getBoolPref("sendReport"));
+
+  await SpecialPowers.pushPrefEnv({
+    set: [[AUTOSUBMIT_PREF, false]],
+  });
+
+  await BrowserTestUtils.withNewTab({
+    gBrowser,
+    url: PAGE,
+  }, async function(browser) {
+    await TabStateFlusher.flush(browser);
+
+    // Make it so that it seems like no dump is available for the next crash.
+    prepareNoDump();
+
+    // Now crash the browser.
+    await BrowserTestUtils.crashBrowser(browser);
+
+    // eslint-disable-next-line mozilla/no-cpows-in-tests
+    let doc = browser.contentDocument;
+
+    // Ensure the request to autosubmit is invisible, since there's no report.
+    let requestRect = doc.getElementById("requestAutoSubmit")
+                         .getBoundingClientRect();
+    Assert.equal(0, requestRect.height,
+                 "Request for autosubmission has no height");
+    Assert.equal(0, requestRect.width,
+                 "Request for autosubmission has no width");
+
+    // Since the pref is set to false, the checkbox should be
+    // unchecked.
+    let autoSubmit = doc.getElementById("autoSubmit");
+    Assert.ok(!autoSubmit.checked,
+              "Checkbox for autosubmission is not checked.");
+
+    let restoreButton = doc.getElementById("restoreTab");
+    restoreButton.click();
+
+    await BrowserTestUtils.browserLoaded(browser, false, PAGE);
+
+    // The autosubmission pref should now be set.
+    Assert.ok(!Services.prefs.getBoolPref(AUTOSUBMIT_PREF),
+              "Autosubmission pref should not have changed.");
+  });
+
+  // We should not have changed the default value for sending the report.
+  Assert.ok(TabCrashHandler.prefs.getBoolPref("sendReport"));
 });

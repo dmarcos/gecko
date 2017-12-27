@@ -7,6 +7,7 @@
 #include "vm/TraceLogging.h"
 
 #include "mozilla/DebugOnly.h"
+#include "mozilla/MemoryReporting.h"
 #include "mozilla/ScopeExit.h"
 
 #include <string.h>
@@ -60,7 +61,7 @@ rdtsc(void)
     return result;
 
 }
-#elif defined(__arm__)
+#elif defined(__arm__) || defined(__aarch64__)
 
 #include <sys/time.h>
 
@@ -101,6 +102,12 @@ EnsureTraceLoggerState()
     }
 
     return true;
+}
+
+size_t
+js::SizeOfTraceLogState(mozilla::MallocSizeOf mallocSizeOf)
+{
+    return traceLoggerState ? traceLoggerState->sizeOfIncludingThis(mallocSizeOf) : 0;
 }
 
 void
@@ -216,6 +223,25 @@ TraceLoggerThread::silentFail(const char* error)
     enabled_ = 0;
 }
 
+size_t
+TraceLoggerThread::sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const
+{
+    size_t size = 0;
+#ifdef DEBUG
+    size += graphStack.sizeOfExcludingThis(mallocSizeOf);
+#endif
+    size += events.sizeOfExcludingThis(mallocSizeOf);
+    if (graph.get())
+        size += graph->sizeOfIncludingThis(mallocSizeOf);
+    return size;
+}
+
+size_t
+TraceLoggerThread::sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const
+{
+    return mallocSizeOf(this) + sizeOfExcludingThis(mallocSizeOf);
+}
+
 bool
 TraceLoggerThread::enable(JSContext* cx)
 {
@@ -234,20 +260,27 @@ TraceLoggerThread::enable(JSContext* cx)
         int32_t engine = 0;
 
         if (act->isJit()) {
-            JitFrameIterator it(iter);
+            JitFrameIter frame(iter->asJit());
 
-            while (!it.isScripted() && !it.done())
-                ++it;
+            while (!frame.done()) {
+                if (frame.isWasm()) {
+                    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                              JSMSG_TRACELOGGER_ENABLE_FAIL,
+                                              "not yet supported in wasm code");
+                    return false;
+                }
+                if (frame.asJSJit().isScripted())
+                    break;
+                ++frame;
+            }
 
-            MOZ_ASSERT(!it.done());
-            MOZ_ASSERT(it.isIonJS() || it.isBaselineJS());
+            MOZ_ASSERT(!frame.done());
 
-            script = it.script();
-            engine = it.isIonJS() ? TraceLogger_IonMonkey : TraceLogger_Baseline;
-        } else if (act->isWasm()) {
-            JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_TRACELOGGER_ENABLE_FAIL,
-                                      "not yet supported in wasm code");
-            return false;
+            const JSJitFrameIter& jitFrame = frame.asJSJit();
+            MOZ_ASSERT(jitFrame.isIonJS() || jitFrame.isBaselineJS());
+
+            script = jitFrame.script();
+            engine = jitFrame.isIonJS() ? TraceLogger_IonMonkey : TraceLogger_Baseline;
         } else {
             MOZ_ASSERT(act->isInterpreter());
             InterpreterFrame* fp = act->asInterpreter()->current();
@@ -310,6 +343,23 @@ TraceLoggerThreadState::maybeEventText(uint32_t id)
         return nullptr;
 
     return p->value()->string();
+}
+
+size_t
+TraceLoggerThreadState::sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf)
+{
+    LockGuard<Mutex> guard(lock);
+
+    // Do not count threadLoggers since they are counted by JSContext::traceLogger.
+
+    size_t size = 0;
+    size += pointerMap.sizeOfExcludingThis(mallocSizeOf);
+    if (textIdPayloads.initialized()) {
+        size += textIdPayloads.sizeOfExcludingThis(mallocSizeOf);
+        for (TextIdHashMap::Range r = textIdPayloads.all(); !r.empty(); r.popFront())
+            r.front().value()->sizeOfIncludingThis(mallocSizeOf);
+    }
+    return size;
 }
 
 bool
@@ -431,7 +481,7 @@ TraceLoggerThreadState::getOrCreateEventPayload(const char* filename,
         return nullptr;
 
     DebugOnly<size_t> ret =
-        snprintf(str, len + 1, "script %s:%" PRIuSIZE ":%" PRIuSIZE, filename, lineno, colno);
+        snprintf(str, len + 1, "script %s:%zu:%zu", filename, lineno, colno);
     MOZ_ASSERT(ret == len);
     MOZ_ASSERT(strlen(str) == len);
 

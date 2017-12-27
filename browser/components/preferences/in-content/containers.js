@@ -17,8 +17,10 @@ let gContainersPane = {
   init() {
     this._list = document.getElementById("containersView");
 
-    document.getElementById("backContainersLink").addEventListener("click", function() {
-      gotoPref("privacy");
+    document.getElementById("backContainersLink").addEventListener("click", function(event) {
+      if (event.button == 0) {
+        gotoPref("general");
+      }
     });
 
     this._rebuildView();
@@ -40,7 +42,7 @@ let gContainersPane = {
     }
   },
 
-  onRemoveClick(button) {
+  async onRemoveCommand(button) {
     let userContextId = parseInt(button.getAttribute("value"), 10);
 
     let count = ContextualIdentityService.countContainerTabs(userContextId);
@@ -49,7 +51,7 @@ let gContainersPane = {
 
       let title = bundlePreferences.getString("removeContainerAlertTitle");
       let message = PluralForm.get(count, bundlePreferences.getString("removeContainerMsg"))
-                              .replace("#S", count)
+                              .replace("#S", count);
       let okButton = bundlePreferences.getString("removeContainerOkButton");
       let cancelButton = bundlePreferences.getString("removeContainerButton2");
 
@@ -62,18 +64,18 @@ let gContainersPane = {
         return;
       }
 
-      ContextualIdentityService.closeContainerTabs(userContextId);
+      await ContextualIdentityService.closeContainerTabs(userContextId);
     }
 
     ContextualIdentityService.remove(userContextId);
     this._rebuildView();
   },
 
-  onPreferenceClick(button) {
+  onPreferenceCommand(button) {
     this.openPreferenceDialog(button.getAttribute("value"));
   },
 
-  onAddButtonClick(button) {
+  onAddButtonCommand(button) {
     this.openPreferenceDialog(null);
   },
 

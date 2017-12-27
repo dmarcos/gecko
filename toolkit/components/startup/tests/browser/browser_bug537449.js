@@ -4,12 +4,6 @@
 
 "use strict";
 
-//
-// Whitelisting this test.
-// As part of bug 1077403, the leaking uncaught rejection should be fixed.
-//
-thisTestLeaksUncaughtRejectionsAndShouldBeFixed("TypeError: this.docShell is null");
-
 SpecialPowers.pushPrefEnv({"set": [["dom.require_user_interaction_for_beforeunload", false]]});
 
 const TEST_URL = "http://example.com/browser/toolkit/components/startup/tests/browser/beforeunload.html";
@@ -17,7 +11,7 @@ const TEST_URL = "http://example.com/browser/toolkit/components/startup/tests/br
 function test() {
   waitForExplicitFinish();
 
-  gBrowser.selectedTab = gBrowser.addTab(TEST_URL);
+  gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser, TEST_URL);
   let browser = gBrowser.selectedBrowser;
 
   whenBrowserLoaded(browser, function() {
@@ -29,9 +23,7 @@ function test() {
       btnStay.click();
     });
 
-    let appStartup = Cc["@mozilla.org/toolkit/app-startup;1"].
-                       getService(Ci.nsIAppStartup);
-    appStartup.quit(Ci.nsIAppStartup.eAttemptQuit);
+    Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit);
     ok(seenDialog, "Should have seen a prompt dialog");
     ok(!window.closed, "Shouldn't have closed the window");
 

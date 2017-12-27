@@ -131,11 +131,11 @@ static int nr_crypto_nss_random_bytes(UCHAR *buf, int len) {
 static int nr_crypto_nss_hmac(UCHAR *key, int keyl, UCHAR *buf, int bufl,
                               UCHAR *result) {
   CK_MECHANISM_TYPE mech = CKM_SHA_1_HMAC;
-  PK11SlotInfo *slot = 0;
+  PK11SlotInfo *slot = nullptr;
   MOZ_ASSERT(keyl > 0);
   SECItem keyi = { siBuffer, key, static_cast<unsigned int>(keyl)};
-  PK11SymKey *skey = 0;
-  PK11Context *hmac_ctx = 0;
+  PK11SymKey *skey = nullptr;
+  PK11Context *hmac_ctx = nullptr;
   SECStatus status;
   unsigned int hmac_len;
   SECItem param = { siBuffer, nullptr, 0 };
@@ -457,7 +457,7 @@ NrIceCtx::InitializeGlobals(bool allow_loopback,
             &ice_tcp_listen_backlog);
         branch->GetCharPref(
             "media.peerconnection.ice.force_interface",
-            getter_Copies(force_net_interface));
+            force_net_interface);
       }
     }
 
@@ -633,8 +633,8 @@ NrIceCtx::Initialize(const std::string& ufrag,
     }
   }
 
-  nsCString mapping_type;
-  nsCString filtering_type;
+  nsAutoCString mapping_type;
+  nsAutoCString filtering_type;
   bool block_udp = false;
   bool block_tcp = false;
 
@@ -648,10 +648,10 @@ NrIceCtx::Initialize(const std::string& ufrag,
     if (NS_SUCCEEDED(rv)) {
       rv = pref_branch->GetCharPref(
           "media.peerconnection.nat_simulator.mapping_type",
-          getter_Copies(mapping_type));
+          mapping_type);
       rv = pref_branch->GetCharPref(
           "media.peerconnection.nat_simulator.filtering_type",
-          getter_Copies(filtering_type));
+          filtering_type);
       rv = pref_branch->GetBoolPref(
           "media.peerconnection.nat_simulator.block_udp",
           &block_udp);
@@ -782,8 +782,8 @@ NrIceStats NrIceCtx::Destroy() {
   delete ice_handler_vtbl_;
   delete ice_handler_;
 
-  ice_handler_vtbl_ = 0;
-  ice_handler_ = 0;
+  ice_handler_vtbl_ = nullptr;
+  ice_handler_ = nullptr;
   streams_.clear();
 
   return stats;
@@ -942,9 +942,8 @@ abort:
   return NS_OK;
 }
 
-nsresult NrIceCtx::StartGathering(bool default_route_only, bool proxy_only) {
+void NrIceCtx::SetCtxFlags(bool default_route_only, bool proxy_only) {
   ASSERT_ON_THREAD(sts_target_);
-  SetGatheringState(ICE_CTX_GATHER_STARTED);
 
   if (default_route_only) {
     nr_ice_ctx_add_flags(ctx_, NR_ICE_CTX_FLAGS_ONLY_DEFAULT_ADDRS);
@@ -957,19 +956,35 @@ nsresult NrIceCtx::StartGathering(bool default_route_only, bool proxy_only) {
   } else {
     nr_ice_ctx_remove_flags(ctx_, NR_ICE_CTX_FLAGS_ONLY_PROXY);
   }
+}
 
+nsresult NrIceCtx::StartGathering(bool default_route_only, bool proxy_only) {
+  ASSERT_ON_THREAD(sts_target_);
+  SetGatheringState(ICE_CTX_GATHER_STARTED);
+
+  SetCtxFlags(default_route_only, proxy_only);
+
+  TimeStamp start = TimeStamp::Now();
   // This might start gathering for the first time, or again after
   // renegotiation, or might do nothing at all if gathering has already
   // finished.
   int r = nr_ice_gather(ctx_, &NrIceCtx::gather_cb, this);
 
+
   if (!r) {
     SetGatheringState(ICE_CTX_GATHER_COMPLETE);
+    Telemetry::AccumulateTimeDelta(
+        Telemetry::WEBRTC_ICE_NR_ICE_GATHER_TIME_IMMEDIATE_SUCCESS, start);
   } else if (r != R_WOULDBLOCK) {
     MOZ_MTLOG(ML_ERROR, "Couldn't gather ICE candidates for '"
                         << name_ << "', error=" << r);
     SetConnectionState(ICE_CTX_FAILED);
+    Telemetry::AccumulateTimeDelta(
+        Telemetry::WEBRTC_ICE_NR_ICE_GATHER_TIME_IMMEDIATE_FAILURE, start);
     return NS_ERROR_FAILURE;
+  } else {
+    Telemetry::AccumulateTimeDelta(
+        Telemetry::WEBRTC_ICE_NR_ICE_GATHER_TIME, start);
   }
 
   return NS_OK;
@@ -987,7 +1002,7 @@ RefPtr<NrIceMediaStream> NrIceCtx::FindStream(
 }
 
 std::vector<std::string> NrIceCtx::GetGlobalAttributes() {
-  char **attrs = 0;
+  char **attrs = nullptr;
   int attrct;
   int r;
   std::vector<std::string> ret;
@@ -1016,8 +1031,8 @@ nsresult NrIceCtx::ParseGlobalAttributes(std::vector<std::string> attrs) {
   }
 
   int r = nr_ice_peer_ctx_parse_global_attributes(peer_,
-                                                  attrs_in.size() ?
-                                                  &attrs_in[0] : nullptr,
+                                                  attrs_in.empty() ?
+                                                  nullptr : &attrs_in[0],
                                                   attrs_in.size());
   if (r) {
     MOZ_MTLOG(ML_ERROR, "Couldn't parse global attributes for "
@@ -1028,8 +1043,21 @@ nsresult NrIceCtx::ParseGlobalAttributes(std::vector<std::string> attrs) {
   return NS_OK;
 }
 
+bool NrIceCtx::HasStreamsToConnect() const {
+  for (auto& stream : streams_) {
+    if (stream && stream->state() != NrIceMediaStream::ICE_CLOSED) {
+      return true;
+    }
+  }
+  return false;
+}
+
 nsresult NrIceCtx::StartChecks(bool offerer) {
   int r;
+  if (!HasStreamsToConnect()) {
+    // Nothing to do
+    return NS_OK;
+  }
 
   offerer_ = offerer;
   ice_start_time_ = TimeStamp::Now();
@@ -1170,6 +1198,4 @@ void nr_ice_compute_codeword(char *buf, int len,char *codeword) {
 
     PL_Base64Encode(reinterpret_cast<char*>(&c), 3, codeword);
     codeword[4] = 0;
-
-    return;
 }

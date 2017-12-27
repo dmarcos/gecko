@@ -5,83 +5,40 @@
 
 this.EXPORTED_SYMBOLS = ["PlacesUIUtils"];
 
-var Ci = Components.interfaces;
-var Cc = Components.classes;
-var Cr = Components.results;
-var Cu = Components.utils;
+const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
 
-Cu.import("resource://gre/modules/PlacesUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
-                                  "resource://gre/modules/PluralForm.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
-                                  "resource://gre/modules/PrivateBrowsingUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
-                                  "resource://gre/modules/NetUtil.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Task",
-                                  "resource://gre/modules/Task.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
-                                  "resource:///modules/RecentWindow.jsm");
-
-// PlacesUtils exposes multiple symbols, so we can't use defineLazyModuleGetter.
+// PlacesUtils exposes multiple symbols, so we can't use defineLazyModuleGetter
+// until we remove legacy transactions (Bug 1131491).
 Cu.import("resource://gre/modules/PlacesUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "PlacesTransactions",
-                                  "resource://gre/modules/PlacesTransactions.jsm");
+XPCOMUtils.defineLazyModuleGetters(this, {
+  PluralForm: "resource://gre/modules/PluralForm.jsm",
+  PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
+  RecentWindow: "resource:///modules/RecentWindow.jsm",
+  PromiseUtils: "resource://gre/modules/PromiseUtils.jsm",
+  PlacesTransactions: "resource://gre/modules/PlacesTransactions.jsm",
+  Weave: "resource://services-sync/main.js",
+});
 
-XPCOMUtils.defineLazyModuleGetter(this, "CloudSync",
-                                  "resource://gre/modules/CloudSync.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "Weave",
-                                  "resource://services-sync/main.js");
+XPCOMUtils.defineLazyGetter(this, "bundle", function() {
+  return Services.strings.createBundle("chrome://browser/locale/places/places.properties");
+});
 
 const gInContentProcess = Services.appinfo.processType == Ci.nsIXULRuntime.PROCESS_TYPE_CONTENT;
 const FAVICON_REQUEST_TIMEOUT = 60 * 1000;
 // Map from windows to arrays of data about pending favicon loads.
 let gFaviconLoadDataMap = new Map();
 
+const ITEM_CHANGED_BATCH_NOTIFICATION_THRESHOLD = 10;
+
 // copied from utilityOverlay.js
 const TAB_DROP_TYPE = "application/x-moz-tabbrowser-tab";
-
-// This function isn't public both because it's synchronous and because it is
-// going to be removed in bug 1072833.
-function IsLivemark(aItemId) {
-  // Since this check may be done on each dragover event, it's worth maintaining
-  // a cache.
-  let self = IsLivemark;
-  if (!("ids" in self)) {
-    const LIVEMARK_ANNO = PlacesUtils.LMANNO_FEEDURI;
-
-    let idsVec = PlacesUtils.annotations.getItemsWithAnnotation(LIVEMARK_ANNO);
-    self.ids = new Set(idsVec);
-
-    let obs = Object.freeze({
-      QueryInterface: XPCOMUtils.generateQI(Ci.nsIAnnotationObserver),
-
-      onItemAnnotationSet(itemId, annoName) {
-        if (annoName == LIVEMARK_ANNO)
-          self.ids.add(itemId);
-      },
-
-      onItemAnnotationRemoved(itemId, annoName) {
-        // If annoName is set to an empty string, the item is gone.
-        if (annoName == LIVEMARK_ANNO || annoName == "")
-          self.ids.delete(itemId);
-      },
-
-      onPageAnnotationSet() { },
-      onPageAnnotationRemoved() { },
-    });
-    PlacesUtils.annotations.addObserver(obs);
-    PlacesUtils.registerShutdownFunction(() => {
-      PlacesUtils.annotations.removeObserver(obs);
-    });
-  }
-  return self.ids.has(aItemId);
-}
+const PREF_LOAD_BOOKMARKS_IN_BACKGROUND = "browser.tabs.loadBookmarksInBackground";
+const PREF_LOAD_BOOKMARKS_IN_TABS = "browser.tabs.loadBookmarksInTabs";
 
 let InternalFaviconLoader = {
   /**
@@ -207,7 +164,7 @@ let InternalFaviconLoader = {
     });
   },
 
-  loadFavicon(browser, principal, uri) {
+  loadFavicon(browser, principal, uri, requestContextID) {
     this.ensureInitialized();
     let win = browser.ownerGlobal;
     if (!gFaviconLoadDataMap.has(win)) {
@@ -225,16 +182,14 @@ let InternalFaviconLoader = {
 
     let {innerWindowID, currentURI} = browser;
 
-    // Immediately cancel any earlier requests
-    this.removeRequestsForInner(innerWindowID);
-
     // First we do the actual setAndFetch call:
     let loadType = PrivateBrowsingUtils.isWindowPrivate(win)
       ? PlacesUtils.favicons.FAVICON_LOAD_PRIVATE
       : PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE;
     let callback = this._makeCompletionCallback(win, innerWindowID);
     let request = PlacesUtils.favicons.setAndFetchFaviconForPage(currentURI, uri, false,
-                                                                 loadType, callback, principal);
+                                                                 loadType, callback, principal,
+                                                                 requestContextID);
 
     // Now register the result so we can cancel it if/when necessary.
     if (!request) {
@@ -269,7 +224,7 @@ this.PlacesUIUtils = {
    * @return A URI object for the spec.
    */
   createFixedURI: function PUIU_createFixedURI(aSpec) {
-    return URIFixup.createFixupURI(aSpec, Ci.nsIURIFixup.FIXUP_FLAG_NONE);
+    return Services.uriFixup.createFixupURI(aSpec, Ci.nsIURIFixup.FIXUP_FLAG_NONE);
   },
 
   getFormattedString: function PUIU_getFormattedString(key, params) {
@@ -425,7 +380,7 @@ this.PlacesUIUtils = {
         root.containerOpen = false;
         for (let { uri } of urls) {
           transactions.push(
-            new PlacesTagURITransaction(NetUtil.newURI(uri), [aData.title])
+            new PlacesTagURITransaction(Services.io.newURI(uri), [aData.title])
           );
         }
       }
@@ -493,7 +448,7 @@ this.PlacesUIUtils = {
         } else if (aAnno.name == PlacesUtils.LMANNO_SITEURI) {
           siteURI = PlacesUtils._uri(aAnno.value);
         }
-        return this._copyableAnnotations.includes(aAnno.name)
+        return this._copyableAnnotations.includes(aAnno.name);
       }, this);
     }
 
@@ -564,8 +519,6 @@ this.PlacesUIUtils = {
    *
    * @param   aData
    *          The unwrapped data blob of dropped or pasted data.
-   * @param   aType
-   *          The content type of the data.
    * @param   aNewParentGuid
    *          GUID of the container the data was dropped or pasted into.
    * @param   aIndex
@@ -576,17 +529,18 @@ this.PlacesUIUtils = {
    * @return  a Places Transaction that can be transacted for performing the
    *          move/insert command.
    */
-  getTransactionForData(aData, aType, aNewParentGuid, aIndex, aCopy) {
+  getTransactionForData(aData, aNewParentGuid, aIndex, aCopy) {
     if (!this.SUPPORTED_FLAVORS.includes(aData.type))
       throw new Error(`Unsupported '${aData.type}' data type`);
 
-    if ("itemGuid" in aData) {
+    if ("itemGuid" in aData && "instanceId" in aData &&
+        aData.instanceId == PlacesUtils.instanceId) {
       if (!this.PLACES_FLAVORS.includes(aData.type))
         throw new Error(`itemGuid unexpectedly set on ${aData.type} data`);
 
-      let info = { guid: aData.itemGuid
-                 , newParentGuid: aNewParentGuid
-                 , newIndex: aIndex };
+      let info = { guid: aData.itemGuid,
+                   newParentGuid: aNewParentGuid,
+                   newIndex: aIndex };
       if (aCopy) {
         info.excludingAnnotation = "Places/SmartBookmark";
         return PlacesTransactions.Copy(info);
@@ -602,16 +556,16 @@ this.PlacesUIUtils = {
       throw new Error("Can't copy a container from a legacy-transactions build");
 
     if (aData.type == PlacesUtils.TYPE_X_MOZ_PLACE_SEPARATOR) {
-      return PlacesTransactions.NewSeparator({ parentGuid: aNewParentGuid
-                                             , index: aIndex });
+      return PlacesTransactions.NewSeparator({ parentGuid: aNewParentGuid,
+                                               index: aIndex });
     }
 
     let title = aData.type != PlacesUtils.TYPE_UNICODE ? aData.title
                                                        : aData.uri;
-    return PlacesTransactions.NewBookmark({ uri: NetUtil.newURI(aData.uri)
-                                          , title
-                                          , parentGuid: aNewParentGuid
-                                          , index: aIndex });
+    return PlacesTransactions.NewBookmark({ url: Services.io.newURI(aData.uri),
+                                            title,
+                                            parentGuid: aNewParentGuid,
+                                            index: aIndex });
   },
 
   /**
@@ -626,8 +580,7 @@ this.PlacesUIUtils = {
    * @see documentation at the top of bookmarkProperties.js
    * @return true if any transaction has been performed, false otherwise.
    */
-  showBookmarkDialog:
-  function PUIU_showBookmarkDialog(aInfo, aParentWindow) {
+  showBookmarkDialog(aInfo, aParentWindow) {
     // Preserve size attributes differently based on the fact the dialog has
     // a folder picker or not, since it needs more horizontal space than the
     // other controls.
@@ -639,12 +592,33 @@ this.PlacesUIUtils = {
                     "chrome://browser/content/places/bookmarkProperties.xul";
 
     let features = "centerscreen,chrome,modal,resizable=yes";
-    aParentWindow.openDialog(dialogURL, "", features, aInfo);
-    return ("performed" in aInfo && aInfo.performed);
-  },
 
-  _getTopBrowserWin: function PUIU__getTopBrowserWin() {
-    return RecentWindow.getMostRecentBrowserWindow();
+    let topUndoEntry;
+    let batchBlockingDeferred;
+
+    if (this.useAsyncTransactions) {
+      // Set the transaction manager into batching mode.
+      topUndoEntry = PlacesTransactions.topUndoEntry;
+      batchBlockingDeferred = PromiseUtils.defer();
+      PlacesTransactions.batch(async () => {
+        await batchBlockingDeferred.promise;
+      });
+    }
+
+    aParentWindow.openDialog(dialogURL, "", features, aInfo);
+
+    let performed = ("performed" in aInfo && aInfo.performed);
+
+    if (this.useAsyncTransactions) {
+      batchBlockingDeferred.resolve();
+
+      if (!performed &&
+          topUndoEntry != PlacesTransactions.topUndoEntry) {
+        PlacesTransactions.undo().catch(Components.utils.reportError);
+      }
+    }
+
+    return performed;
   },
 
   /**
@@ -653,11 +627,11 @@ this.PlacesUIUtils = {
    * @param principal {Principal} The loading principal to use for the fetch.
    * @param uri       {URI}       The URI to fetch.
    */
-  loadFavicon(browser, principal, uri) {
+  loadFavicon(browser, principal, uri, requestContextID) {
     if (gInContentProcess) {
       throw new Error("Can't track loads from within the child process!");
     }
-    InternalFaviconLoader.loadFavicon(browser, principal, uri);
+    InternalFaviconLoader.loadFavicon(browser, principal, uri, requestContextID);
   },
 
   /**
@@ -668,6 +642,10 @@ this.PlacesUIUtils = {
    */
   getViewForNode: function PUIU_getViewForNode(aNode) {
     let node = aNode;
+
+    if (node.localName == "panelview" && node._placesView) {
+      return node._placesView;
+    }
 
     // The view for a <menu> of which its associated menupopup is a places
     // view, is the menupopup.
@@ -737,8 +715,7 @@ this.PlacesUIUtils = {
     var uri = PlacesUtils._uri(aURINode.uri);
     if (uri.schemeIs("javascript") || uri.schemeIs("data")) {
       const BRANDING_BUNDLE_URI = "chrome://branding/locale/brand.properties";
-      var brandShortName = Cc["@mozilla.org/intl/stringbundle;1"].
-                           getService(Ci.nsIStringBundleService).
+      var brandShortName = Services.strings.
                            createBundle(BRANDING_BUNDLE_URI).
                            GetStringFromName("brandShortName");
 
@@ -787,9 +764,11 @@ this.PlacesUIUtils = {
    *
    * @param aNode
    *        a node, except the root node of a query.
+   * @param aView
+   *        The view originating the request.
    * @return true if the aNode represents a removable entry, false otherwise.
    */
-  canUserRemove(aNode) {
+  canUserRemove(aNode, aView) {
     let parentNode = aNode.parent;
     if (!parentNode) {
       // canUserRemove doesn't accept root nodes.
@@ -810,44 +789,40 @@ this.PlacesUIUtils = {
       return true;
 
     // Otherwise it has to be a child of an editable folder.
-    return !this.isContentsReadOnly(parentNode);
+    return !this.isFolderReadOnly(parentNode, aView);
   },
 
   /**
    * DO NOT USE THIS API IN ADDONS. IT IS VERY LIKELY TO CHANGE WHEN THE SWITCH
    * TO GUIDS IS COMPLETE (BUG 1071511).
    *
-   * Check whether or not the given node or item-id points to a folder which
+   * Check whether or not the given Places node points to a folder which
    * should not be modified by the user (i.e. its children should be unremovable
    * and unmovable, new children should be disallowed, etc).
    * These semantics are not inherited, meaning that read-only folder may
    * contain editable items (for instance, the places root is read-only, but all
    * of its direct children aren't).
    *
-   * You should only pass folder item ids or folder nodes for aNodeOrItemId.
-   * While this is only enforced for the node case (if an item id of a separator
-   * or a bookmark is passed, false is returned), it's considered the caller's
-   * job to ensure that it checks a folder.
-   * Also note that folder-shortcuts should only be passed as result nodes.
-   * Otherwise they are just treated as bookmarks (i.e. false is returned).
+   * You should only pass folder nodes.
    *
-   * @param aNodeOrItemId
-   *        any item id or result node.
-   * @throws if aNodeOrItemId is neither an item id nor a folder result node.
+   * @param placesNode
+   *        any folder result node.
+   * @param view
+   *        The view originating the request.
+   * @throws if placesNode is not a folder result node or views is invalid.
    * @note livemark "folders" are considered read-only (but see bug 1072833).
-   * @return true if aItemId points to a read-only folder, false otherwise.
+   * @return true if placesNode is a read-only folder, false otherwise.
    */
-  isContentsReadOnly(aNodeOrItemId) {
-    let itemId;
-    if (typeof(aNodeOrItemId) == "number") {
-      itemId = aNodeOrItemId;
-    } else if (PlacesUtils.nodeIsFolder(aNodeOrItemId)) {
-      itemId = PlacesUtils.getConcreteItemId(aNodeOrItemId);
-    } else {
-      throw new Error("invalid value for aNodeOrItemId");
+  isFolderReadOnly(placesNode, view) {
+    if (typeof placesNode != "object" || !PlacesUtils.nodeIsFolder(placesNode)) {
+      throw new Error("invalid value for placesNode");
     }
-
-    if (itemId == PlacesUtils.placesRootId || IsLivemark(itemId))
+    if (!view || typeof view != "object") {
+      throw new Error("invalid value for aView");
+    }
+    let itemId = PlacesUtils.getConcreteItemId(placesNode);
+    if (itemId == PlacesUtils.placesRootId ||
+        view.controller.hasCachedLivemarkInfo(placesNode))
       return true;
 
     // leftPaneFolderId, and as a result, allBookmarksFolderId, is a lazy getter
@@ -861,9 +836,9 @@ this.PlacesUIUtils = {
     // special folder if the lazy getter is still in place.  This is safe merely
     // because the only way to access the left pane contents goes through
     // "resolving" the leftPaneFolderId getter.
-    if ("get" in Object.getOwnPropertyDescriptor(this, "leftPaneFolderId"))
+    if (typeof Object.getOwnPropertyDescriptor(this, "leftPaneFolderId").get == "function") {
       return false;
-
+    }
     return itemId == this.leftPaneFolderId ||
            itemId == this.allBookmarksFolderId;
   },
@@ -883,8 +858,7 @@ this.PlacesUIUtils = {
         var messageKey = "tabs.openWarningMultipleBranded";
         var openKey = "tabs.openButtonMultiple";
         const BRANDING_BUNDLE_URI = "chrome://branding/locale/brand.properties";
-        var brandShortName = Cc["@mozilla.org/intl/stringbundle;1"].
-                             getService(Ci.nsIStringBundleService).
+        var brandShortName = Services.strings.
                              createBundle(BRANDING_BUNDLE_URI).
                              GetStringFromName("brandShortName");
 
@@ -922,7 +896,7 @@ this.PlacesUIUtils = {
     var browserWindow = null;
     browserWindow =
       aWindow && aWindow.document.documentElement.getAttribute("windowtype") == "navigator:browser" ?
-      aWindow : this._getTopBrowserWin();
+      aWindow : RecentWindow.getMostRecentBrowserWindow();
 
     var urls = [];
     let skipMarking = browserWindow && PrivateBrowsingUtils.isWindowPrivate(browserWindow);
@@ -954,11 +928,15 @@ this.PlacesUIUtils = {
       return;
     }
 
-    var loadInBackground = where == "tabshifted" ? true : false;
+    var loadInBackground = where == "tabshifted";
     // For consistency, we want all the bookmarks to open in new tabs, instead
     // of having one of them replace the currently focused tab.  Hence we call
     // loadTabs with aReplace set to false.
-    browserWindow.gBrowser.loadTabs(urls, loadInBackground, false);
+    browserWindow.gBrowser.loadTabs(urls, {
+      inBackground: loadInBackground,
+      replace: false,
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+    });
   },
 
   openLiveMarkNodesInTabs:
@@ -1011,13 +989,18 @@ this.PlacesUIUtils = {
    * @param   aEvent
    *          The DOM mouse/key event with modifier keys set that track the
    *          user's preferred destination window or tab.
-   * @param   aView
-   *          The controller associated with aNode.
    */
   openNodeWithEvent:
-  function PUIU_openNodeWithEvent(aNode, aEvent, aView) {
-    let window = aView.ownerWindow;
-    this._openNodeIn(aNode, window.whereToOpenLink(aEvent, false, true), window);
+  function PUIU_openNodeWithEvent(aNode, aEvent) {
+    let window = aEvent.target.ownerGlobal;
+
+    let where = window.whereToOpenLink(aEvent, false, true);
+    if (where == "current" && this.loadBookmarksInTabs &&
+        PlacesUtils.nodeIsBookmark(aNode) && !aNode.uri.startsWith("javascript:")) {
+      where = "tab";
+    }
+
+    this._openNodeIn(aNode, where, window);
   },
 
   /**
@@ -1030,7 +1013,7 @@ this.PlacesUIUtils = {
     this._openNodeIn(aNode, aWhere, window, aPrivate);
   },
 
-  _openNodeIn: function PUIU_openNodeIn(aNode, aWhere, aWindow, aPrivate = false) {
+  _openNodeIn: function PUIU__openNodeIn(aNode, aWhere, aWindow, aPrivate = false) {
     if (aNode && PlacesUtils.nodeIsURI(aNode) &&
         this.checkURLSecurity(aNode, aWindow)) {
       let isBookmark = PlacesUtils.nodeIsBookmark(aNode);
@@ -1047,7 +1030,7 @@ this.PlacesUIUtils = {
       if (aWhere == "current" && isBookmark) {
         if (PlacesUtils.annotations
                        .itemHasAnnotation(aNode.itemId, this.LOAD_IN_SIDEBAR_ANNO)) {
-          let browserWin = this._getTopBrowserWin();
+          let browserWin = RecentWindow.getMostRecentBrowserWindow();
           if (browserWin) {
             browserWin.openWebPanel(aNode.title, aNode.uri);
             return;
@@ -1057,7 +1040,7 @@ this.PlacesUIUtils = {
 
       aWindow.openUILinkIn(aNode.uri, aWhere, {
         allowPopups: aNode.uri.startsWith("javascript:"),
-        inBackground: Services.prefs.getBoolPref("browser.tabs.loadBookmarksInBackground"),
+        inBackground: this.loadBookmarksInBackground,
         private: aPrivate,
       });
     }
@@ -1088,11 +1071,11 @@ this.PlacesUIUtils = {
         var fileName = uri.QueryInterface(Ci.nsIURL).fileName;
         // if fileName is empty, use path to distinguish labels
         if (aDoNotCutTitle) {
-          title = host + uri.path;
+          title = host + uri.pathQueryRef;
         } else {
           title = host + (fileName ?
                            (host ? "/" + this.ellipsis + "/" : "") + fileName :
-                           uri.path);
+                           uri.pathQueryRef);
         }
       } catch (e) {
         // Use (no title) for non-standard URIs (data:, javascript:, ...)
@@ -1110,8 +1093,13 @@ this.PlacesUIUtils = {
     return this.leftPaneQueries;
   },
 
-  // Get the folder id for the organizer left-pane folder.
   get leftPaneFolderId() {
+    delete this.leftPaneFolderId;
+    return this.leftPaneFolderId = this.maybeRebuildLeftPane();
+  },
+
+  // Get the folder id for the organizer left-pane folder.
+  maybeRebuildLeftPane() {
     let leftPaneRoot = -1;
     let allBookmarksId;
 
@@ -1127,15 +1115,15 @@ this.PlacesUIUtils = {
       "Tags": { title: this.getString("OrganizerQueryTags") },
       "AllBookmarks": { title: this.getString("OrganizerQueryAllBookmarks") },
       "BookmarksToolbar":
-        { title: null,
+        { title: "",
           concreteTitle: PlacesUtils.getString("BookmarksToolbarFolderTitle"),
           concreteId: PlacesUtils.toolbarFolderId },
       "BookmarksMenu":
-        { title: null,
+        { title: "",
           concreteTitle: PlacesUtils.getString("BookmarksMenuFolderTitle"),
           concreteId: PlacesUtils.bookmarksMenuFolderId },
       "UnfiledBookmarks":
-        { title: null,
+        { title: "",
           concreteTitle: PlacesUtils.getString("OtherBookmarksFolderTitle"),
           concreteId: PlacesUtils.unfiledBookmarksFolderId },
     };
@@ -1163,8 +1151,8 @@ this.PlacesUIUtils = {
     // Returns true if item really exists, false otherwise.
     function itemExists(aItemId) {
       try {
-        bs.getItemIndex(aItemId);
-        return true;
+        let index = bs.getItemIndex(aItemId);
+        return index > -1;
       } catch (e) {
         return false;
       }
@@ -1251,8 +1239,7 @@ this.PlacesUIUtils = {
         safeRemoveItem(leftPaneRoot);
       } else {
         // Everything is fine, return the current left pane folder.
-        delete this.leftPaneFolderId;
-        return this.leftPaneFolderId = leftPaneRoot;
+        return leftPaneRoot;
       }
     }
 
@@ -1345,8 +1332,7 @@ this.PlacesUIUtils = {
     };
     bs.runInBatchMode(callback, null);
 
-    delete this.leftPaneFolderId;
-    return this.leftPaneFolderId = leftPaneRoot;
+    return leftPaneRoot;
   },
 
   /**
@@ -1356,7 +1342,7 @@ this.PlacesUIUtils = {
     // ensure the left-pane root is initialized;
     this.leftPaneFolderId;
     delete this.allBookmarksFolderId;
-    return this.allBookmarksFolderId = this.leftPaneQueries["AllBookmarks"];
+    return this.allBookmarksFolderId = this.leftPaneQueries.AllBookmarks;
   },
 
   /**
@@ -1429,67 +1415,6 @@ this.PlacesUIUtils = {
   },
 
   /**
-   * WARNING TO ADDON AUTHORS: DO NOT USE THIS METHOD. IT"S LIKELY TO BE REMOVED IN A
-   * FUTURE RELEASE.
-   *
-   * Helpers for consumers of editBookmarkOverlay which don't have a node as their input.
-   * Given a partial node-like object, having at least the itemId property set, this
-   * method completes the rest of the properties necessary for initialising the edit
-   * overlay with it.
-   *
-   * @param aNodeLike
-   *        an object having at least the itemId nsINavHistoryResultNode property set,
-   *        along with any other properties available.
-   */
-  completeNodeLikeObjectForItemId(aNodeLike) {
-    if (this.useAsyncTransactions) {
-      // When async-transactions are enabled, node-likes must have
-      // bookmarkGuid set, and we cannot set it synchronously.
-      throw new Error("completeNodeLikeObjectForItemId cannot be used when " +
-                      "async transactions are enabled");
-    }
-    if (!("itemId" in aNodeLike))
-      throw new Error("itemId missing in aNodeLike");
-
-    let itemId = aNodeLike.itemId;
-    let defGetter = XPCOMUtils.defineLazyGetter.bind(XPCOMUtils, aNodeLike);
-
-    if (!("title" in aNodeLike))
-      defGetter("title", () => PlacesUtils.bookmarks.getItemTitle(itemId));
-
-    if (!("uri" in aNodeLike)) {
-      defGetter("uri", () => {
-        let uri = null;
-        try {
-          uri = PlacesUtils.bookmarks.getBookmarkURI(itemId);
-        } catch (ex) { }
-        return uri ? uri.spec : "";
-      });
-    }
-
-    if (!("type" in aNodeLike)) {
-      defGetter("type", () => {
-        if (aNodeLike.uri.length > 0) {
-          if (/^place:/.test(aNodeLike.uri)) {
-            if (this.isFolderShortcutQueryString(aNodeLike.uri))
-              return Ci.nsINavHistoryResultNode.RESULT_TYPE_FOLDER_SHORTCUT;
-
-            return Ci.nsINavHistoryResultNode.RESULT_TYPE_QUERY;
-          }
-
-          return Ci.nsINavHistoryResultNode.RESULT_TYPE_URI;
-        }
-
-        let itemType = PlacesUtils.bookmarks.getItemType(itemId);
-        if (itemType == PlacesUtils.bookmarks.TYPE_FOLDER)
-          return Ci.nsINavHistoryResultNode.RESULT_TYPE_FOLDER;
-
-        throw new Error("Unexpected item type");
-      });
-    }
-  },
-
-  /**
    * Helpers for consumers of editBookmarkOverlay which don't have a node as their input.
    *
    * Given a bookmark object for either a url bookmark or a folder, returned by
@@ -1501,12 +1426,18 @@ this.PlacesUIUtils = {
    * @return a node-like object suitable for initialising editBookmarkOverlay.
    * @throws if aFetchInfo is representing a separator.
    */
-  promiseNodeLikeFromFetchInfo: Task.async(function* (aFetchInfo) {
+  async promiseNodeLikeFromFetchInfo(aFetchInfo) {
     if (aFetchInfo.itemType == PlacesUtils.bookmarks.TYPE_SEPARATOR)
       throw new Error("promiseNodeLike doesn't support separators");
 
+    let parent = {
+      itemId: await PlacesUtils.promiseItemId(aFetchInfo.parentGuid),
+      bookmarkGuid: aFetchInfo.parentGuid,
+      type: Ci.nsINavHistoryResultNode.RESULT_TYPE_FOLDER
+    };
+
     return Object.freeze({
-      itemId: yield PlacesUtils.promiseItemId(aFetchInfo.guid),
+      itemId: await PlacesUtils.promiseItemId(aFetchInfo.guid),
       bookmarkGuid: aFetchInfo.guid,
       title: aFetchInfo.title,
       uri: aFetchInfo.url !== undefined ? aFetchInfo.url.href : "",
@@ -1526,9 +1457,13 @@ this.PlacesUIUtils = {
         }
 
         return Ci.nsINavHistoryResultNode.RESULT_TYPE_URI;
+      },
+
+      get parent() {
+        return parent;
       }
     });
-  }),
+  },
 
   /**
    * Shortcut for calling promiseNodeLikeFromFetchInfo on the result of
@@ -1536,12 +1471,46 @@ this.PlacesUIUtils = {
    *
    * @see promiseNodeLikeFromFetchInfo above and Bookmarks.fetch in Bookmarks.jsm.
    */
-  fetchNodeLike: Task.async(function* (aGuidOrInfo) {
-    let info = yield PlacesUtils.bookmarks.fetch(aGuidOrInfo);
+  async fetchNodeLike(aGuidOrInfo) {
+    let info = await PlacesUtils.bookmarks.fetch(aGuidOrInfo);
     if (!info)
       return null;
-    return (yield this.promiseNodeLikeFromFetchInfo(info));
-  })
+    return this.promiseNodeLikeFromFetchInfo(info);
+  },
+
+  /**
+   * This function wraps potentially large places transaction operations
+   * with batch notifications to the result node, hence switching the views
+   * to batch mode.
+   *
+   * @param {nsINavHistoryResult} resultNode The result node to turn on batching.
+   * @note If resultNode is not supplied, the function will pass-through to
+   *       functionToWrap.
+   * @param {Integer} itemsBeingChanged The count of items being changed. If the
+   *                                    count is lower than a threshold, then
+   *                                    batching won't be set.
+   * @param {Function} functionToWrap The function to
+   */
+  async batchUpdatesForNode(resultNode, itemsBeingChanged, functionToWrap) {
+    if (!resultNode) {
+      await functionToWrap();
+      return;
+    }
+
+    resultNode = resultNode.QueryInterface(Ci.nsINavBookmarkObserver);
+
+    if (itemsBeingChanged > ITEM_CHANGED_BATCH_NOTIFICATION_THRESHOLD) {
+      resultNode.onBeginUpdateBatch();
+    }
+
+    try {
+      await functionToWrap();
+    } finally {
+      if (itemsBeingChanged > ITEM_CHANGED_BATCH_NOTIFICATION_THRESHOLD) {
+        resultNode.onEndUpdateBatch();
+      }
+    }
+  },
 };
 
 
@@ -1556,196 +1525,16 @@ PlacesUIUtils.URI_FLAVORS = [PlacesUtils.TYPE_X_MOZ_URL,
 PlacesUIUtils.SUPPORTED_FLAVORS = [...PlacesUIUtils.PLACES_FLAVORS,
                                    ...PlacesUIUtils.URI_FLAVORS];
 
-XPCOMUtils.defineLazyServiceGetter(PlacesUIUtils, "RDF",
-                                   "@mozilla.org/rdf/rdf-service;1",
-                                   "nsIRDFService");
-
 XPCOMUtils.defineLazyGetter(PlacesUIUtils, "ellipsis", function() {
   return Services.prefs.getComplexValue("intl.ellipsis",
                                         Ci.nsIPrefLocalizedString).data;
 });
 
-XPCOMUtils.defineLazyGetter(PlacesUIUtils, "useAsyncTransactions", function() {
-  try {
-    return Services.prefs.getBoolPref("browser.places.useAsyncTransactions");
-  } catch (ex) { }
-  return false;
-});
-
-XPCOMUtils.defineLazyServiceGetter(this, "URIFixup",
-                                   "@mozilla.org/docshell/urifixup;1",
-                                   "nsIURIFixup");
-
-XPCOMUtils.defineLazyGetter(this, "bundle", function() {
-  const PLACES_STRING_BUNDLE_URI =
-    "chrome://browser/locale/places/places.properties";
-  return Cc["@mozilla.org/intl/stringbundle;1"].
-         getService(Ci.nsIStringBundleService).
-         createBundle(PLACES_STRING_BUNDLE_URI);
-});
-
-/**
- * This is a compatibility shim for old PUIU.ptm users.
- *
- * If you're looking for transactions and writing new code using them, directly
- * use the transactions objects exported by the PlacesUtils.jsm module.
- *
- * This object will be removed once enough users are converted to the new API.
- */
-XPCOMUtils.defineLazyGetter(PlacesUIUtils, "ptm", function() {
-  // Ensure PlacesUtils is imported in scope.
-  PlacesUtils;
-
-  return {
-    aggregateTransactions: (aName, aTransactions) =>
-      new PlacesAggregatedTransaction(aName, aTransactions),
-
-    createFolder: (aName, aContainer, aIndex, aAnnotations,
-                   aChildItemsTransactions) =>
-      new PlacesCreateFolderTransaction(aName, aContainer, aIndex, aAnnotations,
-                                        aChildItemsTransactions),
-
-    createItem: (aURI, aContainer, aIndex, aTitle, aKeyword,
-                 aAnnotations, aChildTransactions) =>
-      new PlacesCreateBookmarkTransaction(aURI, aContainer, aIndex, aTitle,
-                                          aKeyword, aAnnotations,
-                                          aChildTransactions),
-
-    createSeparator: (aContainer, aIndex) =>
-      new PlacesCreateSeparatorTransaction(aContainer, aIndex),
-
-    createLivemark: (aFeedURI, aSiteURI, aName, aContainer, aIndex,
-                     aAnnotations) =>
-      new PlacesCreateLivemarkTransaction(aFeedURI, aSiteURI, aName, aContainer,
-                                          aIndex, aAnnotations),
-
-    moveItem: (aItemId, aNewContainer, aNewIndex) =>
-      new PlacesMoveItemTransaction(aItemId, aNewContainer, aNewIndex),
-
-    removeItem: (aItemId) =>
-      new PlacesRemoveItemTransaction(aItemId),
-
-    editItemTitle: (aItemId, aNewTitle) =>
-      new PlacesEditItemTitleTransaction(aItemId, aNewTitle),
-
-    editBookmarkURI: (aItemId, aNewURI) =>
-      new PlacesEditBookmarkURITransaction(aItemId, aNewURI),
-
-    setItemAnnotation: (aItemId, aAnnotationObject) =>
-      new PlacesSetItemAnnotationTransaction(aItemId, aAnnotationObject),
-
-    setPageAnnotation: (aURI, aAnnotationObject) =>
-      new PlacesSetPageAnnotationTransaction(aURI, aAnnotationObject),
-
-    editBookmarkKeyword: (aItemId, aNewKeyword) =>
-      new PlacesEditBookmarkKeywordTransaction(aItemId, aNewKeyword),
-
-    editLivemarkSiteURI: (aLivemarkId, aSiteURI) =>
-      new PlacesEditLivemarkSiteURITransaction(aLivemarkId, aSiteURI),
-
-    editLivemarkFeedURI: (aLivemarkId, aFeedURI) =>
-      new PlacesEditLivemarkFeedURITransaction(aLivemarkId, aFeedURI),
-
-    editItemDateAdded: (aItemId, aNewDateAdded) =>
-      new PlacesEditItemDateAddedTransaction(aItemId, aNewDateAdded),
-
-    editItemLastModified: (aItemId, aNewLastModified) =>
-      new PlacesEditItemLastModifiedTransaction(aItemId, aNewLastModified),
-
-    sortFolderByName: (aFolderId) =>
-      new PlacesSortFolderByNameTransaction(aFolderId),
-
-    tagURI: (aURI, aTags) =>
-      new PlacesTagURITransaction(aURI, aTags),
-
-    untagURI: (aURI, aTags) =>
-      new PlacesUntagURITransaction(aURI, aTags),
-
-    /**
-     * Transaction for setting/unsetting Load-in-sidebar annotation.
-     *
-     * @param aBookmarkId
-     *        id of the bookmark where to set Load-in-sidebar annotation.
-     * @param aLoadInSidebar
-     *        boolean value.
-     * @return nsITransaction object.
-     */
-    setLoadInSidebar(aItemId, aLoadInSidebar) {
-      let annoObj = { name: PlacesUIUtils.LOAD_IN_SIDEBAR_ANNO,
-                      type: Ci.nsIAnnotationService.TYPE_INT32,
-                      flags: 0,
-                      value: aLoadInSidebar,
-                      expires: Ci.nsIAnnotationService.EXPIRE_NEVER };
-      return new PlacesSetItemAnnotationTransaction(aItemId, annoObj);
-    },
-
-   /**
-    * Transaction for editing the description of a bookmark or a folder.
-    *
-    * @param aItemId
-    *        id of the item to edit.
-    * @param aDescription
-    *        new description.
-    * @return nsITransaction object.
-    */
-    editItemDescription(aItemId, aDescription) {
-      let annoObj = { name: PlacesUIUtils.DESCRIPTION_ANNO,
-                      type: Ci.nsIAnnotationService.TYPE_STRING,
-                      flags: 0,
-                      value: aDescription,
-                      expires: Ci.nsIAnnotationService.EXPIRE_NEVER };
-      return new PlacesSetItemAnnotationTransaction(aItemId, annoObj);
-    },
-
-    // nsITransactionManager forwarders.
-
-    beginBatch: () =>
-      PlacesUtils.transactionManager.beginBatch(null),
-
-    endBatch: () =>
-      PlacesUtils.transactionManager.endBatch(false),
-
-    doTransaction: (txn) =>
-      PlacesUtils.transactionManager.doTransaction(txn),
-
-    undoTransaction: () =>
-      PlacesUtils.transactionManager.undoTransaction(),
-
-    redoTransaction: () =>
-      PlacesUtils.transactionManager.redoTransaction(),
-
-    get numberOfUndoItems() {
-      return PlacesUtils.transactionManager.numberOfUndoItems;
-    },
-    get numberOfRedoItems() {
-      return PlacesUtils.transactionManager.numberOfRedoItems;
-    },
-    get maxTransactionCount() {
-      return PlacesUtils.transactionManager.maxTransactionCount;
-    },
-    set maxTransactionCount(val) {
-      PlacesUtils.transactionManager.maxTransactionCount = val;
-    },
-
-    clear: () =>
-      PlacesUtils.transactionManager.clear(),
-
-    peekUndoStack: () =>
-      PlacesUtils.transactionManager.peekUndoStack(),
-
-    peekRedoStack: () =>
-      PlacesUtils.transactionManager.peekRedoStack(),
-
-    getUndoStack: () =>
-      PlacesUtils.transactionManager.getUndoStack(),
-
-    getRedoStack: () =>
-      PlacesUtils.transactionManager.getRedoStack(),
-
-    AddListener: (aListener) =>
-      PlacesUtils.transactionManager.AddListener(aListener),
-
-    RemoveListener: (aListener) =>
-      PlacesUtils.transactionManager.RemoveListener(aListener)
-  }
-});
+XPCOMUtils.defineLazyPreferenceGetter(PlacesUIUtils, "useAsyncTransactions",
+                                      "browser.places.useAsyncTransactions", false);
+XPCOMUtils.defineLazyPreferenceGetter(PlacesUIUtils, "loadBookmarksInBackground",
+                                      PREF_LOAD_BOOKMARKS_IN_BACKGROUND, false);
+XPCOMUtils.defineLazyPreferenceGetter(PlacesUIUtils, "loadBookmarksInTabs",
+                                      PREF_LOAD_BOOKMARKS_IN_TABS, false);
+XPCOMUtils.defineLazyPreferenceGetter(PlacesUIUtils, "openInTabClosesMenu",
+  "browser.bookmarks.openInTabClosesMenu", false);

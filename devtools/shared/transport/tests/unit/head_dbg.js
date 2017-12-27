@@ -32,7 +32,7 @@ const Services = require("Services");
 Services.prefs.setBoolPref("devtools.debugger.remote-enabled", true);
 
 const { DebuggerServer } = require("devtools/server/main");
-const { DebuggerClient } = require("devtools/shared/client/main");
+const { DebuggerClient } = require("devtools/shared/client/debugger-client");
 
 // Convert an nsIScriptError 'flags' value into an appropriate string.
 function scriptErrorFlagsToKind(flags) {
@@ -149,7 +149,7 @@ var socket_transport = Task.async(function* () {
     yield debuggerListener.open();
   }
   let port = DebuggerServer._listeners[0].port;
-  do_print("Debugger server port is " + port);
+  info("Debugger server port is " + port);
   return DebuggerClient.socketConnect({ host: "127.0.0.1", port });
 });
 

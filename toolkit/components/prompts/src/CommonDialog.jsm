@@ -18,7 +18,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "EnableDelayHelper",
 this.CommonDialog = function CommonDialog(args, ui) {
     this.args = args;
     this.ui   = ui;
-}
+};
 
 CommonDialog.prototype = {
     args: null,
@@ -89,6 +89,10 @@ CommonDialog.prototype = {
           default:
             Cu.reportError("commonDialog opened for unknown type: " + this.args.promptType);
             throw "unknown dialog type";
+        }
+
+        if (xulDialog) {
+            xulDialog.setAttribute("windowtype", "prompt:" + this.args.promptType);
         }
 
         // set the document title

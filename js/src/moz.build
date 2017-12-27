@@ -81,7 +81,6 @@ EXPORTS += [
     'jsalloc.h',
     'jsapi.h',
     'jsbytecode.h',
-    'jsclist.h',
     'jscpucfg.h',
     'jsfriendapi.h',
     'jsprf.h',
@@ -126,6 +125,7 @@ EXPORTS.js += [
     '../public/Result.h',
     '../public/RootingAPI.h',
     '../public/SliceBudget.h',
+    '../public/Stream.h',
     '../public/StructuredClone.h',
     '../public/SweepingAPI.h',
     '../public/TraceKind.h',
@@ -158,6 +158,7 @@ UNIFIED_SOURCES += [
     'builtin/Reflect.cpp',
     'builtin/ReflectParse.cpp',
     'builtin/SIMD.cpp',
+    'builtin/Stream.cpp',
     'builtin/SymbolObject.cpp',
     'builtin/TestingFunctions.cpp',
     'builtin/TypedObject.cpp',
@@ -180,7 +181,6 @@ UNIFIED_SOURCES += [
     'gc/Iteration.cpp',
     'gc/Marking.cpp',
     'gc/Memory.cpp',
-    'gc/MemoryProfiler.cpp',
     'gc/Nursery.cpp',
     'gc/RootMarking.cpp',
     'gc/Statistics.cpp',
@@ -230,15 +230,15 @@ UNIFIED_SOURCES += [
     'jit/IonAnalysis.cpp',
     'jit/IonBuilder.cpp',
     'jit/IonCacheIRCompiler.cpp',
-    'jit/IonCaches.cpp',
     'jit/IonControlFlow.cpp',
     'jit/IonIC.cpp',
     'jit/IonOptimizationLevels.cpp',
+    'jit/Jit.cpp',
     'jit/JitcodeMap.cpp',
     'jit/JitFrames.cpp',
     'jit/JitOptions.cpp',
     'jit/JitSpewer.cpp',
-    'jit/JSONPrinter.cpp',
+    'jit/JSJitFrameIter.cpp',
     'jit/JSONSpewer.cpp',
     'jit/LICM.cpp',
     'jit/Linker.cpp',
@@ -259,6 +259,7 @@ UNIFIED_SOURCES += [
     'jit/RematerializedFrame.cpp',
     'jit/Safepoints.cpp',
     'jit/ScalarReplacement.cpp',
+    'jit/shared/Assembler-shared.cpp',
     'jit/shared/BaselineCompiler-shared.cpp',
     'jit/shared/CodeGenerator-shared.cpp',
     'jit/shared/Lowering-shared.cpp',
@@ -288,10 +289,8 @@ UNIFIED_SOURCES += [
     'json.cpp',
     'jsopcode.cpp',
     'jsprf.cpp',
-    'jspropertytree.cpp',
     'jsscript.cpp',
     'jsstr.cpp',
-    'jswatchpoint.cpp',
     'jsweakmap.cpp',
     'perf/jsperf.cpp',
     'proxy/BaseProxyHandler.cpp',
@@ -325,7 +324,9 @@ UNIFIED_SOURCES += [
     'vm/GlobalObject.cpp',
     'vm/HelperThreads.cpp',
     'vm/Id.cpp',
+    'vm/Initialization.cpp',
     'vm/JSONParser.cpp',
+    'vm/JSONPrinter.cpp',
     'vm/MemoryMetrics.cpp',
     'vm/NativeObject.cpp',
     'vm/ObjectGroup.cpp',
@@ -366,18 +367,19 @@ UNIFIED_SOURCES += [
     'wasm/WasmBaselineCompile.cpp',
     'wasm/WasmBinaryIterator.cpp',
     'wasm/WasmBinaryToAST.cpp',
-    'wasm/WasmBinaryToExperimentalText.cpp',
     'wasm/WasmBinaryToText.cpp',
+    'wasm/WasmBuiltins.cpp',
     'wasm/WasmCode.cpp',
     'wasm/WasmCompartment.cpp',
     'wasm/WasmCompile.cpp',
-    'wasm/WasmFrameIterator.cpp',
+    'wasm/WasmDebug.cpp',
+    'wasm/WasmFrameIter.cpp',
     'wasm/WasmGenerator.cpp',
     'wasm/WasmInstance.cpp',
     'wasm/WasmIonCompile.cpp',
     'wasm/WasmJS.cpp',
     'wasm/WasmModule.cpp',
-    'wasm/WasmRuntime.cpp',
+    'wasm/WasmProcess.cpp',
     'wasm/WasmSignalHandlers.cpp',
     'wasm/WasmStubs.cpp',
     'wasm/WasmTable.cpp',
@@ -395,8 +397,8 @@ UNIFIED_SOURCES += [
 # template instantiations.
 # jsdtoa.cpp cannot be built in unified mode because we want to suppress
 # compiler warnings in third-party dtoa.c.
-# jsmath.cpp cannot be built in unified mode because it needs to pull rand_s
-# from <stdlib.h> on Windows through a preprocessor define.
+# jsmath.cpp cannot be built in unified mode because it needs to re-#define the
+# RtlGenRandom declaration's calling convention in <ntsecapi.h> on Windows.
 # jsutil.cpp cannot be built in unified mode because it is needed for
 # check-vanilla-allocations.
 # StoreBuffer.cpp cannot be built in unified because its template
@@ -413,7 +415,6 @@ SOURCES += [
     'jsdtoa.cpp',
     'jsmath.cpp',
     'jsutil.cpp',
-    'vm/Initialization.cpp',
     'vm/Interpreter.cpp',
 ]
 
@@ -582,14 +583,12 @@ elif CONFIG['JS_CODEGEN_MIPS32'] or CONFIG['JS_CODEGEN_MIPS64']:
             ]
 
 if CONFIG['OS_ARCH'] == 'WINNT':
-    SOURCES += [
+    UNIFIED_SOURCES += [
         'threading/windows/CpuCount.cpp',
         'threading/windows/Thread.cpp',
     ]
-    # _CRT_RAND_S must be #defined before #including stdlib.h to get rand_s()
-    DEFINES['_CRT_RAND_S'] = True
 else:
-    SOURCES += [
+    UNIFIED_SOURCES += [
         'threading/posix/CpuCount.cpp',
         'threading/posix/Thread.cpp',
     ]
@@ -611,6 +610,8 @@ if CONFIG['MOZ_VTUNE']:
         'vtune/jitprofiling.c',
         'vtune/VTuneWrapper.cpp',
     ]
+    if CONFIG['CC_TYPE'] != 'msvc':
+        SOURCES['vtune/ittnotify_static.c'].flags += ['-Wno-varargs', '-Wno-unknown-pragmas']
 
 if CONFIG['HAVE_LINUX_PERF_EVENT_H']:
     SOURCES += [
@@ -638,9 +639,29 @@ FINAL_LIBRARY = 'js'
 
 if CONFIG['NIGHTLY_BUILD']:
     DEFINES['ENABLE_BINARYDATA'] = True
-
-if CONFIG['NIGHTLY_BUILD']:
     DEFINES['ENABLE_SIMD'] = True
+    DEFINES['ENABLE_WASM_THREAD_OPS'] = True
+
+if CONFIG['JS_BUILD_BINAST']:
+    # Using SOURCES as UNIFIED_SOURCES causes mysterious bugs on 32-bit platforms.
+    # These parts of BinAST are designed only to test evolutions of the
+    # specification.
+    SOURCES += ['frontend/BinTokenReaderTester.cpp']
+    # These parts of BinAST should eventually move to release.
+    SOURCES += [
+        'frontend/BinSource.cpp',
+        'frontend/BinToken.cpp'
+    ]
+
+# Wasm code should use WASM_HUGE_MEMORY instead of JS_CODEGEN_X64
+# so that it is easy to use the huge-mapping optimization for other
+# 64-bit platforms in the future.
+
+if CONFIG['JS_CODEGEN_X64']:
+    DEFINES['WASM_HUGE_MEMORY'] = True
+
+if CONFIG['MOZ_DEBUG'] or CONFIG['NIGHTLY_BUILD']:
+    DEFINES['JS_CACHEIR_SPEW'] = True
 
 # Also set in shell/moz.build
 DEFINES['ENABLE_SHARED_ARRAY_BUFFER'] = True
@@ -655,7 +676,7 @@ if CONFIG['JS_HAS_CTYPES']:
 if CONFIG['MOZ_LINKER']:
     DEFINES['MOZ_LINKER'] = True
 
-if CONFIG['_MSC_VER']:
+if CONFIG['CC_TYPE'] in ('msvc', 'clang-cl'):
     if CONFIG['CPU_ARCH'] == 'x86':
         SOURCES['builtin/RegExp.cpp'].no_pgo = True # Bug 772303
     elif CONFIG['CPU_ARCH'] == 'x86_64' and CONFIG['JS_HAS_CTYPES']:
@@ -729,12 +750,19 @@ if CONFIG['JS_HAS_CTYPES']:
         # Windows needs this to be linked with a static library.
         DEFINES['FFI_BUILDING'] = True
 
-if CONFIG['GNU_CXX']:
-    CXXFLAGS += ['-Wno-shadow', '-Werror=format']
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
+    # Also disable strict-aliasing for GCC compiler, that is enabled by default
+    # starting with version 7.1, see Bug 1363009
+    CXXFLAGS += ['-Wno-shadow', '-Werror=format', '-fno-strict-aliasing']
 
 # Suppress warnings in third-party code.
-if CONFIG['CLANG_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     SOURCES['jsdtoa.cpp'].flags += ['-Wno-implicit-fallthrough']
 
-if CONFIG['OS_ARCH'] == 'WINNT':
-    DEFINES['NOMINMAX'] = True
+# Generate GC statistics phase data.
+GENERATED_FILES += ['gc/StatsPhasesGenerated.h']
+StatsPhasesGeneratedHeader = GENERATED_FILES['gc/StatsPhasesGenerated.h']
+StatsPhasesGeneratedHeader.script = 'gc/GenerateStatsPhases.py:generateHeader'
+GENERATED_FILES += ['gc/StatsPhasesGenerated.cpp']
+StatsPhasesGeneratedCpp = GENERATED_FILES['gc/StatsPhasesGenerated.cpp']
+StatsPhasesGeneratedCpp.script = 'gc/GenerateStatsPhases.py:generateCpp'

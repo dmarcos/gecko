@@ -1,17 +1,8 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim:cindent:ts=2:et:sw=2:
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * This Original Code has been modified by IBM Corporation. Modifications made by IBM 
- * described herein are Copyright (c) International Business Machines Corporation, 2000.
- * Modifications to Mozilla code or documentation identified per MPL Section 3.3
- *
- * Date             Modified by     Description of modification
- * 04/20/2000       IBM Corp.      OS/2 VisualAge build.
- */
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* storage of the frame tree and information about it */
 
@@ -46,35 +37,10 @@ using namespace mozilla::dom;
 
 //----------------------------------------------------------------------
 
-struct PlaceholderMapEntry : public PLDHashEntryHdr {
-  // key (the out of flow frame) can be obtained through placeholder frame
-  nsPlaceholderFrame *placeholderFrame;
-};
-
-static bool
-PlaceholderMapMatchEntry(const PLDHashEntryHdr *hdr, const void *key)
-{
-  const PlaceholderMapEntry *entry =
-    static_cast<const PlaceholderMapEntry*>(hdr);
-  NS_ASSERTION(entry->placeholderFrame->GetOutOfFlowFrame() !=
-               (void*)0xdddddddd,
-               "Dead placeholder in placeholder map");
-  return entry->placeholderFrame->GetOutOfFlowFrame() == key;
-}
-
-static const PLDHashTableOps PlaceholderMapOps = {
-  PLDHashTable::HashVoidPtrKeyStub,
-  PlaceholderMapMatchEntry,
-  PLDHashTable::MoveEntryStub,
-  PLDHashTable::ClearEntryStub,
-  nullptr
-};
-
 nsFrameManagerBase::nsFrameManagerBase()
   : mPresShell(nullptr)
   , mRootFrame(nullptr)
-  , mPlaceholderMap(&PlaceholderMapOps, sizeof(PlaceholderMapEntry))
-  , mUndisplayedMap(nullptr)
+  , mDisplayNoneMap(nullptr)
   , mDisplayContentsMap(nullptr)
   , mIsDestroyingFrames(false)
 {
@@ -115,16 +81,22 @@ public:
   // Removes all entries from the hash table
   void  Clear();
 
-protected:
-  LinkedList<UndisplayedNode>* GetListFor(nsIContent** aParentContent);
-  LinkedList<UndisplayedNode>* GetOrCreateListFor(nsIContent** aParentContent);
-  void AppendNodeFor(UndisplayedNode* aNode, nsIContent* aParentContent);
   /**
    * Get the applicable parent for the map lookup. This is almost always the
    * provided argument, except if it's a <xbl:children> element, in which case
    * it's the parent of the children element.
+   *
+   * All functions that are entry points into code that handles "parent"
+   * objects (used as the hash table keys) must ensure that the parent objects
+   * that they act on (and pass to other code) have been normalized by calling
+   * this method.
    */
-  nsIContent* GetApplicableParent(nsIContent* aParent);
+  static nsIContent* GetApplicableParent(nsIContent* aParent);
+
+protected:
+  LinkedList<UndisplayedNode>* GetListFor(nsIContent* aParentContent);
+  LinkedList<UndisplayedNode>* GetOrCreateListFor(nsIContent* aParentContent);
+  void AppendNodeFor(UndisplayedNode* aNode, nsIContent* aParentContent);
 };
 
 //----------------------------------------------------------------------
@@ -142,16 +114,13 @@ nsFrameManager::Destroy()
   // Destroy the frame hierarchy.
   mPresShell->SetIgnoreFrameDestruction(true);
 
-  // Unregister all placeholders before tearing down the frame tree
-  nsFrameManager::ClearPlaceholderFrameMap();
-
   if (mRootFrame) {
     mRootFrame->Destroy();
     mRootFrame = nullptr;
   }
 
-  delete mUndisplayedMap;
-  mUndisplayedMap = nullptr;
+  delete mDisplayNoneMap;
+  mDisplayNoneMap = nullptr;
   delete mDisplayContentsMap;
   mDisplayContentsMap = nullptr;
 
@@ -160,63 +129,16 @@ nsFrameManager::Destroy()
 
 //----------------------------------------------------------------------
 
-// Placeholder frame functions
-nsPlaceholderFrame*
-nsFrameManager::GetPlaceholderFrameFor(const nsIFrame* aFrame)
-{
-  NS_PRECONDITION(aFrame, "null param unexpected");
-
-  auto entry = static_cast<PlaceholderMapEntry*>
-    (const_cast<PLDHashTable*>(&mPlaceholderMap)->Search(aFrame));
-  if (entry) {
-    return entry->placeholderFrame;
-  }
-
-  return nullptr;
-}
-
-void
-nsFrameManager::RegisterPlaceholderFrame(nsPlaceholderFrame* aPlaceholderFrame)
-{
-  MOZ_ASSERT(aPlaceholderFrame, "null param unexpected");
-  MOZ_ASSERT(nsGkAtoms::placeholderFrame == aPlaceholderFrame->GetType(),
-             "unexpected frame type");
-  auto entry = static_cast<PlaceholderMapEntry*>
-    (mPlaceholderMap.Add(aPlaceholderFrame->GetOutOfFlowFrame()));
-  MOZ_ASSERT(!entry->placeholderFrame,
-             "Registering a placeholder for a frame that already has a placeholder!");
-  entry->placeholderFrame = aPlaceholderFrame;
-}
-
-void
-nsFrameManager::UnregisterPlaceholderFrame(nsPlaceholderFrame* aPlaceholderFrame)
-{
-  NS_PRECONDITION(aPlaceholderFrame, "null param unexpected");
-  NS_PRECONDITION(nsGkAtoms::placeholderFrame == aPlaceholderFrame->GetType(),
-                  "unexpected frame type");
-
-  mPlaceholderMap.Remove(aPlaceholderFrame->GetOutOfFlowFrame());
-}
-
-void
-nsFrameManager::ClearPlaceholderFrameMap()
-{
-  for (auto iter = mPlaceholderMap.Iter(); !iter.Done(); iter.Next()) {
-    auto entry = static_cast<PlaceholderMapEntry*>(iter.Get());
-    entry->placeholderFrame->SetOutOfFlowFrame(nullptr);
-  }
-  mPlaceholderMap.Clear();
-}
-
-//----------------------------------------------------------------------
-
-static nsIContent*
-ParentForUndisplayedMap(const nsIContent* aContent)
+/* static */ nsIContent*
+nsFrameManager::ParentForUndisplayedMap(const nsIContent* aContent)
 {
   MOZ_ASSERT(aContent);
 
   nsIContent* parent = aContent->GetParentElementCrossingShadowRoot();
   MOZ_ASSERT(parent || !aContent->GetParent(), "no non-elements");
+
+  // Normalize the parent:
+  parent = UndisplayedMap::GetApplicableParent(parent);
 
   return parent;
 }
@@ -236,7 +158,13 @@ nsFrameManager::GetUndisplayedNodeInMapFor(UndisplayedMap* aMap,
   if (!aContent) {
     return nullptr;
   }
+
+  // This function is an entry point into UndisplayedMap handling code, so the
+  // parent that we act on must be normalized by GetApplicableParent (as per
+  // that function's documentation).  We rely on ParentForUndisplayedMap to
+  // have done that for us.
   nsIContent* parent = ParentForUndisplayedMap(aContent);
+
   for (UndisplayedNode* node = aMap->GetFirstNode(parent);
        node; node = node->getNext()) {
     if (node->mContent == aContent)
@@ -255,9 +183,9 @@ nsFrameManager::GetAllUndisplayedNodesInMapFor(UndisplayedMap* aMap,
 }
 
 UndisplayedNode*
-nsFrameManager::GetAllUndisplayedContentIn(nsIContent* aParentContent)
+nsFrameManager::GetAllRegisteredDisplayNoneStylesIn(nsIContent* aParentContent)
 {
-  return GetAllUndisplayedNodesInMapFor(mUndisplayedMap, aParentContent);
+  return GetAllUndisplayedNodesInMapFor(mDisplayNoneMap, aParentContent);
 }
 
 /* static */ void
@@ -276,7 +204,12 @@ nsFrameManager::SetStyleContextInMap(UndisplayedMap* aMap,
   MOZ_ASSERT(!GetStyleContextInMap(aMap, aContent),
              "Already have an entry for aContent");
 
+  // This function is an entry point into UndisplayedMap handling code, so the
+  // parent that we act on must be normalized by GetApplicableParent (as per
+  // that function's documentation).  We rely on ParentForUndisplayedMap to
+  // have done that for us.
   nsIContent* parent = ParentForUndisplayedMap(aContent);
+
 #ifdef DEBUG
   nsIPresShell* shell = aStyleContext->PresContext()->PresShell();
   NS_ASSERTION(parent || (shell && shell->GetDocument() &&
@@ -284,17 +217,27 @@ nsFrameManager::SetStyleContextInMap(UndisplayedMap* aMap,
                "undisplayed content must have a parent, unless it's the root "
                "element");
 #endif
+
+  // We set this bit as an optimization so that we can can know when a content
+  // node may have |display:none| or |display:contents| children.  This allows
+  // other parts of the code to avoid checking for such children in
+  // mDisplayNoneMap and mDisplayContentsMap if the bit isn't present on a node
+  // that it's handling.
+  if (parent) {
+    parent->SetMayHaveChildrenWithLayoutBoxesDisabled();
+  }
+
   aMap->AddNodeFor(parent, aContent, aStyleContext);
 }
 
 void
-nsFrameManager::SetUndisplayedContent(nsIContent* aContent,
-                                      nsStyleContext* aStyleContext)
+nsFrameManager::RegisterDisplayNoneStyleFor(nsIContent* aContent,
+                                            nsStyleContext* aStyleContext)
 {
-  if (!mUndisplayedMap) {
-    mUndisplayedMap = new UndisplayedMap;
+  if (!mDisplayNoneMap) {
+    mDisplayNoneMap = new UndisplayedMap;
   }
-  SetStyleContextInMap(mUndisplayedMap, aContent, aStyleContext);
+  SetStyleContextInMap(mDisplayNoneMap, aContent, aStyleContext);
 }
 
 /* static */ void
@@ -309,7 +252,13 @@ nsFrameManager::ChangeStyleContextInMap(UndisplayedMap* aMap,
    printf("ChangeStyleContextInMap(%d): p=%p \n", i++, (void *)aContent);
 #endif
 
-  for (UndisplayedNode* node = aMap->GetFirstNode(aContent->GetParent());
+  // This function is an entry point into UndisplayedMap handling code, so the
+  // parent that we act on must be normalized by GetApplicableParent (as per
+  // that function's documentation).  We rely on ParentForUndisplayedMap to
+  // have done that for us.
+  nsIContent* parent = ParentForUndisplayedMap(aContent);
+
+  for (UndisplayedNode* node = aMap->GetFirstNode(parent);
        node; node = node->getNext()) {
     if (node->mContent == aContent) {
       node->mStyle = aStyleContext;
@@ -321,29 +270,60 @@ nsFrameManager::ChangeStyleContextInMap(UndisplayedMap* aMap,
 }
 
 void
-nsFrameManager::ClearUndisplayedContentIn(nsIContent* aContent,
-                                          nsIContent* aParentContent)
+nsFrameManager::UnregisterDisplayNoneStyleFor(nsIContent* aContent,
+                                              nsIContent* aParentContent)
 {
 #ifdef DEBUG_UNDISPLAYED_MAP
   static int i = 0;
   printf("ClearUndisplayedContent(%d): content=%p parent=%p --> ", i++, (void *)aContent, (void*)aParentContent);
 #endif
 
-  if (!mUndisplayedMap) {
+  if (!mDisplayNoneMap) {
     return;
   }
 
-  for (UndisplayedNode* node = mUndisplayedMap->GetFirstNode(aParentContent);
-       node; node = node->getNext()) {
+  // This function is an entry point into UndisplayedMap handling code, so we
+  // must call GetApplicableParent so the parent we pass around is correct.
+  aParentContent = UndisplayedMap::GetApplicableParent(aParentContent);
+
+  if (aParentContent &&
+      !aParentContent->MayHaveChildrenWithLayoutBoxesDisabled()) {
+    MOZ_ASSERT(!mDisplayNoneMap->GetFirstNode(aParentContent),
+               "MayHaveChildrenWithLayoutBoxesDisabled bit out of sync - "
+               "may fail to remove node from mDisplayNoneMap");
+    return;
+  }
+
+  UndisplayedNode* node = mDisplayNoneMap->GetFirstNode(aParentContent);
+
+  const bool haveOneDisplayNoneChild = node && !node->getNext();
+
+  for (; node; node = node->getNext()) {
     if (node->mContent == aContent) {
-      mUndisplayedMap->RemoveNodeFor(aParentContent, node);
+      mDisplayNoneMap->RemoveNodeFor(aParentContent, node);
 
 #ifdef DEBUG_UNDISPLAYED_MAP
       printf( "REMOVED!\n");
 #endif
       // make sure that there are no more entries for the same content
-      MOZ_ASSERT(!GetUndisplayedContent(aContent),
+      MOZ_ASSERT(!GetDisplayNoneStyleFor(aContent),
                  "Found more undisplayed content data after removal");
+
+      if (haveOneDisplayNoneChild) {
+        // There are no more children of aParentContent in mDisplayNoneMap.
+        MOZ_ASSERT(!mDisplayNoneMap->GetFirstNode(aParentContent),
+                   "Bad UnsetMayHaveChildrenWithLayoutBoxesDisabled call");
+        // If we also know that none of its children are in mDisplayContentsMap
+        // then we can call UnsetMayHaveChildrenWithLayoutBoxesDisabled.  We
+        // don't want to check mDisplayContentsMap though since that involves a
+        // hash table lookup in relatively hot code.  Still, we know there are
+        // no children in mDisplayContentsMap if the map is empty, so we do
+        // check for that.
+        if (aParentContent && !mDisplayContentsMap) {
+          aParentContent->UnsetMayHaveChildrenWithLayoutBoxesDisabled();
+        }
+      }
+
       return;
     }
   }
@@ -354,16 +334,44 @@ nsFrameManager::ClearUndisplayedContentIn(nsIContent* aContent,
 }
 
 void
-nsFrameManager::ClearAllUndisplayedContentIn(nsIContent* aParentContent)
+nsFrameManager::ClearAllMapsFor(nsIContent* aParentContent)
 {
-#ifdef DEBUG_UNDISPLAYED_MAP
+#if defined(DEBUG_UNDISPLAYED_MAP) || defined(DEBUG_DISPLAY_CONTENTS_MAP)
   static int i = 0;
-  printf("ClearAllUndisplayedContentIn(%d): parent=%p \n", i++, (void*)aParentContent);
+  printf("ClearAllMapsFor(%d): parent=%p \n", i++, aParentContent);
 #endif
 
-  if (mUndisplayedMap) {
-    mUndisplayedMap->RemoveNodesFor(aParentContent);
+  if (!aParentContent ||
+      aParentContent->MayHaveChildrenWithLayoutBoxesDisabled()) {
+    if (mDisplayNoneMap) {
+      mDisplayNoneMap->RemoveNodesFor(aParentContent);
+    }
+    if (mDisplayContentsMap) {
+      nsAutoPtr<LinkedList<UndisplayedNode>> list =
+        mDisplayContentsMap->UnlinkNodesFor(aParentContent);
+      if (list) {
+        while (UndisplayedNode* node = list->popFirst()) {
+          ClearAllMapsFor(node->mContent);
+          delete node;
+        }
+      }
+    }
+    if (aParentContent) {
+      aParentContent->UnsetMayHaveChildrenWithLayoutBoxesDisabled();
+    }
   }
+#ifdef DEBUG
+  else {
+    if (mDisplayNoneMap) {
+      MOZ_ASSERT(!mDisplayNoneMap->GetFirstNode(aParentContent),
+                 "We failed to remove a node from mDisplayNoneMap");
+    }
+    if (mDisplayContentsMap) {
+      MOZ_ASSERT(!mDisplayContentsMap->GetFirstNode(aParentContent),
+                 "We failed to remove a node from mDisplayContentsMap");
+    }
+  }
+#endif
 
   // Need to look at aParentContent's content list due to XBL insertions.
   // Nodes in aParentContent's content list do not have aParentContent as a
@@ -371,8 +379,10 @@ nsFrameManager::ClearAllUndisplayedContentIn(nsIContent* aParentContent)
   // the flattened content list and just ignore any nodes we don't care about.
   FlattenedChildIterator iter(aParentContent);
   for (nsIContent* child = iter.GetNextChild(); child; child = iter.GetNextChild()) {
-    if (child->GetParent() != aParentContent) {
-      ClearUndisplayedContentIn(child, child->GetParent());
+    auto parent = child->GetParent();
+    if (parent != aParentContent) {
+      UnregisterDisplayNoneStyleFor(child, parent);
+      UnregisterDisplayContentsStyleFor(child, parent);
     }
   }
 }
@@ -380,8 +390,8 @@ nsFrameManager::ClearAllUndisplayedContentIn(nsIContent* aParentContent)
 //----------------------------------------------------------------------
 
 void
-nsFrameManager::SetDisplayContents(nsIContent* aContent,
-                                   nsStyleContext* aStyleContext)
+nsFrameManager::RegisterDisplayContentsStyleFor(nsIContent* aContent,
+                                                nsStyleContext* aStyleContext)
 {
   if (!mDisplayContentsMap) {
     mDisplayContentsMap = new UndisplayedMap;
@@ -390,14 +400,14 @@ nsFrameManager::SetDisplayContents(nsIContent* aContent,
 }
 
 UndisplayedNode*
-nsFrameManager::GetAllDisplayContentsIn(nsIContent* aParentContent)
+nsFrameManager::GetAllRegisteredDisplayContentsStylesIn(nsIContent* aParentContent)
 {
   return GetAllUndisplayedNodesInMapFor(mDisplayContentsMap, aParentContent);
 }
 
 void
-nsFrameManager::ClearDisplayContentsIn(nsIContent* aContent,
-                                       nsIContent* aParentContent)
+nsFrameManager::UnregisterDisplayContentsStyleFor(nsIContent* aContent,
+                                                  nsIContent* aParentContent)
 {
 #ifdef DEBUG_DISPLAY_CONTENTS_MAP
   static int i = 0;
@@ -408,8 +418,23 @@ nsFrameManager::ClearDisplayContentsIn(nsIContent* aContent,
     return;
   }
 
-  for (UndisplayedNode* node = mDisplayContentsMap->GetFirstNode(aParentContent);
-       node; node = node->getNext()) {
+  // This function is an entry point into UndisplayedMap handling code, so we
+  // must call GetApplicableParent so the parent we pass around is correct.
+  aParentContent = UndisplayedMap::GetApplicableParent(aParentContent);
+
+  if (aParentContent &&
+      !aParentContent->MayHaveChildrenWithLayoutBoxesDisabled()) {
+    MOZ_ASSERT(!mDisplayContentsMap->GetFirstNode(aParentContent),
+               "MayHaveChildrenWithLayoutBoxesDisabled bit out of sync - "
+               "may fail to remove node from mDisplayContentsMap");
+    return;
+  }
+
+  UndisplayedNode* node = mDisplayContentsMap->GetFirstNode(aParentContent);
+
+  const bool haveOneDisplayContentsChild = node && !node->getNext();
+
+  for (; node; node = node->getNext()) {
     if (node->mContent == aContent) {
       mDisplayContentsMap->RemoveNodeFor(aParentContent, node);
 
@@ -419,47 +444,29 @@ nsFrameManager::ClearDisplayContentsIn(nsIContent* aContent,
       // make sure that there are no more entries for the same content
       MOZ_ASSERT(!GetDisplayContentsStyleFor(aContent),
                  "Found more entries for aContent after removal");
-      ClearAllDisplayContentsIn(aContent);
-      ClearAllUndisplayedContentIn(aContent);
+      ClearAllMapsFor(aContent);
+
+      if (haveOneDisplayContentsChild) {
+        // There are no more children of aParentContent in mDisplayContentsMap.
+        MOZ_ASSERT(!mDisplayContentsMap->GetFirstNode(aParentContent),
+                   "Bad UnsetMayHaveChildrenWithLayoutBoxesDisabled call");
+        // If we also know that none of its children are in mDisplayNoneMap
+        // then we can call UnsetMayHaveChildrenWithLayoutBoxesDisabled.  We
+        // don't want to check mDisplayNoneMap though since that involves a
+        // hash table lookup in relatively hot code.  Still, we know there are
+        // no children in mDisplayNoneMap if the map is empty, so we do
+        // check for that.
+        if (aParentContent && !mDisplayNoneMap) {
+          aParentContent->UnsetMayHaveChildrenWithLayoutBoxesDisabled();
+        }
+      }
+
       return;
     }
   }
 #ifdef DEBUG_DISPLAY_CONTENTS_MAP
   printf( "not found.\n");
 #endif
-}
-
-void
-nsFrameManager::ClearAllDisplayContentsIn(nsIContent* aParentContent)
-{
-#ifdef DEBUG_DISPLAY_CONTENTS_MAP
-  static int i = 0;
-  printf("ClearAllDisplayContentsIn(%d): parent=%p \n", i++, (void*)aParentContent);
-#endif
-
-  if (mDisplayContentsMap) {
-    nsAutoPtr<LinkedList<UndisplayedNode>> list =
-      mDisplayContentsMap->UnlinkNodesFor(aParentContent);
-    if (list) {
-      while (UndisplayedNode* node = list->popFirst()) {
-        ClearAllDisplayContentsIn(node->mContent);
-        ClearAllUndisplayedContentIn(node->mContent);
-        delete node;
-      }
-    }
-  }
-
-  // Need to look at aParentContent's content list due to XBL insertions.
-  // Nodes in aParentContent's content list do not have aParentContent as a
-  // parent, but are treated as children of aParentContent. We iterate over
-  // the flattened content list and just ignore any nodes we don't care about.
-  FlattenedChildIterator iter(aParentContent);
-  for (nsIContent* child = iter.GetNextChild(); child; child = iter.GetNextChild()) {
-    if (child->GetParent() != aParentContent) {
-      ClearDisplayContentsIn(child, child->GetParent());
-      ClearUndisplayedContentIn(child, child->GetParent());
-    }
-  }
 }
 
 //----------------------------------------------------------------------
@@ -514,10 +521,10 @@ nsFrameManager::RemoveFrame(ChildListID     aListID,
 
   NS_ASSERTION(!aOldFrame->GetPrevContinuation() ||
                // exception for nsCSSFrameConstructor::RemoveFloatingFirstLetterFrames
-               aOldFrame->GetType() == nsGkAtoms::textFrame,
+               aOldFrame->IsTextFrame(),
                "Must remove first continuation.");
   NS_ASSERTION(!(aOldFrame->GetStateBits() & NS_FRAME_OUT_OF_FLOW &&
-                 GetPlaceholderFrameFor(aOldFrame)),
+                 aOldFrame->GetPlaceholderFrame()),
                "Must call RemoveFrame on placeholder for out-of-flows.");
   nsContainerFrame* parentFrame = aOldFrame->GetParent();
   if (parentFrame->IsAbsoluteContainer() &&
@@ -538,8 +545,7 @@ nsFrameManager::NotifyDestroyingFrame(nsIFrame* aFrame)
 {
   nsIContent* content = aFrame->GetContent();
   if (content && content->GetPrimaryFrame() == aFrame) {
-    ClearAllUndisplayedContentIn(content);
-    ClearAllDisplayContentsIn(content);
+    ClearAllMapsFor(content);
   }
 }
 
@@ -661,7 +667,7 @@ nsFrameManager::RestoreFrameState(nsIFrame* aFrame,
                                   nsILayoutHistoryState* aState)
 {
   NS_PRECONDITION(nullptr != aFrame && nullptr != aState, "null parameters passed in");
-  
+
   RestoreFrameStateFor(aFrame, aState);
 
   // Now restore state recursively for the frame hierarchy rooted at aFrame
@@ -671,6 +677,21 @@ nsFrameManager::RestoreFrameState(nsIFrame* aFrame,
     for (; !childFrames.AtEnd(); childFrames.Next()) {
       RestoreFrameState(childFrames.get(), aState);
     }
+  }
+}
+
+void
+nsFrameManager::DestroyAnonymousContent(already_AddRefed<nsIContent> aContent)
+{
+  nsCOMPtr<nsIContent> content = aContent;
+  if (content) {
+    // Invoke ClearAllMapsFor before unbinding from the tree. When we unbind,
+    // we remove the mPrimaryFrame pointer, which is used by the frame
+    // teardown code to determine whether to invoke ClearAllMapsFor or not.
+    // These maps will go away when we drop support for the old style system.
+    ClearAllMapsFor(content);
+
+    content->UnbindFromTree();
   }
 }
 
@@ -709,7 +730,7 @@ nsFrameManagerBase::UndisplayedMap::GetApplicableParent(nsIContent* aParent)
   // be a <xbl:children> element) but the parent in the frame tree would be the
   // insertion parent (parent of the <xbl:children> element). Here the children
   // elements are normalized to the insertion parent to correct for the mismatch.
-  if (aParent && nsContentUtils::IsContentInsertionPoint(aParent)) {
+  if (aParent && aParent->IsActiveChildrenElement()) {
     return aParent->GetParent();
   }
 
@@ -717,12 +738,13 @@ nsFrameManagerBase::UndisplayedMap::GetApplicableParent(nsIContent* aParent)
 }
 
 LinkedList<UndisplayedNode>*
-nsFrameManagerBase::UndisplayedMap::GetListFor(nsIContent** aParent)
+nsFrameManagerBase::UndisplayedMap::GetListFor(nsIContent* aParent)
 {
-  *aParent = GetApplicableParent(*aParent);
+  MOZ_ASSERT(aParent == GetApplicableParent(aParent),
+             "The parent that we use as the hash key must have been normalized");
 
   LinkedList<UndisplayedNode>* list;
-  if (Get(*aParent, &list)) {
+  if (Get(aParent, &list)) {
     return list;
   }
 
@@ -730,17 +752,19 @@ nsFrameManagerBase::UndisplayedMap::GetListFor(nsIContent** aParent)
 }
 
 LinkedList<UndisplayedNode>*
-nsFrameManagerBase::UndisplayedMap::GetOrCreateListFor(nsIContent** aParent)
+nsFrameManagerBase::UndisplayedMap::GetOrCreateListFor(nsIContent* aParent)
 {
-  *aParent = GetApplicableParent(*aParent);
-  return LookupOrAdd(*aParent);
+  MOZ_ASSERT(aParent == GetApplicableParent(aParent),
+             "The parent that we use as the hash key must have been normalized");
+
+  return LookupOrAdd(aParent);
 }
 
 
 UndisplayedNode*
 nsFrameManagerBase::UndisplayedMap::GetFirstNode(nsIContent* aParentContent)
 {
-  auto* list = GetListFor(&aParentContent);
+  auto* list = GetListFor(aParentContent);
   return list ? list->getFirst() : nullptr;
 }
 
@@ -749,7 +773,7 @@ void
 nsFrameManagerBase::UndisplayedMap::AppendNodeFor(UndisplayedNode* aNode,
                                                   nsIContent* aParentContent)
 {
-  LinkedList<UndisplayedNode>* list = GetOrCreateListFor(&aParentContent);
+  LinkedList<UndisplayedNode>* list = GetOrCreateListFor(aParentContent);
 
 #ifdef DEBUG
   for (UndisplayedNode* node = list->getFirst(); node; node = node->getNext()) {
@@ -777,7 +801,7 @@ nsFrameManagerBase::UndisplayedMap::RemoveNodeFor(nsIContent* aParentContent,
                                                   UndisplayedNode* aNode)
 {
 #ifdef DEBUG
-  auto list = GetListFor(&aParentContent);
+  auto list = GetListFor(aParentContent);
   MOZ_ASSERT(list, "content not in map");
   aNode->removeFrom(*list);
 #else
@@ -791,7 +815,7 @@ nsAutoPtr<LinkedList<UndisplayedNode>>
 nsFrameManagerBase::UndisplayedMap::UnlinkNodesFor(nsIContent* aParentContent)
 {
   nsAutoPtr<LinkedList<UndisplayedNode>> list;
-  RemoveAndForget(GetApplicableParent(aParentContent), list);
+  Remove(GetApplicableParent(aParentContent), &list);
   return list;
 }
 

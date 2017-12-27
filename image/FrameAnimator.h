@@ -34,6 +34,7 @@ public:
     , mFirstFrameTimeout(FrameTimeout::FromRawMilliseconds(0))
     , mAnimationMode(aAnimationMode)
     , mHasBeenDecoded(false)
+    , mHasRequestedDecode(false)
     , mIsCurrentlyDecoded(false)
     , mCompositedFrameInvalid(false)
     , mDiscarded(false)
@@ -42,16 +43,18 @@ public:
   /**
    * Call this whenever a decode completes, a decode starts, or the image is
    * discarded. It will update the internal state. Specifically mDiscarded,
-   * mCompositedFrameInvalid, and mIsCurrentlyDecoded. Returns a rect to
-   * invalidate.
+   * mCompositedFrameInvalid, and mIsCurrentlyDecoded. If aAllowInvalidation
+   * is true then returns a rect to invalidate.
    */
   const gfx::IntRect UpdateState(bool aAnimationFinished,
                             RasterImage *aImage,
-                            const gfx::IntSize& aSize);
+                            const gfx::IntSize& aSize,
+                            bool aAllowInvalidation = true);
 private:
   const gfx::IntRect UpdateStateInternal(LookupResult& aResult,
                                     bool aAnimationFinished,
-                                    const gfx::IntSize& aSize);
+                                    const gfx::IntSize& aSize,
+                                    bool aAllowInvalidation = true);
 
 public:
   /**
@@ -63,6 +66,11 @@ public:
    * Returns true if this image has been fully decoded before.
    */
   bool GetHasBeenDecoded() { return mHasBeenDecoded; }
+
+  /**
+   * Returns true if this image has ever requested a decode before.
+   */
+  bool GetHasRequestedDecode() { return mHasRequestedDecode; }
 
   /**
    * Returns true if this image has been discarded and a decoded has not yet
@@ -218,6 +226,9 @@ private:
 
   //! Whether this image has been decoded at least once.
   bool mHasBeenDecoded;
+
+  //! Whether this image has ever requested a decode.
+  bool mHasRequestedDecode;
 
   //! Whether this image is currently fully decoded.
   bool mIsCurrentlyDecoded;

@@ -27,12 +27,16 @@ XPCOMUtils.defineLazyModuleGetter(this, "Deprecated",
   ["gViewSourceBundle", "viewSourceBundle"],
   ["gContextMenu",      "viewSourceContextMenu"]
 ].forEach(function([name, id]) {
-  window.__defineGetter__(name, function() {
-    var element = document.getElementById(id);
-    if (!element)
-      return null;
-    delete window[name];
-    return window[name] = element;
+  Object.defineProperty(window, name, {
+    configurable: true,
+    enumerable: true,
+    get() {
+      var element = document.getElementById(id);
+      if (!element)
+        return null;
+      delete window[name];
+      return window[name] = element;
+    },
   });
 });
 
@@ -76,7 +80,6 @@ ViewSourceChrome.prototype = {
     "ViewSource:SourceUnloaded",
     "ViewSource:Close",
     "ViewSource:OpenURL",
-    "ViewSource:UpdateStatus",
     "ViewSource:ContextMenuOpening",
   ]),
 
@@ -155,9 +158,6 @@ ViewSourceChrome.prototype = {
         break;
       case "ViewSource:OpenURL":
         this.openURL(data.URL);
-        break;
-      case "ViewSource:UpdateStatus":
-        this.updateStatus(data.label);
         break;
       case "ViewSource:ContextMenuOpening":
         this.onContextMenuOpening(data.isLink, data.isEmail, data.href);
@@ -527,10 +527,7 @@ ViewSourceChrome.prototype = {
         event.preventDefault();
     }
 
-    let linkHandler = Cc["@mozilla.org/content/dropped-link-handler;1"]
-                        .getService(Ci.nsIDroppedLinkHandler);
-
-    if (linkHandler.canDropLink(event, false)) {
+    if (Services.droppedLinkHandler.canDropLink(event, false)) {
       event.preventDefault();
     }
   },
@@ -543,12 +540,10 @@ ViewSourceChrome.prototype = {
       return;
 
     let name = { };
-    let linkHandler = Cc["@mozilla.org/content/dropped-link-handler;1"]
-                        .getService(Ci.nsIDroppedLinkHandler);
     let uri;
     try {
       // Pass true to prevent the dropping of javascript:/data: URIs
-      uri = linkHandler.dropLink(event, name, true);
+      uri = Services.droppedLinkHandler.dropLink(event, name, true);
     } catch (e) {
       return;
     }
@@ -604,32 +599,6 @@ ViewSourceChrome.prototype = {
     } else {
       forwardBroadcaster.setAttribute("disabled", "true");
     }
-  },
-
-  /**
-   * Updates the status displayed in the status bar of the view source window.
-   *
-   * @param label
-   *        The string to be displayed in the statusbar-lin-col element.
-   */
-  updateStatus(label) {
-    let statusBarField = document.getElementById("statusbar-line-col");
-    if (statusBarField) {
-      statusBarField.label = label;
-    }
-  },
-
-  /**
-   * Called when the frame script reports that a line was successfully gotten
-   * to.
-   *
-   * @param lineNumber
-   *        The line number that we successfully got to.
-   */
-  onGoToLineSuccess(lineNumber) {
-    ViewSourceBrowser.prototype.onGoToLineSuccess.call(this, lineNumber);
-    document.getElementById("statusbar-line-col").label =
-      gViewSourceBundle.getFormattedString("statusBarLineCol", [lineNumber, 1]);
   },
 
   /**
@@ -779,14 +748,18 @@ function getBrowser() {
   return gBrowser;
 }
 
-this.__defineGetter__("gPageLoader", function() {
-  var webnav = viewSourceChrome.webNav;
-  if (!webnav)
-    return null;
-  delete this.gPageLoader;
-  this.gPageLoader = (webnav instanceof Ci.nsIWebPageDescriptor) ? webnav
-                                                                 : null;
-  return this.gPageLoader;
+Object.defineProperty(this, "gPageLoader", {
+  configurable: true,
+  enumerable: true,
+  get() {
+    var webnav = viewSourceChrome.webNav;
+    if (!webnav)
+      return null;
+    delete this.gPageLoader;
+    this.gPageLoader = (webnav instanceof Ci.nsIWebPageDescriptor) ? webnav
+                                                                   : null;
+    return this.gPageLoader;
+  },
 });
 
 // Strips the |view-source:| for internalSave()
@@ -800,11 +773,15 @@ function ViewSourceSavePage() {
 // Below are old deprecated functions and variables left behind for
 // compatibility reasons. These will be removed soon via bug 1159293.
 
-this.__defineGetter__("gLastLineFound", function() {
-  Deprecated.warning("gLastLineFound is deprecated - please use " +
-                     "viewSourceChrome.lastLineFound instead.",
-                     "https://developer.mozilla.org/en-US/Add-ons/Code_snippets/View_Source_for_XUL_Applications");
-  return viewSourceChrome.lastLineFound;
+Object.defineProperty(this, "gLastLineFound", {
+  configurable: true,
+  enumerable: true,
+  get() {
+    Deprecated.warning("gLastLineFound is deprecated - please use " +
+                       "viewSourceChrome.lastLineFound instead.",
+                       "https://developer.mozilla.org/en-US/Add-ons/Code_snippets/View_Source_for_XUL_Applications");
+    return viewSourceChrome.lastLineFound;
+  },
 });
 
 function onLoadViewSource() {

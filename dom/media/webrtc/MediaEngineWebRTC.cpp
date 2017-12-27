@@ -25,7 +25,6 @@ static mozilla::LazyLogModule sGetUserMediaLog("GetUserMedia");
 
 #ifdef MOZ_WIDGET_ANDROID
 #include "VideoEngine.h"
-#include "AndroidJNIWrapper.h"
 #include "AndroidBridge.h"
 #endif
 
@@ -38,9 +37,10 @@ namespace mozilla {
 nsTArray<int>* AudioInputCubeb::mDeviceIndexes;
 int AudioInputCubeb::mDefaultDevice = -1;
 nsTArray<nsCString>* AudioInputCubeb::mDeviceNames;
-cubeb_device_collection* AudioInputCubeb::mDevices = nullptr;
+cubeb_device_collection AudioInputCubeb::mDevices = { nullptr, 0 };
 bool AudioInputCubeb::mAnyInUse = false;
 StaticMutex AudioInputCubeb::sMutex;
+uint32_t AudioInputCubeb::sUserChannelCount = 0;
 
 // AudioDeviceID is an annoying opaque value that's really a string
 // pointer, and is freed when the cubeb_device_collection is destroyed
@@ -52,7 +52,7 @@ void AudioInputCubeb::UpdateDeviceList()
     return;
   }
 
-  cubeb_device_collection *devices = nullptr;
+  cubeb_device_collection devices = { nullptr, 0 };
 
   if (CUBEB_OK != cubeb_enumerate_devices(cubebContext,
                                           CUBEB_DEVICE_TYPE_INPUT,
@@ -71,27 +71,27 @@ void AudioInputCubeb::UpdateDeviceList()
   // For some reason the "fake" device for automation is marked as DISABLED,
   // so white-list it.
   mDefaultDevice = -1;
-  for (uint32_t i = 0; i < devices->count; i++) {
+  for (uint32_t i = 0; i < devices.count; i++) {
     LOG(("Cubeb device %u: type 0x%x, state 0x%x, name %s, id %p",
-         i, devices->device[i]->type, devices->device[i]->state,
-         devices->device[i]->friendly_name, devices->device[i]->device_id));
-    if (devices->device[i]->type == CUBEB_DEVICE_TYPE_INPUT && // paranoia
-        (devices->device[i]->state == CUBEB_DEVICE_STATE_ENABLED ||
-         (devices->device[i]->state == CUBEB_DEVICE_STATE_DISABLED &&
-          devices->device[i]->friendly_name &&
-          strcmp(devices->device[i]->friendly_name, "Sine source at 440 Hz") == 0)))
+         i, devices.device[i].type, devices.device[i].state,
+         devices.device[i].friendly_name, devices.device[i].device_id));
+    if (devices.device[i].type == CUBEB_DEVICE_TYPE_INPUT && // paranoia
+        (devices.device[i].state == CUBEB_DEVICE_STATE_ENABLED ||
+         (devices.device[i].state == CUBEB_DEVICE_STATE_DISABLED &&
+          devices.device[i].friendly_name &&
+          strcmp(devices.device[i].friendly_name, "Sine source at 440 Hz") == 0)))
     {
-      auto j = mDeviceNames->IndexOf(devices->device[i]->device_id);
+      auto j = mDeviceNames->IndexOf(devices.device[i].device_id);
       if (j != nsTArray<nsCString>::NoIndex) {
         // match! update the mapping
         (*mDeviceIndexes)[j] = i;
       } else {
         // new device, add to the array
         mDeviceIndexes->AppendElement(i);
-        mDeviceNames->AppendElement(devices->device[i]->device_id);
+        mDeviceNames->AppendElement(devices.device[i].device_id);
         j = mDeviceIndexes->Length()-1;
       }
-      if (devices->device[i]->preferred & CUBEB_DEVICE_PREF_VOICE) {
+      if (devices.device[i].preferred & CUBEB_DEVICE_PREF_VOICE) {
         // There can be only one... we hope
         NS_ASSERTION(mDefaultDevice == -1, "multiple default cubeb input devices!");
         mDefaultDevice = j;
@@ -101,19 +101,16 @@ void AudioInputCubeb::UpdateDeviceList()
   LOG(("Cubeb default input device %d", mDefaultDevice));
   StaticMutexAutoLock lock(sMutex);
   // swap state
-  if (mDevices) {
-    cubeb_device_collection_destroy(mDevices);
-  }
+  cubeb_device_collection_destroy(cubebContext, &mDevices);
   mDevices = devices;
 }
 
 MediaEngineWebRTC::MediaEngineWebRTC(MediaEnginePrefs &aPrefs)
   : mMutex("mozilla::MediaEngineWebRTC"),
-    mVoiceEngine(nullptr),
     mAudioInput(nullptr),
     mFullDuplex(aPrefs.mFullDuplex),
-    mExtendedFilter(aPrefs.mExtendedFilter),
     mDelayAgnostic(aPrefs.mDelayAgnostic),
+    mExtendedFilter(aPrefs.mExtendedFilter),
     mHasTabVideoSource(false)
 {
   nsCOMPtr<nsIComponentRegistrar> compMgr;
@@ -121,8 +118,6 @@ MediaEngineWebRTC::MediaEngineWebRTC(MediaEnginePrefs &aPrefs)
   if (compMgr) {
     compMgr->IsContractIDRegistered(NS_TABSOURCESERVICE_CONTRACTID, &mHasTabVideoSource);
   }
-  // XXX
-  gFarendObserver = new AudioOutputObserver();
 
   camera::GetChildAndCall(
     &camera::CamerasChild::AddDeviceChangeCallback,
@@ -284,56 +279,17 @@ MediaEngineWebRTC::EnumerateAudioDevices(dom::MediaSourceEnum aMediaSource,
     return;
   }
 
-#ifdef MOZ_WIDGET_ANDROID
-  jobject context = mozilla::AndroidBridge::Bridge()->GetGlobalContextRef();
-
-  // get the JVM
-  JavaVM* jvm;
-  JNIEnv* const env = jni::GetEnvForThread();
-  MOZ_ALWAYS_TRUE(!env->GetJavaVM(&jvm));
-
-  if (webrtc::VoiceEngine::SetAndroidObjects(jvm, (void*)context) != 0) {
-    LOG(("VoiceEngine:SetAndroidObjects Failed"));
-    return;
-  }
-#endif
-
-  if (!mVoiceEngine) {
-    mConfig.Set<webrtc::ExtendedFilter>(new webrtc::ExtendedFilter(mExtendedFilter));
-    mConfig.Set<webrtc::DelayAgnostic>(new webrtc::DelayAgnostic(mDelayAgnostic));
-
-    mVoiceEngine = webrtc::VoiceEngine::Create(mConfig);
-    if (!mVoiceEngine) {
+  if (!mAudioInput) {
+    if (!SupportsDuplex()) {
       return;
     }
-  }
-
-  ptrVoEBase = webrtc::VoEBase::GetInterface(mVoiceEngine);
-  if (!ptrVoEBase) {
-    return;
-  }
-
-  // Always re-init the voice engine, since if we close the last use we
-  // DeInitEngine() and Terminate(), which shuts down Process() - but means
-  // we have to Init() again before using it.  Init() when already inited is
-  // just a no-op, so call always.
-  if (ptrVoEBase->Init() < 0) {
-    return;
-  }
-
-  if (!mAudioInput) {
-    if (SupportsDuplex()) {
-      // The platform_supports_full_duplex.
-      mAudioInput = new mozilla::AudioInputCubeb(mVoiceEngine);
-    } else {
-      mAudioInput = new mozilla::AudioInputWebRTC(mVoiceEngine);
-    }
+    mAudioInput = new mozilla::AudioInputCubeb();
   }
 
   int nDevices = 0;
   mAudioInput->GetNumOfRecordingDevices(nDevices);
   int i;
-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_WIDGET_ANDROID)
   i = 0; // Bug 1037025 - let the OS handle defaulting for now on android/b2g
 #else
   // -1 is "default communications device" depending on OS in webrtc.org code
@@ -349,13 +305,12 @@ MediaEngineWebRTC::EnumerateAudioDevices(dom::MediaSourceEnum aMediaSource,
 
     int error = mAudioInput->GetRecordingDeviceName(i, deviceName, uniqueId);
     if (error) {
-      LOG((" VoEHardware:GetRecordingDeviceName: Failed %d", error));
+      LOG((" AudioInput::GetRecordingDeviceName: Failed %d", error));
       continue;
     }
 
     if (uniqueId[0] == '\0') {
       // Mac and Linux don't set uniqueId!
-      MOZ_ASSERT(sizeof(deviceName) == sizeof(uniqueId)); // total paranoia
       strcpy(uniqueId, deviceName); // safe given assert and initialization/error-check
     }
 
@@ -365,17 +320,9 @@ MediaEngineWebRTC::EnumerateAudioDevices(dom::MediaSourceEnum aMediaSource,
       // We've already seen this device, just append.
       aASources->AppendElement(aSource.get());
     } else {
-      AudioInput* audioinput = mAudioInput;
-      if (SupportsDuplex()) {
-        // The platform_supports_full_duplex.
-
-        // For cubeb, it has state (the selected ID)
-        // XXX just use the uniqueID for cubeb and support it everywhere, and get rid of this
-        // XXX Small window where the device list/index could change!
-        audioinput = new mozilla::AudioInputCubeb(mVoiceEngine, i);
-      }
-      aSource = new MediaEngineWebRTCMicrophoneSource(mVoiceEngine, audioinput,
-                                                      i, deviceName, uniqueId);
+      aSource = new MediaEngineWebRTCMicrophoneSource(new mozilla::AudioInputCubeb(i),
+                                                      i, deviceName, uniqueId,
+                                                      mDelayAgnostic, mExtendedFilter);
       mAudioSources.Put(uuid, aSource); // Hashtable takes ownership.
       aASources->AppendElement(aSource);
     }
@@ -410,13 +357,6 @@ MediaEngineWebRTC::Shutdown()
   }
   mVideoSources.Clear();
   mAudioSources.Clear();
-
-  if (mVoiceEngine) {
-    mVoiceEngine->SetTraceCallback(nullptr);
-    webrtc::VoiceEngine::Delete(mVoiceEngine);
-  }
-
-  mVoiceEngine = nullptr;
 
   mozilla::camera::Shutdown();
   AudioInputCubeb::CleanupGlobalData();

@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 
 #[cfg(target_os = "windows")]
-trait OsStrExt3 {
+pub trait OsStrExt3 {
     fn from_bytes(b: &[u8]) -> &Self;
     fn as_bytes(&self) -> &[u8];
 }
@@ -48,24 +48,38 @@ impl OsStrExt2 for OsStr {
     fn split_at_byte(&self, byte: u8) -> (&OsStr, &OsStr) {
         for (i, b) in self.as_bytes().iter().enumerate() {
             if b == &byte {
-                return (OsStr::from_bytes(&self.as_bytes()[..i]),
-                        OsStr::from_bytes(&self.as_bytes()[i + 1..]));
+                return (
+                    OsStr::from_bytes(&self.as_bytes()[..i]),
+                    OsStr::from_bytes(&self.as_bytes()[i + 1..]),
+                );
             }
         }
-        (&*self, OsStr::from_bytes(&self.as_bytes()[self.len_()..self.len_()]))
+        (
+            &*self,
+            OsStr::from_bytes(&self.as_bytes()[self.len_()..self.len_()]),
+        )
     }
 
     fn trim_left_matches(&self, byte: u8) -> &OsStr {
+        let mut found = false;
         for (i, b) in self.as_bytes().iter().enumerate() {
             if b != &byte {
                 return OsStr::from_bytes(&self.as_bytes()[i..]);
+            } else {
+                found = true;
             }
+        }
+        if found {
+            return OsStr::from_bytes(&self.as_bytes()[self.len_()..]);
         }
         &*self
     }
 
     fn split_at(&self, i: usize) -> (&OsStr, &OsStr) {
-        (OsStr::from_bytes(&self.as_bytes()[..i]), OsStr::from_bytes(&self.as_bytes()[i..]))
+        (
+            OsStr::from_bytes(&self.as_bytes()[..i]),
+            OsStr::from_bytes(&self.as_bytes()[i..]),
+        )
     }
 
     fn len_(&self) -> usize { self.as_bytes().len() }

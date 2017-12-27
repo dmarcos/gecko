@@ -25,11 +25,11 @@ public:
     // nsJARProtocolHandler methods:
     nsJARProtocolHandler();
 
-    static nsJARProtocolHandler *GetSingleton();
+    static already_AddRefed<nsJARProtocolHandler> GetSingleton();
 
     nsresult Init();
 
-    // returns non addref'ed pointer.  
+    // returns non addref'ed pointer.
     nsIMIMEService    *MimeService();
     nsIZipReaderCache *JarCache() { return mJARCache; }
 protected:

@@ -3,21 +3,21 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use dom::bindings::codegen::Bindings::CSSFontFaceRuleBinding;
-use dom::bindings::js::Root;
 use dom::bindings::reflector::reflect_dom_object;
+use dom::bindings::root::DomRoot;
 use dom::bindings::str::DOMString;
 use dom::cssrule::{CSSRule, SpecificCSSRule};
 use dom::cssstylesheet::CSSStyleSheet;
 use dom::window::Window;
 use dom_struct::dom_struct;
-use std::sync::Arc;
+use servo_arc::Arc;
 use style::shared_lock::{Locked, ToCssWithGuard};
 use style::stylesheets::FontFaceRule;
 
 #[dom_struct]
 pub struct CSSFontFaceRule {
     cssrule: CSSRule,
-    #[ignore_heap_size_of = "Arc"]
+    #[ignore_malloc_size_of = "Arc"]
     fontfacerule: Arc<Locked<FontFaceRule>>,
 }
 
@@ -32,8 +32,8 @@ impl CSSFontFaceRule {
 
     #[allow(unrooted_must_root)]
     pub fn new(window: &Window, parent_stylesheet: &CSSStyleSheet,
-               fontfacerule: Arc<Locked<FontFaceRule>>) -> Root<CSSFontFaceRule> {
-        reflect_dom_object(box CSSFontFaceRule::new_inherited(parent_stylesheet, fontfacerule),
+               fontfacerule: Arc<Locked<FontFaceRule>>) -> DomRoot<CSSFontFaceRule> {
+        reflect_dom_object(Box::new(CSSFontFaceRule::new_inherited(parent_stylesheet, fontfacerule)),
                            window,
                            CSSFontFaceRuleBinding::Wrap)
     }

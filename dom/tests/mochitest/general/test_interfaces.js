@@ -29,6 +29,8 @@ var ecmaGlobals =
     "ArrayBuffer",
     "Atomics",
     "Boolean",
+    {name: "ByteLengthQueuingStrategy", disabled: !SpecialPowers.Cu.getJSTestingFunctions().streamsAreEnabled()},
+    {name: "CountQueuingStrategy", disabled: !SpecialPowers.Cu.getJSTestingFunctions().streamsAreEnabled()},
     "DataView",
     "Date",
     "Error",
@@ -44,8 +46,7 @@ var ecmaGlobals =
     "Int32Array",
     "Int8Array",
     "InternalError",
-    {name: "Intl", nonReleaseAndroid: true, android: false},
-    "Iterator",
+    "Intl",
     "JSON",
     "Map",
     "Math",
@@ -55,13 +56,13 @@ var ecmaGlobals =
     "Promise",
     "Proxy",
     "RangeError",
+    {name: "ReadableStream", disabled: !SpecialPowers.Cu.getJSTestingFunctions().streamsAreEnabled()},
     "ReferenceError",
     "Reflect",
     "RegExp",
     "Set",
     "SharedArrayBuffer",
     {name: "SIMD", nightly: true},
-    "StopIteration",
     "String",
     "Symbol",
     "SyntaxError",
@@ -99,6 +100,10 @@ var legacyMozPrefixedInterfaces =
 // IMPORTANT: Do not change the list below without review from a DOM peer!
 var interfaceNamesInGlobalScope =
   [
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "AbortController",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "AbortSignal",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "AnalyserNode",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -182,21 +187,17 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "ChromeNodeList", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "ChromeWindow", xbl: true},
-// IMPORTANT: Do not change this list without review from a DOM peer!
     "ClipboardEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "CloseEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "CommandEvent",
+    {name: "CommandEvent", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Comment",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "CompositionEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "ConstantSourceNode",
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    "Controllers",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "ConvolverNode",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -270,10 +271,6 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "DelayNode",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "DesktopNotification",
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    "DesktopNotificationCenter",
-// IMPORTANT: Do not change this list without review from a DOM peer!
     "DeviceLightEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "DeviceMotionEvent",
@@ -342,8 +339,6 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "EventTarget",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "External",
-// IMPORTANT: Do not change this list without review from a DOM peer!
     "File",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "FileList",
@@ -382,9 +377,9 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "GamepadEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "GamepadHapticActuator", release: false},
+    "GamepadHapticActuator",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "GamepadPose", release: false},
+    "GamepadPose",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HashChangeEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -395,8 +390,6 @@ var interfaceNamesInGlobalScope =
     "HTMLAllCollection",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLAnchorElement",
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    "HTMLAppletElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLAreaElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -413,8 +406,6 @@ var interfaceNamesInGlobalScope =
     "HTMLCanvasElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLCollection",
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    "HTMLContentElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLDataElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -512,7 +503,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLSelectElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "HTMLShadowElement",
+    "HTMLSlotElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLSourceElement",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -596,9 +587,9 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "InstallTrigger",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "IntersectionObserver", disabled: true},
+    "IntersectionObserver",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "IntersectionObserverEntry", disabled: true},
+    "IntersectionObserverEntry",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "KeyEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -641,6 +632,8 @@ var interfaceNamesInGlobalScope =
     "MediaQueryListEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "MediaRecorder",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "MediaRecorderErrorEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "MediaSource",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -732,9 +725,11 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PerformanceNavigation",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "PerformanceObserver", nightly: true},
+    "PerformanceNavigationTiming",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "PerformanceObserverEntryList", nightly: true},
+    "PerformanceObserver",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "PerformanceObserverEntryList",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PerformanceResourceTiming",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -750,16 +745,13 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PluginArray",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "PointerEvent", nightly: true, desktop: true, windows: true},
+    {name: "PointerEvent", nightly: true, desktop: true, android: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PopStateEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PopupBlockedEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "PopupBoxObject", xbl: true},
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "PresentationDeviceInfoManager",
-     disabled: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "Presentation", desktop: false, release: false },
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -791,8 +783,6 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Range",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "RecordErrorEvent",
-// IMPORTANT: Do not change this list without review from a DOM peer!
     "Rect",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Request",
@@ -819,6 +809,8 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "RTCRtpSender",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    "RTCRtpTransceiver",
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "RTCSessionDescription",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "RTCStatsReport",
@@ -832,6 +824,8 @@ var interfaceNamesInGlobalScope =
     "ScriptProcessorNode",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "ScrollAreaEvent",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "SecurityPolicyViolationEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Selection",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -849,7 +843,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "SharedWorker",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "SimpleGestureEvent",
+    {name: "SimpleGestureEvent", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "SimpleTest", xbl: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -875,7 +869,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "StorageEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "StorageManager", nightly: true, isSecureContext: true, android: false},
+    {name: "StorageManager", isSecureContext: true, android: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "StyleSheet",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -1157,8 +1151,6 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "TreeContentView", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "TreeSelection", xbl: true},
-// IMPORTANT: Do not change this list without review from a DOM peer!
     "TreeWalker",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "U2F", disabled: true},
@@ -1177,25 +1169,25 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "VideoStreamTrack",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "VRDisplay", release: false},
+    {name: "VRDisplay", releaseNonWindowsAndMac: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "VRDisplayCapabilities", release: false},
+    {name: "VRDisplayCapabilities", releaseNonWindowsAndMac: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "VRDisplayEvent", release: false},
+    {name: "VRDisplayEvent", releaseNonWindowsAndMac: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "VREyeParameters", release: false},
+    {name: "VREyeParameters", releaseNonWindowsAndMac: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "VRFieldOfView", release: false},
+    {name: "VRFieldOfView", releaseNonWindowsAndMac: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "VRFrameData", release: false},
+    {name: "VRFrameData", releaseNonWindowsAndMac: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "VRPose", release: false},
+    {name: "VRPose", releaseNonWindowsAndMac: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "VRStageParameters", release: false},
+    {name: "VRStageParameters", releaseNonWindowsAndMac: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "VTTCue",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "VTTRegion", disabled: true},
+    "VTTRegion",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "WaveShaperNode",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -1273,13 +1265,9 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "XULCheckboxElement", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "XULCommandDispatcher", xbl: true},
-// IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "XULCommandEvent", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "XULControlElement", xbl: true},
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "XULControllers", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "XULDocument", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -1287,11 +1275,11 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "XULLabeledControlElement", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "XULPopupElement", xbl: true},
-// IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "XULTemplateBuilder", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "XULTreeBuilder", xbl: true},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "XULTreeBuilderObserver", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
   ];
 // IMPORTANT: Do not change the list above without review from a DOM peer!
@@ -1318,14 +1306,14 @@ function createInterfaceMap(isXBLScope) {
         ok(!("pref" in entry), "Bogus pref annotation for " + entry.name);
         if ((entry.nightly === !isNightly) ||
             (entry.nightlyAndroid === !(isAndroid && isNightly) && isAndroid) ||
-            (entry.nonReleaseAndroid === !(isAndroid && !isRelease) && isAndroid) ||
             (entry.xbl === !isXBLScope) ||
             (entry.desktop === !isDesktop) ||
             (entry.windows === !isWindows) ||
             (entry.mac === !isMac) ||
             (entry.linux === !isLinux) ||
-            (entry.android === !isAndroid && !entry.nonReleaseAndroid && !entry.nightlyAndroid) ||
+            (entry.android === !isAndroid && !entry.nightlyAndroid) ||
             (entry.release === !isRelease) ||
+            (entry.releaseNonWindowsAndMac === !(isRelease && !isWindows && !isMac)) ||
             (entry.isSecureContext === !isSecureContext) ||
             entry.disabled) {
           interfaceMap[entry.name] = false;

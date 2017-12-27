@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -45,7 +46,7 @@ nsresult
 nsScrollbarButtonFrame::HandleEvent(nsPresContext* aPresContext,
                                     WidgetGUIEvent* aEvent,
                                     nsEventStatus* aEventStatus)
-{  
+{
   NS_ENSURE_ARG_POINTER(aEventStatus);
 
   // If a web page calls event.preventDefault() we still want to
@@ -113,13 +114,13 @@ nsScrollbarButtonFrame::HandleButtonPress(nsPresContext* aPresContext,
 
   if (scrollbar == nullptr)
     return false;
- 
+
   static nsIContent::AttrValuesArray strings[] = { &nsGkAtoms::increment,
                                                    &nsGkAtoms::decrement,
                                                    nullptr };
-  int32_t index = mContent->FindAttrValueIn(kNameSpaceID_None,
-                                            nsGkAtoms::type,
-                                            strings, eCaseMatters);
+  int32_t index = mContent->AsElement()->FindAttrValueIn(kNameSpaceID_None,
+                                                         nsGkAtoms::type,
+                                                         strings, eCaseMatters);
   int32_t direction;
   if (index == 0)
     direction = 1;
@@ -131,7 +132,8 @@ nsScrollbarButtonFrame::HandleButtonPress(nsPresContext* aPresContext,
   bool repeat = pressedButtonAction != 2;
   // set this attribute so we can style it later
   AutoWeakFrame weakFrame(this);
-  mContent->SetAttr(kNameSpaceID_None, nsGkAtoms::active, NS_LITERAL_STRING("true"), true);
+  mContent->AsElement()->SetAttr(kNameSpaceID_None, nsGkAtoms::active,
+                                 NS_LITERAL_STRING("true"), true);
 
   nsIPresShell::SetCapturingContent(mContent, CAPTURE_IGNOREALLOWED);
 
@@ -187,14 +189,14 @@ nsScrollbarButtonFrame::HandleButtonPress(nsPresContext* aPresContext,
   return true;
 }
 
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsScrollbarButtonFrame::HandleRelease(nsPresContext* aPresContext,
                                       WidgetGUIEvent* aEvent,
                                       nsEventStatus* aEventStatus)
 {
   nsIPresShell::SetCapturingContent(nullptr, 0);
   // we're not active anymore
-  mContent->UnsetAttr(kNameSpaceID_None, nsGkAtoms::active, true);
+  mContent->AsElement()->UnsetAttr(kNameSpaceID_None, nsGkAtoms::active, true);
   StopRepeat();
   nsIFrame* scrollbar;
   GetParentWithTag(nsGkAtoms::scrollbar, this, scrollbar);
@@ -236,7 +238,7 @@ nsScrollbarButtonFrame::MouseClicked(WidgetGUIEvent* aEvent)
 }
 
 nsresult
-nsScrollbarButtonFrame::GetChildWithTag(nsIAtom* atom, nsIFrame* start,
+nsScrollbarButtonFrame::GetChildWithTag(nsAtom* atom, nsIFrame* start,
                                         nsIFrame*& result)
 {
   // recursively search our children
@@ -257,7 +259,7 @@ nsScrollbarButtonFrame::GetChildWithTag(nsIAtom* atom, nsIFrame* start,
 
      // recursive search the child
      GetChildWithTag(atom, childFrame, result);
-     if (result != nullptr) 
+     if (result != nullptr)
        return NS_OK;
   }
 
@@ -266,7 +268,7 @@ nsScrollbarButtonFrame::GetChildWithTag(nsIAtom* atom, nsIFrame* start,
 }
 
 nsresult
-nsScrollbarButtonFrame::GetParentWithTag(nsIAtom* toFind, nsIFrame* start,
+nsScrollbarButtonFrame::GetParentWithTag(nsAtom* toFind, nsIFrame* start,
                                          nsIFrame*& result)
 {
    while (start)
@@ -289,10 +291,10 @@ nsScrollbarButtonFrame::GetParentWithTag(nsIAtom* toFind, nsIFrame* start,
 }
 
 void
-nsScrollbarButtonFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsScrollbarButtonFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   // Ensure our repeat service isn't going... it's possible that a scrollbar can disappear out
   // from under you while you're in the process of scrolling.
   StopRepeat();
-  nsButtonBoxFrame::DestroyFrom(aDestructRoot);
+  nsButtonBoxFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }

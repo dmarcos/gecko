@@ -70,10 +70,7 @@ NS_IMETHODIMP nsDeviceContextSpecX::Init(nsIWidget *aWidget,
   bool toPrinter = !toFile && !aIsPrintPreview;
   if (!toPrinter) {
     double width, height;
-    settings->GetEffectivePageSize(&width, &height);
-    width /= TWIPS_PER_POINT_FLOAT;
-    height /= TWIPS_PER_POINT_FLOAT;
-
+    settings->GetFilePageSize(&width, &height);
     settings->SetCocoaPaperSize(width, height);
   }
 
@@ -83,9 +80,9 @@ NS_IMETHODIMP nsDeviceContextSpecX::Init(nsIWidget *aWidget,
   mPrintSettings = settings->GetPMPrintSettings();
 
 #ifdef MOZ_ENABLE_SKIA_PDF
-  const nsAdoptingString& printViaPdf =
-    mozilla::Preferences::GetString("print.print_via_pdf_encoder");
-  if (printViaPdf == NS_LITERAL_STRING("skia-pdf")) {
+  nsAutoString printViaPdf;
+  mozilla::Preferences::GetString("print.print_via_pdf_encoder", printViaPdf);
+  if (printViaPdf.EqualsLiteral("skia-pdf")) {
     // Annoyingly, PMPrinterPrintWithFile does not pay attention to the
     // kPMDestination* value set in the PMPrintSession; it always sends the PDF
     // to the specified printer.  This means that if we create the PDF using
@@ -126,26 +123,33 @@ NS_IMETHODIMP nsDeviceContextSpecX::Init(nsIWidget *aWidget,
   NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
 }
 
-NS_IMETHODIMP nsDeviceContextSpecX::BeginDocument(const nsAString& aTitle, 
+NS_IMETHODIMP nsDeviceContextSpecX::BeginDocument(const nsAString& aTitle,
                                                   const nsAString& aPrintToFileName,
-                                                  int32_t          aStartPage, 
+                                                  int32_t          aStartPage,
                                                   int32_t          aEndPage)
 {
-    NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
-    if (!aTitle.IsEmpty()) {
-      CFStringRef cfString =
-        ::CFStringCreateWithCharacters(NULL, reinterpret_cast<const UniChar*>(aTitle.BeginReading()),
-                                             aTitle.Length());
-      if (cfString) {
-        ::PMPrintSettingsSetJobName(mPrintSettings, cfString);
-        ::CFRelease(cfString);
-      }
+  // Print Core of Application Service sent print job with names exceeding
+  // 255 bytes. This is a workaround until fix it.
+  // (https://openradar.appspot.com/34428043)
+  nsAutoString adjustedTitle;
+  PrintTarget::AdjustPrintJobNameForIPP(aTitle, adjustedTitle);
+
+  if (!adjustedTitle.IsEmpty()) {
+    CFStringRef cfString =
+      ::CFStringCreateWithCharacters(NULL,
+                                     reinterpret_cast<const UniChar*>(adjustedTitle.BeginReading()),
+                                     adjustedTitle.Length());
+    if (cfString) {
+      ::PMPrintSettingsSetJobName(mPrintSettings, cfString);
+      ::CFRelease(cfString);
     }
+  }
 
-    return NS_OK;
+  return NS_OK;
 
-    NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
+  NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
 }
 
 NS_IMETHODIMP nsDeviceContextSpecX::EndDocument()
@@ -243,8 +247,10 @@ void nsDeviceContextSpecX::GetPaperRect(double* aTop, double* aLeft, double* aBo
     PMRect paperRect;
     ::PMGetAdjustedPaperRect(mPageFormat, &paperRect);
 
-    *aTop = paperRect.top, *aLeft = paperRect.left;
-    *aBottom = paperRect.bottom, *aRight = paperRect.right;
+    *aTop = paperRect.top;
+    *aLeft = paperRect.left;
+    *aBottom = paperRect.bottom;
+    *aRight = paperRect.right;
 
     NS_OBJC_END_TRY_ABORT_BLOCK;
 }

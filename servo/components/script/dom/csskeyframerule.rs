@@ -4,24 +4,24 @@
 
 use dom::bindings::codegen::Bindings::CSSKeyframeRuleBinding::{self, CSSKeyframeRuleMethods};
 use dom::bindings::inheritance::Castable;
-use dom::bindings::js::{JS, MutNullableJS, Root};
 use dom::bindings::reflector::{DomObject, reflect_dom_object};
+use dom::bindings::root::{Dom, DomRoot, MutNullableDom};
 use dom::bindings::str::DOMString;
 use dom::cssrule::{CSSRule, SpecificCSSRule};
 use dom::cssstyledeclaration::{CSSModificationAccess, CSSStyleDeclaration, CSSStyleOwner};
 use dom::cssstylesheet::CSSStyleSheet;
 use dom::window::Window;
 use dom_struct::dom_struct;
-use std::sync::Arc;
-use style::keyframes::Keyframe;
+use servo_arc::Arc;
 use style::shared_lock::{Locked, ToCssWithGuard};
+use style::stylesheets::keyframes_rule::Keyframe;
 
 #[dom_struct]
 pub struct CSSKeyframeRule {
     cssrule: CSSRule,
-    #[ignore_heap_size_of = "Arc"]
+    #[ignore_malloc_size_of = "Arc"]
     keyframerule: Arc<Locked<Keyframe>>,
-    style_decl: MutNullableJS<CSSStyleDeclaration>,
+    style_decl: MutNullableDom<CSSStyleDeclaration>,
 }
 
 impl CSSKeyframeRule {
@@ -36,8 +36,8 @@ impl CSSKeyframeRule {
 
     #[allow(unrooted_must_root)]
     pub fn new(window: &Window, parent_stylesheet: &CSSStyleSheet,
-               keyframerule: Arc<Locked<Keyframe>>) -> Root<CSSKeyframeRule> {
-        reflect_dom_object(box CSSKeyframeRule::new_inherited(parent_stylesheet, keyframerule),
+               keyframerule: Arc<Locked<Keyframe>>) -> DomRoot<CSSKeyframeRule> {
+        reflect_dom_object(Box::new(CSSKeyframeRule::new_inherited(parent_stylesheet, keyframerule)),
                            window,
                            CSSKeyframeRuleBinding::Wrap)
     }
@@ -45,13 +45,13 @@ impl CSSKeyframeRule {
 
 impl CSSKeyframeRuleMethods for CSSKeyframeRule {
     // https://drafts.csswg.org/css-animations/#dom-csskeyframerule-style
-    fn Style(&self) -> Root<CSSStyleDeclaration> {
+    fn Style(&self) -> DomRoot<CSSStyleDeclaration> {
         self.style_decl.or_init(|| {
             let guard = self.cssrule.shared_lock().read();
             CSSStyleDeclaration::new(
                 self.global().as_window(),
                 CSSStyleOwner::CSSRule(
-                    JS::from_ref(self.upcast()),
+                    Dom::from_ref(self.upcast()),
                     self.keyframerule.read_with(&guard).block.clone(),
                 ),
                 None,

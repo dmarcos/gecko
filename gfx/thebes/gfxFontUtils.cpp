@@ -10,7 +10,6 @@
 
 #include "nsServiceManagerUtils.h"
 
-#include "mozilla/dom/EncodingUtils.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "mozilla/BinarySearch.h"
@@ -18,7 +17,7 @@
 
 #include "nsCOMPtr.h"
 #include "nsIUUIDGenerator.h"
-#include "nsIUnicodeDecoder.h"
+#include "mozilla/Encoding.h"
 
 #include "harfbuzz/hb.h"
 
@@ -414,8 +413,7 @@ gfxFontUtils::ReadCMAPTableFormat14(const uint8_t *aBuf, uint32_t aLength,
 uint32_t
 gfxFontUtils::FindPreferredSubtable(const uint8_t *aBuf, uint32_t aBufLength,
                                     uint32_t *aTableOffset,
-                                    uint32_t *aUVSTableOffset,
-                                    bool *aSymbolEncoding)
+                                    uint32_t *aUVSTableOffset)
 {
     enum {
         OffsetVersion = 0,
@@ -475,17 +473,14 @@ gfxFontUtils::FindPreferredSubtable(const uint8_t *aBuf, uint32_t aBufLength,
         if (isSymbol(platformID, encodingID)) {
             keepFormat = format;
             *aTableOffset = offset;
-            *aSymbolEncoding = true;
             break;
         } else if (format == 4 && acceptableFormat4(platformID, encodingID, keepFormat)) {
             keepFormat = format;
             *aTableOffset = offset;
-            *aSymbolEncoding = false;
         } else if ((format == 10 || format == 12 || format == 13) &&
                    acceptableUCS4Encoding(platformID, encodingID, keepFormat)) {
             keepFormat = format;
             *aTableOffset = offset;
-            *aSymbolEncoding = false;
             if (platformID > PLATFORM_ID_UNICODE || !aUVSTableOffset || *aUVSTableOffset) {
                 break; // we don't want to try anything else when this format is available.
             }
@@ -503,36 +498,23 @@ gfxFontUtils::FindPreferredSubtable(const uint8_t *aBuf, uint32_t aBufLength,
 nsresult
 gfxFontUtils::ReadCMAP(const uint8_t *aBuf, uint32_t aBufLength,
                        gfxSparseBitSet& aCharacterMap,
-                       uint32_t& aUVSOffset,
-                       bool& aUnicodeFont, bool& aSymbolFont)
+                       uint32_t& aUVSOffset)
 {
     uint32_t offset;
-    bool     symbol;
     uint32_t format = FindPreferredSubtable(aBuf, aBufLength,
-                                            &offset, &aUVSOffset, &symbol);
+                                            &offset, &aUVSOffset);
 
     switch (format) {
     case 4:
-        if (symbol) {
-            aUnicodeFont = false;
-            aSymbolFont = true;
-        } else {
-            aUnicodeFont = true;
-            aSymbolFont = false;
-        }
         return ReadCMAPTableFormat4(aBuf + offset, aBufLength - offset,
                                     aCharacterMap);
 
     case 10:
-        aUnicodeFont = true;
-        aSymbolFont = false;
         return ReadCMAPTableFormat10(aBuf + offset, aBufLength - offset,
                                      aCharacterMap);
 
     case 12:
     case 13:
-        aUnicodeFont = true;
-        aSymbolFont = false;
         return ReadCMAPTableFormat12or13(aBuf + offset, aBufLength - offset,
                                          aCharacterMap);
 
@@ -770,9 +752,8 @@ gfxFontUtils::MapCharToGlyph(const uint8_t *aCmapBuf, uint32_t aBufLength,
                              uint32_t aUnicode, uint32_t aVarSelector)
 {
     uint32_t offset, uvsOffset;
-    bool     symbol;
     uint32_t format = FindPreferredSubtable(aCmapBuf, aBufLength, &offset,
-                                            &uvsOffset, &symbol);
+                                            &uvsOffset);
 
     uint32_t gid;
     switch (format) {
@@ -861,8 +842,9 @@ void gfxFontUtils::AppendPrefsFontList(const char *aPrefName,
                                        nsTArray<nsString>& aFontList)
 {
     // get the list of single-face font families
-    nsAdoptingString fontlistValue = Preferences::GetString(aPrefName);
-    if (!fontlistValue) {
+    nsAutoString fontlistValue;
+    nsresult rv = Preferences::GetString(aPrefName, fontlistValue);
+    if (NS_FAILED(rv)) {
         return;
     }
 
@@ -1322,58 +1304,58 @@ gfxFontUtils::ReadCanonicalName(const char *aNameData, uint32_t aDataLen,
 // encoding=roman, lang=english, in order that common entries will be found
 // on the first search.
 
-#define ANY 0xffff
+const uint16_t ANY = 0xffff;
 const gfxFontUtils::MacFontNameCharsetMapping gfxFontUtils::gMacFontNameCharsets[] =
 {
-    { ENCODING_ID_MAC_ROMAN,        LANG_ID_MAC_ENGLISH,      "macintosh"       },
-    { ENCODING_ID_MAC_ROMAN,        LANG_ID_MAC_ICELANDIC,    "x-mac-icelandic" },
-    { ENCODING_ID_MAC_ROMAN,        LANG_ID_MAC_TURKISH,      "x-mac-turkish"   },
-    { ENCODING_ID_MAC_ROMAN,        LANG_ID_MAC_POLISH,       "x-mac-ce"        },
-    { ENCODING_ID_MAC_ROMAN,        LANG_ID_MAC_ROMANIAN,     "x-mac-romanian"  },
-    { ENCODING_ID_MAC_ROMAN,        LANG_ID_MAC_CZECH,        "x-mac-ce"        },
-    { ENCODING_ID_MAC_ROMAN,        LANG_ID_MAC_SLOVAK,       "x-mac-ce"        },
-    { ENCODING_ID_MAC_ROMAN,        ANY,                      "macintosh"       },
-    { ENCODING_ID_MAC_JAPANESE,     LANG_ID_MAC_JAPANESE,     "Shift_JIS"       },
-    { ENCODING_ID_MAC_JAPANESE,     ANY,                      "Shift_JIS"       },
-    { ENCODING_ID_MAC_TRAD_CHINESE, LANG_ID_MAC_TRAD_CHINESE, "Big5"            },
-    { ENCODING_ID_MAC_TRAD_CHINESE, ANY,                      "Big5"            },
-    { ENCODING_ID_MAC_KOREAN,       LANG_ID_MAC_KOREAN,       "EUC-KR"          },
-    { ENCODING_ID_MAC_KOREAN,       ANY,                      "EUC-KR"          },
-    { ENCODING_ID_MAC_ARABIC,       LANG_ID_MAC_ARABIC,       "x-mac-arabic"    },
-    { ENCODING_ID_MAC_ARABIC,       LANG_ID_MAC_URDU,         "x-mac-farsi"     },
-    { ENCODING_ID_MAC_ARABIC,       LANG_ID_MAC_FARSI,        "x-mac-farsi"     },
-    { ENCODING_ID_MAC_ARABIC,       ANY,                      "x-mac-arabic"    },
-    { ENCODING_ID_MAC_HEBREW,       LANG_ID_MAC_HEBREW,       "x-mac-hebrew"    },
-    { ENCODING_ID_MAC_HEBREW,       ANY,                      "x-mac-hebrew"    },
-    { ENCODING_ID_MAC_GREEK,        ANY,                      "x-mac-greek"     },
-    { ENCODING_ID_MAC_CYRILLIC,     ANY,                      "x-mac-cyrillic"  },
-    { ENCODING_ID_MAC_DEVANAGARI,   ANY,                      "x-mac-devanagari"},
-    { ENCODING_ID_MAC_GURMUKHI,     ANY,                      "x-mac-gurmukhi"  },
-    { ENCODING_ID_MAC_GUJARATI,     ANY,                      "x-mac-gujarati"  },
-    { ENCODING_ID_MAC_SIMP_CHINESE, LANG_ID_MAC_SIMP_CHINESE, "gb18030"         },
-    { ENCODING_ID_MAC_SIMP_CHINESE, ANY,                      "gb18030"         }
+    { ENCODING_ID_MAC_ROMAN,        LANG_ID_MAC_ENGLISH,      MACINTOSH_ENCODING },
+    { ENCODING_ID_MAC_ROMAN,        LANG_ID_MAC_ICELANDIC,    X_USER_DEFINED_ENCODING },
+    { ENCODING_ID_MAC_ROMAN,        LANG_ID_MAC_TURKISH,      X_USER_DEFINED_ENCODING },
+    { ENCODING_ID_MAC_ROMAN,        LANG_ID_MAC_POLISH,       X_USER_DEFINED_ENCODING },
+    { ENCODING_ID_MAC_ROMAN,        LANG_ID_MAC_ROMANIAN,     X_USER_DEFINED_ENCODING },
+    { ENCODING_ID_MAC_ROMAN,        LANG_ID_MAC_CZECH,        X_USER_DEFINED_ENCODING },
+    { ENCODING_ID_MAC_ROMAN,        LANG_ID_MAC_SLOVAK,       X_USER_DEFINED_ENCODING },
+    { ENCODING_ID_MAC_ROMAN,        ANY,                      MACINTOSH_ENCODING },
+    { ENCODING_ID_MAC_JAPANESE,     LANG_ID_MAC_JAPANESE,     SHIFT_JIS_ENCODING },
+    { ENCODING_ID_MAC_JAPANESE,     ANY,                      SHIFT_JIS_ENCODING },
+    { ENCODING_ID_MAC_TRAD_CHINESE, LANG_ID_MAC_TRAD_CHINESE, BIG5_ENCODING },
+    { ENCODING_ID_MAC_TRAD_CHINESE, ANY,                      BIG5_ENCODING },
+    { ENCODING_ID_MAC_KOREAN,       LANG_ID_MAC_KOREAN,       EUC_KR_ENCODING },
+    { ENCODING_ID_MAC_KOREAN,       ANY,                      EUC_KR_ENCODING },
+    { ENCODING_ID_MAC_ARABIC,       LANG_ID_MAC_ARABIC,       X_USER_DEFINED_ENCODING },
+    { ENCODING_ID_MAC_ARABIC,       LANG_ID_MAC_URDU,         X_USER_DEFINED_ENCODING },
+    { ENCODING_ID_MAC_ARABIC,       LANG_ID_MAC_FARSI,        X_USER_DEFINED_ENCODING },
+    { ENCODING_ID_MAC_ARABIC,       ANY,                      X_USER_DEFINED_ENCODING },
+    { ENCODING_ID_MAC_HEBREW,       LANG_ID_MAC_HEBREW,       X_USER_DEFINED_ENCODING },
+    { ENCODING_ID_MAC_HEBREW,       ANY,                      X_USER_DEFINED_ENCODING },
+    { ENCODING_ID_MAC_GREEK,        ANY,                      X_USER_DEFINED_ENCODING },
+    { ENCODING_ID_MAC_CYRILLIC,     ANY,                      X_MAC_CYRILLIC_ENCODING },
+    { ENCODING_ID_MAC_DEVANAGARI,   ANY,                      X_USER_DEFINED_ENCODING },
+    { ENCODING_ID_MAC_GURMUKHI,     ANY,                      X_USER_DEFINED_ENCODING },
+    { ENCODING_ID_MAC_GUJARATI,     ANY,                      X_USER_DEFINED_ENCODING },
+    { ENCODING_ID_MAC_SIMP_CHINESE, LANG_ID_MAC_SIMP_CHINESE, GB18030_ENCODING },
+    { ENCODING_ID_MAC_SIMP_CHINESE, ANY,                      GB18030_ENCODING }
 };
 
-const char* gfxFontUtils::gISOFontNameCharsets[] = 
+const Encoding* gfxFontUtils::gISOFontNameCharsets[] =
 {
-    /* 0 */ "windows-1252", /* US-ASCII */
+    /* 0 */ WINDOWS_1252_ENCODING, /* US-ASCII */
     /* 1 */ nullptr       , /* spec says "ISO 10646" but does not specify encoding form! */
-    /* 2 */ "windows-1252"  /* ISO-8859-1 */
+    /* 2 */ WINDOWS_1252_ENCODING  /* ISO-8859-1 */
 };
 
-const char* gfxFontUtils::gMSFontNameCharsets[] =
+const Encoding* gfxFontUtils::gMSFontNameCharsets[] =
 {
-    /* [0] ENCODING_ID_MICROSOFT_SYMBOL */      ""          ,
-    /* [1] ENCODING_ID_MICROSOFT_UNICODEBMP */  ""          ,
-    /* [2] ENCODING_ID_MICROSOFT_SHIFTJIS */    "Shift_JIS" ,
+    /* [0] ENCODING_ID_MICROSOFT_SYMBOL */      UTF_16BE_ENCODING,
+    /* [1] ENCODING_ID_MICROSOFT_UNICODEBMP */  UTF_16BE_ENCODING,
+    /* [2] ENCODING_ID_MICROSOFT_SHIFTJIS */    SHIFT_JIS_ENCODING,
     /* [3] ENCODING_ID_MICROSOFT_PRC */         nullptr      ,
-    /* [4] ENCODING_ID_MICROSOFT_BIG5 */        "Big5"      ,
+    /* [4] ENCODING_ID_MICROSOFT_BIG5 */        BIG5_ENCODING,
     /* [5] ENCODING_ID_MICROSOFT_WANSUNG */     nullptr      ,
     /* [6] ENCODING_ID_MICROSOFT_JOHAB */       nullptr      ,
     /* [7] reserved */                          nullptr      ,
     /* [8] reserved */                          nullptr      ,
     /* [9] reserved */                          nullptr      ,
-    /*[10] ENCODING_ID_MICROSOFT_UNICODEFULL */ ""
+    /*[10] ENCODING_ID_MICROSOFT_UNICODEFULL */ UTF_16BE_ENCODING
 };
 
 struct MacCharsetMappingComparator
@@ -1393,18 +1375,19 @@ struct MacCharsetMappingComparator
     }
 };
 
-// Return the name of the charset we should use to decode a font name
+// Return the Encoding object we should use to decode a font name
 // given the name table attributes.
 // Special return values:
-//    ""       charset is UTF16BE, no need for a converter
-//    nullptr   unknown charset, do not attempt conversion
-const char*
+//    X_USER_DEFINED_ENCODING  One of Mac legacy encodings that is not a part
+//                             of Encoding Standard
+//    nullptr                  unknown charset, do not attempt conversion
+const Encoding*
 gfxFontUtils::GetCharsetForFontName(uint16_t aPlatform, uint16_t aScript, uint16_t aLanguage)
 {
     switch (aPlatform)
     {
     case PLATFORM_ID_UNICODE:
-        return "";
+        return UTF_16BE_ENCODING;
 
     case PLATFORM_ID_MAC:
         {
@@ -1413,7 +1396,7 @@ gfxFontUtils::GetCharsetForFontName(uint16_t aPlatform, uint16_t aScript, uint16
                 size_t idx;
                 if (BinarySearchIf(gMacFontNameCharsets, 0, ArrayLength(gMacFontNameCharsets),
                                             MacCharsetMappingComparator(searchValue), &idx)) {
-                    return gMacFontNameCharsets[idx].mCharsetName;
+                    return gMacFontNameCharsets[idx].mEncoding;
                 }
 
                 // no match, so try again finding one in any language
@@ -1438,6 +1421,16 @@ gfxFontUtils::GetCharsetForFontName(uint16_t aPlatform, uint16_t aScript, uint16
     return nullptr;
 }
 
+template<int N>
+static bool
+StartsWith(const nsACString& string, const char (&prefix)[N])
+{
+  if (N - 1 > string.Length()) {
+    return false;
+  }
+  return memcmp(string.Data(), prefix, N - 1) == 0;
+}
+
 // convert a raw name from the name table to an nsString, if possible;
 // return value indicates whether conversion succeeded
 bool
@@ -1451,9 +1444,9 @@ gfxFontUtils::DecodeFontName(const char *aNameData, int32_t aByteLen,
         return true;
     }
 
-    const char *csName = GetCharsetForFontName(aPlatformCode, aScriptCode, aLangCode);
+    auto encoding = GetCharsetForFontName(aPlatformCode, aScriptCode, aLangCode);
 
-    if (!csName) {
+    if (!encoding) {
         // nullptr -> unknown charset
 #ifdef DEBUG
         char warnBuf[128];
@@ -1466,8 +1459,8 @@ gfxFontUtils::DecodeFontName(const char *aNameData, int32_t aByteLen,
         return false;
     }
 
-    if (csName[0] == 0) {
-        // empty charset name: data is utf16be, no need to instantiate a converter
+    if (encoding == UTF_16BE_ENCODING) {
+        // no need to instantiate a converter
         uint32_t strLen = aByteLen / 2;
         aName.SetLength(strLen);
 #ifdef IS_LITTLE_ENDIAN
@@ -1479,12 +1472,10 @@ gfxFontUtils::DecodeFontName(const char *aNameData, int32_t aByteLen,
         return true;
     }
 
-    nsCOMPtr<nsIUnicodeDecoder> decoder =
-        mozilla::dom::EncodingUtils::DecoderForEncoding(csName);
-    if (!decoder) {
+    if (encoding == X_USER_DEFINED_ENCODING) {
 #ifdef XP_MACOSX
         // Special case for macOS only: support legacy Mac encodings
-        // that DecoderForEncoding didn't handle.
+        // that aren't part of the Encoding Standard.
         if (aPlatformCode == PLATFORM_ID_MAC) {
             CFStringRef str =
                 CFStringCreateWithBytes(kCFAllocatorDefault,
@@ -1504,24 +1495,9 @@ gfxFontUtils::DecodeFontName(const char *aNameData, int32_t aByteLen,
         return false;
     }
 
-    int32_t destLength;
-    nsresult rv = decoder->GetMaxLength(aNameData, aByteLen, &destLength);
-    if (NS_FAILED(rv)) {
-        NS_WARNING("decoder->GetMaxLength failed, invalid font name?");
-        return false;
-    }
-
-    // make space for the converted string
-    aName.SetLength(destLength);
-    rv = decoder->Convert(aNameData, &aByteLen,
-                          aName.BeginWriting(), &destLength);
-    if (NS_FAILED(rv)) {
-        NS_WARNING("decoder->Convert failed, invalid font name?");
-        return false;
-    }
-    aName.Truncate(destLength); // set the actual length
-
-    return true;
+    auto rv = encoding->DecodeWithoutBOMHandling(
+      AsBytes(MakeSpan(aNameData, aByteLen)), aName);
+    return NS_SUCCEEDED(rv);
 }
 
 nsresult

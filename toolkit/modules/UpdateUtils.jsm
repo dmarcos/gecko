@@ -9,19 +9,21 @@ const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/NetUtil.jsm");
-Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/ctypes.jsm");
+Cu.importGlobalProperties(["fetch"]); /* globals fetch */
+
+XPCOMUtils.defineLazyModuleGetter(this, "WindowsRegistry",
+                                  "resource://gre/modules/WindowsRegistry.jsm");
 
 const FILE_UPDATE_LOCALE                  = "update.locale";
 const PREF_APP_DISTRIBUTION               = "distribution.id";
 const PREF_APP_DISTRIBUTION_VERSION       = "distribution.version";
-const PREF_APP_B2G_VERSION                = "b2g.version";
 const PREF_APP_UPDATE_CUSTOM              = "app.update.custom";
-const PREF_APP_UPDATE_IMEI_HASH           = "app.update.imei_hash";
 
 
 this.UpdateUtils = {
+  _locale: undefined,
+
   /**
    * Read the update channel from defaults only.  We do this to ensure that
    * the channel is tightly coupled with the application and does not apply
@@ -64,44 +66,69 @@ this.UpdateUtils = {
    *         The URL to format.
    * @return The formatted URL.
    */
-  formatUpdateURL(url) {
-    url = url.replace(/%PRODUCT%/g, Services.appinfo.name);
-    url = url.replace(/%VERSION%/g, Services.appinfo.version);
-    url = url.replace(/%BUILD_ID%/g, Services.appinfo.appBuildID);
-    url = url.replace(/%BUILD_TARGET%/g, Services.appinfo.OS + "_" + this.ABI);
-    url = url.replace(/%OS_VERSION%/g, this.OSVersion);
-    url = url.replace(/%SYSTEM_CAPABILITIES%/g, gSystemCapabilities);
-    if (/%LOCALE%/.test(url)) {
-      url = url.replace(/%LOCALE%/g, this.Locale);
-    }
-    url = url.replace(/%CHANNEL%/g, this.UpdateChannel);
-    url = url.replace(/%PLATFORM_VERSION%/g, Services.appinfo.platformVersion);
-    url = url.replace(/%DISTRIBUTION%/g,
-                      getDistributionPrefValue(PREF_APP_DISTRIBUTION));
-    url = url.replace(/%DISTRIBUTION_VERSION%/g,
-                      getDistributionPrefValue(PREF_APP_DISTRIBUTION_VERSION));
-    url = url.replace(/%CUSTOM%/g, Preferences.get(PREF_APP_UPDATE_CUSTOM, ""));
-    url = url.replace(/\+/g, "%2B");
+  async formatUpdateURL(url) {
+    const locale = await this.getLocale();
 
-    if (AppConstants.platform == "gonk") {
-      let sysLibs = {};
-      Cu.import("resource://gre/modules/systemlibs.js", sysLibs);
-      let productDevice = sysLibs.libcutils.property_get("ro.product.device");
-      let buildType = sysLibs.libcutils.property_get("ro.build.type");
-      url = url.replace(/%PRODUCT_MODEL%/g,
-                        sysLibs.libcutils.property_get("ro.product.model"));
-      if (buildType == "user" || buildType == "userdebug") {
-        url = url.replace(/%PRODUCT_DEVICE%/g, productDevice);
-      } else {
-        url = url.replace(/%PRODUCT_DEVICE%/g, productDevice + "-" + buildType);
+    return url.replace(/%(\w+)%/g, (match, name) => {
+      switch (name) {
+        case "PRODUCT":
+          return Services.appinfo.name;
+        case "VERSION":
+          return Services.appinfo.version;
+        case "BUILD_ID":
+          return Services.appinfo.appBuildID;
+        case "BUILD_TARGET":
+          return Services.appinfo.OS + "_" + this.ABI;
+        case "OS_VERSION":
+          return this.OSVersion;
+        case "LOCALE":
+          return locale;
+        case "CHANNEL":
+          return this.UpdateChannel;
+        case "PLATFORM_VERSION":
+          return Services.appinfo.platformVersion;
+        case "SYSTEM_CAPABILITIES":
+          return getSystemCapabilities();
+        case "CUSTOM":
+          return Services.prefs.getStringPref(PREF_APP_UPDATE_CUSTOM, "");
+        case "DISTRIBUTION":
+          return getDistributionPrefValue(PREF_APP_DISTRIBUTION);
+        case "DISTRIBUTION_VERSION":
+          return getDistributionPrefValue(PREF_APP_DISTRIBUTION_VERSION);
       }
-      url = url.replace(/%B2G_VERSION%/g,
-                        Preferences.get(PREF_APP_B2G_VERSION, null));
-      url = url.replace(/%IMEI%/g,
-                        Preferences.get(PREF_APP_UPDATE_IMEI_HASH, "default"));
+      return match;
+    }).replace(/\+/g, "%2B");
+  },
+
+  /**
+   * Gets the locale from the update.locale file for replacing %LOCALE% in the
+   * update url. The update.locale file can be located in the application
+   * directory or the GRE directory with preference given to it being located in
+   * the application directory.
+   */
+  async getLocale() {
+    if (this._locale !== undefined) {
+      return this._locale;
     }
 
-    return url;
+    for (let res of ["app", "gre"]) {
+      const url = "resource://" + res + "/" + FILE_UPDATE_LOCALE;
+      let data;
+      try {
+        data = await fetch(url);
+      } catch (e) {
+        continue;
+      }
+      const locale = await data.text();
+      if (locale) {
+        return this._locale = locale.trim();
+      }
+    }
+
+    Cu.reportError(FILE_UPDATE_LOCALE + " file doesn't exist in either the " +
+                   "application or GRE directories");
+
+    return this._locale = null;
   }
 };
 
@@ -110,80 +137,42 @@ function getDistributionPrefValue(aPrefName) {
   return Services.prefs.getDefaultBranch(null).getCharPref(aPrefName, "default");
 }
 
-/**
- * Gets the locale from the update.locale file for replacing %LOCALE% in the
- * update url. The update.locale file can be located in the application
- * directory or the GRE directory with preference given to it being located in
- * the application directory.
- */
-XPCOMUtils.defineLazyGetter(UpdateUtils, "Locale", function() {
-  let channel;
-  let locale;
-  for (let res of ["app", "gre"]) {
-    channel = NetUtil.newChannel({
-      uri: "resource://" + res + "/" + FILE_UPDATE_LOCALE,
-      contentPolicyType: Ci.nsIContentPolicy.TYPE_INTERNAL_XMLHTTPREQUEST,
-      loadUsingSystemPrincipal: true
-    });
-    try {
-      let inputStream = channel.open2();
-      locale = NetUtil.readInputStreamToString(inputStream, inputStream.available());
-    } catch (e) {}
-    if (locale)
-      return locale.trim();
-  }
-
-  Cu.reportError(FILE_UPDATE_LOCALE + " file doesn't exist in either the " +
-                 "application or GRE directories");
-
-  return null;
-});
+function getSystemCapabilities() {
+  return "ISET:" + gInstructionSet + ",MEM:" + getMemoryMB();
+}
 
 /**
- * Provides adhoc system capability information for application update.
+ * Gets the RAM size in megabytes. This will round the value because sysinfo
+ * doesn't always provide RAM in multiples of 1024.
  */
-XPCOMUtils.defineLazyGetter(this, "gSystemCapabilities", function aus_gSC() {
-  if (AppConstants.platform == "win") {
-    const PF_MMX_INSTRUCTIONS_AVAILABLE = 3; // MMX
-    const PF_XMMI_INSTRUCTIONS_AVAILABLE = 6; // SSE
-    const PF_XMMI64_INSTRUCTIONS_AVAILABLE = 10; // SSE2
-    const PF_SSE3_INSTRUCTIONS_AVAILABLE = 13; // SSE3
-
-    let lib = ctypes.open("kernel32.dll");
-    let IsProcessorFeaturePresent = lib.declare("IsProcessorFeaturePresent",
-                                                ctypes.winapi_abi,
-                                                ctypes.int32_t, /* success */
-                                                ctypes.uint32_t); /* DWORD */
-    let instructionSet = "unknown";
-    try {
-      if (IsProcessorFeaturePresent(PF_SSE3_INSTRUCTIONS_AVAILABLE)) {
-        instructionSet = "SSE3";
-      } else if (IsProcessorFeaturePresent(PF_XMMI64_INSTRUCTIONS_AVAILABLE)) {
-        instructionSet = "SSE2";
-      } else if (IsProcessorFeaturePresent(PF_XMMI_INSTRUCTIONS_AVAILABLE)) {
-        instructionSet = "SSE";
-      } else if (IsProcessorFeaturePresent(PF_MMX_INSTRUCTIONS_AVAILABLE)) {
-        instructionSet = "MMX";
-      }
-    } catch (e) {
-      instructionSet = "error";
-      Cu.reportError("Error getting processor instruction set. " +
-                     "Exception: " + e);
+function getMemoryMB() {
+  let memoryMB = "unknown";
+  try {
+    memoryMB = Services.sysinfo.getProperty("memsize");
+    if (memoryMB) {
+      memoryMB = Math.round(memoryMB / 1024 / 1024);
     }
+  } catch (e) {
+    Cu.reportError("Error getting system info memsize property. " +
+                   "Exception: " + e);
+  }
+  return memoryMB;
+}
 
-    lib.close();
-    return instructionSet;
+/**
+ * Gets the supported CPU instruction set.
+ */
+XPCOMUtils.defineLazyGetter(this, "gInstructionSet", function aus_gIS() {
+  const CPU_EXTENSIONS = ["hasSSE4_2", "hasSSE4_1", "hasSSE4A", "hasSSSE3",
+                          "hasSSE3", "hasSSE2", "hasSSE", "hasMMX",
+                          "hasNEON", "hasARMv7", "hasARMv6"];
+  for (let ext of CPU_EXTENSIONS) {
+    if (Services.sysinfo.getProperty(ext)) {
+      return ext.substring(3);
+    }
   }
 
-  if (AppConstants == "linux") {
-    let instructionSet = "unknown";
-    if (navigator.cpuHasSSE2) {
-      instructionSet = "SSE2";
-    }
-    return instructionSet;
-  }
-
-  return "NA"
+  return "unknown";
 });
 
 /* Windows only getter that returns the processor architecture. */
@@ -221,7 +210,7 @@ XPCOMUtils.defineLazyGetter(this, "gWinCPUArch", function aus_gWinCPUArch() {
   if (kernel32) {
     try {
       let GetNativeSystemInfo = kernel32.declare("GetNativeSystemInfo",
-                                                 ctypes.default_abi,
+                                                 ctypes.winapi_abi,
                                                  ctypes.void_t,
                                                  SYSTEM_INFO.ptr);
       let winSystemInfo = SYSTEM_INFO();
@@ -323,7 +312,7 @@ XPCOMUtils.defineLazyGetter(UpdateUtils, "OSVersion", function() {
           // Get Service pack info
           try {
             let GetVersionEx = kernel32.declare("GetVersionExW",
-                                                ctypes.default_abi,
+                                                ctypes.winapi_abi,
                                                 BOOL,
                                                 OSVERSIONINFOEXW.ptr);
             let winVer = OSVERSIONINFOEXW();
@@ -331,7 +320,8 @@ XPCOMUtils.defineLazyGetter(UpdateUtils, "OSVersion", function() {
 
             if (0 !== GetVersionEx(winVer.address())) {
               osVersion += "." + winVer.wServicePackMajor +
-                           "." + winVer.wServicePackMinor;
+                           "." + winVer.wServicePackMinor +
+                           "." + winVer.dwBuildNumber;
             } else {
               Cu.reportError("Unknown failure in GetVersionEX (returned 0)");
               osVersion += ".unknown";
@@ -339,6 +329,14 @@ XPCOMUtils.defineLazyGetter(UpdateUtils, "OSVersion", function() {
           } catch (e) {
             Cu.reportError("Error getting service pack information. Exception: " + e);
             osVersion += ".unknown";
+          }
+
+          if (Services.vc.compare(Services.sysinfo.getProperty("version"), "10") >= 0) {
+            const WINDOWS_UBR_KEY_PATH = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+            let ubr = WindowsRegistry.readRegKey(Ci.nsIWindowsRegKey.ROOT_KEY_LOCAL_MACHINE,
+                                                 WINDOWS_UBR_KEY_PATH, "UBR",
+                                                 Ci.nsIWindowsRegKey.WOW64_64);
+            osVersion += (ubr !== undefined) ? "." + ubr : ".unknown";
           }
         } finally {
           kernel32.close();

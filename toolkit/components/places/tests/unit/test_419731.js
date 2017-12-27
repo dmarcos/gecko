@@ -4,22 +4,28 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-function run_test() {
-  let uri1 = NetUtil.newURI("http://foo.bar/");
+add_task(async function test_tag_updates() {
+  const url = "http://foo.bar/";
+  let lastModified = new Date(Date.now() - 10000);
 
   // create 2 bookmarks
-  let bookmark1id = PlacesUtils.bookmarks
-                               .insertBookmark(PlacesUtils.bookmarksMenuFolderId,
-                                               uri1,
-                                               PlacesUtils.bookmarks.DEFAULT_INDEX,
-                                               "title 1");
-  let bookmark2id = PlacesUtils.bookmarks
-                               .insertBookmark(PlacesUtils.toolbarFolderId,
-                                               uri1,
-                                               PlacesUtils.bookmarks.DEFAULT_INDEX,
-                                               "title 2");
+  let bm1 = await PlacesUtils.bookmarks.insert({
+    parentGuid: PlacesUtils.bookmarks.menuGuid,
+    dateAdded: lastModified,
+    lastModified: new Date(),
+    title: "title 1",
+    url,
+  });
+  let bm2 = await PlacesUtils.bookmarks.insert({
+    parentGuid: PlacesUtils.bookmarks.menuGuid,
+    dateAdded: lastModified,
+    lastModified,
+    title: "title 2",
+    url,
+  });
+
   // add a new tag
-  PlacesUtils.tagging.tagURI(uri1, ["foo"]);
+  PlacesUtils.tagging.tagURI(uri(url), ["foo"]);
 
   // get tag folder id
   let options = PlacesUtils.history.getNewQueryOptions();
@@ -30,15 +36,25 @@ function run_test() {
   tagRoot.containerOpen = true;
   let tagNode = tagRoot.getChild(0)
                        .QueryInterface(Ci.nsINavHistoryContainerResultNode);
+  let tagItemGuid = tagNode.bookmarkGuid;
   let tagItemId = tagNode.itemId;
   tagRoot.containerOpen = false;
 
   // change bookmark 1 title
-  PlacesUtils.bookmarks.setItemTitle(bookmark1id, "new title 1");
+  await PlacesUtils.bookmarks.update({
+    guid: bm1.guid,
+    title: "new title 1",
+  });
 
   // Workaround timers resolution and time skews.
-  let bookmark2LastMod = PlacesUtils.bookmarks.getItemLastModified(bookmark2id);
-  PlacesUtils.bookmarks.setItemLastModified(bookmark1id, bookmark2LastMod + 1000);
+  bm2 = await PlacesUtils.bookmarks.fetch(bm2.guid);
+
+  lastModified = new Date(lastModified.getTime() + 1000);
+
+  await PlacesUtils.bookmarks.update({
+    guid: bm1.guid,
+    lastModified,
+  });
 
   // Query the tag.
   options = PlacesUtils.history.getNewQueryOptions();
@@ -49,34 +65,45 @@ function run_test() {
   result = PlacesUtils.history.executeQuery(query, options);
   let root = result.root;
   root.containerOpen = true;
-  do_check_eq(root.childCount, 1);
+  Assert.equal(root.childCount, 1);
 
   let theTag = root.getChild(0)
                    .QueryInterface(Ci.nsINavHistoryContainerResultNode);
   // Bug 524219: Check that renaming the tag shows up in the result.
-  do_check_eq(theTag.title, "foo")
-  PlacesUtils.bookmarks.setItemTitle(tagItemId, "bar");
+  Assert.equal(theTag.title, "foo");
+
+  await PlacesUtils.bookmarks.update({
+    guid: tagItemGuid,
+    title: "bar",
+  });
 
   // Check that the item has been replaced
-  do_check_neq(theTag, root.getChild(0));
+  Assert.notEqual(theTag, root.getChild(0));
   theTag = root.getChild(0)
                    .QueryInterface(Ci.nsINavHistoryContainerResultNode);
-  do_check_eq(theTag.title, "bar");
+  Assert.equal(theTag.title, "bar");
 
   // Check that tag container contains new title
   theTag.containerOpen = true;
-  do_check_eq(theTag.childCount, 1);
+  Assert.equal(theTag.childCount, 1);
   let node = theTag.getChild(0);
-  do_check_eq(node.title, "new title 1");
+  Assert.equal(node.title, "new title 1");
   theTag.containerOpen = false;
   root.containerOpen = false;
 
   // Change bookmark 2 title.
-  PlacesUtils.bookmarks.setItemTitle(bookmark2id, "new title 2");
+  PlacesUtils.bookmarks.update({
+    guid: bm2.guid,
+    title: "new title 2"
+  });
 
   // Workaround timers resolution and time skews.
-  let bookmark1LastMod = PlacesUtils.bookmarks.getItemLastModified(bookmark1id);
-  PlacesUtils.bookmarks.setItemLastModified(bookmark2id, bookmark1LastMod + 1000);
+  lastModified = new Date(lastModified.getTime() + 1000);
+
+  await PlacesUtils.bookmarks.update({
+    guid: bm2.guid,
+    lastModified,
+  });
 
   // Check that tag container contains new title
   options = PlacesUtils.history.getNewQueryOptions();
@@ -89,8 +116,8 @@ function run_test() {
   root = result.root;
 
   root.containerOpen = true;
-  do_check_eq(root.childCount, 1);
+  Assert.equal(root.childCount, 1);
   node = root.getChild(0);
-  do_check_eq(node.title, "new title 2");
+  Assert.equal(node.title, "new title 2");
   root.containerOpen = false;
-}
+});

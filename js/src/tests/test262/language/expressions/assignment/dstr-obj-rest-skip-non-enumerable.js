@@ -5,7 +5,7 @@
 description: Rest object doesn't contain non-enumerable properties (AssignmentExpression)
 esid: sec-variable-statement-runtime-semantics-evaluation
 es6id: 13.3.2.4
-features: [destructuring-binding]
+features: [object-rest, destructuring-binding]
 flags: [generated]
 includes: [propertyHelper.js]
 info: |
@@ -26,18 +26,21 @@ var vals = obj;
 
 result = {...rest} = vals;
 
-assert.sameValue(rest.a, 3);
-assert.sameValue(rest.b, 4);
 assert.sameValue(Object.getOwnPropertyDescriptor(rest, "x"), undefined);
 
-verifyEnumerable(rest, "a");
-verifyWritable(rest, "a");
-verifyConfigurable(rest, "a");
+verifyProperty(rest, "a", {
+  enumerable: true,
+  writable: true,
+  configurable: true,
+  value: 3
+});
 
-verifyEnumerable(rest, "b");
-verifyWritable(rest, "b");
-verifyConfigurable(rest, "b");
-
+verifyProperty(rest, "b", {
+  enumerable: true,
+  writable: true,
+  configurable: true,
+  value: 4
+});
 
 assert.sameValue(result, vals);
 

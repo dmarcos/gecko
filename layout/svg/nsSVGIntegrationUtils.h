@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -6,7 +7,7 @@
 #ifndef NSSVGINTEGRATIONUTILS_H_
 #define NSSVGINTEGRATIONUTILS_H_
 
-#include "DrawResult.h"
+#include "ImgDrawResult.h"
 #include "gfxMatrix.h"
 #include "gfxRect.h"
 #include "nsRegionFwd.h"
@@ -40,7 +41,7 @@ class nsSVGIntegrationUtils final
 {
   typedef mozilla::gfx::DrawTarget DrawTarget;
   typedef mozilla::gfx::IntRect IntRect;
-  typedef mozilla::image::DrawResult DrawResult;
+  typedef mozilla::image::imgDrawingParams imgDrawingParams;
 
 public:
   /**
@@ -78,12 +79,13 @@ public:
    * "bbox" for the element they're being applied to in order to make decisions
    * about positioning, and to resolve various lengths against. This method
    * provides the "bbox" for non-SVG frames. The bbox returned is in CSS px
-   * units, and is the union of all aNonSVGFrame's continuations' overflow
-   * areas, relative to the top-left of the union of all aNonSVGFrame's
+   * units, and aUnionContinuations decide whether bbox contains the area of
+   * current frame only or the union of all aNonSVGFrame's continuations'
+   * overflow areas, relative to the top-left of the union of all aNonSVGFrame's
    * continuations' border box rects.
    */
   static gfxRect
-  GetSVGBBoxForNonSVGFrame(nsIFrame* aNonSVGFrame);
+  GetSVGBBoxForNonSVGFrame(nsIFrame* aNonSVGFrame, bool aUnionContinuations);
 
   /**
    * Used to adjust a frame's pre-effects visual overflow rect to take account
@@ -132,7 +134,7 @@ public:
   static bool
   HitTestFrameForEffects(nsIFrame* aFrame, const nsPoint& aPt);
 
-  struct PaintFramesParams {
+  struct MOZ_STACK_CLASS PaintFramesParams {
     gfxContext& ctx;
     nsIFrame* frame;
     const nsRect& dirtyRect;
@@ -142,32 +144,33 @@ public:
     bool handleOpacity; // If true, PaintMaskAndClipPath/ PaintFilter should
                         // apply css opacity.
     IntRect maskRect;
-    uint32_t flags;     // Image flags of the imgIContainer::FLAG_* variety.
+    imgDrawingParams& imgParams;
 
     explicit PaintFramesParams(gfxContext& aCtx, nsIFrame* aFrame,
                                const nsRect& aDirtyRect,
                                const nsRect& aBorderArea,
                                nsDisplayListBuilder* aBuilder,
                                mozilla::layers::LayerManager* aLayerManager,
-                               bool aHandleOpacity, uint32_t aFlags)
+                               bool aHandleOpacity,
+                               imgDrawingParams& aImgParams)
       : ctx(aCtx), frame(aFrame), dirtyRect(aDirtyRect),
         borderArea(aBorderArea), builder(aBuilder),
         layerManager(aLayerManager), handleOpacity(aHandleOpacity),
-        flags(aFlags)
+        imgParams(aImgParams)
     { }
   };
 
   /**
    * Paint non-SVG frame with mask, clipPath and opacity effect.
    */
-  static DrawResult
+  static void
   PaintMaskAndClipPath(const PaintFramesParams& aParams);
 
   /**
    * Paint mask of non-SVG frame onto a given context, aParams.ctx.
    * aParams.ctx must contain an A8 surface.
    */
-  static DrawResult
+  static void
   PaintMask(const PaintFramesParams& aParams);
 
   /**
@@ -179,7 +182,7 @@ public:
   /**
    * Paint non-SVG frame with filter and opacity effect.
    */
-  static DrawResult
+  static void
   PaintFilter(const PaintFramesParams& aParams);
 
   /**

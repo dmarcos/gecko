@@ -12,11 +12,14 @@
 #include "ASpdySession.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/WeakPtr.h"
 #include "nsAHttpConnection.h"
 #include "nsClassHashtable.h"
 #include "nsDataHashtable.h"
 #include "nsDeque.h"
 #include "nsHashKeys.h"
+#include "nsHttpRequestHead.h"
+#include "nsICacheEntryOpenCallback.h"
 
 #include "Http2Compression.h"
 
@@ -52,7 +55,6 @@ public:
   uint32_t SpdyVersion() override;
   bool TestJoinConnection(const nsACString &hostname, int32_t port) override;
   bool JoinConnection(const nsACString &hostname, int32_t port) override;
-  void ThrottleResponse(bool aThrottle) override;
 
   // When the connection is active this is called up to once every 1 second
   // return the interval (in seconds) that the connection next wants to
@@ -170,15 +172,18 @@ public:
     kFrameTypeBytes + kFrameStreamIDBytes;
 
   enum {
-    kLeaderGroupID =     0x3,
+    kLeaderGroupID =      0x3,
     kOtherGroupID =       0x5,
     kBackgroundGroupID =  0x7,
     kSpeculativeGroupID = 0x9,
-    kFollowerGroupID =    0xB
+    kFollowerGroupID =    0xB,
+    kUrgentStartGroupID = 0xD
     // Hey, you! YES YOU! If you add/remove any groups here, you almost
     // certainly need to change the lookup of the stream/ID hash in
-    // Http2Session::OnTransportStatus. Yeah, that's right. YOU!
+    // Http2Session::OnTransportStatus and |kPriorityGroupCount| below.
+    // Yeah, that's right. YOU!
   };
+  const static uint8_t kPriorityGroupCount = 6;
 
   static nsresult RecvHeaders(Http2Session *);
   static nsresult RecvPriority(Http2Session *);
@@ -249,9 +254,12 @@ public:
   MOZ_MUST_USE nsresult WriteSegmentsAgain(nsAHttpSegmentWriter *, uint32_t , uint32_t *, bool *) override final;
   MOZ_MUST_USE bool Do0RTT() override final { return true; }
   MOZ_MUST_USE nsresult Finish0RTT(bool aRestart, bool aAlpnChanged) override final;
+  void SetFastOpenStatus(uint8_t aStatus) override final;
 
   // For use by an HTTP2Stream
   void Received421(nsHttpConnectionInfo *ci);
+
+  void SendPriorityFrame(uint32_t streamID, uint32_t dependsOn, uint8_t weight);
 
 private:
 
@@ -302,6 +310,7 @@ private:
 
   MOZ_MUST_USE nsresult SetInputFrameDataStream(uint32_t);
   void        CreatePriorityNode(uint32_t, uint32_t, uint8_t, const char *);
+  char        *CreatePriorityFrame(uint32_t, uint32_t, uint8_t);
   bool        VerifyStream(Http2Stream *, uint32_t);
   void        SetNeedsCleanup();
 
@@ -519,7 +528,10 @@ private:
 
   bool mAttemptingEarlyData;
   // The ID(s) of the stream(s) that we are getting 0RTT data from.
-  nsTArray<uint32_t> m0RTTStreams;
+  nsTArray<WeakPtr<Http2Stream>> m0RTTStreams;
+  // The ID(s) of the stream(s) that are not able to send 0RTT data. We need to
+  // remember them put them into mReadyForWrite queue when 0RTT finishes.
+  nsTArray<WeakPtr<Http2Stream>> mCannotDo0RTTStreams;
 
   bool RealJoinConnection(const nsACString &hostname, int32_t port, bool jk);
   bool TestOriginFrame(const nsACString &name, int32_t port);
@@ -528,6 +540,29 @@ private:
 
   nsDataHashtable<nsCStringHashKey, bool> mJoinConnectionCache;
 
+  uint64_t mCurrentForegroundTabOuterContentWindowId;
+
+  class CachePushCheckCallback final : public nsICacheEntryOpenCallback
+  {
+  public:
+    CachePushCheckCallback(Http2Session *session, uint32_t promisedID, const nsACString &requestString);
+
+    NS_DECL_ISUPPORTS
+    NS_DECL_NSICACHEENTRYOPENCALLBACK
+
+  private:
+    ~CachePushCheckCallback() { }
+
+    RefPtr<Http2Session> mSession;
+    uint32_t mPromisedID;
+    nsHttpRequestHead mRequestHead;
+  };
+
+  // A h2 session will be created before all socket events are trigered,
+  // e.g. NS_NET_STATUS_TLS_HANDSHAKE_ENDED and for TFO many others.
+  // We should propagate this events to the first nsHttpTransaction.
+  RefPtr<nsHttpTransaction> mFirstHttpTransaction;
+  bool mTlsHandshakeFinished;
 private:
 /// connect tunnels
   void DispatchOnTunnel(nsAHttpTransaction *, nsIInterfaceRequestor *);

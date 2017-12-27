@@ -13,7 +13,10 @@ const {
   FILTER_TEXT_SET,
   FILTER_TOGGLE,
   FILTERS_CLEAR,
+  DEFAULT_FILTERS_RESET,
   PREFS,
+  FILTERS,
+  DEFAULT_FILTERS,
 } = require("devtools/client/webconsole/new-console-output/constants");
 
 function filterTextSet(text) {
@@ -31,7 +34,7 @@ function filterToggle(filter) {
     });
     const filterState = getAllFilters(getState());
     Services.prefs.setBoolPref(PREFS.FILTER[filter.toUpperCase()],
-      filterState.get(filter));
+      filterState[filter]);
   };
 }
 
@@ -43,13 +46,39 @@ function filtersClear() {
 
     const filterState = getAllFilters(getState());
     for (let filter in filterState) {
-      Services.prefs.clearUserPref(PREFS.FILTER[filter.toUpperCase()]);
+      if (filter !== FILTERS.TEXT) {
+        Services.prefs.clearUserPref(PREFS.FILTER[filter.toUpperCase()]);
+      }
     }
+  };
+}
+
+/**
+ * Set the default filters to their original values.
+ * This is different than filtersClear where we reset
+ * all the filters to their original values. Here we want
+ * to keep non-default filters the user might have set.
+ */
+function defaultFiltersReset() {
+  return (dispatch, getState) => {
+    // Get the state before dispatching so the action does not alter prefs reset.
+    const filterState = getAllFilters(getState());
+
+    dispatch({
+      type: DEFAULT_FILTERS_RESET,
+    });
+
+    DEFAULT_FILTERS.forEach(filter => {
+      if (filterState[filter] === false) {
+        Services.prefs.clearUserPref(PREFS.FILTER[filter.toUpperCase()]);
+      }
+    });
   };
 }
 
 module.exports = {
   filterTextSet,
   filterToggle,
-  filtersClear
+  filtersClear,
+  defaultFiltersReset,
 };

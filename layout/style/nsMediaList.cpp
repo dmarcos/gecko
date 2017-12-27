@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -129,23 +130,23 @@ nsMediaExpression::Matches(nsPresContext *aPresContext,
                      required.GetUnit() == eCSSUnit_Pixel ||
                      required.GetUnit() == eCSSUnit_Centimeter,
                      "bad required value");
-        float actualDPI = actual.GetFloatValue();
+        float actualDPPX = actual.GetFloatValue();
         float overrideDPPX = aPresContext->GetOverrideDPPX();
 
         if (overrideDPPX > 0) {
-          actualDPI = overrideDPPX * 96.0f;
+          actualDPPX = overrideDPPX;
         } else if (actual.GetUnit() == eCSSUnit_Centimeter) {
-          actualDPI = actualDPI * 2.54f;
-        } else if (actual.GetUnit() == eCSSUnit_Pixel) {
-          actualDPI = actualDPI * 96.0f;
+          actualDPPX = actualDPPX * 2.54f / 96.0f;
+        } else if (actual.GetUnit() == eCSSUnit_Inch) {
+          actualDPPX = actualDPPX / 96.0f;
         }
-        float requiredDPI = required.GetFloatValue();
+        float requiredDPPX = required.GetFloatValue();
         if (required.GetUnit() == eCSSUnit_Centimeter) {
-          requiredDPI = requiredDPI * 2.54f;
-        } else if (required.GetUnit() == eCSSUnit_Pixel) {
-          requiredDPI = requiredDPI * 96.0f;
+          requiredDPPX = requiredDPPX * 2.54f / 96.0f;
+        } else if (required.GetUnit() == eCSSUnit_Inch) {
+          requiredDPPX = requiredDPPX / 96.0f;
         }
-        cmp = DoCompare(actualDPI, requiredDPI);
+        cmp = DoCompare(actualDPPX, requiredDPPX);
       }
       break;
     case nsMediaFeature::eEnumerated:
@@ -274,7 +275,7 @@ nsDocumentRuleResultCacheKey::Matches(
 
 #ifdef DEBUG
   for (css::DocumentRule* rule : mMatchingRules) {
-    MOZ_ASSERT(aRules.BinaryIndexOf(rule) != aRules.NoIndex,
+    MOZ_ASSERT(aRules.ContainsSorted(rule),
                "aRules must contain all rules in mMatchingRules");
   }
 #endif
@@ -389,8 +390,7 @@ nsMediaQuery::AppendToString(nsAString& aString) const
           NS_ASSERTION(expr.mValue.IsLengthUnit(), "bad unit");
           // Use 'width' as a property that takes length values
           // written in the normal way.
-          expr.mValue.AppendToString(eCSSProperty_width, aString,
-                                     nsCSSValue::eNormalized);
+          expr.mValue.AppendToString(eCSSProperty_width, aString);
           break;
         case nsMediaFeature::eInteger:
         case nsMediaFeature::eBoolInteger:
@@ -398,8 +398,7 @@ nsMediaQuery::AppendToString(nsAString& aString) const
                        "bad unit");
           // Use 'z-index' as a property that takes integer values
           // written without anything extra.
-          expr.mValue.AppendToString(eCSSProperty_z_index, aString,
-                                     nsCSSValue::eNormalized);
+          expr.mValue.AppendToString(eCSSProperty_z_index, aString);
           break;
         case nsMediaFeature::eFloat:
           {
@@ -407,8 +406,7 @@ nsMediaQuery::AppendToString(nsAString& aString) const
                          "bad unit");
             // Use 'line-height' as a property that takes float values
             // written in the normal way.
-            expr.mValue.AppendToString(eCSSProperty_line_height, aString,
-                                       nsCSSValue::eNormalized);
+            expr.mValue.AppendToString(eCSSProperty_line_height, aString);
           }
           break;
         case nsMediaFeature::eIntRatio:
@@ -421,11 +419,9 @@ nsMediaQuery::AppendToString(nsAString& aString) const
                          "bad unit");
             NS_ASSERTION(array->Item(1).GetUnit() == eCSSUnit_Integer,
                          "bad unit");
-            array->Item(0).AppendToString(eCSSProperty_z_index, aString,
-                                          nsCSSValue::eNormalized);
+            array->Item(0).AppendToString(eCSSProperty_z_index, aString);
             aString.Append('/');
-            array->Item(1).AppendToString(eCSSProperty_z_index, aString,
-                                          nsCSSValue::eNormalized);
+            array->Item(1).AppendToString(eCSSProperty_z_index, aString);
           }
           break;
         case nsMediaFeature::eResolution:

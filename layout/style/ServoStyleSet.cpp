@@ -7,45 +7,148 @@
 #include "mozilla/ServoStyleSet.h"
 
 #include "gfxPlatformFontList.h"
+#include "mozilla/AutoRestyleTimelineMarker.h"
 #include "mozilla/DocumentStyleRootIterator.h"
+#include "mozilla/LookAndFeel.h"
+#include "mozilla/RestyleManagerInlines.h"
+#include "mozilla/ServoBindings.h"
 #include "mozilla/ServoRestyleManager.h"
+#include "mozilla/ServoStyleRuleMap.h"
+#include "mozilla/ServoTypes.h"
+#include "mozilla/css/Loader.h"
 #include "mozilla/dom/AnonymousContent.h"
 #include "mozilla/dom/ChildIterator.h"
+#include "mozilla/dom/FontFaceSet.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/ElementInlines.h"
-#include "mozilla/dom/KeyframeEffectReadOnly.h"
 #include "nsCSSAnonBoxes.h"
+#include "nsCSSFrameConstructor.h"
 #include "nsCSSPseudoElements.h"
 #include "nsDeviceContext.h"
 #include "nsHTMLStyleSheet.h"
+#include "nsIAnonymousContentCreator.h"
 #include "nsIDocumentInlines.h"
+#include "nsMediaFeatures.h"
 #include "nsPrintfCString.h"
+#include "nsSMILAnimationController.h"
 #include "nsStyleContext.h"
 #include "nsStyleSet.h"
+#include "gfxUserFontSet.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
 
-ServoStyleSet::ServoStyleSet()
-  : mPresContext(nullptr)
-  , mBatching(0)
-  , mAllowResolveStaleStyles(false)
+ServoStyleSet* ServoStyleSet::sInServoTraversal = nullptr;
+
+#ifdef DEBUG
+bool
+ServoStyleSet::IsCurrentThreadInServoTraversal()
+{
+  return sInServoTraversal && (NS_IsMainThread() || Servo_IsWorkerThread());
+}
+#endif
+
+namespace mozilla {
+// On construction, sets sInServoTraversal to the given ServoStyleSet.
+// On destruction, clears sInServoTraversal and calls RunPostTraversalTasks.
+class MOZ_RAII AutoSetInServoTraversal
+{
+public:
+  explicit AutoSetInServoTraversal(ServoStyleSet* aSet)
+    : mSet(aSet)
+  {
+    MOZ_ASSERT(!ServoStyleSet::sInServoTraversal);
+    MOZ_ASSERT(aSet);
+    ServoStyleSet::sInServoTraversal = aSet;
+  }
+
+  ~AutoSetInServoTraversal()
+  {
+    MOZ_ASSERT(ServoStyleSet::sInServoTraversal);
+    ServoStyleSet::sInServoTraversal = nullptr;
+    mSet->RunPostTraversalTasks();
+  }
+
+private:
+  ServoStyleSet* mSet;
+};
+
+// Sets up for one or more calls to Servo_TraverseSubtree.
+class MOZ_RAII AutoPrepareTraversal
+{
+public:
+  explicit AutoPrepareTraversal(ServoStyleSet* aSet)
+    // For markers for animations, we have already set the markers in
+    // ServoRestyleManager::PostRestyleEventForAnimations so that we don't need
+    // to care about animation restyles here.
+    : mTimelineMarker(aSet->mPresContext->GetDocShell(), false)
+    , mSetInServoTraversal(aSet)
+  {
+    MOZ_ASSERT(!aSet->StylistNeedsUpdate());
+  }
+
+private:
+  AutoRestyleTimelineMarker mTimelineMarker;
+  AutoSetInServoTraversal mSetInServoTraversal;
+};
+
+} // namespace mozilla
+
+ServoStyleSet::ServoStyleSet(Kind aKind)
+  : mKind(aKind)
+  , mPresContext(nullptr)
   , mAuthorStyleDisabled(false)
+  , mStylistState(StylistState::NotDirty)
+  , mUserFontSetUpdateGeneration(0)
+  , mUserFontCacheUpdateGeneration(0)
+  , mNeedsRestyleAfterEnsureUniqueInner(false)
 {
 }
 
 ServoStyleSet::~ServoStyleSet()
 {
+  for (auto& sheetArray : mSheets) {
+    for (auto& sheet : sheetArray) {
+      sheet->DropStyleSet(this);
+    }
+  }
+}
+
+UniquePtr<ServoStyleSet>
+ServoStyleSet::CreateXBLServoStyleSet(
+  nsPresContext* aPresContext,
+  const nsTArray<RefPtr<ServoStyleSheet>>& aNewSheets)
+{
+  auto set = MakeUnique<ServoStyleSet>(Kind::ForXBL);
+  set->Init(aPresContext, nullptr);
+
+  // The XBL style sheets aren't document level sheets, but we need to
+  // decide a particular SheetType to add them to style set. This type
+  // doesn't affect the place where we pull those rules from
+  // stylist::push_applicable_declarations_as_xbl_only_stylist().
+  set->ReplaceSheets(SheetType::Doc, aNewSheets);
+
+  // Update stylist immediately.
+  set->UpdateStylist();
+
+  // The PresContext of the bound document could be destroyed anytime later,
+  // which shouldn't be used for XBL styleset, so we clear it here to avoid
+  // dangling pointer.
+  set->mPresContext = nullptr;
+
+  return set;
 }
 
 void
-ServoStyleSet::Init(nsPresContext* aPresContext)
+ServoStyleSet::Init(nsPresContext* aPresContext, nsBindingManager* aBindingManager)
 {
   mPresContext = aPresContext;
+  mLastPresContextUsesXBLStyleSet = aPresContext;
+
   mRawSet.reset(Servo_StyleSet_Init(aPresContext));
+  mBindingManager = aBindingManager;
 
   mPresContext->DeviceContext()->InitFontCache();
-  gfxPlatformFontList::PlatformFontList()->InitLangService();
 
   // Now that we have an mRawSet, go ahead and notify about whatever stylesheets
   // we have so far.
@@ -53,47 +156,19 @@ ServoStyleSet::Init(nsPresContext* aPresContext)
     for (auto& sheet : sheetArray) {
       // There's no guarantee this will create a list on the servo side whose
       // ordering matches the list that would have been created had all those
-      // sheets been appended/prepended/etc after we had mRawSet.  But hopefully
-      // that's OK (e.g. because servo doesn't care about the relative ordering
-      // of sheets from different cascade levels in the list?).
-      MOZ_ASSERT(sheet->RawSheet(), "We should only append non-null raw sheets.");
-      Servo_StyleSet_AppendStyleSheet(mRawSet.get(), sheet->RawSheet(), false);
+      // sheets been appended/prepended/etc after we had mRawSet. That's okay
+      // because Servo only needs to maintain relative ordering within a sheet
+      // type, which this preserves.
+
+      MOZ_ASSERT(sheet->RawContents(),
+                 "We should only append non-null raw sheets.");
+      Servo_StyleSet_AppendStyleSheet(mRawSet.get(), sheet);
     }
   }
 
-  // No need to Servo_StyleSet_FlushStyleSheets because we just created the
-  // mRawSet, so there was nothing to flush.
-}
-
-void
-ServoStyleSet::BeginShutdown()
-{
-  nsIDocument* doc = mPresContext->Document();
-
-  // It's important to do this before mRawSet is released, since that will cause
-  // a RuleTree GC, which needs to happen after we have dropped all of the
-  // document's strong references to RuleNodes.  We also need to do it here,
-  // in BeginShutdown, and not in Shutdown, since Shutdown happens after the
-  // frame tree has been destroyed, but before the script runners that delete
-  // native anonymous content (which also could be holding on the RuleNodes)
-  // have run.  By clearing style here, before the frame tree is destroyed,
-  // the AllChildrenIterator will find the anonymous content.
-  //
-  // Note that this is pretty bad for performance; we should find a way to
-  // get by with the ServoNodeDatas being dropped as part of the document
-  // going away.
-  DocumentStyleRootIterator iter(doc);
-  while (Element* root = iter.GetNextStyleRoot()) {
-    ServoRestyleManager::ClearServoDataFromSubtree(root);
-  }
-
-  // We can also have some cloned canvas custom content stored in the document
-  // (as done in nsCanvasFrame::DestroyFrom), due to bug 1348480, when we create
-  // the clone (wastefully) during PresShell destruction.  Clear data from that
-  // clone.
-  for (RefPtr<AnonymousContent>& ac : doc->GetAnonymousContents()) {
-    ServoRestyleManager::ClearServoDataFromSubtree(ac->GetContentNode());
-  }
+  // We added prefilled stylesheets into mRawSet, so the stylist is dirty.
+  // The Stylist should be updated later when necessary.
+  SetStylistStyleSheetsDirty();
 }
 
 void
@@ -103,23 +178,125 @@ ServoStyleSet::Shutdown()
   // starts going away.
   ClearNonInheritingStyleContexts();
   mRawSet = nullptr;
+  mStyleRuleMap = nullptr;
+
+  // Also drop the reference to the pres context to avoid notifications from our
+  // stylesheets to dereference a null restyle manager, see bug 1422634.
+  //
+  // We should really fix bug 154199...
+  mPresContext = nullptr;
 }
 
-size_t
-ServoStyleSet::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
+void
+ServoStyleSet::InvalidateStyleForCSSRuleChanges()
 {
-  size_t n = aMallocSizeOf(this);
+  MOZ_ASSERT(StylistNeedsUpdate());
+  mPresContext->RestyleManager()->AsServo()->PostRestyleEventForCSSRuleChanges();
+}
+
+bool
+ServoStyleSet::SetPresContext(nsPresContext* aPresContext)
+{
+  MOZ_ASSERT(IsForXBL(), "Only XBL styleset can set PresContext!");
+
+  mLastPresContextUsesXBLStyleSet = aPresContext;
+
+  const OriginFlags rulesChanged = static_cast<OriginFlags>(
+    Servo_StyleSet_SetDevice(mRawSet.get(), aPresContext));
+
+  if (rulesChanged != OriginFlags(0)) {
+    MarkOriginsDirty(rulesChanged);
+    return true;
+  }
+
+  return false;
+}
+
+nsRestyleHint
+ServoStyleSet::MediumFeaturesChanged(bool aViewportChanged)
+{
+  bool viewportUnitsUsed = false;
+  bool rulesChanged = MediumFeaturesChangedRules(&viewportUnitsUsed);
+
+  if (mBindingManager &&
+      mBindingManager->MediumFeaturesChanged(mPresContext)) {
+    SetStylistXBLStyleSheetsDirty();
+    rulesChanged = true;
+  }
+
+  if (rulesChanged) {
+    return eRestyle_Subtree;
+  }
+
+  if (viewportUnitsUsed && aViewportChanged) {
+    return eRestyle_ForceDescendants;
+  }
+
+  return nsRestyleHint(0);
+}
+
+bool
+ServoStyleSet::MediumFeaturesChangedRules(bool* aViewportUnitsUsed)
+{
+  MOZ_ASSERT(aViewportUnitsUsed);
+
+  const OriginFlags rulesChanged = static_cast<OriginFlags>(
+    Servo_StyleSet_MediumFeaturesChanged(mRawSet.get(), aViewportUnitsUsed));
+
+  if (rulesChanged != OriginFlags(0)) {
+    MarkOriginsDirty(rulesChanged);
+    return true;
+  }
+
+  return false;
+}
+
+MOZ_DEFINE_MALLOC_SIZE_OF(ServoStyleSetMallocSizeOf)
+MOZ_DEFINE_MALLOC_ENCLOSING_SIZE_OF(ServoStyleSetMallocEnclosingSizeOf)
+
+void
+ServoStyleSet::AddSizeOfIncludingThis(nsWindowSizes& aSizes) const
+{
+  MallocSizeOf mallocSizeOf = aSizes.mState.mMallocSizeOf;
+
+  aSizes.mLayoutServoStyleSetsOther += mallocSizeOf(this);
+
+  if (mRawSet) {
+    aSizes.mLayoutServoStyleSetsOther += mallocSizeOf(mRawSet.get());
+    ServoStyleSetSizes sizes;
+    // Measure mRawSet. We use ServoStyleSetMallocSizeOf rather than
+    // aMallocSizeOf to distinguish in DMD's output the memory measured within
+    // Servo code.
+    Servo_StyleSet_AddSizeOfExcludingThis(ServoStyleSetMallocSizeOf,
+                                          ServoStyleSetMallocEnclosingSizeOf,
+                                          &sizes, mRawSet.get());
+
+    // The StyleSet does not contain precomputed pseudos; they are in the UA
+    // cache.
+    MOZ_RELEASE_ASSERT(sizes.mPrecomputedPseudos == 0);
+
+    aSizes.mLayoutServoStyleSetsStylistRuleTree += sizes.mRuleTree;
+    aSizes.mLayoutServoStyleSetsStylistElementAndPseudosMaps +=
+      sizes.mElementAndPseudosMaps;
+    aSizes.mLayoutServoStyleSetsStylistInvalidationMap +=
+      sizes.mInvalidationMap;
+    aSizes.mLayoutServoStyleSetsStylistRevalidationSelectors +=
+      sizes.mRevalidationSelectors;
+    aSizes.mLayoutServoStyleSetsStylistOther += sizes.mOther;
+  }
+
+  if (mStyleRuleMap) {
+    aSizes.mLayoutServoStyleSetsOther +=
+      mStyleRuleMap->SizeOfIncludingThis(aSizes.mState.mMallocSizeOf);
+  }
 
   // Measurement of the following members may be added later if DMD finds it is
   // worthwhile:
-  // - mRawSet
   // - mSheets
   // - mNonInheritingStyleContexts
   //
   // The following members are not measured:
   // - mPresContext, because it a non-owning pointer
-
-  return n;
 }
 
 bool
@@ -136,15 +313,7 @@ ServoStyleSet::SetAuthorStyleDisabled(bool aStyleDisabled)
   }
 
   mAuthorStyleDisabled = aStyleDisabled;
-
-  // If we've just disabled, we have to note the stylesheets have changed and
-  // call flush directly, since the PresShell won't.
-  if (mAuthorStyleDisabled) {
-    NoteStyleSheetsChanged();
-    Servo_StyleSet_FlushStyleSheets(mRawSet.get());
-  }
-  // If we've just enabled, then PresShell will trigger the notification and
-  // later flush when the stylesheet objects are enabled in JS.
+  MarkOriginsDirty(OriginFlags::Author);
 
   return NS_OK;
 }
@@ -152,82 +321,32 @@ ServoStyleSet::SetAuthorStyleDisabled(bool aStyleDisabled)
 void
 ServoStyleSet::BeginUpdate()
 {
-  ++mBatching;
 }
 
 nsresult
 ServoStyleSet::EndUpdate()
 {
-  MOZ_ASSERT(mBatching > 0);
-  if (--mBatching > 0) {
-    return NS_OK;
-  }
-
-  Servo_StyleSet_FlushStyleSheets(mRawSet.get());
   return NS_OK;
 }
 
-already_AddRefed<nsStyleContext>
+already_AddRefed<ServoStyleContext>
 ServoStyleSet::ResolveStyleFor(Element* aElement,
-                               nsStyleContext* aParentContext,
+                               ServoStyleContext* aParentContext,
                                LazyComputeBehavior aMayCompute)
 {
-  return GetContext(aElement, aParentContext, nullptr,
-                    CSSPseudoElementType::NotPseudo, aMayCompute);
-}
-
-already_AddRefed<nsStyleContext>
-ServoStyleSet::GetContext(nsIContent* aContent,
-                          nsStyleContext* aParentContext,
-                          nsIAtom* aPseudoTag,
-                          CSSPseudoElementType aPseudoType,
-                          LazyComputeBehavior aMayCompute)
-{
-  MOZ_ASSERT(aContent->IsElement());
-  Element* element = aContent->AsElement();
-
-  RefPtr<ServoComputedValues> computedValues;
   if (aMayCompute == LazyComputeBehavior::Allow) {
     PreTraverseSync();
-    computedValues = ResolveStyleLazily(element, nullptr);
-  } else {
-    computedValues = ResolveServoStyle(element);
+    return ResolveStyleLazilyInternal(
+        aElement, CSSPseudoElementType::NotPseudo);
   }
 
-  MOZ_ASSERT(computedValues);
-  return GetContext(computedValues.forget(), aParentContext, aPseudoTag, aPseudoType,
-                    element);
+  return ResolveServoStyle(aElement);
 }
 
-already_AddRefed<nsStyleContext>
-ServoStyleSet::GetContext(already_AddRefed<ServoComputedValues> aComputedValues,
-                          nsStyleContext* aParentContext,
-                          nsIAtom* aPseudoTag,
-                          CSSPseudoElementType aPseudoType,
-                          Element* aElementForAnimation)
+const ServoElementSnapshotTable&
+ServoStyleSet::Snapshots()
 {
-  // XXXbholley: nsStyleSet does visited handling here.
-
-  // XXXbholley: Figure out the correct thing to pass here. Does this fixup
-  // duplicate something that servo already does?
-  // See bug 1344914.
-  bool skipFixup = false;
-
-  RefPtr<nsStyleContext> result = NS_NewStyleContext(aParentContext, mPresContext, aPseudoTag,
-                                                     aPseudoType, Move(aComputedValues), skipFixup);
-
-  // Set the body color on the pres context. See nsStyleSet::GetContext
-  if (aElementForAnimation &&
-      aElementForAnimation->IsHTMLElement(nsGkAtoms::body) &&
-      aPseudoType == CSSPseudoElementType::NotPseudo &&
-      mPresContext->CompatibilityMode() == eCompatibility_NavQuirks) {
-    nsIDocument* doc = aElementForAnimation->GetUncomposedDoc();
-    if (doc && doc->GetBodyElement() == aElementForAnimation) {
-      // Update the prescontext's body color
-      mPresContext->SetBodyTextColor(result->StyleColor()->mColor);
-    }
-  }
-  return result.forget();
+  return mPresContext->RestyleManager()->AsServo()->Snapshots();
 }
 
 void
@@ -243,243 +362,234 @@ ServoStyleSet::ResolveMappedAttrDeclarationBlocks()
 void
 ServoStyleSet::PreTraverseSync()
 {
+  // Get the Document's root element to ensure that the cache is valid before
+  // calling into the (potentially-parallel) Servo traversal, where a cache hit
+  // is necessary to avoid a data race when updating the cache.
+  mozilla::Unused << mPresContext->Document()->GetRootElement();
+
   ResolveMappedAttrDeclarationBlocks();
 
-  // This is lazily computed and pseudo matching needs to access
-  // it so force computation early.
-  mPresContext->Document()->GetDocumentState();
+  nsMediaFeatures::InitSystemMetrics();
 
-  // Ensure that the @font-face data is not stale
-  mPresContext->Document()->GetUserFontSet();
+  LookAndFeel::NativeInit();
+
+  if (gfxUserFontSet* userFontSet = mPresContext->Document()->GetUserFontSet()) {
+    // Ensure that the @font-face data is not stale
+    uint64_t generation = userFontSet->GetGeneration();
+    if (generation != mUserFontSetUpdateGeneration) {
+      mPresContext->DeviceContext()->UpdateFontCacheUserFonts(userFontSet);
+      mUserFontSetUpdateGeneration = generation;
+    }
+
+    // Ensure that the FontFaceSet's cached document principal is up to date.
+    FontFaceSet* fontFaceSet =
+      static_cast<FontFaceSet::UserFontSet*>(userFontSet)->GetFontFaceSet();
+    fontFaceSet->UpdateStandardFontLoadPrincipal();
+    bool principalChanged = fontFaceSet->HasStandardFontLoadPrincipalChanged();
+
+    // Ensure that the user font cache holds up-to-date data on whether
+    // our font set is allowed to re-use fonts from the cache.
+    uint32_t cacheGeneration = gfxUserFontSet::UserFontCache::Generation();
+    if (principalChanged) {
+      gfxUserFontSet::UserFontCache::ClearAllowedFontSets(userFontSet);
+    }
+    if (cacheGeneration != mUserFontCacheUpdateGeneration || principalChanged) {
+      gfxUserFontSet::UserFontCache::UpdateAllowedFontSets(userFontSet);
+      mUserFontCacheUpdateGeneration = cacheGeneration;
+    }
+  }
+
+  UpdateStylistIfNeeded();
+  mPresContext->CacheAllLangs();
 }
 
 void
-ServoStyleSet::PreTraverse(Element* aRoot)
+ServoStyleSet::PreTraverse(ServoTraversalFlags aFlags, Element* aRoot)
 {
   PreTraverseSync();
 
   // Process animation stuff that we should avoid doing during the parallel
   // traversal.
+  nsSMILAnimationController* smilController =
+    mPresContext->Document()->HasAnimationController()
+    ? mPresContext->Document()->GetAnimationController()
+    : nullptr;
+
   if (aRoot) {
-    mPresContext->EffectCompositor()->PreTraverseInSubtree(aRoot);
+    mPresContext->EffectCompositor()
+                ->PreTraverseInSubtree(aFlags, aRoot);
+    if (smilController) {
+      smilController->PreTraverseInSubtree(aRoot);
+    }
   } else {
-    mPresContext->EffectCompositor()->PreTraverse();
-  }
-}
-
-bool
-ServoStyleSet::PrepareAndTraverseSubtree(RawGeckoElementBorrowed aRoot,
-                                         TraversalRootBehavior aRootBehavior,
-                                         TraversalRestyleBehavior
-                                           aRestyleBehavior)
-{
-  // Get the Document's root element to ensure that the cache is valid before
-  // calling into the (potentially-parallel) Servo traversal, where a cache hit
-  // is necessary to avoid a data race when updating the cache.
-  mozilla::Unused << aRoot->OwnerDoc()->GetRootElement();
-
-  MOZ_ASSERT(!sInServoTraversal);
-  sInServoTraversal = true;
-
-  bool isInitial = !aRoot->HasServoData();
-  bool forReconstruct =
-    aRestyleBehavior == TraversalRestyleBehavior::ForReconstruct;
-  bool postTraversalRequired =
-    Servo_TraverseSubtree(aRoot, mRawSet.get(), aRootBehavior, aRestyleBehavior);
-  MOZ_ASSERT_IF(isInitial || forReconstruct, !postTraversalRequired);
-
-  auto root = const_cast<Element*>(aRoot);
-
-  // If there are still animation restyles needed, trigger a second traversal to
-  // update CSS animations or transitions' styles.
-  EffectCompositor* compositor = mPresContext->EffectCompositor();
-  if (forReconstruct ? compositor->PreTraverseInSubtree(root)
-                     : compositor->PreTraverse()) {
-    if (Servo_TraverseSubtree(aRoot, mRawSet.get(),
-                              aRootBehavior, aRestyleBehavior)) {
-      MOZ_ASSERT(!forReconstruct);
-      if (isInitial) {
-        // We're doing initial styling, and the additional animation
-        // traversal changed the styles that were set by the first traversal.
-        // This would normally require a post-traversal to update the style
-        // contexts, and the DOM now has dirty descendant bits and RestyleData
-        // in expectation of that post-traversal. But since this is actually
-        // the initial styling, there are no style contexts to update and no
-        // frames to apply the change hints to, so we don't need to do that
-        // post-traversal. Instead, just drop this state and tell the caller
-        // that no post-traversal is required.
-        MOZ_ASSERT(!postTraversalRequired);
-        ServoRestyleManager::ClearRestyleStateFromSubtree(root);
-      } else {
-        postTraversalRequired = true;
-      }
+    mPresContext->EffectCompositor()->PreTraverse(aFlags);
+    if (smilController) {
+      smilController->PreTraverse();
     }
   }
-
-  sInServoTraversal = false;
-  return postTraversalRequired;
 }
 
-already_AddRefed<nsStyleContext>
-ServoStyleSet::ResolveStyleFor(Element* aElement,
-                               nsStyleContext* aParentContext,
-                               LazyComputeBehavior aMayCompute,
-                               TreeMatchContext& aTreeMatchContext)
+static inline already_AddRefed<ServoStyleContext>
+ResolveStyleForTextOrFirstLetterContinuation(
+    RawServoStyleSetBorrowed aStyleSet,
+    ServoStyleContext& aParent,
+    nsAtom* aAnonBox)
 {
-  // aTreeMatchContext is used to speed up selector matching,
-  // but if the element already has a ServoComputedValues computed in
-  // advance, then we shouldn't need to use it.
-  return ResolveStyleFor(aElement, aParentContext, aMayCompute);
+  MOZ_ASSERT(aAnonBox == nsCSSAnonBoxes::mozText ||
+             aAnonBox == nsCSSAnonBoxes::firstLetterContinuation);
+  auto inheritTarget = aAnonBox == nsCSSAnonBoxes::mozText
+    ? InheritTarget::Text
+    : InheritTarget::FirstLetterContinuation;
+
+  RefPtr<ServoStyleContext> style =
+    aParent.GetCachedInheritingAnonBoxStyle(aAnonBox);
+  if (!style) {
+    style = Servo_ComputedValues_Inherit(aStyleSet,
+                                         aAnonBox,
+                                         &aParent,
+                                         inheritTarget).Consume();
+    MOZ_ASSERT(style);
+    aParent.SetCachedInheritedAnonBoxStyle(aAnonBox, style);
+  }
+
+  return style.forget();
 }
 
-already_AddRefed<nsStyleContext>
+already_AddRefed<ServoStyleContext>
 ServoStyleSet::ResolveStyleForText(nsIContent* aTextNode,
-                                   nsStyleContext* aParentContext)
+                                   ServoStyleContext* aParentContext)
 {
   MOZ_ASSERT(aTextNode && aTextNode->IsNodeOfType(nsINode::eTEXT));
   MOZ_ASSERT(aTextNode->GetParent());
   MOZ_ASSERT(aParentContext);
 
-  // Gecko expects text node style contexts to be like elements that match no
-  // rules: inherit the inherit structs, reset the reset structs. This is cheap
-  // enough to do on the main thread, which means that the parallel style system
-  // can avoid worrying about text nodes.
-  const ServoComputedValues* parentComputedValues =
-    aParentContext->StyleSource().AsServoComputedValues();
-  RefPtr<ServoComputedValues> computedValues =
-    Servo_ComputedValues_Inherit(mRawSet.get(), parentComputedValues).Consume();
-
-  return GetContext(computedValues.forget(), aParentContext,
-                    nsCSSAnonBoxes::mozText,
-                    CSSPseudoElementType::InheritingAnonBox,
-                    nullptr);
+  return ResolveStyleForTextOrFirstLetterContinuation(
+      mRawSet.get(), *aParentContext, nsCSSAnonBoxes::mozText);
 }
 
-already_AddRefed<nsStyleContext>
-ServoStyleSet::ResolveStyleForFirstLetterContinuation(nsStyleContext* aParentContext)
+already_AddRefed<ServoStyleContext>
+ServoStyleSet::ResolveStyleForFirstLetterContinuation(ServoStyleContext* aParentContext)
 {
-  const ServoComputedValues* parent = aParentContext->StyleSource().AsServoComputedValues();
-  RefPtr<ServoComputedValues> computedValues =
-    Servo_ComputedValues_Inherit(mRawSet.get(), parent).Consume();
-  MOZ_ASSERT(computedValues);
+  MOZ_ASSERT(aParentContext);
 
-  return GetContext(computedValues.forget(), aParentContext,
-                    nsCSSAnonBoxes::firstLetterContinuation,
-                    CSSPseudoElementType::InheritingAnonBox,
-                    nullptr);
+  return ResolveStyleForTextOrFirstLetterContinuation(
+      mRawSet.get(), *aParentContext, nsCSSAnonBoxes::firstLetterContinuation);
 }
 
-already_AddRefed<nsStyleContext>
+already_AddRefed<ServoStyleContext>
 ServoStyleSet::ResolveStyleForPlaceholder()
 {
-  RefPtr<nsStyleContext>& cache =
+  RefPtr<ServoStyleContext>& cache =
     mNonInheritingStyleContexts[nsCSSAnonBoxes::NonInheriting::oofPlaceholder];
   if (cache) {
-    RefPtr<nsStyleContext> retval = cache;
+    RefPtr<ServoStyleContext> retval = cache;
     return retval.forget();
   }
 
-  RefPtr<ServoComputedValues> computedValues =
-    Servo_ComputedValues_Inherit(mRawSet.get(), nullptr).Consume();
+  RefPtr<ServoStyleContext> computedValues =
+    Servo_ComputedValues_Inherit(mRawSet.get(),
+                                 nsCSSAnonBoxes::oofPlaceholder,
+                                 nullptr,
+                                 InheritTarget::PlaceholderFrame)
+                                 .Consume();
   MOZ_ASSERT(computedValues);
 
-  RefPtr<nsStyleContext> retval =
-    GetContext(computedValues.forget(), nullptr,
-               nsCSSAnonBoxes::oofPlaceholder,
-               CSSPseudoElementType::NonInheritingAnonBox,
-               nullptr);
-  cache = retval;
-  return retval.forget();
+  cache = computedValues;
+  return computedValues.forget();
 }
 
-already_AddRefed<nsStyleContext>
+static inline bool
+LazyPseudoIsCacheable(CSSPseudoElementType aType,
+                      Element* aOriginatingElement,
+                      ServoStyleContext* aParentContext)
+{
+  return aParentContext &&
+         !nsCSSPseudoElements::IsEagerlyCascadedInServo(aType) &&
+         aOriginatingElement->HasServoData() &&
+         !Servo_Element_IsPrimaryStyleReusedViaRuleNode(aOriginatingElement);
+}
+
+already_AddRefed<ServoStyleContext>
 ServoStyleSet::ResolvePseudoElementStyle(Element* aOriginatingElement,
                                          CSSPseudoElementType aType,
-                                         nsStyleContext* aParentContext,
+                                         ServoStyleContext* aParentContext,
                                          Element* aPseudoElement)
 {
+  UpdateStylistIfNeeded();
+
+  MOZ_ASSERT(aType < CSSPseudoElementType::Count);
+
+  RefPtr<ServoStyleContext> computedValues;
+
   if (aPseudoElement) {
-    NS_WARNING("stylo: We don't support CSS_PSEUDO_ELEMENT_SUPPORTS_USER_ACTION_STATE yet");
+    MOZ_ASSERT(aType == aPseudoElement->GetPseudoElementType());
+    computedValues =
+      Servo_ResolveStyle(aPseudoElement, mRawSet.get()).Consume();
+  } else {
+    bool cacheable =
+      LazyPseudoIsCacheable(aType, aOriginatingElement, aParentContext);
+    computedValues =
+      cacheable ? aParentContext->GetCachedLazyPseudoStyle(aType) : nullptr;
+
+    if (!computedValues) {
+      computedValues = Servo_ResolvePseudoStyle(aOriginatingElement,
+                                                aType,
+                                                /* is_probe = */ false,
+                                                aParentContext,
+                                                mRawSet.get()).Consume();
+      if (cacheable) {
+        aParentContext->SetCachedLazyPseudoStyle(computedValues);
+      }
+    }
   }
 
-  // NB: We ignore aParentContext, on the assumption that pseudo element styles
-  // should just inherit from aOriginatingElement's primary style, which Servo
-  // already knows.
-  MOZ_ASSERT(aType < CSSPseudoElementType::Count);
-  nsIAtom* pseudoTag = nsCSSPseudoElements::GetPseudoAtom(aType);
-
-  RefPtr<ServoComputedValues> computedValues =
-    Servo_ResolvePseudoStyle(aOriginatingElement, pseudoTag,
-                             /* is_probe = */ false, mRawSet.get()).Consume();
   MOZ_ASSERT(computedValues);
-
-  bool isBeforeOrAfter = aType == CSSPseudoElementType::before ||
-                         aType == CSSPseudoElementType::after;
-  return GetContext(computedValues.forget(), aParentContext, pseudoTag, aType,
-                    isBeforeOrAfter ? aOriginatingElement : nullptr);
+  return computedValues.forget();
 }
 
-already_AddRefed<nsStyleContext>
-ServoStyleSet::ResolveTransientStyle(Element* aElement,
-                                     nsIAtom* aPseudoTag,
-                                     CSSPseudoElementType aPseudoType)
-{
-  RefPtr<ServoComputedValues> computedValues =
-    ResolveTransientServoStyle(aElement, aPseudoTag);
-
-  return GetContext(computedValues.forget(),
-                    nullptr,
-                    aPseudoTag,
-                    aPseudoType, nullptr);
-}
-
-already_AddRefed<ServoComputedValues>
-ServoStyleSet::ResolveTransientServoStyle(Element* aElement,
-                                          nsIAtom* aPseudoTag)
+already_AddRefed<ServoStyleContext>
+ServoStyleSet::ResolveStyleLazily(Element* aElement,
+                                  CSSPseudoElementType aPseudoType,
+                                  StyleRuleInclusion aRuleInclusion)
 {
   PreTraverseSync();
 
-  return ResolveStyleLazily(aElement, aPseudoTag);
+  return ResolveStyleLazilyInternal(aElement, aPseudoType,
+                                    aRuleInclusion);
 }
 
-// aFlags is an nsStyleSet flags bitfield
-already_AddRefed<nsStyleContext>
-ServoStyleSet::ResolveInheritingAnonymousBoxStyle(nsIAtom* aPseudoTag,
-                                                  nsStyleContext* aParentContext,
-                                                  uint32_t aFlags)
+already_AddRefed<ServoStyleContext>
+ServoStyleSet::ResolveInheritingAnonymousBoxStyle(nsAtom* aPseudoTag,
+                                                  ServoStyleContext* aParentContext)
 {
   MOZ_ASSERT(nsCSSAnonBoxes::IsAnonBox(aPseudoTag) &&
              !nsCSSAnonBoxes::IsNonInheritingAnonBox(aPseudoTag));
+  MOZ_ASSERT_IF(aParentContext, !StylistNeedsUpdate());
 
-  MOZ_ASSERT(aFlags == 0 ||
-             aFlags == nsStyleSet::eSkipParentDisplayBasedStyleFixup);
-  bool skipFixup = aFlags & nsStyleSet::eSkipParentDisplayBasedStyleFixup;
+  UpdateStylistIfNeeded();
 
-  const ServoComputedValues* parentStyle =
-    aParentContext ? aParentContext->StyleSource().AsServoComputedValues()
-                   : nullptr;
-  RefPtr<ServoComputedValues> computedValues =
-    Servo_ComputedValues_GetForAnonymousBox(parentStyle, aPseudoTag, skipFixup,
-                                            mRawSet.get()).Consume();
-#ifdef DEBUG
-  if (!computedValues) {
-    nsString pseudo;
-    aPseudoTag->ToString(pseudo);
-    NS_ERROR(nsPrintfCString("stylo: could not get anon-box: %s",
-             NS_ConvertUTF16toUTF8(pseudo).get()).get());
-    MOZ_CRASH();
+  RefPtr<ServoStyleContext> style = nullptr;
+
+  if (aParentContext) {
+    style = aParentContext->GetCachedInheritingAnonBoxStyle(aPseudoTag);
   }
-#endif
 
-  // FIXME(bz, bug 1344914) We should really GetContext here and make skipFixup
-  // work there.
-  return NS_NewStyleContext(aParentContext, mPresContext, aPseudoTag,
-                            CSSPseudoElementType::InheritingAnonBox,
-                            computedValues.forget(), skipFixup);
+  if (!style) {
+    style =
+      Servo_ComputedValues_GetForAnonymousBox(aParentContext,
+                                              aPseudoTag,
+                                              mRawSet.get()).Consume();
+    MOZ_ASSERT(style);
+    if (aParentContext) {
+      aParentContext->SetCachedInheritedAnonBoxStyle(aPseudoTag, style);
+    }
+  }
+
+  return style.forget();
 }
 
-already_AddRefed<nsStyleContext>
-ServoStyleSet::ResolveNonInheritingAnonymousBoxStyle(nsIAtom* aPseudoTag)
+already_AddRefed<ServoStyleContext>
+ServoStyleSet::ResolveNonInheritingAnonymousBoxStyle(nsAtom* aPseudoTag)
 {
   MOZ_ASSERT(nsCSSAnonBoxes::IsAnonBox(aPseudoTag) &&
              nsCSSAnonBoxes::IsNonInheritingAnonBox(aPseudoTag));
@@ -491,18 +601,23 @@ ServoStyleSet::ResolveNonInheritingAnonymousBoxStyle(nsIAtom* aPseudoTag)
 
   nsCSSAnonBoxes::NonInheriting type =
     nsCSSAnonBoxes::NonInheritingTypeForPseudoTag(aPseudoTag);
-  RefPtr<nsStyleContext>& cache = mNonInheritingStyleContexts[type];
+  RefPtr<ServoStyleContext>& cache = mNonInheritingStyleContexts[type];
   if (cache) {
-    RefPtr<nsStyleContext> retval = cache;
+    RefPtr<ServoStyleContext> retval = cache;
     return retval.forget();
   }
 
+  UpdateStylistIfNeeded();
+
   // We always want to skip parent-based display fixup here.  It never makes
-  // sense for non-inheriting anonymous boxes.
+  // sense for non-inheriting anonymous boxes.  (Static assertions in
+  // nsCSSAnonBoxes.cpp ensure that all non-inheriting non-anonymous boxes
+  // are indeed annotated as skipping this fixup.)
   MOZ_ASSERT(!nsCSSAnonBoxes::IsNonInheritingAnonBox(nsCSSAnonBoxes::viewport),
              "viewport needs fixup to handle blockifying it");
-  RefPtr<ServoComputedValues> computedValues =
-    Servo_ComputedValues_GetForAnonymousBox(nullptr, aPseudoTag, true,
+  RefPtr<ServoStyleContext> computedValues =
+    Servo_ComputedValues_GetForAnonymousBox(nullptr,
+                                            aPseudoTag,
                                             mRawSet.get()).Consume();
 #ifdef DEBUG
   if (!computedValues) {
@@ -514,12 +629,30 @@ ServoStyleSet::ResolveNonInheritingAnonymousBoxStyle(nsIAtom* aPseudoTag)
   }
 #endif
 
-  RefPtr<nsStyleContext> retval =
-    GetContext(computedValues.forget(), nullptr, aPseudoTag,
-               CSSPseudoElementType::NonInheritingAnonBox, nullptr);
-  cache = retval;
-  return retval.forget();
+  cache = computedValues;
+  return computedValues.forget();
 }
+
+#ifdef MOZ_XUL
+already_AddRefed<ServoStyleContext>
+ServoStyleSet::ResolveXULTreePseudoStyle(dom::Element* aParentElement,
+                                         nsICSSAnonBoxPseudo* aPseudoTag,
+                                         ServoStyleContext* aParentContext,
+                                         const AtomArray& aInputWord)
+{
+  MOZ_ASSERT(nsCSSAnonBoxes::IsTreePseudoElement(aPseudoTag));
+  MOZ_ASSERT(aParentContext);
+  MOZ_ASSERT(!StylistNeedsUpdate());
+
+  return Servo_ComputedValues_ResolveXULTreePseudoStyle(
+      aParentElement,
+      aPseudoTag,
+      aParentContext,
+      &aInputWord,
+      mRawSet.get()
+  ).Consume();
+}
+#endif
 
 // manage the set of style sheets in the style set
 nsresult
@@ -528,15 +661,22 @@ ServoStyleSet::AppendStyleSheet(SheetType aType,
 {
   MOZ_ASSERT(aSheet);
   MOZ_ASSERT(aSheet->IsApplicable());
-  MOZ_ASSERT(nsStyleSet::IsCSSSheetType(aType));
+  MOZ_ASSERT(IsCSSSheetType(aType));
+  MOZ_ASSERT(aSheet->RawContents(), "Raw sheet should be in place before insertion.");
 
-  MOZ_ASSERT(aSheet->RawSheet(), "Raw sheet should be in place before insertion.");
-  mSheets[aType].RemoveElement(aSheet);
-  mSheets[aType].AppendElement(aSheet);
+  RemoveSheetOfType(aType, aSheet);
+  AppendSheetOfType(aType, aSheet);
 
   if (mRawSet) {
     // Maintain a mirrored list of sheets on the servo side.
-    Servo_StyleSet_AppendStyleSheet(mRawSet.get(), aSheet->RawSheet(), !mBatching);
+    // Servo will remove aSheet from its original position as part of the call
+    // to Servo_StyleSet_AppendStyleSheet.
+    Servo_StyleSet_AppendStyleSheet(mRawSet.get(), aSheet);
+    SetStylistStyleSheetsDirty();
+  }
+
+  if (mStyleRuleMap) {
+    mStyleRuleMap->SheetAdded(*aSheet);
   }
 
   return NS_OK;
@@ -548,15 +688,23 @@ ServoStyleSet::PrependStyleSheet(SheetType aType,
 {
   MOZ_ASSERT(aSheet);
   MOZ_ASSERT(aSheet->IsApplicable());
-  MOZ_ASSERT(nsStyleSet::IsCSSSheetType(aType));
+  MOZ_ASSERT(IsCSSSheetType(aType));
+  MOZ_ASSERT(aSheet->RawContents(),
+             "Raw sheet should be in place before insertion.");
 
-  MOZ_ASSERT(aSheet->RawSheet(), "Raw sheet should be in place before insertion.");
-  mSheets[aType].RemoveElement(aSheet);
-  mSheets[aType].InsertElementAt(0, aSheet);
+  RemoveSheetOfType(aType, aSheet);
+  PrependSheetOfType(aType, aSheet);
 
   if (mRawSet) {
     // Maintain a mirrored list of sheets on the servo side.
-    Servo_StyleSet_PrependStyleSheet(mRawSet.get(), aSheet->RawSheet(), !mBatching);
+    // Servo will remove aSheet from its original position as part of the call
+    // to Servo_StyleSet_PrependStyleSheet.
+    Servo_StyleSet_PrependStyleSheet(mRawSet.get(), aSheet);
+    SetStylistStyleSheetsDirty();
+  }
+
+  if (mStyleRuleMap) {
+    mStyleRuleMap->SheetAdded(*aSheet);
   }
 
   return NS_OK;
@@ -567,13 +715,17 @@ ServoStyleSet::RemoveStyleSheet(SheetType aType,
                                 ServoStyleSheet* aSheet)
 {
   MOZ_ASSERT(aSheet);
-  MOZ_ASSERT(nsStyleSet::IsCSSSheetType(aType));
+  MOZ_ASSERT(IsCSSSheetType(aType));
 
-  mSheets[aType].RemoveElement(aSheet);
-
+  RemoveSheetOfType(aType, aSheet);
   if (mRawSet) {
     // Maintain a mirrored list of sheets on the servo side.
-    Servo_StyleSet_RemoveStyleSheet(mRawSet.get(), aSheet->RawSheet(), !mBatching);
+    Servo_StyleSet_RemoveStyleSheet(mRawSet.get(), aSheet);
+    SetStylistStyleSheetsDirty();
+  }
+
+  if (mStyleRuleMap) {
+    mStyleRuleMap->SheetRemoved(*aSheet);
   }
 
   return NS_OK;
@@ -588,26 +740,29 @@ ServoStyleSet::ReplaceSheets(SheetType aType,
   // to express. If the need ever arises, we can easily make this more efficent,
   // probably by aligning the representations better between engines.
 
-  if (mRawSet) {
-    for (ServoStyleSheet* sheet : mSheets[aType]) {
-      Servo_StyleSet_RemoveStyleSheet(mRawSet.get(), sheet->RawSheet(), false);
+  SetStylistStyleSheetsDirty();
+
+  // Remove all the existing sheets first.
+  for (const auto& sheet : mSheets[aType]) {
+    sheet->DropStyleSet(this);
+    if (mRawSet) {
+      Servo_StyleSet_RemoveStyleSheet(mRawSet.get(), sheet);
     }
   }
-
   mSheets[aType].Clear();
-  mSheets[aType].AppendElements(aNewSheets);
 
-  if (mRawSet) {
-    for (ServoStyleSheet* sheet : mSheets[aType]) {
-      MOZ_ASSERT(sheet->RawSheet(), "Raw sheet should be in place before replacement.");
-      Servo_StyleSet_AppendStyleSheet(mRawSet.get(), sheet->RawSheet(), false);
+  // Add in all the new sheets.
+  for (auto& sheet : aNewSheets) {
+    AppendSheetOfType(aType, sheet);
+    if (mRawSet) {
+      MOZ_ASSERT(sheet->RawContents(), "Raw sheet should be in place before replacement.");
+      Servo_StyleSet_AppendStyleSheet(mRawSet.get(), sheet);
     }
   }
 
-  if (!mBatching) {
-    Servo_StyleSet_FlushStyleSheets(mRawSet.get());
-  }
-
+  // Just don't bother calling SheetRemoved / SheetAdded, and recreate the rule
+  // map when needed.
+  mStyleRuleMap = nullptr;
   return NS_OK;
 }
 
@@ -619,21 +774,24 @@ ServoStyleSet::InsertStyleSheetBefore(SheetType aType,
   MOZ_ASSERT(aNewSheet);
   MOZ_ASSERT(aReferenceSheet);
   MOZ_ASSERT(aNewSheet->IsApplicable());
+  MOZ_ASSERT(aNewSheet != aReferenceSheet, "Can't place sheet before itself.");
+  MOZ_ASSERT(aNewSheet->RawContents(), "Raw sheet should be in place before insertion.");
+  MOZ_ASSERT(aReferenceSheet->RawContents(), "Reference sheet should have a raw sheet.");
 
-  mSheets[aType].RemoveElement(aNewSheet);
-  size_t idx = mSheets[aType].IndexOf(aReferenceSheet);
-  if (idx == mSheets[aType].NoIndex) {
-    return NS_ERROR_INVALID_ARG;
-  }
-  MOZ_ASSERT(aReferenceSheet->RawSheet(), "Reference sheet should have a raw sheet.");
-
-  MOZ_ASSERT(aNewSheet->RawSheet(), "Raw sheet should be in place before insertion.");
-  mSheets[aType].InsertElementAt(idx, aNewSheet);
+  // Servo will remove aNewSheet from its original position as part of the
+  // call to Servo_StyleSet_InsertStyleSheetBefore.
+  RemoveSheetOfType(aType, aNewSheet);
+  InsertSheetOfType(aType, aNewSheet, aReferenceSheet);
 
   if (mRawSet) {
     // Maintain a mirrored list of sheets on the servo side.
-    Servo_StyleSet_InsertStyleSheetBefore(mRawSet.get(), aNewSheet->RawSheet(),
-                                          aReferenceSheet->RawSheet(), !mBatching);
+    Servo_StyleSet_InsertStyleSheetBefore(
+        mRawSet.get(), aNewSheet, aReferenceSheet);
+    SetStylistStyleSheetsDirty();
+  }
+
+  if (mStyleRuleMap) {
+    mStyleRuleMap->SheetAdded(*aNewSheet);
   }
 
   return NS_OK;
@@ -642,16 +800,23 @@ ServoStyleSet::InsertStyleSheetBefore(SheetType aType,
 int32_t
 ServoStyleSet::SheetCount(SheetType aType) const
 {
-  MOZ_ASSERT(nsStyleSet::IsCSSSheetType(aType));
+  MOZ_ASSERT(IsCSSSheetType(aType));
   return mSheets[aType].Length();
 }
 
 ServoStyleSheet*
-ServoStyleSet::StyleSheetAt(SheetType aType,
-                            int32_t aIndex) const
+ServoStyleSet::StyleSheetAt(SheetType aType, int32_t aIndex) const
 {
-  MOZ_ASSERT(nsStyleSet::IsCSSSheetType(aType));
+  MOZ_ASSERT(IsCSSSheetType(aType));
   return mSheets[aType][aIndex];
+}
+
+void
+ServoStyleSet::AppendAllXBLStyleSheets(nsTArray<StyleSheet*>& aArray) const
+{
+  if (mBindingManager) {
+    mBindingManager->AppendAllSheets(aArray);
+  }
 }
 
 nsresult
@@ -665,117 +830,170 @@ ServoStyleSet::AddDocStyleSheet(ServoStyleSheet* aSheet,
                                 nsIDocument* aDocument)
 {
   MOZ_ASSERT(aSheet->IsApplicable());
-  MOZ_ASSERT(aSheet->RawSheet(), "Raw sheet should be in place by this point.");
+  MOZ_ASSERT(aSheet->RawContents(), "Raw sheet should be in place by this point.");
 
   RefPtr<StyleSheet> strong(aSheet);
 
-  nsTArray<RefPtr<ServoStyleSheet>>& sheetsArray = mSheets[SheetType::Doc];
-
-  sheetsArray.RemoveElement(aSheet);
+  RemoveSheetOfType(SheetType::Doc, aSheet);
 
   size_t index =
-    aDocument->FindDocStyleSheetInsertionPoint(sheetsArray, aSheet);
-  sheetsArray.InsertElementAt(index, aSheet);
+    aDocument->FindDocStyleSheetInsertionPoint(mSheets[SheetType::Doc], *aSheet);
 
-  if (mRawSet) {
-    // Maintain a mirrored list of sheets on the servo side.
-    ServoStyleSheet* followingSheet = sheetsArray.SafeElementAt(index + 1);
-    if (followingSheet) {
-      MOZ_ASSERT(followingSheet->RawSheet(), "Every mSheets element should have a raw sheet");
-      Servo_StyleSet_InsertStyleSheetBefore(mRawSet.get(), aSheet->RawSheet(),
-                                            followingSheet->RawSheet(), !mBatching);
-    } else {
-      Servo_StyleSet_AppendStyleSheet(mRawSet.get(), aSheet->RawSheet(), !mBatching);
+  if (index < mSheets[SheetType::Doc].Length()) {
+    // This case is insert before.
+    ServoStyleSheet *beforeSheet = mSheets[SheetType::Doc][index];
+    InsertSheetOfType(SheetType::Doc, aSheet, beforeSheet);
+
+    if (mRawSet) {
+      // Maintain a mirrored list of sheets on the servo side.
+      Servo_StyleSet_InsertStyleSheetBefore(mRawSet.get(), aSheet, beforeSheet);
+      SetStylistStyleSheetsDirty();
     }
+  } else {
+    // This case is append.
+    AppendSheetOfType(SheetType::Doc, aSheet);
+
+    if (mRawSet) {
+      // Maintain a mirrored list of sheets on the servo side.
+      Servo_StyleSet_AppendStyleSheet(mRawSet.get(), aSheet);
+      SetStylistStyleSheetsDirty();
+    }
+  }
+
+  if (mStyleRuleMap) {
+    mStyleRuleMap->SheetAdded(*aSheet);
   }
 
   return NS_OK;
 }
 
-already_AddRefed<nsStyleContext>
+already_AddRefed<ServoStyleContext>
 ServoStyleSet::ProbePseudoElementStyle(Element* aOriginatingElement,
                                        CSSPseudoElementType aType,
-                                       nsStyleContext* aParentContext)
+                                       ServoStyleContext* aParentContext)
 {
-  // NB: We ignore aParentContext, on the assumption that pseudo element styles
-  // should just inherit from aOriginatingElement's primary style, which Servo
-  // already knows.
-  MOZ_ASSERT(aType < CSSPseudoElementType::Count);
-  nsIAtom* pseudoTag = nsCSSPseudoElements::GetPseudoAtom(aType);
+  UpdateStylistIfNeeded();
 
-  RefPtr<ServoComputedValues> computedValues =
-    Servo_ResolvePseudoStyle(aOriginatingElement, pseudoTag,
-                             /* is_probe = */ true, mRawSet.get()).Consume();
+  // NB: We ignore aParentContext, because in some cases
+  // (first-line/first-letter on anonymous box blocks) Gecko passes something
+  // nonsensical there.  In all other cases we want to inherit directly from
+  // aOriginatingElement's styles anyway.
+  MOZ_ASSERT(aType < CSSPseudoElementType::Count);
+
+  bool cacheable =
+    LazyPseudoIsCacheable(aType, aOriginatingElement, aParentContext);
+
+  RefPtr<ServoStyleContext> computedValues =
+    cacheable ? aParentContext->GetCachedLazyPseudoStyle(aType) : nullptr;
   if (!computedValues) {
-    return nullptr;
+    computedValues = Servo_ResolvePseudoStyle(aOriginatingElement, aType,
+                                              /* is_probe = */ true,
+                                              nullptr,
+                                              mRawSet.get()).Consume();
+    if (!computedValues) {
+      return nullptr;
+    }
+
+    if (cacheable) {
+      // NB: We don't need to worry about the before/after handling below
+      // because those are eager and thus not |cacheable| anyway.
+      aParentContext->SetCachedLazyPseudoStyle(computedValues);
+    }
   }
 
   // For :before and :after pseudo-elements, having display: none or no
   // 'content' property is equivalent to not having the pseudo-element
   // at all.
-  bool isBeforeOrAfter = pseudoTag == nsCSSPseudoElements::before ||
-                         pseudoTag == nsCSSPseudoElements::after;
+  bool isBeforeOrAfter = aType == CSSPseudoElementType::before ||
+                         aType == CSSPseudoElementType::after;
   if (isBeforeOrAfter) {
-    const nsStyleDisplay *display = Servo_GetStyleDisplay(computedValues);
-    const nsStyleContent *content = Servo_GetStyleContent(computedValues);
-    // XXXldb What is contentCount for |content: ""|?
+    const nsStyleDisplay* display = computedValues->ComputedData()->GetStyleDisplay();
+    const nsStyleContent* content = computedValues->ComputedData()->GetStyleContent();
     if (display->mDisplay == StyleDisplay::None ||
         content->ContentCount() == 0) {
       return nullptr;
     }
   }
 
-  return GetContext(computedValues.forget(), aParentContext, pseudoTag, aType,
-                    isBeforeOrAfter ? aOriginatingElement : nullptr);
-}
-
-already_AddRefed<nsStyleContext>
-ServoStyleSet::ProbePseudoElementStyle(Element* aOriginatingElement,
-                                       CSSPseudoElementType aType,
-                                       nsStyleContext* aParentContext,
-                                       TreeMatchContext& aTreeMatchContext,
-                                       Element* aPseudoElement)
-{
-  if (aPseudoElement) {
-    NS_ERROR("stylo: We don't support CSS_PSEUDO_ELEMENT_SUPPORTS_USER_ACTION_STATE yet");
-  }
-  return ProbePseudoElementStyle(aOriginatingElement, aType, aParentContext);
-}
-
-nsRestyleHint
-ServoStyleSet::HasStateDependentStyle(dom::Element* aElement,
-                                      EventStates aStateMask)
-{
-  NS_WARNING("stylo: HasStateDependentStyle always returns zero!");
-  return nsRestyleHint(0);
-}
-
-nsRestyleHint
-ServoStyleSet::HasStateDependentStyle(dom::Element* aElement,
-                                      CSSPseudoElementType aPseudoType,
-                                     dom::Element* aPseudoElement,
-                                     EventStates aStateMask)
-{
-  NS_WARNING("stylo: HasStateDependentStyle always returns zero!");
-  return nsRestyleHint(0);
+  return computedValues.forget();
 }
 
 bool
-ServoStyleSet::StyleDocument()
+ServoStyleSet::StyleDocument(ServoTraversalFlags aFlags)
 {
-  PreTraverse();
+  nsIDocument* doc = mPresContext->Document();
+  if (!doc->GetServoRestyleRoot()) {
+    return false;
+  }
+
+  PreTraverse(aFlags);
+  AutoPrepareTraversal guard(this);
+  const SnapshotTable& snapshots = Snapshots();
 
   // Restyle the document from the root element and each of the document level
   // NAC subtree roots.
   bool postTraversalRequired = false;
-  DocumentStyleRootIterator iter(mPresContext->Document());
+
+  Element* rootElement = doc->GetRootElement();
+  MOZ_ASSERT_IF(rootElement, rootElement->HasServoData());
+
+  if (ShouldTraverseInParallel()) {
+    aFlags |= ServoTraversalFlags::ParallelTraversal;
+  }
+
+  // Do the first traversal.
+  DocumentStyleRootIterator iter(doc->GetServoRestyleRoot());
   while (Element* root = iter.GetNextStyleRoot()) {
-    if (PrepareAndTraverseSubtree(root,
-                                  TraversalRootBehavior::Normal,
-                                  TraversalRestyleBehavior::Normal)) {
-      postTraversalRequired = true;
+    MOZ_ASSERT(MayTraverseFrom(root));
+
+    Element* parent = root->GetFlattenedTreeParentElementForStyle();
+    MOZ_ASSERT_IF(parent,
+                  !parent->HasAnyOfFlags(Element::kAllServoDescendantBits));
+
+    postTraversalRequired |=
+      Servo_TraverseSubtree(root, mRawSet.get(), &snapshots, aFlags);
+    postTraversalRequired |=
+      root->HasAnyOfFlags(Element::kAllServoDescendantBits | NODE_NEEDS_FRAME);
+
+    if (parent) {
+      MOZ_ASSERT(root == doc->GetServoRestyleRoot());
+      if (parent->HasDirtyDescendantsForServo()) {
+        // If any style invalidation was triggered in our siblings, then we may
+        // need to post-traverse them, even if the root wasn't restyled after
+        // all.
+        uint32_t existingBits = doc->GetServoRestyleRootDirtyBits();
+        // We need to propagate the existing bits to the parent.
+        parent->SetFlags(existingBits);
+        doc->SetServoRestyleRoot(
+            parent,
+            existingBits | ELEMENT_HAS_DIRTY_DESCENDANTS_FOR_SERVO);
+        postTraversalRequired = true;
+      }
     }
   }
+
+  // If there are still animation restyles needed, trigger a second traversal to
+  // update CSS animations or transitions' styles.
+  //
+  // Note that we need to check the style root again, because doing another
+  // PreTraverse on the EffectCompositor might alter the style root. But we
+  // don't need to worry about NAC, since document-level NAC shouldn't have
+  // animations.
+  //
+  // We don't need to do this for SMIL since SMIL only updates its animation
+  // values once at the begin of a tick. As a result, even if the previous
+  // traversal caused, for example, the font-size to change, the SMIL style
+  // won't be updated until the next tick anyway.
+  if (mPresContext->EffectCompositor()->PreTraverse(aFlags)) {
+    nsINode* styleRoot = doc->GetServoRestyleRoot();
+    Element* root = styleRoot->IsElement() ? styleRoot->AsElement() : rootElement;
+
+    postTraversalRequired |=
+      Servo_TraverseSubtree(root, mRawSet.get(), &snapshots, aFlags);
+    postTraversalRequired |=
+      root->HasAnyOfFlags(Element::kAllServoDescendantBits | NODE_NEEDS_FRAME);
+  }
+
   return postTraversalRequired;
 }
 
@@ -783,44 +1001,101 @@ void
 ServoStyleSet::StyleNewSubtree(Element* aRoot)
 {
   MOZ_ASSERT(!aRoot->HasServoData());
+  PreTraverseSync();
+  AutoPrepareTraversal guard(this);
 
-  PreTraverse();
-
-  DebugOnly<bool> postTraversalRequired =
-    PrepareAndTraverseSubtree(aRoot,
-                              TraversalRootBehavior::Normal,
-                              TraversalRestyleBehavior::Normal);
-  MOZ_ASSERT(!postTraversalRequired);
-}
-
-void
-ServoStyleSet::StyleNewChildren(Element* aParent)
-{
-  PreTraverse();
-
-  PrepareAndTraverseSubtree(aParent,
-                            TraversalRootBehavior::UnstyledChildrenOnly,
-                            TraversalRestyleBehavior::Normal);
-  // We can't assert that Servo_TraverseSubtree returns false, since aParent
-  // or some of its other children might have pending restyles.
-}
-
-void
-ServoStyleSet::StyleSubtreeForReconstruct(Element* aRoot)
-{
-  PreTraverse(aRoot);
+  // Do the traversal. The snapshots will not be used.
+  const SnapshotTable& snapshots = Snapshots();
+  auto flags = ServoTraversalFlags::Empty;
+  if (ShouldTraverseInParallel()) {
+    flags |= ServoTraversalFlags::ParallelTraversal;
+  }
 
   DebugOnly<bool> postTraversalRequired =
-    PrepareAndTraverseSubtree(aRoot,
-                              TraversalRootBehavior::Normal,
-                              TraversalRestyleBehavior::ForReconstruct);
+    Servo_TraverseSubtree(aRoot, mRawSet.get(), &snapshots, flags);
   MOZ_ASSERT(!postTraversalRequired);
+
+  // Annoyingly, the newly-styled content may have animations that need
+  // starting, which requires traversing them again. Mark the elements
+  // that need animation processing, then do a forgetful traversal to
+  // update the styles and clear the animation bits.
+  if (mPresContext->EffectCompositor()->PreTraverseInSubtree(flags, aRoot)) {
+    postTraversalRequired =
+      Servo_TraverseSubtree(aRoot, mRawSet.get(), &snapshots,
+                            ServoTraversalFlags::AnimationOnly |
+                            ServoTraversalFlags::Forgetful |
+                            ServoTraversalFlags::ClearAnimationOnlyDirtyDescendants);
+    MOZ_ASSERT(!postTraversalRequired);
+  }
 }
 
 void
-ServoStyleSet::NoteStyleSheetsChanged()
+ServoStyleSet::MarkOriginsDirty(OriginFlags aChangedOrigins)
 {
-  Servo_StyleSet_NoteStyleSheetsChanged(mRawSet.get(), mAuthorStyleDisabled);
+  if (MOZ_UNLIKELY(!mRawSet)) {
+    return;
+  }
+
+  SetStylistStyleSheetsDirty();
+  Servo_StyleSet_NoteStyleSheetsChanged(mRawSet.get(),
+                                        mAuthorStyleDisabled,
+                                        aChangedOrigins);
+}
+
+void
+ServoStyleSet::SetStylistStyleSheetsDirty()
+{
+  mStylistState |= StylistState::StyleSheetsDirty;
+
+  // We need to invalidate cached style in getComputedStyle for undisplayed
+  // elements, since we don't know if any of the style sheet change that we
+  // do would affect undisplayed elements.
+  if (mPresContext) {
+    // XBL sheets don't have a pres context, but invalidating the restyle generation
+    // in that case is handled by SetXBLStyleSheetsDirty in the "master" stylist.
+    mPresContext->RestyleManager()->AsServo()->IncrementUndisplayedRestyleGeneration();
+  }
+}
+
+void
+ServoStyleSet::SetStylistXBLStyleSheetsDirty()
+{
+  mStylistState |= StylistState::XBLStyleSheetsDirty;
+
+  // We need to invalidate cached style in getComputedStyle for undisplayed
+  // elements, since we don't know if any of the style sheet change that we
+  // do would affect undisplayed elements.
+  MOZ_ASSERT(mPresContext);
+  mPresContext->RestyleManager()->AsServo()->IncrementUndisplayedRestyleGeneration();
+}
+
+void
+ServoStyleSet::RuleAdded(ServoStyleSheet& aSheet, css::Rule& aRule)
+{
+  if (mStyleRuleMap) {
+    mStyleRuleMap->RuleAdded(aSheet, aRule);
+  }
+
+  // FIXME(emilio): Could be more granular based on aRule.
+  MarkOriginsDirty(aSheet.GetOrigin());
+}
+
+void
+ServoStyleSet::RuleRemoved(ServoStyleSheet& aSheet, css::Rule& aRule)
+{
+  if (mStyleRuleMap) {
+    mStyleRuleMap->RuleRemoved(aSheet, aRule);
+  }
+
+  // FIXME(emilio): Could be more granular based on aRule.
+  MarkOriginsDirty(aSheet.GetOrigin());
+}
+
+void
+ServoStyleSet::RuleChanged(ServoStyleSheet& aSheet, css::Rule* aRule)
+{
+  // FIXME(emilio): Could be more granular based on aRule.
+  MarkOriginsDirty(aSheet.GetOrigin());
 }
 
 #ifdef DEBUG
@@ -835,24 +1110,23 @@ ServoStyleSet::AssertTreeIsClean()
 #endif
 
 bool
-ServoStyleSet::FillKeyframesForName(const nsString& aName,
-                                    const nsTimingFunction& aTimingFunction,
-                                    const ServoComputedValues* aComputedValues,
-                                    nsTArray<Keyframe>& aKeyframes)
+ServoStyleSet::GetKeyframesForName(nsAtom* aName,
+                                   const nsTimingFunction& aTimingFunction,
+                                   nsTArray<Keyframe>& aKeyframes)
 {
-  NS_ConvertUTF16toUTF8 name(aName);
-  return Servo_StyleSet_FillKeyframesForName(mRawSet.get(),
-                                             &name,
-                                             &aTimingFunction,
-                                             aComputedValues,
-                                             &aKeyframes);
+  UpdateStylistIfNeeded();
+
+  return Servo_StyleSet_GetKeyframesForName(mRawSet.get(),
+                                            aName,
+                                            &aTimingFunction,
+                                            &aKeyframes);
 }
 
 nsTArray<ComputedKeyframeValues>
 ServoStyleSet::GetComputedKeyframeValuesFor(
   const nsTArray<Keyframe>& aKeyframes,
-  dom::Element* aElement,
-  const ServoComputedValuesWithParent& aServoValues)
+  Element* aElement,
+  const ServoStyleContext* aContext)
 {
   nsTArray<ComputedKeyframeValues> result(aKeyframes.Length());
 
@@ -860,59 +1134,197 @@ ServoStyleSet::GetComputedKeyframeValuesFor(
   result.AppendElements(aKeyframes.Length());
 
   Servo_GetComputedKeyframeValues(&aKeyframes,
-                                  aServoValues.mCurrentStyle,
-                                  aServoValues.mParentStyle,
+                                  aElement,
+                                  aContext,
                                   mRawSet.get(),
                                   &result);
   return result;
 }
 
-already_AddRefed<ServoComputedValues>
-ServoStyleSet::GetBaseComputedValuesForElement(Element* aElement,
-                                               nsIAtom* aPseudoTag)
+void
+ServoStyleSet::GetAnimationValues(
+  RawServoDeclarationBlock* aDeclarations,
+  Element* aElement,
+  const ServoStyleContext* aStyleContext,
+  nsTArray<RefPtr<RawServoAnimationValue>>& aAnimationValues)
+{
+  // Servo_GetAnimationValues below won't handle ignoring existing element
+  // data for bfcached documents. (See comment in ResolveStyleLazily
+  // about these bfcache issues.)
+  Servo_GetAnimationValues(aDeclarations,
+                           aElement,
+                           aStyleContext,
+                           mRawSet.get(),
+                           &aAnimationValues);
+}
+
+already_AddRefed<ServoStyleContext>
+ServoStyleSet::GetBaseContextForElement(
+  Element* aElement,
+  nsPresContext* aPresContext,
+  const ServoStyleContext* aStyle)
 {
   return Servo_StyleSet_GetBaseComputedValuesForElement(mRawSet.get(),
                                                         aElement,
-                                                        aPseudoTag).Consume();
+                                                        aStyle,
+                                                        &Snapshots()).Consume();
+}
+
+already_AddRefed<ServoStyleContext>
+ServoStyleSet::ResolveServoStyleByAddingAnimation(
+  Element* aElement,
+  const ServoStyleContext* aStyle,
+  RawServoAnimationValue* aAnimationValue)
+{
+  return Servo_StyleSet_GetComputedValuesByAddingAnimation(
+    mRawSet.get(),
+    aElement,
+    aStyle,
+    &Snapshots(),
+    aAnimationValue).Consume();
+}
+
+already_AddRefed<RawServoAnimationValue>
+ServoStyleSet::ComputeAnimationValue(
+  Element* aElement,
+  RawServoDeclarationBlock* aDeclarations,
+  const ServoStyleContext* aContext)
+{
+  return Servo_AnimationValue_Compute(aElement,
+                                      aDeclarations,
+                                      aContext,
+                                      mRawSet.get()).Consume();
+}
+
+bool
+ServoStyleSet::EnsureUniqueInnerOnCSSSheets()
+{
+  AutoTArray<StyleSheet*, 32> queue;
+  for (auto& entryArray : mSheets) {
+    for (auto& sheet : entryArray) {
+      queue.AppendElement(sheet);
+    }
+  }
+  // This is a stub until more of the functionality of nsStyleSet is
+  // replicated for Servo here.
+
+  // Bug 1290276 will replicate the nsStyleSet work of checking
+  // a nsBindingManager
+
+  while (!queue.IsEmpty()) {
+    uint32_t idx = queue.Length() - 1;
+    StyleSheet* sheet = queue[idx];
+    queue.RemoveElementAt(idx);
+
+    // Only call EnsureUniqueInner for complete sheets. If we do call it on
+    // incomplete sheets, we'll cause problems when the sheet is actually
+    // loaded. We don't care about incomplete sheets here anyway, because this
+    // method is only invoked by nsPresContext::EnsureSafeToHandOutCSSRules.
+    // The CSSRule objects we are handing out won't contain any rules derived
+    // from incomplete sheets (because they aren't yet applied in styling).
+    if (sheet->IsComplete()) {
+      sheet->EnsureUniqueInner();
+    }
+
+    // Enqueue all the sheet's children.
+    sheet->AppendAllChildSheets(queue);
+  }
+
+  if (mNeedsRestyleAfterEnsureUniqueInner) {
+    // TODO(emilio): We could make this faster if needed tracking the specific
+    // origins and all that, but the only caller of this doesn't seem to really
+    // care about perf.
+    MarkOriginsDirty(OriginFlags::All);
+  }
+  bool res = mNeedsRestyleAfterEnsureUniqueInner;
+  mNeedsRestyleAfterEnsureUniqueInner = false;
+  return res;
 }
 
 void
-ServoStyleSet::RebuildData()
+ServoStyleSet::ClearCachedStyleData()
 {
   ClearNonInheritingStyleContexts();
-  Servo_StyleSet_RebuildData(mRawSet.get());
+  Servo_StyleSet_RebuildCachedData(mRawSet.get());
 }
 
-already_AddRefed<ServoComputedValues>
+void
+ServoStyleSet::CompatibilityModeChanged()
+{
+  Servo_StyleSet_CompatModeChanged(mRawSet.get());
+}
+
+already_AddRefed<ServoStyleContext>
 ServoStyleSet::ResolveServoStyle(Element* aElement)
 {
-  return Servo_ResolveStyle(aElement, mRawSet.get(),
-                            mAllowResolveStaleStyles).Consume();
+  RefPtr<ServoStyleContext> result =
+    Servo_ResolveStyle(aElement, mRawSet.get()).Consume();
+  return result.forget();
 }
 
 void
 ServoStyleSet::ClearNonInheritingStyleContexts()
 {
-  for (RefPtr<nsStyleContext>& ptr : mNonInheritingStyleContexts) {
+  for (RefPtr<ServoStyleContext>& ptr : mNonInheritingStyleContexts) {
     ptr = nullptr;
   }
 }
 
-already_AddRefed<ServoComputedValues>
-ServoStyleSet::ResolveStyleLazily(Element* aElement, nsIAtom* aPseudoTag)
+already_AddRefed<ServoStyleContext>
+ServoStyleSet::ResolveStyleLazilyInternal(Element* aElement,
+                                          CSSPseudoElementType aPseudoType,
+                                          StyleRuleInclusion aRuleInclusion)
 {
-  mPresContext->EffectCompositor()->PreTraverse(aElement, aPseudoTag);
+  mPresContext->EffectCompositor()->PreTraverse(aElement, aPseudoType);
+  MOZ_ASSERT(!StylistNeedsUpdate());
 
-  MOZ_ASSERT(!sInServoTraversal);
-  sInServoTraversal = true;
-  RefPtr<ServoComputedValues> computedValues =
-    Servo_ResolveStyleLazily(aElement, aPseudoTag, mRawSet.get()).Consume();
+  AutoSetInServoTraversal guard(this);
 
-  if (mPresContext->EffectCompositor()->PreTraverse(aElement, aPseudoTag)) {
-    computedValues =
-      Servo_ResolveStyleLazily(aElement, aPseudoTag, mRawSet.get()).Consume();
+  /**
+   * NB: This is needed because we process animations and transitions on the
+   * pseudo-elements themselves, not on the parent's EagerPseudoStyles.
+   *
+   * That means that that style doesn't account for animations, and we can't do
+   * that easily from the traversal without doing wasted work.
+   *
+   * As such, we just lie here a bit, which is the entrypoint of
+   * getComputedStyle, the only API where this can be observed, to look at the
+   * style of the pseudo-element if it exists instead.
+   */
+  Element* elementForStyleResolution = aElement;
+  CSSPseudoElementType pseudoTypeForStyleResolution = aPseudoType;
+  if (aPseudoType == CSSPseudoElementType::before) {
+    if (Element* pseudo = nsLayoutUtils::GetBeforePseudo(aElement)) {
+      elementForStyleResolution = pseudo;
+      pseudoTypeForStyleResolution = CSSPseudoElementType::NotPseudo;
+    }
+  } else if (aPseudoType == CSSPseudoElementType::after) {
+    if (Element* pseudo = nsLayoutUtils::GetAfterPseudo(aElement)) {
+      elementForStyleResolution = pseudo;
+      pseudoTypeForStyleResolution = CSSPseudoElementType::NotPseudo;
+    }
   }
-  sInServoTraversal = false;
+
+  RefPtr<ServoStyleContext> computedValues =
+    Servo_ResolveStyleLazily(elementForStyleResolution,
+                             pseudoTypeForStyleResolution,
+                             aRuleInclusion,
+                             &Snapshots(),
+                             mRawSet.get(),
+                             /* aIgnoreExistingStyles = */ false).Consume();
+
+  if (mPresContext->EffectCompositor()->PreTraverse(aElement, aPseudoType)) {
+    computedValues =
+      Servo_ResolveStyleLazily(elementForStyleResolution,
+                               pseudoTypeForStyleResolution,
+                               aRuleInclusion,
+                               &Snapshots(),
+                               mRawSet.get(),
+                               /* aIgnoreExistingStyles = */ false).Consume();
+  }
+
+  MOZ_DIAGNOSTIC_ASSERT(computedValues->PresContext() == mPresContext ||
+                        aElement->OwnerDoc()->GetBFCacheEntry());
 
   return computedValues.forget();
 }
@@ -920,18 +1332,242 @@ ServoStyleSet::ResolveStyleLazily(Element* aElement, nsIAtom* aPseudoTag)
 bool
 ServoStyleSet::AppendFontFaceRules(nsTArray<nsFontFaceRuleContainer>& aArray)
 {
+  UpdateStylistIfNeeded();
   Servo_StyleSet_GetFontFaceRules(mRawSet.get(), &aArray);
   return true;
 }
 
-already_AddRefed<ServoComputedValues>
+nsCSSCounterStyleRule*
+ServoStyleSet::CounterStyleRuleForName(nsAtom* aName)
+{
+  return Servo_StyleSet_GetCounterStyleRule(mRawSet.get(), aName);
+}
+
+already_AddRefed<gfxFontFeatureValueSet>
+ServoStyleSet::BuildFontFeatureValueSet()
+{
+  UpdateStylistIfNeeded();
+  RefPtr<gfxFontFeatureValueSet> set =
+    Servo_StyleSet_BuildFontFeatureValueSet(mRawSet.get());
+  return set.forget();
+}
+
+already_AddRefed<ServoStyleContext>
 ServoStyleSet::ResolveForDeclarations(
-  ServoComputedValuesBorrowedOrNull aParentOrNull,
+  const ServoStyleContext* aParentOrNull,
   RawServoDeclarationBlockBorrowed aDeclarations)
 {
+  UpdateStylistIfNeeded();
   return Servo_StyleSet_ResolveForDeclarations(mRawSet.get(),
                                                aParentOrNull,
                                                aDeclarations).Consume();
 }
 
-bool ServoStyleSet::sInServoTraversal = false;
+void
+ServoStyleSet::UpdateStylist()
+{
+  MOZ_ASSERT(StylistNeedsUpdate());
+
+  if (mStylistState & StylistState::StyleSheetsDirty) {
+    // There's no need to compute invalidations and such for an XBL styleset,
+    // since they are loaded and unloaded synchronously, and they don't have to
+    // deal with dynamic content changes.
+    Element* root =
+      IsMaster() ? mPresContext->Document()->GetDocumentElement() : nullptr;
+
+    Servo_StyleSet_FlushStyleSheets(mRawSet.get(), root);
+  }
+
+  if (MOZ_UNLIKELY(mStylistState & StylistState::XBLStyleSheetsDirty)) {
+    MOZ_ASSERT(IsMaster(), "Only master styleset can mark XBL stylesets dirty!");
+    mBindingManager->UpdateBoundContentBindingsForServo(mPresContext);
+  }
+
+  mStylistState = StylistState::NotDirty;
+}
+
+void
+ServoStyleSet::MaybeGCRuleTree()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  Servo_MaybeGCRuleTree(mRawSet.get());
+}
+
+/* static */ bool
+ServoStyleSet::MayTraverseFrom(const Element* aElement)
+{
+  MOZ_ASSERT(aElement->IsInComposedDoc());
+  nsINode* parent = aElement->GetFlattenedTreeParentNodeForStyle();
+  if (!parent) {
+    return false;
+  }
+
+  if (!parent->IsElement()) {
+    MOZ_ASSERT(parent->IsNodeOfType(nsINode::eDOCUMENT));
+    return true;
+  }
+
+  if (!parent->AsElement()->HasServoData()) {
+    return false;
+  }
+
+  return !Servo_Element_IsDisplayNone(parent->AsElement());
+}
+
+bool
+ServoStyleSet::ShouldTraverseInParallel() const
+{
+  return mPresContext->PresShell()->IsActive();
+}
+
+void
+ServoStyleSet::PrependSheetOfType(SheetType aType,
+                                  ServoStyleSheet* aSheet)
+{
+  aSheet->AddStyleSet(this);
+  mSheets[aType].InsertElementAt(0, aSheet);
+}
+
+void
+ServoStyleSet::AppendSheetOfType(SheetType aType,
+                                 ServoStyleSheet* aSheet)
+{
+  aSheet->AddStyleSet(this);
+  mSheets[aType].AppendElement(aSheet);
+}
+
+void
+ServoStyleSet::InsertSheetOfType(SheetType aType,
+                                 ServoStyleSheet* aSheet,
+                                 ServoStyleSheet* aBeforeSheet)
+{
+  for (uint32_t i = 0; i < mSheets[aType].Length(); ++i) {
+    if (mSheets[aType][i] == aBeforeSheet) {
+      aSheet->AddStyleSet(this);
+      mSheets[aType].InsertElementAt(i, aSheet);
+      return;
+    }
+  }
+}
+
+void
+ServoStyleSet::RemoveSheetOfType(SheetType aType,
+                                 ServoStyleSheet* aSheet)
+{
+  for (uint32_t i = 0; i < mSheets[aType].Length(); ++i) {
+    if (mSheets[aType][i] == aSheet) {
+      aSheet->DropStyleSet(this);
+      mSheets[aType].RemoveElementAt(i);
+    }
+  }
+}
+
+void
+ServoStyleSet::RunPostTraversalTasks()
+{
+  MOZ_ASSERT(!IsInServoTraversal());
+
+  if (mPostTraversalTasks.IsEmpty()) {
+    return;
+  }
+
+  nsTArray<PostTraversalTask> tasks;
+  tasks.SwapElements(mPostTraversalTasks);
+
+  for (auto& task : tasks) {
+    task.Run();
+  }
+}
+
+ServoStyleRuleMap*
+ServoStyleSet::StyleRuleMap()
+{
+  if (!mStyleRuleMap) {
+    mStyleRuleMap = MakeUnique<ServoStyleRuleMap>(this);
+  }
+  return mStyleRuleMap.get();
+}
+
+bool
+ServoStyleSet::MightHaveAttributeDependency(const Element& aElement,
+                                            nsAtom* aAttribute) const
+{
+  return Servo_StyleSet_MightHaveAttributeDependency(
+      mRawSet.get(), &aElement, aAttribute);
+}
+
+bool
+ServoStyleSet::HasStateDependency(const Element& aElement,
+                                  EventStates aState) const
+{
+  return Servo_StyleSet_HasStateDependency(
+      mRawSet.get(), &aElement, aState.ServoValue());
+}
+
+bool
+ServoStyleSet::HasDocumentStateDependency(EventStates aState) const
+{
+  return Servo_StyleSet_HasDocumentStateDependency(
+      mRawSet.get(), aState.ServoValue());
+}
+
+already_AddRefed<ServoStyleContext>
+ServoStyleSet::ReparentStyleContext(ServoStyleContext* aStyleContext,
+                                    ServoStyleContext* aNewParent,
+                                    ServoStyleContext* aNewParentIgnoringFirstLine,
+                                    ServoStyleContext* aNewLayoutParent,
+                                    Element* aElement)
+{
+  return Servo_ReparentStyle(aStyleContext, aNewParent,
+                             aNewParentIgnoringFirstLine, aNewLayoutParent,
+                             aElement, mRawSet.get()).Consume();
+}
+
+NS_IMPL_ISUPPORTS(UACacheReporter, nsIMemoryReporter)
+
+MOZ_DEFINE_MALLOC_SIZE_OF(ServoUACacheMallocSizeOf)
+MOZ_DEFINE_MALLOC_ENCLOSING_SIZE_OF(ServoUACacheMallocEnclosingSizeOf)
+
+NS_IMETHODIMP
+UACacheReporter::CollectReports(nsIHandleReportCallback* aHandleReport,
+                                nsISupports* aData, bool aAnonymize)
+{
+  ServoStyleSetSizes sizes;
+  Servo_UACache_AddSizeOf(ServoUACacheMallocSizeOf,
+                          ServoUACacheMallocEnclosingSizeOf, &sizes);
+
+#define REPORT(_path, _amount, _desc) \
+  do { \
+    size_t __amount = _amount;  /* evaluate _amount only once */ \
+    if (__amount > 0) { \
+      MOZ_COLLECT_REPORT(_path, KIND_HEAP, UNITS_BYTES, __amount, _desc); \
+    } \
+  } while (0)
+
+  // The UA cache does not contain the rule tree; that's in the StyleSet.
+  MOZ_RELEASE_ASSERT(sizes.mRuleTree == 0);
+
+  REPORT("explicit/layout/servo-ua-cache/precomputed-pseudos",
+         sizes.mPrecomputedPseudos,
+         "Memory used by precomputed pseudo-element declarations within the "
+         "UA cache.");
+
+  REPORT("explicit/layout/servo-ua-cache/element-and-pseudos-maps",
+         sizes.mElementAndPseudosMaps,
+         "Memory used by element and pseudos maps within the UA cache.");
+
+  REPORT("explicit/layout/servo-ua-cache/invalidation-map",
+         sizes.mInvalidationMap,
+         "Memory used by invalidation maps within the UA cache.");
+
+  REPORT("explicit/layout/servo-ua-cache/revalidation-selectors",
+         sizes.mRevalidationSelectors,
+         "Memory used by selectors for cache revalidation within the UA "
+         "cache.");
+
+  REPORT("explicit/layout/servo-ua-cache/other",
+         sizes.mOther,
+         "Memory used by other data within the UA cache");
+
+  return NS_OK;
+}

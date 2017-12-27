@@ -10,6 +10,8 @@
 #include "nsISupports.h"
 #include "nsRect.h"
 
+class nsIEventTarget;
+
 namespace mozilla {
 namespace image {
 
@@ -38,14 +40,15 @@ public:
   virtual void Notify(int32_t aType, const nsIntRect* aRect = nullptr) = 0;
   virtual void OnLoadComplete(bool aLastPart) = 0;
 
-  // imgIOnloadBlocker methods:
-  virtual void BlockOnload() = 0;
-  virtual void UnblockOnload() = 0;
-
   // Other, internal-only methods:
   virtual void SetHasImage() = 0;
   virtual bool NotificationsDeferred() const = 0;
   virtual void SetNotificationsDeferred(bool aDeferNotifications) = 0;
+
+  virtual already_AddRefed<nsIEventTarget> GetEventTarget() const
+  {
+    return nullptr;
+  }
 
 protected:
   virtual ~IProgressObserver() { }

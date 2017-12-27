@@ -32,13 +32,6 @@ public:
                                                    const IPC::Principal& aPrincipal,
                                                    const ClonedMessageData& aData) override;
 
-  virtual PBlobChild*
-  SendPBlobConstructor(PBlobChild* actor,
-                       const BlobConstructorParams& aParams) override;
-
-  virtual PMemoryStreamChild*
-  SendPMemoryStreamConstructor(const uint64_t& aSize) override;
-
   jsipc::CPOWManager* GetCPOWManager() override;
 
   virtual bool SendPBrowserConstructor(PBrowserChild* aActor,
@@ -59,8 +52,7 @@ public:
 
   virtual mozilla::ipc::IPCResult RecvDeactivate(PBrowserChild* aTab) override;
 
-  virtual mozilla::ipc::IPCResult RecvParentActivated(PBrowserChild* aTab,
-                                                      const bool& aActivated) override;
+  virtual already_AddRefed<nsIEventTarget> GetEventTargetFor(TabChild* aTabChild) override;
 
   FORWARD_SHMEM_ALLOCATOR_TO(PContentBridgeChild)
 
@@ -85,12 +77,12 @@ protected:
   virtual mozilla::jsipc::PJavaScriptChild* AllocPJavaScriptChild() override;
   virtual bool DeallocPJavaScriptChild(mozilla::jsipc::PJavaScriptChild*) override;
 
-  virtual PBlobChild* AllocPBlobChild(const BlobConstructorParams& aParams) override;
-  virtual bool DeallocPBlobChild(PBlobChild*) override;
+  virtual PIPCBlobInputStreamChild*
+  AllocPIPCBlobInputStreamChild(const nsID& aID,
+                                const uint64_t& aSize) override;
 
-  virtual PMemoryStreamChild*
-  AllocPMemoryStreamChild(const uint64_t& aSize) override;
-  virtual bool DeallocPMemoryStreamChild(PMemoryStreamChild*) override;
+  virtual bool
+  DeallocPIPCBlobInputStreamChild(PIPCBlobInputStreamChild*) override;
 
   virtual mozilla::ipc::PChildToParentStreamChild*
   AllocPChildToParentStreamChild() override;
@@ -110,6 +102,10 @@ protected:
   DeallocPFileDescriptorSetChild(mozilla::ipc::PFileDescriptorSetChild* aActor) override;
 
   DISALLOW_EVIL_CONSTRUCTORS(ContentBridgeChild);
+
+private:
+  virtual already_AddRefed<nsIEventTarget>
+  GetConstructedEventTarget(const Message& aMsg) override;
 
 protected: // members
   RefPtr<ContentBridgeChild> mSelfRef;

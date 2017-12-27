@@ -141,7 +141,7 @@ this.deriveHawkCredentials = function deriveHawkCredentials(tokenHex,
   }
 
   return result;
-}
+};
 
 // With hawk request, we send the user's accepted-languages with each request.
 // To keep the number of times we read this pref at a minimum, maintain the
@@ -151,7 +151,7 @@ this.Intl = function Intl() {
   // We won't actually query the pref until the first time we need it
   this._accepted = "";
   this._everRead = false;
-  this._log = Log.repository.getLogger("Services.common.RESTRequest");
+  this._log = Log.repository.getLogger("Services.Common.RESTRequest");
   this._log.level = Log.Level[Prefs.get("log.logger.rest.request")];
   this.init();
 };
@@ -195,4 +195,3 @@ function getIntl() {
   }
   return intl;
 }
-

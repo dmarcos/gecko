@@ -5,6 +5,7 @@
 
 #include "nsAuth.h"
 #include "nsAuthSambaNTLM.h"
+#include "nsMemory.h"
 #include "prenv.h"
 #include "plbase64.h"
 #include "prerror.h"
@@ -77,7 +78,7 @@ SpawnIOChild(char* const* aArgs, PRProcess** aPID,
     }
 
     PR_ProcessAttrSetStdioRedirect(attr, PR_StandardInput, toChildPipeRead);
-    PR_ProcessAttrSetStdioRedirect(attr, PR_StandardOutput, fromChildPipeWrite);   
+    PR_ProcessAttrSetStdioRedirect(attr, PR_StandardOutput, fromChildPipeWrite);
 
     PRProcess* process = PR_CreateProcess(aArgs[0], aArgs, nullptr, attr);
     PR_DestroyProcessAttr(attr);
@@ -87,7 +88,7 @@ SpawnIOChild(char* const* aArgs, PRProcess** aPID,
         LOG(("ntlm_auth exec failure [%d]", PR_GetError()));
         PR_Close(fromChildPipeRead);
         PR_Close(toChildPipeWrite);
-        return false;        
+        return false;
     }
 
     *aPID = process;
@@ -147,13 +148,13 @@ static uint8_t* ExtractMessage(const nsACString& aLine, uint32_t* aLen)
     const char* s = line + 3;
     length -= 4; // lose first 3 chars plus trailing \n
     NS_ASSERTION(s[length] == '\n', "aLine not newline-terminated");
-    
+
     if (length & 3) {
         // The base64 encoded block must be multiple of 4. If not, something
         // screwed up.
         NS_WARNING("Base64 encoded block should be a multiple of 4 chars");
         return nullptr;
-    } 
+    }
 
     // Calculate the exact length. I wonder why there isn't a function for this
     // in plbase64.
@@ -182,7 +183,7 @@ nsAuthSambaNTLM::SpawnNTLMAuthHelper()
     };
 
     bool isOK = SpawnIOChild(const_cast<char* const*>(args), &mChildPID, &mFromChildFD, &mToChildFD);
-    if (!isOK)  
+    if (!isOK)
         return NS_ERROR_FAILURE;
 
     if (!WriteString(mToChildFD, NS_LITERAL_CSTRING("YR\n")))
@@ -269,7 +270,7 @@ nsAuthSambaNTLM::GetNextToken(const void *inToken,
     if (!*outToken) {
         return NS_ERROR_OUT_OF_MEMORY;
     }
-    
+
     // We're done. Close our file descriptors now and reap the helper
     // process.
     Shutdown();

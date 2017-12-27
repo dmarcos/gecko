@@ -58,13 +58,43 @@ function checkTestModuleExists() {
   return testModule;
 }
 
+function checkModuleTelemetry(additionalExpectedModule = undefined) {
+  let expectedModules = [
+    "NSS Internal PKCS #11 Module",
+  ];
+  if (additionalExpectedModule) {
+    expectedModules.push(additionalExpectedModule);
+  }
+  expectedModules.sort();
+  let telemetryService = Cc["@mozilla.org/base/telemetry;1"]
+                           .getService(Ci.nsITelemetry);
+  let telemetry = telemetryService.snapshotKeyedScalars(
+    Ci.nsITelemetry.DATASET_RELEASE_CHANNEL_OPTOUT).parent;
+  let moduleTelemetry = telemetry["security.pkcs11_modules_loaded"];
+  let actualModules = [];
+  Object.keys(moduleTelemetry).forEach((key) => {
+    ok(moduleTelemetry[key], "each keyed scalar should be true");
+    actualModules.push(key);
+  });
+  actualModules.sort();
+  equal(actualModules.length, expectedModules.length,
+        "the number of actual and expected loaded modules should be the same");
+  for (let i in actualModules) {
+    equal(actualModules[i], expectedModules[i],
+          "actual and expected module names should match");
+  }
+}
+
 function run_test() {
   // Check that if we have never added the test module, that we don't find it
   // in the module list.
   checkTestModuleNotPresent();
+  checkModuleTelemetry();
 
   // Check that adding the test module makes it appear in the module list.
   loadPKCS11TestModule(true);
+  checkModuleTelemetry(
+    `${AppConstants.DLL_PREFIX}pkcs11testmodule${AppConstants.DLL_SUFFIX}`);
   let testModule = checkTestModuleExists();
 
   // Check that listing the slots for the test module works.
@@ -75,7 +105,7 @@ function run_test() {
     testModuleSlotNames.push(slot.name);
   }
   testModuleSlotNames.sort();
-  const expectedSlotNames = ["Test PKCS11 Slot", "Test PKCS11 Slot 二"];
+  const expectedSlotNames = ["Empty PKCS11 Slot", "Test PKCS11 Slot", "Test PKCS11 Slot 二"];
   deepEqual(testModuleSlotNames, expectedSlotNames,
             "Actual and expected slot names should be equal");
 
@@ -86,38 +116,13 @@ function run_test() {
   throws(() => testModule.findSlotByName("Not Present"), /NS_ERROR_FAILURE/,
          "Non-present slot should not be findable by name");
 
-  // Check that the strangely named nsIPKCS11ModuleDB.findSlotByName() works.
-  // In particular, a comment in nsPKCS11Slot.cpp notes that the method
-  // "is essentially the same as nsIPK11Token::findTokenByName, except that it
-  //  returns an nsIPKCS11Slot".
-  let strBundleSvc = Cc["@mozilla.org/intl/stringbundle;1"]
-                       .getService(Ci.nsIStringBundleService);
-  let bundle =
-    strBundleSvc.createBundle("chrome://pipnss/locale/pipnss.properties");
-  let internalTokenName = bundle.GetStringFromName("PrivateTokenDescription");
-  let internalTokenAsSlot = gModuleDB.findSlotByName(internalTokenName);
-  notEqual(internalTokenAsSlot, null,
-           "Internal 'slot' should be findable by name via the module DB");
-  ok(internalTokenAsSlot instanceof Ci.nsIPKCS11Slot,
-     "Module DB findSlotByName() should return a token as an nsIPKCS11Slot");
-  equal(internalTokenAsSlot.name,
-        bundle.GetStringFromName("PrivateSlotDescription"),
-        "Spot check: actual and expected internal 'slot' names should be equal");
-  throws(() => gModuleDB.findSlotByName("Not Present"), /NS_ERROR_FAILURE/,
-         "Non-present 'slot' should not be findable by name via the module DB");
-  throws(() => gModuleDB.findSlotByName(""), /NS_ERROR_ILLEGAL_VALUE/,
-         "nsIPKCS11ModuleDB.findSlotByName should throw given an empty name");
-
   // Check that deleting the test module makes it disappear from the module list.
-  let pkcs11 = Cc["@mozilla.org/security/pkcs11;1"].getService(Ci.nsIPKCS11);
-  pkcs11.deleteModule("PKCS11 Test Module");
+  let pkcs11ModuleDB = Cc["@mozilla.org/security/pkcs11moduledb;1"]
+                         .getService(Ci.nsIPKCS11ModuleDB);
+  pkcs11ModuleDB.deleteModule("PKCS11 Test Module");
   checkTestModuleNotPresent();
 
   // Check miscellaneous module DB methods and attributes.
-  notEqual(gModuleDB.getInternal(), null,
-           "The internal module should be present");
-  notEqual(gModuleDB.getInternalFIPS(), null,
-           "The internal FIPS module should be present");
-  ok(gModuleDB.canToggleFIPS, "It should be possible to toggle FIPS");
+  ok(!gModuleDB.canToggleFIPS, "It should NOT be possible to toggle FIPS");
   ok(!gModuleDB.isFIPSEnabled, "FIPS should not be enabled");
 }

@@ -9,7 +9,6 @@
 
 #include "jsopcode.h"
 
-#include "jit/IonCaches.h"
 #include "jit/JitFrames.h"
 #include "jit/mips-shared/MacroAssembler-mips-shared.h"
 #include "jit/MoveResolver.h"
@@ -31,7 +30,7 @@ struct ImmType : public ImmTag
     { }
 };
 
-static const ValueOperand JSReturnOperand = ValueOperand(JSReturnReg_Type, JSReturnReg_Data);
+static constexpr ValueOperand JSReturnOperand{JSReturnReg_Type, JSReturnReg_Data};
 static const ValueOperand softfpReturnOperand = ValueOperand(v1, v0);
 
 static const int defaultShift = 3;
@@ -52,6 +51,7 @@ class MacroAssemblerMIPS : public MacroAssemblerMIPSShared
     using MacroAssemblerMIPSShared::ma_store;
     using MacroAssemblerMIPSShared::ma_cmp_set;
     using MacroAssemblerMIPSShared::ma_subTestOverflow;
+    using MacroAssemblerMIPSShared::ma_liPatchable;
 
     void ma_li(Register dest, CodeOffset* label);
 
@@ -194,6 +194,9 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
     void mov(ImmPtr imm, Register dest) {
         mov(ImmWord(uintptr_t(imm.value)), dest);
     }
+    void mov(CodeOffset* label, Register dest) {
+        ma_li(dest, label);
+    }
     void mov(Register src, Address dest) {
         MOZ_CRASH("NYI-IC");
     }
@@ -279,6 +282,13 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
         return movWithPatch(ImmWord(uintptr_t(imm.value)), dest);
     }
 
+    void writeCodePointer(CodeOffset* label) {
+        label->bind(currentOffset());
+        ma_liPatchable(ScratchRegister, ImmWord(0));
+        as_jr(ScratchRegister);
+        as_nop();
+    }
+
     void jump(Label* label) {
         ma_b(label);
     }
@@ -298,6 +308,14 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
 
     void jump(wasm::TrapDesc target) {
         ma_b(target);
+    }
+
+    void jump(TrampolinePtr code)
+    {
+        auto target = ImmPtr(code.value);
+        BufferOffset bo = m_buffer.nextOffset();
+        addPendingJump(bo, target, Relocation::HARDCODED);
+        ma_jump(target);
     }
 
     void negl(Register reg) {
@@ -332,7 +350,7 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
     }
 
     // boxing code
-    void boxDouble(FloatRegister src, const ValueOperand& dest);
+    void boxDouble(FloatRegister src, const ValueOperand& dest, FloatRegister);
     void boxNonDouble(JSValueType type, Register src, const ValueOperand& dest);
 
     // Extended unboxing API. If the payload is already in a register, returns
@@ -495,7 +513,7 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
     void storeTypeTag(ImmTag tag, Address dest);
     void storeTypeTag(ImmTag tag, const BaseIndex& dest);
 
-    void handleFailureWithHandlerTail(void* handler);
+    void handleFailureWithHandlerTail(void* handler, Label* profilerExitTail);
 
     /////////////////////////////////////////////////////////////////
     // Common interface.
@@ -848,9 +866,8 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
     void load32(AbsoluteAddress address, Register dest);
     void load32(wasm::SymbolicAddress address, Register dest);
     void load64(const Address& address, Register64 dest) {
-        load32(Address(address.base, address.offset + INT64LOW_OFFSET), dest.low);
-        int32_t highOffset = (address.offset < 0) ? -int32_t(INT64HIGH_OFFSET) : INT64HIGH_OFFSET;
-        load32(Address(address.base, address.offset + highOffset), dest.high);
+        load32(LowWord(address), dest.low);
+        load32(HighWord(address), dest.high);
     }
 
     void loadPtr(const Address& address, Register dest);
@@ -895,7 +912,8 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
 
     void loadDouble(const Address& addr, FloatRegister dest);
     void loadDouble(const BaseIndex& src, FloatRegister dest);
-    void loadUnalignedDouble(const BaseIndex& src, Register temp, FloatRegister dest);
+    void loadUnalignedDouble(const wasm::MemoryAccessDesc& access, const BaseIndex& src,
+                             Register temp, FloatRegister dest);
 
     // Load a float value into a register, then expand it to a double.
     void loadFloatAsDouble(const Address& addr, FloatRegister dest);
@@ -903,7 +921,8 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
 
     void loadFloat32(const Address& addr, FloatRegister dest);
     void loadFloat32(const BaseIndex& src, FloatRegister dest);
-    void loadUnalignedFloat32(const BaseIndex& src, Register temp, FloatRegister dest);
+    void loadUnalignedFloat32(const wasm::MemoryAccessDesc& access, const BaseIndex& src,
+                              Register temp, FloatRegister dest);
 
     void store8(Register src, const Address& address);
     void store8(Imm32 imm, const Address& address);
@@ -944,8 +963,10 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
     void storePtr(Register src, const BaseIndex& address);
     void storePtr(Register src, AbsoluteAddress dest);
 
-    void storeUnalignedFloat32(FloatRegister src, Register temp, const BaseIndex& dest);
-    void storeUnalignedDouble(FloatRegister src, Register temp, const BaseIndex& dest);
+    void storeUnalignedFloat32(const wasm::MemoryAccessDesc& access, FloatRegister src,
+                               Register temp, const BaseIndex& dest);
+    void storeUnalignedDouble(const wasm::MemoryAccessDesc& access, FloatRegister src,
+                              Register temp, const BaseIndex& dest);
 
     void moveDouble(FloatRegister src, FloatRegister dest) {
         as_movd(dest, src);
@@ -970,6 +991,124 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
     // If source is a double, load it into dest. If source is int32,
     // convert it to double. Else, branch to failure.
     void ensureDouble(const ValueOperand& source, FloatRegister dest, Label* failure);
+
+    template<typename T>
+    void atomicFetchAdd8ZeroExtend(Register value, const T& mem, Register temp, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void atomicFetchSub8ZeroExtend(Register value, const T& mem, Register temp, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void atomicFetchAnd8ZeroExtend(Register value, const T& mem, Register temp, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void atomicFetchOr8ZeroExtend(Register value, const T& mem, Register temp, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void atomicFetchXor8ZeroExtend(Register value, const T& mem, Register temp, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void compareExchange8ZeroExtend(const T& mem, Register oldval, Register newval,
+                                    Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void atomicExchange8ZeroExtend(const T& mem, Register value, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void atomicFetchAdd16ZeroExtend(Register value, const T& mem, Register temp, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void atomicFetchSub16ZeroExtend(Register value, const T& mem, Register temp, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void atomicFetchAnd16ZeroExtend(Register value, const T& mem, Register temp, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void atomicFetchOr16ZeroExtend(Register value, const T& mem, Register temp, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void atomicFetchXor16ZeroExtend(Register value, const T& mem, Register temp, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void compareExchange16ZeroExtend(const T& mem, Register oldval, Register newval,
+                                     Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void atomicExchange16ZeroExtend(const T& mem, Register value, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void atomicFetchAdd32(Register value, const T& mem, Register temp, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void atomicFetchSub32(Register value, const T& mem, Register temp, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void atomicFetchAnd32(Register value, const T& mem, Register temp, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void atomicFetchOr32(Register value, const T& mem, Register temp, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void atomicFetchXor32(Register value, const T& mem, Register temp, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T>
+    void compareExchange32(const T& mem, Register oldval, Register newval, Register output) {
+        MOZ_CRASH();
+    }
+    template<typename T> void atomicExchange32(const T& mem, Register value, Register output) {
+        MOZ_CRASH();
+    }
+    template <typename T>
+    void atomicFetchAdd64(Register64 value, const T& mem, Register64 temp, Register64 output) {
+        MOZ_CRASH();
+    }
+    template <typename T>
+    void atomicFetchSub64(Register64 value, const T& mem, Register64 temp, Register64 output) {
+        MOZ_CRASH();
+    }
+    template <typename T>
+    void atomicFetchAnd64(Register64 value, const T& mem, Register64 temp, Register64 output) {
+        MOZ_CRASH();
+    }
+    template <typename T>
+    void atomicFetchOr64(Register64 value, const T& mem, Register64 temp, Register64 output) {
+        MOZ_CRASH();
+    }
+    template <typename T>
+    void atomicFetchXor64(Register64 value, const T& mem, Register64 temp, Register64 output) {
+        MOZ_CRASH();
+    }
+    template <typename T>
+    void atomicExchange64(const T& mem, Register64 src, Register64 output) {
+        MOZ_CRASH();
+    }
+    template <typename T>
+    void compareExchange64(const T& mem, Register64 expect, Register64 replace, Register64 output) {
+        MOZ_CRASH();
+    }
+    template <typename T>
+    void atomicLoad64(const T& mem, Register64 temp, Register64 output) {
+        MOZ_CRASH();
+    }
 
   protected:
     bool buildOOLFakeExitFrame(void* fakeReturnAddr);
@@ -996,12 +1135,10 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
         as_movs(dest, src);
     }
     void loadWasmGlobalPtr(uint32_t globalDataOffset, Register dest) {
-        loadPtr(Address(GlobalReg, globalDataOffset - WasmGlobalRegBias), dest);
+        loadPtr(Address(WasmTlsReg, offsetof(wasm::TlsData, globalArea) + globalDataOffset), dest);
     }
     void loadWasmPinnedRegsFromTls() {
         loadPtr(Address(WasmTlsReg, offsetof(wasm::TlsData, memoryBase)), HeapReg);
-        loadPtr(Address(WasmTlsReg, offsetof(wasm::TlsData, globalData)), GlobalReg);
-        ma_addu(GlobalReg, Imm32(WasmGlobalRegBias));
     }
 
     // Instrumentation for entering and leaving the profiler.

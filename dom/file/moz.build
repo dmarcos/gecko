@@ -35,6 +35,7 @@ EXPORTS.mozilla.dom += [
     'MultipartBlobImpl.h',
     'MutableBlobStorage.h',
     'MutableBlobStreamListener.h',
+    'StreamBlobImpl.h',
 ]
 
 UNIFIED_SOURCES += [
@@ -56,10 +57,11 @@ UNIFIED_SOURCES += [
     'nsHostObjectURI.cpp',
     'StreamBlobImpl.cpp',
     'StringBlobImpl.cpp',
-    'TemporaryBlobImpl.cpp',
+    'TemporaryFileBlobImpl.cpp',
 ]
 
 LOCAL_INCLUDES += [
+    '/dom/file/ipc',
     '/dom/workers',
 ]
 

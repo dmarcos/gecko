@@ -13,13 +13,13 @@
 #include "nsIWidget.h"
 
 class nsIContent;
-class nsIEditor;
 class nsINode;
 class nsPresContext;
 class nsISelection;
 
 namespace mozilla {
 
+class EditorBase;
 class EventDispatchingCallback;
 class IMEContentObserver;
 class TextCompositionArray;
@@ -56,6 +56,20 @@ public:
       return nullptr;
     }
     return sActiveTabParent.get();
+  }
+
+  /**
+   * DoesTabParentHaveIMEFocus() returns true when aTabParent has IME focus,
+   * i.e., the TabParent sent "focus" notification but not yet sends "blur".
+   * Note that this doesn't check if the remote processes are same because
+   * if another TabParent has focus, committing composition causes firing
+   * composition events in different TabParent.  (Anyway, such case shouldn't
+   * occur.)
+   */
+  static bool DoesTabParentHaveIMEFocus(const TabParent* aTabParent)
+  {
+    MOZ_ASSERT(aTabParent);
+    return sFocusedIMETabParent == aTabParent;
   }
 
   /**
@@ -119,6 +133,17 @@ public:
   static nsresult OnChangeFocus(nsPresContext* aPresContext,
                                 nsIContent* aContent,
                                 InputContextAction::Cause aCause);
+
+  /**
+   * OnInstalledMenuKeyboardListener() is called when menu keyboard listener
+   * is installed or uninstalled in the process.  So, even if menu keyboard
+   * listener was installed in chrome process, this won't be called in content
+   * processes.
+   *
+   * @param aInstalling     true if menu keyboard listener is installed.
+   *                        Otherwise, i.e., menu keyboard listener is
+   *                        uninstalled, false.
+   */
   static void OnInstalledMenuKeyboardListener(bool aInstalling);
 
   // These two methods manage focus and selection/text observers.
@@ -134,7 +159,7 @@ public:
   // widget.  So, the caller must have focus.
   static void UpdateIMEState(const IMEState &aNewIMEState,
                              nsIContent* aContent,
-                             nsIEditor* aEditor);
+                             EditorBase* aEditorBase);
 
   // This method is called when user operates mouse button in focused editor
   // and before the editor handles it.
@@ -159,14 +184,14 @@ public:
   //   If the editor is for designMode, nullptr.
   static void OnFocusInEditor(nsPresContext* aPresContext,
                               nsIContent* aContent,
-                              nsIEditor* aEditor);
+                              EditorBase& aEditorBase);
 
   // This method is called when the editor is initialized.
-  static void OnEditorInitialized(nsIEditor* aEditor);
+  static void OnEditorInitialized(EditorBase& aEditorBase);
 
   // This method is called when the editor is (might be temporarily) being
   // destroyed.
-  static void OnEditorDestroying(nsIEditor* aEditor);
+  static void OnEditorDestroying(EditorBase& aEditorBase);
 
   /**
    * All composition events must be dispatched via DispatchCompositionEvent()
@@ -224,13 +249,13 @@ public:
    */
   static nsresult NotifyIME(const IMENotification& aNotification,
                             nsIWidget* aWidget,
-                            bool aOriginIsRemote = false);
+                            TabParent* aTabParent = nullptr);
   static nsresult NotifyIME(IMEMessage aMessage,
                             nsIWidget* aWidget,
-                            bool aOriginIsRemote = false);
+                            TabParent* aTabParent = nullptr);
   static nsresult NotifyIME(IMEMessage aMessage,
                             nsPresContext* aPresContext,
-                            bool aOriginIsRemote = false);
+                            TabParent* aTabParent = nullptr);
 
   static nsINode* GetRootEditableNode(nsPresContext* aPresContext,
                                       nsIContent* aContent);
@@ -246,9 +271,11 @@ protected:
                                         nsIContent* aContent,
                                         InputContextAction aAction);
   static void SetIMEState(const IMEState &aState,
+                          nsPresContext* aPresContext,
                           nsIContent* aContent,
                           nsIWidget* aWidget,
-                          InputContextAction aAction);
+                          InputContextAction aAction,
+                          InputContext::Origin aOrigin);
   static void SetInputContext(nsIWidget* aWidget,
                               const InputContext& aInputContext,
                               const InputContextAction& aAction);
@@ -256,8 +283,14 @@ protected:
                                  nsIContent* aContent);
 
   static void EnsureTextCompositionArray();
-  static void CreateIMEContentObserver(nsIEditor* aEditor);
+  static void CreateIMEContentObserver(EditorBase* aEditorBase);
   static void DestroyIMEContentObserver();
+
+  /**
+   * NotifyIMEOfBlurForChildProcess() tries to send blur notification when
+   * a remote process has IME focus.  Otherwise, do nothing.
+   */
+  static void NotifyIMEOfBlurForChildProcess();
 
   static bool IsEditable(nsINode* node);
 
@@ -265,11 +298,41 @@ protected:
 
   static nsIContent* GetRootContent(nsPresContext* aPresContext);
 
+  /**
+   * CanHandleWith() returns false if aPresContext is nullptr or it's destroyed.
+   */
+  static bool CanHandleWith(nsPresContext* aPresContext);
+
+  /**
+   * ResetActiveChildInputContext() resets sActiveChildInputContext.
+   * So, HasActiveChildSetInputContext() will return false until a remote
+   * process gets focus and set input context.
+   */
+  static void ResetActiveChildInputContext();
+
+  /**
+   * HasActiveChildSetInputContext() returns true if a remote tab has focus
+   * and it has already set input context.  Otherwise, returns false.
+   */
+  static bool HasActiveChildSetInputContext();
+
+  // sContent and sPresContext are the focused content and PresContext.  If a
+  // document has focus but there is no focused element, sContent may be
+  // nullptr.
   static StaticRefPtr<nsIContent> sContent;
   static StaticRefPtr<nsPresContext> sPresContext;
+  // sWidget is cache for the root widget of sPresContext.  Even afer
+  // sPresContext has gone, we need to clean up some IME state on the widget
+  // if the widget is available.
+  static nsIWidget* sWidget;
+  // sFocusedIMETabParent is the tab parent, which send "focus" notification to
+  // sFocusedIMEWidget (and didn't yet sent "blur" notification).
   static nsIWidget* sFocusedIMEWidget;
+  static StaticRefPtr<TabParent> sFocusedIMETabParent;
   // sActiveInputContextWidget is the last widget whose SetInputContext() is
-  // called.
+  // called.  This is important to reduce sync IPC cost with parent process.
+  // If IMEStateManager set input context to different widget, PuppetWidget can
+  // return cached input context safely.
   static nsIWidget* sActiveInputContextWidget;
   static StaticRefPtr<TabParent> sActiveTabParent;
   // sActiveIMEContentObserver points to the currently active
@@ -282,10 +345,23 @@ protected:
   // something to cause committing or canceling the composition.
   static TextCompositionArray* sTextCompositions;
 
-  static bool           sInstalledMenuKeyboardListener;
-  static bool           sIsGettingNewIMEState;
-  static bool           sCheckForIMEUnawareWebApps;
-  static bool           sRemoteHasFocus;
+  // Origin type of current process.
+  static InputContext::Origin sOrigin;
+
+  // sActiveChildInputContext is valid only when sActiveTabParent is not
+  // nullptr.  This stores last information of input context in the remote
+  // process of sActiveTabParent.  I.e., they are set when
+  // SetInputContextForChildProcess() is called.  This is necessary for
+  // restoring IME state when menu keyboard listener is uninstalled.
+  static InputContext sActiveChildInputContext;
+
+  // sInstalledMenuKeyboardListener is true if menu keyboard listener is
+  // installed in the process.
+  static bool sInstalledMenuKeyboardListener;
+
+  static bool sIsGettingNewIMEState;
+  static bool sCheckForIMEUnawareWebApps;
+  static bool sInputModeSupported;
 
   class MOZ_STACK_CLASS GettingNewIMEStateBlocker final
   {

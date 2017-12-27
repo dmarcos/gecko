@@ -16,7 +16,6 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
  
@@ -24,10 +23,10 @@ function test()
   var a = ["", 0, 0, 0, 0, 0, "", "", 0, "", 0, ""];
   var i = 0;
   var g = 0;
-  for each (let e in a) {
+  for (let e of a) {
       "" + [e];
       if (i == 3 || i == 7) {
-        for each (g in [1]) {
+        for (g of [1]) {
           }
       }
       ++i;
@@ -35,6 +34,4 @@ function test()
 
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

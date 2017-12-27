@@ -8,11 +8,7 @@ Cu.import("resource:///modules/experiments/Experiments.jsm");
 
 const MANIFEST_HANDLER         = "manifests/handler";
 
-function run_test() {
-  run_next_test();
-}
-
-add_task(function* test_setup() {
+add_task(async function test_setup() {
   loadAddonManager();
   do_get_profile();
 
@@ -28,7 +24,7 @@ add_task(function* test_setup() {
       response.write("["); // never finish!
     });
 
-  do_register_cleanup(() => httpServer.stop(() => {}));
+  registerCleanupFunction(() => httpServer.stop(() => {}));
   Services.prefs.setBoolPref(PREF_EXPERIMENTS_ENABLED, true);
   Services.prefs.setIntPref(PREF_LOGGING_LEVEL, 0);
   Services.prefs.setBoolPref(PREF_LOGGING_DUMP, true);
@@ -43,5 +39,5 @@ add_task(function* test_setup() {
     (e) => {
       do_throw("updateManifest should not have failed: got error " + e);
     });
-  yield experiments.uninit();
+  await experiments.uninit();
 });

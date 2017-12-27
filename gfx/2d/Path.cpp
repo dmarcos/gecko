@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -258,6 +259,7 @@ FlattenBezierCurveSegment(const BezierControlPoints &aControlPoints,
   BezierControlPoints currentCP = aControlPoints;
 
   double t = 0;
+  double currentTolerance = aTolerance;
   while (t < 1.0) {
     PointD cp21 = currentCP.mCP2 - currentCP.mCP1;
     PointD cp31 = currentCP.mCP3 - currentCP.mCP1;
@@ -273,7 +275,14 @@ FlattenBezierCurveSegment(const BezierControlPoints &aControlPoints,
     }
 
     double s3inv = h / cp21x31;
-    t = 2 * sqrt(aTolerance * std::abs(s3inv) / 3.);
+    t = 2 * sqrt(currentTolerance * std::abs(s3inv) / 3.);
+    currentTolerance *= 1 + aTolerance;
+    // Increase tolerance every iteration to prevent this loop from executing
+    // too many times. This approximates the length of large curves more
+    // roughly. In practice, aTolerance is the constant kFlatteningTolerance
+    // which has value 0.0001. With this value, it takes 6,932 splits to double
+    // currentTolerance (to 0.0002) and 23,028 splits to increase
+    // currentTolerance by an order of magnitude (to 0.001).
     if (t >= 1.0) {
       break;
     }
@@ -442,8 +451,6 @@ FindInflectionPoints(const BezierControlPoints &aControlPoints,
       *aCount = 2;
     }
   }
-
-  return;
 }
 
 void

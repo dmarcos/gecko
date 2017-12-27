@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -41,8 +42,7 @@ nsButtonBoxFrame::nsButtonBoxListener::HandleEvent(nsIDOMEvent* aEvent)
     return NS_OK;
   }
 
-  NS_ABORT();
-
+  MOZ_ASSERT_UNREACHABLE("Unexpected eventType");
   return NS_OK;
 }
 
@@ -59,8 +59,8 @@ NS_NewButtonBoxFrame (nsIPresShell* aPresShell, nsStyleContext* aContext)
 
 NS_IMPL_FRAMEARENA_HELPERS(nsButtonBoxFrame)
 
-nsButtonBoxFrame::nsButtonBoxFrame(nsStyleContext* aContext) :
-  nsBoxFrame(aContext, false),
+nsButtonBoxFrame::nsButtonBoxFrame(nsStyleContext* aContext, ClassID aID) :
+  nsBoxFrame(aContext, aID, false),
   mButtonBoxListener(nullptr),
   mIsHandlingKeyEvent(false)
 {
@@ -80,29 +80,28 @@ nsButtonBoxFrame::Init(nsIContent*       aContent,
 }
 
 void
-nsButtonBoxFrame::DestroyFrom(nsIFrame* aDestructRoot)
+nsButtonBoxFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
   mContent->RemoveSystemEventListener(NS_LITERAL_STRING("blur"), mButtonBoxListener, false);
 
   mButtonBoxListener->mButtonBoxFrame = nullptr;
   mButtonBoxListener = nullptr;
 
-  nsBoxFrame::DestroyFrom(aDestructRoot);
+  nsBoxFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 void
 nsButtonBoxFrame::BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
-                                              const nsRect&           aDirtyRect,
                                               const nsDisplayListSet& aLists)
 {
   // override, since we don't want children to get events
   if (aBuilder->IsForEventDelivery())
     return;
-  nsBoxFrame::BuildDisplayListForChildren(aBuilder, aDirtyRect, aLists);
+  nsBoxFrame::BuildDisplayListForChildren(aBuilder, aLists);
 }
 
 nsresult
-nsButtonBoxFrame::HandleEvent(nsPresContext* aPresContext, 
+nsButtonBoxFrame::HandleEvent(nsPresContext* aPresContext,
                               WidgetGUIEvent* aEvent,
                               nsEventStatus* aEventStatus)
 {
@@ -211,12 +210,19 @@ nsButtonBoxFrame::DoMouseClick(WidgetGUIEvent* aEvent, bool aTrustEvent)
   bool isControl = false;
   bool isAlt = false;
   bool isMeta = false;
+  uint16_t inputSource = nsIDOMMouseEvent::MOZ_SOURCE_UNKNOWN;
+
   if(aEvent) {
     WidgetInputEvent* inputEvent = aEvent->AsInputEvent();
     isShift = inputEvent->IsShift();
     isControl = inputEvent->IsControl();
     isAlt = inputEvent->IsAlt();
     isMeta = inputEvent->IsMeta();
+
+    WidgetMouseEventBase* mouseEvent = aEvent->AsMouseEventBase();
+    if (mouseEvent) {
+      inputSource = mouseEvent->inputSource;
+    }
   }
 
   // Have the content handle the event, propagating it according to normal DOM rules.
@@ -226,6 +232,6 @@ nsButtonBoxFrame::DoMouseClick(WidgetGUIEvent* aEvent, bool aTrustEvent)
                                        aEvent ?
                                          aEvent->IsTrusted() : aTrustEvent,
                                        nullptr, shell,
-                                       isControl, isAlt, isShift, isMeta);
+                                       isControl, isAlt, isShift, isMeta, inputSource);
   }
 }

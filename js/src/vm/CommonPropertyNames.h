@@ -17,6 +17,8 @@
     macro(anonymous, anonymous, "anonymous") \
     macro(Any, Any, "Any") \
     macro(apply, apply, "apply") \
+    macro(AcquireReadableStreamBYOBReader, AcquireReadableStreamBYOBReader, "AcquireReadableStreamBYOBReader") \
+    macro(AcquireReadableStreamDefaultReader, AcquireReadableStreamDefaultReader, "AcquireReadableStreamDefaultReader") \
     macro(arguments, arguments, "arguments") \
     macro(ArrayBufferSpecies, ArrayBufferSpecies, "ArrayBufferSpecies") \
     macro(ArrayIterator, ArrayIterator, "Array Iterator") \
@@ -36,6 +38,7 @@
     macro(AsyncGeneratorFunction, AsyncGeneratorFunction, "AsyncGeneratorFunction") \
     macro(AsyncWrapped, AsyncWrapped, "AsyncWrapped") \
     macro(async, async, "async") \
+    macro(autoAllocateChunkSize, autoAllocateChunkSize, "autoAllocateChunkSize") \
     macro(await, await, "await") \
     macro(Bool8x16, Bool8x16, "Bool8x16") \
     macro(Bool16x8, Bool16x8, "Bool16x8") \
@@ -47,6 +50,7 @@
     macro(buffer, buffer, "buffer") \
     macro(builder, builder, "builder") \
     macro(by, by, "by") \
+    macro(byob, byob, "byob") \
     macro(byteAlignment, byteAlignment, "byteAlignment") \
     macro(byteLength, byteLength, "byteLength") \
     macro(byteOffset, byteOffset, "byteOffset") \
@@ -57,11 +61,11 @@
     macro(callee, callee, "callee") \
     macro(caller, caller, "caller") \
     macro(callFunction, callFunction, "callFunction") \
+    macro(cancel, cancel, "cancel") \
     macro(case, case_, "case") \
     macro(caseFirst, caseFirst, "caseFirst") \
     macro(catch, catch_, "catch") \
     macro(class, class_, "class") \
-    macro(close, close, "close") \
     macro(Collator, Collator, "Collator") \
     macro(collections, collections, "collections") \
     macro(columnNumber, columnNumber, "columnNumber") \
@@ -74,6 +78,8 @@
     macro(constructor, constructor, "constructor") \
     macro(continue, continue_, "continue") \
     macro(ConvertAndCopyTo, ConvertAndCopyTo, "ConvertAndCopyTo") \
+    macro(CopyDataProperties, CopyDataProperties, "CopyDataProperties") \
+    macro(CopyDataPropertiesUnfiltered, CopyDataPropertiesUnfiltered, "CopyDataPropertiesUnfiltered") \
     macro(copyWithin, copyWithin, "copyWithin") \
     macro(count, count, "count") \
     macro(CreateResolvingFunctions, CreateResolvingFunctions, "CreateResolvingFunctions") \
@@ -138,7 +144,6 @@
     macro(forceInterpreter, forceInterpreter, "forceInterpreter") \
     macro(forEach, forEach, "forEach") \
     macro(format, format, "format") \
-    macro(formatToParts, formatToParts, "formatToParts") \
     macro(fraction, fraction, "fraction") \
     macro(frame, frame, "frame") \
     macro(from, from, "from") \
@@ -149,12 +154,16 @@
     macro(gcCycleNumber, gcCycleNumber, "gcCycleNumber") \
     macro(Generator, Generator, "Generator") \
     macro(GeneratorFunction, GeneratorFunction, "GeneratorFunction") \
+    macro(GeneratorNext, GeneratorNext, "GeneratorNext") \
+    macro(GeneratorReturn, GeneratorReturn, "GeneratorReturn") \
+    macro(GeneratorThrow, GeneratorThrow, "GeneratorThrow") \
     macro(get, get, "get") \
     macro(getInternals, getInternals, "getInternals") \
     macro(getOwnPropertyDescriptor, getOwnPropertyDescriptor, "getOwnPropertyDescriptor") \
     macro(getOwnPropertyNames, getOwnPropertyNames, "getOwnPropertyNames") \
     macro(getPrefix, getPrefix, "get ") \
     macro(getPropertyDescriptor, getPropertyDescriptor, "getPropertyDescriptor") \
+    macro(getPropertySuper, getPropertySuper, "getPropertySuper") \
     macro(getPrototypeOf, getPrototypeOf, "getPrototypeOf") \
     macro(global, global, "global") \
     macro(group, group, "group") \
@@ -162,6 +171,7 @@
     macro(has, has, "has") \
     macro(hasOwn, hasOwn, "hasOwn") \
     macro(hasOwnProperty, hasOwnProperty, "hasOwnProperty") \
+    macro(highWaterMark, highWaterMark, "highWaterMark") \
     macro(hour, hour, "hour") \
     macro(if, if_, "if") \
     macro(ignoreCase, ignoreCase, "ignoreCase") \
@@ -178,6 +188,7 @@
     macro(InitializeDateTimeFormat, InitializeDateTimeFormat, "InitializeDateTimeFormat") \
     macro(InitializeNumberFormat, InitializeNumberFormat, "InitializeNumberFormat") \
     macro(InitializePluralRules, InitializePluralRules, "InitializePluralRules") \
+    macro(InitializeRelativeTimeFormat, InitializeRelativeTimeFormat, "InitializeRelativeTimeFormat") \
     macro(innermost, innermost, "innermost") \
     macro(inNursery, inNursery, "inNursery") \
     macro(input, input, "input") \
@@ -198,13 +209,11 @@
     macro(isPrototypeOf, isPrototypeOf, "isPrototypeOf") \
     macro(IterableToList, IterableToList, "IterableToList") \
     macro(iterate, iterate, "iterate") \
-    macro(iteratorIntrinsic, iteratorIntrinsic, "__iterator__") \
     macro(join, join, "join") \
     macro(js, js, "js") \
     macro(keys, keys, "keys") \
     macro(label, label, "label") \
     macro(lastIndex, lastIndex, "lastIndex") \
-    macro(LegacyGeneratorCloseInternal, LegacyGeneratorCloseInternal, "LegacyGeneratorCloseInternal") \
     macro(length, length, "length") \
     macro(let, let, "let") \
     macro(line, line, "line") \
@@ -227,10 +236,11 @@
     macro(minusSign, minusSign, "minusSign") \
     macro(minute, minute, "minute") \
     macro(missingArguments, missingArguments, "missingArguments") \
+    macro(mode, mode, "mode") \
     macro(module, module, "module") \
     macro(Module, Module, "Module") \
-    macro(ModuleDeclarationInstantiation, ModuleDeclarationInstantiation, "ModuleDeclarationInstantiation") \
-    macro(ModuleEvaluation, ModuleEvaluation, "ModuleEvaluation") \
+    macro(ModuleInstantiate, ModuleInstantiate, "ModuleInstantiate") \
+    macro(ModuleEvaluate, ModuleEvaluate, "ModuleEvaluate") \
     macro(month, month, "month") \
     macro(multiline, multiline, "multiline") \
     macro(name, name, "name") \
@@ -248,7 +258,6 @@
     macro(noStack, noStack, "noStack") \
     macro(notes, notes, "notes") \
     macro(NumberFormat, NumberFormat, "NumberFormat") \
-    macro(NumberFormatFormatToParts, NumberFormatFormatToParts, "Intl_NumberFormat_formatToParts") \
     macro(numeric, numeric, "numeric") \
     macro(objectArguments, objectArguments, "[object Arguments]") \
     macro(objectArray, objectArray, "[object Array]") \
@@ -276,10 +285,10 @@
     macro(pattern, pattern, "pattern") \
     macro(pending, pending, "pending") \
     macro(PluralRules, PluralRules, "PluralRules") \
-    macro(PluralRulesSelect, PluralRulesSelect, "Intl_PluralRules_Select") \
     macro(percentSign, percentSign, "percentSign") \
     macro(plusSign, plusSign, "plusSign") \
     macro(public, public_, "public") \
+    macro(pull, pull, "pull") \
     macro(preventExtensions, preventExtensions, "preventExtensions") \
     macro(private, private_, "private") \
     macro(promise, promise, "promise") \
@@ -289,6 +298,50 @@
     macro(prototype, prototype, "prototype") \
     macro(proxy, proxy, "proxy") \
     macro(raw, raw, "raw") \
+    macro(ReadableByteStreamControllerGetDesiredSize, \
+          ReadableByteStreamControllerGetDesiredSize, \
+          "ReadableByteStreamControllerGetDesiredSize") \
+    macro(ReadableByteStreamController_close, \
+          ReadableByteStreamController_close, \
+          "ReadableByteStreamController_close") \
+    macro(ReadableByteStreamController_enqueue, \
+          ReadableByteStreamController_enqueue, \
+          "ReadableByteStreamController_enqueue") \
+    macro(ReadableByteStreamController_error, \
+          ReadableByteStreamController_error, \
+          "ReadableByteStreamController_error") \
+    macro(ReadableStreamBYOBReader_cancel, \
+          ReadableStreamBYOBReader_cancel, \
+          "ReadableStreamBYOBReader_cancel") \
+    macro(ReadableStreamBYOBReader_read, \
+          ReadableStreamBYOBReader_read, \
+          "ReadableStreamBYOBReader_read") \
+    macro(ReadableStreamBYOBReader_releaseLock, \
+          ReadableStreamBYOBReader_releaseLock, \
+          "ReadableStreamBYOBReader_releaseLock") \
+    macro(ReadableStream_cancel, ReadableStream_cancel, "ReadableStream_cancel") \
+    macro(ReadableStreamDefaultControllerGetDesiredSize, \
+          ReadableStreamDefaultControllerGetDesiredSize, \
+          "ReadableStreamDefaultControllerGetDesiredSize") \
+    macro(ReadableStreamDefaultController_close, \
+          ReadableStreamDefaultController_close, \
+          "ReadableStreamDefaultController_close") \
+    macro(ReadableStreamDefaultController_enqueue, \
+          ReadableStreamDefaultController_enqueue, \
+          "ReadableStreamDefaultController_enqueue") \
+    macro(ReadableStreamDefaultController_error, \
+          ReadableStreamDefaultController_error, \
+          "ReadableStreamDefaultController_error") \
+    macro(ReadableStreamDefaultReader_cancel, \
+          ReadableStreamDefaultReader_cancel, \
+          "ReadableStreamDefaultReader_cancel") \
+    macro(ReadableStreamDefaultReader_read, \
+          ReadableStreamDefaultReader_read, \
+          "ReadableStreamDefaultReader_read") \
+    macro(ReadableStreamDefaultReader_releaseLock, \
+          ReadableStreamDefaultReader_releaseLock, \
+          "ReadableStreamDefaultReader_releaseLock") \
+    macro(ReadableStreamTee, ReadableStreamTee, "ReadableStreamTee") \
     macro(reason, reason, "reason") \
     macro(RegExpBuiltinExec, RegExpBuiltinExec, "RegExpBuiltinExec") \
     macro(RegExpFlagsGetter, RegExpFlagsGetter, "RegExpFlagsGetter") \
@@ -299,6 +352,8 @@
     macro(Reify, Reify, "Reify") \
     macro(reject, reject, "reject") \
     macro(rejected, rejected, "rejected") \
+    macro(RelativeTimeFormat, RelativeTimeFormat, "RelativeTimeFormat") \
+    macro(RelativeTimeFormatFormat, RelativeTimeFormatFormat, "Intl_RelativeTimeFormat_Format") \
     macro(RequireObjectCoercible, RequireObjectCoercible, "RequireObjectCoercible") \
     macro(resolve, resolve, "resolve") \
     macro(resumeGenerator, resumeGenerator, "resumeGenerator") \
@@ -321,10 +376,7 @@
     macro(SpeciesConstructor, SpeciesConstructor, "SpeciesConstructor") \
     macro(stack, stack, "stack") \
     macro(star, star, "*") \
-    macro(starDefaultStar, starDefaultStar, "*default*") \
-    macro(StarGeneratorNext, StarGeneratorNext, "StarGeneratorNext") \
-    macro(StarGeneratorReturn, StarGeneratorReturn, "StarGeneratorReturn") \
-    macro(StarGeneratorThrow, StarGeneratorThrow, "StarGeneratorThrow") \
+    macro(start, start, "start") \
     macro(startTimestamp, startTimestamp, "startTimestamp") \
     macro(state, state, "state") \
     macro(static, static_, "static") \
@@ -366,6 +418,7 @@
     macro(unescape, unescape, "unescape") \
     macro(uneval, uneval, "uneval") \
     macro(unicode, unicode, "unicode") \
+    macro(unit, unit, "unit") \
     macro(uninitialized, uninitialized, "uninitialized") \
     macro(unsized, unsized, "unsized") \
     macro(unwatch, unwatch, "unwatch") \

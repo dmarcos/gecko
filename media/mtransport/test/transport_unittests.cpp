@@ -614,8 +614,8 @@ class TransportTestPeer : public sigslot::has_slots<> {
         connect(this, &TransportTestPeer::GotCandidate);
 
     // Create the transport layer
-    ice_ = new TransportLayerIce(name);
-    ice_->SetParameters(ice_ctx_->ctx(), stream, 1);
+    ice_ = new TransportLayerIce();
+    ice_->SetParameters(stream, 1);
 
     // Assemble the stack
     nsAutoPtr<std::queue<mozilla::TransportLayer *> > layers(
@@ -912,11 +912,6 @@ class TransportTest : public MtransportTest {
     ConnectSocketInternal();
     ASSERT_EQ_WAIT(s1, p1_->state(), 10000);
     ASSERT_EQ_WAIT(s2, p2_->state(), 10000);
-  }
-
-  void InitIce() {
-    p1_->InitIce();
-    p2_->InitIce();
   }
 
   void ConnectIce() {

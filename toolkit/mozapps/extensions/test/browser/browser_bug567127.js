@@ -17,10 +17,7 @@ function checkInstallConfirmation(...urls) {
     let observer = {
       observe(aSubject, aTopic, aData) {
         var installInfo = aSubject.wrappedJSObject;
-        if (gTestInWindow)
-          is(installInfo.browser, null, "Notification should have a null browser");
-        else
-          isnot(installInfo.browser, null, "Notification should have non-null browser");
+        isnot(installInfo.browser, null, "Notification should have non-null browser");
         notificationCount++;
       }
     };
@@ -46,8 +43,6 @@ function checkInstallConfirmation(...urls) {
         executeSoon(() => handleDialog(window));
       },
 
-      onWindowTitleChange() { },
-
       onOpenWindow(window) {
         windows.add(window);
         let domwindow = window.QueryInterface(Ci.nsIInterfaceRequestor)
@@ -67,9 +62,7 @@ function checkInstallConfirmation(...urls) {
 
         is(urls.length, 0, "Saw install dialogs for all expected urls");
 
-        let wm = Cc["@mozilla.org/appshell/window-mediator;1"]
-                             .getService(Ci.nsIWindowMediator);
-        wm.removeListener(listener);
+        Services.wm.removeListener(listener);
 
         is(notificationCount, nurls, `Saw ${nurls} addon-install-started notifications`);
         Services.obs.removeObserver(observer, "addon-install-started");
@@ -78,14 +71,12 @@ function checkInstallConfirmation(...urls) {
       }
     };
 
-    let wm = Cc["@mozilla.org/appshell/window-mediator;1"]
-                         .getService(Ci.nsIWindowMediator);
-    wm.addListener(listener);
+    Services.wm.addListener(listener);
   });
 }
 
-add_task(function* test_install_from_file() {
-  gManagerWindow = yield open_manager("addons://list/extension");
+add_task(async function test_install_from_file() {
+  gManagerWindow = await open_manager("addons://list/extension");
 
   var filePaths = [
                    get_addon_file_url("browser_bug567127_1.xpi"),
@@ -99,8 +90,8 @@ add_task(function* test_install_from_file() {
 
   gManagerWindow.gViewController.doCommand("cmd_installFromFile");
 
-  yield pInstallURIClosed;
+  await pInstallURIClosed;
 
   MockFilePicker.cleanup();
-  yield close_manager(gManagerWindow);
+  await close_manager(gManagerWindow);
 });

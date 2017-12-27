@@ -11,12 +11,12 @@
 #include "nsCycleCollectionParticipant.h"
 #include "nsIEditRules.h"
 #include "nsIEditor.h"
+#include "nsINamed.h"
 #include "nsISupportsImpl.h"
 #include "nsITimer.h"
 #include "nsString.h"
 #include "nscore.h"
 
-class nsIDOMElement;
 class nsIDOMNode;
 
 namespace mozilla {
@@ -41,6 +41,7 @@ class Selection;
  */
 class TextEditRules : public nsIEditRules
                     , public nsITimerCallback
+                    , public nsINamed
 {
 public:
   typedef dom::Element Element;
@@ -66,8 +67,11 @@ public:
                           bool* aCancel, bool* aHandled) override;
   NS_IMETHOD DidDoAction(Selection* aSelection, RulesInfo* aInfo,
                          nsresult aResult) override;
-  NS_IMETHOD DocumentIsEmpty(bool* aDocumentIsEmpty) override;
+  NS_IMETHOD_(bool) DocumentIsEmpty() override;
   NS_IMETHOD DocumentModified() override;
+
+  // nsINamed methods
+  NS_DECL_NSINAMED
 
 protected:
   virtual ~TextEditRules();
@@ -111,6 +115,11 @@ public:
    */
   static void FillBufWithPWChars(nsAString* aOutString, int32_t aLength);
 
+  bool HasBogusNode()
+  {
+    return !!mBogusNode;
+  }
+
 protected:
 
   void InitFields();
@@ -124,11 +133,17 @@ protected:
                           nsAString* outString,
                           int32_t aMaxLength);
   nsresult DidInsertText(Selection* aSelection, nsresult aResult);
-  nsresult GetTopEnclosingPre(nsIDOMNode* aNode, nsIDOMNode** aOutPreNode);
 
   nsresult WillInsertBreak(Selection* aSelection, bool* aCancel,
                            bool* aHandled, int32_t aMaxLength);
   nsresult DidInsertBreak(Selection* aSelection, nsresult aResult);
+
+  nsresult WillSetText(Selection& aSelection,
+                       bool* aCancel,
+                       bool* aHandled,
+                       const nsAString* inString,
+                       int32_t aMaxLength);
+  nsresult DidSetText(Selection& aSelection, nsresult aResult);
 
   void WillInsert(Selection& aSelection, bool* aCancel);
   nsresult DidInsert(Selection* aSelection, nsresult aResult);
@@ -166,6 +181,7 @@ protected:
   nsresult WillOutputText(Selection* aSelection,
                           const nsAString* aInFormat,
                           nsAString* aOutText,
+                          uint32_t aFlags,
                           bool* aOutCancel,
                           bool* aHandled);
 
@@ -201,8 +217,43 @@ protected:
    */
   void RemoveIMETextFromPWBuf(uint32_t& aStart, nsAString* aIMEString);
 
-  nsresult CreateMozBR(nsIDOMNode* inParent, int32_t inOffset,
-                       nsIDOMNode** outBRNode = nullptr);
+  /**
+   * Create a normal <br> element and insert it to aPointToInsert.
+   *
+   * @param aPointToInsert  The point where the new <br> element will be
+   *                        inserted.
+   * @return                Returns created <br> element.
+   */
+  already_AddRefed<Element> CreateBR(const EditorRawDOMPoint& aPointToInsert)
+  {
+    return CreateBRInternal(aPointToInsert, false);
+  }
+
+  /**
+   * Create a moz-<br> element and insert it to aPointToInsert.
+   *
+   * @param aPointToInsert  The point where the new moz-<br> element will be
+   *                        inserted.
+   * @return                Returns created moz-<br> element.
+   */
+  already_AddRefed<Element> CreateMozBR(const EditorRawDOMPoint& aPointToInsert)
+  {
+    return CreateBRInternal(aPointToInsert, true);
+  }
+
+  /**
+   * Create a normal <br> element or a moz-<br> element and insert it to
+   * aPointToInsert.
+   *
+   * @param aParentToInsert     The point where the new <br> element will be
+   *                            inserted.
+   * @param aCreateMozBR        true if the caller wants to create a moz-<br>
+   *                            element.  Otherwise, false.
+   * @return                    Returns created <br> element.
+   */
+  already_AddRefed<Element>
+  CreateBRInternal(const EditorRawDOMPoint& aPointToInsert,
+                   bool aCreateMozBR);
 
   void UndefineCaretBidiLevel(Selection* aSelection);
 
@@ -235,11 +286,11 @@ protected:
   nsString mPasswordIMEText;
   uint32_t mPasswordIMEIndex;
   // Magic node acts as placeholder in empty doc.
-  nsCOMPtr<nsIDOMNode> mBogusNode;
+  nsCOMPtr<nsIContent> mBogusNode;
   // Cached selected node.
-  nsCOMPtr<nsIDOMNode> mCachedSelectionNode;
+  nsCOMPtr<nsINode> mCachedSelectionNode;
   // Cached selected offset.
-  int32_t mCachedSelectionOffset;
+  uint32_t mCachedSelectionOffset;
   uint32_t mActionNesting;
   bool mLockRulesSniffing;
   bool mDidExplicitlySetInterline;
@@ -256,6 +307,8 @@ protected:
   friend class AutoLockRulesSniffing;
 };
 
+// TODO: This class (almost struct, though) is ugly and its size isn't
+//       optimized.  Should be refined later.
 class TextRulesInfo final : public RulesInfo
 {
 public:
@@ -265,6 +318,7 @@ public:
     , outString(nullptr)
     , outputFormat(nullptr)
     , maxLength(-1)
+    , flags(0)
     , collapsedAction(nsIEditor::eNext)
     , stripWrappers(nsIEditor::eStrip)
     , bOrdered(false)
@@ -279,6 +333,9 @@ public:
   nsAString* outString;
   const nsAString* outputFormat;
   int32_t maxLength;
+
+  // EditAction::outputText
+  uint32_t flags;
 
   // EditAction::deleteSelection
   nsIEditor::EDirection collapsedAction;

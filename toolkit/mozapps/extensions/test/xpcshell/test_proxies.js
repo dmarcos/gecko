@@ -35,9 +35,7 @@ var METADATA = {
     minVersion: "2",
     maxVersion: "2"
   }]
-}
-
-const ios = AM_Cc["@mozilla.org/network/io-service;1"].getService(AM_Ci.nsIIOService);
+};
 
 const gHaveSymlinks = AppConstants.platform != "win";
 
@@ -68,7 +66,7 @@ function checkAddonsExist() {
   for (let addon of ADDONS) {
     let file = addon.directory.clone();
     file.append("install.rdf");
-    do_check_true(file.exists(), Components.stack.caller);
+    Assert.ok(file.exists(), Components.stack.caller);
   }
 }
 
@@ -88,7 +86,7 @@ function run_test() {
   run_next_test();
 }
 
-function* run_proxy_tests() {
+async function run_proxy_tests() {
   if (!gHaveSymlinks) {
     ADDONS = ADDONS.filter(a => a.type != "symlink");
   }
@@ -105,9 +103,9 @@ function* run_proxy_tests() {
     writeInstallRDFToDir(METADATA, gTmpD);
 
     if (addon.type == "proxy") {
-      writeFile(addon.directory.path, addon.proxyFile)
+      writeFile(addon.directory.path, addon.proxyFile);
     } else if (addon.type == "symlink") {
-      yield createSymlink(addon.directory, addon.proxyFile)
+      await createSymlink(addon.directory, addon.proxyFile);
     }
   }
 
@@ -126,8 +124,8 @@ function* run_proxy_tests() {
               ADDONS[i].dirId,
               ADDONS[i].dirId != null,
               ADDONS[i].type == "symlink");
-        do_check_eq(addon == null,
-                    ADDONS[i].dirId != null);
+        Assert.equal(addon == null,
+                     ADDONS[i].dirId != null);
 
         if (addon != null) {
           let fixURL = url => {
@@ -137,19 +135,19 @@ function* run_proxy_tests() {
           };
 
           // Check that proxied add-ons do not have upgrade permissions.
-          do_check_eq(addon.permissions & AddonManager.PERM_CAN_UPGRADE, 0);
+          Assert.equal(addon.permissions & AddonManager.PERM_CAN_UPGRADE, 0);
 
           // Check that getResourceURI points to the right place.
-          do_check_eq(ios.newFileURI(ADDONS[i].directory).spec,
-                      fixURL(addon.getResourceURI().spec),
-                      `Base resource URL resolves as expected`);
+          Assert.equal(Services.io.newFileURI(ADDONS[i].directory).spec,
+                       fixURL(addon.getResourceURI().spec),
+                       `Base resource URL resolves as expected`);
 
           let file = ADDONS[i].directory.clone();
           file.append("install.rdf");
 
-          do_check_eq(ios.newFileURI(file).spec,
-                      fixURL(addon.getResourceURI("install.rdf").spec),
-                      `Resource URLs resolve as expected`);
+          Assert.equal(Services.io.newFileURI(file).spec,
+                       fixURL(addon.getResourceURI("install.rdf").spec),
+                       `Resource URLs resolve as expected`);
 
           addon.uninstall();
         }
@@ -177,7 +175,7 @@ function* run_proxy_tests() {
   });
 }
 
-function* run_symlink_tests() {
+async function run_symlink_tests() {
   // Check that symlinks are not followed out of a directory tree
   // when deleting an add-on.
 
@@ -199,18 +197,18 @@ function* run_symlink_tests() {
 
   let symlink = addonDirectory.clone();
   symlink.append(tempDirectory.leafName);
-  yield createSymlink(tempDirectory, symlink);
+  await createSymlink(tempDirectory, symlink);
 
   // Make sure that the symlink was created properly.
   let file = symlink.clone();
   file.append(tempFile.leafName);
   file.normalize();
-  do_check_eq(file.path.replace(/^\/private\//, "/"), tempFile.path);
+  Assert.equal(file.path.replace(/^\/private\//, "/"), tempFile.path);
 
   startupManager();
 
   return AddonManager.getAddonByID(METADATA.id).then(addon => {
-    do_check_neq(addon, null);
+    Assert.notEqual(addon, null);
 
     addon.uninstall();
 
@@ -218,12 +216,11 @@ function* run_symlink_tests() {
     shutdownManager();
 
     // Check that the install directory is gone.
-    do_check_false(addonDirectory.exists());
+    Assert.ok(!addonDirectory.exists());
 
     // Check that the temp file is not gone.
-    do_check_true(tempFile.exists());
+    Assert.ok(tempFile.exists());
 
     tempDirectory.remove(true);
   });
 }
-

@@ -5,14 +5,19 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "Benchmark.h"
+
 #include "BufferMediaResource.h"
 #include "MediaData.h"
 #include "MediaPrefs.h"
 #include "PDMFactory.h"
+#include "VideoUtils.h"
 #include "WebMDemuxer.h"
 #include "gfxPrefs.h"
 #include "mozilla/AbstractThread.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/SharedThreadPool.h"
+#include "mozilla/SystemGroup.h"
+#include "mozilla/TaskQueue.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/gfx/gfxVars.h"
@@ -21,11 +26,13 @@
 #include "WebMSample.h"
 #endif
 
+using namespace mozilla::gfx;
+
 namespace mozilla {
 
 // Update this version number to force re-running the benchmark. Such as when
 // an improvement to FFVP9 or LIBVPX is deemed worthwhile.
-const uint32_t VP9Benchmark::sBenchmarkVersionID = 2;
+const uint32_t VP9Benchmark::sBenchmarkVersionID = 3;
 
 const char* VP9Benchmark::sBenchmarkFpsPref = "media.benchmark.vp9.fps";
 const char* VP9Benchmark::sBenchmarkFpsVersionCheck = "media.benchmark.vp9.versioncheck";
@@ -37,7 +44,8 @@ VP9Benchmark::IsVP9DecodeFast()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-#ifdef MOZ_WIDGET_ANDROID
+  // Disable VP9 estimizer on Mac, see bug 1400787.
+#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_APPLEMEDIA)
   return false;
 #else
   bool hasPref = Preferences::HasUserValue(sBenchmarkFpsPref);
@@ -46,10 +54,8 @@ VP9Benchmark::IsVP9DecodeFast()
   if (!sHasRunTest && (!hasPref || hadRecentUpdate != sBenchmarkVersionID)) {
     sHasRunTest = true;
 
-    RefPtr<WebMDemuxer> demuxer =
-      new WebMDemuxer(
-        new BufferMediaResource(sWebMSample, sizeof(sWebMSample), nullptr,
-                                MediaContainerType(MEDIAMIMETYPE("video/webm"))));
+    RefPtr<WebMDemuxer> demuxer = new WebMDemuxer(
+      new BufferMediaResource(sWebMSample, sizeof(sWebMSample)));
     RefPtr<Benchmark> estimiser =
       new Benchmark(demuxer,
                     {
@@ -90,7 +96,7 @@ VP9Benchmark::IsVP9DecodeFast()
 }
 
 Benchmark::Benchmark(MediaDataDemuxer* aDemuxer, const Parameters& aParameters)
-  : QueueObject(AbstractThread::GetCurrent())
+  : QueueObject(AbstractThread::MainThread())
   , mParameters(aParameters)
   , mKeepAliveUntilComplete(this)
   , mPlaybackState(this, aDemuxer)
@@ -111,8 +117,8 @@ Benchmark::Run()
 
   RefPtr<BenchmarkPromise> p = mPromise.Ensure(__func__);
   RefPtr<Benchmark> self = this;
-  mPlaybackState.Dispatch(
-    NS_NewRunnableFunction([self]() { self->mPlaybackState.DemuxSamples(); }));
+  mPlaybackState.Dispatch(NS_NewRunnableFunction(
+    "Benchmark::Run", [self]() { self->mPlaybackState.DemuxSamples(); }));
   return p;
 }
 
@@ -144,10 +150,13 @@ Benchmark::Init()
 
 BenchmarkPlayback::BenchmarkPlayback(Benchmark* aMainThreadState,
                                      MediaDataDemuxer* aDemuxer)
-  : QueueObject(new TaskQueue(GetMediaThreadPool(MediaThreadType::PLAYBACK)))
+  : QueueObject(new TaskQueue(
+      GetMediaThreadPool(MediaThreadType::PLAYBACK),
+      "BenchmarkPlayback::QueueObject"))
   , mMainThreadState(aMainThreadState)
-  , mDecoderTaskQueue(new TaskQueue(GetMediaThreadPool(
-                        MediaThreadType::PLATFORM_DECODER)))
+  , mDecoderTaskQueue(new TaskQueue(
+      GetMediaThreadPool(MediaThreadType::PLATFORM_DECODER),
+      "BenchmarkPlayback::mDecoderTaskQueue"))
   , mDemuxer(aDemuxer)
   , mSampleIndex(0)
   , mFrameCount(0)
@@ -189,11 +198,12 @@ BenchmarkPlayback::DemuxNextSample()
     Thread(), __func__,
     [this, ref](RefPtr<MediaTrackDemuxer::SamplesHolder> aHolder) {
       mSamples.AppendElements(Move(aHolder->mSamples));
-      if (ref->mParameters.mStopAtFrame
-          && mSamples.Length() == (size_t)ref->mParameters.mStopAtFrame.ref()) {
+      if (ref->mParameters.mStopAtFrame &&
+          mSamples.Length() == (size_t)ref->mParameters.mStopAtFrame.ref()) {
         InitDecoder(Move(*mTrackDemuxer->GetInfo()));
       } else {
-        Dispatch(NS_NewRunnableFunction([this, ref]() { DemuxNextSample(); }));
+        Dispatch(NS_NewRunnableFunction("BenchmarkPlayback::DemuxNextSample",
+                                        [this, ref]() { DemuxNextSample(); }));
       }
     },
     [this, ref](const MediaResult& aError) {
@@ -282,15 +292,15 @@ BenchmarkPlayback::Output(const MediaDataDecoder::DecodedData& aResults)
   TimeStamp now = TimeStamp::Now();
   int32_t frames = mFrameCount - ref->mParameters.mStartupFrame;
   TimeDuration elapsedTime = now - mDecodeStartTime.refOr(now);
-  if (!mFinished
-      && (((frames == ref->mParameters.mFramesToMeasure) && frames > 0)
-          || elapsedTime >= ref->mParameters.mTimeout
-          || mDrained)) {
+  if (!mFinished &&
+      (((frames == ref->mParameters.mFramesToMeasure) && frames > 0) ||
+       elapsedTime >= ref->mParameters.mTimeout || mDrained)) {
     uint32_t decodeFps = frames / elapsedTime.ToSeconds();
     MainThreadShutdown();
-    ref->Dispatch(NS_NewRunnableFunction([ref, decodeFps]() {
-      ref->ReturnResult(decodeFps);
-    }));
+    ref->Dispatch(
+      NS_NewRunnableFunction("BenchmarkPlayback::Output", [ref, decodeFps]() {
+        ref->ReturnResult(decodeFps);
+      }));
   }
 }
 

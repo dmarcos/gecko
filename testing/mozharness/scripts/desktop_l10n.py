@@ -34,7 +34,6 @@ from mozharness.mozilla.signing import SigningMixin
 from mozharness.mozilla.updates.balrog import BalrogMixin
 from mozharness.mozilla.taskcluster_helper import Taskcluster
 from mozharness.base.python import VirtualenvMixin
-from mozharness.mozilla.mock import ERROR_MSGS
 
 try:
     import simplejson as json
@@ -50,31 +49,25 @@ FAILURE = 1
 SUCCESS_STR = "Success"
 FAILURE_STR = "Failed"
 
-# when running get_output_form_command, pymake has some extra output
-# that needs to be filtered out
-PyMakeIgnoreList = [
-    re.compile(r'''.*make\.py(?:\[\d+\])?: Entering directory'''),
-    re.compile(r'''.*make\.py(?:\[\d+\])?: Leaving directory'''),
-]
-
 
 # mandatory configuration options, without them, this script will not work
 # it's a list of values that are already known before starting a build
 configuration_tokens = ('branch',
                         'platform',
-                        'update_platform',
                         'update_channel',
                         'ssh_key_dir',
                         'stage_product',
                         'upload_environment',
-                       )
+                        )
 # some other values such as "%(version)s", "%(buildid)s", ...
 # are defined at run time and they cannot be enforced in the _pre_config_lock
 # phase
 runtime_config_tokens = ('buildid', 'version', 'locale', 'from_buildid',
-                         'abs_objdir', 'abs_merge_dir', 'revision',
-                         'to_buildid', 'en_us_binary_url', 'mar_tools_url',
+                         'abs_objdir', 'revision',
+                         'to_buildid', 'en_us_binary_url',
+                         'en_us_installer_binary_url', 'mar_tools_url',
                          'post_upload_extra', 'who')
+
 
 # DesktopSingleLocale {{{1
 class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
@@ -163,9 +156,18 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
          "help": "Specify the url of the en-us binary"}
     ], [
         ["--disable-mock"], {
-        "dest": "disable_mock",
-        "action": "store_true",
-        "help": "do not run under mock despite what gecko-config says"}
+         "dest": "disable_mock",
+         "action": "store_true",
+         "help": "do not run under mock despite what gecko-config says"}
+    ], [
+        ['--scm-level'], {  # Ignored on desktop for now: see Bug 1414678.
+         "action": "store",
+         "type": "int",
+         "dest": "scm_level",
+         "default": 1,
+         "help": "This sets the SCM level for the branch being built."
+                 " See https://www.mozilla.org/en-US/about/"
+                 "governance/policies/commit/access-policy/"}
     ]]
 
     def __init__(self, require_config_file=True):
@@ -277,6 +279,8 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
         self.read_buildbot_config()
         if not self.buildbot_config:
             self.warning("Skipping buildbot properties overrides")
+            # Set an empty dict
+            self.buildbot_config = {"properties": {}}
             return
         props = self.buildbot_config["properties"]
         for prop in ['mar_tools_url']:
@@ -375,6 +379,12 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
                 str(self.buildbot_config["properties"]["en_us_binary_url"])
         bootstrap_env = self.query_env(partial_env=config.get("bootstrap_env"),
                                        replace_dict=replace_dict)
+        # Override en_us_installer_binary_url if passed as a buildbot property
+        if self.buildbot_config["properties"].get("en_us_installer_binary_url"):
+            self.info("Overriding en_us_binary_url with %s" %
+                      self.buildbot_config["properties"]["en_us_installer_binary_url"])
+            bootstrap_env['EN_US_INSTALLER_BINARY_URL'] = str(
+                self.buildbot_config["properties"]["en_us_installer_binary_url"])
         if 'MOZ_SIGNING_SERVERS' in os.environ:
             sign_cmd = self.query_moz_sign_cmd(formats=None)
             sign_cmd = subprocess.list2cmdline(sign_cmd)
@@ -389,9 +399,6 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
             if binary.endswith('.exe'):
                 binary_path = binary_path.replace('\\', '\\\\\\\\')
             bootstrap_env[name] = binary_path
-            if 'LOCALE_MERGEDIR' in bootstrap_env:
-                # windows fix
-                bootstrap_env['LOCALE_MERGEDIR'] = bootstrap_env['LOCALE_MERGEDIR'].replace('\\', '\\\\\\\\')
         if self.query_is_nightly():
             bootstrap_env["IS_NIGHTLY"] = "yes"
         self.bootstrap_env = bootstrap_env
@@ -484,7 +491,7 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
         elif 'revision' in self.buildbot_properties:
             revision = self.buildbot_properties['revision']
         elif (self.buildbot_config and
-                  self.buildbot_config.get('sourcestamp', {}).get('revision')):
+              self.buildbot_config.get('sourcestamp', {}).get('revision')):
             revision = self.buildbot_config['sourcestamp']['revision']
         elif self.buildbot_config and self.buildbot_config.get('revision'):
             revision = self.buildbot_config['revision']
@@ -510,33 +517,20 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
                 self.enUS_revision = match.groups()[1]
         return self.enUS_revision
 
-    def _query_make_variable(self, variable, make_args=None,
-                             exclude_lines=PyMakeIgnoreList):
+    def _query_make_variable(self, variable, make_args=None):
         """returns the value of make echo-variable-<variable>
            it accepts extra make arguements (make_args)
-           it also has an exclude_lines from the output filer
-           exclude_lines defaults to PyMakeIgnoreList because
-           on windows, pymake writes extra output lines that need
-           to be filtered out.
         """
         dirs = self.query_abs_dirs()
         make_args = make_args or []
-        exclude_lines = exclude_lines or []
         target = ["echo-variable-%s" % variable] + make_args
         cwd = dirs['abs_locales_dir']
         raw_output = self._get_output_from_make(target, cwd=cwd,
                                                 env=self.query_bootstrap_env())
-        # we want to log all the messages from make/pymake and
-        # exlcude some messages from the output ("Entering directory...")
+        # we want to log all the messages from make
         output = []
         for line in raw_output.split("\n"):
-            discard = False
-            for element in exclude_lines:
-                if element.match(line):
-                    discard = True
-                    continue
-            if not discard:
-                output.append(line.strip())
+            output.append(line.strip())
         output = " ".join(output).strip()
         self.info('echo-variable-%s: %s' % (variable, output))
         return output
@@ -631,7 +625,8 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
                     # pass through non-interpolables, like booleans
                     current_repo[key] = value
                 except KeyError:
-                    self.error('not all the values in "{0}" can be replaced. Check your configuration'.format(value))
+                    self.error('not all the values in "{0}" can be replaced. Check your '
+                               'configuration'.format(value))
                     raise
             repos.append(current_repo)
         self.info("repositories: %s" % repos)
@@ -718,7 +713,11 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
         return self._mach(target=target, env=env)
 
     def _get_mach_executable(self):
-        python = self.query_exe('python2.7')
+        python = sys.executable
+        # A mock environment is a special case, the system python isn't
+        # available there
+        if 'mock_target' in self.config:
+            python = 'python2.7'
         return [python, 'mach']
 
     def _get_make_executable(self):
@@ -817,15 +816,25 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
             glob_name = "*.%s.*" % locale
             matches = (glob.glob(os.path.join(upload_target, glob_name)) +
                        glob.glob(os.path.join(upload_target, 'update', glob_name)) +
-                       glob.glob(os.path.join(upload_target, '*', 'xpi', glob_name)))
-            targets_exts = ["tar.bz2", "langpack.xpi", "complete.mar", "checksums"]
-            targets = ["target.%s" % ext for ext in targets_exts]
+                       glob.glob(os.path.join(upload_target, '*', 'xpi', glob_name)) +
+                       glob.glob(os.path.join(upload_target, 'install', 'sea', glob_name)) +
+                       glob.glob(os.path.join(upload_target, 'setup.exe')) +
+                       glob.glob(os.path.join(upload_target, 'setup-stub.exe')))
+            targets_exts = ["tar.bz2", "dmg", "langpack.xpi",
+                            "complete.mar", "checksums", "zip",
+                            "installer.exe", "installer-stub.exe"]
+            targets = [(".%s" % (ext,), "target.%s" % (ext,)) for ext in targets_exts]
+            targets.extend([(f, f) for f in 'setup.exe', 'setup-stub.exe'])
             for f in matches:
-                target_file = next(target_file for target_file in targets
-                                    if f.endswith(target_file[6:]))
-                if target_file:
+                possible_targets = [
+                    (tail, target_file)
+                    for (tail, target_file) in targets
+                    if f.endswith(tail)
+                ]
+                if len(possible_targets) == 1:
+                    _, target_file = possible_targets[0]
                     # Remove from list of available options for this locale
-                    targets.remove(target_file)
+                    targets.remove(possible_targets[0])
                 else:
                     # wasn't valid (or already matched)
                     raise RuntimeError("Unexpected matching file name encountered: %s"
@@ -865,20 +874,15 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
         self._copy_mozconfig()
         dirs = self.query_abs_dirs()
         cwd = os.path.join(dirs['abs_locales_dir'])
-        target = ["installers-%s" % locale,
-                  "LOCALE_MERGEDIR=%s" % env["LOCALE_MERGEDIR"], ]
+        target = ["installers-%s" % locale, ]
         return self._make(target=target, cwd=cwd,
                           env=env, halt_on_failure=False)
 
     def repack_locale(self, locale):
-        """wraps the logic for compare locale, make installers and generating
+        """wraps the logic for make installers and generating
            complete updates."""
 
-        if self.run_compare_locales(locale) != SUCCESS:
-            self.error("compare locale %s failed" % (locale))
-            return FAILURE
-
-        # compare locale succeeded, run make installers
+        # run make installers
         if self.make_installers(locale) != SUCCESS:
             self.error("make installers-%s failed" % (locale))
             return FAILURE
@@ -979,7 +983,8 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
         # files
         # Locale is hardcoded to en-US, for silly reasons
         # The Balrog submitter translates this platform into a build target
-        # via https://github.com/mozilla/build-tools/blob/master/lib/python/release/platforms.py#L23
+        # via
+        # https://github.com/mozilla/build-tools/blob/master/lib/python/release/platforms.py#L23
         self.set_buildbot_property("completeMarSize", self.query_filesize(c_marfile))
         self.set_buildbot_property("completeMarHash", self.query_sha512sum(c_marfile))
         self.set_buildbot_property("completeMarUrl", c_mar_url)
@@ -1052,30 +1057,49 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
             return fn
 
     def _run_tooltool(self):
+        env = self.query_bootstrap_env()
         config = self.config
         dirs = self.query_abs_dirs()
-        if not config.get('tooltool_manifest_src'):
-            return self.warning(ERROR_MSGS['tooltool_manifest_undetermined'])
-        fetch_script_path = os.path.join(dirs['abs_tools_dir'],
-                                         'scripts/tooltool/tooltool_wrapper.sh')
-        tooltool_manifest_path = os.path.join(dirs['abs_mozilla_dir'],
-                                              config['tooltool_manifest_src'])
+        toolchains = os.environ.get('MOZ_TOOLCHAINS')
+        manifest_src = os.environ.get('TOOLTOOL_MANIFEST')
+        if not manifest_src:
+            manifest_src = config.get('tooltool_manifest_src')
+        if not manifest_src and not toolchains:
+            return
+        python = sys.executable
+        # A mock environment is a special case, the system python isn't
+        # available there
+        if 'mock_target' in self.config:
+            python = 'python2.7'
+
         cmd = [
-            'sh',
-            fetch_script_path,
-            tooltool_manifest_path,
-            config['tooltool_url'],
-            config['tooltool_bootstrap'],
+            python, '-u',
+            os.path.join(dirs['abs_mozilla_dir'], 'mach'),
+            'artifact',
+            'toolchain',
+            '-v',
+            '--retry', '4',
+            '--artifact-manifest',
+            os.path.join(dirs['abs_mozilla_dir'], 'toolchains.json'),
         ]
-        cmd.extend(config['tooltool_script'])
-        auth_file = self._get_tooltool_auth_file()
-        if auth_file and os.path.exists(auth_file):
-            cmd.extend(['--authentication-file', auth_file])
+        if manifest_src:
+            cmd.extend([
+                '--tooltool-manifest',
+                os.path.join(dirs['abs_mozilla_dir'], manifest_src),
+                '--tooltool-url',
+                config['tooltool_url'],
+            ])
+            auth_file = self._get_tooltool_auth_file()
+            if auth_file and os.path.exists(auth_file):
+                cmd.extend(['--authentication-file', auth_file])
         cache = config['bootstrap_env'].get('TOOLTOOL_CACHE')
         if cache:
-            cmd.extend(['-c', cache])
+            cmd.extend(['--cache-dir', cache])
+        if toolchains:
+            cmd.extend(toolchains.split())
         self.info(str(cmd))
-        self.run_command(cmd, cwd=dirs['abs_mozilla_dir'], halt_on_failure=True)
+        self.run_command(cmd, cwd=dirs['abs_mozilla_dir'], halt_on_failure=True,
+                         env=env)
 
     def funsize_props(self):
         """Set buildbot properties required to trigger funsize tasks
@@ -1086,7 +1110,8 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
             'branch': self.config['branch'],
             'appName': self.config['appName'],
             'platform': self.config['platform'],
-            'completeMarUrls':  {locale: self._query_complete_mar_url(locale) for locale in locales},
+            'completeMarUrls': {locale: self._query_complete_mar_url(locale)
+                                for locale in locales},
         }
         self.info('funsize info: %s' % funsize_info)
         self.set_buildbot_property('funsize_info', json.dumps(funsize_info),
@@ -1161,7 +1186,7 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
 
             self.info('Using routes: %s' % routes)
             tc = Taskcluster(branch,
-                             pushinfo.pushdate, # Use pushdate as the rank
+                             pushinfo.pushdate,  # Use pushdate as the rank
                              client_id,
                              access_token,
                              self.log_obj,

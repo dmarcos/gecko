@@ -20,9 +20,10 @@ extern "C" {
 #define PRINTF_FORMAT(fmt, args)
 #endif
 
-extern cubeb_log_level g_log_level;
-extern cubeb_log_callback g_log_callback PRINTF_FORMAT(1, 2);
+extern cubeb_log_level g_cubeb_log_level;
+extern cubeb_log_callback g_cubeb_log_callback PRINTF_FORMAT(1, 2);
 void cubeb_async_log(const char * fmt, ...);
+void cubeb_async_log_reset_threads();
 
 #ifdef __cplusplus
 }
@@ -32,8 +33,8 @@ void cubeb_async_log(const char * fmt, ...);
 #define LOG(msg, ...) LOG_INTERNAL(CUBEB_LOG_NORMAL, msg, ##__VA_ARGS__)
 
 #define LOG_INTERNAL(level, fmt, ...) do {                                   \
-    if (g_log_callback && level <= g_log_level) {                            \
-      g_log_callback("%s:%d: " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__); \
+    if (g_cubeb_log_callback && level <= g_cubeb_log_level) {                            \
+      g_cubeb_log_callback("%s:%d: " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__); \
     }                                                                        \
   } while(0)
 

@@ -63,12 +63,12 @@ AutoCompleteInput.prototype = {
   },
 
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIAutoCompleteInput])
-}
+};
 
 /**
  * Checks that autocomplete results are ordered correctly.
  */
-function ensure_results(expected, searchTerm) {
+function ensure_results(expected, searchTerm, callback) {
   let controller = Cc["@mozilla.org/autocomplete/controller;1"].
                    getService(Ci.nsIAutoCompleteController);
 
@@ -79,16 +79,16 @@ function ensure_results(expected, searchTerm) {
   controller.input = input;
 
   input.onSearchComplete = function() {
-    do_check_eq(controller.searchStatus,
-                Ci.nsIAutoCompleteController.STATUS_COMPLETE_MATCH);
-    do_check_eq(controller.matchCount, expected.length);
+    Assert.equal(controller.searchStatus,
+                 Ci.nsIAutoCompleteController.STATUS_COMPLETE_MATCH);
+    Assert.equal(controller.matchCount, expected.length);
     for (let i = 0; i < controller.matchCount; i++) {
       print("Testing for '" + expected[i].uri.spec + "' got '" + controller.getValueAt(i) + "'");
-      do_check_eq(controller.getValueAt(i), expected[i].uri.spec);
-      do_check_eq(controller.getStyleAt(i), expected[i].style);
+      Assert.equal(controller.getValueAt(i), expected[i].uri.spec);
+      Assert.equal(controller.getStyleAt(i), expected[i].style);
     }
 
-    deferEnsureResults.resolve();
+    callback();
   };
 
   controller.startSearch(searchTerm);
@@ -97,13 +97,13 @@ function ensure_results(expected, searchTerm) {
 /**
  * Asynchronous task that bumps up the rank for an uri.
  */
-function* task_setCountRank(aURI, aCount, aRank, aSearch, aBookmark) {
+async function task_setCountRank(aURI, aCount, aRank, aSearch, aBookmark) {
   // Bump up the visit count for the uri.
   let visits = [];
   for (let i = 0; i < aCount; i++) {
     visits.push({ uri: aURI, visitDate: d1, transition: TRANSITION_TYPED });
   }
-  yield PlacesTestUtils.addVisits(visits);
+  await PlacesTestUtils.addVisits(visits);
 
   // Make a nsIAutoCompleteController and friends for instrumentation feedback.
   let thing = {
@@ -131,10 +131,11 @@ function* task_setCountRank(aURI, aCount, aRank, aSearch, aBookmark) {
 
   // If this is supposed to be a bookmark, add it.
   if (aBookmark) {
-    PlacesUtils.bookmarks.insertBookmark(PlacesUtils.unfiledBookmarksFolderId,
-                                         aURI,
-                                         PlacesUtils.bookmarks.DEFAULT_INDEX,
-                                         "test_book");
+    await PlacesUtils.bookmarks.insert({
+      parentGuid: PlacesUtils.bookmarks.unfiledGuid,
+      title: "test_book",
+      url: aURI,
+    });
 
     // And add the tag if we need to.
     if (aBookmark == "tag") {
@@ -170,17 +171,24 @@ var s0 = "";
 var s1 = "si";
 var s2 = "site";
 
-var observer = {
-  results: null,
-  search: null,
-  runCount: -1,
-  observe(aSubject, aTopic, aData) {
-    if (--this.runCount > 0)
-      return;
-    ensure_results(this.results, this.search);
-  }
-};
-Services.obs.addObserver(observer, PlacesUtils.TOPIC_FEEDBACK_UPDATED);
+var observer;
+
+function promiseResultsCompleted() {
+  return new Promise(resolve => {
+    observer = {
+      results: null,
+      search: null,
+      runCount: -1,
+      observe(aSubject, aTopic, aData) {
+        if (--this.runCount > 0)
+          return;
+        ensure_results(this.results, this.search, resolve);
+        Services.obs.removeObserver(observer, PlacesUtils.TOPIC_FEEDBACK_UPDATED);
+      }
+    };
+    Services.obs.addObserver(observer, PlacesUtils.TOPIC_FEEDBACK_UPDATED);
+  });
+}
 
 /**
  * Make the result object for a given URI that will be passed to ensure_results.
@@ -194,7 +202,7 @@ function makeResult(aURI, aStyle = "favicon") {
 
 var tests = [
   // Test things without a search term.
-  function*() {
+  async function() {
     print("Test 0 same count, diff rank, same term; no search");
     observer.results = [
       makeResult(uri1),
@@ -202,10 +210,10 @@ var tests = [
     ];
     observer.search = s0;
     observer.runCount = c1 + c2;
-    yield task_setCountRank(uri1, c1, c1, s2);
-    yield task_setCountRank(uri2, c1, c2, s2);
+    await task_setCountRank(uri1, c1, c1, s2);
+    await task_setCountRank(uri2, c1, c2, s2);
   },
-  function*() {
+  async function() {
     print("Test 1 same count, diff rank, same term; no search");
     observer.results = [
       makeResult(uri2),
@@ -213,10 +221,10 @@ var tests = [
     ];
     observer.search = s0;
     observer.runCount = c1 + c2;
-    yield task_setCountRank(uri1, c1, c2, s2);
-    yield task_setCountRank(uri2, c1, c1, s2);
+    await task_setCountRank(uri1, c1, c2, s2);
+    await task_setCountRank(uri2, c1, c1, s2);
   },
-  function*() {
+  async function() {
     print("Test 2 diff count, same rank, same term; no search");
     observer.results = [
       makeResult(uri1),
@@ -224,10 +232,10 @@ var tests = [
     ];
     observer.search = s0;
     observer.runCount = c1 + c1;
-    yield task_setCountRank(uri1, c1, c1, s2);
-    yield task_setCountRank(uri2, c2, c1, s2);
+    await task_setCountRank(uri1, c1, c1, s2);
+    await task_setCountRank(uri2, c2, c1, s2);
   },
-  function*() {
+  async function() {
     print("Test 3 diff count, same rank, same term; no search");
     observer.results = [
       makeResult(uri2),
@@ -235,12 +243,12 @@ var tests = [
     ];
     observer.search = s0;
     observer.runCount = c1 + c1;
-    yield task_setCountRank(uri1, c2, c1, s2);
-    yield task_setCountRank(uri2, c1, c1, s2);
+    await task_setCountRank(uri1, c2, c1, s2);
+    await task_setCountRank(uri2, c1, c1, s2);
   },
 
   // Test things with a search term (exact match one, partial other).
-  function*() {
+  async function() {
     print("Test 4 same count, same rank, diff term; one exact/one partial search");
     observer.results = [
       makeResult(uri1),
@@ -248,10 +256,10 @@ var tests = [
     ];
     observer.search = s1;
     observer.runCount = c1 + c1;
-    yield task_setCountRank(uri1, c1, c1, s1);
-    yield task_setCountRank(uri2, c1, c1, s2);
+    await task_setCountRank(uri1, c1, c1, s1);
+    await task_setCountRank(uri2, c1, c1, s2);
   },
-  function*() {
+  async function() {
     print("Test 5 same count, same rank, diff term; one exact/one partial search");
     observer.results = [
       makeResult(uri2),
@@ -259,12 +267,12 @@ var tests = [
     ];
     observer.search = s1;
     observer.runCount = c1 + c1;
-    yield task_setCountRank(uri1, c1, c1, s2);
-    yield task_setCountRank(uri2, c1, c1, s1);
+    await task_setCountRank(uri1, c1, c1, s2);
+    await task_setCountRank(uri2, c1, c1, s1);
   },
 
   // Test things with a search term (exact match both).
-  function*() {
+  async function() {
     print("Test 6 same count, diff rank, same term; both exact search");
     observer.results = [
       makeResult(uri1),
@@ -272,10 +280,10 @@ var tests = [
     ];
     observer.search = s1;
     observer.runCount = c1 + c2;
-    yield task_setCountRank(uri1, c1, c1, s1);
-    yield task_setCountRank(uri2, c1, c2, s1);
+    await task_setCountRank(uri1, c1, c1, s1);
+    await task_setCountRank(uri2, c1, c2, s1);
   },
-  function*() {
+  async function() {
     print("Test 7 same count, diff rank, same term; both exact search");
     observer.results = [
       makeResult(uri2),
@@ -283,12 +291,12 @@ var tests = [
     ];
     observer.search = s1;
     observer.runCount = c1 + c2;
-    yield task_setCountRank(uri1, c1, c2, s1);
-    yield task_setCountRank(uri2, c1, c1, s1);
+    await task_setCountRank(uri1, c1, c2, s1);
+    await task_setCountRank(uri2, c1, c1, s1);
   },
 
   // Test things with a search term (partial match both).
-  function*() {
+  async function() {
     print("Test 8 same count, diff rank, same term; both partial search");
     observer.results = [
       makeResult(uri1),
@@ -296,10 +304,10 @@ var tests = [
     ];
     observer.search = s1;
     observer.runCount = c1 + c2;
-    yield task_setCountRank(uri1, c1, c1, s2);
-    yield task_setCountRank(uri2, c1, c2, s2);
+    await task_setCountRank(uri1, c1, c1, s2);
+    await task_setCountRank(uri2, c1, c2, s2);
   },
-  function*() {
+  async function() {
     print("Test 9 same count, diff rank, same term; both partial search");
     observer.results = [
       makeResult(uri2),
@@ -307,10 +315,10 @@ var tests = [
     ];
     observer.search = s1;
     observer.runCount = c1 + c2;
-    yield task_setCountRank(uri1, c1, c2, s2);
-    yield task_setCountRank(uri2, c1, c1, s2);
+    await task_setCountRank(uri1, c1, c2, s2);
+    await task_setCountRank(uri2, c1, c1, s2);
   },
-  function*() {
+  async function() {
     print("Test 10 same count, same rank, same term, decay first; exact match");
     observer.results = [
       makeResult(uri2),
@@ -318,11 +326,11 @@ var tests = [
     ];
     observer.search = s1;
     observer.runCount = c1 + c1;
-    yield task_setCountRank(uri1, c1, c1, s1);
+    await task_setCountRank(uri1, c1, c1, s1);
     doAdaptiveDecay();
-    yield task_setCountRank(uri2, c1, c1, s1);
+    await task_setCountRank(uri2, c1, c1, s1);
   },
-  function*() {
+  async function() {
     print("Test 11 same count, same rank, same term, decay second; exact match");
     observer.results = [
       makeResult(uri1),
@@ -330,12 +338,12 @@ var tests = [
     ];
     observer.search = s1;
     observer.runCount = c1 + c1;
-    yield task_setCountRank(uri2, c1, c1, s1);
+    await task_setCountRank(uri2, c1, c1, s1);
     doAdaptiveDecay();
-    yield task_setCountRank(uri1, c1, c1, s1);
+    await task_setCountRank(uri1, c1, c1, s1);
   },
   // Test that bookmarks are hidden if the preferences are set right.
-  function*() {
+  async function() {
     print("Test 12 same count, diff rank, same term; no search; history only");
     Services.prefs.setBoolPref("browser.urlbar.suggest.history", true);
     Services.prefs.setBoolPref("browser.urlbar.suggest.bookmark", false);
@@ -346,11 +354,11 @@ var tests = [
     ];
     observer.search = s0;
     observer.runCount = c1 + c2;
-    yield task_setCountRank(uri1, c1, c1, s2, "bookmark");
-    yield task_setCountRank(uri2, c1, c2, s2);
+    await task_setCountRank(uri1, c1, c1, s2, "bookmark");
+    await task_setCountRank(uri2, c1, c2, s2);
   },
   // Test that tags are shown if the preferences are set right.
-  function*() {
+  async function() {
     print("Test 13 same count, diff rank, same term; no search; history only with tag");
     Services.prefs.setBoolPref("browser.urlbar.suggest.history", true);
     Services.prefs.setBoolPref("browser.urlbar.suggest.bookmark", false);
@@ -361,41 +369,31 @@ var tests = [
     ];
     observer.search = s0;
     observer.runCount = c1 + c2;
-    yield task_setCountRank(uri1, c1, c1, s2, "tag");
-    yield task_setCountRank(uri2, c1, c2, s2);
+    await task_setCountRank(uri1, c1, c1, s2, "tag");
+    await task_setCountRank(uri2, c1, c2, s2);
   },
 ];
 
 /**
- * This deferred object contains a promise that is resolved when the
- * ensure_results function has finished its execution.
- */
-var deferEnsureResults;
-
-/**
  * Test adaptive autocomplete.
  */
-add_task(function* test_adaptive() {
+add_task(async function test_adaptive() {
   // Disable autoFill for this test.
   Services.prefs.setBoolPref("browser.urlbar.autoFill", false);
-  do_register_cleanup(() => Services.prefs.clearUserPref("browser.urlbar.autoFill"));
+  registerCleanupFunction(() => Services.prefs.clearUserPref("browser.urlbar.autoFill"));
   for (let test of tests) {
     // Cleanup.
-    PlacesUtils.bookmarks.removeFolderChildren(PlacesUtils.unfiledBookmarksFolderId);
-    PlacesUtils.bookmarks.removeFolderChildren(PlacesUtils.tagsFolderId);
-    observer.runCount = -1;
+    await PlacesUtils.bookmarks.eraseEverything();
 
     let types = ["history", "bookmark", "openpage"];
     for (let type of types) {
       Services.prefs.clearUserPref("browser.urlbar.suggest." + type);
     }
 
-    yield PlacesTestUtils.clearHistory();
+    await PlacesTestUtils.clearHistory();
 
-    deferEnsureResults = Promise.defer();
-    yield test();
-    yield deferEnsureResults.promise;
+    let resultsCompletedPromise = promiseResultsCompleted();
+    await test();
+    await resultsCompletedPromise;
   }
-
-  Services.obs.removeObserver(observer, PlacesUtils.TOPIC_FEEDBACK_UPDATED);
 });

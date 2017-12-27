@@ -61,7 +61,6 @@ struct SecondScratchRegisterScope : public AutoRegisterScope
 };
 
 static constexpr Register OsrFrameReg = r3;
-static constexpr Register ArgumentsRectifierReg = r8;
 static constexpr Register CallTempReg0 = r5;
 static constexpr Register CallTempReg1 = r6;
 static constexpr Register CallTempReg2 = r7;
@@ -109,11 +108,20 @@ class ABIArgGenerator
 
 bool IsUnaligned(const wasm::MemoryAccessDesc& access);
 
+// These registers may be volatile or nonvolatile.
 static constexpr Register ABINonArgReg0 = r4;
 static constexpr Register ABINonArgReg1 = r5;
 static constexpr Register ABINonArgReg2 = r6;
+
+// These registers may be volatile or nonvolatile.
+// Note: these three registers are all guaranteed to be different
 static constexpr Register ABINonArgReturnReg0 = r4;
 static constexpr Register ABINonArgReturnReg1 = r5;
+
+// This register is guaranteed to be clobberable during the prologue and
+// epilogue of an ABI call which must preserve both ABI argument, return
+// and non-volatile registers.
+static constexpr Register ABINonArgReturnVolatileReg = lr;
 
 // TLS pointer argument register for WebAssembly functions. This must not alias
 // any other register used for passing function arguments or return values.
@@ -140,7 +148,7 @@ static constexpr Register64 ReturnReg64(r1, r0);
 static constexpr FloatRegister ReturnFloat32Reg = { FloatRegisters::d0, VFPRegister::Single };
 static constexpr FloatRegister ReturnDoubleReg = { FloatRegisters::d0, VFPRegister::Double};
 static constexpr FloatRegister ReturnSimd128Reg = InvalidFloatReg;
-static constexpr FloatRegister ScratchFloat32Reg = { FloatRegisters::d30, VFPRegister::Single };
+static constexpr FloatRegister ScratchFloat32Reg = { FloatRegisters::s30, VFPRegister::Single };
 static constexpr FloatRegister ScratchDoubleReg = { FloatRegisters::d15, VFPRegister::Double };
 static constexpr FloatRegister ScratchSimd128Reg = InvalidFloatReg;
 static constexpr FloatRegister ScratchUIntReg = { FloatRegisters::d15, VFPRegister::UInt };
@@ -409,7 +417,7 @@ bool condsAreSafe(ALUOp op);
 // variant of it.
 ALUOp getDestVariant(ALUOp op);
 
-static const ValueOperand JSReturnOperand = ValueOperand(JSReturnReg_Type, JSReturnReg_Data);
+static constexpr ValueOperand JSReturnOperand{JSReturnReg_Type, JSReturnReg_Data};
 static const ValueOperand softfpReturnOperand = ValueOperand(r1, r0);
 
 // All of these classes exist solely to shuffle data into the various operands.
@@ -1129,7 +1137,6 @@ PatchBackedge(CodeLocationJump& jump_, CodeLocationLabel label, JitZoneGroup::Ba
     PatchJump(jump_, label);
 }
 
-class InstructionIterator;
 class Assembler;
 typedef js::jit::AssemblerBufferWithConstantPools<1024, 4, Instruction, Assembler> ARMBuffer;
 
@@ -1285,7 +1292,6 @@ class Assembler : public AssemblerShared
 
     CompactBufferWriter jumpRelocations_;
     CompactBufferWriter dataRelocations_;
-    CompactBufferWriter preBarriers_;
 
     ARMBuffer m_buffer;
 
@@ -1318,7 +1324,7 @@ class Assembler : public AssemblerShared
     uint32_t spewProbe(Label* l);
     uint32_t spewDefine(Label* l);
     void spew(const char* fmt, ...) MOZ_FORMAT_PRINTF(2, 3);
-    void spew(const char* fmt, va_list args);
+    void spew(const char* fmt, va_list args) MOZ_FORMAT_PRINTF(2, 0);
 #endif
 
   public:
@@ -1363,9 +1369,6 @@ class Assembler : public AssemblerShared
                 dataRelocations_.writeUnsigned(nextOffset().getOffset());
         }
     }
-    void writePrebarrierOffset(CodeOffset label) {
-        preBarriers_.writeUnsigned(label.offset());
-    }
 
     enum RelocBranchStyle {
         B_MOVWT,
@@ -1388,15 +1391,9 @@ class Assembler : public AssemblerShared
 
     static uintptr_t GetPointer(uint8_t*);
     template <class Iter>
-    static const uint32_t* GetPtr32Target(Iter* iter, Register* dest = nullptr, RelocStyle* rs = nullptr);
+    static const uint32_t* GetPtr32Target(Iter iter, Register* dest = nullptr, RelocStyle* rs = nullptr);
 
     bool oom() const;
-
-    void disableProtection() {}
-    void enableProtection() {}
-    void setLowerBoundForProtection(size_t) {}
-    void unprotectRegion(unsigned char*, size_t) {}
-    void reprotectRegion(unsigned char*, size_t) {}
 
     void setPrinter(Sprinter* sp) {
 #ifdef JS_DISASM_ARM
@@ -1412,17 +1409,17 @@ class Assembler : public AssemblerShared
     bool isFinished;
   public:
     void finish();
-    bool asmMergeWith(Assembler& other);
+    bool appendRawCode(const uint8_t* code, size_t numBytes);
+    bool reserve(size_t size);
+    bool swapBuffer(wasm::Bytes& bytes);
     void copyJumpRelocationTable(uint8_t* dest);
     void copyDataRelocationTable(uint8_t* dest);
-    void copyPreBarrierTable(uint8_t* dest);
 
     // Size of the instruction stream, in bytes, after pools are flushed.
     size_t size() const;
     // Size of the jump relocation table, in bytes.
     size_t jumpRelocationTableBytes() const;
     size_t dataRelocationTableBytes() const;
-    size_t preBarrierTableBytes() const;
 
     // Size of the data table, in bytes.
     size_t bytesNeeded() const;
@@ -1570,22 +1567,31 @@ class Assembler : public AssemblerShared
     // Load a 32 bit floating point immediate from a pool into a register.
     BufferOffset as_FImm32Pool(VFPRegister dest, float value, Condition c = Always);
 
-    // Atomic instructions: ldrex, ldrexh, ldrexb, strex, strexh, strexb.
+    // Atomic instructions: ldrexd, ldrex, ldrexh, ldrexb, strexd, strex, strexh, strexb.
     //
-    // The halfword and byte versions are available from ARMv6K forward.
+    // The doubleword, halfword, and byte versions are available from ARMv6K forward.
     //
     // The word versions are available from ARMv6 forward and can be used to
     // implement the halfword and byte versions on older systems.
+
+    // LDREXD rt, rt2, [rn].  Constraint: rt even register, rt2=rt+1.
+    BufferOffset as_ldrexd(Register rt, Register rt2, Register rn, Condition c = Always);
 
     // LDREX rt, [rn]
     BufferOffset as_ldrex(Register rt, Register rn, Condition c = Always);
     BufferOffset as_ldrexh(Register rt, Register rn, Condition c = Always);
     BufferOffset as_ldrexb(Register rt, Register rn, Condition c = Always);
 
+    // STREXD rd, rt, rt2, [rn].  Constraint: rt even register, rt2=rt+1.
+    BufferOffset as_strexd(Register rd, Register rt, Register rt2, Register rn, Condition c = Always);
+
     // STREX rd, rt, [rn].  Constraint: rd != rn, rd != rt.
     BufferOffset as_strex(Register rd, Register rt, Register rn, Condition c = Always);
     BufferOffset as_strexh(Register rd, Register rt, Register rn, Condition c = Always);
     BufferOffset as_strexb(Register rd, Register rt, Register rn, Condition c = Always);
+
+    // CLREX
+    BufferOffset as_clrex();
 
     // Memory synchronization.
     // These are available from ARMv7 forward.
@@ -1724,12 +1730,7 @@ class Assembler : public AssemblerShared
     // I'm going to pretend this doesn't exist for now.
     void retarget(Label* label, void* target, Relocation::Kind reloc);
 
-    void Bind(uint8_t* rawCode, CodeOffset* label, const void* address);
-
-    // See Bind
-    size_t labelToPatchOffset(CodeOffset label) {
-        return label.offset();
-    }
+    static void Bind(uint8_t* rawCode, CodeOffset label, CodeOffset target);
 
     void as_bkpt();
 
@@ -1931,10 +1932,6 @@ class Assembler : public AssemblerShared
                                         ImmPtr expectedValue);
     static void PatchWrite_Imm32(CodeLocationLabel label, Imm32 imm);
 
-    static void PatchInstructionImmediate(uint8_t* code, PatchedImmPtr imm) {
-        MOZ_CRASH("Unused.");
-    }
-
     static uint32_t AlignDoubleArg(uint32_t offset) {
         return (offset + 1) & ~1;
     }
@@ -2004,16 +2001,10 @@ class Instruction
     }
     // Since almost all instructions have condition codes, the condition code
     // extractor resides in the base class.
-    Assembler::Condition extractCond() {
+    Assembler::Condition extractCond() const {
         MOZ_ASSERT(data >> 28 != 0xf, "The instruction does not have condition code");
         return (Assembler::Condition)(data & 0xf0000000);
     }
-    // Get the next instruction in the instruction stream.
-    // This does neat things like ignoreconstant pools and their guards.
-    Instruction* next();
-
-    // Skipping pools with artificial guards.
-    Instruction* skipPool();
 
     // Sometimes, an api wants a uint32_t (or a pointer to it) rather than an
     // instruction. raw() just coerces this into a pointer to a uint32_t.
@@ -2264,22 +2255,59 @@ class InstMOV : public InstALU
     static InstMOV* AsTHIS (const Instruction& i);
 };
 
-
 class InstructionIterator
 {
   private:
-    Instruction* i;
+    Instruction* inst_;
 
   public:
-    explicit InstructionIterator(Instruction* i_);
+    explicit InstructionIterator(Instruction* inst)
+      : inst_(inst)
+    {
+        maybeSkipAutomaticInstructions();
+    }
 
+    // Advances to the next intentionally-inserted instruction.
+    Instruction* next();
+
+    // Advances past any automatically-inserted instructions.
+    Instruction* maybeSkipAutomaticInstructions();
+
+    Instruction* cur() const {
+        return inst_;
+    }
+
+  protected:
+    // Advances past the given number of instruction-length bytes.
+    void advanceRaw(ptrdiff_t instructions = 1) {
+        inst_ = inst_ + instructions;
+    }
+
+    // Look ahead, including automatically-inserted instructions
+    // and PoolHeaders.
+    Instruction* peekRaw(ptrdiff_t instructions = 1) const {
+        return inst_ + instructions;
+    }
+};
+
+// Compile-time iterator over instructions, with a safe interface that
+// references not-necessarily-linear Instructions by linear BufferOffset.
+class BufferInstructionIterator : public ARMBuffer::AssemblerBufferInstIterator
+{
+  public:
+    BufferInstructionIterator(BufferOffset bo, ARMBuffer* buffer)
+      : ARMBuffer::AssemblerBufferInstIterator(bo, buffer)
+    {}
+
+    // Advances the buffer to the next intentionally-inserted instruction.
     Instruction* next() {
-        i = i->next();
+        advance(cur()->size());
+        maybeSkipAutomaticInstructions();
         return cur();
     }
-    Instruction* cur() const {
-        return i;
-    }
+
+    // Advances the BufferOffset past any automatically-inserted instructions.
+    Instruction* maybeSkipAutomaticInstructions();
 };
 
 static const uint32_t NumIntArgRegs = 4;

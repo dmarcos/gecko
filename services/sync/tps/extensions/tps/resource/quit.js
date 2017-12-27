@@ -37,12 +37,10 @@ function goQuitApplication() {
   var forceQuit;
 
   if (kAppStartup in Components.classes) {
-    appService = Components.classes[kAppStartup]
-                 .getService(Components.interfaces.nsIAppStartup);
+    appService = Services.startup;
     forceQuit  = Components.interfaces.nsIAppStartup.eForceQuit;
   } else if (kAppShell in Components.classes) {
-    appService = Components.classes[kAppShell].
-      getService(Components.interfaces.nsIAppShellService);
+    appService = Services.appShell;
     forceQuit = Components.interfaces.nsIAppShellService.eForceQuit;
   } else {
     throw new Error("goQuitApplication: no AppStartup/appShell");
@@ -51,9 +49,8 @@ function goQuitApplication() {
   try {
     appService.quit(forceQuit);
   } catch (ex) {
-    throw new Error("goQuitApplication: " + ex);
+    throw new Error(`goQuitApplication: ${ex.message}`);
   }
 
   return true;
 }
-

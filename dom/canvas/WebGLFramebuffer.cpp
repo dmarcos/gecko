@@ -655,7 +655,6 @@ WebGLFramebuffer::Delete()
         cur.Clear(funcName);
     }
 
-    mContext->MakeContextCurrent();
     mContext->gl->fDeleteFramebuffers(1, &mGLName);
 
     LinkedListElement<WebGLFramebuffer>::removeFrom(mContext->mFramebuffers);
@@ -678,8 +677,8 @@ WebGLFramebuffer::GetColorAttachPoint(GLenum attachPoint)
 
     const size_t colorId = attachPoint - LOCAL_GL_COLOR_ATTACHMENT0;
 
-    MOZ_ASSERT(mContext->mImplMaxColorAttachments <= kMaxColorAttachments);
-    if (colorId >= mContext->mImplMaxColorAttachments)
+    MOZ_ASSERT(mContext->mGLMaxColorAttachments <= kMaxColorAttachments);
+    if (colorId >= mContext->mGLMaxColorAttachments)
         return Nothing();
 
     return Some(&mColorAttachments[colorId]);
@@ -738,6 +737,25 @@ WebGLFramebuffer::DetachRenderbuffer(const char* funcName, const WebGLRenderbuff
 
 ////////////////////////////////////////////////////////////////////////////////
 // Completeness
+
+bool
+WebGLFramebuffer::HasDuplicateAttachments() const
+{
+   std::set<WebGLFBAttachPoint::Ordered> uniqueAttachSet;
+
+   for (const auto& attach : mColorAttachments) {
+      if (!attach.IsDefined())
+          continue;
+
+      const WebGLFBAttachPoint::Ordered ordered(attach);
+
+      const bool didInsert = uniqueAttachSet.insert(ordered).second;
+      if (!didInsert)
+         return true;
+   }
+
+   return false;
+}
 
 bool
 WebGLFramebuffer::HasDefinedAttachments() const
@@ -851,6 +869,9 @@ WebGLFramebuffer::PrecheckFramebufferStatus(nsCString* const out_info) const
     if (!AllImageSamplesMatch())
         return LOCAL_GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE; // Inconsistent samples
 
+    if (HasDuplicateAttachments())
+       return LOCAL_GL_FRAMEBUFFER_UNSUPPORTED;
+
     if (mContext->IsWebGL2()) {
         MOZ_ASSERT(!mDepthStencilAttachment.IsDefined());
     } else {
@@ -961,7 +982,7 @@ WebGLFramebuffer::ResolveAttachments() const
     ////
     // Nuke attachment points.
 
-    for (uint32_t i = 0; i < mContext->mImplMaxColorAttachments; i++) {
+    for (uint32_t i = 0; i < mContext->mGLMaxColorAttachments; i++) {
         const GLenum attachEnum = LOCAL_GL_COLOR_ATTACHMENT0 + i;
         gl->fFramebufferRenderbuffer(LOCAL_GL_FRAMEBUFFER, attachEnum,
                                      LOCAL_GL_RENDERBUFFER, 0);
@@ -1064,8 +1085,6 @@ WebGLFramebuffer::ResolveAttachmentData(const char* funcName) const
 
         ////
         // Clear
-
-        mContext->MakeContextCurrent();
 
         const bool hasDrawBuffers = mContext->HasDrawBuffers();
         if (hasDrawBuffers) {
@@ -1181,7 +1200,6 @@ WebGLFramebuffer::CheckFramebufferStatus(const char* funcName)
 
         // Looks good on our end. Let's ask the driver.
         gl::GLContext* const gl = mContext->gl;
-        gl->MakeCurrent();
 
         const ScopedFBRebinder autoFB(mContext);
         gl->fBindFramebuffer(LOCAL_GL_FRAMEBUFFER, mGLName);
@@ -1232,7 +1250,7 @@ WebGLFramebuffer::RefreshDrawBuffers() const
     // yields a framebuffer status of FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER.
     // We could workaround this only on affected versions, but it's easier be
     // unconditional.
-    std::vector<GLenum> driverBuffers(mContext->mImplMaxDrawBuffers, LOCAL_GL_NONE);
+    std::vector<GLenum> driverBuffers(mContext->mGLMaxDrawBuffers, LOCAL_GL_NONE);
     for (const auto& attach : mColorDrawBuffers) {
         if (attach->HasImage()) {
             const uint32_t index = attach->mAttachmentPoint - LOCAL_GL_COLOR_ATTACHMENT0;
@@ -1267,7 +1285,7 @@ WebGLFramebuffer::RefreshReadBuffer() const
 void
 WebGLFramebuffer::DrawBuffers(const char* funcName, const dom::Sequence<GLenum>& buffers)
 {
-    if (buffers.Length() > mContext->mImplMaxDrawBuffers) {
+    if (buffers.Length() > mContext->mGLMaxDrawBuffers) {
         // "An INVALID_VALUE error is generated if `n` is greater than MAX_DRAW_BUFFERS."
         mContext->ErrorInvalidValue("%s: `buffers` must have a length <="
                                     " MAX_DRAW_BUFFERS.", funcName);
@@ -1311,8 +1329,6 @@ WebGLFramebuffer::DrawBuffers(const char* funcName, const dom::Sequence<GLenum>&
 
     ////
 
-    mContext->MakeContextCurrent();
-
     mColorDrawBuffers.swap(newColorDrawBuffers);
     RefreshDrawBuffers(); // Calls glDrawBuffers.
     RefreshResolvedData();
@@ -1335,8 +1351,6 @@ WebGLFramebuffer::ReadBuffer(const char* funcName, GLenum attachPoint)
     const auto& attach = maybeAttach.value(); // Might be nullptr.
 
     ////
-
-    mContext->MakeContextCurrent();
 
     mColorReadBuffer = attach;
     RefreshReadBuffer(); // Calls glReadBuffer.
@@ -1367,8 +1381,17 @@ WebGLFramebuffer::FramebufferRenderbuffer(const char* funcName, GLenum attachEnu
     }
 
     // `rb`
-    if (rb && !mContext->ValidateObject("framebufferRenderbuffer: rb", *rb))
-        return;
+    if (rb) {
+        if (!mContext->ValidateObject("framebufferRenderbuffer: rb", *rb))
+            return;
+
+        if (!rb->mHasBeenBound) {
+            mContext->ErrorInvalidOperation("%s: bindRenderbuffer must be called before"
+                                            " attachment to %04x",
+                                            funcName, attachEnum);
+            return;
+      }
+    }
 
     // End of validation.
 
@@ -1445,13 +1468,13 @@ WebGLFramebuffer::FramebufferTexture2D(const char* funcName, GLenum attachEnum,
          */
 
         if (texImageTarget == LOCAL_GL_TEXTURE_2D) {
-            if (uint32_t(level) > FloorLog2(mContext->mImplMaxTextureSize))
+            if (uint32_t(level) > FloorLog2(mContext->mGLMaxTextureSize))
                 return mContext->ErrorInvalidValue("%s: `level` is too large.", funcName);
         } else {
             MOZ_ASSERT(texImageTarget >= LOCAL_GL_TEXTURE_CUBE_MAP_POSITIVE_X &&
                        texImageTarget <= LOCAL_GL_TEXTURE_CUBE_MAP_NEGATIVE_Z);
 
-            if (uint32_t(level) > FloorLog2(mContext->mImplMaxCubeMapTextureSize))
+            if (uint32_t(level) > FloorLog2(mContext->mGLMaxCubeMapTextureSize))
                 return mContext->ErrorInvalidValue("%s: `level` is too large.", funcName);
         }
     } else if (level != 0) {
@@ -1507,13 +1530,13 @@ WebGLFramebuffer::FramebufferTextureLayer(const char* funcName, GLenum attachEnu
         texImageTarget = tex->Target().get();
         switch (texImageTarget) {
         case LOCAL_GL_TEXTURE_3D:
-            if (uint32_t(layer) >= mContext->mImplMax3DTextureSize) {
+            if (uint32_t(layer) >= mContext->mGLMax3DTextureSize) {
                 mContext->ErrorInvalidValue("%s: `layer` must be < %s.", funcName,
                                             "MAX_3D_TEXTURE_SIZE");
                 return;
             }
 
-            if (uint32_t(level) > FloorLog2(mContext->mImplMax3DTextureSize)) {
+            if (uint32_t(level) > FloorLog2(mContext->mGLMax3DTextureSize)) {
                 mContext->ErrorInvalidValue("%s: `level` must be <= log2(%s).", funcName,
                                             "MAX_3D_TEXTURE_SIZE");
                 return;
@@ -1521,13 +1544,13 @@ WebGLFramebuffer::FramebufferTextureLayer(const char* funcName, GLenum attachEnu
             break;
 
         case LOCAL_GL_TEXTURE_2D_ARRAY:
-            if (uint32_t(layer) >= mContext->mImplMaxArrayTextureLayers) {
+            if (uint32_t(layer) >= mContext->mGLMaxArrayTextureLayers) {
                 mContext->ErrorInvalidValue("%s: `layer` must be < %s.", funcName,
                                             "MAX_ARRAY_TEXTURE_LAYERS");
                 return;
             }
 
-            if (uint32_t(level) > FloorLog2(mContext->mImplMaxTextureSize)) {
+            if (uint32_t(level) > FloorLog2(mContext->mGLMaxTextureSize)) {
                 mContext->ErrorInvalidValue("%s: `level` must be <= log2(%s).", funcName,
                                             "MAX_TEXTURE_SIZE");
                 return;
@@ -1905,7 +1928,6 @@ WebGLFramebuffer::BlitFramebuffer(WebGLContext* webgl,
 
     ////
 
-    gl->MakeCurrent();
     webgl->OnBeforeReadCall();
     WebGLContext::ScopedDrawCallWrapper wrapper(*webgl);
     gl->fBlitFramebuffer(srcX0, srcY0, srcX1, srcY1,

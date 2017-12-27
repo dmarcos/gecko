@@ -3,17 +3,21 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use devtools_traits::AttrInfo;
-use dom::bindings::cell::DOMRefCell;
+use dom::bindings::cell::DomRefCell;
 use dom::bindings::codegen::Bindings::AttrBinding::{self, AttrMethods};
 use dom::bindings::inheritance::Castable;
-use dom::bindings::js::{LayoutJS, MutNullableJS, Root, RootedReference};
 use dom::bindings::reflector::{Reflector, reflect_dom_object};
+use dom::bindings::root::{DomRoot, LayoutDom, MutNullableDom, RootedReference};
 use dom::bindings::str::DOMString;
+use dom::customelementregistry::CallbackReaction;
 use dom::element::{AttributeMutation, Element};
+use dom::mutationobserver::{Mutation, MutationObserver};
+use dom::node::Node;
 use dom::virtualmethods::vtable_for;
 use dom::window::Window;
 use dom_struct::dom_struct;
-use html5ever_atoms::{Prefix, LocalName, Namespace};
+use html5ever::{Prefix, LocalName, Namespace};
+use script_thread::ScriptThread;
 use servo_atoms::Atom;
 use std::borrow::ToOwned;
 use std::cell::Ref;
@@ -25,10 +29,10 @@ use style::attr::{AttrIdentifier, AttrValue};
 pub struct Attr {
     reflector_: Reflector,
     identifier: AttrIdentifier,
-    value: DOMRefCell<AttrValue>,
+    value: DomRefCell<AttrValue>,
 
     /// the element that owns this attribute.
-    owner: MutNullableJS<Element>,
+    owner: MutNullableDom<Element>,
 }
 
 impl Attr {
@@ -47,8 +51,8 @@ impl Attr {
                 namespace: namespace,
                 prefix: prefix,
             },
-            value: DOMRefCell::new(value),
-            owner: MutNullableJS::new(owner),
+            value: DomRefCell::new(value),
+            owner: MutNullableDom::new(owner),
         }
     }
 
@@ -59,15 +63,19 @@ impl Attr {
                namespace: Namespace,
                prefix: Option<Prefix>,
                owner: Option<&Element>)
-               -> Root<Attr> {
-        reflect_dom_object(box Attr::new_inherited(local_name,
-                                                   value,
-                                                   name,
-                                                   namespace,
-                                                   prefix,
-                                                   owner),
-                           window,
-                           AttrBinding::Wrap)
+               -> DomRoot<Attr> {
+        reflect_dom_object(
+            Box::new(Attr::new_inherited(
+                local_name,
+                value,
+                name,
+                namespace,
+                prefix,
+                owner
+            )),
+            window,
+            AttrBinding::Wrap
+        )
     }
 
     #[inline]
@@ -157,7 +165,7 @@ impl AttrMethods for Attr {
     }
 
     // https://dom.spec.whatwg.org/#dom-attr-ownerelement
-    fn GetOwnerElement(&self) -> Option<Root<Element>> {
+    fn GetOwnerElement(&self) -> Option<DomRoot<Element>> {
         self.owner()
     }
 
@@ -170,6 +178,23 @@ impl AttrMethods for Attr {
 
 impl Attr {
     pub fn set_value(&self, mut value: AttrValue, owner: &Element) {
+        let name = self.local_name().clone();
+        let namespace = self.namespace().clone();
+        let old_value = DOMString::from(&**self.value());
+        let new_value = DOMString::from(&*value);
+        let mutation = Mutation::Attribute {
+            name: name.clone(),
+            namespace: namespace.clone(),
+            old_value: old_value.clone(),
+        };
+
+        MutationObserver::queue_a_mutation_record(owner.upcast::<Node>(), mutation);
+
+        if owner.get_custom_element_definition().is_some() {
+            let reaction = CallbackReaction::AttributeChanged(name, Some(old_value), Some(new_value), namespace);
+            ScriptThread::enqueue_callback_reaction(owner, reaction, None);
+        }
+
         assert!(Some(owner) == self.owner().r());
         owner.will_mutate_attr(self);
         self.swap_value(&mut value);
@@ -211,7 +236,7 @@ impl Attr {
         self.owner.set(owner);
     }
 
-    pub fn owner(&self) -> Option<Root<Element>> {
+    pub fn owner(&self) -> Option<DomRoot<Element>> {
         self.owner.get()
     }
 
@@ -235,7 +260,7 @@ pub trait AttrHelpersForLayout {
 }
 
 #[allow(unsafe_code)]
-impl AttrHelpersForLayout for LayoutJS<Attr> {
+impl AttrHelpersForLayout for LayoutDom<Attr> {
     #[inline]
     unsafe fn value_forever(&self) -> &'static AttrValue {
         // This transmute is used to cheat the lifetime restriction.

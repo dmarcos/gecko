@@ -15,7 +15,6 @@ DIRS = [
 ]
 
 DEFINES['MOZ_APP_VERSION'] = '"%s"' % CONFIG['MOZ_APP_VERSION']
-DEFINES['BIN_SUFFIX'] = '"%s"' % CONFIG['BIN_SUFFIX']
 
 LOCAL_INCLUDES += [
     '/xpcom/build',
@@ -24,7 +23,7 @@ LOCAL_INCLUDES += [
 
 SPHINX_TREES['telemetry'] = 'docs'
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']
 
 if CONFIG['ENABLE_TESTS']:
@@ -44,24 +43,35 @@ XPIDL_MODULE = 'telemetry'
 EXPORTS.mozilla += [
     '!TelemetryEventEnums.h',
     '!TelemetryHistogramEnums.h',
+    '!TelemetryProcessEnums.h',
     '!TelemetryScalarEnums.h',
+    'CombinedStacks.h',
     'ipc/TelemetryComms.h',
     'ipc/TelemetryIPC.h',
     'ProcessedStack.h',
     'Telemetry.h',
-    'ThreadHangStats.h',
 ]
 
 SOURCES += [
+    'CombinedStacks.cpp',
+    'HangReports.cpp',
     'ipc/TelemetryIPC.cpp',
     'ipc/TelemetryIPCAccumulator.cpp',
+    'ProcessedStack.cpp',
     'Telemetry.cpp',
     'TelemetryCommon.cpp',
     'TelemetryEvent.cpp',
     'TelemetryHistogram.cpp',
+    'TelemetryIOInterposeObserver.cpp',
     'TelemetryScalar.cpp',
     'WebrtcTelemetry.cpp',
 ]
+
+# KeyedStackCapturer entirely relies on profiler to be enabled.
+if CONFIG['MOZ_GECKO_PROFILER']:
+    SOURCES += [
+      'KeyedStackCapturer.cpp'
+    ]
 
 EXTRA_COMPONENTS += [
     'TelemetryStartup.js',
@@ -73,6 +83,7 @@ EXTRA_JS_MODULES += [
     'TelemetryArchive.jsm',
     'TelemetryController.jsm',
     'TelemetryEnvironment.jsm',
+    'TelemetryHealthPing.jsm',
     'TelemetryLog.jsm',
     'TelemetryModules.jsm',
     'TelemetryReportingPolicy.jsm',
@@ -84,10 +95,15 @@ EXTRA_JS_MODULES += [
     'TelemetryUtils.jsm',
     'ThirdPartyCookieProbe.jsm',
     'UITelemetry.jsm',
+    'UpdatePing.jsm',
 ]
 
 TESTING_JS_MODULES += [
   'tests/unit/TelemetryArchiveTesting.jsm',
+]
+
+PYTHON_UNITTEST_MANIFESTS += [
+    'tests/python/python.ini',
 ]
 
 GENERATED_FILES = [
@@ -95,6 +111,8 @@ GENERATED_FILES = [
     'TelemetryEventEnums.h',
     'TelemetryHistogramData.inc',
     'TelemetryHistogramEnums.h',
+    'TelemetryProcessData.h',
+    'TelemetryProcessEnums.h',
     'TelemetryScalarData.h',
     'TelemetryScalarEnums.h',
 ]
@@ -107,11 +125,11 @@ histogram_files = [
 ]
 
 data = GENERATED_FILES['TelemetryHistogramData.inc']
-data.script = 'gen-histogram-data.py'
+data.script = 'gen_histogram_data.py'
 data.inputs = histogram_files
 
 enums = GENERATED_FILES['TelemetryHistogramEnums.h']
-enums.script = 'gen-histogram-enum.py'
+enums.script = 'gen_histogram_enum.py'
 enums.inputs = histogram_files
 
 # Generate scalar files.
@@ -120,11 +138,11 @@ scalar_files = [
 ]
 
 scalar_data = GENERATED_FILES['TelemetryScalarData.h']
-scalar_data.script = 'gen-scalar-data.py'
+scalar_data.script = 'gen_scalar_data.py'
 scalar_data.inputs = scalar_files
 
 scalar_enums = GENERATED_FILES['TelemetryScalarEnums.h']
-scalar_enums.script = 'gen-scalar-enum.py'
+scalar_enums.script = 'gen_scalar_enum.py'
 scalar_enums.inputs = scalar_files
 
 # Generate event files.
@@ -133,12 +151,25 @@ event_files = [
 ]
 
 event_data = GENERATED_FILES['TelemetryEventData.h']
-event_data.script = 'gen-event-data.py'
+event_data.script = 'gen_event_data.py'
 event_data.inputs = event_files
 
 event_enums = GENERATED_FILES['TelemetryEventEnums.h']
-event_enums.script = 'gen-event-enum.py'
+event_enums.script = 'gen_event_enum.py'
 event_enums.inputs = event_files
+
+# Generate data from Processes.yaml
+processes_files = [
+    'Processes.yaml',
+]
+
+processes_enum = GENERATED_FILES['TelemetryProcessEnums.h']
+processes_enum.script = 'gen_process_enum.py'
+processes_enum.inputs = processes_files
+
+processes_data = GENERATED_FILES['TelemetryProcessData.h']
+processes_data.script = 'gen_process_data.py'
+processes_data.inputs = processes_files
 
 with Files('**'):
     BUG_COMPONENT = ('Toolkit', 'Telemetry')

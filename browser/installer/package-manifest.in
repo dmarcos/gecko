@@ -45,11 +45,8 @@
 #endif
 
 [@AB_CD@]
-@RESPATH@/browser/chrome/@AB_CD@@JAREXT@
-@RESPATH@/browser/chrome/@AB_CD@.manifest
-@RESPATH@/chrome/@AB_CD@@JAREXT@
-@RESPATH@/chrome/@AB_CD@.manifest
 @RESPATH@/dictionaries/*
+@RESPATH@/browser/localization/*
 #if defined(XP_WIN) || defined(XP_LINUX)
 @RESPATH@/fonts/*
 #endif
@@ -70,9 +67,6 @@
 #endif
 #ifndef MOZ_STATIC_JS
 @BINPATH@/@DLL_PREFIX@mozjs@DLL_SUFFIX@
-#endif
-#ifdef MOZ_DMD
-@BINPATH@/@DLL_PREFIX@dmd@DLL_SUFFIX@
 #endif
 #ifndef MOZ_SYSTEM_NSPR
 #ifndef MOZ_FOLD_LIBS
@@ -146,11 +140,6 @@
 @BINPATH@/@DLL_PREFIX@mozavcodec@DLL_SUFFIX@
 #endif
 @RESPATH@/browser/blocklist.xml
-#ifdef XP_UNIX
-#ifndef XP_MACOSX
-@RESPATH@/run-mozilla.sh
-#endif
-#endif
 #ifdef XP_WIN
 #ifdef _AMD64_
 @BINPATH@/@DLL_PREFIX@qipcap64@DLL_SUFFIX@
@@ -185,6 +174,9 @@
 @RESPATH@/browser/components/browser-feeds.xpt
 @RESPATH@/components/caps.xpt
 @RESPATH@/components/chrome.xpt
+#ifdef MOZ_CODE_COVERAGE
+@RESPATH@/components/code-coverage.xpt
+#endif
 @RESPATH@/components/commandhandler.xpt
 @RESPATH@/components/commandlines.xpt
 @RESPATH@/components/composer.xpt
@@ -200,6 +192,9 @@
 @RESPATH@/components/dom.xpt
 @RESPATH@/components/dom_base.xpt
 @RESPATH@/components/dom_bindings.xpt
+#ifdef MOZ_DEBUG
+@RESPATH@/components/dom_bindings_test.xpt
+#endif
 @RESPATH@/components/dom_file.xpt
 @RESPATH@/components/dom_system.xpt
 @RESPATH@/components/dom_canvas.xpt
@@ -212,7 +207,7 @@
 @RESPATH@/components/dom_notification.xpt
 @RESPATH@/components/dom_html.xpt
 @RESPATH@/components/dom_offline.xpt
-@RESPATH@/components/dom_json.xpt
+@RESPATH@/components/dom_payments.xpt
 @RESPATH@/components/dom_power.xpt
 @RESPATH@/components/dom_push.xpt
 @RESPATH@/components/dom_quota.xpt
@@ -235,7 +230,6 @@
 @RESPATH@/components/editor.xpt
 @RESPATH@/components/extensions.xpt
 @RESPATH@/components/exthandler.xpt
-@RESPATH@/components/exthelper.xpt
 @RESPATH@/components/fastfind.xpt
 @RESPATH@/components/feeds.xpt
 #ifdef MOZ_GTK
@@ -252,22 +246,19 @@
 @RESPATH@/components/jsdownloads.xpt
 @RESPATH@/browser/components/jsinspector.xpt
 @RESPATH@/components/layout_base.xpt
+#ifdef MOZ_DEBUG
+@RESPATH@/components/layout_debug.xpt
+#endif
 #ifdef NS_PRINTING
 @RESPATH@/components/layout_printing.xpt
 #endif
 @RESPATH@/components/layout_xul_tree.xpt
 @RESPATH@/components/layout_xul.xpt
 @RESPATH@/components/locale.xpt
-@RESPATH@/components/lwbrk.xpt
-#ifdef MOZ_GECKO_PROFILER
-@RESPATH@/components/memory_profiler.xpt
-#endif
 @RESPATH@/browser/components/migration.xpt
 @RESPATH@/components/mimetype.xpt
 @RESPATH@/components/mozfind.xpt
-#ifdef ENABLE_INTL_API
 @RESPATH@/components/mozintl.xpt
-#endif
 @RESPATH@/components/necko_about.xpt
 @RESPATH@/components/necko_cache.xpt
 @RESPATH@/components/necko_cache2.xpt
@@ -300,6 +291,7 @@
 @RESPATH@/components/profiler.xpt
 #endif
 @RESPATH@/components/rdf.xpt
+@RESPATH@/components/reputationservice.xpt
 @RESPATH@/components/satchel.xpt
 @RESPATH@/components/saxparser.xpt
 @RESPATH@/browser/components/sessionstore.xpt
@@ -309,10 +301,12 @@
 @RESPATH@/components/shistory.xpt
 @RESPATH@/components/spellchecker.xpt
 @RESPATH@/components/storage.xpt
+#ifdef ENABLE_MARIONETTE
+@RESPATH@/components/remote.xpt
+#endif
 @RESPATH@/components/toolkit_asyncshutdown.xpt
 @RESPATH@/components/toolkit_filewatcher.xpt
 @RESPATH@/components/toolkit_finalizationwitness.xpt
-@RESPATH@/components/toolkit_formautofill.xpt
 @RESPATH@/components/toolkit_osfile.xpt
 @RESPATH@/components/toolkit_securityreporter.xpt
 @RESPATH@/components/toolkit_perfmonitoring.xpt
@@ -324,7 +318,6 @@
 @RESPATH@/components/txtsvc.xpt
 @RESPATH@/components/txmgr.xpt
 @RESPATH@/components/uconv.xpt
-@RESPATH@/components/unicharutil.xpt
 @RESPATH@/components/update.xpt
 @RESPATH@/components/uriloader.xpt
 @RESPATH@/components/urlformatter.xpt
@@ -336,7 +329,6 @@
 @RESPATH@/components/widget_cocoa.xpt
 #endif
 @RESPATH@/components/windowcreator.xpt
-@RESPATH@/components/windowds.xpt
 @RESPATH@/components/windowwatcher.xpt
 @RESPATH@/components/xpcom_base.xpt
 @RESPATH@/components/xpcom_system.xpt
@@ -359,6 +351,8 @@
 @RESPATH@/components/BrowserElementParent.js
 @RESPATH@/components/FeedProcessor.manifest
 @RESPATH@/components/FeedProcessor.js
+@RESPATH@/components/UAOverridesBootstrapper.js
+@RESPATH@/components/UAOverridesBootstrapper.manifest
 @RESPATH@/components/WellKnownOpportunisticUtils.js
 @RESPATH@/components/WellKnownOpportunisticUtils.manifest
 #ifndef XP_MACOSX
@@ -377,8 +371,12 @@
 @RESPATH@/browser/components/nsSetDefaultBrowser.js
 @RESPATH@/browser/components/devtools-startup.manifest
 @RESPATH@/browser/components/devtools-startup.js
-@RESPATH@/browser/components/webideCli.js
-@RESPATH@/browser/components/webideComponents.manifest
+@RESPATH@/browser/components/aboutdebugging-registration.js
+@RESPATH@/browser/components/aboutdebugging.manifest
+@RESPATH@/browser/components/aboutdevtools-registration.js
+@RESPATH@/browser/components/aboutdevtools.manifest
+@RESPATH@/browser/components/aboutdevtoolstoolbox-registration.js
+@RESPATH@/browser/components/aboutdevtoolstoolbox.manifest
 @RESPATH@/browser/components/Experiments.manifest
 @RESPATH@/browser/components/ExperimentsService.js
 @RESPATH@/browser/components/browser-newtab.xpt
@@ -386,13 +384,18 @@
 @RESPATH@/browser/components/NewTabComponents.manifest
 @RESPATH@/components/Downloads.manifest
 @RESPATH@/components/DownloadLegacy.js
-@RESPATH@/components/BrowserPageThumbs.manifest
+@RESPATH@/components/thumbnails.xpt
+@RESPATH@/components/PageThumbsComponents.manifest
 @RESPATH@/components/crashmonitor.manifest
 @RESPATH@/components/nsCrashMonitor.js
 @RESPATH@/components/toolkitsearch.manifest
 @RESPATH@/components/nsSearchService.js
 @RESPATH@/components/nsSearchSuggestions.js
 @RESPATH@/components/nsSidebar.js
+#ifdef NIGHTLY_BUILD
+@RESPATH@/components/payments.manifest
+@RESPATH@/components/paymentUIService.js
+#endif
 @RESPATH@/components/passwordmgr.manifest
 @RESPATH@/components/nsLoginInfo.js
 @RESPATH@/components/nsLoginManager.js
@@ -452,13 +455,13 @@
 @RESPATH@/components/PageIconProtocolHandler.js
 @RESPATH@/components/PlacesCategoriesStarter.js
 @RESPATH@/components/ColorAnalyzer.js
-@RESPATH@/components/PageThumbsProtocol.js
+@RESPATH@/components/PageThumbsStorageService.js
 @RESPATH@/components/mozProtocolHandler.js
 @RESPATH@/components/mozProtocolHandler.manifest
 @RESPATH@/components/nsDefaultCLH.manifest
 @RESPATH@/components/nsDefaultCLH.js
-@RESPATH@/components/nsContentPrefService.manifest
-@RESPATH@/components/nsContentPrefService.js
+@RESPATH@/components/ContentPrefService2.manifest
+@RESPATH@/components/ContentPrefService2.js
 @RESPATH@/components/nsContentDispatchChooser.manifest
 @RESPATH@/components/nsContentDispatchChooser.js
 @RESPATH@/components/nsHandlerService-json.manifest
@@ -471,9 +474,6 @@
 @RESPATH@/components/nsFormAutoComplete.js
 @RESPATH@/components/FormHistoryStartup.js
 @RESPATH@/components/nsInputListAutoComplete.js
-@RESPATH@/components/formautofill.manifest
-@RESPATH@/components/FormAutofillContentService.js
-@RESPATH@/components/FormAutofillStartup.js
 @RESPATH@/components/contentAreaDropListener.manifest
 @RESPATH@/components/contentAreaDropListener.js
 @RESPATH@/browser/components/BrowserProfileMigrators.manifest
@@ -492,10 +492,6 @@
 @RESPATH@/components/nsINIProcessor.js
 @RESPATH@/components/nsPrompter.manifest
 @RESPATH@/components/nsPrompter.js
-#ifdef MOZ_SERVICES_HEALTHREPORT
-@RESPATH@/browser/components/SelfSupportService.manifest
-@RESPATH@/browser/components/SelfSupportService.js
-#endif
 @RESPATH@/components/SyncComponents.manifest
 @RESPATH@/components/Weave.js
 @RESPATH@/components/FxAccountsComponents.manifest
@@ -508,8 +504,6 @@
 @RESPATH@/components/TelemetryStartup.manifest
 @RESPATH@/components/XULStore.js
 @RESPATH@/components/XULStore.manifest
-@RESPATH@/components/messageWakeupService.js
-@RESPATH@/components/messageWakeupService.manifest
 @RESPATH@/components/recording-cmdline.js
 @RESPATH@/components/recording-cmdline.manifest
 @RESPATH@/components/htmlMenuBuilder.js
@@ -547,17 +541,13 @@
 @RESPATH@/components/nsAsyncShutdown.manifest
 @RESPATH@/components/nsAsyncShutdown.js
 
-@RESPATH@/components/PresentationDeviceInfoManager.manifest
-@RESPATH@/components/PresentationDeviceInfoManager.js
 @RESPATH@/components/BuiltinProviders.manifest
 @RESPATH@/components/PresentationControlService.js
 @RESPATH@/components/PresentationDataChannelSessionTransport.js
 @RESPATH@/components/PresentationDataChannelSessionTransport.manifest
 
-#ifdef ENABLE_INTL_API
 @RESPATH@/components/mozIntl.manifest
 @RESPATH@/components/mozIntl.js
-#endif
 
 #if defined(ENABLE_TESTS) && defined(MOZ_DEBUG)
 @RESPATH@/components/TestInterfaceJS.js
@@ -565,8 +555,14 @@
 @RESPATH@/components/TestInterfaceJSMaplike.js
 #endif
 
+#if defined(MOZ_DEBUG) || defined(NIGHTLY_BUILD)
+@RESPATH@/browser/components/testComponents.manifest
+@RESPATH@/browser/components/startupRecorder.js
+#endif
+
 ; [Extensions]
 @RESPATH@/components/extensions-toolkit.manifest
+@RESPATH@/components/extension-process-script.js
 @RESPATH@/browser/components/extensions-browser.manifest
 
 ; Modules
@@ -599,6 +595,10 @@
 #endif
 #endif # MOZ_ANGLE_RENDERER
 
+#if defined(XP_WIN) && defined(MOZ_ENABLE_SKIA_PDF)
+@BINPATH@/pdfium.dll
+#endif
+
 ; [Browser Chrome Files]
 @RESPATH@/browser/chrome.manifest
 @RESPATH@/browser/chrome/browser@JAREXT@
@@ -615,6 +615,8 @@
 @RESPATH@/browser/chrome/icons/default/default16.png
 @RESPATH@/browser/chrome/icons/default/default32.png
 @RESPATH@/browser/chrome/icons/default/default48.png
+@RESPATH@/browser/chrome/icons/default/default64.png
+@RESPATH@/browser/chrome/icons/default/default128.png
 #endif
 @RESPATH@/browser/features/*
 
@@ -622,6 +624,11 @@
 @RESPATH@/browser/chrome/webide@JAREXT@
 @RESPATH@/browser/chrome/webide.manifest
 @RESPATH@/browser/@PREF_DIR@/webide-prefs.js
+
+; [DevTools Shim Files]
+@RESPATH@/browser/chrome/devtools-shim@JAREXT@
+@RESPATH@/browser/chrome/devtools-shim.manifest
+@RESPATH@/browser/@PREF_DIR@/devtools-startup-prefs.js
 
 ; DevTools
 @RESPATH@/browser/chrome/devtools@JAREXT@
@@ -632,8 +639,6 @@
 ; shell icons
 #ifdef XP_UNIX
 #ifndef XP_MACOSX
-; shell icons
-@RESPATH@/browser/icons/*.png
 #ifdef MOZ_UPDATER
 ; updater icon
 @RESPATH@/icons/updater.png
@@ -649,6 +654,7 @@
 @RESPATH@/defaults/autoconfig/prefcalls.js
 @RESPATH@/browser/defaults/permissions
 @RESPATH@/browser/defaults/blocklists
+@RESPATH@/browser/defaults/pinning
 
 ; Warning: changing the path to channel-prefs.js can cause bugs (Bug 756325)
 ; Technically this is an app pref file, but we are keeping it in the original
@@ -667,9 +673,6 @@
 @RESPATH@/res/EditorOverride.css
 @RESPATH@/res/contenteditable.css
 @RESPATH@/res/designmode.css
-@RESPATH@/res/ImageDocument.css
-@RESPATH@/res/TopLevelImageDocument.css
-@RESPATH@/res/TopLevelVideoDocument.css
 @RESPATH@/res/table-add-column-after-active.gif
 @RESPATH@/res/table-add-column-after-hover.gif
 @RESPATH@/res/table-add-column-after.gif
@@ -695,15 +698,13 @@
 @RESPATH@/res/fonts/*
 @RESPATH@/res/dtd/*
 @RESPATH@/res/html/*
-#if defined(XP_MACOSX)
-; For SafariProfileMigrator.js.
-@RESPATH@/res/langGroups.properties
-#endif
 @RESPATH@/res/language.properties
-@RESPATH@/res/entityTables/*
 #ifdef XP_MACOSX
 @RESPATH@/res/MainMenu.nib/
 #endif
+
+; Content-accessible resources.
+@RESPATH@/contentaccessible/*
 
 ; svg
 @RESPATH@/res/svg.css
@@ -742,8 +743,8 @@
 #if defined(MOZ_SANDBOX)
 #if defined(XP_LINUX)
 @BINPATH@/@DLL_PREFIX@mozsandbox@DLL_SUFFIX@
-@RESPATH@/components/sandbox.xpt
 #endif
+@RESPATH@/components/sandbox.xpt
 #endif
 
 ; for Solaris SPARC
@@ -821,6 +822,28 @@ bin/libfreebl_32int64_3.so
 @RESPATH@/components/SanityTest.js
 #endif
 
-#ifdef MOZ_MULET
-#include ../../b2g/installer/package-manifest.in
+#ifdef MOZ_DMD
+; DMD
+@RESPATH@/dmd.py
+@RESPATH@/fix_stack_using_bpsyms.py
+#ifdef XP_MACOSX
+@RESPATH@/fix_macosx_stack.py
+#endif
+#ifdef XP_LINUX
+@RESPATH@/fix_linux_stack.py
+#endif
+#endif
+
+; Background Hang Monitor
+@RESPATH@/components/backgroundhangmonitor.xpt
+
+; NOTE: This must match the config checks in
+; /toolkit/components/backgroundhangmonitor/moz.build.
+#if defined(NIGHTLY_BUILD) && !defined(MOZ_DEBUG) && !defined(MOZ_TSAN)
+@RESPATH@/components/BHRTelemetryService.js
+@RESPATH@/components/BHRTelemetryService.manifest
+#endif
+
+#ifdef PKG_LOCALE_MANIFEST
+#include @PKG_LOCALE_MANIFEST@
 #endif

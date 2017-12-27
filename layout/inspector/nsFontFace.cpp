@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,7 +11,7 @@
 #include "gfxUserFontSet.h"
 #include "nsFontFaceLoader.h"
 #include "mozilla/gfx/2D.h"
-#include "decode.h"
+#include "brotli/decode.h"
 #include "zlib.h"
 #include "mozilla/dom/FontFaceSet.h"
 
@@ -208,10 +210,10 @@ nsFontFace::GetMetadata(nsAString & aMetadata)
         case gfxUserFontData::kBrotliCompression:
           {
             size_t decodedSize = userFontData->mMetaOrigLen;
-            if (BrotliDecompressBuffer(userFontData->mMetadata.Length(),
-                                       userFontData->mMetadata.Elements(),
-                                       &decodedSize,
-                                       (uint8_t*)str.BeginWriting()) == 1 &&
+            if (BrotliDecoderDecompress(userFontData->mMetadata.Length(),
+                                        userFontData->mMetadata.Elements(),
+                                        &decodedSize,
+                                        (uint8_t*)str.BeginWriting()) == 1 &&
                 decodedSize == userFontData->mMetaOrigLen) {
               AppendUTF8toUTF16(str, aMetadata);
             }

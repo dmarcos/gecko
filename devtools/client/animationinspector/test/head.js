@@ -32,12 +32,15 @@ registerCleanupFunction(() => {
   Services.prefs.clearUserPref("devtools.debugger.log");
 });
 
-// WebAnimations API is not enabled by default in all release channels yet, see
-// Bug 1264101.
-function enableWebAnimationsAPI() {
+// Some animation features are not enabled by default in release/beta channels
+// yet including:
+// * parts of the Web Animations API (Bug 1264101), and
+// * the frames() timing function (Bug 1379582).
+function enableAnimationFeatures() {
   return new Promise(resolve => {
     SpecialPowers.pushPrefEnv({"set": [
-      ["dom.animations-api.core.enabled", true]
+      ["dom.animations-api.core.enabled", true],
+      ["layout.css.frames-timing.enabled", true],
     ]}, resolve);
   });
 }
@@ -49,7 +52,7 @@ function enableWebAnimationsAPI() {
  */
 var _addTab = addTab;
 addTab = function (url) {
-  return enableWebAnimationsAPI().then(() => _addTab(url)).then(tab => {
+  return enableAnimationFeatures().then(() => _addTab(url)).then(tab => {
     let browser = tab.linkedBrowser;
     info("Loading the helper frame script " + FRAME_SCRIPT_URL);
     browser.messageManager.loadFrameScript(FRAME_SCRIPT_URL, false);
@@ -87,16 +90,18 @@ function* reloadTab(inspector) {
  */
 var selectNodeAndWaitForAnimations = Task.async(
   function* (data, inspector, reason = "test") {
-    yield selectNode(data, inspector, reason);
-
     // We want to make sure the rest of the test waits for the animations to
     // be properly displayed (wait for all target DOM nodes to be previewed).
-    let {AnimationsPanel} = inspector.sidebar.getWindowForTab(TAB_NAME);
-    yield waitForAllAnimationTargets(AnimationsPanel);
+    let {AnimationsController, AnimationsPanel} =
+      inspector.sidebar.getWindowForTab(TAB_NAME);
+    let onUiUpdated = AnimationsPanel.once(AnimationsPanel.UI_UPDATED_EVENT);
 
-    if (AnimationsPanel.animationsTimelineComponent.animations.length === 1) {
-      // Wait for selecting the animation since there is only one animation.
-      yield waitForAnimationSelecting(AnimationsPanel);
+    yield selectNode(data, inspector, reason);
+
+    yield onUiUpdated;
+    if (AnimationsController.animationPlayers.length !== 0) {
+      yield waitForAnimationTimelineRendering(AnimationsPanel);
+      yield waitForAllAnimationTargets(AnimationsPanel);
     }
   }
 );
@@ -159,14 +164,9 @@ var openAnimationInspector = Task.async(function* () {
     yield AnimationsPanel.once(AnimationsPanel.PANEL_INITIALIZED);
   }
 
-  // Make sure we wait for all animations to be loaded (especially their target
-  // nodes to be lazily displayed). This is safe to do even if there are no
-  // animations displayed.
-  yield waitForAllAnimationTargets(AnimationsPanel);
-
-  if (AnimationsPanel.animationsTimelineComponent.animations.length === 1) {
-    // Wait for selecting the animation since there is only one animation.
-    yield waitForAnimationSelecting(AnimationsPanel);
+  if (AnimationsController.animationPlayers.length !== 0) {
+    yield waitForAnimationTimelineRendering(AnimationsPanel);
+    yield waitForAllAnimationTargets(AnimationsPanel);
   }
 
   return {
@@ -254,11 +254,13 @@ function isNodeVisible(node) {
 /**
  * Wait for all AnimationTargetNode instances to be fully loaded
  * (fetched their related actor and rendered), and return them.
+ * This method should be called after "animation-timeline-rendering-completed" is emitted,
+ * since we get all the AnimationTargetNode instances using getAnimationTargetNodes().
  * @param {AnimationsPanel} panel
  * @return {Array} all AnimationTargetNode instances
  */
 var waitForAllAnimationTargets = Task.async(function* (panel) {
-  let targets = panel.animationsTimelineComponent.targetNodes;
+  let targets = getAnimationTargetNodes(panel);
   yield promise.all(targets.map(t => {
     if (!t.previewer.nodeFront) {
       return t.once("target-retrieved");
@@ -301,12 +303,14 @@ function* assertScrubberMoving(panel, isMoving) {
  */
 function* clickTimelinePlayPauseButton(panel) {
   let onUiUpdated = panel.once(panel.UI_UPDATED_EVENT);
+  let onRendered = waitForAnimationTimelineRendering(panel);
 
   let btn = panel.playTimelineButtonEl;
   let win = btn.ownerDocument.defaultView;
   EventUtils.sendMouseEvent({type: "click"}, btn, win);
 
   yield onUiUpdated;
+  yield onRendered;
   yield waitForAllAnimationTargets(panel);
 }
 
@@ -317,12 +321,14 @@ function* clickTimelinePlayPauseButton(panel) {
  */
 function* clickTimelineRewindButton(panel) {
   let onUiUpdated = panel.once(panel.UI_UPDATED_EVENT);
+  let onRendered = waitForAnimationTimelineRendering(panel);
 
   let btn = panel.rewindTimelineButtonEl;
   let win = btn.ownerDocument.defaultView;
   EventUtils.sendMouseEvent({type: "click"}, btn, win);
 
   yield onUiUpdated;
+  yield onRendered;
   yield waitForAllAnimationTargets(panel);
 }
 
@@ -334,6 +340,7 @@ function* clickTimelineRewindButton(panel) {
  */
 function* changeTimelinePlaybackRate(panel, rate) {
   let onUiUpdated = panel.once(panel.UI_UPDATED_EVENT);
+  let onRendered = waitForAnimationTimelineRendering(panel);
 
   let select = panel.rateSelectorEl.firstChild;
   let win = select.ownerDocument.defaultView;
@@ -352,6 +359,7 @@ function* changeTimelinePlaybackRate(panel, rate) {
   EventUtils.synthesizeMouseAtCenter(option, {type: "mouseup"}, win);
 
   yield onUiUpdated;
+  yield onRendered;
   yield waitForAllAnimationTargets(panel);
 
   // Simulate a mousemove outside of the rate selector area to avoid subsequent
@@ -366,6 +374,14 @@ function* changeTimelinePlaybackRate(panel, rate) {
  */
 function* waitForAnimationSelecting(panel) {
   yield panel.animationsTimelineComponent.once("animation-selected");
+}
+
+/**
+ * Wait for rendering animation timeline.
+ * @param {AnimationsPanel} panel
+ */
+function* waitForAnimationTimelineRendering(panel) {
+  return panel.animationsTimelineComponent.once("animation-timeline-rendering-completed");
 }
 
 /**
@@ -424,8 +440,16 @@ function* clickOnAnimation(panel, index, shouldAlreadySelected) {
 
   info("Click on animation " + index + " in the timeline");
   let timeBlock = timeline.rootWrapperEl.querySelectorAll(".time-block")[index];
-  EventUtils.sendMouseEvent({type: "click"}, timeBlock,
-                            timeBlock.ownerDocument.defaultView);
+  // Scroll to show the timeBlock since the element may be out of displayed area.
+  timeBlock.scrollIntoView(false);
+  let timeBlockBounds = timeBlock.getBoundingClientRect();
+  let x = timeBlockBounds.width / 2;
+  let y = timeBlockBounds.height / 2;
+  if (timeBlock != timeBlock.ownerDocument.elementFromPoint(x, y)) {
+    // Move the mouse pointer a little since scrubber element may be at the point.
+    x += timeBlockBounds.width / 4;
+  }
+  EventUtils.synthesizeMouse(timeBlock, x, y, {}, timeBlock.ownerDocument.defaultView);
 
   return yield onSelectionChanged;
 }
@@ -469,14 +493,134 @@ function* setStyle(animation, panel, name, value, selector) {
        name + " to " + value + " of " + selector);
 
   const onAnimationChanged = animation ? once(animation, "changed") : Promise.resolve();
+  const onRendered = waitForAnimationTimelineRendering(panel);
+
   yield executeInContent("devtools:test:setStyle", {
     selector: selector,
     propertyName: name,
     propertyValue: value
   });
-  yield onAnimationChanged;
 
-  // Also wait for the target node previews to be loaded if the panel got
-  // refreshed as a result of this animation mutation.
+  yield onAnimationChanged;
+  yield onRendered;
   yield waitForAllAnimationTargets(panel);
+}
+
+/**
+ * Graph shapes of summary and detail are constructed by <path> element.
+ * This function checks the vertex of path segments.
+ * Also, if needed, checks the color for <stop> element.
+ * @param pathEl - <path> element.
+ * @param duration - float as duration which pathEl represetns.
+ * @param hasClosePath - set true if the path shoud be closing.
+ * @param expectedValues - JSON object format. We can test the vertex and color.
+ *                         e.g.
+ *                         [
+ *                           // Test the vertex (x=0, y=0) should be passing through.
+ *                           { x: 0, y: 0 },
+ *                           { x: 0, y: 1 },
+ *                           // If we have to test the color as well,
+ *                           // we can write as following.
+ *                           { x: 500, y: 1, color: "rgb(0, 0, 255)" },
+ *                           { x: 1000, y: 1 }
+ *                         ]
+ */
+function assertPathSegments(pathEl, duration, hasClosePath, expectedValues) {
+  const pathSegList = pathEl.pathSegList;
+  ok(pathSegList, "The tested element should have pathSegList");
+
+  expectedValues.forEach(expectedValue => {
+    ok(isPassingThrough(pathSegList, expectedValue.x, expectedValue.y),
+       `The path segment of x ${ expectedValue.x }, y ${ expectedValue.y } `
+       + `should be passing through`);
+
+    if (expectedValue.color) {
+      assertColor(pathEl.closest("svg"), expectedValue.x / duration, expectedValue.color);
+    }
+  });
+
+  if (hasClosePath) {
+    const closePathSeg = pathSegList.getItem(pathSegList.numberOfItems - 1);
+    is(closePathSeg.pathSegType, closePathSeg.PATHSEG_CLOSEPATH,
+       "The last segment should be close path");
+  }
+}
+
+/**
+ * Check the color for <stop> element.
+ * @param svgEl - <svg> element which has <stop> element.
+ * @param offset - float which represents the "offset" attribute of <stop>.
+ * @param expectedColor - e.g. rgb(0, 0, 255)
+ */
+function assertColor(svgEl, offset, expectedColor) {
+  const stopEl = findStopElement(svgEl, offset);
+  ok(stopEl, `stop element at offset ${ offset } should exist`);
+  is(stopEl.getAttribute("stop-color"), expectedColor,
+     `stop-color of stop element at offset ${ offset } should be ${ expectedColor }`);
+}
+
+/**
+ * Check whether the given vertex is passing throug on the path.
+ * @param pathSegList - pathSegList of <path> element.
+ * @param x - float x of vertex.
+ * @param y - float y of vertex.
+ * @return true: passing through, false: no on the path.
+ */
+function isPassingThrough(pathSegList, x, y) {
+  let previousPathSeg = pathSegList.getItem(0);
+  for (let i = 0; i < pathSegList.numberOfItems; i++) {
+    const pathSeg = pathSegList.getItem(i);
+    if (pathSeg.x === undefined) {
+      continue;
+    }
+    const currentX = parseFloat(pathSeg.x.toFixed(3));
+    const currentY = parseFloat(pathSeg.y.toFixed(6));
+    if (currentX === x && currentY === y) {
+      return true;
+    }
+    const previousX = parseFloat(previousPathSeg.x.toFixed(3));
+    const previousY = parseFloat(previousPathSeg.y.toFixed(6));
+    if (previousX <= x && x <= currentX &&
+        Math.min(previousY, currentY) <= y && y <= Math.max(previousY, currentY)) {
+      return true;
+    }
+    previousPathSeg = pathSeg;
+  }
+  return false;
+}
+
+/**
+ * Find <stop> element which has given offset from given <svg> element.
+ * @param svgEl - <svg> element which has <stop> element.
+ * @param offset - float which represents the "offset" attribute of <stop>.
+ * @return <stop> element.
+ */
+function findStopElement(svgEl, offset) {
+  return [...svgEl.querySelectorAll("stop")].find(stopEl => {
+    return stopEl.getAttribute("offset") == offset;
+  });
+}
+
+/*
+ * Returns all AnimationTargetNode instances.
+ * This method should be called after emit "animation-timeline-rendering-completed".
+ * @param {AnimationsPanel} panel The panel instance.
+ * @return {Array} all AnimationTargetNode instances.
+ */
+function getAnimationTargetNodes(panel) {
+  return panel.animationsTimelineComponent.animations.map(animation => {
+    return panel.animationsTimelineComponent.componentsMap[animation.actorID].targetNode;
+  });
+}
+
+/*
+ * Returns all AnimationTargetBlock instances.
+ * This method should be called after emit "animation-timeline-rendering-completed".
+ * @param {AnimationsPanel} panel The panel instance.
+ * @return {Array} all AnimationTargetBlock instances.
+ */
+function getAnimationTimeBlocks(panel) {
+  return panel.animationsTimelineComponent.animations.map(animation => {
+    return panel.animationsTimelineComponent.componentsMap[animation.actorID].timeBlock;
+  });
 }

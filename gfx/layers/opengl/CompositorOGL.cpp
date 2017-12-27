@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -45,7 +46,7 @@
 #include "HeapCopyOfStackArray.h"
 
 #if MOZ_WIDGET_ANDROID
-#include "TexturePoolOGL.h"
+#include "GeneratedJNIWrappers.h"
 #endif
 
 #include "GeckoProfiler.h"
@@ -209,8 +210,6 @@ CompositorOGL::CleanupResources()
   mGLContext->MakeCurrent();
 
   mBlitTextureImageHelper = nullptr;
-
-  mContextStateTracker.DestroyOGL(mGLContext);
 
   // On the main thread the Widget will be destroyed soon and calling MakeCurrent
   // after that could cause a crash (at least with GLX, see bug 1059793), unless
@@ -521,9 +520,9 @@ CompositorOGL::PrepareViewport(CompositingRenderTargetOGL* aRenderTarget)
 already_AddRefed<CompositingRenderTarget>
 CompositorOGL::CreateRenderTarget(const IntRect &aRect, SurfaceInitMode aInit)
 {
-  MOZ_ASSERT(aRect.width != 0 && aRect.height != 0, "Trying to create a render target of invalid size");
+  MOZ_ASSERT(!aRect.IsZero(), "Trying to create a render target of invalid size");
 
-  if (aRect.width * aRect.height == 0) {
+  if (aRect.IsZero()) {
     return nullptr;
   }
 
@@ -548,9 +547,9 @@ CompositorOGL::CreateRenderTargetFromSource(const IntRect &aRect,
                                             const CompositingRenderTarget *aSource,
                                             const IntPoint &aSourcePoint)
 {
-  MOZ_ASSERT(aRect.width != 0 && aRect.height != 0, "Trying to create a render target of invalid size");
+  MOZ_ASSERT(!aRect.IsZero(), "Trying to create a render target of invalid size");
 
-  if (aRect.width * aRect.height == 0) {
+  if (aRect.IsZero()) {
     return nullptr;
   }
 
@@ -588,10 +587,6 @@ CompositorOGL::SetRenderTarget(CompositingRenderTarget *aSurface)
     = static_cast<CompositingRenderTargetOGL*>(aSurface);
   if (mCurrentRenderTarget != surface) {
     mCurrentRenderTarget = surface;
-    if (mCurrentRenderTarget) {
-      mContextStateTracker.PopOGLSection(gl(), "Frame");
-    }
-    mContextStateTracker.PushOGLSection(gl(), "Frame");
     surface->BindRenderTarget();
   }
 
@@ -619,10 +614,10 @@ void
 CompositorOGL::ClearRect(const gfx::Rect& aRect)
 {
   // Map aRect to OGL coordinates, origin:bottom-left
-  GLint y = mViewportSize.height - (aRect.y + aRect.height);
+  GLint y = mViewportSize.height - aRect.YMost();
 
   ScopedGLState scopedScissorTestState(mGLContext, LOCAL_GL_SCISSOR_TEST, true);
-  ScopedScissorRect autoScissorRect(mGLContext, aRect.x, y, aRect.width, aRect.height);
+  ScopedScissorRect autoScissorRect(mGLContext, aRect.X(), y, aRect.Width(), aRect.Height());
   mGLContext->fClearColor(0.0, 0.0, 0.0, 0.0);
   mGLContext->fClear(LOCAL_GL_COLOR_BUFFER_BIT | LOCAL_GL_DEPTH_BUFFER_BIT);
 }
@@ -635,8 +630,7 @@ CompositorOGL::BeginFrame(const nsIntRegion& aInvalidRegion,
                           IntRect *aClipRectOut,
                           IntRect *aRenderBoundsOut)
 {
-  PROFILER_LABEL("CompositorOGL", "BeginFrame",
-    js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("CompositorOGL::BeginFrame", GRAPHICS);
 
   MOZ_ASSERT(!mFrameInProgress, "frame still in progress (should have called EndFrame");
 
@@ -644,15 +638,15 @@ CompositorOGL::BeginFrame(const nsIntRegion& aInvalidRegion,
   if (mUseExternalSurfaceSize) {
     rect = gfx::IntRect(0, 0, mSurfaceSize.width, mSurfaceSize.height);
   } else {
-    rect = gfx::IntRect(aRenderBounds.x, aRenderBounds.y, aRenderBounds.width, aRenderBounds.height);
+    rect = gfx::IntRect(aRenderBounds.X(), aRenderBounds.Y(), aRenderBounds.Width(), aRenderBounds.Height());
   }
 
   if (aRenderBoundsOut) {
     *aRenderBoundsOut = rect;
   }
 
-  GLint width = rect.width;
-  GLint height = rect.height;
+  auto width = rect.Width();
+  auto height = rect.Height();
 
   // We can't draw anything to something with no area
   // so just return
@@ -679,7 +673,7 @@ CompositorOGL::BeginFrame(const nsIntRegion& aInvalidRegion,
   mPixelsFilled = 0;
 
 #ifdef MOZ_WIDGET_ANDROID
-  TexturePoolOGL::Fill(gl());
+  java::GeckoSurfaceTexture::DestroyUnused((int64_t)mGLContext.get());
 #endif
 
   // Default blend function implements "OVER"
@@ -728,8 +722,11 @@ CompositorOGL::CreateTexture(const IntRect& aRect, bool aCopyFromSource,
   // See bug 827170 for a discussion.
   IntRect clampedRect = aRect;
   int32_t maxTexSize = GetMaxTextureSize();
-  clampedRect.width = std::min(clampedRect.width, maxTexSize);
-  clampedRect.height = std::min(clampedRect.height, maxTexSize);
+  clampedRect.SetWidth(std::min(clampedRect.Width(), maxTexSize));
+  clampedRect.SetHeight(std::min(clampedRect.Height(), maxTexSize));
+
+  auto clampedRectWidth = clampedRect.Width();
+  auto clampedRectHeight = clampedRect.Height();
 
   GLuint tex;
 
@@ -759,25 +756,25 @@ CompositorOGL::CreateTexture(const IntRect& aRect, bool aCopyFromSource,
       mGLContext->fCopyTexImage2D(mFBOTextureTarget,
                                   0,
                                   LOCAL_GL_RGBA,
-                                  clampedRect.x, FlipY(clampedRect.y + clampedRect.height),
-                                  clampedRect.width, clampedRect.height,
+                                  clampedRect.X(), FlipY(clampedRect.YMost()),
+                                  clampedRectWidth, clampedRectHeight,
                                   0);
     } else {
       // Curses, incompatible formats.  Take a slow path.
 
       // RGBA
-      size_t bufferSize = clampedRect.width * clampedRect.height * 4;
+      size_t bufferSize = clampedRectWidth * clampedRectHeight * 4;
       auto buf = MakeUnique<uint8_t[]>(bufferSize);
 
-      mGLContext->fReadPixels(clampedRect.x, clampedRect.y,
-                              clampedRect.width, clampedRect.height,
+      mGLContext->fReadPixels(clampedRect.X(), clampedRect.Y(),
+                              clampedRectWidth, clampedRectHeight,
                               LOCAL_GL_RGBA,
                               LOCAL_GL_UNSIGNED_BYTE,
                               buf.get());
       mGLContext->fTexImage2D(mFBOTextureTarget,
                               0,
                               LOCAL_GL_RGBA,
-                              clampedRect.width, clampedRect.height,
+                              clampedRectWidth, clampedRectHeight,
                               0,
                               LOCAL_GL_RGBA,
                               LOCAL_GL_UNSIGNED_BYTE,
@@ -795,7 +792,7 @@ CompositorOGL::CreateTexture(const IntRect& aRect, bool aCopyFromSource,
     mGLContext->fTexImage2D(mFBOTextureTarget,
                             0,
                             LOCAL_GL_RGBA,
-                            clampedRect.width, clampedRect.height,
+                            clampedRectWidth, clampedRectHeight,
                             0,
                             LOCAL_GL_RGBA,
                             LOCAL_GL_UNSIGNED_BYTE,
@@ -812,8 +809,8 @@ CompositorOGL::CreateTexture(const IntRect& aRect, bool aCopyFromSource,
   mGLContext->fBindTexture(mFBOTextureTarget, 0);
 
   if (aAllocSize) {
-    aAllocSize->width = clampedRect.width;
-    aAllocSize->height = clampedRect.height;
+    aAllocSize->width = clampedRectWidth;
+    aAllocSize->height = clampedRectHeight;
   }
 
   return tex;
@@ -833,8 +830,18 @@ CompositorOGL::GetShaderConfigFor(Effect *aEffect,
     config.SetRenderColor(true);
     break;
   case EffectTypes::YCBCR:
+  {
     config.SetYCbCr(true);
+    EffectYCbCr* effectYCbCr =
+      static_cast<EffectYCbCr*>(aEffect);
+    uint32_t pixelBits = (8 * BytesPerPixel(SurfaceFormatForAlphaBitDepth(effectYCbCr->mBitDepth)));
+    uint32_t paddingBits = pixelBits - effectYCbCr->mBitDepth;
+    // OpenGL expects values between [0,255], this range needs to be adjusted
+    // according to the bit depth.
+    // So we will scale the YUV values by this amount.
+    config.SetColorMultiplier(pow(2, paddingBits));
     break;
+  }
   case EffectTypes::NV12:
     config.SetNV12(true);
     config.SetTextureTarget(LOCAL_GL_TEXTURE_RECTANGLE_ARB);
@@ -862,7 +869,10 @@ CompositorOGL::GetShaderConfigFor(Effect *aEffect,
     TextureSourceOGL* source = texturedEffect->mTexture->AsSourceOGL();
     MOZ_ASSERT_IF(source->GetTextureTarget() == LOCAL_GL_TEXTURE_EXTERNAL,
                   source->GetFormat() == gfx::SurfaceFormat::R8G8B8A8 ||
-                  source->GetFormat() == gfx::SurfaceFormat::R8G8B8X8);
+                  source->GetFormat() == gfx::SurfaceFormat::R8G8B8X8 ||
+                  source->GetFormat() == gfx::SurfaceFormat::B8G8R8A8 ||
+                  source->GetFormat() == gfx::SurfaceFormat::B8G8R8X8 ||
+                  source->GetFormat() == gfx::SurfaceFormat::R5G6B5_UINT16);
     MOZ_ASSERT_IF(source->GetTextureTarget() == LOCAL_GL_TEXTURE_RECTANGLE_ARB,
                   source->GetFormat() == gfx::SurfaceFormat::R8G8B8A8 ||
                   source->GetFormat() == gfx::SurfaceFormat::R8G8B8X8 ||
@@ -992,8 +1002,7 @@ CompositorOGL::DrawQuad(const Rect& aRect,
                         const gfx::Matrix4x4& aTransform,
                         const gfx::Rect& aVisibleRect)
 {
-  PROFILER_LABEL("CompositorOGL", "DrawQuad",
-    js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("CompositorOGL::DrawQuad", GRAPHICS);
 
   DrawGeometry(aRect, aRect, aClipRect, aEffectChain,
                aOpacity, aTransform, aVisibleRect);
@@ -1008,8 +1017,7 @@ CompositorOGL::DrawTriangles(const nsTArray<gfx::TexturedTriangle>& aTriangles,
                              const gfx::Matrix4x4& aTransform,
                              const gfx::Rect& aVisibleRect)
 {
-  PROFILER_LABEL("CompositorOGL", "DrawTriangles",
-    js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("CompositorOGL::DrawTriangles", GRAPHICS);
 
   DrawGeometry(aTriangles, aRect, aClipRect, aEffectChain,
                aOpacity, aTransform, aVisibleRect);
@@ -1041,7 +1049,7 @@ CompositorOGL::DrawGeometry(const Geometry& aGeometry,
 
   // XXX: This doesn't handle 3D transforms. It also doesn't handled rotated
   //      quads. Fix me.
-  mPixelsFilled += destRect.width * destRect.height;
+  mPixelsFilled += destRect.Width() * destRect.Height();
 
   // Do a simple culling if this rect is out of target buffer.
   // Inflate a small size to avoid some numerical imprecision issue.
@@ -1064,8 +1072,8 @@ CompositorOGL::DrawGeometry(const Geometry& aGeometry,
   }
 
   ScopedGLState scopedScissorTestState(mGLContext, LOCAL_GL_SCISSOR_TEST, true);
-  ScopedScissorRect autoScissorRect(mGLContext, clipRect.x, FlipY(clipRect.y + clipRect.height),
-                                    clipRect.width, clipRect.height);
+  ScopedScissorRect autoScissorRect(mGLContext, clipRect.X(), FlipY(clipRect.Y() + clipRect.Height()),
+                                    clipRect.Width(), clipRect.Height());
 
   MaskType maskType;
   EffectMask* effectMask;
@@ -1088,10 +1096,10 @@ CompositorOGL::DrawGeometry(const Geometry& aGeometry,
     Rect bounds = Rect(Point(), Size(maskSize));
     bounds = maskTransform.As2D().TransformBounds(bounds);
 
-    maskQuadTransform._11 = 1.0f/bounds.width;
-    maskQuadTransform._22 = 1.0f/bounds.height;
-    maskQuadTransform._41 = float(-bounds.x)/bounds.width;
-    maskQuadTransform._42 = float(-bounds.y)/bounds.height;
+    maskQuadTransform._11 = 1.0f/bounds.Width();
+    maskQuadTransform._22 = 1.0f/bounds.Height();
+    maskQuadTransform._41 = float(-bounds.X())/bounds.Width();
+    maskQuadTransform._42 = float(-bounds.Y())/bounds.Height();
 
     maskType = MaskType::Mask;
   } else {
@@ -1476,7 +1484,7 @@ CompositorOGL::DrawGeometry(const Geometry& aGeometry,
   MakeCurrent();
 
   LayerScope::DrawEnd(mGLContext, aEffectChain,
-                      aRect.width, aRect.height);
+                      aRect.Width(), aRect.Height());
 }
 
 void
@@ -1580,8 +1588,7 @@ CompositorOGL::InitializeVAO(const GLuint aAttrib, const GLint aComponents,
 void
 CompositorOGL::EndFrame()
 {
-  PROFILER_LABEL("CompositorOGL", "EndFrame",
-    js::ProfileEntry::Category::GRAPHICS);
+  AUTO_PROFILER_LABEL("CompositorOGL::EndFrame", GRAPHICS);
 
   MOZ_ASSERT(mCurrentRenderTarget == mWindowRenderTarget, "Rendering target not properly restored");
 
@@ -1600,8 +1607,6 @@ CompositorOGL::EndFrame()
     }
   }
 #endif
-
-  mContextStateTracker.PopOGLSection(gl(), "Frame");
 
   mFrameInProgress = false;
 
@@ -1651,8 +1656,8 @@ CompositorOGL::CopyToTarget(DrawTarget* aTarget, const nsIntPoint& aTopLeft, con
   } else {
     rect = IntRect(0, 0, mWidgetSize.width, mWidgetSize.height);
   }
-  GLint width = rect.width;
-  GLint height = rect.height;
+  GLint width = rect.Width();
+  GLint height = rect.Height();
 
   if ((int64_t(width) * int64_t(height) * int64_t(4)) > INT32_MAX) {
     NS_ERROR("Widget size too big - integer overflow!");
@@ -1685,7 +1690,7 @@ CompositorOGL::CopyToTarget(DrawTarget* aTarget, const nsIntPoint& aTopLeft, con
 
   Matrix oldMatrix = aTarget->GetTransform();
   aTarget->SetTransform(glToCairoTransform);
-  Rect floatRect = Rect(rect.x, rect.y, rect.width, rect.height);
+  Rect floatRect = Rect(rect.X(), rect.Y(), width, height);
   aTarget->DrawSurface(source, floatRect, floatRect, DrawSurfaceOptions(), DrawOptions(1.0f, CompositionOp::OP_SOURCE));
   aTarget->SetTransform(oldMatrix);
   aTarget->Flush();

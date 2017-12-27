@@ -4,27 +4,32 @@
 // popup shows a submenu that lists them instead of showing them in the popup
 // itself.
 
-const searchbar = document.getElementById("searchbar");
 const searchPopup = document.getElementById("PopupSearchAutoComplete");
 const oneOffsContainer =
   document.getAnonymousElementByAttribute(searchPopup, "anonid",
                                           "search-one-off-buttons");
 
-add_task(function* test() {
+add_task(async function test() {
+  await SpecialPowers.pushPrefEnv({ set: [
+    ["browser.search.widget.inNavBar", true],
+  ]});
+
+  let searchbar = document.getElementById("searchbar");
+
   let rootDir = getRootDirectory(gTestPath);
   let url = rootDir + "tooManyEnginesOffered.html";
-  yield BrowserTestUtils.openNewForegroundTab(gBrowser, url);
+  await BrowserTestUtils.openNewForegroundTab(gBrowser, url);
 
   // Open the search popup.
   let promise = promiseEvent(searchPopup, "popupshown");
   info("Opening search panel");
   searchbar.focus();
   EventUtils.synthesizeKey("VK_DOWN", {});
-  yield promise;
+  await promise;
 
   // Make sure it has only one add-engine menu button item.
   let items = getOpenSearchItems();
-  Assert.equal(items.length, 1, "A single button")
+  Assert.equal(items.length, 1, "A single button");
   let menuButton = items[0];
   Assert.equal(menuButton.type, "menu", "A menu button");
 
@@ -32,7 +37,7 @@ add_task(function* test() {
   let buttonPopup = menuButton.firstChild;
   promise = promiseEvent(buttonPopup, "popupshown");
   EventUtils.synthesizeMouse(menuButton, 5, 5, { type: "mousemove" });
-  yield promise;
+  await promise;
 
   Assert.ok(menuButton.open, "Submenu should be open");
 
@@ -47,7 +52,7 @@ add_task(function* test() {
   // Mouse out of the menu button to close it.
   promise = promiseEvent(buttonPopup, "popuphidden");
   EventUtils.synthesizeMouse(searchbar, 5, 5, { type: "mousemove" });
-  yield promise;
+  await promise;
 
   Assert.ok(!menuButton.open, "Submenu should be closed");
 
@@ -61,14 +66,14 @@ add_task(function* test() {
   // Press the Right arrow key.  The submenu should open.
   promise = promiseEvent(buttonPopup, "popupshown");
   EventUtils.synthesizeKey("VK_RIGHT", {});
-  yield promise;
+  await promise;
 
   Assert.ok(menuButton.open, "Submenu should be open");
 
   // Press the Esc key.  The submenu should close.
   promise = promiseEvent(buttonPopup, "popuphidden");
   EventUtils.synthesizeKey("VK_ESCAPE", {});
-  yield promise;
+  await promise;
 
   Assert.ok(!menuButton.open, "Submenu should be closed");
 

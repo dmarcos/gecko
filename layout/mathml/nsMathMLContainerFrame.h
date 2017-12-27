@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,24 +16,25 @@
 #include "mozilla/Likely.h"
 
 /*
- * Base class for MathML container frames. It acts like an inferred 
- * mrow. By default, this frame uses its Reflow() method to lay its 
+ * Base class for MathML container frames. It acts like an inferred
+ * mrow. By default, this frame uses its Reflow() method to lay its
  * children horizontally and ensure that their baselines are aligned.
  * The Reflow() method relies upon Place() to position children.
  * By overloading Place() in derived classes, it is therefore possible
  * to position children in various customized ways.
  */
 
-// Options for the preferred size at which to stretch our stretchy children 
+// Options for the preferred size at which to stretch our stretchy children
 #define STRETCH_CONSIDER_ACTUAL_SIZE    0x00000001 // just use our current size
 #define STRETCH_CONSIDER_EMBELLISHMENTS 0x00000002 // size calculations include embellishments
 
 class nsMathMLContainerFrame : public nsContainerFrame,
-                               public nsMathMLFrame {
+                               public nsMathMLFrame
+{
   friend class nsMathMLmfencedFrame;
 public:
-  explicit nsMathMLContainerFrame(nsStyleContext* aContext)
-    : nsContainerFrame(aContext)
+  nsMathMLContainerFrame(nsStyleContext* aContext, ClassID aID)
+    : nsContainerFrame(aContext, aID)
     , mIntrinsicWidth(NS_INTRINSIC_WIDTH_UNKNOWN)
     , mBlockStartAscent(0)
   {}
@@ -60,18 +62,6 @@ public:
       aFlagsValues, aFlagsToUpdate);
     return NS_OK;
   }
-  
-  // helper to set the "increment script level" flag on the element belonging
-  // to a child frame given by aChildIndex.
-  // When this flag is set, the style system will increment the scriptlevel
-  // for the child element. This is needed for situations where the style system
-  // cannot itself determine the scriptlevel (mfrac, munder, mover, munderover).
-  // This should be called during reflow. We set the flag and if it changed,
-  // we request appropriate restyling and also queue a post-reflow callback
-  // to ensure that restyle and reflow happens immediately after the current
-  // reflow.
-  void
-  SetIncrementScriptLevel(int32_t aChildIndex, bool aIncrement);
 
   // --------------------------------------------------------------------------
   // Overloaded nsContainerFrame methods -- see documentation in nsIFrame.h
@@ -100,14 +90,14 @@ public:
    * Both GetMinISize and GetPrefISize use the intrinsic width metrics
    * returned by GetIntrinsicMetrics, including ink overflow.
    */
-  virtual nscoord GetMinISize(nsRenderingContext* aRenderingContext) override;
-  virtual nscoord GetPrefISize(nsRenderingContext* aRenderingContext) override;
+  virtual nscoord GetMinISize(gfxContext* aRenderingContext) override;
+  virtual nscoord GetPrefISize(gfxContext* aRenderingContext) override;
 
   /**
    * Return the intrinsic horizontal metrics of the frame's content area.
    */
   virtual void
-  GetIntrinsicISizeMetrics(nsRenderingContext* aRenderingContext,
+  GetIntrinsicISizeMetrics(gfxContext* aRenderingContext,
                            ReflowOutput& aDesiredSize);
 
   virtual void
@@ -117,16 +107,14 @@ public:
          nsReflowStatus&          aStatus) override;
 
   virtual void DidReflow(nsPresContext*           aPresContext,
-            const ReflowInput*  aReflowInput,
-            nsDidReflowStatus         aStatus) override
+            const ReflowInput*  aReflowInput) override
 
   {
     mPresentationData.flags &= ~NS_MATHML_STRETCH_DONE;
-    return nsContainerFrame::DidReflow(aPresContext, aReflowInput, aStatus);
+    return nsContainerFrame::DidReflow(aPresContext, aReflowInput);
   }
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   virtual bool ComputeCustomOverflow(nsOverflowAreas& aOverflowAreas) override;
@@ -149,10 +137,10 @@ public:
   //    2b. If the automatic data to update affects us in some way, we ask our parent
   //        to re-layout its children using ReLayoutChildren(mParent);
   //        Therefore, there is an overhead here in that our siblings are re-laid
-  //        too (e.g., this happens with <munder>, <mover>, <munderover>). 
+  //        too (e.g., this happens with <munder>, <mover>, <munderover>).
   virtual nsresult
   AttributeChanged(int32_t         aNameSpaceID,
-                   nsIAtom*        aAttribute,
+                   nsAtom*        aAttribute,
                    int32_t         aModType) override;
 
   // helper function to apply mirroring to a horizontal coordinate, if needed.
@@ -164,7 +152,7 @@ public:
   }
 
   // --------------------------------------------------------------------------
-  // Additional methods 
+  // Additional methods
 
 protected:
   /* Place :
@@ -238,7 +226,7 @@ public:
   nsresult
   ReflowError(DrawTarget* aDrawTarget, ReflowOutput& aDesiredSize);
   /*
-   * Helper to call ReportErrorToConsole for parse errors involving 
+   * Helper to call ReportErrorToConsole for parse errors involving
    * attribute/value pairs.
    * @param aAttribute The attribute for which the parse error occured.
    * @param aValue The value for which the parse error occured.
@@ -260,7 +248,7 @@ public:
    * @param aChildTag The tag which is forbidden in this context
    */
   nsresult
-  ReportInvalidChildError(nsIAtom* aChildTag);
+  ReportInvalidChildError(nsAtom* aChildTag);
 
   /*
    * Helper to call ReportToConsole when an error occurs.
@@ -391,7 +379,7 @@ protected:
   /**
    * Recompute mIntrinsicWidth if it's not already up to date.
    */
-  void UpdateIntrinsicWidth(nsRenderingContext* aRenderingContext);
+  void UpdateIntrinsicWidth(gfxContext* aRenderingContext);
 
   nscoord mIntrinsicWidth;
 
@@ -413,9 +401,8 @@ private:
 // Issues: If/when mathml becomes a pluggable component, the separation will be needed.
 class nsMathMLmathBlockFrame : public nsBlockFrame {
 public:
-  NS_DECL_QUERYFRAME_TARGET(nsMathMLmathBlockFrame)
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsMathMLmathBlockFrame)
 
   friend nsContainerFrame* NS_NewMathMLmathBlockFrame(nsIPresShell* aPresShell,
           nsStyleContext* aContext);
@@ -481,7 +468,9 @@ public:
   }
 
 protected:
-  explicit nsMathMLmathBlockFrame(nsStyleContext* aContext) : nsBlockFrame(aContext) {
+  explicit nsMathMLmathBlockFrame(nsStyleContext* aContext)
+    : nsBlockFrame(aContext, kClassID)
+  {
     // We should always have a float manager.  Not that things can really try
     // to float out of us anyway, but we need one for line layout.
     // Bug 1301881: Do we still need to set NS_BLOCK_FLOAT_MGR?
@@ -495,9 +484,8 @@ protected:
 class nsMathMLmathInlineFrame : public nsInlineFrame,
                                 public nsMathMLFrame {
 public:
-  NS_DECL_QUERYFRAME_TARGET(nsMathMLmathInlineFrame)
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsMathMLmathInlineFrame)
 
   friend nsContainerFrame* NS_NewMathMLmathInlineFrame(nsIPresShell* aPresShell,
                                                        nsStyleContext* aContext);
@@ -558,7 +546,10 @@ public:
   }
 
 protected:
-  explicit nsMathMLmathInlineFrame(nsStyleContext* aContext) : nsInlineFrame(aContext) {}
+  explicit nsMathMLmathInlineFrame(nsStyleContext* aContext)
+    : nsInlineFrame(aContext, kClassID)
+  {}
+
   virtual ~nsMathMLmathInlineFrame() {}
 };
 

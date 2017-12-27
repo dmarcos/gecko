@@ -115,6 +115,11 @@ public:
   {
     return mOldInfo->GetKey(aKey);
   }
+  NS_IMETHOD GetCacheEntryId(uint64_t *aCacheEntryId) override
+  {
+    *aCacheEntryId = mCacheEntryId;
+    return NS_OK;
+  }
   NS_IMETHOD GetFetchCount(int32_t *aFetchCount) override
   {
     return mOldInfo->GetFetchCount(aFetchCount);
@@ -151,6 +156,10 @@ public:
   {
     return NS_ERROR_NOT_IMPLEMENTED;
   }
+  NS_IMETHOD Dismiss() override
+  {
+    return NS_ERROR_NOT_IMPLEMENTED;
+  }
 
   NS_IMETHOD AsyncDoom(nsICacheEntryDoomCallback* listener) override;
   NS_IMETHOD GetPersistent(bool *aPersistToDisk) override;
@@ -176,6 +185,8 @@ private:
   _OldCacheEntryWrapper() = delete;
   nsICacheEntryDescriptor* mOldDesc; // ref holded in mOldInfo
   nsCOMPtr<nsICacheEntryInfo> mOldInfo;
+
+  const uint64_t mCacheEntryId;
 };
 
 
@@ -187,8 +198,8 @@ public:
   NS_DECL_NSIRUNNABLE
   NS_DECL_NSICACHELISTENER
 
-  _OldCacheLoad(nsCSubstring const& aScheme,
-                nsCSubstring const& aCacheKey,
+  _OldCacheLoad(const nsACString& aScheme,
+                const nsACString& aCacheKey,
                 nsICacheEntryOpenCallback* aCallback,
                 nsIApplicationCache* aAppCache,
                 nsILoadContextInfo* aLoadInfo,
@@ -241,7 +252,7 @@ private:
   virtual ~_OldStorage();
   nsresult AssembleCacheKey(nsIURI *aURI, nsACString const & aIdExtension,
                             nsACString & aCacheKey, nsACString & aScheme);
-  nsresult ChooseApplicationCache(nsCSubstring const &cacheKey, nsIApplicationCache** aCache);
+  nsresult ChooseApplicationCache(const nsACString& cacheKey, nsIApplicationCache** aCache);
 
   nsCOMPtr<nsILoadContextInfo> mLoadInfo;
   nsCOMPtr<nsIApplicationCache> mAppCache;

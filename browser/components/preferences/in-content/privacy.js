@@ -4,17 +4,18 @@
 
 /* import-globals-from preferences.js */
 
+/* FIXME: ESlint globals workaround should be removed once bug 1395426 gets fixed */
+/* globals DownloadUtils, LoadContextInfo */
+
 Components.utils.import("resource://gre/modules/AppConstants.jsm");
 Components.utils.import("resource://gre/modules/PluralForm.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "ContextualIdentityService",
-                                  "resource://gre/modules/ContextualIdentityService.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
-                                  "resource://gre/modules/PluralForm.jsm");
+  "resource://gre/modules/PluralForm.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "LoginHelper",
-                                  "resource://gre/modules/LoginHelper.jsm");
+  "resource://gre/modules/LoginHelper.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "SiteDataManager",
-                                  "resource:///modules/SiteDataManager.jsm");
+  "resource:///modules/SiteDataManager.jsm");
 
 Components.utils.import("resource://gre/modules/PrivateBrowsingUtils.jsm");
 
@@ -23,8 +24,8 @@ const PREF_UPLOAD_ENABLED = "datareporting.healthreport.uploadEnabled";
 XPCOMUtils.defineLazyGetter(this, "AlertsServiceDND", function() {
   try {
     let alertsService = Cc["@mozilla.org/alerts-service;1"]
-                          .getService(Ci.nsIAlertsService)
-                          .QueryInterface(Ci.nsIAlertsDoNotDisturb);
+      .getService(Ci.nsIAlertsService)
+      .QueryInterface(Ci.nsIAlertsDoNotDisturb);
     // This will throw if manualDoNotDisturb isn't implemented.
     alertsService.manualDoNotDisturb;
     return alertsService;
@@ -61,8 +62,9 @@ var gPrivacyPane = {
 
     this.trackingProtectionReadPrefs();
 
-    document.getElementById("trackingprotectionbox").hidden = false;
-    document.getElementById("trackingprotectionpbmbox").hidden = true;
+    document.getElementById("trackingProtectionExceptions").hidden = false;
+    document.getElementById("trackingProtectionBox").hidden = false;
+    document.getElementById("trackingProtectionPBMBox").hidden = true;
   },
 
   /**
@@ -80,64 +82,7 @@ var gPrivacyPane = {
    */
   _initAutocomplete() {
     Components.classes["@mozilla.org/autocomplete/search;1?name=unifiedcomplete"]
-              .getService(Components.interfaces.mozIPlacesAutoComplete);
-  },
-
-  /**
-   * Show the Containers UI depending on the privacy.userContext.ui.enabled pref.
-   */
-  _initBrowserContainers() {
-    if (!Services.prefs.getBoolPref("privacy.userContext.ui.enabled")) {
-      // The browserContainersGroup element has its own internal padding that
-      // is visible even if the browserContainersbox is visible, so hide the whole
-      // groupbox if the feature is disabled to prevent a gap in the preferences.
-      document.getElementById("browserContainersGroup").setAttribute("data-hidden-from-search", "true");
-      return;
-    }
-
-    let link = document.getElementById("browserContainersLearnMore");
-    link.href = Services.urlFormatter.formatURLPref("app.support.baseURL") + "containers";
-
-    document.getElementById("browserContainersbox").hidden = false;
-
-    document.getElementById("browserContainersCheckbox").checked =
-      Services.prefs.getBoolPref("privacy.userContext.enabled");
-  },
-
-  _checkBrowserContainers(event) {
-    let checkbox = document.getElementById("browserContainersCheckbox");
-    if (checkbox.checked) {
-      Services.prefs.setBoolPref("privacy.userContext.enabled", true);
-      return;
-    }
-
-    let count = ContextualIdentityService.countContainerTabs();
-    if (count == 0) {
-      Services.prefs.setBoolPref("privacy.userContext.enabled", false);
-      return;
-    }
-
-    let bundlePreferences = document.getElementById("bundlePreferences");
-
-    let title = bundlePreferences.getString("disableContainersAlertTitle");
-    let message = PluralForm.get(count, bundlePreferences.getString("disableContainersMsg"))
-                            .replace("#S", count)
-    let okButton = PluralForm.get(count, bundlePreferences.getString("disableContainersOkButton"))
-                             .replace("#S", count)
-    let cancelButton = bundlePreferences.getString("disableContainersButton2");
-
-    let buttonFlags = (Ci.nsIPrompt.BUTTON_TITLE_IS_STRING * Ci.nsIPrompt.BUTTON_POS_0) +
-                      (Ci.nsIPrompt.BUTTON_TITLE_IS_STRING * Ci.nsIPrompt.BUTTON_POS_1);
-
-    let rv = Services.prompt.confirmEx(window, title, message, buttonFlags,
-                                       okButton, cancelButton, null, null, {});
-    if (rv == 0) {
-      ContextualIdentityService.closeContainerTabs();
-      Services.prefs.setBoolPref("privacy.userContext.enabled", false);
-      return;
-    }
-
-    checkbox.checked = true;
+      .getService(Components.interfaces.mozIPlacesAutoComplete);
   },
 
   /**
@@ -147,7 +92,7 @@ var gPrivacyPane = {
   init() {
     function setEventListener(aId, aEventType, aCallback) {
       document.getElementById(aId)
-              .addEventListener(aEventType, aCallback.bind(gPrivacyPane));
+        .addEventListener(aEventType, aCallback.bind(gPrivacyPane));
     }
 
     this._updateSanitizeSettingsButton();
@@ -158,54 +103,55 @@ var gPrivacyPane = {
     this._initTrackingProtection();
     this._initTrackingProtectionPBM();
     this._initAutocomplete();
-    this._initBrowserContainers();
 
     setEventListener("privacy.sanitize.sanitizeOnShutdown", "change",
-                     gPrivacyPane._updateSanitizeSettingsButton);
+      gPrivacyPane._updateSanitizeSettingsButton);
     setEventListener("browser.privatebrowsing.autostart", "change",
-                     gPrivacyPane.updatePrivacyMicroControls);
+      gPrivacyPane.updatePrivacyMicroControls);
     setEventListener("historyMode", "command", function() {
       gPrivacyPane.updateHistoryModePane();
       gPrivacyPane.updateHistoryModePrefs();
       gPrivacyPane.updatePrivacyMicroControls();
       gPrivacyPane.updateAutostart();
     });
-    setEventListener("historyRememberClear", "click", function() {
-      gPrivacyPane.clearPrivateDataNow(false);
+    setEventListener("historyRememberClear", "click", function(event) {
+      if (event.button == 0) {
+        gPrivacyPane.clearPrivateDataNow(false);
+      }
       return false;
     });
-    setEventListener("historyRememberCookies", "click", function() {
-      gPrivacyPane.showCookies();
+    setEventListener("historyRememberCookies", "click", function(event) {
+      if (event.button == 0) {
+        gPrivacyPane.showCookies();
+      }
       return false;
     });
-    setEventListener("historyDontRememberClear", "click", function() {
-      gPrivacyPane.clearPrivateDataNow(true);
+    setEventListener("historyDontRememberClear", "click", function(event) {
+      if (event.button == 0) {
+        gPrivacyPane.clearPrivateDataNow(true);
+      }
       return false;
     });
-    setEventListener("doNotTrackSettings", "click", function() {
-      gPrivacyPane.showDoNotTrackSettings();
+    setEventListener("openSearchEnginePreferences", "click", function(event) {
+      if (event.button == 0) {
+        gotoPref("search");
+      }
       return false;
     });
     setEventListener("privateBrowsingAutoStart", "command",
-                     gPrivacyPane.updateAutostart);
+      gPrivacyPane.updateAutostart);
     setEventListener("cookieExceptions", "command",
-                     gPrivacyPane.showCookieExceptions);
+      gPrivacyPane.showCookieExceptions);
     setEventListener("showCookiesButton", "command",
-                     gPrivacyPane.showCookies);
+      gPrivacyPane.showCookies);
     setEventListener("clearDataSettings", "command",
-                     gPrivacyPane.showClearPrivateDataSettings);
+      gPrivacyPane.showClearPrivateDataSettings);
     setEventListener("trackingProtectionRadioGroup", "command",
-                     gPrivacyPane.trackingProtectionWritePrefs);
+      gPrivacyPane.trackingProtectionWritePrefs);
     setEventListener("trackingProtectionExceptions", "command",
-                     gPrivacyPane.showTrackingProtectionExceptions);
+      gPrivacyPane.showTrackingProtectionExceptions);
     setEventListener("changeBlockList", "command",
-                     gPrivacyPane.showBlockLists);
-    setEventListener("changeBlockListPBM", "command",
-                     gPrivacyPane.showBlockLists);
-    setEventListener("browserContainersCheckbox", "command",
-                     gPrivacyPane._checkBrowserContainers);
-    setEventListener("browserContainersSettings", "command",
-                     gPrivacyPane.showContainerSettings);
+      gPrivacyPane.showBlockLists);
     setEventListener("passwordExceptions", "command",
       gPrivacyPane.showPasswordExceptions);
     setEventListener("useMasterPassword", "command",
@@ -217,13 +163,11 @@ var gPrivacyPane = {
     setEventListener("addonExceptions", "command",
       gPrivacyPane.showAddonExceptions);
     setEventListener("viewCertificatesButton", "command",
-                     gPrivacyPane.showCertificates);
+      gPrivacyPane.showCertificates);
     setEventListener("viewSecurityDevicesButton", "command",
-                     gPrivacyPane.showSecurityDevices);
-    setEventListener("connectionSettings", "command",
-                     gPrivacyPane.showConnections);
+      gPrivacyPane.showSecurityDevices);
     setEventListener("clearCacheButton", "command",
-                     gPrivacyPane.clearCache);
+      gPrivacyPane.clearCache);
 
     this._pane = document.getElementById("panePrivacy");
     this._initMasterPasswordUI();
@@ -231,17 +175,32 @@ var gPrivacyPane = {
     this.updateCacheSizeInputField();
     this.updateActualCacheSize();
 
-    setEventListener("notificationsPolicyButton", "command",
+    setEventListener("notificationSettingsButton", "command",
       gPrivacyPane.showNotificationExceptions);
+    setEventListener("locationSettingsButton", "command",
+      gPrivacyPane.showLocationExceptions);
+    setEventListener("cameraSettingsButton", "command",
+      gPrivacyPane.showCameraExceptions);
+    setEventListener("microphoneSettingsButton", "command",
+      gPrivacyPane.showMicrophoneExceptions);
     setEventListener("popupPolicyButton", "command",
       gPrivacyPane.showPopupExceptions);
     setEventListener("notificationsDoNotDisturb", "command",
       gPrivacyPane.toggleDoNotDisturbNotifications);
 
+    let bundlePrefs = document.getElementById("bundlePreferences");
+
     if (AlertsServiceDND) {
-      let notificationsDoNotDisturbRow =
-        document.getElementById("notificationsDoNotDisturbRow");
-      notificationsDoNotDisturbRow.removeAttribute("hidden");
+      let notificationsDoNotDisturbBox =
+        document.getElementById("notificationsDoNotDisturbBox");
+      notificationsDoNotDisturbBox.removeAttribute("hidden");
+      let checkbox = document.getElementById("notificationsDoNotDisturb");
+      let brandName = document.getElementById("bundleBrand")
+        .getString("brandShortName");
+      checkbox.setAttribute("label",
+        bundlePrefs.getFormattedString("pauseNotifications.label",
+          [brandName]));
+      checkbox.setAttribute("accesskey", bundlePrefs.getString("pauseNotifications.accesskey"));
       if (AlertsServiceDND.manualDoNotDisturb) {
         let notificationsDoNotDisturb =
           document.getElementById("notificationsDoNotDisturb");
@@ -250,26 +209,7 @@ var gPrivacyPane = {
     }
 
     setEventListener("cacheSize", "change",
-                     gPrivacyPane.updateCacheSizePref);
-
-    if (Services.prefs.getBoolPref("browser.preferences.offlineGroup.enabled")) {
-      this.updateOfflineApps();
-      this.updateActualAppCacheSize();
-      setEventListener("offlineNotifyExceptions", "command",
-                       gPrivacyPane.showOfflineExceptions);
-      setEventListener("offlineAppsList", "select",
-                       gPrivacyPane.offlineAppSelected);
-      setEventListener("offlineAppsListRemove", "command",
-                       gPrivacyPane.removeOfflineApp);
-      setEventListener("clearOfflineAppCacheButton", "command",
-                       gPrivacyPane.clearOfflineAppCache);
-      let bundlePrefs = document.getElementById("bundlePreferences");
-      document.getElementById("offlineAppsList")
-              .style.height = bundlePrefs.getString("offlineAppsList.height");
-      let offlineGroup = document.getElementById("offlineGroup");
-      offlineGroup.hidden = false;
-      offlineGroup.removeAttribute("data-hidden-from-search");
-    }
+      gPrivacyPane.updateCacheSizePref);
 
     if (Services.prefs.getBoolPref("browser.storageManager.enabled")) {
       Services.obs.addObserver(this, "sitedatamanager:sites-updated");
@@ -282,20 +222,19 @@ var gPrivacyPane = {
       window.addEventListener("unload", unload);
       SiteDataManager.updateSites();
       setEventListener("clearSiteDataButton", "command",
-                       gPrivacyPane.clearSiteData);
+        gPrivacyPane.clearSiteData);
       setEventListener("siteDataSettings", "command",
-                       gPrivacyPane.showSiteDataSettings);
+        gPrivacyPane.showSiteDataSettings);
       let url = Services.urlFormatter.formatURLPref("app.support.baseURL") + "storage-permissions";
       document.getElementById("siteDataLearnMoreLink").setAttribute("href", url);
       let siteDataGroup = document.getElementById("siteDataGroup");
-      siteDataGroup.hidden = false;
       siteDataGroup.removeAttribute("data-hidden-from-search");
     }
 
     let notificationInfoURL =
       Services.urlFormatter.formatURLPref("app.support.baseURL") + "push";
-    document.getElementById("notificationsPolicyLearnMore").setAttribute("href",
-                                                                         notificationInfoURL);
+    document.getElementById("notificationPermissionsLearnMore").setAttribute("href",
+      notificationInfoURL);
     let drmInfoURL =
       Services.urlFormatter.formatURLPref("app.support.baseURL") + "drm-content";
     document.getElementById("playDRMContentLink").setAttribute("href", drmInfoURL);
@@ -310,15 +249,75 @@ var gPrivacyPane = {
       document.getElementById("drmGroup").setAttribute("style", "display: none !important");
     }
 
+    this.initDataCollection();
     if (AppConstants.MOZ_CRASHREPORTER) {
       this.initSubmitCrashes();
     }
-    this.initTelemetry();
-    if (AppConstants.MOZ_TELEMETRY_REPORTING) {
-      this.initSubmitHealthReport();
-      setEventListener("submitHealthReportBox", "command",
-                       gPrivacyPane.updateSubmitHealthReport);
-    }
+    this.initSubmitHealthReport();
+    setEventListener("submitHealthReportBox", "command",
+      gPrivacyPane.updateSubmitHealthReport);
+    this._initA11yState();
+    let signonBundle = document.getElementById("signonBundle");
+    let pkiBundle = document.getElementById("pkiBundle");
+    appendSearchKeywords("passwordExceptions", [
+      bundlePrefs.getString("savedLoginsExceptions_title"),
+      bundlePrefs.getString("savedLoginsExceptions_desc3"),
+    ]);
+    appendSearchKeywords("showPasswords", [
+      signonBundle.getString("loginsDescriptionAll2"),
+    ]);
+    appendSearchKeywords("cookieExceptions", [
+      bundlePrefs.getString("cookiepermissionstext"),
+    ]);
+    appendSearchKeywords("showCookiesButton", [
+      bundlePrefs.getString("cookiesAll"),
+      bundlePrefs.getString("removeAllCookies.label"),
+      bundlePrefs.getString("removeAllShownCookies.label"),
+      bundlePrefs.getString("removeSelectedCookies.label"),
+    ]);
+    appendSearchKeywords("trackingProtectionExceptions", [
+      bundlePrefs.getString("trackingprotectionpermissionstitle"),
+      bundlePrefs.getString("trackingprotectionpermissionstext2"),
+    ]);
+    appendSearchKeywords("changeBlockList", [
+      bundlePrefs.getString("blockliststitle"),
+      bundlePrefs.getString("blockliststext"),
+    ]);
+    appendSearchKeywords("popupPolicyButton", [
+      bundlePrefs.getString("popuppermissionstitle2"),
+      bundlePrefs.getString("popuppermissionstext"),
+    ]);
+    appendSearchKeywords("notificationSettingsButton", [
+      bundlePrefs.getString("notificationspermissionstitle2"),
+      bundlePrefs.getString("notificationspermissionstext5"),
+    ]);
+    appendSearchKeywords("locationSettingsButton", [
+      bundlePrefs.getString("locationpermissionstitle"),
+      bundlePrefs.getString("locationpermissionstext"),
+    ]);
+    appendSearchKeywords("cameraSettingsButton", [
+      bundlePrefs.getString("camerapermissionstitle"),
+      bundlePrefs.getString("camerapermissionstext"),
+    ]);
+    appendSearchKeywords("microphoneSettingsButton", [
+      bundlePrefs.getString("microphonepermissionstitle"),
+      bundlePrefs.getString("microphonepermissionstext"),
+    ]);
+    appendSearchKeywords("addonExceptions", [
+      bundlePrefs.getString("addons_permissions_title2"),
+      bundlePrefs.getString("addonspermissionstext"),
+    ]);
+    appendSearchKeywords("viewSecurityDevicesButton", [
+      pkiBundle.getString("enable_fips"),
+    ]);
+    appendSearchKeywords("siteDataSettings", [
+      bundlePrefs.getString("siteDataSettings2.description"),
+      bundlePrefs.getString("removeAllCookies.label"),
+      bundlePrefs.getString("removeSelectedCookies.label"),
+    ]);
+
+    // Notify observers that the UI is now ready
+    Services.obs.notifyObservers(window, "privacy-pane-loaded");
   },
 
   // TRACKING PROTECTION MODE
@@ -444,15 +443,15 @@ var gPrivacyPane = {
   updateHistoryModePane() {
     let selectedIndex = -1;
     switch (document.getElementById("historyMode").value) {
-    case "remember":
-      selectedIndex = 0;
-      break;
-    case "dontremember":
-      selectedIndex = 1;
-      break;
-    case "custom":
-      selectedIndex = 2;
-      break;
+      case "remember":
+        selectedIndex = 0;
+        break;
+      case "dontremember":
+        selectedIndex = 1;
+        break;
+      case "custom":
+        selectedIndex = 2;
+        break;
     }
     document.getElementById("historyPane").selectedIndex = selectedIndex;
     document.getElementById("privacy.history.custom").value = selectedIndex == 2;
@@ -465,28 +464,28 @@ var gPrivacyPane = {
   updateHistoryModePrefs() {
     let pref = document.getElementById("browser.privatebrowsing.autostart");
     switch (document.getElementById("historyMode").value) {
-    case "remember":
-      if (pref.value)
-        pref.value = false;
+      case "remember":
+        if (pref.value)
+          pref.value = false;
 
-      // select the remember history option if needed
-      document.getElementById("places.history.enabled").value = true;
+        // select the remember history option if needed
+        document.getElementById("places.history.enabled").value = true;
 
-      // select the remember forms history option
-      document.getElementById("browser.formfill.enable").value = true;
+        // select the remember forms history option
+        document.getElementById("browser.formfill.enable").value = true;
 
-      // select the allow cookies option
-      document.getElementById("network.cookie.cookieBehavior").value = 0;
-      // select the cookie lifetime policy option
-      document.getElementById("network.cookie.lifetimePolicy").value = 0;
+        // select the allow cookies option
+        document.getElementById("network.cookie.cookieBehavior").value = 0;
+        // select the cookie lifetime policy option
+        document.getElementById("network.cookie.lifetimePolicy").value = 0;
 
-      // select the clear on close option
-      document.getElementById("privacy.sanitize.sanitizeOnShutdown").value = false;
-      break;
-    case "dontremember":
-      if (!pref.value)
-        pref.value = true;
-      break;
+        // select the clear on close option
+        document.getElementById("privacy.sanitize.sanitizeOnShutdown").value = false;
+        break;
+      case "dontremember":
+        if (!pref.value)
+          pref.value = true;
+        break;
     }
   },
 
@@ -497,7 +496,7 @@ var gPrivacyPane = {
   updatePrivacyMicroControls() {
     if (document.getElementById("historyMode").value == "custom") {
       let disabled = this._autoStartPrivateBrowsing =
-        document.getElementById("privateBrowsingAutoStart").checked;
+        document.getElementById("browser.privatebrowsing.autostart").value;
       this.dependentControls.forEach(function(aElement) {
         let control = document.getElementById(aElement);
         let preferenceId = control.getAttribute("preference");
@@ -517,8 +516,8 @@ var gPrivacyPane = {
       this.readAcceptCookies();
       let lifetimePolicy = document.getElementById("network.cookie.lifetimePolicy").value;
       if (lifetimePolicy != Ci.nsICookieService.ACCEPT_NORMALLY &&
-          lifetimePolicy != Ci.nsICookieService.ACCEPT_SESSION &&
-          lifetimePolicy != Ci.nsICookieService.ACCEPT_FOR_N_DAYS) {
+        lifetimePolicy != Ci.nsICookieService.ACCEPT_SESSION &&
+        lifetimePolicy != Ci.nsICookieService.ACCEPT_FOR_N_DAYS) {
         lifetimePolicy = Ci.nsICookieService.ACCEPT_NORMALLY;
       }
       document.getElementById("keepCookiesUntil").value = disabled ? 2 : lifetimePolicy;
@@ -555,45 +554,43 @@ var gPrivacyPane = {
   _lastMode: null,
   _lastCheckState: null,
   updateAutostart() {
-      let mode = document.getElementById("historyMode");
-      let autoStart = document.getElementById("privateBrowsingAutoStart");
-      let pref = document.getElementById("browser.privatebrowsing.autostart");
-      if ((mode.value == "custom" && this._lastCheckState == autoStart.checked) ||
-          (mode.value == "remember" && !this._lastCheckState) ||
-          (mode.value == "dontremember" && this._lastCheckState)) {
-          // These are all no-op changes, so we don't need to prompt.
-          this._lastMode = mode.selectedIndex;
-          this._lastCheckState = autoStart.hasAttribute("checked");
-          return;
-      }
+    let mode = document.getElementById("historyMode");
+    let autoStart = document.getElementById("privateBrowsingAutoStart");
+    let pref = document.getElementById("browser.privatebrowsing.autostart");
+    if ((mode.value == "custom" && this._lastCheckState == autoStart.checked) ||
+      (mode.value == "remember" && !this._lastCheckState) ||
+      (mode.value == "dontremember" && this._lastCheckState)) {
+      // These are all no-op changes, so we don't need to prompt.
+      this._lastMode = mode.selectedIndex;
+      this._lastCheckState = autoStart.hasAttribute("checked");
+      return;
+    }
 
-      if (!this._shouldPromptForRestart) {
-        // We're performing a revert. Just let it happen.
-        return;
-      }
+    if (!this._shouldPromptForRestart) {
+      // We're performing a revert. Just let it happen.
+      return;
+    }
 
-      let buttonIndex = confirmRestartPrompt(autoStart.checked, 1,
-                                             true, false);
-      if (buttonIndex == CONFIRM_RESTART_PROMPT_RESTART_NOW) {
-        pref.value = autoStart.hasAttribute("checked");
-        let appStartup = Cc["@mozilla.org/toolkit/app-startup;1"]
-                           .getService(Ci.nsIAppStartup);
-        appStartup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
-        return;
-      }
-
-      this._shouldPromptForRestart = false;
-
-      if (this._lastCheckState) {
-        autoStart.checked = "checked";
-      } else {
-        autoStart.removeAttribute("checked");
-      }
+    let buttonIndex = confirmRestartPrompt(autoStart.checked, 1,
+      true, false);
+    if (buttonIndex == CONFIRM_RESTART_PROMPT_RESTART_NOW) {
       pref.value = autoStart.hasAttribute("checked");
-      mode.selectedIndex = this._lastMode;
-      mode.doCommand();
+      Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
+      return;
+    }
 
-      this._shouldPromptForRestart = true;
+    this._shouldPromptForRestart = false;
+
+    if (this._lastCheckState) {
+      autoStart.checked = "checked";
+    } else {
+      autoStart.removeAttribute("checked");
+    }
+    pref.value = autoStart.hasAttribute("checked");
+    mode.selectedIndex = this._lastMode;
+    mode.doCommand();
+
+    this._shouldPromptForRestart = true;
   },
 
   /**
@@ -605,17 +602,10 @@ var gPrivacyPane = {
       permissionType: "trackingprotection",
       hideStatusColumn: true,
       windowTitle: bundlePreferences.getString("trackingprotectionpermissionstitle"),
-      introText: bundlePreferences.getString("trackingprotectionpermissionstext"),
+      introText: bundlePreferences.getString("trackingprotectionpermissionstext2"),
     };
     gSubDialog.open("chrome://browser/content/preferences/permissions.xul",
-                    null, params);
-  },
-
-  /**
-   * Displays container panel for customising and adding containers.
-   */
-  showContainerSettings() {
-    gotoPref("containers");
+      null, params);
   },
 
   /**
@@ -624,20 +614,14 @@ var gPrivacyPane = {
   showBlockLists() {
     var bundlePreferences = document.getElementById("bundlePreferences");
     let brandName = document.getElementById("bundleBrand")
-                            .getString("brandShortName");
-    var params = { brandShortName: brandName,
-                   windowTitle: bundlePreferences.getString("blockliststitle"),
-                   introText: bundlePreferences.getString("blockliststext") };
+      .getString("brandShortName");
+    var params = {
+      brandShortName: brandName,
+      windowTitle: bundlePreferences.getString("blockliststitle"),
+      introText: bundlePreferences.getString("blockliststext")
+    };
     gSubDialog.open("chrome://browser/content/preferences/blocklists.xul",
-                    null, params);
-  },
-
-  /**
-   * Displays the Do Not Track settings dialog.
-   */
-  showDoNotTrackSettings() {
-    gSubDialog.open("chrome://browser/content/preferences/donottrack.xul",
-                    "resizable=no");
+      null, params);
   },
 
   // HISTORY
@@ -744,15 +728,17 @@ var gPrivacyPane = {
    */
   showCookieExceptions() {
     var bundlePreferences = document.getElementById("bundlePreferences");
-    var params = { blockVisible: true,
-                   sessionVisible: true,
-                   allowVisible: true,
-                   prefilledHost: "",
-                   permissionType: "cookie",
-                   windowTitle: bundlePreferences.getString("cookiepermissionstitle"),
-                   introText: bundlePreferences.getString("cookiepermissionstext") };
+    var params = {
+      blockVisible: true,
+      sessionVisible: true,
+      allowVisible: true,
+      prefilledHost: "",
+      permissionType: "cookie",
+      windowTitle: bundlePreferences.getString("cookiepermissionstitle"),
+      introText: bundlePreferences.getString("cookiepermissionstext")
+    };
     gSubDialog.open("chrome://browser/content/preferences/permissions.xul",
-                    null, params);
+      null, params);
   },
 
   /**
@@ -811,30 +797,59 @@ var gPrivacyPane = {
     var sanitizeOnShutdownPref = document.getElementById("privacy.sanitize.sanitizeOnShutdown");
 
     settingsButton.disabled = !sanitizeOnShutdownPref.value;
-   },
+  },
 
-  // CONTAINERS
+  toggleDoNotDisturbNotifications(event) {
+    AlertsServiceDND.manualDoNotDisturb = event.target.checked;
+  },
 
-  /*
-   * preferences:
-   *
-   * privacy.userContext.enabled
-   * - true if containers is enabled
+  // GEOLOCATION
+
+  /**
+   * Displays the location exceptions dialog where specific site location
+   * preferences can be set.
    */
+  showLocationExceptions() {
+    let bundlePreferences = document.getElementById("bundlePreferences");
+    let params = { permissionType: "geo" };
+    params.windowTitle = bundlePreferences.getString("locationpermissionstitle");
+    params.introText = bundlePreferences.getString("locationpermissionstext");
 
-   /**
-    * Enables/disables the Settings button used to configure containers
-    */
-   readBrowserContainersCheckbox() {
-     var pref = document.getElementById("privacy.userContext.enabled");
-     var settings = document.getElementById("browserContainersSettings");
+    gSubDialog.open("chrome://browser/content/preferences/sitePermissions.xul",
+      "resizable=yes", params);
+  },
 
-     settings.disabled = !pref.value;
-   },
+  // CAMERA
 
-   toggleDoNotDisturbNotifications(event) {
-     AlertsServiceDND.manualDoNotDisturb = event.target.checked;
-   },
+  /**
+   * Displays the camera exceptions dialog where specific site camera
+   * preferences can be set.
+   */
+  showCameraExceptions() {
+    let bundlePreferences = document.getElementById("bundlePreferences");
+    let params = { permissionType: "camera" };
+    params.windowTitle = bundlePreferences.getString("camerapermissionstitle");
+    params.introText = bundlePreferences.getString("camerapermissionstext");
+
+    gSubDialog.open("chrome://browser/content/preferences/sitePermissions.xul",
+      "resizable=yes", params);
+  },
+
+  // MICROPHONE
+
+  /**
+   * Displays the microphone exceptions dialog where specific site microphone
+   * preferences can be set.
+   */
+  showMicrophoneExceptions() {
+    let bundlePreferences = document.getElementById("bundlePreferences");
+    let params = { permissionType: "microphone" };
+    params.windowTitle = bundlePreferences.getString("microphonepermissionstitle");
+    params.introText = bundlePreferences.getString("microphonepermissionstext");
+
+    gSubDialog.open("chrome://browser/content/preferences/sitePermissions.xul",
+      "resizable=yes", params);
+  },
 
   // NOTIFICATIONS
 
@@ -845,16 +860,16 @@ var gPrivacyPane = {
   showNotificationExceptions() {
     let bundlePreferences = document.getElementById("bundlePreferences");
     let params = { permissionType: "desktop-notification" };
-    params.windowTitle = bundlePreferences.getString("notificationspermissionstitle");
-    params.introText = bundlePreferences.getString("notificationspermissionstext4");
+    params.windowTitle = bundlePreferences.getString("notificationspermissionstitle2");
+    params.introText = bundlePreferences.getString("notificationspermissionstext5");
 
-    gSubDialog.open("chrome://browser/content/preferences/permissions.xul",
-                    "resizable=yes", params);
+    gSubDialog.open("chrome://browser/content/preferences/sitePermissions.xul",
+      "resizable=yes", params);
 
     try {
       Services.telemetry
-              .getHistogramById("WEB_NOTIFICATION_EXCEPTIONS_OPENED").add();
-    } catch (e) {}
+        .getHistogramById("WEB_NOTIFICATION_EXCEPTIONS_OPENED").add();
+    } catch (e) { }
   },
 
 
@@ -866,16 +881,18 @@ var gPrivacyPane = {
    */
   showPopupExceptions() {
     var bundlePreferences = document.getElementById("bundlePreferences");
-    var params = { blockVisible: false, sessionVisible: false, allowVisible: true,
-                   prefilledHost: "", permissionType: "popup" }
-    params.windowTitle = bundlePreferences.getString("popuppermissionstitle");
+    var params = {
+      blockVisible: false, sessionVisible: false, allowVisible: true,
+      prefilledHost: "", permissionType: "popup"
+    };
+    params.windowTitle = bundlePreferences.getString("popuppermissionstitle2");
     params.introText = bundlePreferences.getString("popuppermissionstext");
 
     gSubDialog.open("chrome://browser/content/preferences/permissions.xul",
-                    "resizable=yes", params);
+      "resizable=yes", params);
   },
 
-   // UTILITY FUNCTIONS
+  // UTILITY FUNCTIONS
 
   /**
    * Utility function to enable/disable the button specified by aButtonID based
@@ -913,11 +930,11 @@ var gPrivacyPane = {
       prefilledHost: "",
       permissionType: "login-saving",
       windowTitle: bundlePrefs.getString("savedLoginsExceptions_title"),
-      introText: bundlePrefs.getString("savedLoginsExceptions_desc")
+      introText: bundlePrefs.getString("savedLoginsExceptions_desc3")
     };
 
     gSubDialog.open("chrome://browser/content/preferences/permissions.xul",
-                    null, params);
+      null, params);
   },
 
   /**
@@ -959,19 +976,38 @@ var gPrivacyPane = {
     this._initMasterPasswordUI();
   },
 
+  /**
+   * Displays the "remove master password" dialog to allow the user to remove
+   * the current master password.  When the dialog is dismissed, master password
+   * UI is automatically updated.
+   */
+  _removeMasterPassword() {
+    var secmodDB = Cc["@mozilla.org/security/pkcs11moduledb;1"].
+      getService(Ci.nsIPKCS11ModuleDB);
+    if (secmodDB.isFIPSEnabled) {
+      var bundle = document.getElementById("bundlePreferences");
+      Services.prompt.alert(window,
+        bundle.getString("pw_change_failed_title"),
+        bundle.getString("pw_change2empty_in_fips_mode"));
+      this._initMasterPasswordUI();
+    } else {
+      gSubDialog.open("chrome://mozapps/content/preferences/removemp.xul",
+        null, null, this._initMasterPasswordUI.bind(this));
+    }
+  },
 
   /**
    * Displays a dialog in which the master password may be changed.
    */
   changeMasterPassword() {
     gSubDialog.open("chrome://mozapps/content/preferences/changemp.xul",
-                    "resizable=no", null, this._initMasterPasswordUI.bind(this));
+      "resizable=no", null, this._initMasterPasswordUI.bind(this));
   },
 
-    /**
-   * Shows the sites where the user has saved passwords and the associated login
-   * information.
-   */
+  /**
+ * Shows the sites where the user has saved passwords and the associated login
+ * information.
+ */
   showPasswords() {
     gSubDialog.open("chrome://passwordmgr/content/passwordManager.xul");
   },
@@ -1023,29 +1059,41 @@ var gPrivacyPane = {
     let blockUnwantedPref = document.getElementById("browser.safebrowsing.downloads.remote.block_potentially_unwanted");
     let blockUncommonPref = document.getElementById("browser.safebrowsing.downloads.remote.block_uncommon");
 
+    let learnMoreLink = document.getElementById("enableSafeBrowsingLearnMore");
+    let phishingUrl = Services.urlFormatter.formatURLPref("app.support.baseURL") + "phishing-malware";
+    learnMoreLink.setAttribute("href", phishingUrl);
+
     enableSafeBrowsing.addEventListener("command", function() {
       safeBrowsingPhishingPref.value = enableSafeBrowsing.checked;
       safeBrowsingMalwarePref.value = enableSafeBrowsing.checked;
 
       if (enableSafeBrowsing.checked) {
-        blockDownloads.removeAttribute("disabled");
-        if (blockDownloads.checked) {
+        if (blockDownloads) {
+          blockDownloads.removeAttribute("disabled");
+          if (blockDownloads.checked) {
+            blockUncommonUnwanted.removeAttribute("disabled");
+          }
+        } else {
           blockUncommonUnwanted.removeAttribute("disabled");
         }
       } else {
-        blockDownloads.setAttribute("disabled", "true");
+        if (blockDownloads) {
+          blockDownloads.setAttribute("disabled", "true");
+        }
         blockUncommonUnwanted.setAttribute("disabled", "true");
       }
     });
 
-    blockDownloads.addEventListener("command", function() {
-      blockDownloadsPref.value = blockDownloads.checked;
-      if (blockDownloads.checked) {
-        blockUncommonUnwanted.removeAttribute("disabled");
-      } else {
-        blockUncommonUnwanted.setAttribute("disabled", "true");
-      }
-    });
+    if (blockDownloads) {
+      blockDownloads.addEventListener("command", function() {
+        blockDownloadsPref.value = blockDownloads.checked;
+        if (blockDownloads.checked) {
+          blockUncommonUnwanted.removeAttribute("disabled");
+        } else {
+          blockUncommonUnwanted.setAttribute("disabled", "true");
+        }
+      });
+    }
 
     blockUncommonUnwanted.addEventListener("command", function() {
       blockUnwantedPref.value = blockUncommonUnwanted.checked;
@@ -1053,10 +1101,17 @@ var gPrivacyPane = {
 
       let malware = malwareTable.value
         .split(",")
-        .filter(x => x !== "goog-unwanted-shavar" && x !== "test-unwanted-simple");
+        .filter(x => x !== "goog-unwanted-proto" &&
+                     x !== "goog-unwanted-shavar" &&
+                     x !== "test-unwanted-simple");
 
       if (blockUncommonUnwanted.checked) {
-        malware.push("goog-unwanted-shavar");
+        if (malware.indexOf("goog-malware-shavar") != -1) {
+          malware.push("goog-unwanted-shavar");
+        } else {
+          malware.push("goog-unwanted-proto");
+        }
+
         malware.push("test-unwanted-simple");
       }
 
@@ -1064,19 +1119,31 @@ var gPrivacyPane = {
       malware.sort();
 
       malwareTable.value = malware.join(",");
+
+      // Force an update after changing the malware table.
+      let listmanager = Components.classes["@mozilla.org/url-classifier/listmanager;1"]
+                        .getService(Components.interfaces.nsIUrlListManager);
+      if (listmanager) {
+        listmanager.forceUpdates(malwareTable.value);
+      }
     });
 
     // set initial values
 
     enableSafeBrowsing.checked = safeBrowsingPhishingPref.value && safeBrowsingMalwarePref.value;
     if (!enableSafeBrowsing.checked) {
-      blockDownloads.setAttribute("disabled", "true");
+      if (blockDownloads) {
+        blockDownloads.setAttribute("disabled", "true");
+      }
+
       blockUncommonUnwanted.setAttribute("disabled", "true");
     }
 
-    blockDownloads.checked = blockDownloadsPref.value;
-    if (!blockDownloadsPref.value) {
-      blockUncommonUnwanted.setAttribute("disabled", "true");
+    if (blockDownloads) {
+      blockDownloads.checked = blockDownloadsPref.value;
+      if (!blockDownloadsPref.value) {
+        blockUncommonUnwanted.setAttribute("disabled", "true");
+      }
     }
 
     blockUncommonUnwanted.checked = blockUnwantedPref.value && blockUncommonPref.value;
@@ -1090,30 +1157,38 @@ var gPrivacyPane = {
 
     var params = this._addonParams;
     if (!params.windowTitle || !params.introText) {
-      params.windowTitle = bundlePrefs.getString("addons_permissions_title");
+      params.windowTitle = bundlePrefs.getString("addons_permissions_title2");
       params.introText = bundlePrefs.getString("addonspermissionstext");
     }
 
     gSubDialog.open("chrome://browser/content/preferences/permissions.xul",
-                    null, params);
+      null, params);
   },
 
   /**
    * Parameters for the add-on install permissions dialog.
    */
   _addonParams:
-    {
-      blockVisible: false,
-      sessionVisible: false,
-      allowVisible: true,
-      prefilledHost: "",
-      permissionType: "install"
-    },
-
+  {
+    blockVisible: false,
+    sessionVisible: false,
+    allowVisible: true,
+    prefilledHost: "",
+    permissionType: "install"
+  },
 
   /**
-   * security.OCSP.enabled is an integer value for legacy reasons.
-   * A value of 1 means OCSP is enabled. Any other value means it is disabled.
+   * readEnableOCSP is used by the preferences UI to determine whether or not
+   * the checkbox for OCSP fetching should be checked (it returns true if it
+   * should be checked and false otherwise). The about:config preference
+   * "security.OCSP.enabled" is an integer rather than a boolean, so it can't be
+   * directly mapped from {true,false} to {checked,unchecked}. The possible
+   * values for "security.OCSP.enabled" are:
+   * 0: fetching is disabled
+   * 1: fetch for all certificates
+   * 2: fetch only for EV certificates
+   * Hence, if "security.OCSP.enabled" is non-zero, the checkbox should be
+   * checked. Otherwise, it should be unchecked.
    */
   readEnableOCSP() {
     var preference = document.getElementById("security.OCSP.enabled");
@@ -1121,15 +1196,27 @@ var gPrivacyPane = {
     if (preference.value === undefined) {
       return true;
     }
-    return preference.value == 1;
+    return preference.value != 0;
   },
 
   /**
-   * See documentation for readEnableOCSP.
+   * writeEnableOCSP is used by the preferences UI to map the checked/unchecked
+   * state of the OCSP fetching checkbox to the value that the preference
+   * "security.OCSP.enabled" should be set to (it returns that value). See the
+   * readEnableOCSP documentation for more background. We unfortunately don't
+   * have enough information to map from {true,false} to all possible values for
+   * "security.OCSP.enabled", but a reasonable alternative is to map from
+   * {true,false} to {<the default value>,0}. That is, if the box is checked,
+   * "security.OCSP.enabled" will be set to whatever default it should be, given
+   * the platform and channel. If the box is unchecked, the preference will be
+   * set to 0. Obviously this won't work if the default is 0, so we will have to
+   * revisit this if we ever set it to 0.
    */
   writeEnableOCSP() {
     var checkbox = document.getElementById("enableOCSP");
-    return checkbox.checked ? 1 : 0;
+    var defaults = Services.prefs.getDefaultBranch(null);
+    var defaultValue = defaults.getIntPref("security.OCSP.enabled");
+    return checkbox.checked ? defaultValue : 0;
   },
 
   /**
@@ -1146,49 +1233,14 @@ var gPrivacyPane = {
     gSubDialog.open("chrome://pippki/content/device_manager.xul");
   },
 
-  // NETWORK
-  /**
-   * Displays a dialog in which proxy settings may be changed.
-   */
-  showConnections() {
-    gSubDialog.open("chrome://browser/content/preferences/connection.xul");
-  },
-
   /**
    * Clears the cache.
    */
   clearCache() {
     try {
-      var cache = Components.classes["@mozilla.org/netwerk/cache-storage-service;1"]
-                            .getService(Components.interfaces.nsICacheStorageService);
-      cache.clear();
-    } catch (ex) {}
+      Services.cache2.clear();
+    } catch (ex) { }
     this.updateActualCacheSize();
-  },
-
-  showOfflineExceptions() {
-    var bundlePreferences = document.getElementById("bundlePreferences");
-    var params = { blockVisible: false,
-                   sessionVisible: false,
-                   allowVisible: false,
-                   prefilledHost: "",
-                   permissionType: "offline-app",
-                   manageCapability: Components.interfaces.nsIPermissionManager.DENY_ACTION,
-                   windowTitle: bundlePreferences.getString("offlinepermissionstitle"),
-                   introText: bundlePreferences.getString("offlinepermissionstext") };
-    gSubDialog.open("chrome://browser/content/preferences/permissions.xul",
-                    null, params);
-  },
-
-
-  offlineAppSelected() {
-    var removeButton = document.getElementById("offlineAppsListRemove");
-    var list = document.getElementById("offlineAppsList");
-    if (list.selectedItem) {
-      removeButton.setAttribute("disabled", "false");
-    } else {
-      removeButton.setAttribute("disabled", "true");
-    }
   },
 
   showSiteDataSettings() {
@@ -1227,7 +1279,7 @@ var gPrivacyPane = {
         if (!prefStrBundle.getFormattedString) {
           return;
         }
-        actualSizeLabel.value = prefStrBundle.getFormattedString("actualDiskCacheSize", size);
+        actualSizeLabel.textContent = prefStrBundle.getFormattedString("actualDiskCacheSize", size);
       },
 
       QueryInterface: XPCOMUtils.generateQI([
@@ -1236,14 +1288,11 @@ var gPrivacyPane = {
       ])
     };
 
-    actualSizeLabel.value = prefStrBundle.getString("actualDiskCacheSizeCalculated");
+    actualSizeLabel.textContent = prefStrBundle.getString("actualDiskCacheSizeCalculated");
 
     try {
-      var cacheService =
-        Components.classes["@mozilla.org/netwerk/cache-storage-service;1"]
-                  .getService(Components.interfaces.nsICacheStorageService);
-      cacheService.asyncGetDiskConsumption(this.observer);
-    } catch (e) {}
+      Services.cache2.asyncGetDiskConsumption(this.observer);
+    } catch (e) { }
   },
 
   updateCacheSizeUI(smartSizeEnabled) {
@@ -1308,20 +1357,14 @@ var gPrivacyPane = {
     }
   },
 
-  initSubmitCrashes() {
-    this._setupLearnMoreLink("toolkit.crashreporter.infoURL",
-                             "crashReporterLearnMore");
+  initDataCollection() {
+    this._setupLearnMoreLink("toolkit.datacollection.infoURL",
+      "dataCollectionPrivacyNotice");
   },
 
-  /**
-   * The preference/checkbox is configured in XUL.
-   *
-   * In all cases, set up the Learn More link sanely.
-   */
-  initTelemetry() {
-    if (AppConstants.MOZ_TELEMETRY_REPORTING) {
-      this._setupLearnMoreLink("toolkit.telemetry.infoURL", "telemetryLearnMore");
-    }
+  initSubmitCrashes() {
+    this._setupLearnMoreLink("toolkit.crashreporter.infoURL",
+      "crashReporterLearnMore");
   },
 
   /**
@@ -1340,214 +1383,33 @@ var gPrivacyPane = {
   },
 
   /**
-   * Set the status of the telemetry controls based on the input argument.
-   * @param {Boolean} aEnabled False disables the controls, true enables them.
-   */
-  setTelemetrySectionEnabled(aEnabled) {
-    if (!AppConstants.MOZ_TELEMETRY_REPORTING) {
-      return;
-    }
-    // If FHR is disabled, additional data sharing should be disabled as well.
-    let disabled = !aEnabled;
-    document.getElementById("submitTelemetryBox").disabled = disabled;
-    if (disabled) {
-      // If we disable FHR, untick the telemetry checkbox.
-      Services.prefs.setBoolPref("toolkit.telemetry.enabled", false);
-    }
-    document.getElementById("telemetryDataDesc").disabled = disabled;
-  },
-
-  /**
    * Initialize the health report service reference and checkbox.
    */
   initSubmitHealthReport() {
-    if (!AppConstants.MOZ_TELEMETRY_REPORTING) {
-      return;
-    }
     this._setupLearnMoreLink("datareporting.healthreport.infoURL", "FHRLearnMore");
 
     let checkbox = document.getElementById("submitHealthReportBox");
 
-    if (Services.prefs.prefIsLocked(PREF_UPLOAD_ENABLED)) {
+    // Telemetry is only sending data if MOZ_TELEMETRY_REPORTING is defined.
+    // We still want to display the preferences panel if that's not the case, but
+    // we want it to be disabled and unchecked.
+    if (Services.prefs.prefIsLocked(PREF_UPLOAD_ENABLED) ||
+      !AppConstants.MOZ_TELEMETRY_REPORTING) {
       checkbox.setAttribute("disabled", "true");
       return;
     }
 
-    checkbox.checked = Services.prefs.getBoolPref(PREF_UPLOAD_ENABLED);
-    this.setTelemetrySectionEnabled(checkbox.checked);
+    checkbox.checked = Services.prefs.getBoolPref(PREF_UPLOAD_ENABLED) &&
+      AppConstants.MOZ_TELEMETRY_REPORTING;
   },
 
   /**
    * Update the health report preference with state from checkbox.
    */
   updateSubmitHealthReport() {
-    if (!AppConstants.MOZ_TELEMETRY_REPORTING) {
-      return;
-    }
     let checkbox = document.getElementById("submitHealthReportBox");
     Services.prefs.setBoolPref(PREF_UPLOAD_ENABLED, checkbox.checked);
-    this.setTelemetrySectionEnabled(checkbox.checked);
   },
-
-  // Methods for Offline Apps (AppCache)
-
-  /**
-   * Clears the application cache.
-   */
-  clearOfflineAppCache() {
-    Components.utils.import("resource:///modules/offlineAppCache.jsm");
-    OfflineAppCacheHelper.clear();
-
-    this.updateActualAppCacheSize();
-    this.updateOfflineApps();
-  },
-
-  // Retrieves the amount of space currently used by offline cache
-  updateActualAppCacheSize() {
-    var visitor = {
-      onCacheStorageInfo(aEntryCount, aConsumption, aCapacity, aDiskDirectory) {
-        var actualSizeLabel = document.getElementById("actualAppCacheSize");
-        var sizeStrings = DownloadUtils.convertByteUnits(aConsumption);
-        var prefStrBundle = document.getElementById("bundlePreferences");
-        // The XBL binding for the string bundle may have been destroyed if
-        // the page was closed before this callback was executed.
-        if (!prefStrBundle.getFormattedString) {
-          return;
-        }
-        var sizeStr = prefStrBundle.getFormattedString("actualAppCacheSize", sizeStrings);
-        actualSizeLabel.value = sizeStr;
-      }
-    };
-
-    try {
-      var cacheService =
-        Components.classes["@mozilla.org/netwerk/cache-storage-service;1"]
-                  .getService(Components.interfaces.nsICacheStorageService);
-      var storage = cacheService.appCacheStorage(LoadContextInfo.default, null);
-      storage.asyncVisitStorage(visitor, false);
-    } catch (e) {}
-  },
-
-  readOfflineNotify() {
-    var pref = document.getElementById("browser.offline-apps.notify");
-    var button = document.getElementById("offlineNotifyExceptions");
-    button.disabled = !pref.value;
-    return pref.value;
-  },
-
-  // XXX: duplicated in browser.js
-  _getOfflineAppUsage(perm, groups) {
-    let cacheService = Cc["@mozilla.org/network/application-cache-service;1"].
-                       getService(Ci.nsIApplicationCacheService);
-    if (!groups) {
-      try {
-        groups = cacheService.getGroups();
-      } catch (ex) {
-        return 0;
-      }
-    }
-
-    let usage = 0;
-    for (let group of groups) {
-      let uri = Services.io.newURI(group);
-      if (perm.matchesURI(uri, true)) {
-        let cache = cacheService.getActiveCache(group);
-        usage += cache.usage;
-      }
-    }
-
-    return usage;
-  },
-
-  /**
-   * Updates the list of offline applications
-   */
-  updateOfflineApps() {
-    var pm = Components.classes["@mozilla.org/permissionmanager;1"]
-                       .getService(Components.interfaces.nsIPermissionManager);
-
-    var list = document.getElementById("offlineAppsList");
-    while (list.firstChild) {
-      list.firstChild.remove();
-    }
-
-    var groups;
-    try {
-      var cacheService = Components.classes["@mozilla.org/network/application-cache-service;1"].
-                         getService(Components.interfaces.nsIApplicationCacheService);
-      groups = cacheService.getGroups();
-    } catch (e) {
-      return;
-    }
-
-    var bundle = document.getElementById("bundlePreferences");
-
-    var enumerator = pm.enumerator;
-    while (enumerator.hasMoreElements()) {
-      var perm = enumerator.getNext().QueryInterface(Components.interfaces.nsIPermission);
-      if (perm.type == "offline-app" &&
-          perm.capability != Components.interfaces.nsIPermissionManager.DEFAULT_ACTION &&
-          perm.capability != Components.interfaces.nsIPermissionManager.DENY_ACTION) {
-        var row = document.createElement("listitem");
-        row.id = "";
-        row.className = "offlineapp";
-        row.setAttribute("origin", perm.principal.origin);
-        var converted = DownloadUtils.
-                        convertByteUnits(this._getOfflineAppUsage(perm, groups));
-        row.setAttribute("usage",
-                         bundle.getFormattedString("offlineAppUsage",
-                                                   converted));
-        list.appendChild(row);
-      }
-    }
-  },
-
-  removeOfflineApp() {
-    var list = document.getElementById("offlineAppsList");
-    var item = list.selectedItem;
-    var origin = item.getAttribute("origin");
-    var principal = Services.scriptSecurityManager.createCodebasePrincipalFromOrigin(origin);
-
-    var prompts = Components.classes["@mozilla.org/embedcomp/prompt-service;1"]
-                            .getService(Components.interfaces.nsIPromptService);
-    var flags = prompts.BUTTON_TITLE_IS_STRING * prompts.BUTTON_POS_0 +
-                prompts.BUTTON_TITLE_CANCEL * prompts.BUTTON_POS_1;
-
-    var bundle = document.getElementById("bundlePreferences");
-    var title = bundle.getString("offlineAppRemoveTitle");
-    var prompt = bundle.getFormattedString("offlineAppRemovePrompt", [principal.URI.prePath]);
-    var confirm = bundle.getString("offlineAppRemoveConfirm");
-    var result = prompts.confirmEx(window, title, prompt, flags, confirm,
-                                   null, null, null, {});
-    if (result != 0)
-      return;
-
-    // get the permission
-    var pm = Components.classes["@mozilla.org/permissionmanager;1"]
-                       .getService(Components.interfaces.nsIPermissionManager);
-    var perm = pm.getPermissionObject(principal, "offline-app", true);
-    if (perm) {
-      // clear offline cache entries
-      try {
-        var cacheService = Components.classes["@mozilla.org/network/application-cache-service;1"].
-                           getService(Components.interfaces.nsIApplicationCacheService);
-        var groups = cacheService.getGroups();
-        for (var i = 0; i < groups.length; i++) {
-          var uri = Services.io.newURI(groups[i]);
-          if (perm.matchesURI(uri, true)) {
-            var cache = cacheService.getActiveCache(groups[i]);
-            cache.discard();
-          }
-        }
-      } catch (e) {}
-
-      pm.removePermission(perm);
-    }
-    list.removeChild(item);
-    gPrivacyPane.offlineAppSelected();
-    this.updateActualAppCacheSize();
-  },
-  // Methods for Offline Apps (AppCache) end
 
   observe(aSubject, aTopic, aData) {
     switch (aTopic) {
@@ -1564,4 +1426,38 @@ var gPrivacyPane = {
         break;
     }
   },
+
+  // Accessibility checkbox helpers
+  _initA11yState() {
+    this._initA11yString();
+    let checkbox = document.getElementById("a11yPrivacyCheckbox");
+    switch (Services.prefs.getIntPref("accessibility.force_disabled")) {
+      case 1: // access blocked
+        checkbox.checked = true;
+        break;
+      case -1: // a11y is forced on for testing
+      case 0: // access allowed
+        checkbox.checked = false;
+        break;
+    }
+  },
+
+  _initA11yString() {
+    let a11yLearnMoreLink =
+      Services.urlFormatter.formatURLPref("accessibility.support.url");
+    document.getElementById("a11yLearnMoreLink")
+      .setAttribute("href", a11yLearnMoreLink);
+  },
+
+  updateA11yPrefs(checked) {
+    let buttonIndex = confirmRestartPrompt(checked, 0, true, false);
+    if (buttonIndex == CONFIRM_RESTART_PROMPT_RESTART_NOW) {
+      Services.prefs.setIntPref("accessibility.force_disabled", checked ? 1 : 0);
+      Services.telemetry.scalarSet("preferences.prevent_accessibility_services", true);
+      Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
+    }
+
+    // Revert the checkbox in case we didn't quit
+    document.getElementById("a11yPrivacyCheckbox").checked = !checked;
+  }
 };

@@ -38,22 +38,26 @@ nsXBLPrototypeResources::~nsXBLPrototypeResources()
   if (mLoader) {
     mLoader->mResources = nullptr;
   }
+  if (mServoStyleSet) {
+    mServoStyleSet->Shutdown();
+  }
 }
 
 void
-nsXBLPrototypeResources::AddResource(nsIAtom* aResourceType, const nsAString& aSrc)
+nsXBLPrototypeResources::AddResource(nsAtom* aResourceType, const nsAString& aSrc)
 {
   if (mLoader)
     mLoader->AddResource(aResourceType, aSrc);
 }
 
-void
-nsXBLPrototypeResources::LoadResources(bool* aResult)
+bool
+nsXBLPrototypeResources::LoadResources(nsIContent* aBoundElement)
 {
-  if (mLoader)
-    mLoader->LoadResources(aResult);
-  else
-    *aResult = true; // All resources loaded.
+  if (mLoader) {
+    return mLoader->LoadResources(aBoundElement);
+  }
+
+  return true; // All resources loaded.
 }
 
 void
@@ -107,7 +111,18 @@ nsXBLPrototypeResources::FlushSkinSheets()
     mStyleSheetList.AppendElement(newSheet);
   }
 
-  GatherRuleProcessor();
+  if (doc->IsStyledByServo()) {
+    // There may be no shell during unlink.
+    //
+    // FIXME(emilio): We shouldn't skip shadow root style updates just because?
+    // Though during unlink is fine I guess...
+    if (auto* shell = doc->GetShell()) {
+      MOZ_ASSERT(shell->GetPresContext());
+      ComputeServoStyleSet(shell->GetPresContext());
+    }
+  } else {
+    GatherRuleProcessor();
+  }
 
   return NS_OK;
 }
@@ -158,6 +173,19 @@ nsXBLPrototypeResources::GatherRuleProcessor()
                                           SheetType::Doc,
                                           nullptr,
                                           mRuleProcessor);
+}
+
+void
+nsXBLPrototypeResources::ComputeServoStyleSet(nsPresContext* aPresContext)
+{
+  nsTArray<RefPtr<ServoStyleSheet>> sheets(mStyleSheetList.Length());
+  for (StyleSheet* sheet : mStyleSheetList) {
+    MOZ_ASSERT(sheet->IsServo(),
+               "This should only be called with Servo-flavored style backend!");
+    sheets.AppendElement(sheet->AsServo());
+  }
+
+  mServoStyleSet = ServoStyleSet::CreateXBLServoStyleSet(aPresContext, sheets);
 }
 
 void

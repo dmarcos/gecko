@@ -7,12 +7,12 @@
 #define nsITextServicesDocument_h__
 
 #include "nsISupports.h"
+#include "nsStringFwd.h"
 
 class nsIDOMDocument;
-class nsIDOMRange;
 class nsIEditor;
-class nsString;
 class nsITextServicesFilter;
+class nsRange;
 
 /*
 TextServicesDocument interface to outside world
@@ -67,7 +67,7 @@ public:
    * @param aDOMRange is the range to use. aDOMRange must point to a
    * valid range object.
    */
-  NS_IMETHOD SetExtent(nsIDOMRange* aDOMRange) = 0;
+  NS_IMETHOD SetExtent(nsRange* aDOMRange) = 0;
 
   /**
    * Expands the end points of the range so that it spans complete words.
@@ -75,7 +75,7 @@ public:
    *
    * @param aDOMRange the range to be expanded/adjusted.
    */
-  NS_IMETHOD ExpandRangeToWordBoundaries(nsIDOMRange *aRange) = 0;
+  NS_IMETHOD ExpandRangeToWordBoundaries(nsRange* aRange) = 0;
 
   /**
    * Sets the filter to be used while iterating over content.

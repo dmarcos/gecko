@@ -11,7 +11,7 @@ function make_channel(url) {
   return NetUtil.newChannel({uri: url, loadUsingSystemPrincipal: true});
 }
 
-var multipartBody = "--boundary\r\n\r\nSome text\r\n--boundary\r\nContent-Type: text/x-test\r\n\r\n<?xml version='1.1'?>\r\n<root/>\r\n--boundary\r\n\r\n<?xml version='1.0'?><root/>\r\n--boundary--";
+var multipartBody = "--boundary\r\nSet-Cookie: foo=bar\r\n\r\nSome text\r\n--boundary\r\nContent-Type: text/x-test\r\n\r\n<?xml version='1.1'?>\r\n<root/>\r\n--boundary\r\n\r\n<?xml version='1.0'?><root/>\r\n--boundary--";
 
 function contentHandler(metadata, response)
 {
@@ -31,8 +31,8 @@ var testData =
 
 function responseHandler(request, buffer)
 {
-  do_check_eq(buffer, testData[testNum].data);
-  do_check_eq(request.QueryInterface(Ci.nsIChannel).contentType,
+  Assert.equal(buffer, testData[testNum].data);
+  Assert.equal(request.QueryInterface(Ci.nsIChannel).contentType,
   testData[testNum].type);
   if (++testNum == numTests)
     httpserver.stop(do_test_finished);
@@ -66,7 +66,7 @@ var multipartListener = {
   onStopRequest: function(request, context, status) {
     this._index++;
     // Second part should be last part
-    do_check_eq(request.QueryInterface(Ci.nsIMultiPartChannel).isLastPart, this._index == testData.length);
+    Assert.equal(request.QueryInterface(Ci.nsIMultiPartChannel).isLastPart, this._index == testData.length);
     try {
       responseHandler(request, this._buffer);
     } catch (ex) {

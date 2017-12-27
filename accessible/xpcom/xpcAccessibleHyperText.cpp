@@ -91,7 +91,7 @@ xpcAccessibleHyperText::GetTextBeforeOffset(int32_t aOffset,
     return NS_ERROR_FAILURE;
 
   if (mIntl.IsAccessible()) {
-    Intl()->TextBeforeOffset(aOffset, aBoundaryType, aStartOffset, aEndOffset, 
+    Intl()->TextBeforeOffset(aOffset, aBoundaryType, aStartOffset, aEndOffset,
                              aText);
   } else {
     nsString text;
@@ -117,11 +117,11 @@ xpcAccessibleHyperText::GetTextAtOffset(int32_t aOffset,
     return NS_ERROR_FAILURE;
 
   if (mIntl.IsAccessible()) {
-    Intl()->TextAtOffset(aOffset, aBoundaryType, aStartOffset, aEndOffset, 
+    Intl()->TextAtOffset(aOffset, aBoundaryType, aStartOffset, aEndOffset,
                          aText);
   } else {
     nsString text;
-    mIntl.AsProxy()->GetTextAtOffset(aOffset, aBoundaryType, text, 
+    mIntl.AsProxy()->GetTextAtOffset(aOffset, aBoundaryType, text,
                                      aStartOffset, aEndOffset);
     aText = text;
   }
@@ -143,11 +143,11 @@ xpcAccessibleHyperText::GetTextAfterOffset(int32_t aOffset,
     return NS_ERROR_FAILURE;
 
   if (mIntl.IsAccessible()) {
-    Intl()->TextAfterOffset(aOffset, aBoundaryType, aStartOffset, aEndOffset, 
+    Intl()->TextAfterOffset(aOffset, aBoundaryType, aStartOffset, aEndOffset,
                             aText);
   } else {
     nsString text;
-    mIntl.AsProxy()->GetTextAfterOffset(aOffset, aBoundaryType, text, 
+    mIntl.AsProxy()->GetTextAfterOffset(aOffset, aBoundaryType, text,
                                         aStartOffset, aEndOffset);
     aText = text;
   }
@@ -397,14 +397,14 @@ xpcAccessibleHyperText::GetSelectionBounds(int32_t aSelectionNum,
   if (mIntl.IsAccessible()) {
     if (aSelectionNum >= Intl()->SelectionCount())
       return NS_ERROR_INVALID_ARG;
-      
+
     Intl()->SelectionBoundsAt(aSelectionNum, aStartOffset, aEndOffset);
   } else {
 #if defined(XP_WIN)
     return NS_ERROR_NOT_IMPLEMENTED;
 #else
     nsString unused;
-    mIntl.AsProxy()->SelectionBoundsAt(aSelectionNum, unused, aStartOffset, 
+    mIntl.AsProxy()->SelectionBoundsAt(aSelectionNum, unused, aStartOffset,
                                        aEndOffset);
 #endif
   }
@@ -423,7 +423,7 @@ xpcAccessibleHyperText::SetSelectionBounds(int32_t aSelectionNum,
     return NS_ERROR_INVALID_ARG;
 
   if (mIntl.IsAccessible()) {
-      if (!Intl()->SetSelectionBoundsAt(aSelectionNum, aStartOffset, 
+      if (!Intl()->SetSelectionBoundsAt(aSelectionNum, aStartOffset,
                                         aEndOffset)) {
         return NS_ERROR_INVALID_ARG;
       }
@@ -431,7 +431,7 @@ xpcAccessibleHyperText::SetSelectionBounds(int32_t aSelectionNum,
 #if defined(XP_WIN)
     return NS_ERROR_NOT_IMPLEMENTED;
 #else
-      if (!mIntl.AsProxy()->SetSelectionBoundsAt(aSelectionNum, aStartOffset, 
+      if (!mIntl.AsProxy()->SetSelectionBoundsAt(aSelectionNum, aStartOffset,
                                                 aEndOffset)) {
         return NS_ERROR_INVALID_ARG;
       }
@@ -540,8 +540,7 @@ xpcAccessibleHyperText::GetSelectionRanges(nsIArray** aRanges)
   Intl()->SelectionRanges(&ranges);
   uint32_t len = ranges.Length();
   for (uint32_t idx = 0; idx < len; idx++)
-    xpcRanges->AppendElement(new xpcAccessibleTextRange(Move(ranges[idx])),
-                             false);
+    xpcRanges->AppendElement(new xpcAccessibleTextRange(Move(ranges[idx])));
 
   xpcRanges.forget(aRanges);
   return NS_OK;
@@ -565,8 +564,7 @@ xpcAccessibleHyperText::GetVisibleRanges(nsIArray** aRanges)
   Intl()->VisibleRanges(&ranges);
   uint32_t len = ranges.Length();
   for (uint32_t idx = 0; idx < len; idx++)
-    xpcRanges->AppendElement(new xpcAccessibleTextRange(Move(ranges[idx])),
-                             false);
+    xpcRanges->AppendElement(new xpcAccessibleTextRange(Move(ranges[idx])));
 
   xpcRanges.forget(aRanges);
   return NS_OK;

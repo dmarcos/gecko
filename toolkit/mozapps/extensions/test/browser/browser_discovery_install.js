@@ -2,6 +2,8 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
+/* eslint-disable mozilla/no-cpows-in-tests */
+
 // Tests that the discovery view can install add-ons correctly
 
 const MAIN_URL = "https://example.com/" + RELATIVE_DIR + "discovery_install.html";
@@ -47,87 +49,87 @@ function waitForFail() {
     let listener = (subject, topic, data) => {
       Services.obs.removeObserver(listener, topic);
       resolve();
-    }
+    };
     Services.obs.addObserver(listener, "addon-install-origin-blocked");
   });
 }
 
 // Tests that navigating to an XPI attempts to install correctly
-add_task(function* test_install_direct() {
+add_task(async function test_install_direct() {
   Services.prefs.setCharPref(PREF_DISCOVERURL, MAIN_URL);
 
-  let managerWindow = yield open_manager("addons://discover/");
+  let managerWindow = await open_manager("addons://discover/");
   let browser = managerWindow.document.getElementById("discover-browser");
 
   clickLink(browser, "install-direct");
-  yield waitForInstall();
+  await waitForInstall();
 
-  yield close_manager(managerWindow);
+  await close_manager(managerWindow);
 });
 
 // Tests that installing via JS works correctly
-add_task(function* test_install_js() {
+add_task(async function test_install_js() {
   Services.prefs.setCharPref(PREF_DISCOVERURL, MAIN_URL);
 
-  let managerWindow = yield open_manager("addons://discover/");
+  let managerWindow = await open_manager("addons://discover/");
   let browser = managerWindow.document.getElementById("discover-browser");
 
   clickLink(browser, "install-js");
-  yield waitForInstall();
+  await waitForInstall();
 
-  yield close_manager(managerWindow);
+  await close_manager(managerWindow);
 });
 
 // Installing from an inner-frame of the same origin should work
-add_task(function* test_install_inner_direct() {
+add_task(async function test_install_inner_direct() {
   Services.prefs.setCharPref(PREF_DISCOVERURL, GOOD_FRAMED_URL);
 
-  let managerWindow = yield open_manager("addons://discover/");
+  let managerWindow = await open_manager("addons://discover/");
   let browser = managerWindow.document.getElementById("discover-browser");
   let frame = browser.contentDocument.getElementById("frame");
 
   clickLink(frame, "install-direct");
-  yield waitForInstall();
+  await waitForInstall();
 
-  yield close_manager(managerWindow);
+  await close_manager(managerWindow);
 });
 
-add_task(function* test_install_inner_js() {
+add_task(async function test_install_inner_js() {
   Services.prefs.setCharPref(PREF_DISCOVERURL, GOOD_FRAMED_URL);
 
-  let managerWindow = yield open_manager("addons://discover/");
+  let managerWindow = await open_manager("addons://discover/");
   let browser = managerWindow.document.getElementById("discover-browser");
   let frame = browser.contentDocument.getElementById("frame");
 
   clickLink(frame, "install-js");
-  yield waitForInstall();
+  await waitForInstall();
 
-  yield close_manager(managerWindow);
+  await close_manager(managerWindow);
 });
 
 // Installing from an inner-frame of a different origin should fail
-add_task(function* test_install_xorigin_direct() {
+add_task(async function test_install_xorigin_direct() {
   Services.prefs.setCharPref(PREF_DISCOVERURL, BAD_FRAMED_URL);
 
-  let managerWindow = yield open_manager("addons://discover/");
+  let managerWindow = await open_manager("addons://discover/");
   let browser = managerWindow.document.getElementById("discover-browser");
   let frame = browser.contentDocument.getElementById("frame");
 
   clickLink(frame, "install-direct");
-  yield waitForFail();
+  await waitForFail();
 
-  yield close_manager(managerWindow);
+  await close_manager(managerWindow);
 });
 
-add_task(function* test_install_xorigin_js() {
+add_task(async function test_install_xorigin_js() {
   Services.prefs.setCharPref(PREF_DISCOVERURL, BAD_FRAMED_URL);
 
-  let managerWindow = yield open_manager("addons://discover/");
+  let managerWindow = await open_manager("addons://discover/");
   let browser = managerWindow.document.getElementById("discover-browser");
   let frame = browser.contentDocument.getElementById("frame");
 
   clickLink(frame, "install-js");
-  yield waitForFail();
+  await waitForFail();
 
-  yield close_manager(managerWindow);
+  await close_manager(managerWindow);
 });

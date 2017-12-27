@@ -3,7 +3,7 @@
     "message": "Tee veebist klippe või ekraanipilte ning salvesta need ajutiselt või püsivalt."
   },
   "addonAuthorsList": {
-    "message": "Mozilla <screenshots-feedback@mozilla.org>"
+    "message": "Mozilla <screenshots-feedback@mozilla.com>"
   },
   "contextMenuLabel": {
     "message": "Tee ekraanipilt"
@@ -29,6 +29,21 @@
   "downloadScreenshot": {
     "message": "Laadi alla"
   },
+  "downloadOnlyNotice": {
+    "message": "Oled hetkel režiimis, kus saab vaid alla laadida."
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots lülitub sellesse režiimi automaatselt, kui:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "oled privaatse veebilehitsemise aknas"
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "kolmanda osapoole küpsised on keelatud"
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "“ei säilita ajalugu” on lubatud"
+  },
   "notificationLinkCopiedTitle": {
     "message": "Link kopeeriti"
   },
@@ -36,6 +51,17 @@
     "message": "Link sinu pildile kopeeriti lõikepuhvrisse. Asetamiseks vajuta $META_KEY$-V.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Kopeeri"
+  },
+  "imageCroppedWarning": {
+    "message": "See pilt on vähendatud $PIXELS$-le pikslile.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -64,32 +90,47 @@
   "selfScreenshotErrorTitle": {
     "message": "Firefox Screenshots lehest ei saa ekraanipilti teha!"
   },
+  "emptySelectionErrorTitle": {
+    "message": "Valik on liiga väike"
+  },
+  "privateWindowErrorTitle": {
+    "message": "Ekraanipilte ei saa privaatsel veebilehitsemisel teha"
+  },
+  "privateWindowErrorDetails": {
+    "message": "Vabandame tüli tekitamise pärast. Töötame selle võimaluse lisamiseks tulevikus."
+  },
   "genericErrorTitle": {
     "message": "Oi-oi! Firefox Screenshots läks sassi."
   },
   "genericErrorDetails": {
     "message": "Me pole kindlad, mis just juhtus. Proovid ehk uuesti või teed ekraanipildi mõnest teisest lehest?"
   },
-  "tourBodyOne": {
+  "tourBodyIntro": {
     "message": "Tee, salvesta ja jaga ekraanipilte Firefoxist lahkumata."
   },
-  "tourHeaderTwo": {
+  "tourHeaderPageAction": {
+    "message": "Uus viis salvestamiseks"
+  },
+  "tourBodyPageAction": {
+    "message": "Laienda lehe tegevuste menüüd aadressiribal, kui soovid ekraanipildi teha."
+  },
+  "tourHeaderClickAndDrag": {
     "message": "Salvesta just seda, mida soovid"
   },
-  "tourBodyTwo": {
+  "tourBodyClickAndDrag": {
     "message": "Klõpsa ja lohista lehe osa valimiseks. Samuti võid valiku esile toomiseks kursorit selle kohal hoida."
   },
-  "tourHeaderThree": {
-    "message": "Nii, kuidas sulle meeldib"
-  },
-  "tourBodyThree": {
-    "message": "Salvesta kärbitud pilte lihtsamaks jagamiseks veebi või laadi need alla enda arvutisse. Võid ka klõpsata Minu pildid nupul kõigi tehtud piltide vaatamiseks."
-  },
-  "tourHeaderFour": {
+  "tourHeaderFullPage": {
     "message": "Salvesta aknaid või terveid lehti"
   },
-  "tourBodyFour": {
+  "tourBodyFullPage": {
     "message": "Kasuta nuppe ülal paremal aknas nähtava ala või terve lehe salvestamiseks."
+  },
+  "tourHeaderDownloadUpload": {
+    "message": "Nii, kuidas sulle meeldib"
+  },
+  "tourBodyDownloadUpload": {
+    "message": "Salvesta kärbitud pilte lihtsamaks jagamiseks veebi või laadi need alla enda arvutisse. Võid ka klõpsata Minu pildid nupul kõigi tehtud piltide vaatamiseks."
   },
   "tourSkip": {
     "message": "Jäta vahele"
@@ -103,8 +144,8 @@
   "tourDone": {
     "message": "Valmis"
   },
-  "termsAndPrivacyNotice": {
-    "message": "Firefox Screenshots kasutamisel nõustud Screenshots $TERMSANDPRIVACYNOTICETERMSLINK$ ja $TERMSANDPRIVACYNOTICEPRIVACYLINK$.",
+  "termsAndPrivacyNotice2": {
+    "message": "Firefox Screenshots'i kasutades nõustud meie $TERMSANDPRIVACYNOTICETERMSLINK$ ja $TERMSANDPRIVACYNOTICEPRIVACYLINK$.",
     "placeholders": {
       "termsandprivacynoticetermslink": {
         "content": "$1"
@@ -119,5 +160,8 @@
   },
   "termsAndPrivacyNoticyPrivacyLink": {
     "message": "privaatsuspoliitikaga"
+  },
+  "libraryLabel": {
+    "message": "Ekraanipildid"
   }
 }

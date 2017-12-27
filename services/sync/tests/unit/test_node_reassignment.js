@@ -14,8 +14,8 @@ Cu.import("resource://testing-common/services/sync/rotaryengine.js");
 Cu.import("resource://testing-common/services/sync/utils.js");
 Cu.import("resource://gre/modules/PromiseUtils.jsm");
 
-function run_test() {
-  Log.repository.getLogger("Sync.AsyncResource").level = Log.Level.Trace;
+
+add_task(async function setup() {
   Log.repository.getLogger("Sync.ErrorHandler").level  = Log.Level.Trace;
   Log.repository.getLogger("Sync.Resource").level      = Log.Level.Trace;
   Log.repository.getLogger("Sync.RESTRequest").level   = Log.Level.Trace;
@@ -30,9 +30,7 @@ function run_test() {
   }
   Svc.Obs.add("weave:ui:login:error", onUIError);
   Svc.Obs.add("weave:ui:sync:error", onUIError);
-
-  run_next_test();
-}
+});
 
 /**
  * Emulate the following Zeus config:
@@ -95,42 +93,44 @@ async function syncAndExpectNodeReassignment(server, firstNotification, between,
   };
   Service.identity._tokenServerClient = mockTSC;
 
-  function onwards() {
-    function onFirstSync() {
-      _("First sync completed.");
-      Svc.Obs.remove(firstNotification, onFirstSync);
-      Svc.Obs.add(secondNotification, onSecondSync);
+  // Make sure that it works!
+  await new Promise(res => {
+    let request = new RESTRequest(url);
+    request.get(function() {
+      Assert.equal(request.response.status, 401);
+      res();
+    });
+  });
 
-      do_check_eq(Service.clusterURL, "");
+  function onFirstSync() {
+    _("First sync completed.");
+    Svc.Obs.remove(firstNotification, onFirstSync);
+    Svc.Obs.add(secondNotification, onSecondSync);
 
-      // Allow for tests to clean up error conditions.
-      between();
-    }
-    function onSecondSync() {
-      _("Second sync completed.");
-      Svc.Obs.remove(secondNotification, onSecondSync);
-      Service.scheduler.clearSyncTriggers();
+    Assert.equal(Service.clusterURL, "");
 
-      // Make absolutely sure that any event listeners are done with their work
-      // before we proceed.
-      waitForZeroTimer(function() {
-        _("Second sync nextTick.");
-        do_check_eq(getTokenCount, 1);
-        Service.startOver();
+    // Allow for tests to clean up error conditions.
+    between();
+  }
+  function onSecondSync() {
+    _("Second sync completed.");
+    Svc.Obs.remove(secondNotification, onSecondSync);
+    Service.scheduler.clearSyncTriggers();
+
+    // Make absolutely sure that any event listeners are done with their work
+    // before we proceed.
+    waitForZeroTimer(function() {
+      _("Second sync nextTick.");
+      Assert.equal(getTokenCount, 1);
+      Service.startOver().then(() => {
         server.stop(deferred.resolve);
       });
-    }
-
-    Svc.Obs.add(firstNotification, onFirstSync);
-    Service.sync();
+    });
   }
 
-  // Make sure that it works!
-  let request = new RESTRequest(url);
-  request.get(function() {
-    do_check_eq(request.response.status, 401);
-    Utils.nextTick(onwards);
-  });
+  Svc.Obs.add(firstNotification, onFirstSync);
+  await Service.sync();
+
   await deferred.promise;
 }
 
@@ -142,18 +142,18 @@ add_task(async function test_momentary_401_engine() {
   let john   = server.user("johndoe");
 
   _("Enabling the Rotary engine.");
-  let { engine, tracker } = registerRotaryEngine();
+  let { engine, tracker } = await registerRotaryEngine();
 
   // We need the server to be correctly set up prior to experimenting. Do this
   // through a sync.
   let global = {syncID: Service.syncID,
                 storageVersion: STORAGE_VERSION,
                 rotary: {version: engine.version,
-                         syncID:  engine.syncID}}
+                         syncID:  engine.syncID}};
   john.createCollection("meta").insert("global", global);
 
   _("First sync to prepare server contents.");
-  Service.sync();
+  await Service.sync();
 
   _("Setting up Rotary collection to 401.");
   let rotary = john.createCollection("rotary");
@@ -172,7 +172,7 @@ add_task(async function test_momentary_401_engine() {
       // lastSyncReassigned shouldn't be cleared until a sync has succeeded.
       _("Ensuring that lastSyncReassigned is still set at next sync start.");
       Svc.Obs.remove("weave:service:login:start", onLoginStart);
-      do_check_true(getReassigned());
+      Assert.ok(getReassigned());
     }
 
     _("Adding observer that lastSyncReassigned is still set on login.");
@@ -197,7 +197,7 @@ add_task(async function test_momentary_401_info_collections() {
   let server = await prepareServer();
 
   _("First sync to prepare server contents.");
-  Service.sync();
+  await Service.sync();
 
   // Return a 401 for info requests, particularly info/collections.
   let oldHandler = server.toplevelHandlers.info;
@@ -222,8 +222,8 @@ add_task(async function test_momentary_401_storage_loggedin() {
     "Resolved by reassignment.");
   let server = await prepareServer();
 
-  _("Performing initial sync to ensure we are logged in.")
-  Service.sync();
+  _("Performing initial sync to ensure we are logged in.");
+  await Service.sync();
 
   // Return a 401 for all storage requests.
   let oldHandler = server.toplevelHandlers.storage;
@@ -234,7 +234,7 @@ add_task(async function test_momentary_401_storage_loggedin() {
     server.toplevelHandlers.storage = oldHandler;
   }
 
-  do_check_true(Service.isLoggedIn, "already logged in");
+  Assert.ok(Service.isLoggedIn, "already logged in");
   await syncAndExpectNodeReassignment(server,
                                       "weave:service:sync:error",
                                       undo,
@@ -258,7 +258,7 @@ add_task(async function test_momentary_401_storage_loggedout() {
     server.toplevelHandlers.storage = oldHandler;
   }
 
-  do_check_false(Service.isLoggedIn, "not already logged in");
+  Assert.ok(!Service.isLoggedIn, "not already logged in");
   await syncAndExpectNodeReassignment(server,
                                       "weave:service:login:error",
                                       undo,
@@ -305,10 +305,10 @@ add_task(async function test_loop_avoidance_storage() {
     Svc.Obs.remove(firstNotification, onFirstSync);
     Svc.Obs.add(secondNotification, onSecondSync);
 
-    do_check_eq(Service.clusterURL, "");
+    Assert.equal(Service.clusterURL, "");
 
     // We got a 401 mid-sync, and set the pref accordingly.
-    do_check_true(Services.prefs.getBoolPref("services.sync.lastSyncReassigned"));
+    Assert.ok(Services.prefs.getBoolPref("services.sync.lastSyncReassigned"));
 
     // Update the timestamp.
     now = Date.now();
@@ -321,10 +321,10 @@ add_task(async function test_loop_avoidance_storage() {
 
     // This sync occurred within the backoff interval.
     let elapsedTime = Date.now() - now;
-    do_check_true(elapsedTime < MINIMUM_BACKOFF_INTERVAL);
+    Assert.ok(elapsedTime < MINIMUM_BACKOFF_INTERVAL);
 
     // This pref will be true until a sync completes successfully.
-    do_check_true(getReassigned());
+    Assert.ok(getReassigned());
 
     // The timer will be set for some distant time.
     // We store nextSync in prefs, which offers us only limited resolution.
@@ -333,8 +333,8 @@ add_task(async function test_loop_avoidance_storage() {
     _("Next sync scheduled for " + Service.scheduler.nextSync);
     _("Expected to be slightly greater than " + expectedNextSync);
 
-    do_check_true(Service.scheduler.nextSync >= expectedNextSync);
-    do_check_true(!!Service.scheduler.syncTimer);
+    Assert.ok(Service.scheduler.nextSync >= expectedNextSync);
+    Assert.ok(!!Service.scheduler.syncTimer);
 
     // Undo our evil scheme.
     server.toplevelHandlers.storage = oldHandler;
@@ -353,17 +353,18 @@ add_task(async function test_loop_avoidance_storage() {
     // before we proceed.
     waitForZeroTimer(function() {
       _("Third sync nextTick.");
-      do_check_false(getReassigned());
-      do_check_eq(getTokenCount, 2);
-      Service.startOver();
-      server.stop(deferred.resolve);
+      Assert.ok(!getReassigned());
+      Assert.equal(getTokenCount, 2);
+      Service.startOver().then(() => {
+        server.stop(deferred.resolve);
+      });
     });
   }
 
   Svc.Obs.add(firstNotification, onFirstSync);
 
   now = Date.now();
-  Service.sync();
+  await Service.sync();
   await deferred.promise;
 });
 
@@ -376,7 +377,7 @@ add_task(async function test_loop_avoidance_engine() {
   let john   = server.user("johndoe");
 
   _("Enabling the Rotary engine.");
-  let { engine, tracker } = registerRotaryEngine();
+  let { engine, tracker } = await registerRotaryEngine();
   let deferred = PromiseUtils.defer();
 
   let getTokenCount = 0;
@@ -395,11 +396,11 @@ add_task(async function test_loop_avoidance_engine() {
   let global = {syncID: Service.syncID,
                 storageVersion: STORAGE_VERSION,
                 rotary: {version: engine.version,
-                         syncID:  engine.syncID}}
+                         syncID:  engine.syncID}};
   john.createCollection("meta").insert("global", global);
 
   _("First sync to prepare server contents.");
-  Service.sync();
+  await Service.sync();
 
   _("Setting up Rotary collection to 401.");
   let rotary = john.createCollection("rotary");
@@ -412,18 +413,12 @@ add_task(async function test_loop_avoidance_engine() {
   function onLoginStart() {
     // lastSyncReassigned shouldn't be cleared until a sync has succeeded.
     _("Ensuring that lastSyncReassigned is still set at next sync start.");
-    do_check_true(getReassigned());
+    Assert.ok(getReassigned());
   }
 
   function beforeSuccessfulSync() {
     _("Undoing test changes.");
     rotary.collectionHandler = oldHandler;
-  }
-
-  function afterSuccessfulSync() {
-    Svc.Obs.remove("weave:service:login:start", onLoginStart);
-    Service.startOver();
-    server.stop(deferred.resolve);
   }
 
   let firstNotification  = "weave:service:sync:finish";
@@ -440,13 +435,13 @@ add_task(async function test_loop_avoidance_engine() {
     Svc.Obs.remove(firstNotification, onFirstSync);
     Svc.Obs.add(secondNotification, onSecondSync);
 
-    do_check_eq(Service.clusterURL, "");
+    Assert.equal(Service.clusterURL, "");
 
     _("Adding observer that lastSyncReassigned is still set on login.");
     Svc.Obs.add("weave:service:login:start", onLoginStart);
 
     // We got a 401 mid-sync, and set the pref accordingly.
-    do_check_true(Services.prefs.getBoolPref("services.sync.lastSyncReassigned"));
+    Assert.ok(Services.prefs.getBoolPref("services.sync.lastSyncReassigned"));
 
     // Update the timestamp.
     now = Date.now();
@@ -459,10 +454,10 @@ add_task(async function test_loop_avoidance_engine() {
 
     // This sync occurred within the backoff interval.
     let elapsedTime = Date.now() - now;
-    do_check_true(elapsedTime < MINIMUM_BACKOFF_INTERVAL);
+    Assert.ok(elapsedTime < MINIMUM_BACKOFF_INTERVAL);
 
     // This pref will be true until a sync completes successfully.
-    do_check_true(getReassigned());
+    Assert.ok(getReassigned());
 
     // The timer will be set for some distant time.
     // We store nextSync in prefs, which offers us only limited resolution.
@@ -471,8 +466,8 @@ add_task(async function test_loop_avoidance_engine() {
     _("Next sync scheduled for " + Service.scheduler.nextSync);
     _("Expected to be slightly greater than " + expectedNextSync);
 
-    do_check_true(Service.scheduler.nextSync >= expectedNextSync);
-    do_check_true(!!Service.scheduler.syncTimer);
+    Assert.ok(Service.scheduler.nextSync >= expectedNextSync);
+    Assert.ok(!!Service.scheduler.syncTimer);
 
     // Undo our evil scheme.
     beforeSuccessfulSync();
@@ -492,16 +487,19 @@ add_task(async function test_loop_avoidance_engine() {
     // before we proceed.
     waitForZeroTimer(function() {
       _("Third sync nextTick.");
-      do_check_false(getReassigned());
-      do_check_eq(getTokenCount, 2);
-      afterSuccessfulSync();
+      Assert.ok(!getReassigned());
+      Assert.equal(getTokenCount, 2);
+      Svc.Obs.remove("weave:service:login:start", onLoginStart);
+      Service.startOver().then(() => {
+        server.stop(deferred.resolve);
+      });
     });
   }
 
   Svc.Obs.add(firstNotification, onFirstSync);
 
   now = Date.now();
-  Service.sync();
+  await Service.sync();
   await deferred.promise;
 
   tracker.clearChangedIDs();

@@ -161,6 +161,11 @@ MacroAssemblerX86::loadConstantSimd128Float(const SimdConstant& v, FloatRegister
 void
 MacroAssemblerX86::finish()
 {
+    // Last instruction may be an indirect jump so eagerly insert an undefined
+    // instruction byte to prevent processors from decoding data values into
+    // their pipelines. See Intel performance guides.
+    masm.ud2();
+
     if (!doubles_.empty())
         masm.haltingAlign(sizeof(double));
     for (const Double& d : doubles_) {
@@ -197,7 +202,7 @@ MacroAssemblerX86::finish()
 }
 
 void
-MacroAssemblerX86::handleFailureWithHandlerTail(void* handler)
+MacroAssemblerX86::handleFailureWithHandlerTail(void* handler, Label* profilerExitTail)
 {
     // Reserve space for exception information.
     subl(Imm32(sizeof(ResumeFromException)), esp);
@@ -206,13 +211,14 @@ MacroAssemblerX86::handleFailureWithHandlerTail(void* handler)
     // Call the handler.
     asMasm().setupUnalignedABICall(ecx);
     asMasm().passABIArg(eax);
-    asMasm().callWithABI(handler);
+    asMasm().callWithABI(handler, MoveOp::GENERAL, CheckUnsafeCallWithABI::DontCheckHasExitFrame);
 
     Label entryFrame;
     Label catch_;
     Label finally;
     Label return_;
     Label bailout;
+    Label wasm;
 
     loadPtr(Address(esp, offsetof(ResumeFromException, kind)), eax);
     asMasm().branch32(Assembler::Equal, eax, Imm32(ResumeFromException::RESUME_ENTRY_FRAME),
@@ -222,13 +228,14 @@ MacroAssemblerX86::handleFailureWithHandlerTail(void* handler)
     asMasm().branch32(Assembler::Equal, eax, Imm32(ResumeFromException::RESUME_FORCED_RETURN),
                       &return_);
     asMasm().branch32(Assembler::Equal, eax, Imm32(ResumeFromException::RESUME_BAILOUT), &bailout);
+    asMasm().branch32(Assembler::Equal, eax, Imm32(ResumeFromException::RESUME_WASM), &wasm);
 
     breakpoint(); // Invalid kind.
 
     // No exception handler. Load the error value, load the new stack pointer
     // and return from the entry frame.
     bind(&entryFrame);
-    moveValue(MagicValue(JS_ION_ERROR), JSReturnOperand);
+    asMasm().moveValue(MagicValue(JS_ION_ERROR), JSReturnOperand);
     loadPtr(Address(esp, offsetof(ResumeFromException, stackPointer)), esp);
     ret();
 
@@ -271,7 +278,7 @@ MacroAssemblerX86::handleFailureWithHandlerTail(void* handler)
         AbsoluteAddress addressOfEnabled(GetJitContext()->runtime->geckoProfiler().addressOfEnabled());
         asMasm().branch32(Assembler::Equal, addressOfEnabled, Imm32(0),
                           &skipProfilingInstrumentation);
-        profilerExitFrame();
+        jump(profilerExitTail);
         bind(&skipProfilingInstrumentation);
     }
 
@@ -283,6 +290,14 @@ MacroAssemblerX86::handleFailureWithHandlerTail(void* handler)
     loadPtr(Address(esp, offsetof(ResumeFromException, bailoutInfo)), ecx);
     movl(Imm32(BAILOUT_RETURN_OK), eax);
     jmp(Operand(esp, offsetof(ResumeFromException, target)));
+
+    // If we are throwing and the innermost frame was a wasm frame, reset SP and
+    // FP; SP is pointing to the unwound return address to the wasm entry, so
+    // we can just ret().
+    bind(&wasm);
+    loadPtr(Address(esp, offsetof(ResumeFromException, framePointer)), ebp);
+    loadPtr(Address(esp, offsetof(ResumeFromException, stackPointer)), esp);
+    masm.ret();
 }
 
 void
@@ -297,7 +312,7 @@ MacroAssemblerX86::profilerEnterFrame(Register framePtr, Register scratch)
 void
 MacroAssemblerX86::profilerExitFrame()
 {
-    jmp(GetJitContext()->runtime->jitRuntime()->getProfilerExitFrameTail());
+    jump(GetJitContext()->runtime->jitRuntime()->getProfilerExitFrameTail());
 }
 
 MacroAssembler&
@@ -453,6 +468,73 @@ MacroAssembler::callWithABINoProfiler(const Address& fun, MoveOp::Type result)
     callWithABIPre(&stackAdjust);
     call(fun);
     callWithABIPost(stackAdjust, result);
+}
+
+// ===============================================================
+// Move instructions
+
+void
+MacroAssembler::moveValue(const TypedOrValueRegister& src, const ValueOperand& dest)
+{
+    if (src.hasValue()) {
+        moveValue(src.valueReg(), dest);
+        return;
+    }
+
+    MIRType type = src.type();
+    AnyRegister reg = src.typedReg();
+
+    if (!IsFloatingPointType(type)) {
+        mov(ImmWord(MIRTypeToTag(type)), dest.typeReg());
+        if (reg.gpr() != dest.payloadReg())
+            movl(reg.gpr(), dest.payloadReg());
+        return;
+    }
+
+    ScratchDoubleScope scratch(*this);
+    FloatRegister freg = reg.fpu();
+    if (type == MIRType::Float32) {
+        convertFloat32ToDouble(freg, scratch);
+        freg = scratch;
+    }
+    boxDouble(freg, dest, scratch);
+}
+
+void
+MacroAssembler::moveValue(const ValueOperand& src, const ValueOperand& dest)
+{
+    Register s0 = src.typeReg();
+    Register s1 = src.payloadReg();
+    Register d0 = dest.typeReg();
+    Register d1 = dest.payloadReg();
+
+    // Either one or both of the source registers could be the same as a
+    // destination register.
+    if (s1 == d0) {
+        if (s0 == d1) {
+            // If both are, this is just a swap of two registers.
+            xchgl(d0, d1);
+            return;
+        }
+        // If only one is, copy that source first.
+        mozilla::Swap(s0, s1);
+        mozilla::Swap(d0, d1);
+    }
+
+    if (s0 != d0)
+        movl(s0, d0);
+    if (s1 != d1)
+        movl(s1, d1);
+}
+
+void
+MacroAssembler::moveValue(const Value& src, const ValueOperand& dest)
+{
+    movl(Imm32(src.toNunboxTag()), dest.typeReg());
+    if (src.isGCThing())
+        movl(ImmGCPtr(src.toGCThing()), dest.payloadReg());
+    else
+        movl(Imm32(src.toNunboxPayload()), dest.payloadReg());
 }
 
 // ===============================================================
@@ -645,9 +727,12 @@ MacroAssembler::wasmLoad(const wasm::MemoryAccessDesc& access, Operand srcAddr, 
 void
 MacroAssembler::wasmLoadI64(const wasm::MemoryAccessDesc& access, Operand srcAddr, Register64 out)
 {
-    MOZ_ASSERT(!access.isAtomic());
+    // Atomic i64 load must use lock_cmpxchg8b.
+    MOZ_ASSERT_IF(access.isAtomic(), access.byteSize() <= 4);
     MOZ_ASSERT(!access.isSimd());
     MOZ_ASSERT(srcAddr.kind() == Operand::MEM_REG_DISP || srcAddr.kind() == Operand::MEM_SCALE);
+
+    memoryBarrier(access.barrierBefore());
 
     size_t loadOffset = size();
     switch (access.type()) {
@@ -691,30 +776,18 @@ MacroAssembler::wasmLoadI64(const wasm::MemoryAccessDesc& access, Operand srcAdd
         xorl(out.high, out.high);
         break;
       case Scalar::Int64: {
-        Operand low(eax);
-        Operand high(eax);
-
         if (srcAddr.kind() == Operand::MEM_SCALE) {
-            BaseIndex addr = srcAddr.toBaseIndex();
-
-            MOZ_RELEASE_ASSERT(addr.base != out.low && addr.index != out.low);
-
-            low = Operand(addr.base, addr.index, addr.scale, addr.offset + INT64LOW_OFFSET);
-            high = Operand(addr.base, addr.index, addr.scale, addr.offset + INT64HIGH_OFFSET);
-        } else {
-            Address addr = srcAddr.toAddress();
-
-            MOZ_RELEASE_ASSERT(addr.base != out.low);
-
-            low = Operand(addr.base, addr.offset + INT64LOW_OFFSET);
-            high = Operand(addr.base, addr.offset + INT64HIGH_OFFSET);
+            MOZ_RELEASE_ASSERT(srcAddr.toBaseIndex().base != out.low &&
+                               srcAddr.toBaseIndex().index != out.low);
         }
+        if (srcAddr.kind() == Operand::MEM_REG_DISP)
+            MOZ_RELEASE_ASSERT(srcAddr.toAddress().base != out.low);
 
-        movl(low, out.low);
+        movl(LowWord(srcAddr), out.low);
         append(access, loadOffset, framePushed());
 
         loadOffset = size();
-        movl(high, out.high);
+        movl(HighWord(srcAddr), out.high);
         append(access, loadOffset, framePushed());
 
         break;
@@ -730,6 +803,8 @@ MacroAssembler::wasmLoadI64(const wasm::MemoryAccessDesc& access, Operand srcAdd
       case Scalar::MaxTypedArrayViewType:
         MOZ_CRASH("unexpected array type");
     }
+
+    memoryBarrier(access.barrierAfter());
 }
 
 void
@@ -801,30 +876,108 @@ MacroAssembler::wasmStore(const wasm::MemoryAccessDesc& access, AnyRegister valu
 void
 MacroAssembler::wasmStoreI64(const wasm::MemoryAccessDesc& access, Register64 value, Operand dstAddr)
 {
+    // Atomic i64 store must use lock_cmpxchg8b.
     MOZ_ASSERT(!access.isAtomic());
     MOZ_ASSERT(!access.isSimd());
     MOZ_ASSERT(dstAddr.kind() == Operand::MEM_REG_DISP || dstAddr.kind() == Operand::MEM_SCALE);
 
-    Operand low(eax);
-    Operand high(eax);
-    if (dstAddr.kind() == Operand::MEM_SCALE) {
-        BaseIndex addr = dstAddr.toBaseIndex();
-        low = Operand(addr.base, addr.index, addr.scale, addr.offset + INT64LOW_OFFSET);
-        high = Operand(addr.base, addr.index, addr.scale, addr.offset + INT64HIGH_OFFSET);
-    } else {
-        Address addr = dstAddr.toAddress();
-        low = Operand(addr.base, addr.offset + INT64LOW_OFFSET);
-        high = Operand(addr.base, addr.offset + INT64HIGH_OFFSET);
-    }
-
     size_t storeOffset = size();
-    movl(value.low, low);
+    movl(value.low, LowWord(dstAddr));
     append(access, storeOffset, framePushed());
 
     storeOffset = size();
-    movl(value.high, high);
+    movl(value.high, HighWord(dstAddr));
     append(access, storeOffset, framePushed());
 }
+
+// We don't have enough registers for all the operands on x86, so the rhs
+// operand is in memory.
+
+#define ATOMIC_OP_BODY(OPERATE)                   \
+    MOZ_ASSERT(output.low == eax);                \
+    MOZ_ASSERT(output.high == edx);               \
+    MOZ_ASSERT(temp.low == ebx);                  \
+    MOZ_ASSERT(temp.high == ecx);                 \
+    load64(address, output);                      \
+    Label again;                                  \
+    bind(&again);                                 \
+    asMasm().move64(output, temp);                \
+    OPERATE(value, temp);                         \
+    lock_cmpxchg8b(edx, eax, ecx, ebx, Operand(address));     \
+    j(NonZero, &again);
+
+template <typename T, typename U>
+void
+MacroAssemblerX86::atomicFetchAdd64(const T& value, const U& address, Register64 temp,
+                                    Register64 output)
+{
+    ATOMIC_OP_BODY(add64)
+}
+
+template <typename T, typename U>
+void
+MacroAssemblerX86::atomicFetchSub64(const T& value, const U& address, Register64 temp,
+                                    Register64 output)
+{
+    ATOMIC_OP_BODY(sub64)
+}
+
+template <typename T, typename U>
+void
+MacroAssemblerX86::atomicFetchAnd64(const T& value, const U& address, Register64 temp,
+                                    Register64 output)
+{
+    ATOMIC_OP_BODY(and64)
+}
+
+template <typename T, typename U>
+void
+MacroAssemblerX86::atomicFetchOr64(const T& value, const U& address, Register64 temp,
+                                   Register64 output)
+{
+    ATOMIC_OP_BODY(or64)
+}
+
+template <typename T, typename U>
+void
+MacroAssemblerX86::atomicFetchXor64(const T& value, const U& address, Register64 temp,
+                                    Register64 output)
+{
+    ATOMIC_OP_BODY(xor64)
+}
+
+#undef ATOMIC_OP_BODY
+
+template void
+js::jit::MacroAssemblerX86::atomicFetchAdd64(const Address& value, const Address& address,
+                                             Register64 temp, Register64 output);
+template void
+js::jit::MacroAssemblerX86::atomicFetchAdd64(const Address& value, const BaseIndex& address,
+                                             Register64 temp, Register64 output);
+template void
+js::jit::MacroAssemblerX86::atomicFetchSub64(const Address& value, const Address& address,
+                                             Register64 temp, Register64 output);
+template void
+js::jit::MacroAssemblerX86::atomicFetchSub64(const Address& value, const BaseIndex& address,
+                                             Register64 temp, Register64 output);
+template void
+js::jit::MacroAssemblerX86::atomicFetchAnd64(const Address& value, const Address& address,
+                                             Register64 temp, Register64 output);
+template void
+js::jit::MacroAssemblerX86::atomicFetchAnd64(const Address& value, const BaseIndex& address,
+                                             Register64 temp, Register64 output);
+template void
+js::jit::MacroAssemblerX86::atomicFetchOr64(const Address& value, const Address& address,
+                                            Register64 temp, Register64 output);
+template void
+js::jit::MacroAssemblerX86::atomicFetchOr64(const Address& value, const BaseIndex& address,
+                                            Register64 temp, Register64 output);
+template void
+js::jit::MacroAssemblerX86::atomicFetchXor64(const Address& value, const Address& address,
+                                             Register64 temp, Register64 output);
+template void
+js::jit::MacroAssemblerX86::atomicFetchXor64(const Address& value, const BaseIndex& address,
+                                             Register64 temp, Register64 output);
 
 void
 MacroAssembler::wasmTruncateDoubleToUInt32(FloatRegister input, Register output, Label* oolEntry)

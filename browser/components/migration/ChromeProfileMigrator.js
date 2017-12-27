@@ -20,40 +20,18 @@ const AUTH_TYPE = {
 };
 
 Cu.import("resource://gre/modules/AppConstants.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/NetUtil.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
-Cu.import("resource://gre/modules/osfile.jsm"); /* globals OS */
-Cu.import("resource://gre/modules/Task.jsm");
-Cu.import("resource:///modules/MigrationUtils.jsm"); /* globals MigratorPrototype */
+Cu.import("resource://gre/modules/NetUtil.jsm");
+Cu.import("resource://gre/modules/osfile.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource:///modules/ChromeMigrationUtils.jsm");
+Cu.import("resource:///modules/MigrationUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
                                   "resource://gre/modules/PlacesUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "OSCrypto",
                                   "resource://gre/modules/OSCrypto.jsm");
-/**
- * Get an nsIFile instance representing the expected location of user data
- * for this copy of Chrome/Chromium/Canary on different OSes.
- * @param subfoldersWin {Array} an array of subfolders to use for Windows
- * @param subfoldersOSX {Array} an array of subfolders to use for OS X
- * @param subfoldersUnix {Array} an array of subfolders to use for *nix systems
- * @returns {nsIFile} the place we expect data to live. Might not actually exist!
- */
-function getDataFolder(subfoldersWin, subfoldersOSX, subfoldersUnix) {
-  let dirServiceID, subfolders;
-  if (AppConstants.platform == "win") {
-    dirServiceID = "LocalAppData";
-    subfolders = subfoldersWin.concat(["User Data"]);
-  } else if (AppConstants.platform == "macosx") {
-    dirServiceID = "ULibDir";
-    subfolders = ["Application Support"].concat(subfoldersOSX);
-  } else {
-    dirServiceID = "Home";
-    subfolders = [".config"].concat(subfoldersUnix);
-  }
-  return FileUtils.getDir(dirServiceID, subfolders, false);
-}
 
 /**
  * Convert Chrome time format to Date object
@@ -114,8 +92,8 @@ function convertBookmarks(items, errorAccumulator) {
 }
 
 function ChromeProfileMigrator() {
-  let chromeUserDataFolder =
-    getDataFolder(["Google", "Chrome"], ["Google", "Chrome"], ["google-chrome"]);
+  let path = ChromeMigrationUtils.getDataPath("Chrome");
+  let chromeUserDataFolder = new FileUtils.File(path);
   this._chromeUserDataFolder = chromeUserDataFolder.exists() ?
     chromeUserDataFolder : null;
 }
@@ -172,19 +150,7 @@ Object.defineProperty(ChromeProfileMigrator.prototype, "sourceProfiles", {
 
     let profiles = [];
     try {
-      // Local State is a JSON file that contains profile info.
-      let localState = this._chromeUserDataFolder.clone();
-      localState.append("Local State");
-      if (!localState.exists())
-        throw new Error("Chrome's 'Local State' file does not exist.");
-      if (!localState.isReadable())
-        throw new Error("Chrome's 'Local State' file could not be read.");
-
-      let fstream = Cc[FILE_INPUT_STREAM_CID].createInstance(Ci.nsIFileInputStream);
-      fstream.init(localState, -1, 0, 0);
-      let inputStream = NetUtil.readInputStreamToString(fstream, fstream.available(),
-                                                        { charset: "UTF-8" });
-      let info_cache = JSON.parse(inputStream).profile.info_cache;
+      let info_cache = ChromeMigrationUtils.getLocalState().profile.info_cache;
       for (let profileFolderName in info_cache) {
         let profileFolder = this._chromeUserDataFolder.clone();
         profileFolder.append(profileFolderName);
@@ -254,11 +220,11 @@ function GetBookmarksResource(aProfileFolder) {
     type: MigrationUtils.resourceTypes.BOOKMARKS,
 
     migrate(aCallback) {
-      return Task.spawn(function* () {
+      return (async function() {
         let gotErrors = false;
-        let errorGatherer = function() { gotErrors = true };
+        let errorGatherer = function() { gotErrors = true; };
         // Parse Chrome bookmark file that is JSON format
-        let bookmarkJSON = yield OS.File.read(bookmarksFile.path, {encoding: "UTF-8"});
+        let bookmarkJSON = await OS.File.read(bookmarksFile.path, {encoding: "UTF-8"});
         let roots = JSON.parse(bookmarkJSON).roots;
 
         // Importing bookmark bar items
@@ -269,9 +235,9 @@ function GetBookmarksResource(aProfileFolder) {
           let bookmarks = convertBookmarks(roots.bookmark_bar.children, errorGatherer);
           if (!MigrationUtils.isStartupMigration) {
             parentGuid =
-              yield MigrationUtils.createImportedBookmarksFolder("Chrome", parentGuid);
+              await MigrationUtils.createImportedBookmarksFolder("Chrome", parentGuid);
           }
-          yield MigrationUtils.insertManyBookmarksWrapper(bookmarks, parentGuid);
+          await MigrationUtils.insertManyBookmarksWrapper(bookmarks, parentGuid);
         }
 
         // Importing bookmark menu items
@@ -282,14 +248,14 @@ function GetBookmarksResource(aProfileFolder) {
           let bookmarks = convertBookmarks(roots.other.children, errorGatherer);
           if (!MigrationUtils.isStartupMigration) {
             parentGuid
-              = yield MigrationUtils.createImportedBookmarksFolder("Chrome", parentGuid);
+              = await MigrationUtils.createImportedBookmarksFolder("Chrome", parentGuid);
           }
-          yield MigrationUtils.insertManyBookmarksWrapper(bookmarks, parentGuid);
+          await MigrationUtils.insertManyBookmarksWrapper(bookmarks, parentGuid);
         }
         if (gotErrors) {
           throw new Error("The migration included errors.");
         }
-      }).then(() => aCallback(true),
+      })().then(() => aCallback(true),
               () => aCallback(false));
     }
   };
@@ -305,7 +271,7 @@ function GetHistoryResource(aProfileFolder) {
     type: MigrationUtils.resourceTypes.HISTORY,
 
     migrate(aCallback) {
-      Task.spawn(function* () {
+      (async function() {
         const MAX_AGE_IN_DAYS = Services.prefs.getIntPref("browser.migrate.chrome.history.maxAgeInDays");
         const LIMIT = Services.prefs.getIntPref("browser.migrate.chrome.history.limit");
 
@@ -319,7 +285,7 @@ function GetHistoryResource(aProfileFolder) {
         }
 
         let rows =
-          yield MigrationUtils.getRowsFromDBWithoutLocks(historyFile.path, "Chrome history", query);
+          await MigrationUtils.getRowsFromDBWithoutLocks(historyFile.path, "Chrome history", query);
         let places = [];
         for (let row of rows) {
           try {
@@ -344,7 +310,7 @@ function GetHistoryResource(aProfileFolder) {
         }
 
         if (places.length > 0) {
-          yield new Promise((resolve, reject) => {
+          await new Promise((resolve, reject) => {
             MigrationUtils.insertVisitsWrapper(places, {
               ignoreErrors: true,
               ignoreResults: true,
@@ -358,7 +324,7 @@ function GetHistoryResource(aProfileFolder) {
             });
           });
         }
-      }).then(() => { aCallback(true) },
+      })().then(() => { aCallback(true); },
               ex => {
                 Cu.reportError(ex);
                 aCallback(false);
@@ -376,9 +342,9 @@ function GetCookiesResource(aProfileFolder) {
   return {
     type: MigrationUtils.resourceTypes.COOKIES,
 
-    migrate: Task.async(function* (aCallback) {
+    async migrate(aCallback) {
       // We don't support decrypting cookies yet so only import plaintext ones.
-      let rows = yield MigrationUtils.getRowsFromDBWithoutLocks(cookiesFile.path, "Chrome cookies",
+      let rows = await MigrationUtils.getRowsFromDBWithoutLocks(cookiesFile.path, "Chrome cookies",
        `SELECT host_key, name, value, path, expires_utc, secure, httponly, encrypted_value
         FROM cookies
         WHERE length(encrypted_value) = 0`).catch(ex => {
@@ -415,7 +381,7 @@ function GetCookiesResource(aProfileFolder) {
         }
       }
       aCallback(true);
-    }),
+    },
   };
 }
 
@@ -428,8 +394,8 @@ function GetWindowsPasswordsResource(aProfileFolder) {
   return {
     type: MigrationUtils.resourceTypes.PASSWORDS,
 
-    migrate: Task.async(function* (aCallback) {
-      let rows = yield MigrationUtils.getRowsFromDBWithoutLocks(loginFile.path, "Chrome passwords",
+    async migrate(aCallback) {
+      let rows = await MigrationUtils.getRowsFromDBWithoutLocks(loginFile.path, "Chrome passwords",
        `SELECT origin_url, action_url, username_element, username_value,
         password_element, password_value, signon_realm, scheme, date_created,
         times_used FROM logins WHERE blacklisted_by_user = 0`).catch(ex => {
@@ -491,7 +457,7 @@ function GetWindowsPasswordsResource(aProfileFolder) {
       }
       crypto.finalize();
       aCallback(true);
-    }),
+    },
   };
 }
 
@@ -504,7 +470,8 @@ ChromeProfileMigrator.prototype.classID = Components.ID("{4cec1de4-1671-4fc3-a53
  *  Chromium migration
  **/
 function ChromiumProfileMigrator() {
-  let chromiumUserDataFolder = getDataFolder(["Chromium"], ["Chromium"], ["chromium"]);
+  let path = ChromeMigrationUtils.getDataPath("Chromium");
+  let chromiumUserDataFolder = new FileUtils.File(path);
   this._chromeUserDataFolder = chromiumUserDataFolder.exists() ? chromiumUserDataFolder : null;
 }
 
@@ -520,7 +487,8 @@ var componentsArray = [ChromeProfileMigrator, ChromiumProfileMigrator];
  * Not available on Linux
  **/
 function CanaryProfileMigrator() {
-  let chromeUserDataFolder = getDataFolder(["Google", "Chrome SxS"], ["Google", "Chrome Canary"]);
+  let path = ChromeMigrationUtils.getDataPath("Canary");
+  let chromeUserDataFolder = new FileUtils.File(path);
   this._chromeUserDataFolder = chromeUserDataFolder.exists() ? chromeUserDataFolder : null;
 }
 CanaryProfileMigrator.prototype = Object.create(ChromeProfileMigrator.prototype);

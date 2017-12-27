@@ -59,6 +59,7 @@ let expectedContentApis = [
 let expectedBackgroundApis = [
   ...expectedCommonApis,
   ...expectedBackgroundApisTargetSpecific,
+  "contentScripts.register",
   "extension.ViewType",
   "extension.getBackgroundPage",
   "extension.getViews",
@@ -128,7 +129,7 @@ function sendAllApis() {
   browser.test.sendMessage("allApis", results.sort());
 }
 
-add_task(function* test_enumerate_content_script_apis() {
+add_task(async function test_enumerate_content_script_apis() {
   let extensionData = {
     manifest: {
       content_scripts: [{
@@ -142,26 +143,26 @@ add_task(function* test_enumerate_content_script_apis() {
     },
   };
   let extension = ExtensionTestUtils.loadExtension(extensionData);
-  yield extension.startup();
+  await extension.startup();
 
   let win = window.open("file_sample.html");
-  let actualApis = yield extension.awaitMessage("allApis");
+  let actualApis = await extension.awaitMessage("allApis");
   win.close();
   let expectedApis = generateExpectations(expectedContentApis);
   isDeeply(actualApis, expectedApis, "content script APIs");
 
-  yield extension.unload();
+  await extension.unload();
 });
 
-add_task(function* test_enumerate_background_script_apis() {
+add_task(async function test_enumerate_background_script_apis() {
   let extensionData = {
     background: sendAllApis,
   };
   let extension = ExtensionTestUtils.loadExtension(extensionData);
-  yield extension.startup();
-  let actualApis = yield extension.awaitMessage("allApis");
+  await extension.startup();
+  let actualApis = await extension.awaitMessage("allApis");
   let expectedApis = generateExpectations(expectedBackgroundApis);
   isDeeply(actualApis, expectedApis, "background script APIs");
 
-  yield extension.unload();
+  await extension.unload();
 });

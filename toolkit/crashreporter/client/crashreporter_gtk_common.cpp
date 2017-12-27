@@ -59,6 +59,7 @@ GThread* gSendThreadID;
 // From crashreporter_linux.cpp
 void SaveSettings();
 void SendReport();
+void DisableGUIAndSendReport();
 void TryInitGnome();
 void UpdateSubmit();
 
@@ -76,8 +77,10 @@ static bool RestartApplication()
   argv[i] = 0;
 
   pid_t pid = fork();
-  if (pid == -1)
+  if (pid == -1) {
+    free(argv);
     return false;
+  }
   else if (pid == 0) {
     (void)execv(argv[0], argv);
     _exit(1);
@@ -91,7 +94,9 @@ static bool RestartApplication()
 // Quit the app, used as a timeout callback
 static gboolean CloseApp(gpointer data)
 {
-  gtk_main_quit();
+  if (!gAutoSubmit) {
+    gtk_main_quit();
+  }
   g_thread_join(gSendThreadID);
   return FALSE;
 }
@@ -209,10 +214,13 @@ gpointer SendThread(gpointer args)
   }
 
   SendCompleted(success, response);
-  // Apparently glib is threadsafe, and will schedule this
-  // on the main thread, see:
-  // http://library.gnome.org/devel/gtk-faq/stable/x499.html
-  g_idle_add(ReportCompleted, (gpointer)success);
+
+  if (!gAutoSubmit) {
+    // Apparently glib is threadsafe, and will schedule this
+    // on the main thread, see:
+    // http://library.gnome.org/devel/gtk-faq/stable/x499.html
+    g_idle_add(ReportCompleted, (gpointer)success);
+  }
 
   return nullptr;
 }
@@ -241,7 +249,7 @@ static void MaybeSubmitReport()
 {
   if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(gSubmitReportCheck))) {
     gDidTrySend = true;
-    SendReport();
+    DisableGUIAndSendReport();
   } else {
     gtk_main_quit();
   }

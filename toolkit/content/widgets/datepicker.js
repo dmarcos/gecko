@@ -24,6 +24,10 @@ function DatePicker(context) {
      *           {Number} year [optional]
      *           {Number} month [optional]
      *           {Number} date [optional]
+     *           {Number} min
+     *           {Number} max
+     *           {Number} step
+     *           {Number} stepBase
      *           {Number} firstDayOfWeek
      *           {Array<Number>} weekends
      *           {Array<String>} monthStrings
@@ -36,27 +40,17 @@ function DatePicker(context) {
       this._setDefaultState();
       this._createComponents();
       this._update();
+      document.dispatchEvent(new CustomEvent("PickerReady"));
     },
 
     /*
      * Set initial date picker states.
      */
     _setDefaultState() {
-      const now = new Date();
-      const { year = now.getFullYear(),
-              month = now.getMonth(),
-              day = now.getDate(),
-              firstDayOfWeek,
-              weekends,
-              monthStrings,
-              weekdayStrings,
-              locale,
-              dir } = this.props;
+      const { year, month, day, min, max, step, stepBase, firstDayOfWeek, weekends,
+              monthStrings, weekdayStrings, locale, dir } = this.props;
       const dateKeeper = new DateKeeper({
-        year, month, day
-      }, {
-        firstDayOfWeek,
-        weekends,
+        year, month, day, min, max, step, stepBase, firstDayOfWeek, weekends,
         calViewSize: CAL_VIEW_SIZE
       });
 
@@ -66,33 +60,38 @@ function DatePicker(context) {
         dateKeeper,
         locale,
         isMonthPickerVisible: false,
-        isYearSet: false,
-        isMonthSet: false,
-        isDateSet: false,
         datetimeOrders: new Intl.DateTimeFormat(locale)
                           .formatToParts(new Date(0)).map(part => part.type),
-        getDayString: new Intl.NumberFormat(locale).format,
+        getDayString: day => day ? new Intl.NumberFormat(locale).format(day) : "",
         getWeekHeaderString: weekday => weekdayStrings[weekday],
         getMonthString: month => monthStrings[month],
-        setValue: ({ dateValue, selectionValue }) => {
-          dateKeeper.setValue(dateValue);
-          this.state.selectionValue = selectionValue;
-          this.state.isYearSet = true;
-          this.state.isMonthSet = true;
-          this.state.isDateSet = true;
+        setSelection: date => {
+          dateKeeper.setSelection({
+            year: date.getUTCFullYear(),
+            month: date.getUTCMonth(),
+            day: date.getUTCDate(),
+          });
           this._update();
           this._dispatchState();
           this._closePopup();
         },
         setYear: year => {
           dateKeeper.setYear(year);
-          this.state.isYearSet = true;
+          dateKeeper.setSelection({
+            year,
+            month: dateKeeper.selection.month,
+            day: dateKeeper.selection.day,
+          });
           this._update();
           this._dispatchState();
         },
         setMonth: month => {
           dateKeeper.setMonth(month);
-          this.state.isMonthSet = true;
+          dateKeeper.setSelection({
+            year: dateKeeper.selection.year,
+            month,
+            day: dateKeeper.selection.day,
+          });
           this._update();
           this._dispatchState();
         },
@@ -110,7 +109,10 @@ function DatePicker(context) {
       this.components = {
         calendar: new Calendar({
           calViewSize: CAL_VIEW_SIZE,
-          locale: this.state.locale
+          locale: this.state.locale,
+          setSelection: this.state.setSelection,
+          getDayString: this.state.getDayString,
+          getWeekHeaderString: this.state.getWeekHeaderString
         }, {
           weekHeader: this.context.weekHeader,
           daysView: this.context.daysView
@@ -131,8 +133,8 @@ function DatePicker(context) {
     /**
      * Update date picker and its components.
      */
-    _update() {
-      const { dateKeeper, selectionValue, isMonthPickerVisible } = this.state;
+    _update(options = {}) {
+      const { dateKeeper, isMonthPickerVisible } = this.state;
 
       if (isMonthPickerVisible) {
         this.state.months = dateKeeper.getMonths();
@@ -144,20 +146,15 @@ function DatePicker(context) {
       this.components.monthYear.setProps({
         isVisible: isMonthPickerVisible,
         dateObj: dateKeeper.state.dateObj,
-        month: dateKeeper.state.month,
         months: this.state.months,
-        year: dateKeeper.state.year,
         years: this.state.years,
-        toggleMonthPicker: this.state.toggleMonthPicker
+        toggleMonthPicker: this.state.toggleMonthPicker,
+        noSmoothScroll: options.noSmoothScroll
       });
       this.components.calendar.setProps({
         isVisible: !isMonthPickerVisible,
         days: this.state.days,
-        weekHeaders: dateKeeper.state.weekHeaders,
-        setValue: this.state.setValue,
-        getDayString: this.state.getDayString,
-        getWeekHeaderString: this.state.getWeekHeaderString,
-        selectionValue
+        weekHeaders: dateKeeper.state.weekHeaders
       });
 
       isMonthPickerVisible ?
@@ -178,8 +175,7 @@ function DatePicker(context) {
      * Use postMessage to pass the state of picker to the panel.
      */
     _dispatchState() {
-      const { year, month, day } = this.state.dateKeeper.state;
-      const { isYearSet, isMonthSet, isDaySet } = this.state;
+      const { year, month, day } = this.state.dateKeeper.selection;
       // The panel is listening to window for postMessage event, so we
       // do postMessage to itself to send data to input boxes.
       window.postMessage({
@@ -188,9 +184,6 @@ function DatePicker(context) {
           year,
           month,
           day,
-          isYearSet,
-          isMonthSet,
-          isDaySet
         }
       }, "*");
     },
@@ -271,20 +264,13 @@ function DatePicker(context) {
     set({ year, month, day }) {
       const { dateKeeper } = this.state;
 
-      if (year != undefined) {
-        this.state.isYearSet = true;
-      }
-      if (month != undefined) {
-        this.state.isMonthSet = true;
-      }
-      if (day != undefined) {
-        this.state.isDaySet = true;
-      }
-
-      dateKeeper.set({
+      dateKeeper.setCalendarMonth({
+        year, month
+      });
+      dateKeeper.setSelection({
         year, month, day
       });
-      this._update();
+      this._update({ noSmoothScroll: true });
     }
   };
 
@@ -303,8 +289,11 @@ function DatePicker(context) {
    */
   function MonthYear(options, context) {
     const spinnerSize = 5;
-    const yearFormat = new Intl.DateTimeFormat(options.locale, { year: "numeric" }).format;
-    const dateFormat = new Intl.DateTimeFormat(options.locale, { year: "numeric", month: "long" }).format;
+    const yearFormat = new Intl.DateTimeFormat(options.locale, { year: "numeric",
+                                                                 timeZone: "UTC" }).format;
+    const dateFormat = new Intl.DateTimeFormat(options.locale, { year: "numeric",
+                                                                 month: "long",
+                                                                 timeZone: "UTC" }).format;
     const spinnerOrder =
       options.datetimeOrders.indexOf("month") < options.datetimeOrders.indexOf("year") ?
       "order-month-year" : "order-year-month";
@@ -330,7 +319,7 @@ function DatePicker(context) {
           this.state.isYearSet = true;
           options.setYear(year);
         },
-        getDisplayString: year => yearFormat(new Date(new Date(0).setFullYear(year))),
+        getDisplayString: year => yearFormat(new Date(new Date(0).setUTCFullYear(year))),
         viewportSize: spinnerSize
       }, context.monthYearView)
     };
@@ -347,8 +336,6 @@ function DatePicker(context) {
      *        {
      *          {Boolean} isVisible
      *          {Date} dateObj
-     *          {Number} month
-     *          {Number} year
      *          {Array<Object>} months
      *          {Array<Object>} years
      *          {Function} toggleMonthPicker
@@ -360,18 +347,18 @@ function DatePicker(context) {
       if (props.isVisible) {
         this.context.monthYear.classList.add("active");
         this.components.month.setState({
-          value: props.month,
+          value: props.dateObj.getUTCMonth(),
           items: props.months,
           isInfiniteScroll: true,
           isValueSet: this.state.isMonthSet,
-          smoothScroll: !this.state.firstOpened
+          smoothScroll: !(this.state.firstOpened || props.noSmoothScroll)
         });
         this.components.year.setState({
-          value: props.year,
+          value: props.dateObj.getUTCFullYear(),
           items: props.years,
           isInfiniteScroll: false,
           isValueSet: this.state.isYearSet,
-          smoothScroll: !this.state.firstOpened
+          smoothScroll: !(this.state.firstOpened || props.noSmoothScroll)
         });
         this.state.firstOpened = false;
       } else {

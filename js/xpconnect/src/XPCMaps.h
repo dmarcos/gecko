@@ -83,7 +83,7 @@ public:
             r.front().value()->DebugDump(depth);
     }
 
-    void UpdateWeakPointersAfterGC(XPCJSContext* context);
+    void UpdateWeakPointersAfterGC();
 
     void ShutdownMarker();
 
@@ -146,6 +146,8 @@ public:
 #endif
         mTable.Remove(wrapper->GetIdentityObject());
     }
+
+    inline void Clear() { mTable.Clear(); }
 
     inline uint32_t Count() { return mTable.EntryCount(); }
 
@@ -366,6 +368,8 @@ public:
         mTable.Remove(info);
     }
 
+    inline void Clear() { mTable.Clear(); }
+
     inline uint32_t Count() { return mTable.EntryCount(); }
 
     PLDHashTable::Iterator Iter() { return mTable.Iter(); }
@@ -582,7 +586,7 @@ public:
             return p->value();
         if (!mTable.add(p, key, value))
             return nullptr;
-        MOZ_ASSERT(xpc::CompartmentPrivate::Get(key)->scope->mWaiverWrapperMap == this);
+        MOZ_ASSERT(xpc::RealmPrivate::Get(key)->scope->mWaiverWrapperMap == this);
         return value;
     }
 

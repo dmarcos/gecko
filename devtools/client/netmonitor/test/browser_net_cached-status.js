@@ -8,17 +8,20 @@
  */
 
 add_task(function* () {
+  // Disable rcwn to make cache behavior deterministic.
+  yield pushPref("network.http.rcwn.enabled", false);
+
   let { tab, monitor } = yield initNetMonitor(STATUS_CODES_URL, true);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   const REQUEST_DATA = [
     {
@@ -93,11 +96,17 @@ add_task(function* () {
 
   let index = 0;
   for (let request of REQUEST_DATA) {
+    let requestItem = document.querySelectorAll(".request-list-item")[index];
+    requestItem.scrollIntoView();
+    let requestsListStatus = requestItem.querySelector(".requests-list-status");
+    EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+    yield waitUntil(() => requestsListStatus.title);
+
     info("Verifying request #" + index);
     yield verifyRequestItemTarget(
       document,
-      getDisplayedRequests(gStore.getState()),
-      getSortedRequests(gStore.getState()).get(index),
+      getDisplayedRequests(store.getState()),
+      getSortedRequests(store.getState()).get(index),
       request.method,
       request.uri,
       request.details

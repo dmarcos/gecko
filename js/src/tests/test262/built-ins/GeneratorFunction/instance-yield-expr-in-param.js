@@ -1,4 +1,4 @@
-// Copyright (C) Copyright 2016 the V8 project authors. All rights reserved.
+// Copyright (C) 2016 the V8 project authors. All rights reserved.
 // This code is governed by the BSD license found in the LICENSE file.
 /*---
 esid: sec-generatorfunction
@@ -14,6 +14,7 @@ info: |
     20. If kind is "generator", then
         a. If parameters Contains YieldExpression is true, throw a SyntaxError
            exception.
+features: [generators]
 ---*/
 
 var GeneratorFunction = Object.getPrototypeOf(function* () {}).constructor;

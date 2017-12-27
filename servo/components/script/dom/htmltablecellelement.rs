@@ -6,7 +6,7 @@ use cssparser::RGBA;
 use dom::bindings::codegen::Bindings::HTMLTableCellElementBinding::HTMLTableCellElementMethods;
 use dom::bindings::codegen::Bindings::NodeBinding::NodeMethods;
 use dom::bindings::inheritance::Castable;
-use dom::bindings::js::LayoutJS;
+use dom::bindings::root::LayoutDom;
 use dom::bindings::str::DOMString;
 use dom::document::Document;
 use dom::element::{Element, RawLayoutElementHelpers};
@@ -15,7 +15,7 @@ use dom::htmltablerowelement::HTMLTableRowElement;
 use dom::node::Node;
 use dom::virtualmethods::VirtualMethods;
 use dom_struct::dom_struct;
-use html5ever_atoms::LocalName;
+use html5ever::{LocalName, Prefix};
 use style::attr::{AttrValue, LengthOrPercentageOrAuto};
 
 const DEFAULT_COLSPAN: u32 = 1;
@@ -28,7 +28,7 @@ pub struct HTMLTableCellElement {
 
 impl HTMLTableCellElement {
     pub fn new_inherited(tag_name: LocalName,
-                         prefix: Option<DOMString>,
+                         prefix: Option<Prefix>,
                          document: &Document)
                          -> HTMLTableCellElement {
         HTMLTableCellElement {
@@ -88,7 +88,7 @@ pub trait HTMLTableCellElementLayoutHelpers {
 }
 
 #[allow(unsafe_code)]
-impl HTMLTableCellElementLayoutHelpers for LayoutJS<HTMLTableCellElement> {
+impl HTMLTableCellElementLayoutHelpers for LayoutDom<HTMLTableCellElement> {
     fn get_background_color(&self) -> Option<RGBA> {
         unsafe {
             (&*self.upcast::<Element>().unsafe_get())

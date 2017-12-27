@@ -30,8 +30,7 @@ const RE_SCRATCHPAD_ERROR = /(?:@Scratchpad\/\d+:|\()(\d+):?(\d+)?(?:\)|\n)/;
 const RE_JUMP_TO_LINE = /^(\d+):?(\d+)?/;
 
 const Services = require("Services");
-const promise = require("promise");
-const events = require("devtools/shared/event-emitter");
+const events = require("devtools/shared/old-event-emitter");
 const { PrefObserver } = require("devtools/client/shared/prefs");
 const { getClientCssProperties } = require("devtools/shared/fronts/css-properties");
 const KeyShortcuts = require("devtools/client/shared/key-shortcuts");
@@ -39,39 +38,24 @@ const KeyShortcuts = require("devtools/client/shared/key-shortcuts");
 const {LocalizationHelper} = require("devtools/shared/l10n");
 const L10N = new LocalizationHelper("devtools/client/locales/sourceeditor.properties");
 
+const {
+  getWasmText,
+  getWasmLineNumberFormatter,
+  isWasm,
+  lineToWasmOffset,
+  wasmOffsetToLine,
+} = require("./wasm");
+
 const { OS } = Services.appinfo;
 
-// CM_STYLES, CM_SCRIPTS and CM_IFRAME represent the HTML,
-// JavaScript and CSS that is injected into an iframe in
-// order to initialize a CodeMirror instance.
-
-const CM_STYLES = [
-  "chrome://devtools/content/sourceeditor/codemirror/lib/codemirror.css",
-  "chrome://devtools/content/sourceeditor/codemirror/addon/dialog/dialog.css",
-  "chrome://devtools/content/sourceeditor/codemirror/mozilla.css"
-];
-
-CM_STYLES.push(
-  "chrome://devtools/content/sourceeditor/codemirror/old-debugger.css"
-);
+// CM_SCRIPTS and CM_IFRAME represent the HTML and JavaScript that is
+// injected into an iframe in order to initialize a CodeMirror instance.
 
 const CM_SCRIPTS = [
   "chrome://devtools/content/sourceeditor/codemirror/codemirror.bundle.js",
 ];
 
-const CM_IFRAME =
-  "data:text/html;charset=utf8,<!DOCTYPE html>" +
-  "<html dir='ltr'>" +
-  "  <head>" +
-  "    <style>" +
-  "      html, body { height: 100%; }" +
-  "      body { margin: 0; overflow: hidden; }" +
-  "      .CodeMirror { width: 100% !important; line-height: 1.25 !important; }" +
-  "    </style>" +
-  CM_STYLES.map(style => "<link rel='stylesheet' href='" + style + "'>").join("\n") +
-  "  </head>" +
-  "  <body class='theme-body devtools-monospace'></body>" +
-  "</html>";
+const CM_IFRAME = "chrome://devtools/content/sourceeditor/codemirror/cmiframe.html";
 
 const CM_MAPPING = [
   "focus",
@@ -206,7 +190,7 @@ function Editor(config) {
 
     let num = cm.getOption("indentUnit");
     if (cm.getCursor().ch !== 0) {
-      num -= 1;
+      num -= cm.getCursor().ch % num;
     }
     cm.replaceSelection(" ".repeat(num), "end", "+input");
   };
@@ -257,45 +241,45 @@ Editor.prototype = {
    * This method is asynchronous and returns a promise.
    */
   appendTo: function (el, env) {
-    let def = promise.defer();
-    let cm = editors.get(this);
+    return new Promise(resolve => {
+      let cm = editors.get(this);
 
-    if (!env) {
-      env = el.ownerDocument.createElementNS(el.namespaceURI, "iframe");
+      if (!env) {
+        env = el.ownerDocument.createElementNS(el.namespaceURI, "iframe");
 
-      if (el.namespaceURI === XUL_NS) {
-        env.flex = 1;
-      }
-    }
-
-    if (cm) {
-      throw new Error("You can append an editor only once.");
-    }
-
-    let onLoad = () => {
-      let win = env.contentWindow.wrappedJSObject;
-
-      if (!this.config.themeSwitching) {
-        win.document.documentElement.setAttribute("force-theme", "light");
+        if (el.namespaceURI === XUL_NS) {
+          env.flex = 1;
+        }
       }
 
-      Services.scriptloader.loadSubScript(
-        "chrome://devtools/content/shared/theme-switching.js",
-        win, "utf8"
-      );
-      this.container = env;
-      this._setup(win.document.body, el.ownerDocument);
-      env.removeEventListener("load", onLoad, true);
+      if (cm) {
+        throw new Error("You can append an editor only once.");
+      }
 
-      def.resolve();
-    };
+      let onLoad = () => {
+        let win = env.contentWindow.wrappedJSObject;
 
-    env.addEventListener("load", onLoad, true);
-    env.setAttribute("src", CM_IFRAME);
-    el.appendChild(env);
+        if (!this.config.themeSwitching) {
+          win.document.documentElement.setAttribute("force-theme", "light");
+        }
 
-    this.once("destroy", () => el.removeChild(env));
-    return def.promise;
+        Services.scriptloader.loadSubScript(
+          "chrome://devtools/content/shared/theme-switching.js",
+          win, "utf8"
+        );
+        this.container = env;
+        this._setup(win.document.body, el.ownerDocument);
+        env.removeEventListener("load", onLoad, true);
+
+        resolve();
+      };
+
+      env.addEventListener("load", onLoad, true);
+      env.setAttribute("src", CM_IFRAME);
+      el.appendChild(env);
+
+      this.once("destroy", () => el.removeChild(env));
+    });
   },
 
   appendToLocalElement: function (el) {
@@ -372,11 +356,12 @@ Editor.prototype = {
     });
 
     cm.getWrapperElement().addEventListener("contextmenu", ev => {
-      ev.preventDefault();
-
       if (!this.config.contextMenu) {
         return;
       }
+
+      ev.stopPropagation();
+      ev.preventDefault();
 
       let popup = this.config.contextMenu;
       if (typeof popup == "string") {
@@ -399,8 +384,9 @@ Editor.prototype = {
     cm.on("cursorActivity", () => this.emit("cursorActivity"));
 
     cm.on("gutterClick", (cmArg, line, gutter, ev) => {
+      let lineOrOffset = !this.isWasm ? line : this.lineToWasmOffset(line);
       let head = { line: line, ch: 0 };
-      let tail = { line: line, ch: this.getText(line).length };
+      let tail = { line: line, ch: this.getText(lineOrOffset).length };
 
       // Shift-click on a gutter selects the whole line.
       if (ev.shiftKey) {
@@ -408,7 +394,7 @@ Editor.prototype = {
         return;
       }
 
-      this.emit("gutterClick", line, ev.button);
+      this.emit("gutterClick", lineOrOffset, ev.button);
     });
 
     win.CodeMirror.defineExtension("l10n", (name) => {
@@ -477,6 +463,9 @@ Editor.prototype = {
   replaceDocument: function (doc) {
     let cm = editors.get(this);
     cm.swapDoc(doc);
+    if (!Services.prefs.getBoolPref("devtools.debugger.new-debugger-frontend")) {
+      this._updateLineNumberFormat();
+    }
   },
 
   /**
@@ -505,8 +494,55 @@ Editor.prototype = {
       return cm.getValue();
     }
 
-    let info = cm.lineInfo(line);
-    return info ? cm.lineInfo(line).text : "";
+    let info = this.lineInfo(line);
+    return info ? info.text : "";
+  },
+
+  getDoc: function () {
+    let cm = editors.get(this);
+    return cm.getDoc();
+  },
+
+  get isWasm() {
+    return isWasm(this.getDoc());
+  },
+
+  wasmOffsetToLine: function (offset) {
+    return wasmOffsetToLine(this.getDoc(), offset);
+  },
+
+  lineToWasmOffset: function (number) {
+    return lineToWasmOffset(this.getDoc(), number);
+  },
+
+  toLineIfWasmOffset: function (maybeOffset) {
+    if (typeof maybeOffset !== "number" || !this.isWasm) {
+      return maybeOffset;
+    }
+    return this.wasmOffsetToLine(maybeOffset);
+  },
+
+  lineInfo: function (lineOrOffset) {
+    let line = this.toLineIfWasmOffset(lineOrOffset);
+    if (line == undefined) {
+      return null;
+    }
+    let cm = editors.get(this);
+    return cm.lineInfo(line);
+  },
+
+  getLineOrOffset: function (line) {
+    return this.isWasm ? this.lineToWasmOffset(line) : line;
+  },
+
+  _updateLineNumberFormat: function () {
+    let cm = editors.get(this);
+    if (this.isWasm) {
+      let formatter = getWasmLineNumberFormatter(this.getDoc());
+      cm.setOption("lineNumberFormatter", formatter);
+    } else {
+      cm.setOption("lineNumberFormatter", (number) => number);
+    }
   },
 
   /**
@@ -515,6 +551,31 @@ Editor.prototype = {
    */
   setText: function (value) {
     let cm = editors.get(this);
+
+    if (typeof value !== "string" && "binary" in value) { // wasm?
+      // binary does not survive as Uint8Array, converting from string
+      let binary = value.binary;
+      let data = new Uint8Array(binary.length);
+      for (let i = 0; i < data.length; i++) {
+        data[i] = binary.charCodeAt(i);
+      }
+      let { lines, done } = getWasmText(this.getDoc(), data);
+      const MAX_LINES = 10000000;
+      if (lines.length > MAX_LINES) {
+        lines.splice(MAX_LINES, lines.length - MAX_LINES);
+        lines.push(";; .... text is truncated due to the size");
+      }
+      if (!done) {
+        lines.push(";; .... possible error during wast conversion");
+      }
+      // cm will try to split into lines anyway, saving memory
+      value = { split: () => lines };
+    }
+
+    if (!Services.prefs.getBoolPref("devtools.debugger.new-debugger-frontend")) {
+      this._updateLineNumberFormat();
+    }
+
     cm.setValue(value);
 
     this.resetIndentUnit();
@@ -695,7 +756,7 @@ Editor.prototype = {
    */
   addMarker: function (line, gutterName, markerClass) {
     let cm = editors.get(this);
-    let info = cm.lineInfo(line);
+    let info = this.lineInfo(line);
     if (!info) {
       return;
     }
@@ -724,8 +785,7 @@ Editor.prototype = {
       return;
     }
 
-    let cm = editors.get(this);
-    cm.lineInfo(line).gutterMarkers[gutterName].classList.remove(markerClass);
+    this.lineInfo(line).gutterMarkers[gutterName].classList.remove(markerClass);
   },
 
   /**
@@ -735,13 +795,14 @@ Editor.prototype = {
    */
   addContentMarker: function (line, gutterName, markerClass, content) {
     let cm = editors.get(this);
-    let info = cm.lineInfo(line);
+    let info = this.lineInfo(line);
     if (!info) {
       return;
     }
 
     let marker = cm.getWrapperElement().ownerDocument.createElement("div");
     marker.className = markerClass;
+    // eslint-disable-next-line no-unsanitized/property
     marker.innerHTML = content;
     cm.setGutterMarker(info.line, gutterName, marker);
   },
@@ -752,7 +813,7 @@ Editor.prototype = {
    */
   removeContentMarker: function (line, gutterName) {
     let cm = editors.get(this);
-    let info = cm.lineInfo(line);
+    let info = this.lineInfo(line);
     if (!info) {
       return;
     }
@@ -761,8 +822,7 @@ Editor.prototype = {
   },
 
   getMarker: function (line, gutterName) {
-    let cm = editors.get(this);
-    let info = cm.lineInfo(line);
+    let info = this.lineInfo(line);
     if (!info) {
       return null;
     }
@@ -810,8 +870,7 @@ Editor.prototype = {
    * Returns whether a line is decorated using the specified class name.
    */
   hasLineClass: function (line, className) {
-    let cm = editors.get(this);
-    let info = cm.lineInfo(line);
+    let info = this.lineInfo(line);
 
     if (!info || !info.wrapClass) {
       return false;
@@ -823,16 +882,18 @@ Editor.prototype = {
   /**
    * Sets a CSS class name for the given line, including the text and gutter.
    */
-  addLineClass: function (line, className) {
+  addLineClass: function (lineOrOffset, className) {
     let cm = editors.get(this);
+    let line = this.toLineIfWasmOffset(lineOrOffset);
     cm.addLineClass(line, "wrap", className);
   },
 
   /**
    * The reverse of addLineClass.
    */
-  removeLineClass: function (line, className) {
+  removeLineClass: function (lineOrOffset, className) {
     let cm = editors.get(this);
+    let line = this.toLineIfWasmOffset(lineOrOffset);
     cm.removeLineClass(line, "wrap", className);
   },
 
@@ -1226,6 +1287,12 @@ Editor.prototype = {
       this._prefObserver.off(DETECT_INDENT, this.reloadPreferences);
       this._prefObserver.off(ENABLE_CODE_FOLDING, this.reloadPreferences);
       this._prefObserver.destroy();
+    }
+
+    // Remove the link between the document and code-mirror.
+    let cm = editors.get(this);
+    if (cm && cm.doc) {
+      cm.doc.cm = null;
     }
 
     this.emit("destroy");

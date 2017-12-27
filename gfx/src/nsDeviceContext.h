@@ -1,4 +1,4 @@
-/* -*- Mode: C++; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -20,24 +20,19 @@
 #include "nscore.h"                     // for char16_t, nsAString
 #include "mozilla/AppUnits.h"           // for AppUnits
 #include "nsFontMetrics.h"              // for nsFontMetrics::Params
+#include "mozilla/gfx/PrintTarget.h"    // for PrintTarget::PageDoneCallback
 
 class gfxContext;
 class gfxTextPerfMetrics;
 class gfxUserFontSet;
 struct nsFont;
 class nsFontCache;
-class nsIAtom;
+class nsAtom;
 class nsIDeviceContextSpec;
 class nsIScreen;
 class nsIScreenManager;
 class nsIWidget;
 struct nsRect;
-
-namespace mozilla {
-namespace gfx {
-class PrintTarget;
-}
-}
 
 class nsDeviceContext final
 {
@@ -60,6 +55,8 @@ public:
      * (Needed for stylo)
      */
     void InitFontCache();
+
+    void UpdateFontCacheUserFonts(gfxUserFontSet* aUserFontSet);
 
     /**
      * Initialize the device context from a device context spec
@@ -190,6 +187,12 @@ public:
     nsresult GetClientRect(nsRect& aRect);
 
     /**
+     * Returns true if we're currently between BeginDocument() and
+     * EndDocument() calls.
+     */
+    bool IsCurrentlyPrintingDocument() const { return mIsCurrentlyPrintingDoc; }
+
+    /**
      * Inform the output device that output of a document is beginning
      * Used for print related device contexts. Must be matched 1:1 with
      * EndDocument() or AbortDocument().
@@ -272,6 +275,9 @@ public:
 
     mozilla::DesktopToLayoutDeviceScale GetDesktopToDeviceScale();
 
+    bool IsSyncPagePrinting() const;
+    void RegisterPageDoneCallback(PrintTarget::PageDoneCallback&& aCallback);
+    void UnregisterPageDoneCallback();
 private:
     // Private destructor, to discourage deletion outside of Release():
     ~nsDeviceContext();
@@ -305,6 +311,7 @@ private:
     nsCOMPtr<nsIScreenManager>     mScreenManager;
     nsCOMPtr<nsIDeviceContextSpec> mDeviceContextSpec;
     RefPtr<PrintTarget>            mPrintTarget;
+    bool                           mIsCurrentlyPrintingDoc;
 #ifdef DEBUG
     bool mIsInitialized;
 #endif

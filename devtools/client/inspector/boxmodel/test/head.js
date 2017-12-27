@@ -11,10 +11,8 @@ Services.scriptloader.loadSubScript(
   "chrome://mochitests/content/browser/devtools/client/inspector/test/head.js",
   this);
 
-Services.prefs.setBoolPref("devtools.layoutview.enabled", true);
 Services.prefs.setIntPref("devtools.toolbox.footer.height", 350);
 registerCleanupFunction(() => {
-  Services.prefs.clearUserPref("devtools.layoutview.enabled");
   Services.prefs.clearUserPref("devtools.toolbox.footer.height");
 });
 
@@ -36,6 +34,15 @@ function* selectAndHighlightNode(selectorOrNodeFront, inspector) {
   let updated = inspector.toolbox.once("highlighter-ready");
   inspector.selection.setNodeFront(nodeFront, "test-highlight");
   yield updated;
+}
+
+/**
+ * Is the given node visible in the page (rendered in the frame tree).
+ * @param {DOMNode}
+ * @return {Boolean}
+ */
+function isNodeVisible(node) {
+  return !!node.getClientRects().length;
 }
 
 /**
@@ -63,36 +70,6 @@ function openBoxModelView() {
       toolbox: data.toolbox,
       inspector: data.inspector,
       view: data.inspector.getPanel("computedview"),
-      testActor: data.testActor
-    };
-  });
-}
-
-/**
- * Open the toolbox, with the inspector tool visible, and the layout view
- * sidebar tab selected to display the box model view with properties.
- *
- * @return {Promise} a promise that resolves when the inspector is ready and the box model
- *         view is visible and ready.
- */
-function openLayoutView() {
-  return openInspectorSidebarTab("layoutview").then(data => {
-    // The actual highligher show/hide methods are mocked in box model tests.
-    // The highlighter is tested in devtools/inspector/test.
-    function mockHighlighter({highlighter}) {
-      highlighter.showBoxModel = function () {
-        return promise.resolve();
-      };
-      highlighter.hideBoxModel = function () {
-        return promise.resolve();
-      };
-    }
-    mockHighlighter(data.toolbox);
-
-    return {
-      toolbox: data.toolbox,
-      inspector: data.inspector,
-      boxmodel: data.inspector.getPanel("boxmodel"),
       testActor: data.testActor
     };
   });
@@ -135,15 +112,15 @@ function waitForMarkupLoaded(inspector) {
 
 function getStyle(testActor, selector, propertyName) {
   return testActor.eval(`
-    content.document.querySelector("${selector}")
-                    .style.getPropertyValue("${propertyName}");
+    document.querySelector("${selector}")
+            .style.getPropertyValue("${propertyName}");
   `);
 }
 
 function setStyle(testActor, selector, propertyName, value) {
   return testActor.eval(`
-    content.document.querySelector("${selector}")
-                    .style.${propertyName} = "${value}";
+    document.querySelector("${selector}")
+            .style.${propertyName} = "${value}";
   `);
 }
 

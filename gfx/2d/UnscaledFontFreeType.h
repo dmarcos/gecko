@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -33,7 +34,7 @@ public:
   ~UnscaledFontFreeType()
   {
     if (mOwnsFace) {
-      FT_Done_Face(mFace);
+      Factory::ReleaseFTFace(mFace);
     }
   }
 
@@ -43,17 +44,11 @@ public:
   const char* GetFile() const { return mFile.c_str(); }
   uint32_t GetIndex() const { return mIndex; }
 
-  struct FontDescriptor
-  {
-    uint32_t mPathLength;
-    uint32_t mIndex;
-  };
-
   bool GetFontFileData(FontFileDataOutput aDataCallback, void* aBaton) override;
 
   bool GetFontDescriptor(FontDescriptorOutput aCb, void* aBaton) override;
 
-private:
+protected:
   FT_Face mFace;
   bool mOwnsFace;
   std::string mFile;
@@ -73,16 +68,28 @@ public:
                                   uint32_t aIndex = 0)
     : UnscaledFontFreeType(aFile, aIndex)
   {}
+  UnscaledFontFontconfig(FT_Face aFace,
+                         NativeFontResource* aNativeFontResource)
+    : UnscaledFontFreeType(aFace, false)
+    , mNativeFontResource(aNativeFontResource)
+  {}
 
   FontType GetType() const override { return FontType::FONTCONFIG; }
 
   static already_AddRefed<UnscaledFont>
-    CreateFromFontDescriptor(const uint8_t* aData, uint32_t aDataLength);
+    CreateFromFontDescriptor(const uint8_t* aData, uint32_t aDataLength, uint32_t aIndex);
 
   already_AddRefed<ScaledFont>
     CreateScaledFont(Float aGlyphSize,
                      const uint8_t* aInstanceData,
-                     uint32_t aInstanceDataLength) override;
+                     uint32_t aInstanceDataLength,
+                     const FontVariation* aVariations,
+                     uint32_t aNumVariations) override;
+
+  bool GetWRFontDescriptor(WRFontDescriptorOutput aCb, void* aBaton) override;
+
+private:
+  RefPtr<NativeFontResource> mNativeFontResource;
 };
 #endif
 

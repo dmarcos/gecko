@@ -19,7 +19,7 @@
 class nsMappedAttributes;
 struct nsRuleData;
 
-typedef void (*nsMapRuleToAttributesFunc)(const nsMappedAttributes* aAttributes, 
+typedef void (*nsMapRuleToAttributesFunc)(const nsMappedAttributes* aAttributes,
                                           mozilla::GenericSpecifiedValues* aData);
 
 typedef nsStyledElement nsMappedAttributeElementBase;
@@ -36,13 +36,14 @@ protected:
 public:
   virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const;
 
-  static void MapNoAttributesInto(const nsMappedAttributes* aAttributes, 
+  static void MapNoAttributesInto(const nsMappedAttributes* aAttributes,
                                   mozilla::GenericSpecifiedValues* aGenericData);
 
   NS_IMETHOD WalkContentStyleRules(nsRuleWalker* aRuleWalker) override;
-  virtual bool SetMappedAttribute(nsIAtom* aName,
-                                  nsAttrValue& aValue,
-                                  nsresult* aRetval) override;
+  virtual bool SetAndSwapMappedAttribute(nsAtom* aName,
+                                         nsAttrValue& aValue,
+                                         bool* aValueWasSet,
+                                         nsresult* aRetval) override;
 
   virtual void NodeInfoChanged(nsIDocument* aOldDoc) override;
 };

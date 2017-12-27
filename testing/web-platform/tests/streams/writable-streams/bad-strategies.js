@@ -61,7 +61,7 @@ promise_test(t => {
 
   const writer = ws.getWriter();
 
-  const p1 = promise_rejects(t, new TypeError(), writer.write('a'), 'write should reject with a TypeError');
+  const p1 = promise_rejects(t, error1, writer.write('a'), 'write should reject with the thrown error');
 
   const p2 = promise_rejects(t, error1, writer.closed, 'closed should reject with the thrown error');
 
@@ -89,5 +89,12 @@ promise_test(() => {
     });
   }));
 }, 'Writable stream: invalid strategy.size return value');
+
+test(() => {
+  assert_throws(new TypeError(), () => new WritableStream(undefined, {
+    size: 'not a function',
+    highWaterMark: NaN
+  }), 'WritableStream constructor should throw a TypeError');
+}, 'Writable stream: invalid size beats invalid highWaterMark');
 
 done();

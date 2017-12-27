@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=99: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,7 +15,10 @@ VsyncBridgeParent::Start(Endpoint<PVsyncBridgeParent>&& aEndpoint)
   RefPtr<VsyncBridgeParent> parent = new VsyncBridgeParent();
 
   RefPtr<Runnable> task = NewRunnableMethod<Endpoint<PVsyncBridgeParent>&&>(
-    parent, &VsyncBridgeParent::Open, Move(aEndpoint));
+    "gfx::VsyncBridgeParent::Open",
+    parent,
+    &VsyncBridgeParent::Open,
+    Move(aEndpoint));
   CompositorThreadHolder::Loop()->PostTask(task.forget());
 
   return parent;
@@ -25,6 +28,7 @@ VsyncBridgeParent::VsyncBridgeParent()
  : mOpen(false)
 {
   MOZ_COUNT_CTOR(VsyncBridgeParent);
+  mCompositorThreadRef = CompositorThreadHolder::GetSingleton();
 }
 
 VsyncBridgeParent::~VsyncBridgeParent()
@@ -55,7 +59,9 @@ VsyncBridgeParent::Shutdown()
 {
   MessageLoop* ccloop = CompositorThreadHolder::Loop();
   if (MessageLoop::current() != ccloop) {
-    ccloop->PostTask(NewRunnableMethod(this, &VsyncBridgeParent::ShutdownImpl));
+    ccloop->PostTask(NewRunnableMethod("gfx::VsyncBridgeParent::ShutdownImpl",
+                                       this,
+                                       &VsyncBridgeParent::ShutdownImpl));
     return;
   }
 
@@ -75,6 +81,7 @@ void
 VsyncBridgeParent::ActorDestroy(ActorDestroyReason aWhy)
 {
   mOpen = false;
+  mCompositorThreadRef = nullptr;
 }
 
 void

@@ -1,5 +1,5 @@
-/* -*- Mode: C++; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* vim: set sts=2 ts=8 sw=2 tw=99 et: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -61,6 +61,9 @@ public:
   //  4. If a user status was set, return it.
   //  5. Return the default status.
   static FeatureStatus GetValue(Feature aFeature);
+
+  // Reset the entire state of a feature.
+  static void Reset(Feature aFeature);
 
   // Initialize the base value of a parameter. The return value is aEnable.
   static bool SetDefault(Feature aFeature,
@@ -164,7 +167,8 @@ public:
   // Query whether a fallback has been toggled.
   static bool UseFallback(Fallback aFallback);
 
-  // Enable a fallback.
+  // Add a log entry denoting that a given fallback had to be used. This can
+  // be called from any thread in the UI or GPU process.
   static void EnableFallback(Fallback aFallback, const char* aMessage);
 
   // Run a callback for each initialized FeatureState.

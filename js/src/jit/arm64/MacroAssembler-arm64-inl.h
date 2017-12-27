@@ -50,6 +50,48 @@ MacroAssembler::move16SignExtend(Register src, Register dest)
     MOZ_CRASH("NYI: move16SignExtend");
 }
 
+void
+MacroAssembler::moveDoubleToGPR64(FloatRegister src, Register64 dest)
+{
+    MOZ_CRASH("NYI: moveDoubleToGPR64");
+}
+
+void
+MacroAssembler::moveGPR64ToDouble(Register64 src, FloatRegister dest)
+{
+    MOZ_CRASH("NYI: moveGPR64ToDouble");
+}
+
+void
+MacroAssembler::move64To32(Register64 src, Register dest)
+{
+    MOZ_CRASH("NYI: move64To32");
+}
+
+void
+MacroAssembler::move32To64ZeroExtend(Register src, Register64 dest)
+{
+    MOZ_CRASH("NYI: move32To64ZeroExtend");
+}
+
+void
+MacroAssembler::move8To64SignExtend(Register src, Register64 dest)
+{
+    MOZ_CRASH("NYI: move8To64SignExtend");
+}
+
+void
+MacroAssembler::move16To64SignExtend(Register src, Register64 dest)
+{
+    MOZ_CRASH("NYI: move16To64SignExtend");
+}
+
+void
+MacroAssembler::move32To64SignExtend(Register src, Register64 dest)
+{
+    MOZ_CRASH("NYI: move32To64SignExtend");
+}
+
 // ===============================================================
 // Logical instructions
 
@@ -1032,6 +1074,17 @@ MacroAssembler::branchPtr(Condition cond, wasm::SymbolicAddress lhs, Register rh
     branchPtr(cond, scratch, rhs, label);
 }
 
+void
+MacroAssembler::branchPtr(Condition cond, const BaseIndex& lhs, ImmWord rhs, Label* label)
+{
+    vixl::UseScratchRegisterScope temps(this);
+    const Register scratch = temps.AcquireX().asUnsized();
+    MOZ_ASSERT(scratch != lhs.base);
+    MOZ_ASSERT(scratch != lhs.index);
+    loadPtr(lhs, scratch);
+    branchPtr(cond, scratch, rhs, label);
+}
+
 template <typename T>
 CodeOffsetJump
 MacroAssembler::branchPtrWithPatch(Condition cond, Register lhs, T rhs, RepatchLabel* label)
@@ -1448,6 +1501,12 @@ MacroAssembler::branchTestString(Condition cond, Register tag, Label* label)
 }
 
 void
+MacroAssembler::branchTestString(Condition cond, const Address& address, Label* label)
+{
+    branchTestStringImpl(cond, address, label);
+}
+
+void
 MacroAssembler::branchTestString(Condition cond, const BaseIndex& address, Label* label)
 {
     branchTestStringImpl(cond, address, label);
@@ -1643,6 +1702,12 @@ MacroAssembler::branchTestMagic(Condition cond, const Address& valaddr, JSWhyMag
     uint64_t magic = MagicValue(why).asRawBits();
     cmpPtr(valaddr, ImmWord(magic));
     B(label, cond);
+}
+
+void
+MacroAssembler::branchToComputedAddress(const BaseIndex& addr)
+{
+    MOZ_CRASH("branchToComputedAddress");
 }
 
 // ========================================================================

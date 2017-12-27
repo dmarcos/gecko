@@ -32,6 +32,41 @@ nsSVGViewBoxRect::operator==(const nsSVGViewBoxRect& aOther) const
      height == aOther.height);
 }
 
+/* static */ nsresult
+nsSVGViewBoxRect::FromString(const nsAString& aStr, nsSVGViewBoxRect *aViewBox)
+{
+  if (aStr.EqualsLiteral("none")) {
+    aViewBox->none = true;
+    return NS_OK;
+  }
+
+  nsCharSeparatedTokenizerTemplate<IsSVGWhitespace>
+  tokenizer(aStr, ',',
+            nsCharSeparatedTokenizer::SEPARATOR_OPTIONAL);
+  float vals[NUM_VIEWBOX_COMPONENTS];
+  uint32_t i;
+  for (i = 0; i < NUM_VIEWBOX_COMPONENTS && tokenizer.hasMoreTokens(); ++i) {
+    if (!SVGContentUtils::ParseNumber(tokenizer.nextToken(), vals[i])) {
+      return NS_ERROR_DOM_SYNTAX_ERR;
+    }
+  }
+
+  if (i != NUM_VIEWBOX_COMPONENTS ||              // Too few values.
+      tokenizer.hasMoreTokens() ||                // Too many values.
+      tokenizer.separatorAfterCurrentToken()) {   // Trailing comma.
+    return NS_ERROR_DOM_SYNTAX_ERR;
+  }
+
+  aViewBox->x = vals[0];
+  aViewBox->y = vals[1];
+  aViewBox->width = vals[2];
+  aViewBox->height = vals[3];
+  aViewBox->none = false;
+
+  return NS_OK;
+}
+
+
 /* Cycle collection macros for nsSVGViewBox */
 
 NS_SVG_VAL_IMPL_CYCLE_COLLECTION_WRAPPERCACHED(nsSVGViewBox::DOMBaseVal, mSVGElement)
@@ -132,40 +167,6 @@ nsSVGViewBox::SetBaseValue(const nsSVGViewBoxRect& aRect,
   }
 }
 
-static nsresult
-ToSVGViewBoxRect(const nsAString& aStr, nsSVGViewBoxRect *aViewBox)
-{
-  if (aStr.EqualsLiteral("none")) {
-    aViewBox->none = true;
-    return NS_OK;
-  }
-
-  nsCharSeparatedTokenizerTemplate<IsSVGWhitespace>
-    tokenizer(aStr, ',',
-              nsCharSeparatedTokenizer::SEPARATOR_OPTIONAL);
-  float vals[NUM_VIEWBOX_COMPONENTS];
-  uint32_t i;
-  for (i = 0; i < NUM_VIEWBOX_COMPONENTS && tokenizer.hasMoreTokens(); ++i) {
-    if (!SVGContentUtils::ParseNumber(tokenizer.nextToken(), vals[i])) {
-      return NS_ERROR_DOM_SYNTAX_ERR;
-    }
-  }
-
-  if (i != NUM_VIEWBOX_COMPONENTS ||              // Too few values.
-      tokenizer.hasMoreTokens() ||                // Too many values.
-      tokenizer.separatorAfterCurrentToken()) {   // Trailing comma.
-    return NS_ERROR_DOM_SYNTAX_ERR;
-  }
-
-  aViewBox->x = vals[0];
-  aViewBox->y = vals[1];
-  aViewBox->width = vals[2];
-  aViewBox->height = vals[3];
-  aViewBox->none = false;
-
-  return NS_OK;
-}
-
 nsresult
 nsSVGViewBox::SetBaseValueString(const nsAString& aValue,
                                  nsSVGElement *aSVGElement,
@@ -173,7 +174,7 @@ nsSVGViewBox::SetBaseValueString(const nsAString& aValue,
 {
   nsSVGViewBoxRect viewBox;
 
-  nsresult rv = ToSVGViewBoxRect(aValue, &viewBox);
+  nsresult rv = nsSVGViewBoxRect::FromString(aValue, &viewBox);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -205,12 +206,10 @@ nsSVGViewBox::GetBaseValueString(nsAString& aValue) const
     aValue.AssignLiteral("none");
     return;
   }
-  char16_t buf[200];
-  nsTextFormatter::snprintf(buf, sizeof(buf)/sizeof(char16_t),
+  nsTextFormatter::ssprintf(aValue,
                             u"%g %g %g %g",
                             (double)mBaseVal.x, (double)mBaseVal.y,
                             (double)mBaseVal.width, (double)mBaseVal.height);
-  aValue.Assign(buf);
 }
 
 
@@ -318,7 +317,7 @@ nsSVGViewBox::SMILViewBox
                               bool& aPreventCachingOfSandwich) const
 {
   nsSVGViewBoxRect viewBox;
-  nsresult res = ToSVGViewBoxRect(aStr, &viewBox);
+  nsresult res = nsSVGViewBoxRect::FromString(aStr, &viewBox);
   if (NS_FAILED(res)) {
     return res;
   }
@@ -326,7 +325,7 @@ nsSVGViewBox::SMILViewBox
   *static_cast<nsSVGViewBoxRect*>(val.mU.mPtr) = viewBox;
   aValue = Move(val);
   aPreventCachingOfSandwich = false;
-  
+
   return NS_OK;
 }
 

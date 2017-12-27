@@ -1,3 +1,5 @@
+from __future__ import absolute_import
+
 import argparse
 import sys
 
@@ -34,6 +36,7 @@ def main(**kwargs):
 
     for data in reader.read(input_file):
         handler(data)
+
 
 if __name__ == "__main__":
     parser = get_parser()

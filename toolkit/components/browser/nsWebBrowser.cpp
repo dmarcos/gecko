@@ -15,6 +15,7 @@
 #include "mozilla/gfx/2D.h"
 
 // Interfaces Needed
+#include "gfxContext.h"
 #include "nsReadableUtils.h"
 #include "nsIComponentManager.h"
 #include "nsIDOMDocument.h"
@@ -27,7 +28,6 @@
 #include "nsIWebProgress.h"
 #include "nsIWebProgressListener.h"
 #include "nsIWebBrowserFocus.h"
-#include "nsIWebBrowserStream.h"
 #include "nsIPresShell.h"
 #include "nsIURIContentListener.h"
 #include "nsISHistoryListener.h"
@@ -37,7 +37,6 @@
 #include "nsIServiceManager.h"
 #include "nsFocusManager.h"
 #include "Layers.h"
-#include "gfxContext.h"
 #include "nsILoadContext.h"
 #include "nsDocShell.h"
 
@@ -106,10 +105,19 @@ nsWebBrowser::InternalDestroy()
   return NS_OK;
 }
 
-NS_IMPL_ADDREF(nsWebBrowser)
-NS_IMPL_RELEASE(nsWebBrowser)
+NS_IMPL_CYCLE_COLLECTING_ADDREF(nsWebBrowser)
+NS_IMPL_CYCLE_COLLECTING_RELEASE(nsWebBrowser)
 
-NS_INTERFACE_MAP_BEGIN(nsWebBrowser)
+NS_IMPL_CYCLE_COLLECTION(nsWebBrowser,
+                         mDocShell,
+                         mDocShellAsReq,
+                         mDocShellAsWin,
+                         mDocShellAsNav,
+                         mDocShellAsScrollable,
+                         mDocShellAsTextScroll,
+                         mWebProgress)
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsWebBrowser)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIWebBrowser)
   NS_INTERFACE_MAP_ENTRY(nsIWebBrowser)
   NS_INTERFACE_MAP_ENTRY(nsIWebNavigation)
@@ -123,7 +131,6 @@ NS_INTERFACE_MAP_BEGIN(nsWebBrowser)
   NS_INTERFACE_MAP_ENTRY(nsICancelable)
   NS_INTERFACE_MAP_ENTRY(nsIWebBrowserFocus)
   NS_INTERFACE_MAP_ENTRY(nsIWebProgressListener)
-  NS_INTERFACE_MAP_ENTRY(nsIWebBrowserStream)
   NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
 NS_INTERFACE_MAP_END
 
@@ -673,12 +680,14 @@ NS_IMETHODIMP
 nsWebBrowser::LoadURI(const char16_t* aURI, uint32_t aLoadFlags,
                       nsIURI* aReferringURI,
                       nsIInputStream* aPostDataStream,
-                      nsIInputStream* aExtraHeaderStream)
+                      nsIInputStream* aExtraHeaderStream,
+                      nsIPrincipal* aTriggeringPrincipal)
 {
   NS_ENSURE_STATE(mDocShell);
 
-  return mDocShellAsNav->LoadURI(
-    aURI, aLoadFlags, aReferringURI, aPostDataStream, aExtraHeaderStream);
+  return mDocShellAsNav->LoadURI(aURI, aLoadFlags, aReferringURI,
+                                 aPostDataStream, aExtraHeaderStream,
+                                 aTriggeringPrincipal);
 }
 
 NS_IMETHODIMP
@@ -1580,9 +1589,8 @@ nsWebBrowser::SetFocus()
 }
 
 NS_IMETHODIMP
-nsWebBrowser::GetTitle(char16_t** aTitle)
+nsWebBrowser::GetTitle(nsAString& aTitle)
 {
-  NS_ENSURE_ARG_POINTER(aTitle);
   NS_ENSURE_STATE(mDocShell);
 
   NS_ENSURE_SUCCESS(mDocShellAsWin->GetTitle(aTitle), NS_ERROR_FAILURE);
@@ -1591,7 +1599,7 @@ nsWebBrowser::GetTitle(char16_t** aTitle)
 }
 
 NS_IMETHODIMP
-nsWebBrowser::SetTitle(const char16_t* aTitle)
+nsWebBrowser::SetTitle(const nsAString& aTitle)
 {
   NS_ENSURE_STATE(mDocShell);
 
@@ -1894,51 +1902,4 @@ nsWebBrowser::SetFocusedElement(nsIDOMElement* aFocusedElement)
 {
   nsCOMPtr<nsIFocusManager> fm = do_GetService(FOCUSMANAGER_CONTRACTID);
   return fm ? fm->SetFocus(aFocusedElement, 0) : NS_OK;
-}
-
-//*****************************************************************************
-// nsWebBrowser::nsIWebBrowserStream
-//*****************************************************************************
-
-NS_IMETHODIMP
-nsWebBrowser::OpenStream(nsIURI* aBaseURI, const nsACString& aContentType)
-{
-  nsresult rv;
-
-  if (!mStream) {
-    mStream = new nsEmbedStream();
-    mStream->InitOwner(this);
-    rv = mStream->Init();
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-  }
-
-  return mStream->OpenStream(aBaseURI, aContentType);
-}
-
-
-NS_IMETHODIMP
-nsWebBrowser::AppendToStream(const uint8_t* aData, uint32_t aLen)
-{
-  if (!mStream) {
-    return NS_ERROR_FAILURE;
-  }
-
-  return mStream->AppendToStream(aData, aLen);
-}
-
-NS_IMETHODIMP
-nsWebBrowser::CloseStream()
-{
-  nsresult rv;
-
-  if (!mStream) {
-    return NS_ERROR_FAILURE;
-  }
-  rv = mStream->CloseStream();
-
-  mStream = nullptr;
-
-  return rv;
 }

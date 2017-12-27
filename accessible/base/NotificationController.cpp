@@ -271,6 +271,8 @@ NotificationController::DropMutationEvent(AccTreeMutationEvent* aEvent)
   } else if (aEvent->GetEventType() == nsIAccessibleEvent::EVENT_SHOW) {
     aEvent->GetAccessible()->SetShowEventTarget(false);
   } else {
+    aEvent->GetAccessible()->SetHideEventTarget(false);
+
     AccHideEvent* hideEvent = downcast_accEvent(aEvent);
     MOZ_ASSERT(hideEvent);
 
@@ -417,8 +419,7 @@ NotificationController::ScheduleContentInsertion(Accessible* aContainer,
                                                  nsIContent* aStartChildNode,
                                                  nsIContent* aEndChildNode)
 {
-  nsTArray<nsCOMPtr<nsIContent>>* list =
-    mContentInsertions.LookupOrAdd(aContainer);
+  nsTArray<nsCOMPtr<nsIContent>> list;
 
   bool needsProcessing = false;
   nsIContent* node = aStartChildNode;
@@ -427,13 +428,14 @@ NotificationController::ScheduleContentInsertion(Accessible* aContainer,
     // actually inserted, check if the given content has a frame to discard
     // this case early.
     if (node->GetPrimaryFrame()) {
-      if (list->AppendElement(node))
+      if (list.AppendElement(node))
         needsProcessing = true;
     }
     node = node->GetNextSibling();
   }
 
   if (needsProcessing) {
+    mContentInsertions.LookupOrAdd(aContainer)->AppendElements(list);
     ScheduleProcessing();
   }
 }
@@ -457,9 +459,29 @@ NotificationController::IsUpdatePending()
 {
   return mPresShell->IsLayoutFlushObserver() ||
     mObservingState == eRefreshProcessingForUpdate ||
+    WaitingForParent() ||
     mContentInsertions.Count() != 0 || mNotifications.Length() != 0 ||
     mTextHash.Count() != 0 ||
     !mDocument->HasLoadState(DocAccessible::eTreeConstructed);
+}
+
+bool
+NotificationController::WaitingForParent()
+{
+  DocAccessible* parentdoc = mDocument->ParentDocument();
+  if (!parentdoc) {
+    return false;
+  }
+
+  NotificationController* parent = parentdoc->mNotificationController;
+  if (!parent || parent == this) {
+    // Do not wait for nothing or ourselves
+    return false;
+  }
+
+  // Wait for parent's notifications processing
+  return parent->mContentInsertions.Count() != 0 ||
+         parent->mNotifications.Length() != 0;
 }
 
 void
@@ -590,8 +612,9 @@ NotificationController::ProcessMutationEvents()
 void
 NotificationController::WillRefresh(mozilla::TimeStamp aTime)
 {
-  PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
-  Telemetry::AutoTimer<Telemetry::A11Y_UPDATE_TIME> updateTimer;
+  Telemetry::AutoTimer<Telemetry::A11Y_TREE_UPDATE_TIMING_MS> timer;
+
+  AUTO_PROFILER_LABEL("NotificationController::WillRefresh", OTHER);
 
   // If the document accessible that notification collector was created for is
   // now shut down, don't process notifications anymore.
@@ -600,9 +623,19 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
   if (!mDocument)
     return;
 
+  // Wait until an update, we have started, or an interruptible reflow is
+  // finished.
   if (mObservingState == eRefreshProcessing ||
-      mObservingState == eRefreshProcessingForUpdate)
+      mObservingState == eRefreshProcessingForUpdate ||
+      mPresShell->IsReflowInterrupted()) {
     return;
+  }
+
+  // Wait for parent's notifications, to get proper ordering between e.g. tab
+  // event and content event.
+  if (WaitingForParent()) {
+    return;
+  }
 
   // Any generic notifications should be queued if we're processing content
   // insertions or generic notifications.
@@ -641,24 +674,28 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
     nsIContent* textNode = entry->GetKey();
     Accessible* textAcc = mDocument->GetAccessible(textNode);
 
-    // If the text node is not in tree or doesn't have frame then this case should
-    // have been handled already by content removal notifications.
+    // If the text node is not in tree or doesn't have a frame, or placed in
+    // another document, then this case should have been handled already by
+    // content removal notifications.
     nsINode* containerNode = textNode->GetParentNode();
-    if (!containerNode) {
-      NS_ASSERTION(!textAcc,
-                   "Text node was removed but accessible is kept alive!");
+    if (!containerNode ||
+        textNode->GetOwnerDocument() != mDocument->DocumentNode()) {
+      MOZ_ASSERT(!textAcc,
+                 "Text node was removed but accessible is kept alive!");
       continue;
     }
 
     nsIFrame* textFrame = textNode->GetPrimaryFrame();
     if (!textFrame) {
-      NS_ASSERTION(!textAcc,
-                   "Text node isn't rendered but accessible is kept alive!");
+      MOZ_ASSERT(!textAcc,
+                 "Text node isn't rendered but accessible is kept alive!");
       continue;
     }
 
+  #ifdef A11Y_LOG
     nsIContent* containerElm = containerNode->IsElement() ?
       containerNode->AsElement() : nullptr;
+  #endif
 
     nsIFrame::RenderedText text = textFrame->GetRenderedText(0,
         UINT32_MAX, nsIFrame::TextOffsetType::OFFSETS_IN_CONTENT_TEXT,
@@ -676,7 +713,7 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
         }
   #endif
 
-        mDocument->ContentRemoved(containerElm, textNode);
+        mDocument->ContentRemoved(textAcc);
         continue;
       }
 
@@ -730,13 +767,20 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
   }
   mContentInsertions.Clear();
 
-  // Bind hanging child documents.
+  // Bind hanging child documents unless we are using IPC and the
+  // document has no IPC actor.  If we fail to bind the child doc then
+  // shut it down.
   uint32_t hangingDocCnt = mHangingChildDocuments.Length();
   nsTArray<RefPtr<DocAccessible>> newChildDocs;
   for (uint32_t idx = 0; idx < hangingDocCnt; idx++) {
     DocAccessible* childDoc = mHangingChildDocuments[idx];
     if (childDoc->IsDefunct())
       continue;
+
+    if (IPCAccessibilityActive() && !mDocument->IPCDoc()) {
+      childDoc->Shutdown();
+      continue;
+    }
 
     nsIContent* ownerContent = mDocument->DocumentNode()->
       FindContentForSubDocument(childDoc->DocumentNode());
@@ -755,6 +799,8 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
       childDoc->Shutdown();
     }
   }
+
+  // Clear the hanging documents list, even if we didn't bind them.
   mHangingChildDocuments.Clear();
   MOZ_ASSERT(mDocument, "Illicit document shutdown");
   if (!mDocument) {
@@ -795,13 +841,10 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
   // modification are done.
   mDocument->ProcessInvalidationList();
 
-  // We cannot rely on DOM tree to keep aria-owns relations updated. Make
-  // a validation to remove dead links.
-  mDocument->ValidateARIAOwned();
-
   // Process relocation list.
   for (uint32_t idx = 0; idx < mRelocations.Length(); idx++) {
-    if (mRelocations[idx]->IsInDocument()) {
+    // owner should be in a document and have na associated DOM node (docs sometimes don't)
+    if (mRelocations[idx]->IsInDocument() && mRelocations[idx]->HasOwnContent()) {
       mDocument->DoARIAOwnsRelocation(mRelocations[idx]);
     }
   }

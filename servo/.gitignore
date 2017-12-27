@@ -1,5 +1,6 @@
 /.servo
-/.cargo
+/.cargo/*
+!/.cargo/config.*
 /.servobuild
 /target
 /ports/android/bin
@@ -8,12 +9,15 @@
 /ports/android/obj
 /python/_virtualenv
 /python/tidy/servo_tidy.egg-info
+/tests/wpt/sync
 *~
 *.pkl
 *.pyc
 *.swp
 *.swo
 *.csv
+*.rej
+*.orig
 .DS_Store
 Servo.app
 .config.mk.last
@@ -24,8 +28,13 @@ Servo.app
 # IntelliJ
 .idea
 *.iws
+*.iml
+
+#Gradle
+.gradle
 
 # VSCode
 .vscode
 
 /unminified-js
+

@@ -24,9 +24,9 @@ namespace JS {
     _(GetProp_Unboxed)                                  \
     _(GetProp_CommonGetter)                             \
     _(GetProp_InlineAccess)                             \
+    _(GetProp_InlineProtoAccess)                        \
     _(GetProp_Innerize)                                 \
     _(GetProp_InlineCache)                              \
-    _(GetProp_SharedCache)                              \
     _(GetProp_ModuleNamespace)                          \
                                                         \
     _(SetProp_CommonSetter)                             \
@@ -42,7 +42,8 @@ namespace JS {
     _(GetElem_TypedArray)                               \
     _(GetElem_String)                                   \
     _(GetElem_Arguments)                                \
-    _(GetElem_ArgumentsInlined)                         \
+    _(GetElem_ArgumentsInlinedConstant)                 \
+    _(GetElem_ArgumentsInlinedSwitch)                   \
     _(GetElem_InlineCache)                              \
                                                         \
     _(SetElem_TypedObject)                              \
@@ -197,7 +198,6 @@ namespace JS {
     _(CantInlineTooManyArgs)                                            \
     _(CantInlineNeedsArgsObj)                                           \
     _(CantInlineDebuggee)                                               \
-    _(CantInlineUnknownProps)                                           \
     _(CantInlineExceededDepth)                                          \
     _(CantInlineExceededTotalBytecodeLength)                            \
     _(CantInlineBigCaller)                                              \

@@ -5,9 +5,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "CParserContext.h"
-#include "nsToken.h"
 #include "prenv.h"  
 #include "nsIHTMLContentSink.h"
 #include "nsHTMLTokenizer.h"

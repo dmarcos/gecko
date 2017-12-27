@@ -4,16 +4,21 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "ImageLogging.h"
 #include "imgRequestProxy.h"
-#include "imgIOnloadBlocker.h"
+
+#include "ImageLogging.h"
 #include "imgLoader.h"
 #include "Image.h"
 #include "ImageOps.h"
 #include "nsError.h"
 #include "nsCRTGlue.h"
 #include "imgINotificationObserver.h"
+#include "mozilla/dom/TabGroup.h"       // for TabGroup
+#include "mozilla/dom/DocGroup.h"       // for DocGroup
+#include "mozilla/Move.h"
+#include "mozilla/Telemetry.h"          // for Telemetry
 
+using namespace mozilla;
 using namespace mozilla::image;
 
 // The split of imgRequestProxy and imgRequestProxyStatic means that
@@ -112,12 +117,15 @@ imgRequestProxy::imgRequestProxy() :
   mAnimationConsumers(0),
   mCanceled(false),
   mIsInLoadGroup(false),
+  mForceDispatchLoadGroup(false),
   mListenerIsStrongRef(false),
   mDecodeRequested(false),
-  mDeferNotifications(false)
+  mDeferNotifications(false),
+  mHadListener(false),
+  mHadDispatch(false)
 {
   /* member initializers and constructor code */
-
+  LOG_FUNC(gImgLog, "imgRequestProxy::imgRequestProxy");
 }
 
 imgRequestProxy::~imgRequestProxy()
@@ -125,6 +133,21 @@ imgRequestProxy::~imgRequestProxy()
   /* destructor code */
   NS_PRECONDITION(!mListener,
                   "Someone forgot to properly cancel this request!");
+
+  // If we had a listener, that means we would have issued notifications. With
+  // bug 1359833, we added support for main thread scheduler groups. Each
+  // imgRequestProxy may have its own associated listener, document and/or
+  // scheduler group. Typically most imgRequestProxy belong to the same
+  // document, or have no listener, which means we will want to execute all main
+  // thread code in that shared scheduler group. Less frequently, there may be
+  // multiple imgRequests and they have separate documents, which means that
+  // when we issue state notifications, some or all need to be dispatched to the
+  // appropriate scheduler group for each request. This should be rare, so we
+  // want to monitor the frequency of dispatching in the wild.
+  if (mHadListener) {
+    mozilla::Telemetry::Accumulate(mozilla::Telemetry::IMAGE_REQUEST_DISPATCHED,
+                                   mHadDispatch);
+  }
 
   // Unlock the image the proper number of times if we're holding locks on
   // it. Note that UnlockImage() decrements mLockCount each time it's called.
@@ -149,11 +172,15 @@ imgRequestProxy::~imgRequestProxy()
     mCanceled = true;
     GetOwner()->RemoveProxy(this, NS_OK);
   }
+
+  RemoveFromLoadGroup();
+  LOG_FUNC(gImgLog, "imgRequestProxy::~imgRequestProxy");
 }
 
 nsresult
 imgRequestProxy::Init(imgRequest* aOwner,
                       nsILoadGroup* aLoadGroup,
+                      nsIDocument* aLoadingDocument,
                       ImageURL* aURI,
                       imgINotificationObserver* aObserver)
 {
@@ -167,20 +194,19 @@ imgRequestProxy::Init(imgRequest* aOwner,
 
   mBehaviour->SetOwner(aOwner);
   mListener = aObserver;
-  // Make sure to addref mListener before the AddProxy call below, since
+  // Make sure to addref mListener before the AddToOwner call below, since
   // that call might well want to release it if the imgRequest has
   // already seen OnStopRequest.
   if (mListener) {
+    mHadListener = true;
     mListenerIsStrongRef = true;
     NS_ADDREF(mListener);
   }
   mLoadGroup = aLoadGroup;
   mURI = aURI;
 
-  // Note: AddProxy won't send all the On* notifications immediately
-  if (GetOwner()) {
-    GetOwner()->AddProxy(this);
-  }
+  // Note: AddToOwner won't send all the On* notifications immediately
+  AddToOwner(aLoadingDocument);
 
   return NS_OK;
 }
@@ -208,7 +234,7 @@ imgRequestProxy::ChangeOwner(imgRequest* aNewOwner)
   uint32_t oldAnimationConsumers = mAnimationConsumers;
   ClearAnimationConsumers();
 
-  GetOwner()->RemoveProxy(this, NS_IMAGELIB_CHANGING_OWNER);
+  GetOwner()->RemoveProxy(this, NS_OK);
 
   mBehaviour->SetOwner(aNewOwner);
 
@@ -224,7 +250,7 @@ imgRequestProxy::ChangeOwner(imgRequest* aNewOwner)
     IncrementAnimationConsumers();
   }
 
-  GetOwner()->AddProxy(this);
+  AddToOwner(nullptr);
 
   // If we'd previously requested a synchronous decode, request a decode on the
   // new image.
@@ -235,40 +261,194 @@ imgRequestProxy::ChangeOwner(imgRequest* aNewOwner)
   return NS_OK;
 }
 
+bool
+imgRequestProxy::IsOnEventTarget() const
+{
+  // Ensure we are in some main thread context because the scheduler group
+  // methods are only safe to call on the main thread.
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (mTabGroup) {
+    MOZ_ASSERT(mEventTarget);
+    return mTabGroup->IsSafeToRun();
+  }
+
+  if (mListener) {
+    // If we have no scheduler group but we do have a listener, then we know
+    // that the listener requires unlabelled dispatch.
+    MOZ_ASSERT(mEventTarget);
+    return mozilla::SchedulerGroup::IsSafeToRunUnlabeled();
+  }
+
+  // No listener means it is always safe, as there is nothing to do.
+  return true;
+}
+
+already_AddRefed<nsIEventTarget>
+imgRequestProxy::GetEventTarget() const
+{
+  nsCOMPtr<nsIEventTarget> target(mEventTarget);
+  return target.forget();
+}
+
+nsresult
+imgRequestProxy::DispatchWithTargetIfAvailable(already_AddRefed<nsIRunnable> aEvent)
+{
+  LOG_FUNC(gImgLog, "imgRequestProxy::DispatchWithTargetIfAvailable");
+
+  // This method should only be used when it is *expected* that we are
+  // dispatching an event (e.g. we want to handle an event asynchronously)
+  // rather we need to (e.g. we are in the wrong scheduler group context).
+  // As such, we do not set mHadDispatch for telemetry purposes.
+  if (mEventTarget) {
+    mEventTarget->Dispatch(Move(aEvent), NS_DISPATCH_NORMAL);
+    return NS_OK;
+  }
+
+  return NS_DispatchToMainThread(Move(aEvent));
+}
+
+void
+imgRequestProxy::DispatchWithTarget(already_AddRefed<nsIRunnable> aEvent)
+{
+  LOG_FUNC(gImgLog, "imgRequestProxy::DispatchWithTarget");
+
+  MOZ_ASSERT(mListener || mTabGroup);
+  MOZ_ASSERT(mEventTarget);
+
+  mHadDispatch = true;
+  mEventTarget->Dispatch(Move(aEvent), NS_DISPATCH_NORMAL);
+}
+
+void
+imgRequestProxy::AddToOwner(nsIDocument* aLoadingDocument)
+{
+  // An imgRequestProxy can be initialized with neither a listener nor a
+  // document. The caller could follow up later by cloning the canonical
+  // imgRequestProxy with the actual listener. This is possible because
+  // imgLoader::LoadImage does not require a valid listener to be provided.
+  //
+  // Without a listener, we don't need to set our scheduler group, because
+  // we have nothing to signal. However if we were told what document this
+  // is for, it is likely that future listeners will belong to the same
+  // scheduler group.
+  //
+  // With a listener, we always need to update our scheduler group. A null
+  // scheduler group is valid with or without a document, but that means
+  // we will use the most generic event target possible on dispatch.
+  if (aLoadingDocument) {
+    RefPtr<dom::DocGroup> docGroup = aLoadingDocument->GetDocGroup();
+    if (docGroup) {
+      mTabGroup = docGroup->GetTabGroup();
+      MOZ_ASSERT(mTabGroup);
+
+      mEventTarget = mTabGroup->EventTargetFor(mozilla::TaskCategory::Other);
+      MOZ_ASSERT(mEventTarget);
+    }
+  }
+
+  if (mListener && !mEventTarget) {
+    mEventTarget = do_GetMainThread();
+  }
+
+  if (!GetOwner()) {
+    return;
+  }
+
+  GetOwner()->AddProxy(this);
+}
+
 void
 imgRequestProxy::AddToLoadGroup()
 {
   NS_ASSERTION(!mIsInLoadGroup, "Whaa, we're already in the loadgroup!");
+  MOZ_ASSERT(!mForceDispatchLoadGroup);
 
+  /* While in theory there could be a dispatch outstanding to remove this
+     request from the load group, in practice we only add to the load group
+     (when previously not in a load group) at initialization. */
   if (!mIsInLoadGroup && mLoadGroup) {
+    LOG_FUNC(gImgLog, "imgRequestProxy::AddToLoadGroup");
     mLoadGroup->AddRequest(this, nullptr);
     mIsInLoadGroup = true;
   }
 }
 
 void
-imgRequestProxy::RemoveFromLoadGroup(bool releaseLoadGroup)
+imgRequestProxy::RemoveFromLoadGroup()
 {
-  if (!mIsInLoadGroup) {
+  if (!mIsInLoadGroup || !mLoadGroup) {
     return;
   }
+
+  /* Sometimes we may not be able to remove ourselves from the load group in
+     the current context. This is because our listeners are not re-entrant (e.g.
+     we are in the middle of CancelAndForgetObserver or SyncClone). */
+  if (mForceDispatchLoadGroup) {
+    LOG_FUNC(gImgLog, "imgRequestProxy::RemoveFromLoadGroup -- dispatch");
+
+    /* We take away the load group from the request temporarily; this prevents
+       additional dispatches via RemoveFromLoadGroup occurring, as well as
+       MoveToBackgroundInLoadGroup from removing and readding. This is safe
+       because we know that once we get here, blocking the load group at all is
+       unnecessary. */
+    mIsInLoadGroup = false;
+    nsCOMPtr<nsILoadGroup> loadGroup = Move(mLoadGroup);
+    RefPtr<imgRequestProxy> self(this);
+    DispatchWithTargetIfAvailable(NS_NewRunnableFunction(
+      "imgRequestProxy::RemoveFromLoadGroup",
+      [self, loadGroup]() -> void {
+        loadGroup->RemoveRequest(self, nullptr, NS_OK);
+      }));
+    return;
+  }
+
+  LOG_FUNC(gImgLog, "imgRequestProxy::RemoveFromLoadGroup");
 
   /* calling RemoveFromLoadGroup may cause the document to finish
      loading, which could result in our death.  We need to make sure
      that we stay alive long enough to fight another battle... at
-     least until we exit this function.
-  */
+     least until we exit this function. */
   nsCOMPtr<imgIRequest> kungFuDeathGrip(this);
-
   mLoadGroup->RemoveRequest(this, nullptr, NS_OK);
+  mLoadGroup = nullptr;
   mIsInLoadGroup = false;
-
-  if (releaseLoadGroup) {
-    // We're done with the loadgroup, release it.
-    mLoadGroup = nullptr;
-  }
 }
 
+void
+imgRequestProxy::MoveToBackgroundInLoadGroup()
+{
+  /* Even if we are still in the load group, we may have taken away the load
+     group reference itself because we are in the process of leaving the group.
+     In that case, there is no need to background the request. */
+  if (!mLoadGroup) {
+    return;
+  }
+
+  /* There is no need to dispatch if we only need to add ourselves to the load
+     group without removal. It is the removal which causes the problematic
+     callbacks (see RemoveFromLoadGroup). */
+  if (mIsInLoadGroup && mForceDispatchLoadGroup) {
+    LOG_FUNC(gImgLog, "imgRequestProxy::MoveToBackgroundInLoadGroup -- dispatch");
+
+    RefPtr<imgRequestProxy> self(this);
+    DispatchWithTargetIfAvailable(NS_NewRunnableFunction(
+      "imgRequestProxy::MoveToBackgroundInLoadGroup",
+      [self]() -> void {
+        self->MoveToBackgroundInLoadGroup();
+      }));
+    return;
+  }
+
+  LOG_FUNC(gImgLog, "imgRequestProxy::MoveToBackgroundInLoadGroup");
+  nsCOMPtr<imgIRequest> kungFuDeathGrip(this);
+  if (mIsInLoadGroup) {
+    mLoadGroup->RemoveRequest(this, nullptr, NS_OK);
+  }
+
+  mLoadFlags |= nsIRequest::LOAD_BACKGROUND;
+  mLoadGroup->AddRequest(this, nullptr);
+}
 
 /**  nsIRequest / imgIRequest methods **/
 
@@ -308,7 +488,7 @@ imgRequestProxy::Cancel(nsresult status)
   mCanceled = true;
 
   nsCOMPtr<nsIRunnable> ev = new imgCancelRunnable(this, status);
-  return NS_DispatchToCurrentThread(ev);
+  return DispatchWithTargetIfAvailable(ev.forget());
 }
 
 void
@@ -318,6 +498,7 @@ imgRequestProxy::DoCancel(nsresult status)
     GetOwner()->RemoveProxy(this, status);
   }
 
+  RemoveFromLoadGroup();
   NullOutListener();
 }
 
@@ -337,21 +518,20 @@ imgRequestProxy::CancelAndForgetObserver(nsresult aStatus)
   LOG_SCOPE(gImgLog, "imgRequestProxy::CancelAndForgetObserver");
 
   mCanceled = true;
+  mForceDispatchLoadGroup = true;
 
-  // Now cheat and make sure our removal from loadgroup happens async
-  bool oldIsInLoadGroup = mIsInLoadGroup;
-  mIsInLoadGroup = false;
+  imgRequest* owner = GetOwner();
+  if (owner) {
+    imgCacheValidator* validator = owner->GetValidator();
+    if (validator) {
+      validator->RemoveProxy(this);
+    }
 
-  if (GetOwner()) {
-    GetOwner()->RemoveProxy(this, aStatus);
+    owner->RemoveProxy(this, aStatus);
   }
 
-  mIsInLoadGroup = oldIsInLoadGroup;
-
-  if (mIsInLoadGroup) {
-    NS_DispatchToCurrentThread(NewRunnableMethod("imgRequestProxy::DoRemoveFromLoadGroup",
-                                                 this, &imgRequestProxy::DoRemoveFromLoadGroup));
-  }
+  RemoveFromLoadGroup();
+  mForceDispatchLoadGroup = false;
 
   NullOutListener();
 
@@ -487,7 +667,10 @@ imgRequestProxy::GetLoadGroup(nsILoadGroup** loadGroup)
 NS_IMETHODIMP
 imgRequestProxy::SetLoadGroup(nsILoadGroup* loadGroup)
 {
-  mLoadGroup = loadGroup;
+  if (loadGroup != mLoadGroup) {
+    MOZ_ASSERT_UNREACHABLE("Switching load groups is unsupported!");
+    return NS_ERROR_NOT_IMPLEMENTED;
+  }
   return NS_OK;
 }
 
@@ -562,13 +745,13 @@ imgRequestProxy::GetURI(nsIURI** aURI)
 }
 
 nsresult
-imgRequestProxy::GetCurrentURI(nsIURI** aURI)
+imgRequestProxy::GetFinalURI(nsIURI** aURI)
 {
   if (!GetOwner()) {
     return NS_ERROR_FAILURE;
   }
 
-  return GetOwner()->GetCurrentURI(aURI);
+  return GetOwner()->GetFinalURI(aURI);
 }
 
 nsresult
@@ -608,17 +791,9 @@ imgRequestProxy::GetMimeType(char** aMimeType)
   return NS_OK;
 }
 
-static imgRequestProxy* NewProxy(imgRequestProxy* /*aThis*/)
+imgRequestProxy* imgRequestProxy::NewClonedProxy()
 {
   return new imgRequestProxy();
-}
-
-imgRequestProxy* NewStaticProxy(imgRequestProxy* aThis)
-{
-  nsCOMPtr<nsIPrincipal> currentPrincipal;
-  aThis->GetImagePrincipal(getter_AddRefs(currentPrincipal));
-  RefPtr<image::Image> image = aThis->GetImage();
-  return new imgRequestProxyStatic(image, currentPrincipal);
 }
 
 NS_IMETHODIMP
@@ -627,20 +802,31 @@ imgRequestProxy::Clone(imgINotificationObserver* aObserver,
 {
   nsresult result;
   imgRequestProxy* proxy;
-  result = Clone(aObserver, &proxy);
+  result = PerformClone(aObserver, nullptr, /* aSyncNotify */ true, &proxy);
   *aClone = proxy;
   return result;
 }
 
+nsresult imgRequestProxy::SyncClone(imgINotificationObserver* aObserver,
+                                    nsIDocument* aLoadingDocument,
+                                    imgRequestProxy** aClone)
+{
+  return PerformClone(aObserver, aLoadingDocument,
+                      /* aSyncNotify */ true, aClone);
+}
+
 nsresult imgRequestProxy::Clone(imgINotificationObserver* aObserver,
+                                nsIDocument* aLoadingDocument,
                                 imgRequestProxy** aClone)
 {
-  return PerformClone(aObserver, NewProxy, aClone);
+  return PerformClone(aObserver, aLoadingDocument,
+                      /* aSyncNotify */ false, aClone);
 }
 
 nsresult
 imgRequestProxy::PerformClone(imgINotificationObserver* aObserver,
-                              imgRequestProxy* (aAllocFn)(imgRequestProxy*),
+                              nsIDocument* aLoadingDocument,
+                              bool aSyncNotify,
                               imgRequestProxy** aClone)
 {
   NS_PRECONDITION(aClone, "Null out param");
@@ -648,7 +834,12 @@ imgRequestProxy::PerformClone(imgINotificationObserver* aObserver,
   LOG_SCOPE(gImgLog, "imgRequestProxy::Clone");
 
   *aClone = nullptr;
-  RefPtr<imgRequestProxy> clone = aAllocFn(this);
+  RefPtr<imgRequestProxy> clone = NewClonedProxy();
+
+  nsCOMPtr<nsILoadGroup> loadGroup;
+  if (aLoadingDocument) {
+    loadGroup = aLoadingDocument->GetDocumentLoadGroup();
+  }
 
   // It is important to call |SetLoadFlags()| before calling |Init()| because
   // |Init()| adds the request to the loadgroup.
@@ -657,15 +848,10 @@ imgRequestProxy::PerformClone(imgINotificationObserver* aObserver,
   // XXXldb That's not true anymore.  Stuff from imgLoader adds the
   // request to the loadgroup.
   clone->SetLoadFlags(mLoadFlags);
-  nsresult rv = clone->Init(mBehaviour->GetOwner(), mLoadGroup,
-                            mURI, aObserver);
+  nsresult rv = clone->Init(mBehaviour->GetOwner(), loadGroup,
+                            aLoadingDocument, mURI, aObserver);
   if (NS_FAILED(rv)) {
     return rv;
-  }
-
-  if (GetOwner() && GetOwner()->GetValidator()) {
-    clone->SetNotificationsDeferred(true);
-    GetOwner()->GetValidator()->AddProxy(clone);
   }
 
   // Assign to *aClone before calling Notify so that if the caller expects to
@@ -673,9 +859,47 @@ imgRequestProxy::PerformClone(imgINotificationObserver* aObserver,
   // surprised.
   NS_ADDREF(*aClone = clone);
 
-  // This is wrong!!! We need to notify asynchronously, but there's code that
-  // assumes that we don't. This will be fixed in bug 580466.
-  clone->SyncNotifyListener();
+  if (GetOwner() && GetOwner()->GetValidator()) {
+    // Note that if we have a validator, we don't want to issue notifications at
+    // here because we want to defer until that completes. AddProxy will add us
+    // to the load group; we cannot avoid that in this case, because we don't
+    // know when the validation will complete, and if it will cause us to
+    // discard our cached state anyways. We are probably already blocked by the
+    // original LoadImage(WithChannel) request in any event.
+    clone->SetNotificationsDeferred(true);
+    GetOwner()->GetValidator()->AddProxy(clone);
+  } else {
+    // We only want to add the request to the load group of the owning document
+    // if it is still in progress. Some callers cannot handle a supurious load
+    // group removal (e.g. print preview) so we must be careful. On the other
+    // hand, if after cloning, the original request proxy is cancelled /
+    // destroyed, we need to ensure that any clones still block the load group
+    // if it is incomplete.
+    bool addToLoadGroup = mIsInLoadGroup;
+    if (!addToLoadGroup) {
+      RefPtr<ProgressTracker> tracker = clone->GetProgressTracker();
+      addToLoadGroup = tracker && !(tracker->GetProgress() & FLAG_LOAD_COMPLETE);
+    }
+
+    if (addToLoadGroup) {
+      clone->AddToLoadGroup();
+    }
+
+    if (aSyncNotify) {
+      // This is wrong!!! We need to notify asynchronously, but there's code
+      // that assumes that we don't. This will be fixed in bug 580466. Note that
+      // if we have a validator, we won't issue notifications anyways because
+      // they are deferred, so there is no point in requesting.
+      clone->mForceDispatchLoadGroup = true;
+      clone->SyncNotifyListener();
+      clone->mForceDispatchLoadGroup = false;
+    } else {
+      // Without a validator, we can request asynchronous notifications
+      // immediately. If there was a validator, this would override the deferral
+      // and that would be incorrect.
+      clone->NotifyListener();
+    }
+  }
 
   return NS_OK;
 }
@@ -713,6 +937,14 @@ imgRequestProxy::GetCORSMode(int32_t* aCorsMode)
 
   *aCorsMode = GetOwner()->GetCORSMode();
 
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+imgRequestProxy::BoostPriority(uint32_t aCategory)
+{
+  NS_ENSURE_STATE(GetOwner() && !mCanceled);
+  GetOwner()->BoostPriority(aCategory);
   return NS_OK;
 }
 
@@ -803,6 +1035,23 @@ imgRequestProxy::Notify(int32_t aType, const mozilla::gfx::IntRect* aRect)
     return;
   }
 
+  if (!IsOnEventTarget()) {
+    RefPtr<imgRequestProxy> self(this);
+    if (aRect) {
+      const mozilla::gfx::IntRect rect = *aRect;
+      DispatchWithTarget(NS_NewRunnableFunction("imgRequestProxy::Notify",
+                                      [self, rect, aType]() -> void {
+        self->Notify(aType, &rect);
+      }));
+    } else {
+      DispatchWithTarget(NS_NewRunnableFunction("imgRequestProxy::Notify",
+                                      [self, aType]() -> void {
+        self->Notify(aType, nullptr);
+      }));
+    }
+    return;
+  }
+
   // Make sure the listener stays alive while we notify.
   nsCOMPtr<imgINotificationObserver> listener(mListener);
 
@@ -822,7 +1071,15 @@ imgRequestProxy::OnLoadComplete(bool aLastPart)
   // There's all sorts of stuff here that could kill us (the OnStopRequest call
   // on the listener, the removal from the loadgroup, the release of the
   // listener, etc).  Don't let them do it.
-  nsCOMPtr<imgIRequest> kungFuDeathGrip(this);
+  RefPtr<imgRequestProxy> self(this);
+
+  if (!IsOnEventTarget()) {
+    DispatchWithTarget(NS_NewRunnableFunction("imgRequestProxy::OnLoadComplete",
+                                    [self, aLastPart]() -> void {
+      self->OnLoadComplete(aLastPart);
+    }));
+    return;
+  }
 
   if (mListener && !mCanceled) {
     // Hold a ref to the listener while we call it, just in case.
@@ -835,12 +1092,12 @@ imgRequestProxy::OnLoadComplete(bool aLastPart)
   // If the request is already a background request and there's more data
   // coming, we can just leave the request in the loadgroup as-is.
   if (aLastPart || (mLoadFlags & nsIRequest::LOAD_BACKGROUND) == 0) {
-    RemoveFromLoadGroup(aLastPart);
-    // More data is coming, so change the request to be a background request
-    // and put it back in the loadgroup.
-    if (!aLastPart) {
-      mLoadFlags |= nsIRequest::LOAD_BACKGROUND;
-      AddToLoadGroup();
+    if (aLastPart) {
+      RemoveFromLoadGroup();
+    } else {
+      // More data is coming, so change the request to be a background request
+      // and put it back in the loadgroup.
+      MoveToBackgroundInLoadGroup();
     }
   }
 
@@ -852,38 +1109,6 @@ imgRequestProxy::OnLoadComplete(bool aLastPart)
     imgINotificationObserver* obs = mListener;
     mListenerIsStrongRef = false;
     NS_RELEASE(obs);
-  }
-}
-
-void
-imgRequestProxy::BlockOnload()
-{
-  if (MOZ_LOG_TEST(gImgLog, LogLevel::Debug)) {
-    nsAutoCString name;
-    GetName(name);
-    LOG_FUNC_WITH_PARAM(gImgLog, "imgRequestProxy::BlockOnload",
-                        "name", name.get());
-  }
-
-  nsCOMPtr<imgIOnloadBlocker> blocker = do_QueryInterface(mListener);
-  if (blocker) {
-    blocker->BlockOnload(this);
-  }
-}
-
-void
-imgRequestProxy::UnblockOnload()
-{
-  if (MOZ_LOG_TEST(gImgLog, LogLevel::Debug)) {
-    nsAutoCString name;
-    GetName(name);
-    LOG_FUNC_WITH_PARAM(gImgLog, "imgRequestProxy::UnblockOnload",
-                        "name", name.get());
-  }
-
-  nsCOMPtr<imgIOnloadBlocker> blocker = do_QueryInterface(mListener);
-  if (blocker) {
-    blocker->UnblockOnload(this);
   }
 }
 
@@ -903,19 +1128,25 @@ imgRequestProxy::NullOutListener()
   } else {
     mListener = nullptr;
   }
+
+  // Note that we don't free the event target. We actually need that to ensure
+  // we get removed from the ProgressTracker properly. No harm in keeping it
+  // however.
+  mTabGroup = nullptr;
 }
 
 NS_IMETHODIMP
 imgRequestProxy::GetStaticRequest(imgIRequest** aReturn)
 {
   imgRequestProxy* proxy;
-  nsresult result = GetStaticRequest(&proxy);
+  nsresult result = GetStaticRequest(nullptr, &proxy);
   *aReturn = proxy;
   return result;
 }
 
 nsresult
-imgRequestProxy::GetStaticRequest(imgRequestProxy** aReturn)
+imgRequestProxy::GetStaticRequest(nsIDocument* aLoadingDocument,
+                                  imgRequestProxy** aReturn)
 {
   *aReturn = nullptr;
   RefPtr<Image> image = GetImage();
@@ -942,7 +1173,7 @@ imgRequestProxy::GetStaticRequest(imgRequestProxy** aReturn)
   GetImagePrincipal(getter_AddRefs(currentPrincipal));
   RefPtr<imgRequestProxy> req = new imgRequestProxyStatic(frozenImage,
                                                             currentPrincipal);
-  req->Init(nullptr, nullptr, mURI, nullptr);
+  req->Init(nullptr, nullptr, aLoadingDocument, mURI, nullptr);
 
   NS_ADDREF(*aReturn = req);
 
@@ -1095,9 +1326,10 @@ imgRequestProxyStatic::GetImagePrincipal(nsIPrincipal** aPrincipal)
   return NS_OK;
 }
 
-nsresult
-imgRequestProxyStatic::Clone(imgINotificationObserver* aObserver,
-                             imgRequestProxy** aClone)
+imgRequestProxy* imgRequestProxyStatic::NewClonedProxy()
 {
-  return PerformClone(aObserver, NewStaticProxy, aClone);
+  nsCOMPtr<nsIPrincipal> currentPrincipal;
+  GetImagePrincipal(getter_AddRefs(currentPrincipal));
+  RefPtr<mozilla::image::Image> image = GetImage();
+  return new imgRequestProxyStatic(image, currentPrincipal);
 }

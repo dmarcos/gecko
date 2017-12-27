@@ -12,11 +12,7 @@ var gBrowserGlue = Cc["@mozilla.org/browser/browserglue;1"]
                      .getService(Ci.nsIObserver);
 var gGetBoolPref = Services.prefs.getBoolPref;
 
-function run_test() {
-  run_next_test();
-}
-
-do_register_cleanup(cleanup);
+registerCleanupFunction(cleanup);
 
 function cleanup() {
   let prefix = "browser.urlbar.suggest.";
@@ -37,8 +33,8 @@ function setupBehaviorAndMigrate(aDefaultBehavior, aAutocompleteEnabled = true) 
   gBrowserGlue.observe(null, TOPIC_BROWSERGLUE_TEST, TOPICDATA_BROWSERGLUE_TEST);
 }
 
-add_task(function*() {
-  do_print("Migrate default.behavior = 0");
+add_task(async function() {
+  info("Migrate default.behavior = 0");
   setupBehaviorAndMigrate(0);
 
   Assert.ok(gGetBoolPref("browser.urlbar.suggest.history"),
@@ -51,8 +47,8 @@ add_task(function*() {
     "Typed preference should be false.");
 });
 
-add_task(function*() {
-  do_print("Migrate default.behavior = 1");
+add_task(async function() {
+  info("Migrate default.behavior = 1");
   setupBehaviorAndMigrate(1);
 
   Assert.ok(gGetBoolPref("browser.urlbar.suggest.history"),
@@ -65,8 +61,8 @@ add_task(function*() {
     "Typed preference should be false");
 });
 
-add_task(function*() {
-  do_print("Migrate default.behavior = 2");
+add_task(async function() {
+  info("Migrate default.behavior = 2");
   setupBehaviorAndMigrate(2);
 
   Assert.equal(gGetBoolPref("browser.urlbar.suggest.history"), false,
@@ -79,8 +75,8 @@ add_task(function*() {
     "Typed preference should be false");
 });
 
-add_task(function*() {
-  do_print("Migrate default.behavior = 3");
+add_task(async function() {
+  info("Migrate default.behavior = 3");
   setupBehaviorAndMigrate(3);
 
   Assert.ok(gGetBoolPref("browser.urlbar.suggest.history"),
@@ -93,8 +89,8 @@ add_task(function*() {
     "Typed preference should be false");
 });
 
-add_task(function*() {
-  do_print("Migrate default.behavior = 19");
+add_task(async function() {
+  info("Migrate default.behavior = 19");
   setupBehaviorAndMigrate(19);
 
   Assert.ok(gGetBoolPref("browser.urlbar.suggest.history"),
@@ -107,8 +103,8 @@ add_task(function*() {
     "Typed preference should be false");
 });
 
-add_task(function*() {
-  do_print("Migrate default.behavior = 33");
+add_task(async function() {
+  info("Migrate default.behavior = 33");
   setupBehaviorAndMigrate(33);
 
   Assert.ok(gGetBoolPref("browser.urlbar.suggest.history"),
@@ -121,8 +117,8 @@ add_task(function*() {
     "Typed preference should be true");
 });
 
-add_task(function*() {
-  do_print("Migrate default.behavior = 129");
+add_task(async function() {
+  info("Migrate default.behavior = 129");
   setupBehaviorAndMigrate(129);
 
   Assert.ok(gGetBoolPref("browser.urlbar.suggest.history"),
@@ -135,8 +131,8 @@ add_task(function*() {
     "Typed preference should be false");
 });
 
-add_task(function*() {
-  do_print("Migrate default.behavior = 0, autocomplete.enabled = false");
+add_task(async function() {
+  info("Migrate default.behavior = 0, autocomplete.enabled = false");
   setupBehaviorAndMigrate(0, false);
 
   Assert.equal(gGetBoolPref("browser.urlbar.suggest.history"), false,

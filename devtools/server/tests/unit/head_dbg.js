@@ -25,6 +25,7 @@ _appInfo.updateAppInfo({
 const { require, loader } = Cu.import("resource://devtools/shared/Loader.jsm", {});
 const { worker } = Cu.import("resource://devtools/shared/worker/loader.js", {});
 const promise = require("promise");
+const defer = require("devtools/shared/defer");
 const { Task } = require("devtools/shared/task");
 const { console } = require("resource://gre/modules/Console.jsm");
 const { NetUtil } = require("resource://gre/modules/NetUtil.jsm");
@@ -39,7 +40,8 @@ Services.prefs.setBoolPref("devtools.debugger.remote-enabled", true);
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
 const { DebuggerServer } = require("devtools/server/main");
 const { DebuggerServer: WorkerDebuggerServer } = worker.require("devtools/server/main");
-const { DebuggerClient, ObjectClient } = require("devtools/shared/client/main");
+const { DebuggerClient } = require("devtools/shared/client/debugger-client");
+const ObjectClient = require("devtools/shared/client/object-client");
 const { MemoryFront } = require("devtools/shared/fronts/memory");
 
 const { addDebuggerToGlobal } = Cu.import("resource://gre/modules/jsdebugger.jsm", {});
@@ -47,8 +49,9 @@ const { addDebuggerToGlobal } = Cu.import("resource://gre/modules/jsdebugger.jsm
 const systemPrincipal = Cc["@mozilla.org/systemprincipal;1"]
                         .createInstance(Ci.nsIPrincipal);
 
-var { loadSubScript } = Cc["@mozilla.org/moz/jssubscript-loader;1"]
-                        .getService(Ci.mozIJSSubScriptLoader);
+var { loadSubScript, loadSubScriptWithOptions } =
+  Cc["@mozilla.org/moz/jssubscript-loader;1"]
+  .getService(Ci.mozIJSSubScriptLoader);
 
 /**
  * Initializes any test that needs to work with add-ons.
@@ -230,6 +233,14 @@ function setBreakpoint(sourceClient, location) {
   return sourceClient.setBreakpoint(location);
 }
 
+function getPrototypeAndProperties(objClient) {
+  dump("getting prototype and properties.\n");
+
+  return new Promise(resolve => {
+    objClient.getPrototypeAndProperties(response => resolve(response));
+  });
+}
+
 function dumpn(msg) {
   dump("DBG-TEST: " + msg + "\n");
 }
@@ -319,11 +330,11 @@ function check_except(func) {
   try {
     func();
   } catch (e) {
-    do_check_true(true);
+    Assert.ok(true);
     return;
   }
   dumpn("Should have thrown an exception: " + func.toString());
-  do_check_true(false);
+  Assert.ok(false);
 }
 
 function testGlobal(name) {
@@ -409,7 +420,7 @@ function initTestDebuggerServer(server = DebuggerServer) {
 function startTestDebuggerServer(title, server = DebuggerServer) {
   initTestDebuggerServer(server);
   addTestGlobal(title);
-  DebuggerServer.addTabActors();
+  DebuggerServer.registerActors({ tab: true });
 
   let transport = DebuggerServer.connectPipe();
   let client = new DebuggerClient(transport);
@@ -427,10 +438,8 @@ function finishClient(client) {
 // Create a server, connect to it and fetch tab actors for the parent process;
 // pass |callback| the debugger client and tab actor form with all actor IDs.
 function get_chrome_actors(callback) {
-  if (!DebuggerServer.initialized) {
-    DebuggerServer.init();
-    DebuggerServer.addBrowserActors();
-  }
+  DebuggerServer.init();
+  DebuggerServer.registerAllActors();
   DebuggerServer.allowChromeProcess = true;
 
   let client = new DebuggerClient(DebuggerServer.connectPipe());
@@ -556,13 +565,13 @@ TracingTransport.prototype = {
 
   expectSend: function (expected) {
     let packet = this.packets[this.checkIndex++];
-    do_check_eq(packet.type, "sent");
+    Assert.equal(packet.type, "sent");
     deepEqual(packet.packet, this.normalize(expected));
   },
 
   expectReceive: function (expected) {
     let packet = this.packets[this.checkIndex++];
-    do_check_eq(packet.type, "received");
+    Assert.equal(packet.type, "received");
     deepEqual(packet.packet, this.normalize(expected));
   },
 
@@ -584,45 +593,6 @@ StubTransport.prototype.ready = function () {};
 StubTransport.prototype.send = function () {};
 StubTransport.prototype.close = function () {};
 
-function executeSoon(func) {
-  Services.tm.dispatchToMainThread({
-    run: DevToolsUtils.makeInfallible(func)
-  });
-}
-
-// The do_check_* family of functions expect their last argument to be an
-// optional stack object. Unfortunately, most tests actually pass a in a string
-// containing an error message instead, which causes error reporting to break if
-// strict warnings as errors is turned on. To avoid this, we wrap these
-// functions here below to ensure the correct number of arguments is passed.
-//
-// TODO: Remove this once bug 906232 is resolved
-//
-var do_check_true_old = do_check_true;
-var do_check_true = function (condition) {
-  do_check_true_old(condition);
-};
-
-var do_check_false_old = do_check_false;
-var do_check_false = function (condition) {
-  do_check_false_old(condition);
-};
-
-var do_check_eq_old = do_check_eq;
-var do_check_eq = function (left, right) {
-  do_check_eq_old(left, right);
-};
-
-var do_check_neq_old = do_check_neq;
-var do_check_neq = function (left, right) {
-  do_check_neq_old(left, right);
-};
-
-var do_check_matches_old = do_check_matches;
-var do_check_matches = function (pattern, value) {
-  do_check_matches_old(pattern, value);
-};
-
 // Create async version of the object where calling each method
 // is equivalent of calling it with asyncall. Mainly useful for
 // destructuring objects with methods that take callbacks.
@@ -641,7 +611,7 @@ const Test = task => () => {
   run_next_test();
 };
 
-const assert = do_check_true;
+const assert = Assert.ok.bind(Assert);
 
 /**
  * Create a promise that is resolved on the next occurence of the given event.
@@ -652,6 +622,10 @@ const assert = do_check_true;
  * @returns Promise
  */
 function waitForEvent(client, type, predicate) {
+  if (!predicate) {
+    return client.addOneTimeListener(type);
+  }
+
   return new Promise(function (resolve) {
     function listener(type, packet) {
       if (!predicate(packet)) {
@@ -660,14 +634,7 @@ function waitForEvent(client, type, predicate) {
       client.removeListener(listener);
       resolve(packet);
     }
-
-    if (predicate) {
-      client.addListener(type, listener);
-    } else {
-      client.addOneTimeListener(type, function (type, packet) {
-        resolve(packet);
-      });
-    }
+    client.addListener(type, listener);
   });
 }
 
@@ -691,6 +658,16 @@ function executeOnNextTickAndWaitForPause(action, client) {
   const paused = waitForPause(client);
   executeSoon(action);
   return paused;
+}
+
+function evalCallback(debuggeeGlobal, func) {
+  Components.utils.evalInSandbox(
+    "(" + func + ")()",
+    debuggeeGlobal,
+    "1.8",
+    "test.js",
+    1
+  );
 }
 
 /**
@@ -743,6 +720,20 @@ function stepIn(client, threadClient) {
 function stepOver(client, threadClient) {
   dumpn("Stepping over.");
   return threadClient.stepOver()
+    .then(() => waitForPause(client));
+}
+
+/**
+ * Resume JS execution for a step out and wait for the pause after the step
+ * has been taken.
+ *
+ * @param DebuggerClient client
+ * @param ThreadClient threadClient
+ * @returns Promise
+ */
+function stepOut(client, threadClient) {
+  dumpn("Stepping out.");
+  return threadClient.stepOut()
     .then(() => waitForPause(client));
 }
 
@@ -802,7 +793,7 @@ function getSourceContent(sourceClient) {
  * @returns Promise<SourceClient>
  */
 function getSource(threadClient, url) {
-  let deferred = promise.defer();
+  let deferred = defer();
   threadClient.getSources((res) => {
     let source = res.sources.filter(function (s) {
       return s.url === url;
@@ -823,7 +814,7 @@ function getSource(threadClient, url) {
  * @returns Promise<response>
  */
 function reload(tabClient) {
-  let deferred = promise.defer();
+  let deferred = defer();
   tabClient._reload({}, deferred.resolve);
   return deferred.promise;
 }

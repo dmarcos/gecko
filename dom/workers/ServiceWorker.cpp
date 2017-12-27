@@ -8,12 +8,13 @@
 
 #include "nsIDocument.h"
 #include "nsPIDOMWindow.h"
-#include "ServiceWorkerClient.h"
 #include "ServiceWorkerManager.h"
 #include "ServiceWorkerPrivate.h"
 #include "WorkerPrivate.h"
 
 #include "mozilla/Preferences.h"
+#include "mozilla/dom/ClientIPCTypes.h"
+#include "mozilla/dom/ClientState.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/ServiceWorkerGlobalScopeBinding.h"
 
@@ -35,9 +36,7 @@ ServiceWorkerVisible(JSContext* aCx, JSObject* aObj)
     return Preferences::GetBool("dom.serviceWorkers.enabled", false);
   }
 
-  ServiceWorkerGlobalScope* scope = nullptr;
-  nsresult rv = UNWRAP_OBJECT(ServiceWorkerGlobalScope, aObj, scope);
-  return NS_SUCCEEDED(rv);
+  return IS_INSTANCE_OF(ServiceWorkerGlobalScope, aObj);
 }
 
 ServiceWorker::ServiceWorker(nsPIDOMWindowInner* aWindow,
@@ -61,7 +60,7 @@ ServiceWorker::~ServiceWorker()
 NS_IMPL_ADDREF_INHERITED(ServiceWorker, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(ServiceWorker, DOMEventTargetHelper)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ServiceWorker)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ServiceWorker)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 JSObject*
@@ -95,9 +94,26 @@ ServiceWorker::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
     return;
   }
 
-  UniquePtr<ServiceWorkerClientInfo> clientInfo(new ServiceWorkerClientInfo(window->GetExtantDoc()));
+  auto storageAllowed = nsContentUtils::StorageAllowedForWindow(window);
+  if (storageAllowed != nsContentUtils::StorageAccess::eAllow) {
+    ServiceWorkerManager::LocalizeAndReportToAllClients(
+      mInfo->Scope(), "ServiceWorkerPostMessageStorageError",
+      nsTArray<nsString> { NS_ConvertUTF8toUTF16(mInfo->Scope()) });
+    aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
+    return;
+  }
+
+  Maybe<ClientInfo> clientInfo = window->GetClientInfo();
+  Maybe<ClientState> clientState = window->GetClientState();
+  if (clientInfo.isNothing() || clientState.isNothing()) {
+    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+    return;
+  }
+
   ServiceWorkerPrivate* workerPrivate = mInfo->WorkerPrivate();
-  aRv = workerPrivate->SendMessageEvent(aCx, aMessage, aTransferable, Move(clientInfo));
+  aRv = workerPrivate->SendMessageEvent(aCx, aMessage, aTransferable,
+                                        ClientInfoAndState(clientInfo.ref().ToIPC(),
+                                                           clientState.ref().ToIPC()));
 }
 
 } // namespace workers

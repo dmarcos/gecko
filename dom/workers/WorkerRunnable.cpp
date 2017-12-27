@@ -303,7 +303,7 @@ WorkerRunnable::Run()
   } else {
     kungFuDeathGrip = mWorkerPrivate;
     if (isMainThread) {
-      globalObject = nsGlobalWindow::Cast(mWorkerPrivate->GetWindow());
+      globalObject = nsGlobalWindowInner::Cast(mWorkerPrivate->GetWindow());
     } else {
       globalObject = mWorkerPrivate->GetParent()->GlobalScope();
     }
@@ -559,10 +559,12 @@ WorkerControlRunnable::DispatchInternal()
 
 NS_IMPL_ISUPPORTS_INHERITED0(WorkerControlRunnable, WorkerRunnable)
 
-WorkerMainThreadRunnable::WorkerMainThreadRunnable(WorkerPrivate* aWorkerPrivate,
-                                                   const nsACString& aTelemetryKey)
-: mWorkerPrivate(aWorkerPrivate)
-, mTelemetryKey(aTelemetryKey)
+WorkerMainThreadRunnable::WorkerMainThreadRunnable(
+  WorkerPrivate* aWorkerPrivate,
+  const nsACString& aTelemetryKey)
+  : mozilla::Runnable("dom::workers::WorkerMainThreadRunnable")
+  , mWorkerPrivate(aWorkerPrivate)
+  , mTelemetryKey(aTelemetryKey)
 {
   mWorkerPrivate->AssertIsOnWorkerThread();
 }
@@ -661,8 +663,10 @@ WorkerSameThreadRunnable::PostDispatch(WorkerPrivate* aWorkerPrivate,
   }
 }
 
-WorkerProxyToMainThreadRunnable::WorkerProxyToMainThreadRunnable(WorkerPrivate* aWorkerPrivate)
-  : mWorkerPrivate(aWorkerPrivate)
+WorkerProxyToMainThreadRunnable::WorkerProxyToMainThreadRunnable(
+  WorkerPrivate* aWorkerPrivate)
+  : mozilla::Runnable("dom::workers::WorkerProxyToMainThreadRunnable")
+  , mWorkerPrivate(aWorkerPrivate)
 {
   MOZ_ASSERT(mWorkerPrivate);
   mWorkerPrivate->AssertIsOnWorkerThread();
@@ -677,13 +681,13 @@ WorkerProxyToMainThreadRunnable::Dispatch()
   mWorkerPrivate->AssertIsOnWorkerThread();
 
   if (NS_WARN_IF(!HoldWorker())) {
-    RunBackOnWorkerThread();
+    RunBackOnWorkerThreadForCleanup();
     return false;
   }
 
   if (NS_WARN_IF(NS_FAILED(mWorkerPrivate->DispatchToMainThread(this)))) {
     ReleaseWorker();
-    RunBackOnWorkerThread();
+    RunBackOnWorkerThreadForCleanup();
     return false;
   }
 
@@ -715,7 +719,8 @@ WorkerProxyToMainThreadRunnable::PostDispatchOnMainThread()
       MOZ_ASSERT(aRunnable);
     }
 
-    // We must call RunBackOnWorkerThread() also if the runnable is canceled.
+    // We must call RunBackOnWorkerThreadForCleanup() also if the runnable is
+    // canceled.
     nsresult
     Cancel() override
     {
@@ -730,7 +735,7 @@ WorkerProxyToMainThreadRunnable::PostDispatchOnMainThread()
       aWorkerPrivate->AssertIsOnWorkerThread();
 
       if (mRunnable) {
-        mRunnable->RunBackOnWorkerThread();
+        mRunnable->RunBackOnWorkerThreadForCleanup();
 
         // Let's release the worker thread.
         mRunnable->ReleaseWorker();
@@ -759,6 +764,10 @@ WorkerProxyToMainThreadRunnable::HoldWorker()
   class SimpleWorkerHolder final : public WorkerHolder
   {
   public:
+    SimpleWorkerHolder()
+      : WorkerHolder("WorkerProxyToMainThreadRunnable::SimpleWorkerHolder")
+    {}
+
     bool Notify(Status aStatus) override
     {
       // We don't care about the notification. We just want to keep the

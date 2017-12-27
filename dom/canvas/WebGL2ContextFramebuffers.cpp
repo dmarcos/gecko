@@ -166,8 +166,6 @@ WebGLContext::ValidateInvalidateFramebuffer(const char* funcName, GLenum target,
     if (IsContextLost())
         return false;
 
-    gl->MakeCurrent();
-
     if (!ValidateFramebufferTarget(target, funcName))
         return false;
 

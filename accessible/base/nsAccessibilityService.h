@@ -8,6 +8,7 @@
 
 #include "mozilla/a11y/DocManager.h"
 #include "mozilla/a11y/FocusManager.h"
+#include "mozilla/a11y/Platform.h"
 #include "mozilla/a11y/Role.h"
 #include "mozilla/a11y/SelectionManager.h"
 #include "mozilla/Preferences.h"
@@ -53,19 +54,36 @@ xpcAccessibleApplication* XPCApplicationAcc();
 typedef Accessible* (New_Accessible)(nsIContent* aContent, Accessible* aContext);
 
 struct MarkupAttrInfo {
-  nsIAtom** name;
-  nsIAtom** value;
+  nsStaticAtom** name;
+  nsStaticAtom** value;
 
-  nsIAtom** DOMAttrName;
-  nsIAtom** DOMAttrValue;
+  nsStaticAtom** DOMAttrName;
+  nsStaticAtom** DOMAttrValue;
 };
 
 struct MarkupMapInfo {
-  nsIAtom** tag;
+  nsStaticAtom** tag;
   New_Accessible* new_func;
   a11y::role role;
   MarkupAttrInfo attrs[4];
 };
+
+#ifdef MOZ_XUL
+struct XULMarkupMapInfo {
+  nsStaticAtom** tag;
+  New_Accessible* new_func;
+};
+#endif
+
+/**
+ * PREF_ACCESSIBILITY_FORCE_DISABLED preference change callback.
+ */
+void PrefChanged(const char* aPref, void* aClosure);
+
+/**
+ * Read and normalize PREF_ACCESSIBILITY_FORCE_DISABLED preference.
+ */
+EPlatformDisabledState ReadPlatformDisabledState();
 
 } // namespace a11y
 } // namespace mozilla
@@ -122,6 +140,11 @@ public:
    * Get a string equivalent for an accessible event value.
    */
   void GetStringEventType(uint32_t aEventType, nsAString& aString);
+
+  /**
+   * Get a string equivalent for an accessible event value.
+   */
+  void GetStringEventType(uint32_t aEventType, nsACString& aString);
 
   /**
    * Get a string equivalent for an accessible relation type.
@@ -281,6 +304,26 @@ private:
     CreateAccessibleByFrameType(nsIFrame* aFrame, nsIContent* aContent,
                                 Accessible* aContext);
 
+  /**
+   * Notify observers about change of the accessibility service's consumers.
+   */
+  void NotifyOfConsumersChange();
+
+  /**
+   * Get a JSON string representing the accessibility service consumers.
+   */
+  void GetConsumers(nsAString& aString);
+
+  /**
+   * Set accessibility service consumers.
+   */
+  void SetConsumers(uint32_t aConsumers);
+
+  /**
+   * Unset accessibility service consumers.
+   */
+  void UnsetConsumers(uint32_t aConsumers);
+
 #ifdef MOZ_XUL
   /**
    * Create accessible for XUL tree element.
@@ -305,11 +348,15 @@ private:
    */
   static uint32_t gConsumers;
 
-  nsDataHashtable<nsPtrHashKey<const nsIAtom>, const mozilla::a11y::MarkupMapInfo*> mMarkupMaps;
+  nsDataHashtable<nsPtrHashKey<const nsAtom>, const mozilla::a11y::MarkupMapInfo*> mMarkupMaps;
+#ifdef MOZ_XUL
+  nsDataHashtable<nsPtrHashKey<const nsAtom>, const mozilla::a11y::XULMarkupMapInfo*> mXULMarkupMaps;
+#endif
 
   friend nsAccessibilityService* GetAccService();
   friend nsAccessibilityService* GetOrCreateAccService(uint32_t);
   friend void MaybeShutdownAccService(uint32_t);
+  friend void mozilla::a11y::PrefChanged(const char*, void*);
   friend mozilla::a11y::FocusManager* mozilla::a11y::FocusMgr();
   friend mozilla::a11y::SelectionManager* mozilla::a11y::SelectionMgr();
   friend mozilla::a11y::ApplicationAccessible* mozilla::a11y::ApplicationAcc();

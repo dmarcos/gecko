@@ -30,13 +30,14 @@ public:
     : nsSVGElement(aNodeInfo) {}
   virtual ~SVGTransformableElement() {}
 
-  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override = 0;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+                         bool aPreallocateChildren) const override = 0;
 
   // WebIDL
   already_AddRefed<SVGAnimatedTransformList> Transform();
   nsSVGElement* GetNearestViewportElement();
   nsSVGElement* GetFarthestViewportElement();
-  already_AddRefed<SVGIRect> GetBBox(const SVGBoundingBoxOptions& aOptions, 
+  already_AddRefed<SVGIRect> GetBBox(const SVGBoundingBoxOptions& aOptions,
                                      ErrorResult& rv);
   already_AddRefed<SVGMatrix> GetCTM();
   already_AddRefed<SVGMatrix> GetScreenCTM();
@@ -44,14 +45,14 @@ public:
                                                     ErrorResult& rv);
 
   // nsIContent interface
-  NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const override;
+  NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* aAttribute) const override;
 
-  nsChangeHint GetAttributeChangeHint(const nsIAtom* aAttribute,
+  nsChangeHint GetAttributeChangeHint(const nsAtom* aAttribute,
                                       int32_t aModType) const override;
 
 
   // nsSVGElement overrides
-  virtual bool IsEventAttributeName(nsIAtom* aName) override;
+  virtual bool IsEventAttributeNameInternal(nsAtom* aName) override;
 
 
   virtual gfxMatrix PrependLocalTransformsTo(
@@ -62,7 +63,7 @@ public:
 
   virtual nsSVGAnimatedTransformList*
     GetAnimatedTransformList(uint32_t aFlags = 0) override;
-  virtual nsIAtom* GetTransformListAttrName() const override {
+  virtual nsAtom* GetTransformListAttrName() const override {
     return nsGkAtoms::transform;
   }
 

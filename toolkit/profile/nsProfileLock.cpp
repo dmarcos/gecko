@@ -30,10 +30,6 @@
 #include "mozilla/Printf.h"
 #endif
 
-#if defined(MOZ_WIDGET_GONK) && !defined(MOZ_CRASHREPORTER)
-#include <sys/syscall.h>
-#endif
-
 // **********************************************************************
 // class nsProfileLock
 //
@@ -192,27 +188,6 @@ void nsProfileLock::FatalSignalHandler(int signo
         }
     }
 
-#ifdef MOZ_WIDGET_GONK
-    switch (signo) {
-        case SIGQUIT:
-        case SIGILL:
-        case SIGABRT:
-        case SIGSEGV:
-#ifndef MOZ_CRASHREPORTER
-            // Retrigger the signal for those that can generate a core dump
-            signal(signo, SIG_DFL);
-            if (info->si_code <= 0) {
-                if (syscall(__NR_tgkill, getpid(), syscall(__NR_gettid), signo) < 0) {
-                    break;
-                }
-            }
-#endif
-            return;
-        default:
-            break;
-    }
-#endif
-
     // Backstop exit call, just in case.
     _exit(signo);
 }
@@ -352,14 +327,14 @@ nsresult nsProfileLock::LockWithSymlink(nsIFile *aLockFile, bool aHaveFcntlLock)
             memcpy(&inaddr, hostent.h_addr, sizeof inaddr);
     }
 
-    char *signature =
+    mozilla::SmprintfPointer signature =
         mozilla::Smprintf("%s:%s%lu", inet_ntoa(inaddr), aHaveFcntlLock ? "+" : "",
                    (unsigned long)getpid());
     const char *fileName = lockFilePath.get();
     int symlink_rv, symlink_errno = 0, tries = 0;
 
     // use ns4.x-compatible symlinks if the FS supports them
-    while ((symlink_rv = symlink(signature, fileName)) < 0)
+    while ((symlink_rv = symlink(signature.get(), fileName)) < 0)
     {
         symlink_errno = errno;
         if (symlink_errno != EEXIST)
@@ -374,9 +349,6 @@ nsresult nsProfileLock::LockWithSymlink(nsIFile *aLockFile, bool aHaveFcntlLock)
         if (++tries > 100)
             break;
     }
-
-    mozilla::SmprintfFree(signature);
-    signature = nullptr;
 
     if (symlink_rv == 0)
     {
@@ -402,7 +374,7 @@ nsresult nsProfileLock::LockWithSymlink(nsIFile *aLockFile, bool aHaveFcntlLock)
                     struct sigaction act, oldact;
 #ifdef SA_SIGINFO
                     act.sa_sigaction = FatalSignalHandler;
-                    act.sa_flags = SA_SIGINFO;
+                    act.sa_flags = SA_SIGINFO | SA_ONSTACK;
 #else
                     act.sa_handler = FatalSignalHandler;
 #endif

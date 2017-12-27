@@ -843,15 +843,10 @@ device_id_idx(UINT devid)
   return ret;
 }
 
-static cubeb_device_info *
-winmm_create_device_from_outcaps2(LPWAVEOUTCAPS2A caps, UINT devid)
+static void
+winmm_create_device_from_outcaps2(cubeb_device_info * ret, LPWAVEOUTCAPS2A caps, UINT devid)
 {
-  cubeb_device_info * ret;
-
-  ret = calloc(1, sizeof(cubeb_device_info));
-  if (!ret) {
-    return NULL;
-  }
+  XASSERT(ret);
   ret->devid = (cubeb_devid) devid;
   ret->device_id = device_id_idx(devid);
   ret->friendly_name = _strdup(caps->szPname);
@@ -867,22 +862,15 @@ winmm_create_device_from_outcaps2(LPWAVEOUTCAPS2A caps, UINT devid)
   winmm_query_supported_formats(devid, caps->dwFormats,
       &ret->format, &ret->default_format);
 
-  /* Hardcoed latency estimates... */
+  /* Hardcoded latency estimates... */
   ret->latency_lo = 100 * ret->default_rate / 1000;
   ret->latency_hi = 200 * ret->default_rate / 1000;
-
-  return ret;
 }
 
-static cubeb_device_info *
-winmm_create_device_from_outcaps(LPWAVEOUTCAPSA caps, UINT devid)
+static void
+winmm_create_device_from_outcaps(cubeb_device_info * ret, LPWAVEOUTCAPSA caps, UINT devid)
 {
-  cubeb_device_info * ret;
-
-  ret = calloc(1, sizeof(cubeb_device_info));
-  if (!ret) {
-    return NULL;
-  }
+  XASSERT(ret);
   ret->devid = (cubeb_devid) devid;
   ret->device_id = device_id_idx(devid);
   ret->friendly_name = _strdup(caps->szPname);
@@ -898,11 +886,9 @@ winmm_create_device_from_outcaps(LPWAVEOUTCAPSA caps, UINT devid)
   winmm_query_supported_formats(devid, caps->dwFormats,
       &ret->format, &ret->default_format);
 
-  /* Hardcoed latency estimates... */
+  /* Hardcoded latency estimates... */
   ret->latency_lo = 100 * ret->default_rate / 1000;
   ret->latency_hi = 200 * ret->default_rate / 1000;
-
-  return ret;
 }
 
 static cubeb_device_pref
@@ -924,15 +910,10 @@ winmm_query_preferred_in_device(UINT devid)
   return ret;
 }
 
-static cubeb_device_info *
-winmm_create_device_from_incaps2(LPWAVEINCAPS2A caps, UINT devid)
+static void
+winmm_create_device_from_incaps2(cubeb_device_info * ret, LPWAVEINCAPS2A caps, UINT devid)
 {
-  cubeb_device_info * ret;
-
-  ret = calloc(1, sizeof(cubeb_device_info));
-  if (!ret) {
-    return NULL;
-  }
+  XASSERT(ret);
   ret->devid = (cubeb_devid) devid;
   ret->device_id = device_id_idx(devid);
   ret->friendly_name = _strdup(caps->szPname);
@@ -948,22 +929,15 @@ winmm_create_device_from_incaps2(LPWAVEINCAPS2A caps, UINT devid)
   winmm_query_supported_formats(devid, caps->dwFormats,
       &ret->format, &ret->default_format);
 
-  /* Hardcoed latency estimates... */
+  /* Hardcoded latency estimates... */
   ret->latency_lo = 100 * ret->default_rate / 1000;
   ret->latency_hi = 200 * ret->default_rate / 1000;
-
-  return ret;
 }
 
-static cubeb_device_info *
-winmm_create_device_from_incaps(LPWAVEINCAPSA caps, UINT devid)
+static void
+winmm_create_device_from_incaps(cubeb_device_info * ret, LPWAVEINCAPSA caps, UINT devid)
 {
-  cubeb_device_info * ret;
-
-  ret = calloc(1, sizeof(cubeb_device_info));
-  if (!ret) {
-    return NULL;
-  }
+  XASSERT(ret);
   ret->devid = (cubeb_devid) devid;
   ret->device_id = device_id_idx(devid);
   ret->friendly_name = _strdup(caps->szPname);
@@ -979,29 +953,25 @@ winmm_create_device_from_incaps(LPWAVEINCAPSA caps, UINT devid)
   winmm_query_supported_formats(devid, caps->dwFormats,
       &ret->format, &ret->default_format);
 
-  /* Hardcoed latency estimates... */
+  /* Hardcoded latency estimates... */
   ret->latency_lo = 100 * ret->default_rate / 1000;
   ret->latency_hi = 200 * ret->default_rate / 1000;
-
-  return ret;
 }
 
 static int
 winmm_enumerate_devices(cubeb * context, cubeb_device_type type,
-                        cubeb_device_collection ** collection)
+                        cubeb_device_collection * collection)
 {
   UINT i, incount, outcount, total;
-  cubeb_device_info * cur;
+  cubeb_device_info * devices;
+  cubeb_device_info * dev;
 
   outcount = waveOutGetNumDevs();
   incount = waveInGetNumDevs();
   total = outcount + incount;
-  if (total > 0) {
-    total -= 1;
-  }
-  *collection = malloc(sizeof(cubeb_device_collection) +
-      sizeof(cubeb_device_info*) * total);
-  (*collection)->count = 0;
+
+  devices = calloc(total, sizeof(cubeb_device_info));
+  collection->count = 0;
 
   if (type & CUBEB_DEVICE_TYPE_OUTPUT) {
     WAVEOUTCAPSA woc;
@@ -1011,12 +981,13 @@ winmm_enumerate_devices(cubeb * context, cubeb_device_type type,
     ZeroMemory(&woc2, sizeof(woc2));
 
     for (i = 0; i < outcount; i++) {
-      if ((waveOutGetDevCapsA(i, (LPWAVEOUTCAPSA)&woc2, sizeof(woc2)) == MMSYSERR_NOERROR &&
-            (cur = winmm_create_device_from_outcaps2(&woc2, i)) != NULL) ||
-          (waveOutGetDevCapsA(i, &woc, sizeof(woc)) == MMSYSERR_NOERROR &&
-            (cur = winmm_create_device_from_outcaps(&woc, i)) != NULL)
-          ) {
-        (*collection)->device[(*collection)->count++] = cur;
+      dev = &devices[collection->count];
+      if (waveOutGetDevCapsA(i, (LPWAVEOUTCAPSA)&woc2, sizeof(woc2)) == MMSYSERR_NOERROR) {
+        winmm_create_device_from_outcaps2(dev, &woc2, i);
+        collection->count += 1;
+      } else if (waveOutGetDevCapsA(i, &woc, sizeof(woc)) == MMSYSERR_NOERROR) {
+        winmm_create_device_from_outcaps(dev, &woc, i);
+        collection->count += 1;
       }
     }
   }
@@ -1029,16 +1000,39 @@ winmm_enumerate_devices(cubeb * context, cubeb_device_type type,
     ZeroMemory(&wic2, sizeof(wic2));
 
     for (i = 0; i < incount; i++) {
-      if ((waveInGetDevCapsA(i, (LPWAVEINCAPSA)&wic2, sizeof(wic2)) == MMSYSERR_NOERROR &&
-            (cur = winmm_create_device_from_incaps2(&wic2, i)) != NULL) ||
-          (waveInGetDevCapsA(i, &wic, sizeof(wic)) == MMSYSERR_NOERROR &&
-            (cur = winmm_create_device_from_incaps(&wic, i)) != NULL)
-          ) {
-        (*collection)->device[(*collection)->count++] = cur;
+      dev = &devices[collection->count];
+      if (waveInGetDevCapsA(i, (LPWAVEINCAPSA)&wic2, sizeof(wic2)) == MMSYSERR_NOERROR) {
+        winmm_create_device_from_incaps2(dev, &wic2, i);
+        collection->count += 1;
+      } else if (waveInGetDevCapsA(i, &wic, sizeof(wic)) == MMSYSERR_NOERROR) {
+        winmm_create_device_from_incaps(dev, &wic, i);
+        collection->count += 1;
       }
     }
   }
 
+  collection->device = devices;
+
+  return CUBEB_OK;
+}
+
+static int
+winmm_device_collection_destroy(cubeb * ctx,
+                                cubeb_device_collection * collection)
+{
+  uint32_t i;
+  XASSERT(collection);
+
+  (void) ctx;
+
+  for (i = 0; i < collection->count; i++) {
+    free((void *) collection->device[i].device_id);
+    free((void *) collection->device[i].friendly_name);
+    free((void *) collection->device[i].group_id);
+    free((void *) collection->device[i].vendor_name);
+  }
+
+  free(collection->device);
   return CUBEB_OK;
 }
 
@@ -1050,11 +1044,13 @@ static struct cubeb_ops const winmm_ops = {
   /*.get_preferred_sample_rate =*/ winmm_get_preferred_sample_rate,
   /*.get_preferred_channel_layout =*/ NULL,
   /*.enumerate_devices =*/ winmm_enumerate_devices,
+  /*.device_collection_destroy =*/ winmm_device_collection_destroy,
   /*.destroy =*/ winmm_destroy,
   /*.stream_init =*/ winmm_stream_init,
   /*.stream_destroy =*/ winmm_stream_destroy,
   /*.stream_start =*/ winmm_stream_start,
   /*.stream_stop =*/ winmm_stream_stop,
+  /*.stream_reset_default_device =*/ NULL,
   /*.stream_get_position =*/ winmm_stream_get_position,
   /*.stream_get_latency = */ winmm_stream_get_latency,
   /*.stream_set_volume =*/ winmm_stream_set_volume,

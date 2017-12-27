@@ -1,4 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -24,11 +25,13 @@ class ScrollWheelInput;
 namespace layers {
 
 class AsyncPanZoomController;
+class InputBlockState;
 class CancelableBlockState;
 class TouchBlockState;
 class WheelBlockState;
 class DragBlockState;
 class PanGestureBlockState;
+class KeyboardBlockState;
 class AsyncDragMetrics;
 class QueuedInput;
 
@@ -93,7 +96,7 @@ public:
    * Returns the pending input block at the head of the queue, if there is one.
    * This may return null if there all input events have been processed.
    */
-  CancelableBlockState* GetCurrentBlock() const;
+  InputBlockState* GetCurrentBlock() const;
   /*
    * Returns the current pending input block as a specific kind of block. If
    * GetCurrentBlock() returns null, these functions additionally check the
@@ -105,6 +108,7 @@ public:
   WheelBlockState* GetCurrentWheelBlock() const;
   DragBlockState* GetCurrentDragBlock() const;
   PanGestureBlockState* GetCurrentPanGestureBlock() const;
+  KeyboardBlockState* GetCurrentKeyboardBlock() const;
   /**
    * Returns true iff the pending block at the head of the queue is a touch
    * block and is ready for handling.
@@ -143,7 +147,7 @@ private:
    * If animations are present for the current pending input block, cancel
    * them as soon as possible.
    */
-  void CancelAnimationsForNewBlock(CancelableBlockState* aBlock,
+  void CancelAnimationsForNewBlock(InputBlockState* aBlock,
                                    CancelAnimationFlags aExtraFlags = Default);
 
   /**
@@ -168,6 +172,9 @@ private:
                                         bool aTargetConfirmed,
                                         const PanGestureInput& aEvent,
                                         uint64_t* aOutInputBlockId);
+  nsEventStatus ReceiveKeyboardInput(const RefPtr<AsyncPanZoomController>& aTarget,
+                                     const KeyboardInput& aEvent,
+                                     uint64_t* aOutInputBlockId);
 
   /**
    * Helper function that searches mQueuedInputs for the first block matching
@@ -178,13 +185,13 @@ private:
    * non-null if the block id provided matches one of the depleted-but-still-
    * active blocks (mActiveTouchBlock, mActiveWheelBlock, etc.).
    */
-  CancelableBlockState* FindBlockForId(uint64_t aInputBlockId,
-                                       InputData** aOutFirstInput);
+  InputBlockState* FindBlockForId(uint64_t aInputBlockId,
+                                  InputData** aOutFirstInput);
   void ScheduleMainThreadTimeout(const RefPtr<AsyncPanZoomController>& aTarget,
                                  CancelableBlockState* aBlock);
   void MainThreadTimeout(uint64_t aInputBlockId);
   void ProcessQueue();
-  bool CanDiscardBlock(CancelableBlockState* aBlock);
+  bool CanDiscardBlock(InputBlockState* aBlock);
   void UpdateActiveApzc(const RefPtr<AsyncPanZoomController>& aNewActive);
 
 private:
@@ -201,6 +208,7 @@ private:
   RefPtr<WheelBlockState> mActiveWheelBlock;
   RefPtr<DragBlockState> mActiveDragBlock;
   RefPtr<PanGestureBlockState> mActivePanGestureBlock;
+  RefPtr<KeyboardBlockState> mActiveKeyboardBlock;
 
   // The APZC to which the last event was delivered
   RefPtr<AsyncPanZoomController> mLastActiveApzc;

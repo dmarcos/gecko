@@ -1,9 +1,8 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
-
-/* This Source Code is subject to the terms of the Mozilla Public License
- * version 2.0 (the "License"). You can obtain a copy of the License at
- * http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* rendering object for CSS "display: flex" and "display: -webkit-box" */
 
@@ -21,6 +20,55 @@ class LogicalPoint;
 nsContainerFrame* NS_NewFlexContainerFrame(nsIPresShell* aPresShell,
                                            nsStyleContext* aContext);
 
+/**
+ * These structures are used to capture data during reflow to be
+ * extracted by devtools via Chrome APIs. The structures are only
+ * created when requested in GetFlexFrameWithComputedInfo(), and
+ * the structures are attached to the nsFlexContainerFrame via the
+ * FlexContainerInfo property.
+ */
+struct ComputedFlexItemInfo
+{
+  nsCOMPtr<nsINode> mNode;
+  /**
+   * mMainBaseSize is a measure of the size of the item in the main
+   * axis before the flex sizing algorithm is applied. In the spec,
+   * this is called "flex base size", but we use this name to connect
+   * the value to the other main axis sizes.
+   */
+  nscoord mMainBaseSize;
+  /**
+   * mMainDeltaSize is the value that the flex sizing algorithm
+   * "wants" to use to stretch or shrink the item, before clamping to
+   * the item's main min and max sizes. Since the flex sizing
+   * algorithm proceeds linearly, the mMainDeltaSize for an item only
+   * respects the resolved size of items already frozen.
+   */
+  nscoord mMainDeltaSize;
+  nscoord mMainMinSize;
+  nscoord mMainMaxSize;
+  nscoord mCrossMinSize;
+  nscoord mCrossMaxSize;
+};
+
+struct ComputedFlexLineInfo
+{
+  nsTArray<ComputedFlexItemInfo> mItems;
+  nscoord mCrossStart;
+  nscoord mCrossSize;
+  nscoord mFirstBaselineOffset;
+  nscoord mLastBaselineOffset;
+  enum GrowthState {
+    UNCHANGED,
+    SHRINKING,
+    GROWING,
+  } mGrowthState;
+};
+
+struct ComputedFlexContainerInfo
+{
+  nsTArray<ComputedFlexLineInfo> mLines;
+};
 
 /**
  * This is the rendering object used for laying out elements with
@@ -41,10 +89,10 @@ nsContainerFrame* NS_NewFlexContainerFrame(nsIPresShell* aPresShell,
  * layout here as well (since that's what the -webkit versions are aliased to)
  * -- but only inside of a "display:-webkit-{inline-}box" container.)
  */
-class nsFlexContainerFrame : public nsContainerFrame {
+class nsFlexContainerFrame final : public nsContainerFrame
+{
 public:
-  NS_DECL_FRAMEARENA_HELPERS
-  NS_DECL_QUERYFRAME_TARGET(nsFlexContainerFrame)
+  NS_DECL_FRAMEARENA_HELPERS(nsFlexContainerFrame)
   NS_DECL_QUERYFRAME
 
   // Factory method:
@@ -64,7 +112,6 @@ public:
             nsIFrame*         aPrevInFlow) override;
 
   void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                        const nsRect&           aDirtyRect,
                         const nsDisplayListSet& aLists) override;
 
   void MarkIntrinsicISizesDirty() override;
@@ -74,10 +121,9 @@ public:
               const ReflowInput& aReflowInput,
               nsReflowStatus& aStatus) override;
 
-  nscoord GetMinISize(nsRenderingContext* aRenderingContext) override;
-  nscoord GetPrefISize(nsRenderingContext* aRenderingContext) override;
+  nscoord GetMinISize(gfxContext* aRenderingContext) override;
+  nscoord GetPrefISize(gfxContext* aRenderingContext) override;
 
-  nsIAtom* GetType() const override;
 #ifdef DEBUG_FRAME_DUMP
   nsresult GetFrameName(nsAString& aResult) const override;
 #endif
@@ -111,32 +157,57 @@ public:
   bool IsHorizontal();
 
   /**
-    * Helper function to calculate packing space and initial offset of alignment
-    * subjects in MainAxisPositionTracker() and CrossAxisPositionTracker() for
-    * space-between, space-around, and space-evenly.
-    *
-    * @param aNumThingsToPack             Number of alignment subjects.
-    * @param aAlignVal                    Value for align-self or justify-self.
-    * @param aFirstSubjectOffset          Outparam for first subject offset.
-    * @param aNumPackingSpacesRemaining   Outparam for number of equal-sized
-    *                                     packing spaces to apply between each
-    *                                     alignment subject.
-    * @param aPackingSpaceRemaining       Outparam for total amount of packing
-    *                                     space to be divided up.
-    */
+   * Helper function to calculate packing space and initial offset of alignment
+   * subjects in MainAxisPositionTracker() and CrossAxisPositionTracker() for
+   * space-between, space-around, and space-evenly.
+   *    * @param aNumThingsToPack             Number of alignment subjects.
+   * @param aAlignVal                    Value for align-self or justify-self.
+   * @param aFirstSubjectOffset          Outparam for first subject offset.
+   * @param aNumPackingSpacesRemaining   Outparam for number of equal-sized
+   *                                     packing spaces to apply between each
+   *                                     alignment subject.
+   * @param aPackingSpaceRemaining       Outparam for total amount of packing
+   *                                     space to be divided up.
+   */
   static void CalculatePackingSpace(uint32_t aNumThingsToPack,
                                     uint8_t aAlignVal,
                                     nscoord* aFirstSubjectOffset,
                                     uint32_t* aNumPackingSpacesRemaining,
                                     nscoord* aPackingSpaceRemaining);
 
+  /**
+   * This property is created by a call to
+   * nsFlexContainerFrame::GetFlexFrameWithComputedInfo.
+   */
+  NS_DECLARE_FRAME_PROPERTY_DELETABLE(FlexContainerInfo, ComputedFlexContainerInfo)
+  /**
+   * This function should only be called on a nsFlexContainerFrame
+   * that has just been returned by a call to
+   * GetFlexFrameWithComputedInfo.
+   */
+  const ComputedFlexContainerInfo* GetFlexContainerInfo()
+  {
+    const ComputedFlexContainerInfo* info = GetProperty(FlexContainerInfo());
+    MOZ_ASSERT(info, "Property generation wasn't requested.");
+    return info;
+  }
+
+  /**
+   * Return aFrame as a flex frame after ensuring it has computed flex info.
+   * @return nullptr if aFrame is null or doesn't have a flex frame
+   *         as its content insertion frame.
+   * @note this might destroy layout/style data since it may flush layout.
+   */
+  static nsFlexContainerFrame* GetFlexFrameWithComputedInfo(nsIFrame* aFrame);
+
 protected:
   // Protected constructor & destructor
   explicit nsFlexContainerFrame(nsStyleContext* aContext)
-    : nsContainerFrame(aContext)
+    : nsContainerFrame(aContext, kClassID)
     , mBaselineFromLastReflow(NS_INTRINSIC_WIDTH_UNKNOWN)
     , mLastBaselineFromLastReflow(NS_INTRINSIC_WIDTH_UNKNOWN)
   {}
+
   virtual ~nsFlexContainerFrame();
 
   /*
@@ -227,6 +298,17 @@ protected:
                                       FlexItem& aFlexItem,
                                       const ReflowInput& aItemReflowInput,
                                       const FlexboxAxisTracker& aAxisTracker);
+
+  /**
+   * Returns true if "this" is the nsFlexContainerFrame for a -moz-box or
+   * a -moz-inline-box -- these boxes have special behavior for flex items with
+   * "visibility:collapse".
+   *
+   * @param aFlexStyleDisp This frame's StyleDisplay(). (Just an optimization to
+   *                       avoid repeated lookup; some callers already have it.)
+   * @return true if "this" is the nsFlexContainerFrame for a -moz-{inline}box.
+   */
+  bool ShouldUseMozBoxCollapseBehavior(const nsStyleDisplay* aFlexStyleDisp);
 
   /**
    * This method:
@@ -328,9 +410,6 @@ protected:
                           nsTArray<nsIFrame*>& aPlaceholders,
                           const mozilla::LogicalPoint& aContentBoxOrigin,
                           const nsSize& aContainerSize);
-
-  bool mChildrenHaveBeenReordered; // Have we ever had to reorder our kids
-                                   // to satisfy their 'order' values?
 
   nscoord mBaselineFromLastReflow;
   // Note: the last baseline is a distance from our border-box end edge.

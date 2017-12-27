@@ -36,6 +36,7 @@ interface nsIPrincipal;
 interface mozIDOMWindow;
 interface nsIPermission;
 interface nsISimpleEnumerator;
+interface nsIRunnable;
 
 %{ C++
 namespace IPC {
@@ -162,6 +163,8 @@ interface nsIPermissionManager : nsISupports
 
   /**
    * Test whether a website has permission to perform the given action.
+   * This function will perform a pref lookup to permissions.default.<type>
+   * if the specific permission type is part of the whitelist for that functionality.
    * @param uri     the uri to be tested
    * @param type    a case-sensitive ASCII string, identifying the consumer
    * @param return  see add(), param permission. returns UNKNOWN_ACTION when
@@ -173,6 +176,8 @@ interface nsIPermissionManager : nsISupports
   /**
    * Test whether the principal has the permission to perform a given action.
    * System principals will always have permissions granted.
+   * This function will perform a pref lookup to permissions.default.<type>
+   * if the specific permission type is part of the whitelist for that functionality.
    */
   uint32_t testPermissionFromPrincipal(in nsIPrincipal principal,
                                        in string type);
@@ -181,6 +186,8 @@ interface nsIPermissionManager : nsISupports
    * Test whether the principal associated with the window's document has the
    * permission to perform a given action.  System principals will always
    * have permissions granted.
+   * This function will perform a pref lookup to permissions.default.<type>
+   * if the specific permission type is part of the whitelist for that functionality.
    */
   uint32_t testPermissionFromWindow(in mozIDOMWindow window,
                                     in string type);
@@ -188,6 +195,8 @@ interface nsIPermissionManager : nsISupports
   /**
    * Test whether a website has permission to perform the given action.
    * This requires an exact hostname match, subdomains are not a match.
+   * This function will perform a pref lookup to permissions.default.<type>
+   * if the specific permission type is part of the whitelist for that functionality.
    * @param uri     the uri to be tested
    * @param type    a case-sensitive ASCII string, identifying the consumer
    * @param return  see add(), param permission. returns UNKNOWN_ACTION when
@@ -199,6 +208,8 @@ interface nsIPermissionManager : nsISupports
   /**
    * See testExactPermission() above.
    * System principals will always have permissions granted.
+   * This function will perform a pref lookup to permissions.default.<type>
+   * if the specific permission type is part of the whitelist for that functionality.
    */
   uint32_t testExactPermissionFromPrincipal(in nsIPrincipal principal,
                                             in string type);
@@ -207,6 +218,8 @@ interface nsIPermissionManager : nsISupports
    * Test whether a website has permission to perform the given action
    * ignoring active sessions.
    * System principals will always have permissions granted.
+   * This function will perform a pref lookup to permissions.default.<type>
+   * if the specific permission type is part of the whitelist for that functionality.
    *
    * @param principal the principal
    * @param type      a case-sensitive ASCII string, identifying the consumer
@@ -326,6 +339,30 @@ interface nsIPermissionManager : nsISupports
    * @param aPrincipal The principal to broadcast permissions for.
    */
   void broadcastPermissionsForPrincipalToAllContentProcesses(in nsIPrincipal aPrincipal);
+
+  /**
+   * Add a callback which should be run when all permissions are available for
+   * the given nsIPrincipal. This method invokes the callback runnable
+   * synchronously when the permissions are already available. Otherwise the
+   * callback will be run asynchronously in SystemGroup when all permissions
+   * are available in the future.
+   *
+   * NOTE: This method will not request the permissions be sent by the parent
+   * process. This should only be used to wait for permissions which may not
+   * have arrived yet in order to ensure they are present.
+   *
+   * @param aPrincipal The principal to wait for permissions to be available for.
+   * @param aRunnable  The runnable to run when permissions are available for the
+   *                   given principal.
+   */
+  void whenPermissionsAvailable(in nsIPrincipal aPrincipal,
+                                in nsIRunnable aRunnable);
+
+  /**
+   * True if any "preload" permissions are present. This is used to avoid making
+   * potentially expensive permissions checks in nsContentBlocker.
+   */
+  [infallible] readonly attribute boolean hasPreloadPermissions;
 };
 
 %{ C++

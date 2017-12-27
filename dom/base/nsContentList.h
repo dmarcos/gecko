@@ -22,7 +22,7 @@
 #include "nsIDOMNodeList.h"
 #include "nsINodeList.h"
 #include "nsStubMutationObserver.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsNameSpaceManager.h"
 #include "nsWrapperCache.h"
@@ -49,7 +49,7 @@ public:
   virtual int32_t IndexOf(nsIContent* aContent) override;
   virtual nsIContent* Item(uint32_t aIndex) override;
 
-  uint32_t Length() const { 
+  uint32_t Length() const {
     return mElements.Length();
   }
 
@@ -95,6 +95,9 @@ public:
   {
     mElements.SetCapacity(aCapacity);
   }
+
+  virtual void LastRelease() {}
+
 protected:
   virtual ~nsBaseContentList();
 
@@ -106,7 +109,7 @@ protected:
   {
   }
 
-  nsTArray< nsCOMPtr<nsIContent> > mElements;
+  AutoTArray<nsCOMPtr<nsIContent>, 10> mElements;
 };
 
 
@@ -131,6 +134,56 @@ public:
 protected:
   virtual ~nsSimpleContentList() {}
 
+private:
+  // This has to be a strong reference, the root might go away before the list.
+  nsCOMPtr<nsINode> mRoot;
+};
+
+// Used for returning lists that will always be empty, such as the applets list
+// in HTML Documents
+class nsEmptyContentList final : public nsBaseContentList,
+                                 public nsIHTMLCollection
+{
+public:
+  explicit nsEmptyContentList(nsINode* aRoot) : nsBaseContentList(),
+                                                mRoot(aRoot)
+  {
+  }
+
+  NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(nsEmptyContentList,
+                                           nsBaseContentList)
+  // nsIDOMNodeList, which we also implement.
+  NS_DECL_NSIDOMNODELIST
+
+  virtual nsINode* GetParentObject() override
+  {
+    return mRoot;
+  }
+
+  virtual JSObject* WrapObject(JSContext *cx, JS::Handle<JSObject*> aGivenProto) override;
+
+  virtual JSObject* GetWrapperPreserveColorInternal() override
+  {
+    return nsWrapperCache::GetWrapperPreserveColor();
+  }
+  virtual void PreserveWrapperInternal(nsISupports* aScriptObjectHolder) override
+  {
+    nsWrapperCache::PreserveWrapper(aScriptObjectHolder);
+  }
+
+  virtual uint32_t Length() override final
+  {
+    return 0;
+  }
+  virtual nsIContent* Item(uint32_t aIndex) override;
+  virtual mozilla::dom::Element* GetElementAt(uint32_t index) override;
+  virtual mozilla::dom::Element*
+  GetFirstNamedElement(const nsAString& aName, bool& aFound) override;
+  virtual void GetSupportedNames(nsTArray<nsString>& aNames) override;
+
+protected:
+  virtual ~nsEmptyContentList() {}
 private:
   // This has to be a strong reference, the root might go away before the list.
   nsCOMPtr<nsINode> mRoot;
@@ -173,7 +226,7 @@ struct nsContentListKey
   {
     return mHash;
   }
-  
+
   nsINode* const mRootNode; // Weak ref
   const int32_t mMatchNameSpaceId;
   const nsAString& mTagname;
@@ -202,8 +255,8 @@ struct nsContentListKey
 #define LIST_LAZY 2
 
 /**
- * Class that implements a live NodeList that matches Elements in the
- * tree based on some criterion.
+ * Class that implements a possibly live NodeList that matches Elements
+ * in the tree based on some criterion.
  */
 class nsContentList : public nsBaseContentList,
                       public nsIHTMLCollection,
@@ -227,12 +280,15 @@ public:
    * @param aDeep If false, then look only at children of the root, nothing
    *              deeper.  If true, then look at the whole subtree rooted at
    *              our root.
-   */  
+   * @param aLiveList Whether the created list should be a live list observing
+   *                  mutations to the DOM tree.
+   */
   nsContentList(nsINode* aRootNode,
                 int32_t aMatchNameSpaceId,
-                nsIAtom* aHTMLMatchAtom,
-                nsIAtom* aXMLMatchAtom,
-                bool aDeep = true);
+                nsAtom* aHTMLMatchAtom,
+                nsAtom* aXMLMatchAtom,
+                bool aDeep = true,
+                bool aLiveList = true);
 
   /**
    * @param aRootNode The node under which to limit our search.
@@ -249,18 +305,22 @@ public:
    * @param aMatchNameSpaceId a namespace id to be passed back to aFunc
    * @param aFuncMayDependOnAttr a boolean that indicates whether this list is
    *                             sensitive to attribute changes.
-   */  
+   * @param aLiveList Whether the created list should be a live list observing
+   *                  mutations to the DOM tree.
+   */
   nsContentList(nsINode* aRootNode,
                 nsContentListMatchFunc aFunc,
                 nsContentListDestroyFunc aDestroyFunc,
                 void* aData,
                 bool aDeep = true,
-                nsIAtom* aMatchAtom = nullptr,
+                nsAtom* aMatchAtom = nullptr,
                 int32_t aMatchNameSpaceId = kNameSpaceID_None,
-                bool aFuncMayDependOnAttr = true);
+                bool aFuncMayDependOnAttr = true,
+                bool aLiveList = true);
 
   // nsWrapperCache
   using nsWrapperCache::GetWrapperPreserveColor;
+  using nsWrapperCache::PreserveWrapper;
   virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 protected:
   virtual ~nsContentList();
@@ -269,10 +329,14 @@ protected:
   {
     return nsWrapperCache::GetWrapperPreserveColor();
   }
+  virtual void PreserveWrapperInternal(nsISupports* aScriptObjectHolder) override
+  {
+    nsWrapperCache::PreserveWrapper(aScriptObjectHolder);
+  }
 public:
 
-  // nsIDOMHTMLCollection
-  NS_DECL_NSIDOMHTMLCOLLECTION
+  // nsIDOMNodeList, which we also implement.
+  NS_DECL_NSIDOMNODELIST
 
   // nsBaseContentList overrides
   virtual int32_t IndexOf(nsIContent *aContent, bool aDoFlush) override;
@@ -282,6 +346,10 @@ public:
     return mRootNode;
   }
 
+  virtual uint32_t Length() override final
+  {
+    return Length(true);
+  }
   virtual nsIContent* Item(uint32_t aIndex) override;
   virtual mozilla::dom::Element* GetElementAt(uint32_t index) override;
   virtual mozilla::dom::Element*
@@ -305,7 +373,7 @@ public:
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTINSERTED
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTREMOVED
   NS_DECL_NSIMUTATIONOBSERVER_NODEWILLBEDESTROYED
-  
+
   static nsContentList* FromSupports(nsISupports* aSupports)
   {
     nsINodeList* list = static_cast<nsINodeList*>(aSupports);
@@ -347,6 +415,8 @@ public:
     Reset();
   }
 
+  virtual void LastRelease() override;
+
 protected:
   /**
    * Returns whether the element matches our criterion
@@ -371,9 +441,9 @@ protected:
    * traversed the whole document (or both).
    *
    * @param aNeededLength the length the list should have when we are
-   *        done (unless it exhausts the document)   
+   *        done (unless it exhausts the document)
    */
-  void PopulateSelf(uint32_t aNeededLength);
+  virtual void PopulateSelf(uint32_t aNeededLength);
 
   /**
    * @param  aContainer a content node which must be a descendant of
@@ -410,8 +480,8 @@ protected:
 
   nsINode* mRootNode; // Weak ref
   int32_t mMatchNameSpaceId;
-  nsCOMPtr<nsIAtom> mHTMLMatchAtom;
-  nsCOMPtr<nsIAtom> mXMLMatchAtom;
+  RefPtr<nsAtom> mHTMLMatchAtom;
+  RefPtr<nsAtom> mXMLMatchAtom;
 
   /**
    * Function to use to determine whether a piece of content matches
@@ -436,7 +506,7 @@ protected:
   // pack different typedefs together.  Once we no longer have to worry about
   // flushes in XML documents, we can go back to using bool for the
   // booleans.
-  
+
   /**
    * True if we are looking for elements named "*"
    */
@@ -461,6 +531,10 @@ protected:
    * when doing function matching, always false otherwise.
    */
   uint8_t mIsHTMLDocument : 1;
+  /**
+   * Whether the list observes mutations to the DOM tree.
+   */
+  const uint8_t mIsLiveList : 1;
 
 #ifdef DEBUG_CONTENT_LIST
   void AssertInSync();
@@ -536,15 +610,15 @@ protected:
   nsString mString;
 };
 
-class nsCacheableFuncStringNodeList
+class nsCachableElementsByNameNodeList
   : public nsCacheableFuncStringContentList
 {
 public:
-  nsCacheableFuncStringNodeList(nsINode* aRootNode,
-                                nsContentListMatchFunc aFunc,
-                                nsContentListDestroyFunc aDestroyFunc,
-                                nsFuncStringContentListDataAllocator aDataAllocator,
-                                const nsAString& aString)
+  nsCachableElementsByNameNodeList(nsINode* aRootNode,
+                                   nsContentListMatchFunc aFunc,
+                                   nsContentListDestroyFunc aDestroyFunc,
+                                   nsFuncStringContentListDataAllocator aDataAllocator,
+                                   const nsAString& aString)
     : nsCacheableFuncStringContentList(aRootNode, aFunc, aDestroyFunc,
                                        aDataAllocator, aString)
   {
@@ -552,6 +626,8 @@ public:
     mType = eNodeList;
 #endif
   }
+
+  NS_DECL_NSIMUTATIONOBSERVER_ATTRIBUTECHANGED
 
   virtual JSObject* WrapObject(JSContext *cx, JS::Handle<JSObject*> aGivenProto) override;
 
@@ -584,4 +660,40 @@ public:
 #endif
 };
 
+class nsLabelsNodeList final : public nsContentList
+{
+public:
+  nsLabelsNodeList(nsINode* aRootNode,
+                   nsContentListMatchFunc aFunc,
+                   nsContentListDestroyFunc aDestroyFunc,
+                   void* aData)
+    : nsContentList(aRootNode, aFunc, aDestroyFunc, aData)
+  {
+  }
+
+  NS_DECL_NSIMUTATIONOBSERVER_ATTRIBUTECHANGED
+  NS_DECL_NSIMUTATIONOBSERVER_CONTENTAPPENDED
+  NS_DECL_NSIMUTATIONOBSERVER_CONTENTINSERTED
+  NS_DECL_NSIMUTATIONOBSERVER_CONTENTREMOVED
+
+  virtual JSObject* WrapObject(JSContext *cx, JS::Handle<JSObject*> aGivenProto) override;
+
+ /**
+  * Reset root, mutation observer, and clear content list
+  * if the root has been changed.
+  *
+  * @param aRootNode The node under which to limit our search.
+  */
+  void MaybeResetRoot(nsINode* aRootNode);
+
+private:
+ /**
+  * Start searching at the last one if we already have nodes, otherwise
+  * start searching at the root.
+  *
+  * @param aNeededLength The list of length should have when we are
+  *                      done (unless it exhausts the document).
+  */
+  void PopulateSelf(uint32_t aNeededLength) override;
+};
 #endif // nsContentList_h___

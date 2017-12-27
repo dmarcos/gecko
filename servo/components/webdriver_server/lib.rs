@@ -32,7 +32,7 @@ use hyper::method::Method::{self, Post};
 use image::{DynamicImage, ImageFormat, RgbImage};
 use ipc_channel::ipc::{self, IpcReceiver, IpcSender};
 use keys::keycodes_to_keys;
-use msg::constellation_msg::{FrameId, PipelineId, TraversalDirection};
+use msg::constellation_msg::{BrowsingContextId, TopLevelBrowsingContextId, TraversalDirection};
 use net_traits::image::base::PixelFormat;
 use regex::Captures;
 use rustc_serialize::json::{Json, ToJson};
@@ -52,13 +52,13 @@ use webdriver::command::{AddCookieParameters, GetParameters, JavascriptCommandPa
 use webdriver::command::{LocatorParameters, Parameters};
 use webdriver::command::{SendKeysParameters, SwitchToFrameParameters, TimeoutsParameters};
 use webdriver::command::{WebDriverCommand, WebDriverExtensionCommand, WebDriverMessage};
-use webdriver::command::WindowSizeParameters;
+use webdriver::command::WindowRectParameters;
 use webdriver::common::{Date, LocatorStrategy, Nullable, WebElement};
 use webdriver::error::{ErrorStatus, WebDriverError, WebDriverResult};
 use webdriver::httpapi::WebDriverExtensionRoute;
-use webdriver::response::{Cookie, CookieResponse};
+use webdriver::response::{Cookie, CookieResponse, CookiesResponse};
 use webdriver::response::{ElementRectResponse, NewSessionResponse, ValueResponse};
-use webdriver::response::{WebDriverResponse, WindowSizeResponse};
+use webdriver::response::{WebDriverResponse, WindowRectResponse};
 use webdriver::server::{self, Session, WebDriverHandler};
 
 fn extension_routes() -> Vec<(Method, &'static str, ServoExtensionRoute)> {
@@ -95,14 +95,15 @@ pub fn start_server(port: u16, constellation_chan: Sender<ConstellationMsg>) {
         match server::start(SocketAddr::V4(address), handler, &extension_routes()) {
             Ok(listening) => info!("WebDriver server listening on {}", listening.socket),
             Err(_) => panic!("Unable to start WebDriver HTTPD server"),
-         }
+        }
     }).expect("Thread spawning failed");
 }
 
 /// Represents the current WebDriver session and holds relevant session state.
 struct WebDriverSession {
     id: Uuid,
-    frame_id: Option<FrameId>,
+    browsing_context_id: BrowsingContextId,
+    top_level_browsing_context_id: TopLevelBrowsingContextId,
 
     /// Time to wait for injected scripts to run before interrupting them.  A [`None`] value
     /// specifies that the script should run indefinitely.
@@ -117,10 +118,14 @@ struct WebDriverSession {
 }
 
 impl WebDriverSession {
-    pub fn new() -> WebDriverSession {
+    pub fn new(browsing_context_id: BrowsingContextId,
+               top_level_browsing_context_id: TopLevelBrowsingContextId)
+               -> WebDriverSession
+    {
         WebDriverSession {
             id: Uuid::new_v4(),
-            frame_id: None,
+            browsing_context_id: browsing_context_id,
+            top_level_browsing_context_id: top_level_browsing_context_id,
 
             script_timeout: Some(30_000),
             load_timeout: Some(300_000),
@@ -150,15 +155,15 @@ impl WebDriverExtensionRoute for ServoExtensionRoute {
                body_data: &Json) -> WebDriverResult<WebDriverCommand<ServoExtensionCommand>> {
         let command = match *self {
             ServoExtensionRoute::GetPrefs => {
-                let parameters: GetPrefsParameters = try!(Parameters::from_json(&body_data));
+                let parameters: GetPrefsParameters = Parameters::from_json(&body_data)?;
                 ServoExtensionCommand::GetPrefs(parameters)
             }
             ServoExtensionRoute::SetPrefs => {
-                let parameters: SetPrefsParameters = try!(Parameters::from_json(&body_data));
+                let parameters: SetPrefsParameters = Parameters::from_json(&body_data)?;
                 ServoExtensionCommand::SetPrefs(parameters)
             }
             ServoExtensionRoute::ResetPrefs => {
-                let parameters: GetPrefsParameters = try!(Parameters::from_json(&body_data));
+                let parameters: GetPrefsParameters = Parameters::from_json(&body_data)?;
                 ServoExtensionCommand::ResetPrefs(parameters)
             }
         };
@@ -190,19 +195,19 @@ struct GetPrefsParameters {
 
 impl Parameters for GetPrefsParameters {
     fn from_json(body: &Json) -> WebDriverResult<GetPrefsParameters> {
-        let data = try!(body.as_object().ok_or(
+        let data = body.as_object().ok_or(
             WebDriverError::new(ErrorStatus::InvalidArgument,
-                                "Message body was not an object")));
-        let prefs_value = try!(data.get("prefs").ok_or(
+                                "Message body was not an object"))?;
+        let prefs_value = data.get("prefs").ok_or(
             WebDriverError::new(ErrorStatus::InvalidArgument,
-                                "Missing prefs key")));
-        let items = try!(prefs_value.as_array().ok_or(
+                                "Missing prefs key"))?;
+        let items = prefs_value.as_array().ok_or(
             WebDriverError::new(
                 ErrorStatus::InvalidArgument,
-                "prefs was not an array")));
-        let params = try!(items.iter().map(|x| x.as_string().map(|y| y.to_owned()).ok_or(
+                "prefs was not an array"))?;
+        let params = items.iter().map(|x| x.as_string().map(|y| y.to_owned()).ok_or(
             WebDriverError::new(ErrorStatus::InvalidArgument,
-                                "Pref is not a string"))).collect::<Result<Vec<_>, _>>());
+                                "Pref is not a string"))).collect::<Result<Vec<_>, _>>()?;
         Ok(GetPrefsParameters {
             prefs: params
         })
@@ -224,20 +229,20 @@ struct SetPrefsParameters {
 
 impl Parameters for SetPrefsParameters {
     fn from_json(body: &Json) -> WebDriverResult<SetPrefsParameters> {
-        let data = try!(body.as_object().ok_or(
+        let data = body.as_object().ok_or(
             WebDriverError::new(ErrorStatus::InvalidArgument,
-                                "Message body was not an object")));
-        let items = try!(try!(data.get("prefs").ok_or(
+                                "Message body was not an object"))?;
+        let items = data.get("prefs").ok_or(
             WebDriverError::new(ErrorStatus::InvalidArgument,
-                                "Missing prefs key"))).as_object().ok_or(
+                                "Missing prefs key"))?.as_object().ok_or(
             WebDriverError::new(
                 ErrorStatus::InvalidArgument,
-                "prefs was not an array")));
+                "prefs was not an array"))?;
         let mut params = Vec::with_capacity(items.len());
         for (name, val) in items.iter() {
-            let value = try!(PrefValue::from_json(val.clone()).or(
+            let value = PrefValue::from_json(val.clone()).or(
                 Err(WebDriverError::new(ErrorStatus::InvalidArgument,
-                                        "Pref is not a boolean or string"))));
+                                        "Pref is not a boolean or string")))?;
             let key = name.to_owned();
             params.push((key, value));
         }
@@ -264,31 +269,26 @@ impl Handler {
         }
     }
 
-    fn pipeline_id(&self, frame_id: Option<FrameId>) -> WebDriverResult<PipelineId> {
+    fn focus_top_level_browsing_context_id(&self) -> WebDriverResult<TopLevelBrowsingContextId> {
+        debug!("Getting focused context.");
         let interval = 20;
         let iterations = 30_000 / interval;
         let (sender, receiver) = ipc::channel().unwrap();
 
         for _ in 0..iterations {
-            let msg = ConstellationMsg::GetPipeline(frame_id, sender.clone());
+            let msg = ConstellationMsg::GetFocusTopLevelBrowsingContext(sender.clone());
             self.constellation_chan.send(msg).unwrap();
-            // Wait until the document is ready before returning the pipeline id.
+            // Wait until the document is ready before returning the top-level browsing context id.
             if let Some(x) = receiver.recv().unwrap() {
+                debug!("Focused context is {}", x);
                 return Ok(x);
             }
             thread::sleep(Duration::from_millis(interval));
         }
 
+        debug!("Timed out getting focused context.");
         Err(WebDriverError::new(ErrorStatus::Timeout,
                                 "Failed to get window handle"))
-    }
-
-    fn root_pipeline(&self) -> WebDriverResult<PipelineId> {
-        self.pipeline_id(None)
-    }
-
-    fn frame_pipeline(&self) -> WebDriverResult<PipelineId> {
-        self.pipeline_id(self.session.as_ref().and_then(|session| session.frame_id))
     }
 
     fn session(&self) -> WebDriverResult<&WebDriverSession> {
@@ -299,31 +299,30 @@ impl Handler {
         }
     }
 
-    fn set_frame_id(&mut self, frame_id: Option<FrameId>) -> WebDriverResult<()> {
+    fn session_mut(&mut self) -> WebDriverResult<&mut WebDriverSession> {
         match self.session {
-            Some(ref mut x) => {
-                x.frame_id = frame_id;
-                Ok(())
-            },
+            Some(ref mut x) => Ok(x),
             None => Err(WebDriverError::new(ErrorStatus::SessionNotCreated,
                                             "Session not created"))
         }
     }
 
     fn handle_new_session(&mut self) -> WebDriverResult<WebDriverResponse> {
+        debug!("new session");
         if self.session.is_none() {
-            let session = WebDriverSession::new();
+            let top_level_browsing_context_id = self.focus_top_level_browsing_context_id()?;
+            let browsing_context_id = BrowsingContextId::from(top_level_browsing_context_id);
+            let session = WebDriverSession::new(browsing_context_id, top_level_browsing_context_id);
             let mut capabilities = BTreeMap::new();
             capabilities.insert("browserName".to_owned(), "servo".to_json());
             capabilities.insert("browserVersion".to_owned(), "0.0.1".to_json());
             capabilities.insert("acceptInsecureCerts".to_owned(), false.to_json());
-            let rv = Ok(WebDriverResponse::NewSession(
-                NewSessionResponse::new(
-                    session.id.to_string(),
-                    Json::Object(capabilities))));
+            let response = NewSessionResponse::new(session.id.to_string(), Json::Object(capabilities));
+            debug!("new session created {}.", session.id);
             self.session = Some(session);
-            rv
+            Ok(WebDriverResponse::NewSession(response))
         } else {
+            debug!("new session failed.");
             Err(WebDriverError::new(ErrorStatus::UnknownError,
                                     "Session already created"))
         }
@@ -334,16 +333,18 @@ impl Handler {
         Ok(WebDriverResponse::Void)
     }
 
-    #[inline]
-    fn frame_script_command(&self, cmd_msg: WebDriverScriptCommand) -> WebDriverResult<()> {
-        Ok(self.constellation_chan.send(ConstellationMsg::WebDriverCommand(
-                WebDriverCommandMsg::ScriptCommand(try!(self.frame_pipeline()), cmd_msg))).unwrap())
+    fn browsing_context_script_command(&self, cmd_msg: WebDriverScriptCommand) -> WebDriverResult<()> {
+        let browsing_context_id = self.session()?.browsing_context_id;
+        let msg = ConstellationMsg::WebDriverCommand(WebDriverCommandMsg::ScriptCommand(browsing_context_id, cmd_msg));
+        self.constellation_chan.send(msg).unwrap();
+        Ok(())
     }
 
-    #[inline]
-    fn root_script_command(&self, cmd_msg: WebDriverScriptCommand) -> WebDriverResult<()> {
-        Ok(self.constellation_chan.send(ConstellationMsg::WebDriverCommand(
-                WebDriverCommandMsg::ScriptCommand(try!(self.root_pipeline()), cmd_msg))).unwrap())
+    fn top_level_script_command(&self, cmd_msg: WebDriverScriptCommand) -> WebDriverResult<()> {
+        let browsing_context_id = BrowsingContextId::from(self.session()?.top_level_browsing_context_id);
+        let msg = ConstellationMsg::WebDriverCommand(WebDriverCommandMsg::ScriptCommand(browsing_context_id, cmd_msg));
+        self.constellation_chan.send(msg).unwrap();
+        Ok(())
     }
 
     fn handle_get(&self, parameters: &GetParameters) -> WebDriverResult<WebDriverResponse> {
@@ -353,12 +354,12 @@ impl Handler {
                                                "Invalid URL"))
         };
 
-        let pipeline_id = try!(self.root_pipeline());
+        let top_level_browsing_context_id = self.session()?.top_level_browsing_context_id;
 
         let (sender, receiver) = ipc::channel().unwrap();
 
-        let load_data = LoadData::new(url, None, None);
-        let cmd_msg = WebDriverCommandMsg::LoadUrl(pipeline_id, load_data, sender.clone());
+        let load_data = LoadData::new(url, None, None, None);
+        let cmd_msg = WebDriverCommandMsg::LoadUrl(top_level_browsing_context_id, load_data, sender.clone());
         self.constellation_chan.send(ConstellationMsg::WebDriverCommand(cmd_msg)).unwrap();
 
         self.wait_for_load(sender, receiver)
@@ -368,15 +369,10 @@ impl Handler {
                      sender: IpcSender<LoadStatus>,
                      receiver: IpcReceiver<LoadStatus>)
                      -> WebDriverResult<WebDriverResponse> {
-        let session = try!(self.session
-            .as_ref()
-            .ok_or(WebDriverError::new(ErrorStatus::SessionNotCreated, "")));
-
-        let timeout = session.load_timeout;
-        let timeout_chan = sender;
+        let timeout = self.session()?.load_timeout;
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(timeout.unwrap()));
-            let _ = timeout_chan.send(LoadStatus::LoadTimeout);
+            let _ = sender.send(LoadStatus::LoadTimeout);
         });
 
         // wait to get a load event
@@ -390,7 +386,7 @@ impl Handler {
 
     fn handle_current_url(&self) -> WebDriverResult<WebDriverResponse> {
         let (sender, receiver) = ipc::channel().unwrap();
-        try!(self.root_script_command(WebDriverScriptCommand::GetUrl(sender)));
+        self.top_level_script_command(WebDriverScriptCommand::GetUrl(sender))?;
 
         let url = receiver.recv().unwrap();
 
@@ -399,22 +395,32 @@ impl Handler {
 
     fn handle_window_size(&self) -> WebDriverResult<WebDriverResponse> {
         let (sender, receiver) = ipc::channel().unwrap();
-        let pipeline_id = try!(self.root_pipeline());
-        let cmd_msg = WebDriverCommandMsg::GetWindowSize(pipeline_id, sender);
+        let top_level_browsing_context_id = self.session()?.top_level_browsing_context_id;
+        let cmd_msg = WebDriverCommandMsg::GetWindowSize(top_level_browsing_context_id, sender);
 
         self.constellation_chan.send(ConstellationMsg::WebDriverCommand(cmd_msg)).unwrap();
 
         let window_size = receiver.recv().unwrap();
         let vp = window_size.initial_viewport;
-        let window_size_response = WindowSizeResponse::new(vp.width as u64, vp.height as u64);
-        Ok(WebDriverResponse::WindowSize(window_size_response))
+        let window_size_response = WindowRectResponse {
+            x: 0, y: 0, width: vp.width as i32, height: vp.height as i32
+        };
+        Ok(WebDriverResponse::WindowRect(window_size_response))
     }
 
-    fn handle_set_window_size(&self, params: &WindowSizeParameters) -> WebDriverResult<WebDriverResponse> {
+    fn handle_set_window_size(&self, params: &WindowRectParameters) -> WebDriverResult<WebDriverResponse> {
         let (sender, receiver) = ipc::channel().unwrap();
-        let size = Size2D::new(params.width as u32, params.height as u32);
-        let pipeline_id = try!(self.root_pipeline());
-        let cmd_msg = WebDriverCommandMsg::SetWindowSize(pipeline_id, size, sender.clone());
+        let width = match params.width {
+            Nullable::Value(v) => v,
+            Nullable::Null => 0,
+        };
+        let height = match params.height {
+            Nullable::Value(v) => v,
+            Nullable::Null => 0,
+        };
+        let size = Size2D::new(width as u32, height as u32);
+        let top_level_browsing_context_id = self.session()?.top_level_browsing_context_id;
+        let cmd_msg = WebDriverCommandMsg::SetWindowSize(top_level_browsing_context_id, size, sender.clone());
 
         self.constellation_chan.send(ConstellationMsg::WebDriverCommand(cmd_msg)).unwrap();
 
@@ -424,20 +430,22 @@ impl Handler {
             // On timeout, we send a GetWindowSize message to the constellation,
             // which will give the current window size.
             thread::sleep(Duration::from_millis(timeout as u64));
-            let cmd_msg = WebDriverCommandMsg::GetWindowSize(pipeline_id, sender);
+            let cmd_msg = WebDriverCommandMsg::GetWindowSize(top_level_browsing_context_id, sender);
             constellation_chan.send(ConstellationMsg::WebDriverCommand(cmd_msg)).unwrap();
         });
 
         let window_size = receiver.recv().unwrap();
         let vp = window_size.initial_viewport;
-        let window_size_response = WindowSizeResponse::new(vp.width as u64, vp.height as u64);
-        Ok(WebDriverResponse::WindowSize(window_size_response))
+        let window_size_response = WindowRectResponse {
+            x: 0, y: 0, width: vp.width as i32, height: vp.height as i32
+        };
+        Ok(WebDriverResponse::WindowRect(window_size_response))
     }
 
     fn handle_is_enabled(&self, element: &WebElement) -> WebDriverResult<WebDriverResponse> {
         let (sender, receiver) = ipc::channel().unwrap();
 
-        try!(self.root_script_command(WebDriverScriptCommand::IsEnabled(element.id.clone(), sender)));
+        self.top_level_script_command(WebDriverScriptCommand::IsEnabled(element.id.clone(), sender))?;
 
         match receiver.recv().unwrap() {
             Ok(is_enabled) => Ok(WebDriverResponse::Generic(ValueResponse::new(is_enabled.to_json()))),
@@ -448,7 +456,7 @@ impl Handler {
     fn handle_is_selected(&self, element: &WebElement) -> WebDriverResult<WebDriverResponse> {
         let (sender, receiver) = ipc::channel().unwrap();
 
-        try!(self.root_script_command(WebDriverScriptCommand::IsSelected(element.id.clone(), sender)));
+        self.top_level_script_command(WebDriverScriptCommand::IsSelected(element.id.clone(), sender))?;
 
         match receiver.recv().unwrap() {
             Ok(is_selected) => Ok(WebDriverResponse::Generic(ValueResponse::new(is_selected.to_json()))),
@@ -457,21 +465,27 @@ impl Handler {
     }
 
     fn handle_go_back(&self) -> WebDriverResult<WebDriverResponse> {
-        self.constellation_chan.send(ConstellationMsg::TraverseHistory(None, TraversalDirection::Back(1))).unwrap();
+        let top_level_browsing_context_id = self.session()?.top_level_browsing_context_id;
+        let direction = TraversalDirection::Back(1);
+        let msg = ConstellationMsg::TraverseHistory(top_level_browsing_context_id, direction);
+        self.constellation_chan.send(msg).unwrap();
         Ok(WebDriverResponse::Void)
     }
 
     fn handle_go_forward(&self) -> WebDriverResult<WebDriverResponse> {
-        self.constellation_chan.send(ConstellationMsg::TraverseHistory(None, TraversalDirection::Forward(1))).unwrap();
+        let top_level_browsing_context_id = self.session()?.top_level_browsing_context_id;
+        let direction = TraversalDirection::Forward(1);
+        let msg = ConstellationMsg::TraverseHistory(top_level_browsing_context_id, direction);
+        self.constellation_chan.send(msg).unwrap();
         Ok(WebDriverResponse::Void)
     }
 
     fn handle_refresh(&self) -> WebDriverResult<WebDriverResponse> {
-        let pipeline_id = try!(self.root_pipeline());
+        let top_level_browsing_context_id = self.session()?.top_level_browsing_context_id;
 
         let (sender, receiver) = ipc::channel().unwrap();
 
-        let cmd_msg = WebDriverCommandMsg::Refresh(pipeline_id, sender.clone());
+        let cmd_msg = WebDriverCommandMsg::Refresh(top_level_browsing_context_id, sender.clone());
         self.constellation_chan.send(ConstellationMsg::WebDriverCommand(cmd_msg)).unwrap();
 
         self.wait_for_load(sender, receiver)
@@ -480,7 +494,7 @@ impl Handler {
     fn handle_title(&self) -> WebDriverResult<WebDriverResponse> {
         let (sender, receiver) = ipc::channel().unwrap();
 
-        try!(self.root_script_command(WebDriverScriptCommand::GetTitle(sender)));
+        self.top_level_script_command(WebDriverScriptCommand::GetTitle(sender))?;
 
         let value = receiver.recv().unwrap();
         Ok(WebDriverResponse::Generic(ValueResponse::new(value.to_json())))
@@ -508,8 +522,8 @@ impl Handler {
 
         let (sender, receiver) = ipc::channel().unwrap();
 
-        try!(self.frame_script_command(WebDriverScriptCommand::FindElementCSS(parameters.value.clone(),
-                                                                              sender)));
+        let cmd = WebDriverScriptCommand::FindElementCSS(parameters.value.clone(), sender);
+        self.browsing_context_script_command(cmd)?;
 
         match receiver.recv().unwrap() {
             Ok(value) => {
@@ -525,8 +539,9 @@ impl Handler {
         use webdriver::common::FrameId;
         let frame_id = match parameters.id {
             FrameId::Null => {
-                self.set_frame_id(None).unwrap();
-                return Ok(WebDriverResponse::Void)
+                let session = self.session_mut()?;
+                session.browsing_context_id = BrowsingContextId::from(session.top_level_browsing_context_id);
+                return Ok(WebDriverResponse::Void);
             },
             FrameId::Short(ref x) => WebDriverFrameId::Short(*x),
             FrameId::Element(ref x) => WebDriverFrameId::Element(x.id.clone())
@@ -545,28 +560,15 @@ impl Handler {
             return Err(WebDriverError::new(ErrorStatus::UnsupportedOperation,
                                            "Selecting frame by id not supported"));
         }
-        let pipeline_id = try!(self.frame_pipeline());
+
         let (sender, receiver) = ipc::channel().unwrap();
-        let cmd = WebDriverScriptCommand::GetFrameId(frame_id, sender);
-        {
-            self.constellation_chan.send(ConstellationMsg::WebDriverCommand(
-                WebDriverCommandMsg::ScriptCommand(pipeline_id, cmd))).unwrap();
-        }
+        let cmd = WebDriverScriptCommand::GetBrowsingContextId(frame_id, sender);
+        self.browsing_context_script_command(cmd)?;
 
-        let frame = match receiver.recv().unwrap() {
-            Ok(Some(pipeline_id)) => {
-                let (sender, receiver) = ipc::channel().unwrap();
-                self.constellation_chan.send(ConstellationMsg::GetFrame(pipeline_id, sender)).unwrap();
-                receiver.recv().unwrap()
-            },
-            Ok(None) => None,
-            Err(_) => {
-                return Err(WebDriverError::new(ErrorStatus::NoSuchFrame,
-                                               "Frame does not exist"));
-            }
-        };
+        let browsing_context_id = receiver.recv().unwrap()
+            .or(Err(WebDriverError::new(ErrorStatus::NoSuchFrame, "Frame does not exist")))?;
 
-        self.set_frame_id(frame).unwrap();
+        self.session_mut()?.browsing_context_id = browsing_context_id;
         Ok(WebDriverResponse::Void)
     }
 
@@ -578,8 +580,8 @@ impl Handler {
         }
 
         let (sender, receiver) = ipc::channel().unwrap();
-        try!(self.frame_script_command(WebDriverScriptCommand::FindElementsCSS(parameters.value.clone(),
-                                                                               sender)));
+        let cmd = WebDriverScriptCommand::FindElementsCSS(parameters.value.clone(), sender);
+        self.browsing_context_script_command(cmd)?;
         match receiver.recv().unwrap() {
             Ok(value) => {
                 let resp_value: Vec<Json> = value.into_iter().map(
@@ -594,11 +596,14 @@ impl Handler {
     // https://w3c.github.io/webdriver/webdriver-spec.html#get-element-rect
     fn handle_element_rect(&self, element: &WebElement) -> WebDriverResult<WebDriverResponse> {
         let (sender, receiver) = ipc::channel().unwrap();
-        try!(self.frame_script_command(WebDriverScriptCommand::GetElementRect(element.id.clone(), sender)));
+        let cmd = WebDriverScriptCommand::GetElementRect(element.id.clone(), sender);
+        self.browsing_context_script_command(cmd)?;
         match receiver.recv().unwrap() {
             Ok(rect) => {
-                let response = ElementRectResponse::new(rect.origin.x, rect.origin.y,
-                                                        rect.size.width, rect.size.height);
+                let response = ElementRectResponse {
+                    x: rect.origin.x, y: rect.origin.y,
+                    width: rect.size.width, height: rect.size.height
+                };
                 Ok(WebDriverResponse::ElementRect(response))
             },
             Err(_) => Err(WebDriverError::new(ErrorStatus::StaleElementReference,
@@ -608,7 +613,8 @@ impl Handler {
 
     fn handle_element_text(&self, element: &WebElement) -> WebDriverResult<WebDriverResponse> {
         let (sender, receiver) = ipc::channel().unwrap();
-        try!(self.frame_script_command(WebDriverScriptCommand::GetElementText(element.id.clone(), sender)));
+        let cmd = WebDriverScriptCommand::GetElementText(element.id.clone(), sender);
+        self.browsing_context_script_command(cmd)?;
         match receiver.recv().unwrap() {
             Ok(value) => Ok(WebDriverResponse::Generic(ValueResponse::new(value.to_json()))),
             Err(_) => Err(WebDriverError::new(ErrorStatus::StaleElementReference,
@@ -618,14 +624,16 @@ impl Handler {
 
     fn handle_active_element(&self) -> WebDriverResult<WebDriverResponse> {
         let (sender, receiver) = ipc::channel().unwrap();
-        try!(self.frame_script_command(WebDriverScriptCommand::GetActiveElement(sender)));
+        let cmd = WebDriverScriptCommand::GetActiveElement(sender);
+        self.browsing_context_script_command(cmd)?;
         let value = receiver.recv().unwrap().map(|x| WebElement::new(x).to_json());
         Ok(WebDriverResponse::Generic(ValueResponse::new(value.to_json())))
     }
 
     fn handle_element_tag_name(&self, element: &WebElement) -> WebDriverResult<WebDriverResponse> {
         let (sender, receiver) = ipc::channel().unwrap();
-        try!(self.frame_script_command(WebDriverScriptCommand::GetElementTagName(element.id.clone(), sender)));
+        let cmd = WebDriverScriptCommand::GetElementTagName(element.id.clone(), sender);
+        self.browsing_context_script_command(cmd)?;
         match receiver.recv().unwrap() {
             Ok(value) => Ok(WebDriverResponse::Generic(ValueResponse::new(value.to_json()))),
             Err(_) => Err(WebDriverError::new(ErrorStatus::StaleElementReference,
@@ -635,8 +643,8 @@ impl Handler {
 
     fn handle_element_attribute(&self, element: &WebElement, name: &str) -> WebDriverResult<WebDriverResponse> {
         let (sender, receiver) = ipc::channel().unwrap();
-        try!(self.frame_script_command(WebDriverScriptCommand::GetElementAttribute(element.id.clone(), name.to_owned(),
-                                                                                   sender)));
+        let cmd = WebDriverScriptCommand::GetElementAttribute(element.id.clone(), name.to_owned(), sender);
+        self.browsing_context_script_command(cmd)?;
         match receiver.recv().unwrap() {
             Ok(value) => Ok(WebDriverResponse::Generic(ValueResponse::new(value.to_json()))),
             Err(_) => Err(WebDriverError::new(ErrorStatus::StaleElementReference,
@@ -646,8 +654,8 @@ impl Handler {
 
     fn handle_element_css(&self, element: &WebElement, name: &str) -> WebDriverResult<WebDriverResponse> {
         let (sender, receiver) = ipc::channel().unwrap();
-        try!(self.frame_script_command(WebDriverScriptCommand::GetElementCSS(element.id.clone(), name.to_owned(),
-                                                                             sender)));
+        let cmd = WebDriverScriptCommand::GetElementCSS(element.id.clone(), name.to_owned(), sender);
+        self.browsing_context_script_command(cmd)?;
         match receiver.recv().unwrap() {
             Ok(value) => Ok(WebDriverResponse::Generic(ValueResponse::new(value.to_json()))),
             Err(_) => Err(WebDriverError::new(ErrorStatus::StaleElementReference,
@@ -657,22 +665,24 @@ impl Handler {
 
     fn handle_get_cookies(&self) -> WebDriverResult<WebDriverResponse> {
         let (sender, receiver) = ipc::channel().unwrap();
-        try!(self.frame_script_command(WebDriverScriptCommand::GetCookies(sender)));
+        let cmd = WebDriverScriptCommand::GetCookies(sender);
+        self.browsing_context_script_command(cmd)?;
         let cookies = receiver.recv().unwrap();
         let response = cookies.into_iter().map(|cookie| {
             cookie_msg_to_cookie(cookie.into_inner())
         }).collect::<Vec<Cookie>>();
-        Ok(WebDriverResponse::Cookie(CookieResponse::new(response)))
+        Ok(WebDriverResponse::Cookies(CookiesResponse { value: response }))
     }
 
     fn handle_get_cookie(&self, name: &str) -> WebDriverResult<WebDriverResponse> {
         let (sender, receiver) = ipc::channel().unwrap();
-        try!(self.frame_script_command(WebDriverScriptCommand::GetCookie(name.to_owned(), sender)));
+        let cmd = WebDriverScriptCommand::GetCookie(name.to_owned(), sender);
+        self.browsing_context_script_command(cmd)?;
         let cookies = receiver.recv().unwrap();
         let response = cookies.into_iter().map(|cookie| {
             cookie_msg_to_cookie(cookie.into_inner())
-        }).collect::<Vec<Cookie>>();
-        Ok(WebDriverResponse::Cookie(CookieResponse::new(response)))
+        }).next().unwrap();
+        Ok(WebDriverResponse::Cookie(CookieResponse { value: response }))
     }
 
     fn handle_add_cookie(&self, params: &AddCookieParameters) -> WebDriverResult<WebDriverResponse> {
@@ -690,7 +700,8 @@ impl Handler {
             _ => cookie.finish(),
         };
 
-        try!(self.frame_script_command(WebDriverScriptCommand::AddCookie(cookie, sender)));
+        let cmd = WebDriverScriptCommand::AddCookie(cookie, sender);
+        self.browsing_context_script_command(cmd)?;
         match receiver.recv().unwrap() {
             Ok(_) => Ok(WebDriverResponse::Void),
             Err(response) => match response {
@@ -705,9 +716,9 @@ impl Handler {
     fn handle_set_timeouts(&mut self,
                            parameters: &TimeoutsParameters)
                            -> WebDriverResult<WebDriverResponse> {
-        let mut session = try!(self.session
+        let session = self.session
             .as_mut()
-            .ok_or(WebDriverError::new(ErrorStatus::SessionNotCreated, "")));
+            .ok_or(WebDriverError::new(ErrorStatus::SessionNotCreated, ""))?;
 
         session.script_timeout = parameters.script;
         session.load_timeout = parameters.page_load;
@@ -728,20 +739,18 @@ impl Handler {
 
         let (sender, receiver) = ipc::channel().unwrap();
         let command = WebDriverScriptCommand::ExecuteScript(script, sender);
-        self.execute_script(command, receiver)
+        self.browsing_context_script_command(command)?;
+        let result = receiver.recv().unwrap();
+        self.postprocess_js_result(result)
     }
 
     fn handle_execute_async_script(&self,
                                    parameters: &JavascriptCommandParameters)
                                    -> WebDriverResult<WebDriverResponse> {
-        let session = try!(self.session
-            .as_ref()
-            .ok_or(WebDriverError::new(ErrorStatus::SessionNotCreated, "")));
-
         let func_body = &parameters.script;
         let args_string = "window.webdriverCallback";
 
-        let script = match session.script_timeout {
+        let script = match self.session()?.script_timeout {
             Some(timeout) => {
                 format!("setTimeout(webdriverTimeout, {}); (function(callback) {{ {} }})({})",
                         timeout,
@@ -753,19 +762,13 @@ impl Handler {
 
         let (sender, receiver) = ipc::channel().unwrap();
         let command = WebDriverScriptCommand::ExecuteAsyncScript(script, sender);
-        self.execute_script(command, receiver)
+        self.browsing_context_script_command(command)?;
+        let result = receiver.recv().unwrap();
+        self.postprocess_js_result(result)
     }
 
-    fn execute_script(&self,
-                      command: WebDriverScriptCommand,
-                      receiver: IpcReceiver<WebDriverJSResult>)
-                      -> WebDriverResult<WebDriverResponse> {
-        let pipeline_id = try!(self.frame_pipeline());
-
-        let cmd_msg = WebDriverCommandMsg::ScriptCommand(pipeline_id, command);
-        self.constellation_chan.send(ConstellationMsg::WebDriverCommand(cmd_msg)).unwrap();
-
-        match receiver.recv().unwrap() {
+    fn postprocess_js_result(&self, result: WebDriverJSResult) -> WebDriverResult<WebDriverResponse> {
+        match result {
             Ok(value) => Ok(WebDriverResponse::Generic(ValueResponse::new(value.to_json()))),
             Err(WebDriverJSError::Timeout) => Err(WebDriverError::new(ErrorStatus::Timeout, "")),
             Err(WebDriverJSError::UnknownType) => Err(WebDriverError::new(
@@ -778,22 +781,25 @@ impl Handler {
     fn handle_element_send_keys(&self,
                                 element: &WebElement,
                                 keys: &SendKeysParameters) -> WebDriverResult<WebDriverResponse> {
-        let pipeline_id = try!(self.frame_pipeline());
+        let browsing_context_id = self.session()?.browsing_context_id;
 
         let (sender, receiver) = ipc::channel().unwrap();
 
         let cmd = WebDriverScriptCommand::FocusElement(element.id.clone(), sender);
-        let cmd_msg = WebDriverCommandMsg::ScriptCommand(pipeline_id, cmd);
+        let cmd_msg = WebDriverCommandMsg::ScriptCommand(browsing_context_id, cmd);
         self.constellation_chan.send(ConstellationMsg::WebDriverCommand(cmd_msg)).unwrap();
 
         // TODO: distinguish the not found and not focusable cases
-        try!(receiver.recv().unwrap().or_else(|_| Err(WebDriverError::new(
-            ErrorStatus::StaleElementReference, "Element not found or not focusable"))));
+        receiver.recv().unwrap().or_else(|_| Err(WebDriverError::new(
+            ErrorStatus::StaleElementReference, "Element not found or not focusable")))?;
 
-        let keys = try!(keycodes_to_keys(&keys.value).or_else(|_|
-            Err(WebDriverError::new(ErrorStatus::UnsupportedOperation, "Failed to convert keycodes"))));
+        let keys = keycodes_to_keys(&keys.text).or_else(|_|
+            Err(WebDriverError::new(ErrorStatus::UnsupportedOperation, "Failed to convert keycodes")))?;
 
-        let cmd_msg = WebDriverCommandMsg::SendKeys(pipeline_id, keys);
+        // TODO: there's a race condition caused by the focus command and the
+        // send keys command being two separate messages,
+        // so the constellation may have changed state between them.
+        let cmd_msg = WebDriverCommandMsg::SendKeys(browsing_context_id, keys);
         self.constellation_chan.send(ConstellationMsg::WebDriverCommand(cmd_msg)).unwrap();
 
         Ok(WebDriverResponse::Void)
@@ -801,14 +807,14 @@ impl Handler {
 
     fn handle_take_screenshot(&self) -> WebDriverResult<WebDriverResponse> {
         let mut img = None;
-        let pipeline_id = try!(self.root_pipeline());
+        let top_level_id = self.session()?.top_level_browsing_context_id;
 
         let interval = 1000;
         let iterations = 30_000 / interval;
 
         for _ in 0..iterations {
             let (sender, receiver) = ipc::channel().unwrap();
-            let cmd_msg = WebDriverCommandMsg::TakeScreenshot(pipeline_id, sender);
+            let cmd_msg = WebDriverCommandMsg::TakeScreenshot(top_level_id, sender);
             self.constellation_chan.send(ConstellationMsg::WebDriverCommand(cmd_msg)).unwrap();
 
             if let Some(x) = receiver.recv().unwrap() {
@@ -878,7 +884,7 @@ impl WebDriverHandler<ServoExtensionRoute> for Handler {
         match msg.command {
             WebDriverCommand::NewSession(_) => {},
             _ => {
-                try!(self.session());
+                self.session()?;
             }
         }
 
@@ -888,8 +894,8 @@ impl WebDriverHandler<ServoExtensionRoute> for Handler {
             WebDriverCommand::AddCookie(ref parameters) => self.handle_add_cookie(parameters),
             WebDriverCommand::Get(ref parameters) => self.handle_get(parameters),
             WebDriverCommand::GetCurrentUrl => self.handle_current_url(),
-            WebDriverCommand::GetWindowSize => self.handle_window_size(),
-            WebDriverCommand::SetWindowSize(ref size) => self.handle_set_window_size(size),
+            WebDriverCommand::GetWindowRect => self.handle_window_size(),
+            WebDriverCommand::SetWindowRect(ref size) => self.handle_set_window_size(size),
             WebDriverCommand::IsEnabled(ref element) => self.handle_is_enabled(element),
             WebDriverCommand::IsSelected(ref element) => self.handle_is_selected(element),
             WebDriverCommand::GoBack => self.handle_go_back(),

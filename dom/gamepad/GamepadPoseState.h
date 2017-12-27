@@ -1,3 +1,8 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef mozilla_dom_gamepad_GamepadPoseState_h_
 #define mozilla_dom_gamepad_GamepadPoseState_h_
@@ -42,10 +47,20 @@ struct GamepadPoseState
   float angularAcceleration[3];
   float linearVelocity[3];
   float linearAcceleration[3];
+  bool isPositionValid;
+  bool isOrientationValid;
 
   GamepadPoseState()
+    : flags(GamepadCapabilityFlags::Cap_None)
+    , orientation{ 0, 0, 0, 0 }
+    , position{ 0, 0, 0}
+    , angularVelocity{ 0, 0, 0}
+    , angularAcceleration{ 0, 0, 0}
+    , linearVelocity{ 0, 0, 0}
+    , linearAcceleration{ 0, 0, 0}
+    , isPositionValid(false)
+    , isOrientationValid(false)
   {
-    Clear();
   }
 
   bool operator==(const GamepadPoseState& aPose) const
@@ -69,7 +84,9 @@ struct GamepadPoseState
            && linearVelocity[2] == aPose.linearVelocity[2]
            && linearAcceleration[0] == aPose.linearAcceleration[0]
            && linearAcceleration[1] == aPose.linearAcceleration[1]
-           && linearAcceleration[2] == aPose.linearAcceleration[2];
+           && linearAcceleration[2] == aPose.linearAcceleration[2]
+           && isPositionValid == aPose.isPositionValid
+           && isOrientationValid == aPose.isOrientationValid;
   }
 
   bool operator!=(const GamepadPoseState& aPose) const
@@ -78,7 +95,10 @@ struct GamepadPoseState
   }
 
   void Clear() {
-    memset(this, 0, sizeof(GamepadPoseState));
+    memset(&flags,
+           0,
+           reinterpret_cast<char*>(&isOrientationValid) +
+             sizeof(isOrientationValid) - reinterpret_cast<char*>(&flags));
   }
 };
 

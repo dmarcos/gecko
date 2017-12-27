@@ -12,39 +12,38 @@
 namespace mozilla {
 
 ServoElementSnapshot::ServoElementSnapshot(const Element* aElement)
-  : mContains(Flags(0))
-  , mState(0)
+  : mState(0)
+  , mContains(Flags(0))
+  , mIsTableBorderNonzero(false)
+  , mIsMozBrowserFrame(false)
+  , mClassAttributeChanged(false)
+  , mIdAttributeChanged(false)
+  , mOtherAttributeChanged(false)
 {
   MOZ_COUNT_CTOR(ServoElementSnapshot);
   mIsHTMLElementInHTMLDocument =
     aElement->IsHTMLElement() && aElement->IsInHTMLDocument();
-  mIsInChromeDocument =
-    nsContentUtils::IsChromeDoc(aElement->OwnerDoc());
-}
-
-ServoElementSnapshot::~ServoElementSnapshot()
-{
-  MOZ_COUNT_DTOR(ServoElementSnapshot);
+  mIsInChromeDocument = nsContentUtils::IsChromeDoc(aElement->OwnerDoc());
+  mSupportsLangAttr = aElement->SupportsLangAttr();
 }
 
 void
-ServoElementSnapshot::AddAttrs(Element* aElement)
+ServoElementSnapshot::AddOtherPseudoClassState(Element* aElement)
 {
   MOZ_ASSERT(aElement);
 
-  if (HasAny(Flags::Attributes)) {
+  if (HasOtherPseudoClassState()) {
     return;
   }
 
-  uint32_t attrCount = aElement->GetAttrCount();
-  const nsAttrName* attrName;
-  for (uint32_t i = 0; i < attrCount; ++i) {
-    attrName = aElement->GetAttrNameAt(i);
-    const nsAttrValue* attrValue =
-      aElement->GetParsedAttr(attrName->LocalName(), attrName->NamespaceID());
-    mAttrs.AppendElement(ServoAttrSnapshot(*attrName, *attrValue));
-  }
-  mContains |= Flags::Attributes;
+  mIsTableBorderNonzero =
+    *nsCSSPseudoClasses::MatchesElement(CSSPseudoClassType::mozTableBorderNonzero,
+                                        aElement);
+  mIsMozBrowserFrame =
+    *nsCSSPseudoClasses::MatchesElement(CSSPseudoClassType::mozBrowserFrame,
+                                        aElement);
+
+  mContains |= Flags::OtherPseudoClassState;
 }
 
 } // namespace mozilla

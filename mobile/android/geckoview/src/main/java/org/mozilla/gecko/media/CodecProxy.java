@@ -14,6 +14,7 @@ import android.util.Log;
 import android.view.Surface;
 
 import org.mozilla.gecko.annotation.WrapForJNI;
+import org.mozilla.gecko.gfx.GeckoSurface;
 import org.mozilla.gecko.mozglue.JNIObject;
 
 import java.io.IOException;
@@ -29,10 +30,11 @@ public final class CodecProxy {
     private ICodec mRemote;
     private boolean mIsEncoder;
     private FormatParam mFormat;
-    private Surface mOutputSurface;
+    private GeckoSurface mOutputSurface;
     private CallbacksForwarder mCallbacks;
     private String mRemoteDrmStubId;
     private Queue<Sample> mSurfaceOutputs = new ConcurrentLinkedQueue<>();
+    private boolean mFlushed = true;
 
     public interface Callbacks {
         void onInputStatus(long timestamp, boolean processed);
@@ -56,7 +58,7 @@ public final class CodecProxy {
 
     private class CallbacksForwarder extends ICodecCallbacks.Stub {
         private final Callbacks mCallbacks;
-        private boolean mEndOfInput;
+        private boolean mCodecProxyReleased;
 
         CallbacksForwarder(Callbacks callbacks) {
             mCallbacks = callbacks;
@@ -64,34 +66,44 @@ public final class CodecProxy {
 
         @Override
         public synchronized void onInputQueued(long timestamp) throws RemoteException {
-            if (!mEndOfInput) {
+            if (!mCodecProxyReleased) {
                 mCallbacks.onInputStatus(timestamp, true /* processed */);
             }
         }
 
         @Override
         public synchronized void onInputPending(long timestamp) throws RemoteException {
-            if (!mEndOfInput) {
+            if (!mCodecProxyReleased) {
                 mCallbacks.onInputStatus(timestamp, false /* processed */);
             }
         }
 
         @Override
-        public void onOutputFormatChanged(FormatParam format) throws RemoteException {
-            mCallbacks.onOutputFormatChanged(format.asFormat());
+        public synchronized void onOutputFormatChanged(FormatParam format) throws RemoteException {
+            if (!mCodecProxyReleased) {
+                mCallbacks.onOutputFormatChanged(format.asFormat());
+            }
         }
 
         @Override
-        public void onOutput(Sample sample) throws RemoteException {
+        public synchronized void onOutput(Sample sample) throws RemoteException {
+            if (mCodecProxyReleased) {
+                sample.dispose();
+                return;
+            }
             if (mOutputSurface != null) {
                 // Don't render to surface just yet. Callback will make that happen when it's time.
                 mSurfaceOutputs.offer(sample);
                 mCallbacks.onOutput(sample);
             } else {
                 // Non-surface output needs no rendering.
-                mCallbacks.onOutput(sample);
-                mRemote.releaseOutput(sample, false);
-                sample.dispose();
+                try {
+                    mCallbacks.onOutput(sample);
+                    mRemote.releaseOutput(sample, false);
+                    sample.dispose();
+                } catch (Exception e) {
+                    reportError(true);
+                }
             }
         }
 
@@ -100,19 +112,21 @@ public final class CodecProxy {
             reportError(fatal);
         }
 
-        private void reportError(boolean fatal) {
-            mCallbacks.onError(fatal);
+        private synchronized void reportError(boolean fatal) {
+            if (!mCodecProxyReleased) {
+                mCallbacks.onError(fatal);
+            }
         }
 
-        private void setEndOfInput(boolean end) {
-            mEndOfInput = end;
+        private synchronized void setCodecProxyReleased() {
+            mCodecProxyReleased = true;
         }
     }
 
     @WrapForJNI
     public static CodecProxy create(boolean isEncoder,
                                     MediaFormat format,
-                                    Surface surface,
+                                    GeckoSurface surface,
                                     Callbacks callbacks,
                                     String drmStubId) {
         return RemoteManager.getInstance().createCodec(isEncoder, format, surface, callbacks, drmStubId);
@@ -120,13 +134,13 @@ public final class CodecProxy {
 
     public static CodecProxy createCodecProxy(boolean isEncoder,
                                               MediaFormat format,
-                                              Surface surface,
+                                              GeckoSurface surface,
                                               Callbacks callbacks,
                                               String drmStubId) {
         return new CodecProxy(isEncoder, format, surface, callbacks, drmStubId);
     }
 
-    private CodecProxy(boolean isEncoder, MediaFormat format, Surface surface, Callbacks callbacks, String drmStubId) {
+    private CodecProxy(boolean isEncoder, MediaFormat format, GeckoSurface surface, Callbacks callbacks, String drmStubId) {
         mIsEncoder = isEncoder;
         mFormat = new FormatParam(format);
         mOutputSurface = surface;
@@ -178,6 +192,21 @@ public final class CodecProxy {
     }
 
     @WrapForJNI
+    public synchronized boolean isTunneledPlaybackSupported()
+    {
+      if (mRemote == null) {
+          Log.e(LOGTAG, "cannot check isTunneledPlaybackSupported with an ended codec");
+          return false;
+      }
+      try {
+            return mRemote.isTunneledPlaybackSupported();
+        } catch (RemoteException e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    @WrapForJNI
     public synchronized boolean input(ByteBuffer bytes, BufferInfo info, CryptoInfo cryptoInfo) {
         if (mRemote == null) {
             Log.e(LOGTAG, "cannot send input to an ended codec");
@@ -185,7 +214,6 @@ public final class CodecProxy {
         }
 
         boolean eos = info.flags == MediaCodec.BUFFER_FLAG_END_OF_STREAM;
-        mCallbacks.setEndOfInput(eos);
 
         if (eos) {
             return sendInput(Sample.EOS);
@@ -195,12 +223,12 @@ public final class CodecProxy {
             return sendInput(mRemote.dequeueInput(info.size).set(bytes, info, cryptoInfo));
         } catch (RemoteException | NullPointerException e) {
             Log.e(LOGTAG, "fail to dequeue input buffer", e);
-            return false;
         } catch (IOException e) {
             Log.e(LOGTAG, "fail to copy input data.", e);
             // Balance dequeue/queue.
-            return sendInput(null);
+            sendInput(null);
         }
+        return false;
     }
 
     private boolean sendInput(Sample sample) {
@@ -208,6 +236,7 @@ public final class CodecProxy {
             mRemote.queueInput(sample);
             if (sample != null) {
                 sample.dispose();
+                mFlushed = false;
             }
         } catch (Exception e) {
             Log.e(LOGTAG, "fail to queue input:" + sample, e);
@@ -219,6 +248,9 @@ public final class CodecProxy {
 
     @WrapForJNI
     public synchronized boolean flush() {
+        if (mFlushed) {
+            return true;
+        }
         if (mRemote == null) {
             Log.e(LOGTAG, "cannot flush an ended codec");
             return false;
@@ -226,6 +258,7 @@ public final class CodecProxy {
         try {
             if (DEBUG) { Log.d(LOGTAG, "flush " + this); }
             mRemote.flush();
+            mFlushed = true;
         } catch (DeadObjectException e) {
             return false;
         } catch (RemoteException e) {
@@ -236,36 +269,39 @@ public final class CodecProxy {
     }
 
     @WrapForJNI
-    public synchronized boolean release() {
-        if (mRemote == null) {
-            Log.w(LOGTAG, "codec already ended");
-            return true;
-        }
-        if (DEBUG) { Log.d(LOGTAG, "release " + this); }
+    public boolean release() {
+        mCallbacks.setCodecProxyReleased();
+        synchronized (this) {
+            if (mRemote == null) {
+                Log.w(LOGTAG, "codec already ended");
+                return true;
+            }
+            if (DEBUG) { Log.d(LOGTAG, "release " + this); }
 
-        if (!mSurfaceOutputs.isEmpty()) {
-            // Flushing output buffers to surface may cause some frames to be skipped and
-            // should not happen unless caller release codec before processing all buffers.
-            Log.w(LOGTAG, "release codec when " + mSurfaceOutputs.size() + " output buffers unhandled");
-            try {
-                for (Sample s : mSurfaceOutputs) {
-                    mRemote.releaseOutput(s, true);
+            if (!mSurfaceOutputs.isEmpty()) {
+                // Flushing output buffers to surface may cause some frames to be skipped and
+                // should not happen unless caller release codec before processing all buffers.
+                Log.w(LOGTAG, "release codec when " + mSurfaceOutputs.size() + " output buffers unhandled");
+                try {
+                    for (Sample s : mSurfaceOutputs) {
+                        mRemote.releaseOutput(s, true);
+                    }
+                } catch (RemoteException e) {
+                    e.printStackTrace();
                 }
+                mSurfaceOutputs.clear();
+            }
+
+            try {
+                RemoteManager.getInstance().releaseCodec(this);
+            } catch (DeadObjectException e) {
+                return false;
             } catch (RemoteException e) {
                 e.printStackTrace();
+                return false;
             }
-            mSurfaceOutputs.clear();
+            return true;
         }
-
-        try {
-            RemoteManager.getInstance().releaseCodec(this);
-        } catch (DeadObjectException e) {
-            return false;
-        } catch (RemoteException e) {
-            e.printStackTrace();
-            return false;
-        }
-        return true;
     }
 
     @WrapForJNI

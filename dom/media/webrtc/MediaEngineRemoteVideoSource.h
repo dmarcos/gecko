@@ -32,9 +32,6 @@
 #include "MediaEngineWrapper.h"
 #include "mozilla/dom/MediaStreamTrackBinding.h"
 
-// WebRTC library includes follow
-#include "webrtc/common.h"
-
 // Camera Access via IPC
 #include "CamerasChild.h"
 
@@ -87,9 +84,12 @@ public:
     return mMediaSource;
   }
 
-  bool ChooseCapability(const NormalizedConstraints &aConstraints,
-                        const MediaEnginePrefs &aPrefs,
-                        const nsString& aDeviceId) override;
+  bool ChooseCapability(
+    const NormalizedConstraints &aConstraints,
+    const MediaEnginePrefs &aPrefs,
+    const nsString& aDeviceId,
+    webrtc::CaptureCapability& aCapability,
+    const DistanceCalculation aCalculate) override;
 
   void Refresh(int aIndex);
 
@@ -110,6 +110,7 @@ private:
   nsresult
   UpdateSingleSource(const AllocationHandle* aHandle,
                      const NormalizedConstraints& aNetConstraints,
+                     const NormalizedConstraints& aNewConstraint,
                      const MediaEnginePrefs& aPrefs,
                      const nsString& aDeviceId,
                      const char** aOutBadConstraint) override;

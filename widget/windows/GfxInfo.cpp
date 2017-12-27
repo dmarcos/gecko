@@ -18,14 +18,13 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/gfx/DeviceManagerDx.h"
 #include "mozilla/gfx/Logging.h"
-#include "nsPrintfCString.h"
-#include "jsapi.h"
-
-#if defined(MOZ_CRASHREPORTER)
 #include "nsExceptionHandler.h"
 #include "nsICrashReporter.h"
+#include "nsPrintfCString.h"
+#include "jsapi.h"
+#include <intrin.h>
+
 #define NS_CRASHREPORTER_CONTRACTID "@mozilla.org/toolkit/crash-reporter;1"
-#endif
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -598,8 +597,8 @@ GfxInfo::Init()
 
     if (createDXGIFactory) {
       RefPtr<IDXGIFactory> factory = nullptr;
-      HRESULT hrf = createDXGIFactory(__uuidof(IDXGIFactory),
-                                      (void**)(&factory) );
+      createDXGIFactory(__uuidof(IDXGIFactory),
+                        (void**)(&factory) );
       if (factory) {
         RefPtr<IDXGIAdapter> adapter;
         if (SUCCEEDED(factory->EnumAdapters(0, getter_AddRefs(adapter)))) {
@@ -853,7 +852,6 @@ GfxInfo::GetIsGPU2Active(bool* aIsGPU2Active)
   return NS_OK;
 }
 
-#if defined(MOZ_CRASHREPORTER)
 /* Cisco's VPN software can cause corruption of the floating point state.
  * Make a note of this in our crash reports so that some weird crashes
  * make more sense */
@@ -868,12 +866,10 @@ CheckForCiscoVPN() {
     CrashReporter::AppendAppNotesToCrashReport(NS_LITERAL_CSTRING("Cisco VPN\n"));
   }
 }
-#endif
 
 void
 GfxInfo::AddCrashReportAnnotations()
 {
-#if defined(MOZ_CRASHREPORTER)
   CheckForCiscoVPN();
 
   if (mHasDriverVersionMismatch) {
@@ -922,7 +918,7 @@ GfxInfo::AddCrashReportAnnotations()
     LossyAppendUTF16toASCII(mDeviceKeyDebug, note);
     LossyAppendUTF16toASCII(mDeviceKeyDebug, note);
   }
-  note.Append("\n");
+  note.AppendLiteral("\n");
 
   if (mHasDualGPU) {
     nsString deviceID2, vendorID2, subsysID2;
@@ -953,8 +949,6 @@ GfxInfo::AddCrashReportAnnotations()
     note.Append(NS_LossyConvertUTF16toASCII(adapterDriverVersionString2));
   }
   CrashReporter::AppendAppNotesToCrashReport(note);
-
-#endif
 }
 
 static OperatingSystem
@@ -974,6 +968,39 @@ WindowsVersionToOperatingSystem(int32_t aWindowsVersion)
       return OperatingSystem::Unknown;
     }
 }
+
+// Return true if the CPU supports AVX, but the operating system does not.
+#if defined(_M_X64)
+static inline bool
+DetectBrokenAVX()
+{
+  int regs[4];
+  __cpuid(regs, 0);
+  if (regs[0] == 0) {
+    // Level not supported.
+    return false;
+  }
+
+  __cpuid(regs, 1);
+
+  const unsigned AVX = 1u << 28;
+  const unsigned XSAVE = 1u << 26;
+  if ((regs[2] & (AVX|XSAVE)) != (AVX|XSAVE)) {
+    // AVX is not supported on this CPU.
+    return false;
+  }
+
+  const unsigned OSXSAVE = 1u << 27;
+  if ((regs[2] & OSXSAVE) != OSXSAVE) {
+    // AVX is supported, but the OS didn't enable it.
+    // This can be forced via bcdedit /set xsavedisable 1.
+    return true;
+  }
+
+  const unsigned AVX_CTRL_BITS = (1 << 1) | (1 << 2);
+  return (_xgetbv(0) & AVX_CTRL_BITS) != AVX_CTRL_BITS;
+}
+#endif
 
 const nsTArray<GfxDriverInfo>&
 GfxInfo::GetGfxDriverInfo()
@@ -1289,6 +1316,15 @@ GfxInfo::GetGfxDriverInfo()
       nsIGfxInfo::FEATURE_DIRECT3D_9_LAYERS, nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
       DRIVER_BUILD_ID_LESS_THAN_OR_EQUAL, 1749, "FEATURE_FAILURE_INTEL_W7_D3D9_LAYERS");
 
+#if defined(_M_X64)
+    if (DetectBrokenAVX()) {
+      APPEND_TO_DRIVER_BLOCKLIST2(OperatingSystem::Windows7,
+        (nsAString&) GfxDriverInfo::GetDeviceVendor(VendorIntel), GfxDriverInfo::allDevices,
+        nsIGfxInfo::FEATURE_DIRECT3D_11_LAYERS, nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
+        DRIVER_LESS_THAN, GfxDriverInfo::allDriverVersions, "FEATURE_FAILURE_BUG_1403353");
+    }
+#endif
+
     ////////////////////////////////////
     // WebGL
 
@@ -1318,6 +1354,17 @@ GfxInfo::GetGfxDriverInfo()
       (nsAString&) GfxDriverInfo::GetDeviceVendor(VendorAMD), GfxDriverInfo::allDevices,
       nsIGfxInfo::FEATURE_DX_INTEROP2, nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
       DRIVER_LESS_THAN, GfxDriverInfo::allDriverVersions, "DX_INTEROP2_AMD_CRASH");
+
+    ////////////////////////////////////
+    // FEATURE_D3D11_KEYED_MUTEX
+
+    // bug 1359416
+    APPEND_TO_DRIVER_BLOCKLIST2(OperatingSystem::Windows,
+      (nsAString&) GfxDriverInfo::GetDeviceVendor(VendorIntel),
+      (GfxDeviceFamily*) GfxDriverInfo::GetDeviceFamily(IntelHDGraphicsToSandyBridge),
+      nsIGfxInfo::FEATURE_D3D11_KEYED_MUTEX, nsIGfxInfo::FEATURE_BLOCKED_DEVICE,
+      DRIVER_LESS_THAN, GfxDriverInfo::allDriverVersions, "FEATURE_FAILURE_BUG_1359416");
+
   }
   return *mDriverInfo;
 }

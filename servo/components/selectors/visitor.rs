@@ -6,7 +6,8 @@
 
 #![deny(missing_docs)]
 
-use parser::{AttrSelector, Combinator, ComplexSelector, SelectorImpl, SimpleSelector};
+use attr::NamespaceConstraint;
+use parser::{Combinator, Component, SelectorImpl};
 
 /// A trait to visit selector properties.
 ///
@@ -19,21 +20,25 @@ pub trait SelectorVisitor {
     /// Visit an attribute selector that may match (there are other selectors
     /// that may never match, like those containing whitespace or the empty
     /// string).
-    fn visit_attribute_selector(&mut self, _: &AttrSelector<Self::Impl>) -> bool {
+    fn visit_attribute_selector(
+        &mut self,
+        _namespace: &NamespaceConstraint<&<Self::Impl as SelectorImpl>::NamespaceUrl>,
+        _local_name: &<Self::Impl as SelectorImpl>::LocalName,
+        _local_name_lower: &<Self::Impl as SelectorImpl>::LocalName,
+    ) -> bool {
         true
     }
 
     /// Visit a simple selector.
-    fn visit_simple_selector(&mut self, _: &SimpleSelector<Self::Impl>) -> bool {
+    fn visit_simple_selector(&mut self, _: &Component<Self::Impl>) -> bool {
         true
     }
 
     /// Visits a complex selector.
     ///
     /// Gets the combinator to the right of the selector, or `None` if the
-    /// selector is the leftmost one.
+    /// selector is the rightmost one.
     fn visit_complex_selector(&mut self,
-                              _: &ComplexSelector<Self::Impl>,
                               _combinator_to_right: Option<Combinator>)
                               -> bool {
         true

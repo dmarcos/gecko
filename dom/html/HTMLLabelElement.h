@@ -12,14 +12,12 @@
 
 #include "mozilla/Attributes.h"
 #include "nsGenericHTMLElement.h"
-#include "nsIDOMHTMLLabelElement.h"
 
 namespace mozilla {
 class EventChainPostVisitor;
 namespace dom {
 
-class HTMLLabelElement final : public nsGenericHTMLElement,
-                               public nsIDOMHTMLLabelElement
+class HTMLLabelElement final : public nsGenericHTMLElement
 {
 public:
   explicit HTMLLabelElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
@@ -39,17 +37,14 @@ public:
     return true;
   }
 
-  // nsIDOMHTMLLabelElement
-  NS_DECL_NSIDOMHTMLLABELELEMENT
-
   HTMLFormElement* GetForm() const;
   void GetHtmlFor(nsString& aHtmlFor)
   {
     GetHTMLAttr(nsGkAtoms::_for, aHtmlFor);
   }
-  void SetHtmlFor(const nsAString& aHtmlFor, ErrorResult& aError)
+  void SetHtmlFor(const nsAString& aHtmlFor)
   {
-    SetHTMLAttr(nsGkAtoms::_for, aHtmlFor, aError);
+    SetHTMLAttr(nsGkAtoms::_for, aHtmlFor);
   }
   nsGenericHTMLElement* GetControl() const
   {
@@ -59,14 +54,13 @@ public:
   using nsGenericHTMLElement::Focus;
   virtual void Focus(mozilla::ErrorResult& aError) override;
 
-  virtual bool IsDisabled() const override { return false; }
-
   // nsIContent
   virtual nsresult PostHandleEvent(
                      EventChainPostVisitor& aVisitor) override;
   virtual bool PerformAccesskey(bool aKeyCausesActivation,
                                 bool aIsTrustedEvent) override;
-  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+                         bool aPreallocateChildren) const override;
 
   nsGenericHTMLElement* GetLabeledElement() const;
 protected:

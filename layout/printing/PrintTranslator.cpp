@@ -25,7 +25,7 @@ PrintTranslator::PrintTranslator(nsDeviceContext* aDeviceContext)
 }
 
 bool
-PrintTranslator::TranslateRecording(std::istream& aRecording)
+PrintTranslator::TranslateRecording(PRFileDescStream& aRecording)
 {
   uint32_t magicInt;
   ReadElement(aRecording, magicInt);
@@ -81,21 +81,6 @@ PrintTranslator::CreateDrawTarget(ReferencePtr aRefPtr,
   RefPtr<DrawTarget> drawTarget = context->GetDrawTarget();
   AddDrawTarget(aRefPtr, drawTarget);
   return drawTarget.forget();
-}
-
-FontType
-PrintTranslator::GetDesiredFontType()
-{
-  switch (mBaseDT->GetBackendType()) {
-    case BackendType::DIRECT2D:
-      return FontType::DWRITE;
-    case BackendType::CAIRO:
-      return FontType::CAIRO;
-    case BackendType::SKIA:
-      return FontType::SKIA;
-    default:
-      return FontType::CAIRO;
-  }
 }
 
 } // namespace layout

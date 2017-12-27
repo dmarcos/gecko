@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,6 +10,7 @@
 #define mozilla_StyleAnimationValue_h_
 
 #include "mozilla/gfx/MatrixFwd.h"
+#include "mozilla/gfx/Point.h"
 #include "mozilla/ServoBindingTypes.h"
 #include "mozilla/UniquePtr.h"
 #include "nsStringFwd.h"
@@ -26,6 +28,8 @@ class gfx3DMatrix;
 
 namespace mozilla {
 
+class GeckoStyleContext;
+
 namespace css {
 class StyleRule;
 } // namespace css
@@ -35,6 +39,7 @@ class Element;
 } // namespace dom
 
 enum class CSSPseudoElementType : uint8_t;
+enum class StyleBackendType : uint8_t;
 struct PropertyStyleAnimationValuePair;
 
 /**
@@ -107,7 +112,7 @@ public:
   ComputeDistance(nsCSSPropertyID aProperty,
                   const StyleAnimationValue& aStartValue,
                   const StyleAnimationValue& aEndValue,
-                  nsStyleContext* aStyleContext,
+                  GeckoStyleContext* aStyleContext,
                   double& aDistance);
 
   /**
@@ -203,7 +208,7 @@ public:
   static MOZ_MUST_USE bool
   ComputeValue(nsCSSPropertyID aProperty,
                mozilla::dom::Element* aTargetElement,
-               nsStyleContext* aStyleContext,
+               mozilla::GeckoStyleContext* aStyleContext,
                const nsAString& aSpecifiedValue,
                bool aUseSVGMode,
                StyleAnimationValue& aComputedValue,
@@ -223,7 +228,7 @@ public:
   ComputeValues(nsCSSPropertyID aProperty,
                 mozilla::CSSEnabledState aEnabledState,
                 mozilla::dom::Element* aTargetElement,
-                nsStyleContext* aStyleContext,
+                mozilla::GeckoStyleContext* aStyleContext,
                 const nsAString& aSpecifiedValue,
                 bool aUseSVGMode,
                 nsTArray<PropertyStyleAnimationValuePair>& aResult);
@@ -236,7 +241,7 @@ public:
   ComputeValues(nsCSSPropertyID aProperty,
                 mozilla::CSSEnabledState aEnabledState,
                 mozilla::dom::Element* aTargetElement,
-                nsStyleContext* aStyleContext,
+                mozilla::GeckoStyleContext* aStyleContext,
                 const nsCSSValue& aSpecifiedValue,
                 bool aUseSVGMode,
                 nsTArray<PropertyStyleAnimationValuePair>& aResult);
@@ -287,12 +292,8 @@ public:
    */
   static MOZ_MUST_USE bool ExtractComputedValue(
     nsCSSPropertyID aProperty,
-    nsStyleContext* aStyleContext,
+    mozilla::GeckoStyleContext* aStyleContext,
     StyleAnimationValue& aComputedValue);
-
-  static already_AddRefed<nsCSSValue::Array>
-    AppendTransformFunction(nsCSSKeyword aTransformFunction,
-                            nsCSSValueList**& aListTail);
 
   /**
    * The types and values for the values that we extract and animate.
@@ -423,7 +424,7 @@ public:
   }
 
   /// @return the scale for this value, calculated with reference to @aForFrame.
-  gfxSize GetScaleValue(const nsIFrame* aForFrame) const;
+  mozilla::gfx::Size GetScaleValue(const nsIFrame* aForFrame) const;
 
   const css::ComplexColorData& GetComplexColorData() const {
     MOZ_ASSERT(mUnit == eUnit_ComplexColor, "unit mismatch");
@@ -570,13 +571,34 @@ private:
 
 struct AnimationValue
 {
-  // mGecko and mServo are mutually exclusive: only one or the other should
-  // ever be set.
-  // FIXME: After obsoleting StyleAnimationValue, we should remove mGecko, and
-  // make AnimationValue a wrapper of RawServoAnimationValue to hide these
-  // FFIs.
-  StyleAnimationValue mGecko;
-  RefPtr<RawServoAnimationValue> mServo;
+  explicit AnimationValue(const StyleAnimationValue& aValue)
+    : mGecko(aValue) { }
+  explicit AnimationValue(const RefPtr<RawServoAnimationValue>& aValue)
+    : mServo(aValue) { }
+  AnimationValue() = default;
+
+  AnimationValue(const AnimationValue& aOther)
+    : mGecko(aOther.mGecko), mServo(aOther.mServo) { }
+  AnimationValue(AnimationValue&& aOther)
+    : mGecko(Move(aOther.mGecko)), mServo(Move(aOther.mServo)) { }
+
+  AnimationValue& operator=(const AnimationValue& aOther)
+  {
+    if (this != &aOther) {
+      mGecko = aOther.mGecko;
+      mServo = aOther.mServo;
+    }
+    return *this;
+  }
+  AnimationValue& operator=(AnimationValue&& aOther)
+  {
+    MOZ_ASSERT(this != &aOther, "Do not move itself");
+    if (this != &aOther) {
+      mGecko = Move(aOther.mGecko);
+      mServo = Move(aOther.mServo);
+    }
+    return *this;
+  }
 
   bool operator==(const AnimationValue& aOther) const;
   bool operator!=(const AnimationValue& aOther) const;
@@ -585,9 +607,12 @@ struct AnimationValue
 
   float GetOpacity() const;
 
-  // Returns the scale for mGecko or mServo, which are calculated with
+  // Return the transform list as a RefPtr.
+  already_AddRefed<const nsCSSValueSharedList> GetTransformList() const;
+
+  // Return the scale for mGecko or mServo, which are calculated with
   // reference to aFrame.
-  gfxSize GetScaleValue(const nsIFrame* aFrame) const;
+  mozilla::gfx::Size GetScaleValue(const nsIFrame* aFrame) const;
 
   // Uncompute this AnimationValue and then serialize it.
   void SerializeSpecifiedValue(nsCSSPropertyID aProperty,
@@ -596,6 +621,38 @@ struct AnimationValue
   // Check if |*this| and |aToValue| can be interpolated.
   bool IsInterpolableWith(nsCSSPropertyID aProperty,
                           const AnimationValue& aToValue) const;
+
+  // Compute the distance between *this and aOther.
+  // If |aStyleContext| is nullptr, we will return 0.0 if we have mismatched
+  // transform lists.
+  double ComputeDistance(nsCSSPropertyID aProperty,
+                         const AnimationValue& aOther,
+                         nsStyleContext* aStyleContext) const;
+
+  // Create an AnimaitonValue from a string. This method flushes style, so we
+  // should use this carefully. Now, it is only used by
+  // nsDOMWindowUtils::ComputeAnimationDistance.
+  static AnimationValue FromString(nsCSSPropertyID aProperty,
+                                   const nsAString& aValue,
+                                   dom::Element* aElement);
+
+  // Create an AnimationValue from an opacity value.
+  static AnimationValue Opacity(StyleBackendType aBackendType, float aOpacity);
+  // Create an AnimationValue from a transform list.
+  static AnimationValue Transform(StyleBackendType aBackendType,
+                                  nsCSSValueSharedList& aList);
+
+  static already_AddRefed<nsCSSValue::Array>
+  AppendTransformFunction(nsCSSKeyword aTransformFunction,
+                          nsCSSValueList**& aListTail);
+
+  // mGecko and mServo are mutually exclusive: only one or the other should
+  // ever be set.
+  // FIXME: After obsoleting StyleAnimationValue, we should remove mGecko, and
+  // make AnimationValue a wrapper of RawServoAnimationValue to hide these
+  // FFIs.
+  StyleAnimationValue mGecko;
+  RefPtr<RawServoAnimationValue> mServo;
 };
 
 struct PropertyStyleAnimationValuePair

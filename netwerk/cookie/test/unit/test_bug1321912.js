@@ -50,17 +50,21 @@ conn.executeSimpleSQL("INSERT INTO moz_cookies(" +
   now + ", " + now + ", " + now + ", 1, 1)");
 
 // Now start the cookie service, and then check the fields in the table.
+// Get sessionEnumerator to wait for the initialization in cookie thread
+const enumerator = Cc["@mozilla.org/cookieService;1"].
+                   getService(Ci.nsICookieManager).sessionEnumerator;
 
-const cs = Cc["@mozilla.org/cookieService;1"].
-           getService(Ci.nsICookieService);
-
-do_check_true(conn.schemaVersion, 8);
+Assert.ok(conn.schemaVersion, 8);
 let stmt = conn.createStatement("SELECT sql FROM sqlite_master " +
-                                "WHERE type = 'table' AND " +
-                                "      name = 'moz_cookies'");
-do_check_true(stmt.executeStep());
-let sql = stmt.getString(0);
-do_check_eq(sql.indexOf("appId"), -1);
+                                  "WHERE type = 'table' AND " +
+                                  "      name = 'moz_cookies'");
+try {
+  Assert.ok(stmt.executeStep());
+  let sql = stmt.getString(0);
+  Assert.equal(sql.indexOf("appId"), -1);
+} finally {
+  stmt.finalize();
+}
 
 stmt = conn.createStatement("SELECT * FROM moz_cookies " +
                             "WHERE baseDomain = 'foo.com' AND " +
@@ -73,6 +77,9 @@ stmt = conn.createStatement("SELECT * FROM moz_cookies " +
                             "      creationTime = " + now + " AND " +
                             "      isSecure = 1 AND " +
                             "      isHttpOnly = 1");
-do_check_true(stmt.executeStep());
-
+try {
+  Assert.ok(stmt.executeStep());
+} finally {
+  stmt.finalize();
+}
 conn.close();

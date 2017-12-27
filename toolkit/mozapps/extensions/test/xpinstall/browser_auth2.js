@@ -3,6 +3,9 @@
 // credentials are given
 // This verifies bug 312473
 function test() {
+  // Turn off the authentication dialog blocking for this test.
+  Services.prefs.setBoolPref("network.auth.non-web-content-triggered-resources-http-auth-allow", true);
+
   requestLongerTimeout(2);
   Harness.authenticationCallback = get_auth_info;
   Harness.downloadFailedCallback = download_failed;
@@ -16,7 +19,7 @@ function test() {
   var triggers = encodeURIComponent(JSON.stringify({
     "Unsigned XPI": TESTROOT + "authRedirect.sjs?" + TESTROOT + "amosigned.xpi"
   }));
-  gBrowser.selectedTab = gBrowser.addTab();
+  gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser);
   gBrowser.loadURI(TESTROOT + "installtrigger.html?" + triggers);
 }
 
@@ -40,6 +43,8 @@ function finish_test(count) {
   authMgr.clearAll();
 
   Services.perms.remove(makeURI("http://example.com"), "install");
+
+  Services.prefs.clearUserPref("network.auth.non-web-content-triggered-resources-http-auth-allow");
 
   gBrowser.removeCurrentTab();
   Harness.finish();

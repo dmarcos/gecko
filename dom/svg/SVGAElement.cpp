@@ -38,23 +38,12 @@ nsSVGElement::StringInfo SVGAElement::sStringInfo[3] =
 //----------------------------------------------------------------------
 // nsISupports methods
 
-NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(SVGAElement)
-  NS_INTERFACE_TABLE_INHERITED(SVGAElement,
-                               nsIDOMNode,
-                               nsIDOMElement,
-                               nsIDOMSVGElement,
-                               Link)
-NS_INTERFACE_TABLE_TAIL_INHERITING(SVGAElementBase)
-
-NS_IMPL_CYCLE_COLLECTION_CLASS(SVGAElement)
-
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(SVGAElement,
-                                                  SVGAElementBase)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
-
-NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(SVGAElement,
-                                                SVGAElementBase)
-NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+NS_INTERFACE_MAP_BEGIN(SVGAElement)
+  NS_INTERFACE_MAP_ENTRY(nsIDOMNode)
+  NS_INTERFACE_MAP_ENTRY(nsIDOMElement)
+  NS_INTERFACE_MAP_ENTRY(nsIDOMSVGElement)
+  NS_INTERFACE_MAP_ENTRY(Link)
+NS_INTERFACE_MAP_END_INHERITING(SVGAElementBase)
 
 NS_IMPL_ADDREF_INHERITED(SVGAElement, SVGAElementBase)
 NS_IMPL_RELEASE_INHERITED(SVGAElement, SVGAElementBase)
@@ -78,6 +67,16 @@ SVGAElement::Href()
   return mStringAttributes[HREF].IsExplicitlySet()
          ? mStringAttributes[HREF].ToDOMAnimatedString(this)
          : mStringAttributes[XLINK_HREF].ToDOMAnimatedString(this);
+}
+
+//----------------------------------------------------------------------
+// Link methods
+
+bool
+SVGAElement::ElementHasHref() const
+{
+  return mStringAttributes[HREF].IsExplicitlySet() ||
+         mStringAttributes[XLINK_HREF].IsExplicitlySet();
 }
 
 //----------------------------------------------------------------------
@@ -163,7 +162,7 @@ SVGAElement::GetHrefURI() const
 
 
 NS_IMETHODIMP_(bool)
-SVGAElement::IsAttributeMapped(const nsIAtom* name) const
+SVGAElement::IsAttributeMapped(const nsAtom* name) const
 {
   static const MappedAttributeEntry* const map[] = {
     sFEFloodMap,
@@ -277,13 +276,9 @@ SVGAElement::IsLink(nsIURI** aURI) const
     { &nsGkAtoms::_empty, &nsGkAtoms::onRequest, nullptr };
 
   // Optimization: check for href first for early return
-  bool useXLink = !HasAttr(kNameSpaceID_None, nsGkAtoms::href);
-  const nsAttrValue* href =
-    useXLink
-    ? mAttrsAndChildren.GetAttr(nsGkAtoms::href, kNameSpaceID_XLink)
-    : mAttrsAndChildren.GetAttr(nsGkAtoms::href, kNameSpaceID_None);
+  bool useBareHref = mStringAttributes[HREF].IsExplicitlySet();
 
-  if (href &&
+  if ((useBareHref || mStringAttributes[XLINK_HREF].IsExplicitlySet()) &&
       FindAttrValueIn(kNameSpaceID_XLink, nsGkAtoms::type,
                       sTypeVals, eCaseMatters) !=
                       nsIContent::ATTR_VALUE_NO_MATCH &&
@@ -296,7 +291,7 @@ SVGAElement::IsLink(nsIURI** aURI) const
     nsCOMPtr<nsIURI> baseURI = GetBaseURI();
     // Get absolute URI
     nsAutoString str;
-    const uint8_t idx = useXLink ? XLINK_HREF : HREF;
+    const uint8_t idx = useBareHref ? HREF : XLINK_HREF;
     mStringAttributes[idx].GetAnimValue(str, this);
     nsContentUtils::NewURIWithDocumentCharset(aURI, str, OwnerDoc(), baseURI);
     // must promise out param is non-null if we return true
@@ -338,12 +333,13 @@ SVGAElement::IntrinsicState() const
 }
 
 nsresult
-SVGAElement::SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                     nsIAtom* aPrefix, const nsAString& aValue,
+SVGAElement::SetAttr(int32_t aNameSpaceID, nsAtom* aName,
+                     nsAtom* aPrefix, const nsAString& aValue,
+                     nsIPrincipal* aSubjectPrincipal,
                      bool aNotify)
 {
   nsresult rv = SVGAElementBase::SetAttr(aNameSpaceID, aName, aPrefix,
-                                         aValue, aNotify);
+                                         aValue, aSubjectPrincipal, aNotify);
 
   // The ordering of the parent class's SetAttr call and Link::ResetLinkState
   // is important here!  The attribute is not set until SetAttr returns, and
@@ -360,7 +356,7 @@ SVGAElement::SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
 }
 
 nsresult
-SVGAElement::UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttr,
+SVGAElement::UnsetAttr(int32_t aNameSpaceID, nsAtom* aAttr,
                        bool aNotify)
 {
   nsresult rv = nsSVGElement::UnsetAttr(aNameSpaceID, aAttr, aNotify);
@@ -373,9 +369,7 @@ SVGAElement::UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttr,
   if (aAttr == nsGkAtoms::href &&
       (aNameSpaceID == kNameSpaceID_XLink ||
        aNameSpaceID == kNameSpaceID_None)) {
-    bool hasHref = HasAttr(kNameSpaceID_None, nsGkAtoms::href) ||
-                   HasAttr(kNameSpaceID_XLink, nsGkAtoms::href);
-    Link::ResetLinkState(!!aNotify, hasHref);
+    Link::ResetLinkState(!!aNotify, Link::ElementHasHref());
   }
 
   return rv;

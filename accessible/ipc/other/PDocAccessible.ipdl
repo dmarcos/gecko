@@ -29,6 +29,7 @@ struct ShowEventData
   uint64_t ID;
   uint32_t Idx;
   AccessibleData[] NewTree;
+  bool EventSuppressed;
 };
 
 struct Attribute
@@ -72,6 +73,12 @@ parent:
 
 child:
   async __delete__();
+
+  /*
+   * Called as a result of focus shifting from chrome to content
+   * elements through keyboard navigation.
+   */
+  async RestoreFocus();
 
   // Accessible
   nested(inside_sync) sync State(uint64_t aID) returns(uint64_t states);

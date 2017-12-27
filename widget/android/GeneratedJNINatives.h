@@ -7,8 +7,10 @@
 #ifndef GeneratedJNINatives_h
 #define GeneratedJNINatives_h
 
+#ifndef MOZ_PREPROCESSOR
 #include "GeneratedJNIWrappers.h"
 #include "mozilla/jni/Natives.h"
+#endif
 
 namespace mozilla {
 namespace java {
@@ -86,7 +88,7 @@ template<class Impl>
 class GeckoAppShell::Natives : public mozilla::jni::NativeImpl<GeckoAppShell, Impl>
 {
 public:
-    static const JNINativeMethod methods[7];
+    static const JNINativeMethod methods[6];
 };
 
 template<class Impl>
@@ -103,10 +105,6 @@ const JNINativeMethod GeckoAppShell::Natives<Impl>::methods[] = {
     mozilla::jni::MakeNativeMethod<GeckoAppShell::NotifyUriVisited_t>(
             mozilla::jni::NativeStub<GeckoAppShell::NotifyUriVisited_t, Impl>
             ::template Wrap<&Impl::NotifyUriVisited>),
-
-    mozilla::jni::MakeNativeMethod<GeckoAppShell::OnFullScreenPluginHidden_t>(
-            mozilla::jni::NativeStub<GeckoAppShell::OnFullScreenPluginHidden_t, Impl>
-            ::template Wrap<&Impl::OnFullScreenPluginHidden>),
 
     mozilla::jni::MakeNativeMethod<GeckoAppShell::OnLocationChanged_t>(
             mozilla::jni::NativeStub<GeckoAppShell::OnLocationChanged_t, Impl>
@@ -221,14 +219,49 @@ const JNINativeMethod GeckoScreenOrientation::Natives<Impl>::methods[] = {
 };
 
 template<class Impl>
+class GeckoSession::Window::Natives : public mozilla::jni::NativeImpl<Window, Impl>
+{
+public:
+    static const JNINativeMethod methods[5];
+};
+
+template<class Impl>
+const JNINativeMethod GeckoSession::Window::Natives<Impl>::methods[] = {
+
+    mozilla::jni::MakeNativeMethod<GeckoSession::Window::AttachEditable_t>(
+            mozilla::jni::NativeStub<GeckoSession::Window::AttachEditable_t, Impl>
+            ::template Wrap<&Impl::AttachEditable>),
+
+    mozilla::jni::MakeNativeMethod<GeckoSession::Window::Close_t>(
+            mozilla::jni::NativeStub<GeckoSession::Window::Close_t, Impl>
+            ::template Wrap<&Impl::Close>),
+
+    mozilla::jni::MakeNativeMethod<GeckoSession::Window::DisposeNative_t>(
+            mozilla::jni::NativeStub<GeckoSession::Window::DisposeNative_t, Impl>
+            ::template Wrap<&Impl::DisposeNative>),
+
+    mozilla::jni::MakeNativeMethod<GeckoSession::Window::Open_t>(
+            mozilla::jni::NativeStub<GeckoSession::Window::Open_t, Impl>
+            ::template Wrap<&Impl::Open>),
+
+    mozilla::jni::MakeNativeMethod<GeckoSession::Window::Transfer_t>(
+            mozilla::jni::NativeStub<GeckoSession::Window::Transfer_t, Impl>
+            ::template Wrap<&Impl::Transfer>)
+};
+
+template<class Impl>
 class GeckoThread::Natives : public mozilla::jni::NativeImpl<GeckoThread, Impl>
 {
 public:
-    static const JNINativeMethod methods[6];
+    static const JNINativeMethod methods[7];
 };
 
 template<class Impl>
 const JNINativeMethod GeckoThread::Natives<Impl>::methods[] = {
+
+    mozilla::jni::MakeNativeMethod<GeckoThread::ForceQuit_t>(
+            mozilla::jni::NativeStub<GeckoThread::ForceQuit_t, Impl>
+            ::template Wrap<&Impl::ForceQuit>),
 
     mozilla::jni::MakeNativeMethod<GeckoThread::CreateServices_t>(
             mozilla::jni::NativeStub<GeckoThread::CreateServices_t, Impl>
@@ -256,34 +289,26 @@ const JNINativeMethod GeckoThread::Natives<Impl>::methods[] = {
 };
 
 template<class Impl>
-class GeckoView::Window::Natives : public mozilla::jni::NativeImpl<Window, Impl>
+class GeckoVRManager::Natives : public mozilla::jni::NativeImpl<GeckoVRManager, Impl>
 {
 public:
-    static const JNINativeMethod methods[5];
+    static const JNINativeMethod methods[3];
 };
 
 template<class Impl>
-const JNINativeMethod GeckoView::Window::Natives<Impl>::methods[] = {
+const JNINativeMethod GeckoVRManager::Natives<Impl>::methods[] = {
 
-    mozilla::jni::MakeNativeMethod<GeckoView::Window::Close_t>(
-            mozilla::jni::NativeStub<GeckoView::Window::Close_t, Impl>
-            ::template Wrap<&Impl::Close>),
+    mozilla::jni::MakeNativeMethod<GeckoVRManager::CleanupGVRNonPresentingContext_t>(
+            mozilla::jni::NativeStub<GeckoVRManager::CleanupGVRNonPresentingContext_t, Impl>
+            ::template Wrap<&Impl::CleanupGVRNonPresentingContext>),
 
-    mozilla::jni::MakeNativeMethod<GeckoView::Window::DisposeNative_t>(
-            mozilla::jni::NativeStub<GeckoView::Window::DisposeNative_t, Impl>
-            ::template Wrap<&Impl::DisposeNative>),
+    mozilla::jni::MakeNativeMethod<GeckoVRManager::SetGVRPaused_t>(
+            mozilla::jni::NativeStub<GeckoVRManager::SetGVRPaused_t, Impl>
+            ::template Wrap<&Impl::SetGVRPaused>),
 
-    mozilla::jni::MakeNativeMethod<GeckoView::Window::LoadUri_t>(
-            mozilla::jni::NativeStub<GeckoView::Window::LoadUri_t, Impl>
-            ::template Wrap<&Impl::LoadUri>),
-
-    mozilla::jni::MakeNativeMethod<GeckoView::Window::Open_t>(
-            mozilla::jni::NativeStub<GeckoView::Window::Open_t, Impl>
-            ::template Wrap<&Impl::Open>),
-
-    mozilla::jni::MakeNativeMethod<GeckoView::Window::Reattach_t>(
-            mozilla::jni::NativeStub<GeckoView::Window::Reattach_t, Impl>
-            ::template Wrap<&Impl::Reattach>)
+    mozilla::jni::MakeNativeMethod<GeckoVRManager::SetGVRPresentingContext_t>(
+            mozilla::jni::NativeStub<GeckoVRManager::SetGVRPresentingContext_t, Impl>
+            ::template Wrap<&Impl::SetGVRPresentingContext>)
 };
 
 template<class Impl>
@@ -336,11 +361,15 @@ template<class Impl>
 class SurfaceTextureListener::Natives : public mozilla::jni::NativeImpl<SurfaceTextureListener, Impl>
 {
 public:
-    static const JNINativeMethod methods[1];
+    static const JNINativeMethod methods[2];
 };
 
 template<class Impl>
 const JNINativeMethod SurfaceTextureListener::Natives<Impl>::methods[] = {
+
+    mozilla::jni::MakeNativeMethod<SurfaceTextureListener::DisposeNative_t>(
+            mozilla::jni::NativeStub<SurfaceTextureListener::DisposeNative_t, Impl>
+            ::template Wrap<&Impl::DisposeNative>),
 
     mozilla::jni::MakeNativeMethod<SurfaceTextureListener::OnFrameAvailable_t>(
             mozilla::jni::NativeStub<SurfaceTextureListener::OnFrameAvailable_t, Impl>
@@ -348,41 +377,65 @@ const JNINativeMethod SurfaceTextureListener::Natives<Impl>::methods[] = {
 };
 
 template<class Impl>
-class LayerView::Compositor::Natives : public mozilla::jni::NativeImpl<Compositor, Impl>
+class LayerSession::Compositor::Natives : public mozilla::jni::NativeImpl<Compositor, Impl>
 {
 public:
-    static const JNINativeMethod methods[7];
+    static const JNINativeMethod methods[13];
 };
 
 template<class Impl>
-const JNINativeMethod LayerView::Compositor::Natives<Impl>::methods[] = {
+const JNINativeMethod LayerSession::Compositor::Natives<Impl>::methods[] = {
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::AttachToJava_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::AttachToJava_t, Impl>
-            ::template Wrap<&Impl::AttachToJava>),
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::AttachNPZC_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::AttachNPZC_t, Impl>
+            ::template Wrap<&Impl::AttachNPZC>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::CreateCompositor_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::CreateCompositor_t, Impl>
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::CreateCompositor_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::CreateCompositor_t, Impl>
             ::template Wrap<&Impl::CreateCompositor>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::DisposeNative_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::DisposeNative_t, Impl>
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::DisposeNative_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::DisposeNative_t, Impl>
             ::template Wrap<&Impl::DisposeNative>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::OnSizeChanged_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::OnSizeChanged_t, Impl>
-            ::template Wrap<&Impl::OnSizeChanged>),
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::EnableLayerUpdateNotifications_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::EnableLayerUpdateNotifications_t, Impl>
+            ::template Wrap<&Impl::EnableLayerUpdateNotifications>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::SyncInvalidateAndScheduleComposite_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::SyncInvalidateAndScheduleComposite_t, Impl>
-            ::template Wrap<&Impl::SyncInvalidateAndScheduleComposite>),
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::OnBoundsChanged_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::OnBoundsChanged_t, Impl>
+            ::template Wrap<&Impl::OnBoundsChanged>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::SyncPauseCompositor_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::SyncPauseCompositor_t, Impl>
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::RequestScreenPixels_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::RequestScreenPixels_t, Impl>
+            ::template Wrap<&Impl::RequestScreenPixels>),
+
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::SendToolbarAnimatorMessage_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::SendToolbarAnimatorMessage_t, Impl>
+            ::template Wrap<&Impl::SendToolbarAnimatorMessage>),
+
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::SendToolbarPixelsToCompositor_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::SendToolbarPixelsToCompositor_t, Impl>
+            ::template Wrap<&Impl::SendToolbarPixelsToCompositor>),
+
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::SetDefaultClearColor_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::SetDefaultClearColor_t, Impl>
+            ::template Wrap<&Impl::SetDefaultClearColor>),
+
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::SetMaxToolbarHeight_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::SetMaxToolbarHeight_t, Impl>
+            ::template Wrap<&Impl::SetMaxToolbarHeight>),
+
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::SetPinned_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::SetPinned_t, Impl>
+            ::template Wrap<&Impl::SetPinned>),
+
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::SyncPauseCompositor_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::SyncPauseCompositor_t, Impl>
             ::template Wrap<&Impl::SyncPauseCompositor>),
 
-    mozilla::jni::MakeNativeMethod<LayerView::Compositor::SyncResumeResizeCompositor_t>(
-            mozilla::jni::NativeStub<LayerView::Compositor::SyncResumeResizeCompositor_t, Impl>
+    mozilla::jni::MakeNativeMethod<LayerSession::Compositor::SyncResumeResizeCompositor_t>(
+            mozilla::jni::NativeStub<LayerSession::Compositor::SyncResumeResizeCompositor_t, Impl>
             ::template Wrap<&Impl::SyncResumeResizeCompositor>)
 };
 
@@ -390,15 +443,11 @@ template<class Impl>
 class NativePanZoomController::Natives : public mozilla::jni::NativeImpl<NativePanZoomController, Impl>
 {
 public:
-    static const JNINativeMethod methods[7];
+    static const JNINativeMethod methods[5];
 };
 
 template<class Impl>
 const JNINativeMethod NativePanZoomController::Natives<Impl>::methods[] = {
-
-    mozilla::jni::MakeNativeMethod<NativePanZoomController::AdjustScrollForSurfaceShift_t>(
-            mozilla::jni::NativeStub<NativePanZoomController::AdjustScrollForSurfaceShift_t, Impl>
-            ::template Wrap<&Impl::AdjustScrollForSurfaceShift>),
 
     mozilla::jni::MakeNativeMethod<NativePanZoomController::DisposeNative_t>(
             mozilla::jni::NativeStub<NativePanZoomController::DisposeNative_t, Impl>
@@ -407,10 +456,6 @@ const JNINativeMethod NativePanZoomController::Natives<Impl>::methods[] = {
     mozilla::jni::MakeNativeMethod<NativePanZoomController::HandleMotionEvent_t>(
             mozilla::jni::NativeStub<NativePanZoomController::HandleMotionEvent_t, Impl>
             ::template Wrap<&Impl::HandleMotionEvent>),
-
-    mozilla::jni::MakeNativeMethod<NativePanZoomController::HandleMotionEventVelocity_t>(
-            mozilla::jni::NativeStub<NativePanZoomController::HandleMotionEventVelocity_t, Impl>
-            ::template Wrap<&Impl::HandleMotionEventVelocity>),
 
     mozilla::jni::MakeNativeMethod<NativePanZoomController::HandleMouseEvent_t>(
             mozilla::jni::NativeStub<NativePanZoomController::HandleMouseEvent_t, Impl>
@@ -465,6 +510,44 @@ const JNINativeMethod CodecProxy::NativeCallbacks::Natives<Impl>::methods[] = {
     mozilla::jni::MakeNativeMethod<CodecProxy::NativeCallbacks::OnOutputFormatChanged_t>(
             mozilla::jni::NativeStub<CodecProxy::NativeCallbacks::OnOutputFormatChanged_t, Impl>
             ::template Wrap<&Impl::OnOutputFormatChanged>)
+};
+
+template<class Impl>
+class GeckoHLSDemuxerWrapper::Callbacks::Natives : public mozilla::jni::NativeImpl<Callbacks, Impl>
+{
+public:
+    static const JNINativeMethod methods[2];
+};
+
+template<class Impl>
+const JNINativeMethod GeckoHLSDemuxerWrapper::Callbacks::Natives<Impl>::methods[] = {
+
+    mozilla::jni::MakeNativeMethod<GeckoHLSDemuxerWrapper::Callbacks::OnError_t>(
+            mozilla::jni::NativeStub<GeckoHLSDemuxerWrapper::Callbacks::OnError_t, Impl>
+            ::template Wrap<&Impl::OnError>),
+
+    mozilla::jni::MakeNativeMethod<GeckoHLSDemuxerWrapper::Callbacks::OnInitialized_t>(
+            mozilla::jni::NativeStub<GeckoHLSDemuxerWrapper::Callbacks::OnInitialized_t, Impl>
+            ::template Wrap<&Impl::OnInitialized>)
+};
+
+template<class Impl>
+class GeckoHLSResourceWrapper::Callbacks::Natives : public mozilla::jni::NativeImpl<Callbacks, Impl>
+{
+public:
+    static const JNINativeMethod methods[2];
+};
+
+template<class Impl>
+const JNINativeMethod GeckoHLSResourceWrapper::Callbacks::Natives<Impl>::methods[] = {
+
+    mozilla::jni::MakeNativeMethod<GeckoHLSResourceWrapper::Callbacks::OnDataArrived_t>(
+            mozilla::jni::NativeStub<GeckoHLSResourceWrapper::Callbacks::OnDataArrived_t, Impl>
+            ::template Wrap<&Impl::OnDataArrived>),
+
+    mozilla::jni::MakeNativeMethod<GeckoHLSResourceWrapper::Callbacks::OnError_t>(
+            mozilla::jni::NativeStub<GeckoHLSResourceWrapper::Callbacks::OnError_t, Impl>
+            ::template Wrap<&Impl::OnError>)
 };
 
 template<class Impl>

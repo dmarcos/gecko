@@ -292,11 +292,11 @@ class CallFrameInfo::Rule {
  public:
   virtual ~Rule() { }
 
-  // Tell HANDLER that, at ADDRESS in the program, REGISTER can be
-  // recovered using this rule. If REGISTER is kCFARegister, then this rule
+  // Tell HANDLER that, at ADDRESS in the program, REG can be
+  // recovered using this rule. If REG is kCFARegister, then this rule
   // describes how to compute the canonical frame address. Return what the
   // HANDLER member function returned.
-  virtual bool Handle(Handler *handler, uint64 address, int register) const = 0;
+  virtual bool Handle(Handler *handler, uint64 address, int reg) const = 0;
 
   // Equality on rules. We use these to decide which rules we need
   // to report after a DW_CFA_restore_state instruction.
@@ -601,7 +601,7 @@ bool CallFrameInfo::RuleMap::HandleTransitionTo(
       if (*old_it->second != *new_it->second &&
           !new_it->second->Handle(handler, address, new_it->first))
         return false;
-      new_it++, old_it++;
+      new_it++; old_it++;
     }
   }
   // Finish off entries from this RuleMap with no counterparts in new_rules.
@@ -1297,11 +1297,11 @@ bool CallFrameInfo::ReadCIEFields(CIE *cie) {
   cursor++;
 
   // If we don't recognize the version, we can't parse any more fields of the
-  // CIE. For DWARF CFI, we handle versions 1 through 3 (there was never a
-  // version 2 of CFI data). For .eh_frame, we handle versions 1 and 3 as well;
+  // CIE. For DWARF CFI, we handle versions 1 through 4 (there was never a
+  // version 2 of CFI data). For .eh_frame, we handle versions 1 and 4 as well;
   // the difference between those versions seems to be the same as for
   // .debug_frame.
-  if (cie->version < 1 || cie->version > 3) {
+  if (cie->version < 1 || cie->version > 4) {
     reporter_->UnrecognizedVersion(cie->offset, cie->version);
     return false;
   }
@@ -1328,6 +1328,34 @@ bool CallFrameInfo::ReadCIEFields(CIE *cie) {
       reporter_->UnrecognizedAugmentation(cie->offset, cie->augmentation);
       return false;
     }
+  }
+
+  if (cie->version >= 4) {
+    // Check that the address_size and segment_size fields are plausible.
+    if (cie->end - cursor < 2) {
+      return ReportIncomplete(cie);
+    }
+    uint8_t address_size = reader_->ReadOneByte(cursor);
+    cursor++;
+    if (address_size != sizeof(void*)) {
+      // This is not per-se invalid CFI.  But we can reasonably expect to
+      // be running on a target of the same word size as the CFI is for,
+      // so we reject this case.
+      reporter_->InvalidDwarf4Artefact(cie->offset, "Invalid address_size");
+      return false;
+    }
+    uint8_t segment_size = reader_->ReadOneByte(cursor);
+    cursor++;
+    if (segment_size != 0) {
+      // This is also not per-se invalid CFI, but we don't currently handle
+      // the case of non-zero |segment_size|.
+      reporter_->InvalidDwarf4Artefact(cie->offset, "Invalid segment_size");
+      return false;
+    }
+    // We only continue parsing if |segment_size| is zero.  If this routine
+    // is ever changed to allow non-zero |segment_size|, then
+    // ReadFDEFields() below will have to be changed to match, per comments
+    // there.
   }
 
   // Parse the code alignment factor.
@@ -1454,6 +1482,12 @@ bool CallFrameInfo::ReadCIEFields(CIE *cie) {
 bool CallFrameInfo::ReadFDEFields(FDE *fde) {
   const char *cursor = fde->fields;
   size_t size;
+
+  // At this point, for Dwarf 4 and above, we are assuming that the
+  // associated CIE has its |segment_size| field equal to zero.  This is
+  // checked for in ReadCIEFields() above.  If ReadCIEFields() is ever
+  // changed to allow non-zero |segment_size| CIEs then we will have to read
+  // the segment_selector value at this point.
 
   fde->address = reader_->ReadEncodedPointer(cursor, fde->cie->pointer_encoding,
                                              &size);
@@ -1718,6 +1752,18 @@ void CallFrameInfo::Reporter::UnrecognizedAugmentation(uint64 offset,
   log_(buf);
 }
 
+void CallFrameInfo::Reporter::InvalidDwarf4Artefact(uint64 offset,
+                                                    const char* what) {
+  char* what_safe = strndup(what, 100);
+  char buf[300];
+  SprintfLiteral(buf,
+                 "%s: CFI frame description entry at offset 0x%llx in '%s':"
+                 " CIE specifies invalid Dwarf4 artefact: %s\n",
+                 filename_.c_str(), offset, section_.c_str(), what_safe);
+  log_(buf);
+  free(what_safe);
+}
+
 void CallFrameInfo::Reporter::InvalidPointerEncoding(uint64 offset,
                                                      uint8 encoding) {
   char buf[300];
@@ -1856,6 +1902,21 @@ unsigned int DwarfCFIToModule::RegisterNames::ARM() {
   return 13 * 8;
 }
 
+unsigned int DwarfCFIToModule::RegisterNames::MIPS() {
+  /*
+   8 "$zero", "$at",  "$v0",  "$v1",  "$a0",   "$a1",  "$a2",  "$a3",
+   8 "$t0",   "$t1",  "$t2",  "$t3",  "$t4",   "$t5",  "$t6",  "$t7",
+   8 "$s0",   "$s1",  "$s2",  "$s3",  "$s4",   "$s5",  "$s6",  "$s7",
+   8 "$t8",   "$t9",  "$k0",  "$k1",  "$gp",   "$sp",  "$fp",  "$ra",
+   9 "$lo",   "$hi",  "$pc",  "$f0",  "$f1",   "$f2",  "$f3",  "$f4",  "$f5",
+   8 "$f6",   "$f7",  "$f8",  "$f9",  "$f10",  "$f11", "$f12", "$f13",
+   7 "$f14",  "$f15", "$f16", "$f17", "$f18",  "$f19", "$f20",
+   7 "$f21",  "$f22", "$f23", "$f24", "$f25",  "$f26", "$f27",
+   6 "$f28",  "$f29", "$f30", "$f31", "$fcsr", "$fir"
+  */
+  return 8 + 8 + 8 + 8 + 9 + 8 + 7 + 7 + 6;
+}
+
 // See prototype for comments.
 int32_t parseDwarfExpr(Summariser* summ, const ByteReader* reader,
                        string expr, bool debug,
@@ -1870,7 +1931,7 @@ int32_t parseDwarfExpr(Summariser* summ, const ByteReader* reader,
                    (int)(end1 - cursor));
     summ->Log(buf);
   }
-  
+
   // Add a marker for the start of this expression.  In it, indicate
   // whether or not the CFA should be pushed onto the stack prior to
   // evaluation.
@@ -1885,7 +1946,7 @@ int32_t parseDwarfExpr(Summariser* summ, const ByteReader* reader,
 
     const char* nm   = nullptr;
     PfxExprOp   pxop = PX_End;
-    
+
     switch (opc) {
 
       case DW_OP_lit0 ... DW_OP_lit31: {
@@ -1932,7 +1993,7 @@ int32_t parseDwarfExpr(Summariser* summ, const ByteReader* reader,
         (void) summ->AddPfxInstr(PfxInstr(PX_SImm32, s32));
         break;
       }
-      
+
       case DW_OP_deref: nm = "deref"; pxop = PX_Deref;  goto no_operands;
       case DW_OP_and:   nm = "and";   pxop = PX_And;    goto no_operands;
       case DW_OP_plus:  nm = "plus";  pxop = PX_Add;    goto no_operands;
@@ -1958,9 +2019,9 @@ int32_t parseDwarfExpr(Summariser* summ, const ByteReader* reader,
     } // switch (opc)
 
   } // while (cursor < end1)
-  
+
   MOZ_ASSERT(cursor >= end1);
-  
+
   if (cursor > end1) {
     // We overran the Dwarf expression.  Give up.
     goto fail;
@@ -1983,7 +2044,7 @@ int32_t parseDwarfExpr(Summariser* summ, const ByteReader* reader,
     summ->Log("LUL.DW  >>\n");
   }
   return start_ix;
-      
+
  fail:
   if (debug) {
     summ->Log("LUL.DW   conversion of dwarf expression failed\n");
@@ -2002,7 +2063,7 @@ bool DwarfCFIToModule::Entry(size_t offset, uint64 address, uint64 length,
                    address, length);
     summ_->Log(buf);
   }
-  
+
   summ_->Entry(address, length);
 
   // If dwarf2reader::CallFrameInfo can handle this version and

@@ -9,16 +9,16 @@
 
 <script type="text/javascript">
 
+let { classes: Cc, interfaces: Ci, utils: Cu } = Components;
+
 const State = {
   BYTECHECK: -1,
-  INSTALLING: 0,
-  INSTALLED: 1,
-  ACTIVATING: 2,
-  ACTIVATED: 3,
-  REDUNDANT: 4
+  INSTALLING: Ci.nsIServiceWorkerInfo.STATE_INSTALLING,
+  INSTALLED: Ci.nsIServiceWorkerInfo.STATE_INSTALLED,
+  ACTIVATING: Ci.nsIServiceWorkerInfo.STATE_ACTIVATING,
+  ACTIVATED: Ci.nsIServiceWorkerInfo.STATE_ACTIVATED,
+  REDUNDANT: Ci.nsIServiceWorkerInfo.STATE_REDUNDANT
 };
-
-let { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 let swm = Cc["@mozilla.org/serviceworkers/manager;1"].
           getService(Ci.nsIServiceWorkerManager);
 
@@ -53,6 +53,8 @@ let expectedResults = [
     state: State.ACTIVATED, installedTimeRecorded: true,
     activatedTimeRecorded: true, redundantTimeRecorded: false
   },
+
+  // On unregister
   {
     state: State.REDUNDANT, installedTimeRecorded: true,
     activatedTimeRecorded: true, redundantTimeRecorded: true
@@ -106,7 +108,7 @@ function register() {
   })
 }
 
-function verifyServiceWorkTime(aSWRInfo) {
+function verifyServiceWorkTime(aSWRInfo, resolve) {
   let expectedResult = expectedResults.shift();
   ok(!!expectedResult, "We should be able to get test from expectedResults");
 
@@ -123,7 +125,7 @@ function verifyServiceWorkTime(aSWRInfo) {
 
   if (!swInfo) {
     is(expectedResult.state, State.BYTECHECK,
-       "We shouldn't get sw when we are notified for frist time updating");
+       "We shouldn't get sw when we are notified for first time updating");
     return;
   }
 
@@ -147,6 +149,9 @@ function verifyServiceWorkTime(aSWRInfo) {
   // We need to hold sw to avoid losing it since we'll unregister the swr later.
   if (expectedResult.state === State.ACTIVATED) {
     astrayServiceWorkerInfo = aSWRInfo.activeWorker;
+
+    // Resolve the promise for testServiceWorkerInfo after sw is activated.
+    resolve();
   }
 }
 
@@ -156,22 +161,24 @@ function testServiceWorkerInfo() {
   let promise_resolve;
   let promise = new Promise(aResolve => promise_resolve = aResolve);
 
-  let counter = 0;
   swrlistener = {
     onChange: () => {
-      verifyServiceWorkTime(registrationInfo)
-      counter++;
-
-      // Resolve the promise after sw is activated.
-      if (counter >= State.ACTIVATED) {
-        promise_resolve();
-      }
+      verifyServiceWorkTime(registrationInfo, promise_resolve);
     }
   };
 
   registrationInfo.addListener(swrlistener);
 
   return promise;
+}
+
+async function testHttpCacheUpdateTime() {
+  let iframe = document.querySelector("iframe");
+  let reg = await iframe.contentWindow.navigator.serviceWorker.getRegistration();
+  let lastUpdateTime = registrationInfo.lastUpdateTime;
+  await reg.update();
+  is(lastUpdateTime, registrationInfo.lastUpdateTime,
+     "The update time should not change when SW script is read from http cache.");
 }
 
 function unregister() {
@@ -200,6 +207,7 @@ function runTest() {
   return Promise.resolve()
     .then(register)
     .then(testServiceWorkerInfo)
+    .then(testHttpCacheUpdateTime)
     .then(unregister)
     .catch(aError => ok(false, "Some test failed with error " + aError))
     .then(cleanAll)

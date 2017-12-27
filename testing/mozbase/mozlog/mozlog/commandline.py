@@ -2,6 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 import argparse
 import optparse
 import os
@@ -66,6 +68,7 @@ def default_formatter_options(log_type, overrides):
         rv.update(overrides)
 
     return rv
+
 
 fmt_options = {
     # <option name>: (<wrapper function>, description, <applicable formatters>, action)
@@ -214,6 +217,9 @@ def setup_logging(logger, args, defaults=None, formatter_defaults=None,
 
     if not isinstance(logger, StructuredLogger):
         logger = StructuredLogger(logger)
+        # The likely intent when using this function is to get a brand new
+        # logger, so reset state in case it was previously initialized.
+        logger.reset_state()
 
     # Keep track of any options passed for formatters.
     formatter_options = {}

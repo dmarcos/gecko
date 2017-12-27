@@ -81,7 +81,7 @@
 #include "nsRDFCID.h"
 #include "nsRDFBaseDataSources.h"
 #include "nsCOMArray.h"
-#include "nsXPIDLString.h"
+#include "nsString.h"
 #include "plstr.h"
 #include "prio.h"
 #include "prthread.h"
@@ -146,7 +146,7 @@ protected:
     NS_NewRDFXMLDataSource(nsIRDFDataSource** aResult);
 
     inline bool IsLoading() {
-        return (mLoadState == eLoadState_Pending) || 
+        return (mLoadState == eLoadState_Pending) ||
                (mLoadState == eLoadState_Loading);
     }
 
@@ -157,7 +157,7 @@ public:
                                              nsIRDFDataSource)
 
     // nsIRDFDataSource
-    NS_IMETHOD GetURI(char* *uri) override;
+    NS_IMETHOD GetURI(nsACString& aURI) override;
 
     NS_IMETHOD GetSource(nsIRDFResource* property,
                          nsIRDFNode* target,
@@ -297,14 +297,14 @@ public:
         nsCOMPtr<rdfIDataSource> rdfds = do_QueryInterface(mInner, &rv);
         if (NS_FAILED(rv)) return rv;
         return rdfds->VisitAllSubjects(aVisitor);
-    } 
+    }
 
     NS_IMETHOD VisitAllTriples(rdfITripleVisitor *aVisitor) override {
         nsresult rv;
         nsCOMPtr<rdfIDataSource> rdfds = do_QueryInterface(mInner, &rv);
         if (NS_FAILED(rv)) return rv;
         return rdfds->VisitAllTriples(aVisitor);
-    } 
+    }
 
     // Implementation methods
     bool
@@ -471,7 +471,7 @@ RDFXMLDataSourceImpl::BlockingParse(nsIURI* aURL, nsIStreamListener* aConsumer)
     // XXX I really hate the way that we're spoon-feeding this stuff
     // to the parser: it seems like this is something that netlib
     // should be able to do by itself.
-    
+
     nsCOMPtr<nsIChannel> channel;
 
     // Null LoadGroup ?
@@ -497,7 +497,7 @@ RDFXMLDataSourceImpl::BlockingParse(nsIURI* aURL, nsIStreamListener* aConsumer)
     // Wrap the channel's input stream in a buffered stream to ensure that
     // ReadSegments is implemented (which OnDataAvailable expects).
     nsCOMPtr<nsIInputStream> bufStream;
-    rv = NS_NewBufferedInputStream(getter_AddRefs(bufStream), in,
+    rv = NS_NewBufferedInputStream(getter_AddRefs(bufStream), in.forget(),
                                    4096 /* buffer size */);
     if (NS_FAILED(rv)) return rv;
 
@@ -596,22 +596,14 @@ RDFXMLDataSourceImpl::Init(const char* uri)
 
 
 NS_IMETHODIMP
-RDFXMLDataSourceImpl::GetURI(char* *aURI)
+RDFXMLDataSourceImpl::GetURI(nsACString& aURI)
 {
-    *aURI = nullptr;
     if (!mURL) {
+        aURI.SetIsVoid(true);
         return NS_OK;
     }
 
-    nsAutoCString spec;
-    nsresult rv = mURL->GetSpec(spec);
-    NS_ENSURE_SUCCESS(rv, rv);
-    *aURI = ToNewCString(spec);
-    if (!*aURI) {
-        return NS_ERROR_OUT_OF_MEMORY;
-    }
-
-    return NS_OK;
+    return mURL->GetSpec(aURI);
 }
 
 NS_IMETHODIMP
@@ -750,7 +742,7 @@ RDFXMLDataSourceImpl::rdfXMLFlush(nsIURI *aURI)
     // Is it a file? If so, we can write to it. Some day, it'd be nice
     // if we didn't care what kind of stream this was...
     nsCOMPtr<nsIFileURL> fileURL = do_QueryInterface(aURI);
-    
+
     if (fileURL) {
         nsCOMPtr<nsIFile> file;
         fileURL->GetFile(getter_AddRefs(file));
@@ -766,12 +758,13 @@ RDFXMLDataSourceImpl::rdfXMLFlush(nsIURI *aURI)
             if (NS_FAILED(rv)) return rv;
 
             nsCOMPtr<nsIOutputStream> bufferedOut;
-            rv = NS_NewBufferedOutputStream(getter_AddRefs(bufferedOut), out, 4096);
+            rv = NS_NewBufferedOutputStream(getter_AddRefs(bufferedOut),
+                                            out.forget(), 4096);
             if (NS_FAILED(rv)) return rv;
 
             rv = Serialize(bufferedOut);
             if (NS_FAILED(rv)) return rv;
-            
+
             // All went ok. Maybe except for problems in Write(), but the stream detects
             // that for us
             nsCOMPtr<nsISafeOutputStream> safeStream = do_QueryInterface(bufferedOut, &rv);
@@ -1060,7 +1053,7 @@ RDFXMLDataSourceImpl::EndLoad(void)
 }
 
 NS_IMETHODIMP
-RDFXMLDataSourceImpl::AddNameSpace(nsIAtom* aPrefix, const nsString& aURI)
+RDFXMLDataSourceImpl::AddNameSpace(nsAtom* aPrefix, const nsString& aURI)
 {
     mNameSpaces.Put(aURI, aPrefix);
     return NS_OK;

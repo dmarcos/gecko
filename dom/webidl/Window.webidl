@@ -24,6 +24,7 @@ interface IID;
 interface nsIBrowserDOMWindow;
 interface nsIMessageBroadcaster;
 interface nsIDOMCrypto;
+interface XULControllers;
 
 // http://www.whatwg.org/specs/web-apps/current-work/
 [PrimaryGlobal, LegacyUnenumerableNamedProperties, NeedResolve]
@@ -35,8 +36,8 @@ interface nsIDOMCrypto;
    CrossOriginReadable] readonly attribute Window self;
   [Unforgeable, StoreInSlot, Pure] readonly attribute Document? document;
   [Throws] attribute DOMString name;
-  [PutForwards=href, Unforgeable, Throws,
-   CrossOriginReadable, CrossOriginWritable] readonly attribute Location? location;
+  [PutForwards=href, Unforgeable, BinaryName="getLocation",
+   CrossOriginReadable, CrossOriginWritable] readonly attribute Location location;
   [Throws] readonly attribute History history;
   [Func="CustomElementRegistry::IsCustomElementEnabled"]
   readonly attribute CustomElementRegistry customElements;
@@ -78,10 +79,8 @@ interface nsIDOMCrypto;
   [Throws, UnsafeInPrerendering, NeedsSubjectPrincipal] void alert(DOMString message);
   [Throws, UnsafeInPrerendering, NeedsSubjectPrincipal] boolean confirm(optional DOMString message = "");
   [Throws, UnsafeInPrerendering, NeedsSubjectPrincipal] DOMString? prompt(optional DOMString message = "", optional DOMString default = "");
-  [Throws, UnsafeInPrerendering] void print();
-  //[Throws] any showModalDialog(DOMString url, optional any argument);
-  [Throws, Func="nsGlobalWindow::IsShowModalDialogEnabled", UnsafeInPrerendering, NeedsSubjectPrincipal]
-  any showModalDialog(DOMString url, optional any argument, optional DOMString options = "");
+  [Throws, UnsafeInPrerendering, Func="nsGlobalWindowInner::IsWindowPrintEnabled"]
+  void print();
 
   [Throws, CrossOriginCallable, NeedsSubjectPrincipal]
   void postMessage(any message, DOMString targetOrigin, optional sequence<object> transfer = []);
@@ -143,8 +142,8 @@ dictionary ScrollToOptions : ScrollOptions {
 };
 
 partial interface Window {
-  //[Throws,NewObject] MediaQueryList matchMedia(DOMString query);
-  [Throws,NewObject] MediaQueryList? matchMedia(DOMString query);
+  //[Throws, NewObject, NeedsCallerType] MediaQueryList matchMedia(DOMString query);
+  [Throws, NewObject, NeedsCallerType] MediaQueryList? matchMedia(DOMString query);
   // Per spec, screen is SameObject, but we don't actually guarantee that given
   // nsGlobalWindow::Cleanup.  :(
   //[SameObject, Replaceable, Throws] readonly attribute Screen screen;
@@ -230,19 +229,11 @@ interface SpeechSynthesisGetter {
 Window implements SpeechSynthesisGetter;
 #endif
 
-// http://www.whatwg.org/specs/web-apps/current-work/
-[NoInterfaceObject]
-interface WindowModal {
-  [Throws, Func="nsGlobalWindow::IsModalContentWindow", NeedsSubjectPrincipal]
-  readonly attribute any dialogArguments;
-
-  [Throws, Func="nsGlobalWindow::IsModalContentWindow", NeedsSubjectPrincipal]
-  attribute any returnValue;
-};
-Window implements WindowModal;
-
 // Mozilla-specific stuff
 partial interface Window {
+  //[NewObject, Throws] CSSStyleDeclaration getDefaultComputedStyle(Element elt, optional DOMString pseudoElt = "");
+  [NewObject, Throws] CSSStyleDeclaration? getDefaultComputedStyle(Element elt, optional DOMString pseudoElt = "");
+
   // Mozilla extensions
   /**
    * Method for scrolling this window by a number of lines.
@@ -260,7 +251,7 @@ partial interface Window {
   [Throws, UnsafeInPrerendering, NeedsCallerType] void sizeToContent();
 
   // XXX Shouldn't this be in nsIDOMChromeWindow?
-  [ChromeOnly, Replaceable, Throws] readonly attribute MozControllers controllers;
+  [ChromeOnly, Replaceable, Throws] readonly attribute XULControllers controllers;
 
   [ChromeOnly, Throws] readonly attribute Element? realFrameElement;
 
@@ -269,7 +260,7 @@ partial interface Window {
   [Throws, NeedsCallerType]
   readonly attribute float mozInnerScreenY;
   [Replaceable, Throws, NeedsCallerType]
-  readonly attribute float devicePixelRatio;
+  readonly attribute double devicePixelRatio;
 
   /* The maximum offset that the window can be scrolled to
      (i.e., the document width/height minus the scrollport width/height) */
@@ -278,11 +269,11 @@ partial interface Window {
   [Replaceable, Throws] readonly attribute long   scrollMaxX;
   [Replaceable, Throws] readonly attribute long   scrollMaxY;
 
-  [Throws, UnsafeInPrerendering] attribute boolean            fullScreen;
+  [Throws, UnsafeInPrerendering] attribute boolean fullScreen;
 
-  [Throws, ChromeOnly, UnsafeInPrerendering] void             back();
-  [Throws, ChromeOnly, UnsafeInPrerendering] void             forward();
-  [Throws, ChromeOnly, UnsafeInPrerendering] void             home();
+  [Throws, ChromeOnly, UnsafeInPrerendering] void back();
+  [Throws, ChromeOnly, UnsafeInPrerendering] void forward();
+  [Throws, ChromeOnly, UnsafeInPrerendering, NeedsSubjectPrincipal] void home();
 
   // XXX Should this be in nsIDOMChromeWindow?
   void                      updateCommands(DOMString action,
@@ -312,29 +303,12 @@ partial interface Window {
    */
   [Throws] readonly attribute unsigned long long mozPaintCount;
 
-  /**
-   * This property exists because static attributes don't yet work for
-   * JS-implemented WebIDL (see bugs 1058606 and 863952). With this hack, we
-   * can use `MozSelfSupport.something(...)`, which will continue to work
-   * after we ditch this property and switch to static attributes. See
-   */
-  [ChromeOnly, Throws] readonly attribute MozSelfSupport MozSelfSupport;
-
-  [Pure]
-           attribute EventHandler onwheel;
-
            attribute EventHandler ondevicemotion;
            attribute EventHandler ondeviceorientation;
            attribute EventHandler onabsolutedeviceorientation;
            attribute EventHandler ondeviceproximity;
            attribute EventHandler onuserproximity;
            attribute EventHandler ondevicelight;
-
-#ifdef MOZ_B2G
-           attribute EventHandler onmoztimechange;
-           attribute EventHandler onmoznetworkupload;
-           attribute EventHandler onmoznetworkdownload;
-#endif
 
   void                      dump(DOMString str);
 
@@ -355,9 +329,12 @@ partial interface Window {
                                                                    optional DOMString options = "",
                                                                    any... extraArguments);
 
-  [Replaceable, Throws, NeedsCallerType] readonly attribute object? content;
-
-  [ChromeOnly, Throws, NeedsCallerType] readonly attribute object? __content;
+  [
+#ifdef NIGHTLY_BUILD
+   ChromeOnly,
+#endif
+   NonEnumerable, Replaceable, Throws, NeedsCallerType]
+  readonly attribute object? content;
 
   [Throws, ChromeOnly] any getInterface(IID iid);
 
@@ -366,13 +343,20 @@ partial interface Window {
    */
   [ChromeOnly, Throws]
   readonly attribute WindowRoot? windowRoot;
+
+  /**
+   * ChromeOnly method to determine if a particular window should see console
+   * reports from service workers of the given scope.
+   */
+  [ChromeOnly]
+  boolean shouldReportForServiceWorkerScope(USVString aScope);
 };
 
 Window implements TouchEventHandlers;
 
 Window implements OnErrorEventHandlerForWindow;
 
-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
+#if defined(MOZ_WIDGET_ANDROID)
 // https://compat.spec.whatwg.org/#windoworientation-interface
 partial interface Window {
   [NeedsCallerType]
@@ -389,59 +373,63 @@ partial interface Window {
 };
 #endif
 
-[Func="IsChromeOrXBL"]
-interface ChromeWindow {
-  [Func="nsGlobalWindow::IsPrivilegedChromeWindow"]
+// Mozilla extensions for Chrome windows.
+partial interface Window {
+  // The STATE_* constants need to match the corresponding enum in nsGlobalWindow.cpp.
+  [Func="nsGlobalWindowInner::IsPrivilegedChromeWindow"]
   const unsigned short STATE_MAXIMIZED = 1;
-  [Func="nsGlobalWindow::IsPrivilegedChromeWindow"]
+  [Func="nsGlobalWindowInner::IsPrivilegedChromeWindow"]
   const unsigned short STATE_MINIMIZED = 2;
-  [Func="nsGlobalWindow::IsPrivilegedChromeWindow"]
+  [Func="nsGlobalWindowInner::IsPrivilegedChromeWindow"]
   const unsigned short STATE_NORMAL = 3;
-  [Func="nsGlobalWindow::IsPrivilegedChromeWindow"]
+  [Func="nsGlobalWindowInner::IsPrivilegedChromeWindow"]
   const unsigned short STATE_FULLSCREEN = 4;
 
-  [Func="nsGlobalWindow::IsPrivilegedChromeWindow"]
+  [Func="nsGlobalWindowInner::IsPrivilegedChromeWindow"]
   readonly attribute unsigned short windowState;
+
+  [Func="nsGlobalWindowInner::IsPrivilegedChromeWindow"]
+  readonly attribute boolean isFullyOccluded;
 
   /**
    * browserDOMWindow provides access to yet another layer of
    * utility functions implemented by chrome script. It will be null
    * for DOMWindows not corresponding to browsers.
    */
-  [Throws, Func="nsGlobalWindow::IsPrivilegedChromeWindow"]
+  [Throws, Func="nsGlobalWindowInner::IsPrivilegedChromeWindow"]
            attribute nsIBrowserDOMWindow? browserDOMWindow;
 
-  [Throws, Func="nsGlobalWindow::IsPrivilegedChromeWindow"]
+  [Throws, Func="nsGlobalWindowInner::IsPrivilegedChromeWindow"]
   void                      getAttention();
 
-  [Throws, Func="nsGlobalWindow::IsPrivilegedChromeWindow"]
+  [Throws, Func="nsGlobalWindowInner::IsPrivilegedChromeWindow"]
   void                      getAttentionWithCycleCount(long aCycleCount);
 
-  [Throws, Func="nsGlobalWindow::IsPrivilegedChromeWindow"]
+  [Throws, Func="nsGlobalWindowInner::IsPrivilegedChromeWindow"]
   void                      setCursor(DOMString cursor);
 
-  [Func="nsGlobalWindow::IsPrivilegedChromeWindow", UnsafeInPrerendering]
+  [Func="nsGlobalWindowInner::IsPrivilegedChromeWindow", UnsafeInPrerendering]
   void                      maximize();
-  [Func="nsGlobalWindow::IsPrivilegedChromeWindow", UnsafeInPrerendering]
+  [Func="nsGlobalWindowInner::IsPrivilegedChromeWindow", UnsafeInPrerendering]
   void                      minimize();
-  [Func="nsGlobalWindow::IsPrivilegedChromeWindow", UnsafeInPrerendering]
+  [Func="nsGlobalWindowInner::IsPrivilegedChromeWindow", UnsafeInPrerendering]
   void                      restore();
 
   /**
    * Notify a default button is loaded on a dialog or a wizard.
    * defaultButton is the default button.
    */
-  [Throws, Func="nsGlobalWindow::IsPrivilegedChromeWindow"]
+  [Throws, Func="nsGlobalWindowInner::IsPrivilegedChromeWindow"]
   void notifyDefaultButtonLoaded(Element defaultButton);
 
-  [Throws, Func="nsGlobalWindow::IsPrivilegedChromeWindow"]
+  [Throws, Func="nsGlobalWindowInner::IsPrivilegedChromeWindow"]
   readonly attribute nsIMessageBroadcaster messageManager;
 
   /**
    * Returns the message manager identified by the given group name that
    * manages all frame loaders belonging to that group.
    */
-  [Throws, Func="nsGlobalWindow::IsPrivilegedChromeWindow"]
+  [Throws, Func="nsGlobalWindowInner::IsPrivilegedChromeWindow"]
   nsIMessageBroadcaster getGroupMessageManager(DOMString aGroup);
 
   /**
@@ -454,8 +442,11 @@ interface ChromeWindow {
    *
    * Throws NS_ERROR_NOT_IMPLEMENTED if the OS doesn't support this.
    */
-  [Throws, Func="nsGlobalWindow::IsPrivilegedChromeWindow"]
+  [Throws, Func="nsGlobalWindowInner::IsPrivilegedChromeWindow"]
   void beginWindowMove(Event mouseDownEvent, optional Element? panel = null);
+
+  [Func="IsChromeOrXBL"]
+  readonly attribute boolean isChromeWindow;
 };
 
 partial interface Window {
@@ -483,14 +474,13 @@ partial interface Window {
     readonly attribute Worklet paintWorklet;
 };
 
-Window implements ChromeWindow;
 Window implements WindowOrWorkerGlobalScope;
 
 partial interface Window {
-  [Throws, Pref="dom.requestIdleCallback.enabled"]
+  [Throws, Func="nsGlobalWindowInner::IsRequestIdleCallbackEnabled"]
   unsigned long requestIdleCallback(IdleRequestCallback callback,
                                     optional IdleRequestOptions options);
-  [Pref="dom.requestIdleCallback.enabled"]
+  [Func="nsGlobalWindowInner::IsRequestIdleCallbackEnabled"]
   void          cancelIdleCallback(unsigned long handle);
 };
 
@@ -500,22 +490,14 @@ dictionary IdleRequestOptions {
 
 callback IdleRequestCallback = void (IdleDeadline deadline);
 
-/**
- * Similar to |isSecureContext|, but doesn't pay attention to whether the
- * window's opener (if any) is a secure context or not.
- *
- * WARNING: Do not use this unless you are familiar with the issues that
- * taking opener state into account is designed to address (or else you may
- * introduce security issues).  If in doubt, use |isSecureContext|.  In
- * particular do not use this to gate access to JavaScript APIs.
- */
-partial interface Window {
-  [ChromeOnly] readonly attribute boolean isSecureContextIfOpenerIgnored;
-};
-
 partial interface Window {
   /**
-   * Returns a list of locales that the application should be localized to.
+   * Returns a list of locales that the internationalization components
+   * should be localized to.
+   *
+   * The function name refers to Regional Preferences which can be either
+   * fetched from the internal internationalization database (CLDR), or
+   * from the host environment.
    *
    * The result is a sorted list of valid locale IDs and it should be
    * used for all APIs that accept list of locales, like ECMA402 and L10n APIs.
@@ -525,14 +507,12 @@ partial interface Window {
    * Example: ["en-US", "de", "pl", "sr-Cyrl", "zh-Hans-HK"]
    */
   [Func="IsChromeOrXBL"]
-  sequence<DOMString> getAppLocalesAsBCP47();
+  sequence<DOMString> getRegionalPrefsLocales();
 
-#ifdef ENABLE_INTL_API
   /**
    * Getter funcion for IntlUtils, which provides helper functions for
    * localization.
    */
   [Throws, Func="IsChromeOrXBL"]
   readonly attribute IntlUtils intlUtils;
-#endif
 };

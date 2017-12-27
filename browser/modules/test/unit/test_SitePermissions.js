@@ -6,20 +6,28 @@
 Components.utils.import("resource:///modules/SitePermissions.jsm");
 Components.utils.import("resource://gre/modules/Services.jsm");
 
-add_task(function* testPermissionsListing() {
-  Assert.deepEqual(SitePermissions.listPermissions().sort(),
-    ["camera", "cookie", "desktop-notification", "focus-tab-by-prompt", "geo", "image",
-     "indexedDB", "install", "microphone", "persistent-storage", "popup", "screen"],
+const STORAGE_MANAGER_ENABLED = Services.prefs.getBoolPref("browser.storageManager.enabled");
+
+add_task(async function testPermissionsListing() {
+  let expectedPermissions = ["camera", "cookie", "desktop-notification", "focus-tab-by-prompt",
+     "geo", "image", "install", "microphone", "popup", "screen", "shortcuts"];
+  if (STORAGE_MANAGER_ENABLED) {
+    // The persistent-storage permission is still only pref-on on Nightly
+    // so we add it only when it's pref-on.
+    // Should remove this checking and add it as default after it is fully pref-on.
+    expectedPermissions.push("persistent-storage");
+  }
+  Assert.deepEqual(SitePermissions.listPermissions().sort(), expectedPermissions.sort(),
     "Correct list of all permissions");
 });
 
-add_task(function* testGetAllByURI() {
+add_task(async function testGetAllByURI() {
   // check that it returns an empty array on an invalid URI
   // like a file URI, which doesn't support site permissions
-  let wrongURI = Services.io.newURI("file:///example.js")
+  let wrongURI = Services.io.newURI("file:///example.js");
   Assert.deepEqual(SitePermissions.getAllByURI(wrongURI), []);
 
-  let uri = Services.io.newURI("https://example.com")
+  let uri = Services.io.newURI("https://example.com");
   Assert.deepEqual(SitePermissions.getAllByURI(uri), []);
 
   SitePermissions.set(uri, "camera", SitePermissions.ALLOW);
@@ -50,13 +58,33 @@ add_task(function* testGetAllByURI() {
   SitePermissions.set(uri, "addon", SitePermissions.BLOCK);
   Assert.deepEqual(SitePermissions.getAllByURI(uri), []);
   SitePermissions.remove(uri, "addon");
+
+  Assert.equal(Services.prefs.getIntPref("permissions.default.shortcuts"), 0);
+  SitePermissions.set(uri, "shortcuts", SitePermissions.BLOCK);
+
+  // Customized preference should have been enabled, but the default should not.
+  Assert.equal(Services.prefs.getIntPref("permissions.default.shortcuts"), 0);
+  Assert.deepEqual(SitePermissions.getAllByURI(uri), [
+      { id: "shortcuts", state: SitePermissions.BLOCK, scope: SitePermissions.SCOPE_PERSISTENT },
+  ]);
+
+  SitePermissions.remove(uri, "shortcuts");
+  Services.prefs.clearUserPref("permissions.default.shortcuts");
 });
 
-add_task(function* testGetAvailableStates() {
+add_task(async function testGetAvailableStates() {
   Assert.deepEqual(SitePermissions.getAvailableStates("camera"),
                    [ SitePermissions.UNKNOWN,
                      SitePermissions.ALLOW,
                      SitePermissions.BLOCK ]);
+
+  // Test available states with a default permission set.
+  Services.prefs.setIntPref("permissions.default.camera", SitePermissions.ALLOW);
+  Assert.deepEqual(SitePermissions.getAvailableStates("camera"),
+                   [ SitePermissions.PROMPT,
+                     SitePermissions.ALLOW,
+                     SitePermissions.BLOCK ]);
+  Services.prefs.clearUserPref("permissions.default.camera");
 
   Assert.deepEqual(SitePermissions.getAvailableStates("cookie"),
                    [ SitePermissions.ALLOW,
@@ -68,13 +96,19 @@ add_task(function* testGetAvailableStates() {
                      SitePermissions.BLOCK ]);
 });
 
-add_task(function* testExactHostMatch() {
+add_task(async function testExactHostMatch() {
   let uri = Services.io.newURI("https://example.com");
   let subUri = Services.io.newURI("https://test1.example.com");
 
   let exactHostMatched = ["desktop-notification", "focus-tab-by-prompt", "camera",
-                          "microphone", "screen", "geo", "persistent-storage"];
-  let nonExactHostMatched = ["image", "cookie", "popup", "install", "indexedDB"];
+                          "microphone", "screen", "geo"];
+  if (STORAGE_MANAGER_ENABLED) {
+    // The persistent-storage permission is still only pref-on on Nightly
+    // so we add it only when it's pref-on.
+    // Should remove this checking and add it as default after it is fully pref-on.
+    exactHostMatched.push("persistent-storage");
+  }
+  let nonExactHostMatched = ["image", "cookie", "popup", "install", "shortcuts"];
 
   let permissions = SitePermissions.listPermissions();
   for (let permission of permissions) {
@@ -82,21 +116,75 @@ add_task(function* testExactHostMatch() {
 
     if (exactHostMatched.includes(permission)) {
       // Check that the sub-origin does not inherit the permission from its parent.
-      Assert.equal(SitePermissions.get(subUri, permission).state, SitePermissions.UNKNOWN);
+      Assert.equal(SitePermissions.get(subUri, permission).state, SitePermissions.UNKNOWN,
+        `${permission} should exact-host match`);
     } else if (nonExactHostMatched.includes(permission)) {
       // Check that the sub-origin does inherit the permission from its parent.
-      Assert.equal(SitePermissions.get(subUri, permission).state, SitePermissions.ALLOW);
+      Assert.equal(SitePermissions.get(subUri, permission).state, SitePermissions.ALLOW,
+        `${permission} should not exact-host match`);
     } else {
       Assert.ok(false, `Found an unknown permission ${permission} in exact host match test.` +
                        "Please add new permissions from SitePermissions.jsm to this test.");
     }
 
     // Check that the permission can be made specific to the sub-origin.
-    SitePermissions.set(subUri, permission, SitePermissions.BLOCK);
-    Assert.equal(SitePermissions.get(subUri, permission).state, SitePermissions.BLOCK);
+    SitePermissions.set(subUri, permission, SitePermissions.PROMPT);
+    Assert.equal(SitePermissions.get(subUri, permission).state, SitePermissions.PROMPT);
     Assert.equal(SitePermissions.get(uri, permission).state, SitePermissions.ALLOW);
 
     SitePermissions.remove(subUri, permission);
     SitePermissions.remove(uri, permission);
   }
 });
+
+add_task(function* testDefaultPrefs() {
+  let uri = Services.io.newURI("https://example.com");
+
+  // Check that without a pref the default return value is UNKNOWN.
+  Assert.deepEqual(SitePermissions.get(uri, "camera"), {
+    state: SitePermissions.UNKNOWN,
+    scope: SitePermissions.SCOPE_PERSISTENT,
+  });
+
+  // Check that the default return value changed after setting the pref.
+  Services.prefs.setIntPref("permissions.default.camera", SitePermissions.BLOCK);
+  Assert.deepEqual(SitePermissions.get(uri, "camera"), {
+    state: SitePermissions.BLOCK,
+    scope: SitePermissions.SCOPE_PERSISTENT,
+  });
+
+  // Check that other permissions still return UNKNOWN.
+  Assert.deepEqual(SitePermissions.get(uri, "microphone"), {
+    state: SitePermissions.UNKNOWN,
+    scope: SitePermissions.SCOPE_PERSISTENT,
+  });
+
+  // Check that the default return value changed after changing the pref.
+  Services.prefs.setIntPref("permissions.default.camera", SitePermissions.ALLOW);
+  Assert.deepEqual(SitePermissions.get(uri, "camera"), {
+    state: SitePermissions.ALLOW,
+    scope: SitePermissions.SCOPE_PERSISTENT,
+  });
+
+  // Check that the preference is ignored if there is a value.
+  SitePermissions.set(uri, "camera", SitePermissions.BLOCK);
+  Assert.deepEqual(SitePermissions.get(uri, "camera"), {
+    state: SitePermissions.BLOCK,
+    scope: SitePermissions.SCOPE_PERSISTENT,
+  });
+
+  // The preference should be honored again, after resetting the permissions.
+  SitePermissions.remove(uri, "camera");
+  Assert.deepEqual(SitePermissions.get(uri, "camera"), {
+    state: SitePermissions.ALLOW,
+    scope: SitePermissions.SCOPE_PERSISTENT,
+  });
+
+  // Should be UNKNOWN after clearing the pref.
+  Services.prefs.clearUserPref("permissions.default.camera");
+  Assert.deepEqual(SitePermissions.get(uri, "camera"), {
+    state: SitePermissions.UNKNOWN,
+    scope: SitePermissions.SCOPE_PERSISTENT,
+  });
+});
+

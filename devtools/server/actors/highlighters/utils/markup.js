@@ -4,10 +4,10 @@
 
 "use strict";
 
-const { Cc, Ci, Cu } = require("chrome");
+const { Cc, Ci, Cu, Cr } = require("chrome");
 const { getCurrentZoom, getWindowDimensions, getViewportDimensions,
-  getRootBindingParent } = require("devtools/shared/layout/utils");
-const { on, emit } = require("sdk/event/core");
+  getRootBindingParent, loadSheet } = require("devtools/shared/layout/utils");
+const EventEmitter = require("devtools/shared/event-emitter");
 
 const lazyContainer = {};
 
@@ -29,9 +29,6 @@ exports.addPseudoClassLock = (...args) =>
 
 exports.removePseudoClassLock = (...args) =>
   lazyContainer.DOMUtils.removePseudoClassLock(...args);
-
-exports.getCSSStyleRules = (...args) =>
-  lazyContainer.DOMUtils.getCSSStyleRules(...args);
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
@@ -61,7 +58,7 @@ ClassList.prototype = {
     if (!this.contains(token)) {
       this[_tokens].push(token);
     }
-    emit(this, "update");
+    EventEmitter.emit(this, "update");
   },
   remove(token) {
     let index = this[_tokens].indexOf(token);
@@ -69,7 +66,7 @@ ClassList.prototype = {
     if (index > -1) {
       this[_tokens].splice(index, 1);
     }
-    emit(this, "update");
+    EventEmitter.emit(this, "update");
   },
   toggle(token) {
     if (this.contains(token)) {
@@ -100,23 +97,6 @@ function isXUL(window) {
   return window.document.documentElement.namespaceURI === XUL_NS;
 }
 exports.isXUL = isXUL;
-
-/**
- * Inject a helper stylesheet in the window.
- */
-var installedHelperSheets = new WeakMap();
-
-function installHelperSheet(win, source, type = "agent") {
-  if (installedHelperSheets.has(win.document)) {
-    return;
-  }
-  let {Style} = require("sdk/stylesheet/style");
-  let {attach} = require("sdk/content/mod");
-  let style = Style({source, type});
-  attach(style, win);
-  installedHelperSheets.set(win.document, style);
-}
-exports.installHelperSheet = installHelperSheet;
 
 /**
  * Returns true if a DOM node is "valid", where "valid" means that the node isn't a dead
@@ -278,15 +258,7 @@ CanvasFrameAnonymousContentHelper.prototype = {
     // <style scoped> doesn't work inside anonymous content (see bug 1086532).
     // If it did, highlighters.css would be injected as an anonymous content
     // node using CanvasFrameAnonymousContentHelper instead.
-    if (!installedHelperSheets.has(doc)) {
-      installedHelperSheets.set(doc, true);
-      let source = "@import url('" + STYLESHEET_URI + "');";
-      let url = "data:text/css;charset=utf-8," + encodeURIComponent(source);
-      let winUtils = this.highlighterEnv.window
-                         .QueryInterface(Ci.nsIInterfaceRequestor)
-                         .getInterface(Ci.nsIDOMWindowUtils);
-      winUtils.loadSheetUsingURIString(url, winUtils.AGENT_SHEET);
-    }
+    loadSheet(this.highlighterEnv.window, STYLESHEET_URI);
 
     let node = this.nodeBuilder();
 
@@ -295,7 +267,23 @@ CanvasFrameAnonymousContentHelper.prototype = {
     // at least on desktop. Therefore, removing the code that was dealing with
     // that scenario, fixes when we're adding anonymous content in a tab that
     // is not the active one (see bug 1260043 and bug 1260044)
-    this._content = doc.insertAnonymousContent(node);
+    try {
+      this._content = doc.insertAnonymousContent(node);
+    } catch (e) {
+      // If the `insertAnonymousContent` fails throwing a `NS_ERROR_UNEXPECTED`, it means
+      // we don't have access to a `CustomContentContainer` yet (see bug 1365075).
+      // At this point, it could only happen on document's interactive state, and we
+      // need to wait until the `complete` state before inserting the anonymous content
+      // again.
+      if (e.result === Cr.NS_ERROR_UNEXPECTED && doc.readyState === "interactive") {
+        // The next state change will be "complete" since the current is "interactive"
+        doc.addEventListener("readystatechange", () => {
+          this._content = doc.insertAnonymousContent(node);
+        }, { once: true });
+      } else {
+        throw e;
+      }
+    }
   },
 
   _remove() {
@@ -317,7 +305,6 @@ CanvasFrameAnonymousContentHelper.prototype = {
    */
   _onWindowReady(e, {isTopLevel}) {
     if (isTopLevel) {
-      this._remove();
       this._removeAllListeners();
       this.elements.clear();
       this._insert();
@@ -491,7 +478,7 @@ CanvasFrameAnonymousContentHelper.prototype = {
 
     let classList = new ClassList(this.getAttributeForElement(id, "class"));
 
-    on(classList, "update", () => {
+    EventEmitter.on(classList, "update", () => {
       this.setAttributeForElement(id, "class", classList.toString());
     });
 
@@ -588,15 +575,23 @@ exports.CanvasFrameAnonymousContentHelper = CanvasFrameAnonymousContentHelper;
  *         The content bounds of the container element.
  * @param  {Window} win
  *         The window object.
+ * @param  {Object} [options={}]
+ *         Advanced options for the infobar.
+ * @param  {String} options.position
+ *         Force the infobar to be displayed either on "top" or "bottom". Any other value
+ *         will be ingnored.
+ * @param  {Boolean} options.hideIfOffscreen
+ *         If set to `true`, hides the infobar if it's offscreen, instead of automatically
+ *         reposition it.
  */
-function moveInfobar(container, bounds, win) {
+function moveInfobar(container, bounds, win, options = {}) {
   let zoom = getCurrentZoom(win);
   let viewport = getViewportDimensions(win);
 
   let { computedStyle } = container;
 
-  // To simplify, we use the same arrow's size value as margin's value for all four sides.
-  let margin = parseFloat(computedStyle
+  let margin = 2;
+  let arrowSize = parseFloat(computedStyle
                               .getPropertyValue("--highlighter-bubble-arrow-size"));
   let containerHeight = parseFloat(computedStyle.getPropertyValue("height"));
   let containerWidth = parseFloat(computedStyle.getPropertyValue("width"));
@@ -608,17 +603,16 @@ function moveInfobar(container, bounds, win) {
 
   pageYOffset *= zoom;
   pageXOffset *= zoom;
-  containerHeight += margin;
 
   // Defines the boundaries for the infobar.
   let topBoundary = margin;
-  let bottomBoundary = viewportHeight - containerHeight;
+  let bottomBoundary = viewportHeight - containerHeight - margin - 1;
   let leftBoundary = containerHalfWidth + margin;
   let rightBoundary = viewportWidth - containerHalfWidth - margin;
 
   // Set the default values.
-  let top = bounds.y - containerHeight;
-  let bottom = bounds.bottom + margin;
+  let top = bounds.y - containerHeight - arrowSize;
+  let bottom = bounds.bottom + margin + arrowSize;
   let left = bounds.x + bounds.width / 2;
   let isOverlapTheNode = false;
   let positionAttribute = "top";
@@ -633,8 +627,10 @@ function moveInfobar(container, bounds, win) {
   // It's a sort of "position: sticky" (but positioned as absolute instead of relative).
   let canBePlacedOnTop = top >= pageYOffset;
   let canBePlacedOnBottom = bottomBoundary + pageYOffset - bottom > 0;
+  let forcedOnTop = options.position === "top";
+  let forcedOnBottom = options.position === "bottom";
 
-  if (!canBePlacedOnTop && canBePlacedOnBottom) {
+  if ((!canBePlacedOnTop && canBePlacedOnBottom && !forcedOnTop) || forcedOnBottom) {
     top = bottom;
     positionAttribute = "bottom";
   }
@@ -655,7 +651,10 @@ function moveInfobar(container, bounds, win) {
     top -= pageYOffset;
   }
 
-  if (isOverlapTheNode) {
+  if (isOverlapTheNode && options.hideIfOffscreen) {
+    container.setAttribute("hidden", "true");
+    return;
+  } else if (isOverlapTheNode) {
     left = Math.min(Math.max(leftBoundary, left - pageXOffset), rightBoundary);
 
     position = "fixed";

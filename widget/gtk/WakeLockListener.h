@@ -10,13 +10,14 @@
 #ifndef __WakeLockListener_h__
 #define __WakeLockListener_h__
 
+#include "mozilla/StaticPtr.h"
 #include "nsHashKeys.h"
 #include "nsClassHashtable.h"
 
 #include "nsIDOMWakeLockListener.h"
 
 #ifdef MOZ_ENABLE_DBUS
-#include "mozilla/ipc/DBusConnectionRefPtr.h"
+#include "mozilla/DBusHelpers.h"
 #endif
 
 class WakeLockTopic;
@@ -40,7 +41,7 @@ private:
   WakeLockListener();
   ~WakeLockListener() = default;
 
-  static WakeLockListener* sSingleton;
+  static mozilla::StaticRefPtr<WakeLockListener> sSingleton;
 
 #ifdef MOZ_ENABLE_DBUS
   RefPtr<DBusConnection> mConnection;

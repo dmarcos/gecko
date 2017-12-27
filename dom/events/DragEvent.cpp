@@ -41,7 +41,7 @@ void
 DragEvent::InitDragEvent(const nsAString& aType,
                          bool aCanBubble,
                          bool aCancelable,
-                         nsGlobalWindow* aView,
+                         nsGlobalWindowInner* aView,
                          int32_t aDetail,
                          int32_t aScreenX,
                          int32_t aScreenY,
@@ -126,7 +126,7 @@ using namespace mozilla::dom;
 already_AddRefed<DragEvent>
 NS_NewDOMDragEvent(EventTarget* aOwner,
                    nsPresContext* aPresContext,
-                   WidgetDragEvent* aEvent) 
+                   WidgetDragEvent* aEvent)
 {
   RefPtr<DragEvent> event =
     new DragEvent(aOwner, aPresContext, aEvent);

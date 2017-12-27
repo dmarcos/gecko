@@ -20,8 +20,57 @@ bool is_in_compositor_thread();
 bool is_in_main_thread();
 bool is_in_render_thread();
 bool is_glcontext_egl(void* glcontext_ptr);
+bool is_glcontext_angle(void* glcontext_ptr);
+bool gfx_use_wrench();
+const char* gfx_wr_resource_path_override();
 void gfx_critical_note(const char* msg);
+void gfx_critical_error(const char* msg);
+void gecko_printf_stderr_output(const char* msg);
 void* get_proc_address_from_glcontext(void* glcontext_ptr, const char* procname);
+void gecko_profiler_register_thread(const char* threadname);
+void gecko_profiler_unregister_thread();
+
+// Prelude of types necessary before including webrender_ffi_generated.h
+namespace mozilla {
+namespace wr {
+
+struct FontInstanceFlags {
+  uint32_t bits;
+
+  bool operator==(const FontInstanceFlags& aOther) const {
+    return bits == aOther.bits;
+  }
+
+  FontInstanceFlags& operator=(uint32_t aBits) {
+    bits = aBits;
+    return *this;
+  }
+
+  FontInstanceFlags& operator|=(uint32_t aBits) {
+    bits |= aBits;
+    return *this;
+  }
+
+  enum : uint32_t {
+    SYNTHETIC_ITALICS = 1 << 0,
+    SYNTHETIC_BOLD    = 1 << 1,
+    EMBEDDED_BITMAPS  = 1 << 2,
+    SUBPIXEL_BGR      = 1 << 3,
+
+    FORCE_GDI         = 1 << 16,
+
+    FONT_SMOOTHING    = 1 << 16,
+
+    FORCE_AUTOHINT    = 1 << 16,
+    NO_AUTOHINT       = 1 << 17,
+    VERTICAL_LAYOUT   = 1 << 18
+  };
+};
+
+} // namespace wr
+} // namespace mozilla
+
+} // extern "C"
 
 // Some useful defines to stub out webrender binding functions for when we
 // build gecko without webrender. We try to tell the compiler these functions
@@ -44,28 +93,5 @@ void* get_proc_address_from_glcontext(void* glcontext_ptr, const char* procname)
 
 #undef WR_FUNC
 #undef WR_DESTRUCTOR_SAFE_FUNC
-} // extern "C"
-
-struct WrGlyphArray
-{
-  mozilla::gfx::Color color;
-  nsTArray<WrGlyphInstance> glyphs;
-
-  bool operator==(const WrGlyphArray& other) const
-  {
-    if (!(color == other.color) ||
-       (glyphs.Length() != other.glyphs.Length())) {
-      return false;
-    }
-
-    for (size_t i = 0; i < glyphs.Length(); i++) {
-      if (!(glyphs[i] == other.glyphs[i])) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-};
 
 #endif // WR_h

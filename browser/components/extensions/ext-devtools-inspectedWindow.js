@@ -2,28 +2,18 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-/* global getDevToolsTargetForContext */
+// The ext-* files are imported into the same scopes.
+/* import-globals-from ext-devtools.js */
+/* import-globals-from ext-browser.js */
 
 var {
   SpreadArgs,
-} = ExtensionUtils;
+} = ExtensionCommon;
 
 this.devtools_inspectedWindow = class extends ExtensionAPI {
   getAPI(context) {
-    const {
-      WebExtensionInspectedWindowFront,
-    } = require("devtools/shared/fronts/webextension-inspected-window");
-
-    // Lazily retrieve and store an inspectedWindow actor front per child context.
+    // Lazily retrieved inspectedWindow actor front per child context.
     let waitForInspectedWindowFront;
-    async function getInspectedWindowFront() {
-      // If there is not yet a front instance, then a lazily cloned target for the context is
-      // retrieved using the DevtoolsParentContextsManager helper (which is an asynchronous operation,
-      // because the first time that the target has been cloned, it is not ready to be used to create
-      // the front instance until it is connected to the remote debugger successfully).
-      const clonedTarget = await getDevToolsTargetForContext(context);
-      return new WebExtensionInspectedWindowFront(clonedTarget.client, clonedTarget.form);
-    }
 
     // TODO(rpl): retrive a more detailed callerInfo object, like the filename and
     // lineNumber of the actual extension called, in the child process.
@@ -37,21 +27,24 @@ this.devtools_inspectedWindow = class extends ExtensionAPI {
         inspectedWindow: {
           async eval(expression, options) {
             if (!waitForInspectedWindowFront) {
-              waitForInspectedWindowFront = getInspectedWindowFront();
+              waitForInspectedWindowFront = getInspectedWindowFront(context);
             }
 
             const front = await waitForInspectedWindowFront;
-            return front.eval(callerInfo, expression, options || {}).then(evalResult => {
-              // TODO(rpl): check for additional undocumented behaviors on chrome
-              // (e.g. if we should also print error to the console or set lastError?).
-              return new SpreadArgs([evalResult.value, evalResult.exceptionInfo]);
-            });
+
+            const evalOptions = Object.assign({}, options, getToolboxEvalOptions(context));
+
+            const evalResult = await front.eval(callerInfo, expression, evalOptions);
+
+            // TODO(rpl): check for additional undocumented behaviors on chrome
+            // (e.g. if we should also print error to the console or set lastError?).
+            return new SpreadArgs([evalResult.value, evalResult.exceptionInfo]);
           },
           async reload(options) {
             const {ignoreCache, userAgent, injectedScript} = options || {};
 
             if (!waitForInspectedWindowFront) {
-              waitForInspectedWindowFront = getInspectedWindowFront();
+              waitForInspectedWindowFront = getInspectedWindowFront(context);
             }
 
             const front = await waitForInspectedWindowFront;

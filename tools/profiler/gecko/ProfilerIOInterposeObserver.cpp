@@ -4,7 +4,7 @@
 
 #include "GeckoProfiler.h"
 #include "ProfilerIOInterposeObserver.h"
-#include "ProfilerMarkers.h"
+#include "ProfilerMarkerPayload.h"
 
 using namespace mozilla;
 
@@ -16,15 +16,12 @@ void ProfilerIOInterposeObserver::Observe(Observation& aObservation)
 
   UniqueProfilerBacktrace stack = profiler_get_backtrace();
 
-  nsCString filename;
-  if (aObservation.Filename()) {
-    filename = NS_ConvertUTF16toUTF8(aObservation.Filename());
-  }
-
-  IOMarkerPayload* markerPayload = new IOMarkerPayload(aObservation.Reference(),
-                                                       filename.get(),
-                                                       aObservation.Start(),
-                                                       aObservation.End(),
-                                                       Move(stack));
-  PROFILER_MARKER_PAYLOAD(aObservation.ObservedOperationString(), markerPayload);
+  nsString filename;
+  aObservation.Filename(filename);
+  profiler_add_marker(
+    aObservation.ObservedOperationString(),
+    MakeUnique<IOMarkerPayload>(aObservation.Reference(),
+                                NS_ConvertUTF16toUTF8(filename).get(),
+                                aObservation.Start(), aObservation.End(),
+                                Move(stack)));
 }

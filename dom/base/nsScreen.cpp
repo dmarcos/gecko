@@ -25,7 +25,6 @@ using namespace mozilla::dom;
 nsScreen::Create(nsPIDOMWindowInner* aWindow)
 {
   MOZ_ASSERT(aWindow);
-  MOZ_ASSERT(aWindow->IsInnerWindow());
 
   if (!aWindow->GetDocShell()) {
     return nullptr;
@@ -50,7 +49,7 @@ nsScreen::~nsScreen()
 
 
 // QueryInterface implementation for nsScreen
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(nsScreen)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsScreen)
   NS_INTERFACE_MAP_ENTRY(nsIDOMScreen)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
@@ -137,8 +136,8 @@ nsScreen::GetRect(nsRect& aRect)
   aRect.x = NSToIntRound(screenTopLeftDesk.x);
   aRect.y = NSToIntRound(screenTopLeftDesk.y);
 
-  aRect.height = nsPresContext::AppUnitsToIntCSSPixels(aRect.height);
-  aRect.width = nsPresContext::AppUnitsToIntCSSPixels(aRect.width);
+  aRect.SetHeight(nsPresContext::AppUnitsToIntCSSPixels(aRect.Height()));
+  aRect.SetWidth(nsPresContext::AppUnitsToIntCSSPixels(aRect.Width()));
 
   return NS_OK;
 }
@@ -172,8 +171,8 @@ nsScreen::GetAvailRect(nsRect& aRect)
   aRect.y = NSToIntRound(screenTopLeftDesk.y) +
             nsPresContext::AppUnitsToIntCSSPixels(aRect.y - r.y);
 
-  aRect.height = nsPresContext::AppUnitsToIntCSSPixels(aRect.height);
-  aRect.width = nsPresContext::AppUnitsToIntCSSPixels(aRect.width);
+  aRect.SetHeight(nsPresContext::AppUnitsToIntCSSPixels(aRect.Height()));
+  aRect.SetWidth(nsPresContext::AppUnitsToIntCSSPixels(aRect.Width()));
 
   return NS_OK;
 }

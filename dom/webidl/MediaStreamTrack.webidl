@@ -55,6 +55,11 @@ dictionary MediaTrackConstraintSet {
     ConstrainLong viewportWidth;
     ConstrainLong viewportHeight;
     ConstrainBoolean echoCancellation;
+    ConstrainBoolean noiseSuppression;
+    ConstrainBoolean autoGainControl;
+    ConstrainLong channelCount;
+
+    // Deprecated with warnings:
     ConstrainBoolean mozNoiseSuppression;
     ConstrainBoolean mozAutoGainControl;
 };
@@ -72,19 +77,19 @@ enum MediaStreamTrackState {
 interface MediaStreamTrack : EventTarget {
     readonly    attribute DOMString             kind;
     readonly    attribute DOMString             id;
+    [NeedsCallerType]
     readonly    attribute DOMString             label;
                 attribute boolean               enabled;
-//  readonly    attribute boolean               muted;
-//              attribute EventHandler          onmute;
-//              attribute EventHandler          onunmute;
-//  readonly    attribute boolean               _readonly;
-//  readonly    attribute boolean               remote;
+    readonly    attribute boolean               muted;
+                attribute EventHandler          onmute;
+                attribute EventHandler          onunmute;
     readonly    attribute MediaStreamTrackState readyState;
                 attribute EventHandler          onended;
     MediaStreamTrack       clone ();
     void                   stop ();
 //  MediaTrackCapabilities getCapabilities ();
     MediaTrackConstraints  getConstraints ();
+    [NeedsCallerType]
     MediaTrackSettings     getSettings ();
 
     [Throws, NeedsCallerType]

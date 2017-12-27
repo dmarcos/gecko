@@ -9,6 +9,7 @@
 #include "ipc/ErrorIPCUtils.h"
 #include "mozilla/dom/Notification.h"
 #include "mozilla/dom/Promise.h"
+#include "mozilla/dom/PromiseWindowProxy.h"
 #include "mozilla/dom/PromiseWorkerProxy.h"
 #include "mozilla/dom/PushManagerBinding.h"
 #include "mozilla/dom/PushManager.h"
@@ -139,6 +140,44 @@ public:
     aScope = mScope;
   }
 
+  ServiceWorkerUpdateViaCache
+  GetUpdateViaCache(ErrorResult& aRv) const override
+  {
+    RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+    MOZ_ASSERT(swm);
+
+    nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
+    MOZ_ASSERT(window);
+
+    nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
+    MOZ_ASSERT(doc);
+
+    nsCOMPtr<nsIServiceWorkerRegistrationInfo> registration;
+    nsresult rv = swm->GetRegistrationByPrincipal(doc->NodePrincipal(), mScope,
+                                                  getter_AddRefs(registration));
+
+    /*
+     *  xxx: We should probably store the `updateViaCache` value on the
+     *  ServiceWorkerRegistration object and update it when necessary.
+     *  We don't have a good way to reach all ServiceWorkerRegistration objects
+     *  from the ServiceWorkerRegistratinInfo right now, though.
+     *  This is a short term fix to avoid crashing.
+     */
+    if (NS_FAILED(rv) || !registration) {
+      aRv = NS_ERROR_DOM_INVALID_STATE_ERR;
+      return ServiceWorkerUpdateViaCache::None;
+    }
+
+    uint16_t updateViaCache;
+    rv = registration->GetUpdateViaCache(&updateViaCache);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+
+    // Silence possible compiler warnings.
+    Unused << rv;
+
+    return static_cast<ServiceWorkerUpdateViaCache>(updateViaCache);
+  }
+
 private:
   ~ServiceWorkerRegistrationMainThread();
 
@@ -167,7 +206,7 @@ private:
 NS_IMPL_ADDREF_INHERITED(ServiceWorkerRegistrationMainThread, ServiceWorkerRegistration)
 NS_IMPL_RELEASE_INHERITED(ServiceWorkerRegistrationMainThread, ServiceWorkerRegistration)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ServiceWorkerRegistrationMainThread)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ServiceWorkerRegistrationMainThread)
 NS_INTERFACE_MAP_END_INHERITING(ServiceWorkerRegistration)
 
 NS_IMPL_CYCLE_COLLECTION_INHERITED(ServiceWorkerRegistrationMainThread,
@@ -182,7 +221,6 @@ ServiceWorkerRegistrationMainThread::ServiceWorkerRegistrationMainThread(nsPIDOM
 {
   AssertIsOnMainThread();
   MOZ_ASSERT(aWindow);
-  MOZ_ASSERT(aWindow->IsInnerWindow());
   StartListeningForEvents();
 }
 
@@ -376,14 +414,15 @@ UpdateInternal(nsIPrincipal* aPrincipal,
 
 class MainThreadUpdateCallback final : public ServiceWorkerUpdateFinishCallback
 {
-  RefPtr<Promise> mPromise;
+  PromiseWindowProxy mPromise;
 
   ~MainThreadUpdateCallback()
   { }
 
 public:
-  explicit MainThreadUpdateCallback(Promise* aPromise)
-    : mPromise(aPromise)
+  explicit MainThreadUpdateCallback(nsPIDOMWindowInner* aWindow,
+                                    Promise* aPromise)
+    : mPromise(aWindow, aPromise)
   {
     AssertIsOnMainThread();
   }
@@ -391,13 +430,17 @@ public:
   void
   UpdateSucceeded(ServiceWorkerRegistrationInfo* aRegistration) override
   {
-    mPromise->MaybeResolveWithUndefined();
+    if (RefPtr<Promise> promise = mPromise.Get()) {
+      promise->MaybeResolveWithUndefined();
+    }
   }
 
   void
   UpdateFailed(ErrorResult& aStatus) override
   {
-    mPromise->MaybeReject(aStatus);
+    if (RefPtr<Promise> promise = mPromise.Get()) {
+      promise->MaybeReject(aStatus);
+    }
   }
 };
 
@@ -492,9 +535,9 @@ public:
 class UpdateRunnable final : public Runnable
 {
 public:
-  UpdateRunnable(PromiseWorkerProxy* aPromiseProxy,
-                 const nsAString& aScope)
-    : mPromiseProxy(aPromiseProxy)
+  UpdateRunnable(PromiseWorkerProxy* aPromiseProxy, const nsAString& aScope)
+    : Runnable("dom::UpdateRunnable")
+    , mPromiseProxy(aPromiseProxy)
     , mScope(aScope)
   {}
 
@@ -533,22 +576,25 @@ private:
 
 class UnregisterCallback final : public nsIServiceWorkerUnregisterCallback
 {
-  RefPtr<Promise> mPromise;
+  PromiseWindowProxy mPromise;
 
 public:
   NS_DECL_ISUPPORTS
 
-  explicit UnregisterCallback(Promise* aPromise)
-    : mPromise(aPromise)
+  explicit UnregisterCallback(nsPIDOMWindowInner* aWindow,
+                              Promise* aPromise)
+    : mPromise(aWindow, aPromise)
   {
-    MOZ_ASSERT(mPromise);
+    MOZ_ASSERT(aPromise);
   }
 
   NS_IMETHOD
   UnregisterSucceeded(bool aState) override
   {
     AssertIsOnMainThread();
-    mPromise->MaybeResolve(aState);
+    if (RefPtr<Promise> promise = mPromise.Get()) {
+      promise->MaybeResolve(aState);
+    }
     return NS_OK;
   }
 
@@ -557,7 +603,9 @@ public:
   {
     AssertIsOnMainThread();
 
-    mPromise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
+    if (RefPtr<Promise> promise = mPromise.Get()) {
+      promise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
+    }
     return NS_OK;
   }
 
@@ -663,9 +711,9 @@ class StartUnregisterRunnable final : public Runnable
   const nsString mScope;
 
 public:
-  StartUnregisterRunnable(PromiseWorkerProxy* aProxy,
-                          const nsAString& aScope)
-    : mPromiseWorkerProxy(aProxy)
+  StartUnregisterRunnable(PromiseWorkerProxy* aProxy, const nsAString& aScope)
+    : Runnable("dom::StartUnregisterRunnable")
+    , mPromiseWorkerProxy(aProxy)
     , mScope(aScope)
   {
     MOZ_ASSERT(aProxy);
@@ -727,7 +775,7 @@ ServiceWorkerRegistrationMainThread::Update(ErrorResult& aRv)
   MOZ_ASSERT(doc);
 
   RefPtr<MainThreadUpdateCallback> cb =
-    new MainThreadUpdateCallback(promise);
+    new MainThreadUpdateCallback(GetOwner(), promise);
   UpdateInternal(doc->NodePrincipal(), mScope, cb);
 
   return promise.forget();
@@ -785,7 +833,7 @@ ServiceWorkerRegistrationMainThread::Unregister(ErrorResult& aRv)
     return nullptr;
   }
 
-  RefPtr<UnregisterCallback> cb = new UnregisterCallback(promise);
+  RefPtr<UnregisterCallback> cb = new UnregisterCallback(GetOwner(), promise);
 
   NS_ConvertUTF8toUTF16 scope(uriSpec);
   aRv = swm->Unregister(documentPrincipal, cb, scope);
@@ -914,6 +962,13 @@ public:
   GetScope(nsAString& aScope) const override
   {
     aScope = mScope;
+  }
+
+  ServiceWorkerUpdateViaCache
+  GetUpdateViaCache(ErrorResult& aRv) const override
+  {
+    // FIXME(hopang): Will be implemented after Bug 1113522.
+    return ServiceWorkerUpdateViaCache::Imports;
   }
 
   bool
@@ -1055,7 +1110,7 @@ private:
 NS_IMPL_ADDREF_INHERITED(ServiceWorkerRegistrationWorkerThread, ServiceWorkerRegistration)
 NS_IMPL_RELEASE_INHERITED(ServiceWorkerRegistrationWorkerThread, ServiceWorkerRegistration)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ServiceWorkerRegistrationWorkerThread)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ServiceWorkerRegistrationWorkerThread)
 NS_INTERFACE_MAP_END_INHERITING(ServiceWorkerRegistration)
 
 // Expanded macros since we need special behaviour to release the proxy.
@@ -1076,6 +1131,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 ServiceWorkerRegistrationWorkerThread::ServiceWorkerRegistrationWorkerThread(WorkerPrivate* aWorkerPrivate,
                                                                              const nsAString& aScope)
   : ServiceWorkerRegistration(nullptr, aScope)
+  , WorkerHolder("ServiceWorkerRegistrationWorkerThread")
   , mWorkerPrivate(aWorkerPrivate)
 {
   InitListener();
@@ -1188,7 +1244,9 @@ ServiceWorkerRegistrationWorkerThread::InitListener()
   }
 
   nsCOMPtr<nsIRunnable> r =
-    NewRunnableMethod(mListener, &WorkerListener::StartListeningForEvents);
+    NewRunnableMethod("dom::WorkerListener::StartListeningForEvents",
+                      mListener,
+                      &WorkerListener::StartListeningForEvents);
   MOZ_ALWAYS_SUCCEEDS(worker->DispatchToMainThread(r.forget()));
 }
 
@@ -1210,7 +1268,9 @@ ServiceWorkerRegistrationWorkerThread::ReleaseListener()
   mListener->ClearRegistration();
 
   nsCOMPtr<nsIRunnable> r =
-    NewRunnableMethod(mListener, &WorkerListener::StopListeningForEvents);
+    NewRunnableMethod("dom::WorkerListener::StopListeningForEvents",
+                      mListener,
+                      &WorkerListener::StopListeningForEvents);
   MOZ_ALWAYS_SUCCEEDS(mWorkerPrivate->DispatchToMainThread(r.forget()));
 
   mListener = nullptr;
@@ -1309,7 +1369,7 @@ ServiceWorkerRegistrationWorkerThread::GetPushManager(JSContext* aCx, ErrorResul
 NS_IMPL_ADDREF_INHERITED(ServiceWorkerRegistration, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(ServiceWorkerRegistration, DOMEventTargetHelper)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ServiceWorkerRegistration)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ServiceWorkerRegistration)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 ServiceWorkerRegistration::ServiceWorkerRegistration(nsPIDOMWindowInner* aWindow,

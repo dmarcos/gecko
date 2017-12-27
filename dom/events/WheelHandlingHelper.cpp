@@ -21,7 +21,7 @@
 #include "nsPresContext.h"
 #include "prtime.h"
 #include "Units.h"
-#include "AsyncScrollBase.h"
+#include "ScrollAnimationPhysics.h"
 
 namespace mozilla {
 
@@ -234,8 +234,10 @@ WheelTransaction::OnEvent(WidgetEvent* aEvent)
       if (mouseEvent->IsReal()) {
         // If the cursor is moving to be outside the frame,
         // terminate the scrollwheel transaction.
-        nsIntPoint pt = GetScreenPoint(mouseEvent);
-        nsIntRect r = sTargetFrame->GetScreenRect();
+        LayoutDeviceIntPoint pt = GetScreenPoint(mouseEvent);
+        auto r = LayoutDeviceIntRect::FromAppUnitsToNearest(
+          sTargetFrame->GetScreenRectInAppUnits(),
+          sTargetFrame->PresContext()->AppUnitsPerDevPixel());
         if (!r.Contains(pt)) {
           EndTransaction();
           return;
@@ -279,7 +281,7 @@ WheelTransaction::OnFailToScrollTarget()
 {
   NS_PRECONDITION(sTargetFrame, "We don't have mouse scrolling transaction");
 
-  if (Preferences::GetBool("test.mousescroll", false)) {
+  if (Prefs::sTestMouseScroll) {
     // This event is used for automated tests, see bug 442774.
     nsContentUtils::DispatchTrustedEvent(
                       sTargetFrame->GetContent()->OwnerDoc(),
@@ -308,7 +310,7 @@ WheelTransaction::OnTimeout(nsITimer* aTimer, void* aClosure)
   // the next DOM event might create strange situation for us.
   MayEndTransaction();
 
-  if (Preferences::GetBool("test.mousescroll", false)) {
+  if (Prefs::sTestMouseScroll) {
     // This event is used for automated tests, see bug 442774.
     nsContentUtils::DispatchTrustedEvent(
                       frame->GetContent()->OwnerDoc(),
@@ -322,39 +324,28 @@ WheelTransaction::OnTimeout(nsITimer* aTimer, void* aClosure)
 WheelTransaction::SetTimeout()
 {
   if (!sTimer) {
-    nsCOMPtr<nsITimer> timer = do_CreateInstance(NS_TIMER_CONTRACTID);
-    if (!timer) {
+    sTimer = NS_NewTimer().take();
+    if (!sTimer) {
       return;
     }
-    timer.swap(sTimer);
   }
   sTimer->Cancel();
   DebugOnly<nsresult> rv =
-    sTimer->InitWithFuncCallback(OnTimeout, nullptr, GetTimeoutTime(),
-                                 nsITimer::TYPE_ONE_SHOT);
+    sTimer->InitWithNamedFuncCallback(OnTimeout,
+                                      nullptr,
+                                      GetTimeoutTime(),
+                                      nsITimer::TYPE_ONE_SHOT,
+                                      "WheelTransaction::SetTimeout");
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                        "nsITimer::InitWithFuncCallback failed");
 }
 
-/* static */ nsIntPoint
+/* static */ LayoutDeviceIntPoint
 WheelTransaction::GetScreenPoint(WidgetGUIEvent* aEvent)
 {
   NS_ASSERTION(aEvent, "aEvent is null");
   NS_ASSERTION(aEvent->mWidget, "aEvent-mWidget is null");
-  return (aEvent->mRefPoint + aEvent->mWidget->WidgetToScreenOffset())
-      .ToUnknownPoint();
-}
-
-/* static */ uint32_t
-WheelTransaction::GetTimeoutTime()
-{
-  return Preferences::GetUint("mousewheel.transaction.timeout", 1500);
-}
-
-/* static */ uint32_t
-WheelTransaction::GetIgnoreMoveDelayTime()
-{
-  return Preferences::GetUint("mousewheel.transaction.ignoremovedelay", 100);
+  return aEvent->mRefPoint + aEvent->mWidget->WidgetToScreenOffset();
 }
 
 /* static */ DeltaValues
@@ -389,18 +380,6 @@ WheelTransaction::AccelerateWheelDelta(WidgetWheelEvent* aEvent,
 WheelTransaction::ComputeAcceleratedWheelDelta(double aDelta, int32_t aFactor)
 {
   return mozilla::ComputeAcceleratedWheelDelta(aDelta, sScrollSeriesCounter, aFactor);
-}
-
-/* static */ int32_t
-WheelTransaction::GetAccelerationStart()
-{
-  return Preferences::GetInt("mousewheel.acceleration.start", -1);
-}
-
-/* static */ int32_t
-WheelTransaction::GetAccelerationFactor()
-{
-  return Preferences::GetInt("mousewheel.acceleration.factor", -1);
 }
 
 /* static */ DeltaValues
@@ -546,6 +525,77 @@ ScrollbarsForWheel::DeactivateAllTemporarilyActivatedScrollTargets()
       }
       *scrollTarget = nullptr;
     }
+  }
+}
+
+/******************************************************************/
+/* mozilla::WheelTransaction::Prefs                               */
+/******************************************************************/
+
+int32_t WheelTransaction::Prefs::sMouseWheelAccelerationStart = -1;
+int32_t WheelTransaction::Prefs::sMouseWheelAccelerationFactor = -1;
+uint32_t WheelTransaction::Prefs::sMouseWheelTransactionTimeout = 1500;
+uint32_t WheelTransaction::Prefs::sMouseWheelTransactionIgnoreMoveDelay = 100;
+bool WheelTransaction::Prefs::sTestMouseScroll = false;
+
+/* static */ void
+WheelTransaction::Prefs::InitializeStatics()
+{
+  static bool sIsInitialized = false;
+  if (!sIsInitialized) {
+    Preferences::AddIntVarCache(&sMouseWheelAccelerationStart,
+                                "mousewheel.acceleration.start", -1);
+    Preferences::AddIntVarCache(&sMouseWheelAccelerationFactor,
+                                "mousewheel.acceleration.factor", -1);
+    Preferences::AddUintVarCache(&sMouseWheelTransactionTimeout,
+                                 "mousewheel.transaction.timeout", 1500);
+    Preferences::AddUintVarCache(&sMouseWheelTransactionIgnoreMoveDelay,
+                                 "mousewheel.transaction.ignoremovedelay", 100);
+    Preferences::AddBoolVarCache(&sTestMouseScroll, "test.mousescroll", false);
+    sIsInitialized = true;
+  }
+}
+
+/******************************************************************/
+/* mozilla::AutoWheelDeltaAdjuster                                */
+/******************************************************************/
+
+AutoWheelDeltaAdjuster::AutoWheelDeltaAdjuster(WidgetWheelEvent& aWheelEvent)
+  : mWheelEvent(aWheelEvent)
+  , mOldDeltaX(aWheelEvent.mDeltaX)
+  , mOldDeltaZ(aWheelEvent.mDeltaZ)
+  , mOldOverflowDeltaX(aWheelEvent.mOverflowDeltaX)
+  , mOldLineOrPageDeltaX(aWheelEvent.mLineOrPageDeltaX)
+  , mTreatedVerticalWheelAsHorizontalScroll(false)
+{
+  MOZ_ASSERT(!aWheelEvent.mDeltaValuesAdjustedForDefaultHandler);
+
+  if (EventStateManager::WheelEventIsHorizontalScrollAction(&aWheelEvent)) {
+    // Move deltaY values to deltaX and set both deltaY and deltaZ to 0.
+    mWheelEvent.mDeltaX = mWheelEvent.mDeltaY;
+    mWheelEvent.mDeltaY = 0.0;
+    mWheelEvent.mDeltaZ = 0.0;
+    mWheelEvent.mOverflowDeltaX = mWheelEvent.mOverflowDeltaY;
+    mWheelEvent.mOverflowDeltaY = 0.0;
+    mWheelEvent.mLineOrPageDeltaX = mWheelEvent.mLineOrPageDeltaY;
+    mWheelEvent.mLineOrPageDeltaY = 0;
+    mWheelEvent.mDeltaValuesAdjustedForDefaultHandler = true;
+    mTreatedVerticalWheelAsHorizontalScroll = true;
+  }
+}
+
+AutoWheelDeltaAdjuster::~AutoWheelDeltaAdjuster()
+{
+  if (mTreatedVerticalWheelAsHorizontalScroll &&
+      mWheelEvent.mDeltaValuesAdjustedForDefaultHandler) {
+    mWheelEvent.mDeltaY = mWheelEvent.mDeltaX;
+    mWheelEvent.mDeltaX = mOldDeltaX;
+    mWheelEvent.mDeltaZ = mOldDeltaZ;
+    mWheelEvent.mOverflowDeltaY = mWheelEvent.mOverflowDeltaX;
+    mWheelEvent.mOverflowDeltaX = mOldOverflowDeltaX;
+    mWheelEvent.mLineOrPageDeltaY = mWheelEvent.mLineOrPageDeltaX;
+    mWheelEvent.mLineOrPageDeltaX = mOldLineOrPageDeltaX;
+    mWheelEvent.mDeltaValuesAdjustedForDefaultHandler = false;
   }
 }
 

@@ -32,7 +32,7 @@ AppCacheStorage::AppCacheStorage(nsILoadContextInfo* aInfo,
 
 AppCacheStorage::~AppCacheStorage()
 {
-  ProxyReleaseMainThread(mAppCache);
+  ProxyReleaseMainThread("AppCacheStorage::mAppCache", mAppCache);
 }
 
 NS_IMETHODIMP AppCacheStorage::AsyncOpenURI(nsIURI *aURI,
@@ -169,6 +169,14 @@ NS_IMETHODIMP AppCacheStorage::AsyncVisitStorage(nsICacheStorageVisitor* aVisito
   NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
+}
+
+NS_IMETHODIMP AppCacheStorage::GetCacheIndexEntryAttrs(nsIURI *aURI,
+                                                       const nsACString &aIdExtension,
+                                                       bool *aHasAltData,
+                                                       uint32_t *aSizeInKB)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 } // namespace net

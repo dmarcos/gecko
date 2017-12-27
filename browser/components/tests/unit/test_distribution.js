@@ -79,18 +79,19 @@ function run_test() {
   run_next_test();
 }
 
-do_register_cleanup(function() {
+registerCleanupFunction(function() {
   // Remove the distribution dir, even if the test failed, otherwise all
   // next tests will use it.
   let distDir = gProfD.clone();
   distDir.append("distribution");
   distDir.remove(true);
   Assert.ok(!distDir.exists());
+  Services.prefs.clearUserPref("distribution.testing.loadFromProfile");
 });
 
-add_task(function* () {
+add_task(async function() {
   // Force distribution.
-  let glue = Cc["@mozilla.org/browser/browserglue;1"].getService(Ci.nsIObserver)
+  let glue = Cc["@mozilla.org/browser/browserglue;1"].getService(Ci.nsIObserver);
   glue.observe(null, TOPIC_BROWSERGLUE_TEST, TOPICDATA_DISTRIBUTION_CUSTOMIZATION);
 
   var defaultBranch = Services.prefs.getDefaultBranch(null);

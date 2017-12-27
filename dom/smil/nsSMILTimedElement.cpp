@@ -9,6 +9,7 @@
 #include "mozilla/ContentEvents.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/dom/SVGAnimationElement.h"
+#include "mozilla/TaskCategory.h"
 #include "nsAutoPtr.h"
 #include "nsSMILTimedElement.h"
 #include "nsAttrValueInlines.h"
@@ -87,9 +88,11 @@ namespace
     int32_t              mDetail;
 
   public:
-    AsyncTimeEventRunner(nsIContent* aTarget, EventMessage aMsg,
+    AsyncTimeEventRunner(nsIContent* aTarget,
+                         EventMessage aMsg,
                          int32_t aDetail)
-      : mTarget(aTarget)
+      : mozilla::Runnable("AsyncTimeEventRunner")
+      , mTarget(aTarget)
       , mMsg(aMsg)
       , mDetail(aDetail)
     {
@@ -214,20 +217,21 @@ nsSMILTimedElement::RemoveInstanceTimes(InstanceTimeList& aArray,
 //----------------------------------------------------------------------
 // Static members
 
-nsAttrValue::EnumTable nsSMILTimedElement::sFillModeTable[] = {
+const nsAttrValue::EnumTable nsSMILTimedElement::sFillModeTable[] = {
       {"remove", FILL_REMOVE},
       {"freeze", FILL_FREEZE},
       {nullptr, 0}
 };
 
-nsAttrValue::EnumTable nsSMILTimedElement::sRestartModeTable[] = {
+const nsAttrValue::EnumTable nsSMILTimedElement::sRestartModeTable[] = {
       {"always", RESTART_ALWAYS},
       {"whenNotActive", RESTART_WHENNOTACTIVE},
       {"never", RESTART_NEVER},
       {nullptr, 0}
 };
 
-const nsSMILMilestone nsSMILTimedElement::sMaxMilestone(INT64_MAX, false);
+const nsSMILMilestone nsSMILTimedElement::sMaxMilestone(
+  std::numeric_limits<nsSMILTime>::max(), false);
 
 // The thresholds at which point we start filtering intervals and instance times
 // indiscriminately.
@@ -698,12 +702,10 @@ nsSMILTimedElement::DoSampleAt(nsSMILTime aContainerTime, bool aEndOnly)
           }
           FilterHistory();
           stateChanged = true;
-        } else {
+        } else if (mCurrentInterval->Begin()->Time() <= sampleTime) {
           MOZ_ASSERT(!didApplyEarlyEnd,
                      "We got an early end, but didn't end");
           nsSMILTime beginTime = mCurrentInterval->Begin()->Time().GetMillis();
-          NS_ASSERTION(aContainerTime >= beginTime,
-                       "Sample time should not precede current interval");
           nsSMILTime activeTime = aContainerTime - beginTime;
 
           // The 'min' attribute can cause the active interval to be longer than
@@ -733,6 +735,11 @@ nsSMILTimedElement::DoSampleAt(nsSMILTime aContainerTime, bool aEndOnly)
             }
           }
         }
+        // Otherwise |sampleTime| is *before* the current interval. That
+        // normally doesn't happen but can happen if we get a stray milestone
+        // sample (e.g. if we registered a milestone with a time container that
+        // later got re-attached as a child of a more advanced time container).
+        // In that case we should just ignore the sample.
       }
       break;
 
@@ -850,7 +857,7 @@ namespace
 } // namespace
 
 bool
-nsSMILTimedElement::SetAttr(nsIAtom* aAttribute, const nsAString& aValue,
+nsSMILTimedElement::SetAttr(nsAtom* aAttribute, const nsAString& aValue,
                             nsAttrValue& aResult,
                             Element* aContextNode,
                             nsresult* aParseResult)
@@ -891,7 +898,7 @@ nsSMILTimedElement::SetAttr(nsIAtom* aAttribute, const nsAString& aValue,
 }
 
 bool
-nsSMILTimedElement::UnsetAttr(nsIAtom* aAttribute)
+nsSMILTimedElement::UnsetAttr(nsAtom* aAttribute)
 {
   bool foundMatch = true;
 
@@ -1317,21 +1324,23 @@ nsSMILTimedElement::SetBeginOrEndSpec(const nsAString& aSpec,
     return NS_ERROR_FAILURE;
   }
 
-  nsresult rv = NS_OK;
-  while (tokenizer.hasMoreTokens() && NS_SUCCEEDED(rv)) {
+  bool hadFailure = false;
+  while (tokenizer.hasMoreTokens()) {
     nsAutoPtr<nsSMILTimeValueSpec>
       spec(new nsSMILTimeValueSpec(*this, aIsBegin));
-    rv = spec->SetSpec(tokenizer.nextToken(), aContextNode);
+    nsresult rv = spec->SetSpec(tokenizer.nextToken(), aContextNode);
     if (NS_SUCCEEDED(rv)) {
       timeSpecsList.AppendElement(spec.forget());
+    } else {
+      hadFailure = true;
     }
   }
 
-  if (NS_FAILED(rv)) {
-    ClearSpecs(timeSpecsList, instances, aRemove);
-  }
-
-  return rv;
+  // The return value from this function is only used to determine if we should
+  // print a console message or not, so we return failure if we had one or more
+  // failures but we don't need to differentiate between different types of
+  // failures or the number of failures.
+  return hadFailure ? NS_ERROR_FAILURE : NS_OK;
 }
 
 namespace
@@ -1924,8 +1933,11 @@ nsSMILTimedElement::GetRepeatDuration() const
 {
   nsSMILTimeValue multipliedDuration;
   if (mRepeatCount.IsDefinite() && mSimpleDur.IsDefinite()) {
-    multipliedDuration.SetMillis(
-      nsSMILTime(mRepeatCount * double(mSimpleDur.GetMillis())));
+    if (mRepeatCount * double(mSimpleDur.GetMillis()) <=
+        std::numeric_limits<nsSMILTime>::max()) {
+      multipliedDuration.SetMillis(
+        nsSMILTime(mRepeatCount * mSimpleDur.GetMillis()));
+    }
   } else {
     multipliedDuration.SetIndefinite();
   }
@@ -2204,13 +2216,13 @@ nsresult
 nsSMILTimedElement::AddInstanceTimeFromCurrentTime(nsSMILTime aCurrentTime,
     double aOffsetSeconds, bool aIsBegin)
 {
-  double offset = aOffsetSeconds * PR_MSEC_PER_SEC;
+  double offset = NS_round(aOffsetSeconds * PR_MSEC_PER_SEC);
 
   // Check we won't overflow the range of nsSMILTime
-  if (aCurrentTime + NS_round(offset) > INT64_MAX)
+  if (aCurrentTime + offset > std::numeric_limits<nsSMILTime>::max())
     return NS_ERROR_ILLEGAL_VALUE;
 
-  nsSMILTimeValue timeVal(aCurrentTime + int64_t(NS_round(offset)));
+  nsSMILTimeValue timeVal(aCurrentTime + int64_t(offset));
 
   RefPtr<nsSMILInstanceTime> instanceTime =
     new nsSMILInstanceTime(timeVal, nsSMILInstanceTime::SOURCE_DOM);
@@ -2376,7 +2388,8 @@ nsSMILTimedElement::FireTimeEventAsync(EventMessage aMsg, int32_t aDetail)
 
   nsCOMPtr<nsIRunnable> event =
     new AsyncTimeEventRunner(mAnimationElement, aMsg, aDetail);
-  NS_DispatchToMainThread(event);
+  mAnimationElement->OwnerDoc()->Dispatch(TaskCategory::Other,
+                                          event.forget());
 }
 
 const nsSMILInstanceTime*

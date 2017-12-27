@@ -35,6 +35,10 @@ class imgStatusNotifyRunnable;
 class ProxyBehaviour;
 
 namespace mozilla {
+namespace dom {
+class TabGroup;
+}
+
 namespace image {
 class Image;
 class ImageURL;
@@ -70,6 +74,7 @@ public:
   // (although not immediately after) doing so.
   nsresult Init(imgRequest* aOwner,
                 nsILoadGroup* aLoadGroup,
+                nsIDocument* aLoadingDocument,
                 ImageURL* aURI,
                 imgINotificationObserver* aObserver);
 
@@ -78,8 +83,9 @@ public:
                                                // previous owner has already
                                                // sent notifications out!
 
+  // Add the request to the load group, if any. This should only be called once
+  // during initialization.
   void AddToLoadGroup();
-  void RemoveFromLoadGroup(bool releaseLoadGroup);
 
   inline bool HasObserver() const {
     return mListener != nullptr;
@@ -101,10 +107,6 @@ public:
                       const mozilla::gfx::IntRect* aRect = nullptr) override;
   virtual void OnLoadComplete(bool aLastPart) override;
 
-  // imgIOnloadBlocker methods:
-  virtual void BlockOnload() override;
-  virtual void UnblockOnload() override;
-
   // Other, internal-only methods:
   virtual void SetHasImage() override;
 
@@ -119,15 +121,23 @@ public:
     mDeferNotifications = aDeferNotifications;
   }
 
+  bool IsOnEventTarget() const;
+  already_AddRefed<nsIEventTarget> GetEventTarget() const override;
+
   // Removes all animation consumers that were created with
   // IncrementAnimationConsumers. This is necessary since we need
   // to do it before the proxy itself is destroyed. See
   // imgRequest::RemoveProxy
   void ClearAnimationConsumers();
 
-  virtual nsresult Clone(imgINotificationObserver* aObserver,
-                         imgRequestProxy** aClone);
-  nsresult GetStaticRequest(imgRequestProxy** aReturn);
+  nsresult SyncClone(imgINotificationObserver* aObserver,
+                     nsIDocument* aLoadingDocument,
+                     imgRequestProxy** aClone);
+  nsresult Clone(imgINotificationObserver* aObserver,
+                 nsIDocument* aLoadingDocument,
+                 imgRequestProxy** aClone);
+  nsresult GetStaticRequest(nsIDocument* aLoadingDocument,
+                            imgRequestProxy** aReturn);
 
   nsresult GetURI(ImageURL** aURI);
 
@@ -155,15 +165,17 @@ protected:
       nsresult mStatus;
   };
 
+  /* Remove from and forget the load group. */
+  void RemoveFromLoadGroup();
+
+  /* Remove from the load group and readd as a background request. */
+  void MoveToBackgroundInLoadGroup();
+
   /* Finish up canceling ourselves */
   void DoCancel(nsresult status);
 
   /* Do the proper refcount management to null out mListener */
   void NullOutListener();
-
-  void DoRemoveFromLoadGroup() {
-    RemoveFromLoadGroup(true);
-  }
 
   // Return the ProgressTracker associated with mOwner and/or mImage. It may
   // live either on mOwner or mImage, depending on whether
@@ -184,8 +196,11 @@ protected:
   imgRequest* GetOwner() const;
 
   nsresult PerformClone(imgINotificationObserver* aObserver,
-                        imgRequestProxy* (aAllocFn)(imgRequestProxy*),
+                        nsIDocument* aLoadingDocument,
+                        bool aSyncNotify,
                         imgRequestProxy** aClone);
+
+  virtual imgRequestProxy* NewClonedProxy();
 
 public:
   NS_FORWARD_SAFE_NSITIMEDCHANNEL(TimedChannel())
@@ -195,7 +210,11 @@ protected:
 
 private:
   friend class imgCacheValidator;
-  friend imgRequestProxy* NewStaticProxy(imgRequestProxy* aThis);
+
+  void AddToOwner(nsIDocument* aLoadingDocument);
+
+  nsresult DispatchWithTargetIfAvailable(already_AddRefed<nsIRunnable> aEvent);
+  void DispatchWithTarget(already_AddRefed<nsIRunnable> aEvent);
 
   // The URI of our request.
   RefPtr<ImageURL> mURI;
@@ -208,18 +227,23 @@ private:
                                            "they are destroyed") mListener;
 
   nsCOMPtr<nsILoadGroup> mLoadGroup;
+  RefPtr<mozilla::dom::TabGroup> mTabGroup;
+  nsCOMPtr<nsIEventTarget> mEventTarget;
 
   nsLoadFlags mLoadFlags;
   uint32_t    mLockCount;
   uint32_t    mAnimationConsumers;
-  bool mCanceled;
-  bool mIsInLoadGroup;
-  bool mListenerIsStrongRef;
-  bool mDecodeRequested;
+  bool mCanceled : 1;
+  bool mIsInLoadGroup : 1;
+  bool mForceDispatchLoadGroup : 1;
+  bool mListenerIsStrongRef : 1;
+  bool mDecodeRequested : 1;
 
   // Whether we want to defer our notifications by the non-virtual Observer
   // interfaces as image loads proceed.
-  bool mDeferNotifications;
+  bool mDeferNotifications : 1;
+  bool mHadListener : 1;
+  bool mHadDispatch : 1;
 };
 
 // Used for static image proxies for which no requests are available, so
@@ -232,13 +256,8 @@ public:
 
   NS_IMETHOD GetImagePrincipal(nsIPrincipal** aPrincipal) override;
 
-  using imgRequestProxy::Clone;
-
-  virtual nsresult Clone(imgINotificationObserver* aObserver,
-                         imgRequestProxy** aClone) override;
-
 protected:
-  friend imgRequestProxy* NewStaticProxy(imgRequestProxy*);
+  imgRequestProxy* NewClonedProxy() override;
 
   // Our principal. We have to cache it, rather than accessing the underlying
   // request on-demand, because static proxies don't have an underlying request.

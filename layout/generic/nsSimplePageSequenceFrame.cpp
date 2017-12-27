@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -10,7 +11,6 @@
 #include "nsDeviceContext.h"
 #include "nsPresContext.h"
 #include "gfxContext.h"
-#include "nsRenderingContext.h"
 #include "nsGkAtoms.h"
 #include "nsIPresShell.h"
 #include "nsIPrintSettings.h"
@@ -44,13 +44,11 @@ NS_NewSimplePageSequenceFrame(nsIPresShell* aPresShell, nsStyleContext* aContext
 
 NS_IMPL_FRAMEARENA_HELPERS(nsSimplePageSequenceFrame)
 
-nsSimplePageSequenceFrame::nsSimplePageSequenceFrame(nsStyleContext* aContext) :
-  nsContainerFrame(aContext),
-  mTotalPages(-1),
-  mSelectionHeight(-1),
-  mYSelOffset(0),
-  mCalledBeginPage(false),
-  mCurrentCanvasListSetup(false)
+nsSimplePageSequenceFrame::nsSimplePageSequenceFrame(nsStyleContext* aContext)
+  : nsContainerFrame(aContext, kClassID)
+  , mTotalPages(-1)
+  , mCalledBeginPage(false)
+  , mCurrentCanvasListSetup(false)
 {
   nscoord halfInch = PresContext()->CSSTwipsToAppUnits(NS_INCHES_TO_TWIPS(0.5));
   mMargin.SizeTo(halfInch, halfInch, halfInch, halfInch);
@@ -153,9 +151,8 @@ nsSimplePageSequenceFrame::Reflow(nsPresContext*     aPresContext,
                   "A Page Sequence is only for real pages");
   DO_GLOBAL_REFLOW_COUNT("nsSimplePageSequenceFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
+  MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
   NS_FRAME_TRACE_REFLOW_IN("nsSimplePageSequenceFrame::Reflow");
-
-  aStatus.Reset();  // we're always complete
 
   // Don't do incremental reflow until we've taught tables how to do
   // it right in paginated mode.
@@ -227,12 +224,6 @@ nsSimplePageSequenceFrame::Reflow(nsPresContext*     aPresContext,
   nsSize pageSize = aPresContext->GetPageSize();
 
   mPageData->mReflowSize = pageSize;
-  // If we're printing a selection, we need to reflow with
-  // unconstrained height, to make sure we'll get to the selection
-  // even if it's beyond the first page of content.
-  if (nsIPrintSettings::kRangeSelection == mPrintRangeType) {
-    mPageData->mReflowSize.height = NS_UNCONSTRAINEDSIZE;
-  }
   mPageData->mReflowMargin = mMargin;
 
   // We use the CSS "margin" property on the -moz-page pseudoelement
@@ -303,7 +294,7 @@ nsSimplePageSequenceFrame::Reflow(nsPresContext*     aPresContext,
   // Set Page Number Info
   int32_t pageNum = 1;
   for (nsFrameList::Enumerator e(mFrames); !e.AtEnd(); e.Next()) {
-    MOZ_ASSERT(e.get()->GetType() == nsGkAtoms::pageFrame,
+    MOZ_ASSERT(e.get()->IsPageFrame(),
                "only expecting nsPageFrame children. Other children will make "
                "this static_cast bogus & probably violate other assumptions");
     nsPageFrame* pf = static_cast<nsPageFrame*>(e.get());
@@ -312,12 +303,11 @@ nsSimplePageSequenceFrame::Reflow(nsPresContext*     aPresContext,
   }
 
   nsAutoString formattedDateString;
-  time_t ltime;
-  time( &ltime );
-  if (NS_SUCCEEDED(DateTimeFormat::FormatTime(kDateFormatShort,
-                                              kTimeFormatNoSeconds,
-                                              ltime,
-                                              formattedDateString))) {
+  PRTime now = PR_Now();
+  if (NS_SUCCEEDED(DateTimeFormat::FormatPRTime(kDateFormatShort,
+                                                kTimeFormatNoSeconds,
+                                                now,
+                                                formattedDateString))) {
     SetDateTimeStr(formattedDateString);
   }
 
@@ -329,7 +319,7 @@ nsSimplePageSequenceFrame::Reflow(nsPresContext*     aPresContext,
   aDesiredSize.SetOverflowAreasToDesiredBounds();
   FinishAndStoreOverflow(&aDesiredSize);
 
-  // cache the size so we can set the desired size 
+  // cache the size so we can set the desired size
   // for the other reflows that happen
   mSize.width  = maxXMost;
   mSize.height = y;
@@ -390,11 +380,11 @@ nsSimplePageSequenceFrame::GetPrintRange(int32_t* aFromPage, int32_t* aToPage)
 }
 
 // Helper Function
-void 
+void
 nsSimplePageSequenceFrame::SetPageNumberFormat(const char* aPropName, const char* aDefPropVal, bool aPageNumOnly)
 {
   // Doing this here so we only have to go get these formats once
-  nsXPIDLString pageNumberFormat;
+  nsAutoString pageNumberFormat;
   // Now go get the Localized Page Formating String
   nsresult rv =
     nsContentUtils::GetLocalizedString(nsContentUtils::ePRINTING_PROPERTIES,
@@ -430,15 +420,14 @@ nsSimplePageSequenceFrame::StartPrint(nsPresContext*    aPresContext,
   aPrintSettings->GetEndPageRange(&mToPageNum);
   aPrintSettings->GetPageRanges(mPageRanges);
 
-  mDoingPageRange = nsIPrintSettings::kRangeSpecifiedPageRange == mPrintRangeType ||
-                    nsIPrintSettings::kRangeSelection == mPrintRangeType;
+  mDoingPageRange = nsIPrintSettings::kRangeSpecifiedPageRange == mPrintRangeType;
 
   // If printing a range of pages make sure at least the starting page
   // number is valid
-  int32_t totalPages = mFrames.GetLength();
+  mTotalPages = mFrames.GetLength();
 
   if (mDoingPageRange) {
-    if (mFromPageNum > totalPages) {
+    if (mFromPageNum > mTotalPages) {
       return NS_ERROR_INVALID_ARG;
     }
   }
@@ -446,41 +435,7 @@ nsSimplePageSequenceFrame::StartPrint(nsPresContext*    aPresContext,
   // Begin printing of the document
   nsresult rv = NS_OK;
 
-  // Determine if we are rendering only the selection
-  aPresContext->SetIsRenderingOnlySelection(nsIPrintSettings::kRangeSelection == mPrintRangeType);
-
-
-  if (mDoingPageRange) {
-    // XXX because of the hack for making the selection all print on one page
-    // we must make sure that the page is sized correctly before printing.
-    nscoord height = aPresContext->GetPageSize().height;
-
-    int32_t pageNum = 1;
-    nscoord y = 0;//mMargin.top;
-
-    for (nsFrameList::Enumerator e(mFrames); !e.AtEnd(); e.Next()) {
-      nsIFrame* page = e.get();
-      if (pageNum >= mFromPageNum && pageNum <= mToPageNum) {
-        nsRect rect = page->GetRect();
-        rect.y = y;
-        rect.height = height;
-        page->SetRect(rect);
-        y += rect.height + mMargin.top + mMargin.bottom;
-      }
-      pageNum++;
-    }
-
-    // adjust total number of pages
-    if (nsIPrintSettings::kRangeSelection != mPrintRangeType) {
-      totalPages = pageNum - 1;
-    }
-  }
-
   mPageNum = 1;
-
-  if (mTotalPages == -1) {
-    mTotalPages = totalPages;
-  }
 
   return rv;
 }
@@ -547,13 +502,13 @@ nsSimplePageSequenceFrame::DetermineWhetherToPrintPage()
       return;
     } else {
       int32_t length = mPageRanges.Length();
-    
+
       // Page ranges are pairs (start, end)
       if (length && (length % 2 == 0)) {
         mPrintThisPage = false;
-      
+
         int32_t i;
-        for (i = 0; i < length; i += 2) {          
+        for (i = 0; i < length; i += 2) {
           if (mPageRanges[i] <= mPageNum && mPageNum <= mPageRanges[i+1]) {
             mPrintThisPage = true;
             break;
@@ -572,10 +527,6 @@ nsSimplePageSequenceFrame::DetermineWhetherToPrintPage()
     if (!printEvenPages) {
       mPrintThisPage = false;  // don't print even numbered page
     }
-  }
-  
-  if (nsIPrintSettings::kRangeSelection == mPrintRangeType) {
-    mPrintThisPage = true;
   }
 }
 
@@ -601,7 +552,7 @@ nsSimplePageSequenceFrame::PrePrintNextPage(nsITimerCallback* aCallback, bool* a
     *aDone = true;
     return NS_ERROR_FAILURE;
   }
-  
+
   DetermineWhetherToPrintPage();
   // Nothing to do if the current page doesn't get printed OR rendering to
   // preview. For preview, the `CallPrintCallback` is called from within the
@@ -628,7 +579,7 @@ nsSimplePageSequenceFrame::PrePrintNextPage(nsITimerCallback* aCallback, bool* a
       NS_ENSURE_SUCCESS(rv, rv);
 
       mCalledBeginPage = true;
-      
+
       RefPtr<gfxContext> renderingContext = dc->CreateRenderingContext();
       NS_ENSURE_TRUE(renderingContext, NS_ERROR_OUT_OF_MEMORY);
 
@@ -685,27 +636,16 @@ nsSimplePageSequenceFrame::ResetPrintCanvasList()
   }
 
   mCurrentCanvasList.Clear();
-  mCurrentCanvasListSetup = false; 
+  mCurrentCanvasListSetup = false;
   return NS_OK;
-} 
+}
 
 NS_IMETHODIMP
 nsSimplePageSequenceFrame::PrintNextPage()
 {
-  // This method would be very straightforward except that the
-  // "Print Selection Only" functionality (which is a broken mess) is
-  // integrated here.  The thing to understand is that if we're printing a
-  // selection (which may contain multiple ranges) then we only enter this
-  // function once since the content to print is laid out as one arbitrarily
-  // long nsPageFrame instead of multiple nsPageFrames that are sized to fit
-  // the printer paper size(!).  Each of the "pages" between the start and end
-  // of the selection are printed by offsetting the nsPageContentFrame by the
-  // index of the page being printed and then drawing the nsPageContentFrame.
-  // This does not work for IFrames.
-  //
   // Note: When print al the pages or a page range the printed page shows the
   // actual page number, when printing selection it prints the page number starting
-  // with the first page of the selection. For example if the user has a 
+  // with the first page of the selection. For example if the user has a
   // selection that starts on page 2 and ends on page 3, the page numbers when
   // print are 1 and then two (which is different than printing a page range, where
   // the page numbers would have been 2 and then 3)
@@ -722,84 +662,30 @@ nsSimplePageSequenceFrame::PrintNextPage()
   if (mPrintThisPage) {
     nsDeviceContext* dc = PresContext()->DeviceContext();
 
-    nsPageFrame * pf = static_cast<nsPageFrame*>(currentPageFrame);
-    pf->SetPageNumInfo(mPageNum, mTotalPages);
-    pf->SetSharedPageData(mPageData);
-
-    // Only used if we're printing a selection:
-    nsIFrame* selectionContentFrame = nullptr;
-    nscoord pageContentHeight =
-      PresContext()->GetPageSize().height - (mMargin.top + mMargin.bottom);
-    nscoord selectionY = pageContentHeight;
-    int32_t selectionCurrentPageNum = 1;
-    bool haveUnfinishedSelectionToPrint = false;
-
-    if (mSelectionHeight >= 0) {
-      selectionContentFrame = currentPageFrame->PrincipalChildList().FirstChild();
-      MOZ_ASSERT(selectionContentFrame->GetType() == nsGkAtoms::pageContentFrame &&
-                 !selectionContentFrame->GetNextSibling(),
-                 "Unexpected frame tree");
-      // To print a selection we reposition the page content frame for each
-      // page.  We can do this (and not have to bother resetting the position
-      // after we're done) because we are printing from a static clone document
-      // that is thrown away after we finish printing.
-      selectionContentFrame->SetPosition(selectionContentFrame->GetPosition() +
-                                         nsPoint(0, -mYSelOffset));
-      nsContainerFrame::PositionChildViews(selectionContentFrame);
+    if (PresContext()->IsRootPaginatedDocument()) {
+      if (!mCalledBeginPage) {
+        // We must make sure BeginPage() has been called since some printing
+        // backends can't give us a valid rendering context for a [physical]
+        // page otherwise.
+        PR_PL(("\n"));
+        PR_PL(("***************** BeginPage *****************\n"));
+        rv = dc->BeginPage();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
     }
 
-    do {
-      if (PresContext()->IsRootPaginatedDocument()) {
-        if (!mCalledBeginPage) {
-          // We must make sure BeginPage() has been called since some printing
-          // backends can't give us a valid rendering context for a [physical]
-          // page otherwise.
-          PR_PL(("\n"));
-          PR_PL(("***************** BeginPage *****************\n"));
-          rv = dc->BeginPage();
-          NS_ENSURE_SUCCESS(rv, rv);
-        }
+    PR_PL(("SeqFr::PrintNextPage -> %p PageNo: %d", currentPageFrame, mPageNum));
 
-        // Reset this flag. We reset it early here because if we loop around to
-        // print another page's worth of selection we need to call BeginPage
-        // again:
-        mCalledBeginPage = false;
-      }
+    // CreateRenderingContext can fail
+    RefPtr<gfxContext> gCtx = dc->CreateRenderingContext();
+    NS_ENSURE_TRUE(gCtx, NS_ERROR_OUT_OF_MEMORY);
 
-      PR_PL(("SeqFr::PrintNextPage -> %p PageNo: %d", pf, mPageNum));
-
-      // CreateRenderingContext can fail
-      RefPtr<gfxContext> gCtx = dc->CreateRenderingContext();
-      NS_ENSURE_TRUE(gCtx, NS_ERROR_OUT_OF_MEMORY);
-
-      nsRenderingContext renderingContext(gCtx);
-
-      nsRect drawingRect(nsPoint(0, 0), currentPageFrame->GetSize());
-      nsRegion drawingRegion(drawingRect);
-      nsLayoutUtils::PaintFrame(&renderingContext, currentPageFrame,
-                                drawingRegion, NS_RGBA(0,0,0,0),
-                                nsDisplayListBuilderMode::PAINTING,
-                                nsLayoutUtils::PaintFrameFlags::PAINT_SYNC_DECODE_IMAGES);
-
-      if (mSelectionHeight >= 0) {
-        haveUnfinishedSelectionToPrint = (selectionY < mSelectionHeight);
-        if (haveUnfinishedSelectionToPrint) {
-          selectionY += pageContentHeight;
-          selectionCurrentPageNum++;
-          pf->SetPageNumInfo(selectionCurrentPageNum, mTotalPages);
-          selectionContentFrame->SetPosition(selectionContentFrame->GetPosition() +
-                                             nsPoint(0, -pageContentHeight));
-          nsContainerFrame::PositionChildViews(selectionContentFrame);
-
-          // We're going to loop and call BeginPage to print another page's worth
-          // of selection so we need to call EndPage first.  (Otherwise, EndPage
-          // is called in DoEndPage.)
-          PR_PL(("***************** End Page (PrintNextPage) *****************\n"));
-          rv = dc->EndPage();
-          NS_ENSURE_SUCCESS(rv, rv);
-        }
-      }
-    } while (haveUnfinishedSelectionToPrint);
+    nsRect drawingRect(nsPoint(0, 0), currentPageFrame->GetSize());
+    nsRegion drawingRegion(drawingRect);
+    nsLayoutUtils::PaintFrame(gCtx, currentPageFrame,
+                              drawingRegion, NS_RGBA(0,0,0,0),
+                              nsDisplayListBuilderMode::PAINTING,
+                              nsLayoutUtils::PaintFrameFlags::PAINT_SYNC_DECODE_IMAGES);
   }
   return rv;
 }
@@ -815,9 +701,10 @@ nsSimplePageSequenceFrame::DoPageEnd()
   }
 
   ResetPrintCanvasList();
+  mCalledBeginPage = false;
 
   mPageNum++;
-  
+
   return rv;
 }
 
@@ -830,7 +717,6 @@ ComputePageSequenceTransform(nsIFrame* aFrame, float aAppUnitsPerPixel)
 
 void
 nsSimplePageSequenceFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                            const nsRect&           aDirtyRect,
                                             const nsDisplayListSet& aLists)
 {
   DisplayBorderBackgroundOutline(aBuilder, aLists);
@@ -844,36 +730,34 @@ nsSimplePageSequenceFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     clipState.Clear();
 
     nsIFrame* child = PrincipalChildList().FirstChild();
-    nsRect dirty = aDirtyRect;
-    dirty.ScaleInverseRoundOut(PresContext()->GetPrintPreviewScale());
+    nsRect visible = aBuilder->GetVisibleRect();
+    visible.ScaleInverseRoundOut(PresContext()->GetPrintPreviewScale());
 
     while (child) {
-      if (child->GetVisualOverflowRectRelativeToParent().Intersects(dirty)) {
-        child->BuildDisplayListForStackingContext(aBuilder,
-            dirty - child->GetPosition(), &content);
-        aBuilder->ResetMarkedFramesForDisplayList();
+      if (child->GetVisualOverflowRectRelativeToParent().Intersects(visible)) {
+        nsDisplayListBuilder::AutoBuildingDisplayList
+          buildingForChild(aBuilder, child,
+                           visible - child->GetPosition(),
+                           visible - child->GetPosition(),
+                           aBuilder->IsAtRootOfPseudoStackingContext());
+        child->BuildDisplayListForStackingContext(aBuilder, &content);
+        aBuilder->ResetMarkedFramesForDisplayList(this);
       }
       child = child->GetNextSibling();
     }
   }
 
-  content.AppendNewToTop(new (aBuilder)
+  content.AppendToTop(new (aBuilder)
       nsDisplayTransform(aBuilder, this, &content, content.GetVisibleRect(),
                          ::ComputePageSequenceTransform));
 
   aLists.Content()->AppendToTop(&content);
 }
 
-nsIAtom*
-nsSimplePageSequenceFrame::GetType() const
-{
-  return nsGkAtoms::sequenceFrame; 
-}
-
 //------------------------------------------------------------------------------
 void
 nsSimplePageSequenceFrame::SetPageNumberFormat(const nsAString& aFormatStr, bool aForPageNumOnly)
-{ 
+{
   NS_ASSERTION(mPageData != nullptr, "mPageData string cannot be null!");
 
   if (aForPageNumOnly) {
@@ -886,7 +770,7 @@ nsSimplePageSequenceFrame::SetPageNumberFormat(const nsAString& aFormatStr, bool
 //------------------------------------------------------------------------------
 void
 nsSimplePageSequenceFrame::SetDateTimeStr(const nsAString& aDateTimeStr)
-{ 
+{
   NS_ASSERTION(mPageData != nullptr, "mPageData string cannot be null!");
 
   mPageData->mDateTimeStr = aDateTimeStr;
@@ -895,7 +779,7 @@ nsSimplePageSequenceFrame::SetDateTimeStr(const nsAString& aDateTimeStr)
 //------------------------------------------------------------------------------
 // For Shrink To Fit
 //
-// Return the percentage that the page needs to shrink to 
+// Return the percentage that the page needs to shrink to
 //
 NS_IMETHODIMP
 nsSimplePageSequenceFrame::GetSTFPercent(float& aSTFPercent)
@@ -903,4 +787,13 @@ nsSimplePageSequenceFrame::GetSTFPercent(float& aSTFPercent)
   NS_ENSURE_TRUE(mPageData, NS_ERROR_UNEXPECTED);
   aSTFPercent = mPageData->mShrinkToFitRatio;
   return NS_OK;
+}
+
+void
+nsSimplePageSequenceFrame::AppendDirectlyOwnedAnonBoxes(
+  nsTArray<OwnedAnonBox>& aResult)
+{
+  if (mFrames.NotEmpty()) {
+    aResult.AppendElement(mFrames.FirstChild());
+  }
 }

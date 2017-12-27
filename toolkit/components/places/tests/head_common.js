@@ -6,8 +6,8 @@
 // It is expected that the test files importing this file define Cu etc.
 /* global Cu, Ci, Cc, Cr */
 
-const CURRENT_SCHEMA_VERSION = 37;
-const FIRST_UPGRADABLE_SCHEMA_VERSION = 11;
+const CURRENT_SCHEMA_VERSION = 41;
+const FIRST_UPGRADABLE_SCHEMA_VERSION = 30;
 
 const NS_APP_USER_PROFILE_50_DIR = "ProfD";
 const NS_APP_PROFILE_DIR_STARTUP = "ProfDS";
@@ -32,18 +32,18 @@ XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
                                   "resource://gre/modules/FileUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
                                   "resource://gre/modules/NetUtil.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-                                  "resource://gre/modules/Promise.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PromiseUtils",
+                                  "resource://gre/modules/PromiseUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Services",
                                   "resource://gre/modules/Services.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Task",
-                                  "resource://gre/modules/Task.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "BookmarkJSONUtils",
                                   "resource://gre/modules/BookmarkJSONUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "BookmarkHTMLUtils",
                                   "resource://gre/modules/BookmarkHTMLUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesBackups",
                                   "resource://gre/modules/PlacesBackups.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PlacesSyncUtils",
+                                  "resource://gre/modules/PlacesSyncUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesTestUtils",
                                   "resource://testing-common/PlacesTestUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesTransactions",
@@ -52,6 +52,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "OS",
                                   "resource://gre/modules/osfile.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Sqlite",
                                   "resource://gre/modules/Sqlite.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "TestUtils",
+                                  "resource://testing-common/TestUtils.jsm");
 
 // This imports various other objects in addition to PlacesUtils.
 Cu.import("resource://gre/modules/PlacesUtils.jsm");
@@ -75,10 +77,10 @@ XPCOMUtils.defineLazyGetter(this, "SMALLSVG_DATA_URI", function() {
 var gTestDir = do_get_cwd();
 
 // Initialize profile.
-var gProfD = do_get_profile();
+var gProfD = do_get_profile(true);
 
 Services.prefs.setBoolPref("browser.urlbar.usepreloadedtopurls.enabled", false);
-do_register_cleanup(() =>
+registerCleanupFunction(() =>
   Services.prefs.clearUserPref("browser.urlbar.usepreloadedtopurls.enabled"));
 
 // Remove any old database.
@@ -183,7 +185,7 @@ function readFileData(aFile) {
  */
 function readFileOfLength(aFileName, aExpectedLength) {
   let data = readFileData(do_get_file(aFileName));
-  do_check_eq(data.length, aExpectedLength);
+  Assert.equal(data.length, aExpectedLength);
   return data;
 }
 
@@ -382,17 +384,17 @@ function promiseTopicObserved(aTopic) {
  * Simulates a Places shutdown.
  */
 var shutdownPlaces = function() {
-  do_print("shutdownPlaces: starting");
+  info("shutdownPlaces: starting");
   let promise = new Promise(resolve => {
     Services.obs.addObserver(resolve, "places-connection-closed");
   });
   let hs = PlacesUtils.history.QueryInterface(Ci.nsIObserver);
   hs.observe(null, "profile-change-teardown", null);
-  do_print("shutdownPlaces: sent profile-change-teardown");
+  info("shutdownPlaces: sent profile-change-teardown");
   hs.observe(null, "test-simulate-places-shutdown", null);
-  do_print("shutdownPlaces: sent test-simulate-places-shutdown");
+  info("shutdownPlaces: sent test-simulate-places-shutdown");
   return promise.then(() => {
-    do_print("shutdownPlaces: complete");
+    info("shutdownPlaces: complete");
   });
 };
 
@@ -415,11 +417,11 @@ function create_bookmarks_html(aFilename) {
   remove_bookmarks_html();
   let bookmarksHTMLFile = gTestDir.clone();
   bookmarksHTMLFile.append(aFilename);
-  do_check_true(bookmarksHTMLFile.exists());
+  Assert.ok(bookmarksHTMLFile.exists());
   bookmarksHTMLFile.copyTo(gProfD, FILENAME_BOOKMARKS_HTML);
   let profileBookmarksHTMLFile = gProfD.clone();
   profileBookmarksHTMLFile.append(FILENAME_BOOKMARKS_HTML);
-  do_check_true(profileBookmarksHTMLFile.exists());
+  Assert.ok(profileBookmarksHTMLFile.exists());
   return profileBookmarksHTMLFile;
 }
 
@@ -432,7 +434,7 @@ function remove_bookmarks_html() {
   profileBookmarksHTMLFile.append(FILENAME_BOOKMARKS_HTML);
   if (profileBookmarksHTMLFile.exists()) {
     profileBookmarksHTMLFile.remove(false);
-    do_check_false(profileBookmarksHTMLFile.exists());
+    Assert.ok(!profileBookmarksHTMLFile.exists());
   }
 }
 
@@ -445,7 +447,7 @@ function remove_bookmarks_html() {
 function check_bookmarks_html() {
   let profileBookmarksHTMLFile = gProfD.clone();
   profileBookmarksHTMLFile.append(FILENAME_BOOKMARKS_HTML);
-  do_check_true(profileBookmarksHTMLFile.exists());
+  Assert.ok(profileBookmarksHTMLFile.exists());
   return profileBookmarksHTMLFile;
 }
 
@@ -466,7 +468,7 @@ function create_JSON_backup(aFilename) {
   bookmarksBackupDir.append("bookmarkbackups");
   if (!bookmarksBackupDir.exists()) {
     bookmarksBackupDir.create(Ci.nsIFile.DIRECTORY_TYPE, parseInt("0755", 8));
-    do_check_true(bookmarksBackupDir.exists());
+    Assert.ok(bookmarksBackupDir.exists());
   }
   let profileBookmarksJSONFile = bookmarksBackupDir.clone();
   profileBookmarksJSONFile.append(FILENAME_BOOKMARKS_JSON);
@@ -475,11 +477,11 @@ function create_JSON_backup(aFilename) {
   }
   let bookmarksJSONFile = gTestDir.clone();
   bookmarksJSONFile.append(aFilename);
-  do_check_true(bookmarksJSONFile.exists());
+  Assert.ok(bookmarksJSONFile.exists());
   bookmarksJSONFile.copyTo(bookmarksBackupDir, FILENAME_BOOKMARKS_JSON);
   profileBookmarksJSONFile = bookmarksBackupDir.clone();
   profileBookmarksJSONFile.append(FILENAME_BOOKMARKS_JSON);
-  do_check_true(profileBookmarksJSONFile.exists());
+  Assert.ok(profileBookmarksJSONFile.exists());
   return profileBookmarksJSONFile;
 }
 
@@ -492,7 +494,7 @@ function remove_all_JSON_backups() {
   bookmarksBackupDir.append("bookmarkbackups");
   if (bookmarksBackupDir.exists()) {
     bookmarksBackupDir.remove(true);
-    do_check_false(bookmarksBackupDir.exists());
+    Assert.ok(!bookmarksBackupDir.exists());
   }
 }
 
@@ -522,7 +524,7 @@ function check_JSON_backup(aIsAutomaticBackup) {
     profileBookmarksJSONFile.append("bookmarkbackups");
     profileBookmarksJSONFile.append(FILENAME_BOOKMARKS_JSON);
   }
-  do_check_true(profileBookmarksJSONFile.exists());
+  Assert.ok(profileBookmarksJSONFile.exists());
   return profileBookmarksJSONFile;
 }
 
@@ -618,7 +620,7 @@ function do_check_valid_places_guid(aGuid,
   if (!aStack) {
     aStack = Components.stack.caller;
   }
-  do_check_true(/^[a-zA-Z0-9\-_]{12}$/.test(aGuid), aStack);
+  Assert.ok(/^[a-zA-Z0-9\-_]{12}$/.test(aGuid), aStack);
 }
 
 /**
@@ -641,7 +643,7 @@ function do_get_guid_for_uri(aURI,
      WHERE url_hash = hash(:url) AND url = :url`
   );
   stmt.params.url = aURI.spec;
-  do_check_true(stmt.executeStep(), aStack);
+  Assert.ok(stmt.executeStep(), aStack);
   let guid = stmt.row.guid;
   stmt.finalize();
   do_check_valid_places_guid(guid, aStack);
@@ -662,7 +664,7 @@ function do_check_guid_for_uri(aURI,
   let guid = do_get_guid_for_uri(aURI, caller);
   if (aGUID) {
     do_check_valid_places_guid(aGUID, caller);
-    do_check_eq(guid, aGUID, caller);
+    Assert.equal(guid, aGUID, caller);
   }
 }
 
@@ -686,7 +688,7 @@ function do_get_guid_for_bookmark(aId,
      WHERE id = :item_id`
   );
   stmt.params.item_id = aId;
-  do_check_true(stmt.executeStep(), aStack);
+  Assert.ok(stmt.executeStep(), aStack);
   let guid = stmt.row.guid;
   stmt.finalize();
   do_check_valid_places_guid(guid, aStack);
@@ -707,7 +709,7 @@ function do_check_guid_for_bookmark(aId,
   let guid = do_get_guid_for_bookmark(aId, caller);
   if (aGUID) {
     do_check_valid_places_guid(aGUID, caller);
-    do_check_eq(guid, aGUID, caller);
+    Assert.equal(guid, aGUID, caller);
   }
 }
 
@@ -810,13 +812,13 @@ NavHistoryResultObserver.prototype = {
  * @rejects JavaScript exception.
  */
 function promiseIsURIVisited(aURI) {
-  let deferred = Promise.defer();
+  return new Promise(resolve => {
 
-  PlacesUtils.asyncHistory.isURIVisited(aURI, function(unused, aIsVisited) {
-    deferred.resolve(aIsVisited);
+    PlacesUtils.asyncHistory.isURIVisited(aURI, function(unused, aIsVisited) {
+      resolve(aIsVisited);
+    });
+
   });
-
-  return deferred.promise;
 }
 
 function checkBookmarkObject(info) {
@@ -832,11 +834,11 @@ function checkBookmarkObject(info) {
 /**
  * Reads foreign_count value for a given url.
  */
-function* foreign_count(url) {
+async function foreign_count(url) {
   if (url instanceof Ci.nsIURI)
     url = url.spec;
-  let db = yield PlacesUtils.promiseDBConnection();
-  let rows = yield db.executeCached(
+  let db = await PlacesUtils.promiseDBConnection();
+  let rows = await db.executeCached(
     `SELECT foreign_count FROM moz_places
      WHERE url_hash = hash(:url) AND url = :url
     `, { url });
@@ -863,15 +865,17 @@ function sortBy(array, prop) {
  *        The page's URL
  * @param icon
  *        The URL of the favicon to be set.
+ * @param [optional] forceReload
+ *        Whether to enforce reloading the icon.
  */
-function setFaviconForPage(page, icon) {
+function setFaviconForPage(page, icon, forceReload = true) {
   let pageURI = page instanceof Ci.nsIURI ? page
                                           : NetUtil.newURI(new URL(page).href);
   let iconURI = icon instanceof Ci.nsIURI ? icon
                                           : NetUtil.newURI(new URL(icon).href);
   return new Promise(resolve => {
     PlacesUtils.favicons.setAndFetchFaviconForPage(
-      pageURI, iconURI, true,
+      pageURI, iconURI, forceReload,
       PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE,
       resolve,
       Services.scriptSecurityManager.getSystemPrincipal()
@@ -882,9 +886,12 @@ function setFaviconForPage(page, icon) {
 function getFaviconUrlForPage(page, width = 0) {
   let pageURI = page instanceof Ci.nsIURI ? page
                                           : NetUtil.newURI(new URL(page).href);
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     PlacesUtils.favicons.getFaviconURLForPage(pageURI, iconURI => {
-      resolve(iconURI.spec);
+      if (iconURI)
+        resolve(iconURI.spec);
+      else
+        reject("Unable to find an icon for " + pageURI.spec);
     }, width);
   });
 }
@@ -902,7 +909,7 @@ function getFaviconDataForPage(page, width = 0) {
 /**
  * Asynchronously compares contents from 2 favicon urls.
  */
-function* compareFavicons(icon1, icon2, msg) {
+async function compareFavicons(icon1, icon2, msg) {
   icon1 = new URL(icon1 instanceof Ci.nsIURI ? icon1.spec : icon1);
   icon2 = new URL(icon2 instanceof Ci.nsIURI ? icon2.spec : icon2);
 
@@ -920,9 +927,34 @@ function* compareFavicons(icon1, icon2, msg) {
     });
   }
 
-  let data1 = yield getIconData(icon1);
+  let data1 = await getIconData(icon1);
   Assert.ok(data1.length > 0, "Should fetch icon data");
-  let data2 = yield getIconData(icon2);
+  let data2 = await getIconData(icon2);
   Assert.ok(data2.length > 0, "Should fetch icon data");
   Assert.deepEqual(data1, data2, msg);
+}
+
+/**
+ * Get the internal "root" folder name for an item, specified by its itemId.
+ * If the itemId does not point to a root folder, null is returned.
+ *
+ * @param aItemId
+ *        the item id.
+ * @return the internal-root name for the root folder, if aItemId points
+ * to such folder, null otherwise.
+ */
+function mapItemIdToInternalRootName(aItemId) {
+  switch (aItemId) {
+    case PlacesUtils.placesRootId:
+      return "placesRoot";
+    case PlacesUtils.bookmarksMenuFolderId:
+      return "bookmarksMenuFolder";
+    case PlacesUtils.toolbarFolderId:
+      return "toolbarFolder";
+    case PlacesUtils.unfiledBookmarksFolderId:
+      return "unfiledBookmarksFolder";
+    case PlacesUtils.mobileFolderId:
+      return "mobileFolder";
+  }
+  return null;
 }

@@ -10,8 +10,20 @@
 
 %{ C++
 #include "js/TypeDecls.h"
+#include "mozilla/Maybe.h"
+#include "mozilla/NotNull.h"
+#include "mozilla/UniquePtr.h"
+#include "nsCOMPtr.h"
+#include "nsIURI.h"
 class nsPresContext;
 class nsIPresShell;
+namespace mozilla {
+class Encoding;
+class HTMLEditor;
+namespace dom {
+class ClientSource;
+} // namespace dom
+}
 %}
 
 /**
@@ -20,6 +32,9 @@ class nsIPresShell;
 
 [ptr] native nsPresContext(nsPresContext);
 [ptr] native nsIPresShell(nsIPresShell);
+[ref] native MaybeURI(mozilla::Maybe<nsCOMPtr<nsIURI>>);
+[ref] native Encoding(const mozilla::Encoding*);
+      native UniqueClientSource(mozilla::UniquePtr<mozilla::dom::ClientSource>);
 
 interface nsIURI;
 interface nsIChannel;
@@ -45,6 +60,7 @@ interface nsITabParent;
 interface nsITabChild;
 interface nsICommandManager;
 interface nsICommandParams;
+interface nsILoadURIDelegate;
 native TabChildRef(already_AddRefed<nsITabChild>);
 
 [scriptable, builtinclass, uuid(049234fe-da10-478b-bc5d-bc6f9a1ba63d)]
@@ -116,6 +132,9 @@ interface nsIDocShell : nsIDocShellTreeItem
 
   const long INTERNAL_LOAD_FLAGS_NO_OPENER               = 0x100;
 
+  // Whether a top-level data URI navigation is allowed for that load
+  const long INTERNAL_LOAD_FLAGS_FORCE_ALLOW_DATA_URI    = 0x200;
+
   // NB: 0x80 is available.
 
   /**
@@ -127,6 +146,10 @@ interface nsIDocShell : nsIDocShellTreeItem
    * @param aOriginalURI         - The URI to set as the originalURI on the channel
    *                               that does the load. If null, aURI will be set as
    *                               the originalURI.
+   * @param aResultPrincipalURI  - The URI to be set to loadInfo.resultPrincipalURI
+   *                               When Nothing, there will be no change
+   *                               When Some, the principal URI will overwrite even
+   *                               with a null value.
    * @param aLoadReplace         - If set LOAD_REPLACE flag will be set on the
    *                               channel. aOriginalURI is null, this argument is
    *                               ignored.
@@ -160,6 +183,8 @@ interface nsIDocShell : nsIDocShellTreeItem
    * @param aFileName            - Non-null when the link should be downloaded as
                                    the given filename.
    * @param aPostDataStream      - Post data stream (if POSTing)
+   * @param aPostDataStreamLength - Post data stream length. Use -1 if the length
+                                    of the stream is unknown.
    * @param aHeadersStream       - Stream containing "extra" request headers...
    * @param aLoadFlags           - Flags to modify load behaviour. Flags are defined
    *                               in nsIWebNavigation.
@@ -174,6 +199,7 @@ interface nsIDocShell : nsIDocShellTreeItem
    */
   [noscript]void internalLoad(in nsIURI aURI,
                               in nsIURI aOriginalURI,
+                              [const] in MaybeURI aResultPrincipalURI,
                               in boolean aLoadReplace,
                               in nsIURI aReferrer,
                               in unsigned long aReferrerPolicy,
@@ -184,6 +210,7 @@ interface nsIDocShell : nsIDocShellTreeItem
                               in string aTypeHint,
                               in AString aFileName,
                               in nsIInputStream aPostDataStream,
+                              in long long aPostDataStreamLength,
                               in nsIInputStream aHeadersStream,
                               in unsigned long aLoadFlags,
                               in nsISHEntry aSHEntry,
@@ -451,6 +478,13 @@ interface nsIDocShell : nsIDocShellTreeItem
   attribute nsISecureBrowserUI securityUI;
 
   /**
+   * Object used to delegate URI loading to an upper context.
+   * Currently only set for GeckoView to allow handling of load requests
+   * at the application level.
+   */
+  attribute nsILoadURIDelegate loadURIDelegate;
+
+  /**
    * Cancel the XPCOM timers for each meta-refresh URI in this docshell,
    * and this docshell's children, recursively. The meta-refresh timers can be
    * restarted using resumeRefreshURIs().  If the timers are already suspended,
@@ -537,9 +571,10 @@ interface nsIDocShell : nsIDocShellTreeItem
   readonly attribute nsIChannel currentDocumentChannel;
 
   /**
-   * Set the offset of this child in its container.
+   * The original offset of this child in its container. This property is -1 for
+   * dynamically added docShells.
    */
-  [noscript] void setChildOffset(in unsigned long offset);
+  [noscript] attribute long childOffset;
 
   /**
    * Find out whether the docshell is currently in the middle of a page
@@ -706,11 +741,11 @@ interface nsIDocShell : nsIDocShellTreeItem
    * In a child docshell, this is the charset of the parent docshell
    */
   [noscript, notxpcom, nostdcall] void setParentCharset(
-    in ACString parentCharset,
+    in Encoding parentCharset,
     in int32_t parentCharsetSource,
     in nsIPrincipal parentCharsetPrincipal);
   [noscript, notxpcom, nostdcall] void getParentCharset(
-    out ACString parentCharset,
+    out Encoding parentCharset,
     out int32_t parentCharsetSource,
     out nsIPrincipal parentCharsetPrincipal);
 
@@ -1141,4 +1176,39 @@ interface nsIDocShell : nsIDocShellTreeItem
   * Fire a dummy location change event asynchronously.
   */
   [noscript] void dispatchLocationChangeEvent();
+
+  /**
+   * Take ownership of the ClientSource representing an initial about:blank
+   * document that was never needed.  As an optimization we avoid creating
+   * this document if no code calls GetDocument(), but we still need a
+   * ClientSource object to represent the about:blank window.  This may return
+   * nullptr; for example if the docshell has created a real window and document
+   * already.
+   */
+  [noscript, nostdcall, notxpcom]
+  UniqueClientSource TakeInitialClientSource();
+
+%{C++
+  /**
+   * These methods call nsDocShell::GetHTMLEditorInternal() and
+   * nsDocShell::SetHTMLEditorInternal() with static_cast.
+   */
+  mozilla::HTMLEditor* GetHTMLEditor();
+  nsresult SetHTMLEditor(mozilla::HTMLEditor* aHTMLEditor);
+%}
+
+  /**
+   * Allowed CSS display modes. This needs to be kept in
+   * sync with similar values in nsStyleConsts.h
+   */
+  const unsigned long DISPLAY_MODE_BROWSER = 0;
+  const unsigned long DISPLAY_MODE_MINIMAL_UI = 1;
+  const unsigned long DISPLAY_MODE_STANDALONE = 2;
+  const unsigned long DISPLAY_MODE_FULLSCREEN = 3;
+
+  /**
+   * Display mode for this docshell. Defaults to DISPLAY_MODE_BROWSER.
+   * Media queries only look at the value in the top-most docshell.
+   */
+  attribute unsigned long displayMode;
 };

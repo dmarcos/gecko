@@ -15,7 +15,7 @@ from ipdl.type import ActorType, TypeVisitor, builtinHeaderIncludes
 ## "Public" interface to lowering
 ##
 class LowerToCxx:
-    def lower(self, tu):
+    def lower(self, tu, segmentcapacitydict):
         '''returns |[ header: File ], [ cpp : File ]| representing the
 lowered form of |tu|'''
         # annotate the AST with IPDL/C++ IR-type stuff used later
@@ -26,7 +26,7 @@ lowered form of |tu|'''
         name = tu.name
         pheader, pcpp = File(name +'.h'), File(name +'.cpp')
 
-        _GenerateProtocolCode().lower(tu, pheader, pcpp)
+        _GenerateProtocolCode().lower(tu, pheader, pcpp, segmentcapacitydict)
         headers = [ pheader ]
         cpps = [ pcpp ]
 
@@ -308,8 +308,8 @@ def _abortIfFalse(cond, msg):
         ExprVar('MOZ_RELEASE_ASSERT'),
         [ cond, ExprLiteral.String(msg) ]))
 
-def _refptr(T):
-    return Type('RefPtr', T=T)
+def _refptr(T, ptr=0, ref=0):
+    return Type('RefPtr', T=T, ptr=ptr, ref=ref)
 
 def _refptrGet(expr):
     return ExprCall(ExprSelect(expr, '.', 'get'))
@@ -325,6 +325,33 @@ def _uniqueptr(T):
 
 def _uniqueptrGet(expr):
     return ExprCall(ExprSelect(expr, '.', 'get'))
+
+def _tuple(types, const=0, ref=0):
+    return Type('Tuple', T=types, const=const, ref=ref)
+
+def _promise(resolvetype, rejecttype, tail, resolver=False):
+    inner = Type('Private') if resolver else None
+    return Type('MozPromise', T=[resolvetype, rejecttype, tail], inner=inner)
+
+def _makePromise(returns, side, resolver=False):
+    if len(returns) > 1:
+        resolvetype = _tuple([d.bareType(side) for d in returns])
+    else:
+        resolvetype = returns[0].bareType(side)
+
+    needmove = not all(d.isCopyable() for d in returns)
+
+    return _promise(resolvetype,
+                    _ResponseRejectReason.Type(),
+                    ExprLiteral.TRUE if needmove else ExprLiteral.FALSE,
+                    resolver=resolver)
+
+def _makeResolver(returns, side):
+    if len(returns) > 1:
+        resolvetype = _tuple([d.moveType(side) for d in returns])
+    else:
+        resolvetype = returns[0].moveType(side)
+    return TypeFunction([Decl(resolvetype, '')])
 
 def _cxxArrayType(basetype, const=0, ref=0):
     return Type('nsTArray', T=basetype, const=const, ref=ref, hasimplicitcopyctor=False)
@@ -490,6 +517,17 @@ class _DestroyReason:
     AbnormalShutdown = ExprVar('AbnormalShutdown')
     FailedConstructor = ExprVar('FailedConstructor')
 
+class _ResponseRejectReason:
+    @staticmethod
+    def Type():
+        return Type('ResponseRejectReason')
+
+    SendError = ExprVar('ResponseRejectReason::SendError')
+    ChannelClosed = ExprVar('ResponseRejectReason::ChannelClosed')
+    HandlerRejected = ExprVar('ResponseRejectReason::HandlerRejected')
+    ActorDestroyed = ExprVar('ResponseRejectReason::ActorDestroyed')
+
+
 ##-----------------------------------------------------------------------------
 ## Intermediate representation (IR) nodes used during lowering
 
@@ -522,6 +560,9 @@ class _ConvertToCxxType(TypeVisitor):
     def visitShmemType(self, s):
         return Type(self.typename(s))
 
+    def visitByteBufType(self, s):
+        return Type(self.typename(s))
+
     def visitFDType(self, s):
         return Type(self.typename(s))
 
@@ -548,13 +589,22 @@ def _cxxConstRefType(ipdltype, side):
     if ipdltype.isIPDL() and ipdltype.isShmem():
         t.ref = 1
         return t
+    if ipdltype.isIPDL() and ipdltype.isByteBuf():
+        t.ref = 1
+        return t
     t.const = 1
     t.ref = 1
     return t
 
+def _cxxTypeNeedsMove(ipdltype):
+    return ipdltype.isIPDL() and (ipdltype.isArray() or
+                                  ipdltype.isShmem() or
+                                  ipdltype.isByteBuf() or
+                                  ipdltype.isEndpoint())
+
 def _cxxMoveRefType(ipdltype, side):
     t = _cxxBareType(ipdltype, side)
-    if ipdltype.isIPDL() and (ipdltype.isArray() or ipdltype.isShmem() or ipdltype.isEndpoint()):
+    if _cxxTypeNeedsMove(ipdltype):
         t.ref = 2
         return t
     return _cxxConstRefType(ipdltype, side)
@@ -596,6 +646,9 @@ info needed by later passes, along with a basic name for the decl."""
         self.ipdltype = ipdltype
         self.name = name
         self.idnum = 0
+
+    def isCopyable(self):
+        return not _cxxTypeNeedsMove(self.ipdltype)
 
     def var(self):
         return ExprVar(self.name)
@@ -685,7 +738,6 @@ class StructDecl(ipdl.ast.StructDecl, HasFQName):
     def upgrade(structDecl):
         assert isinstance(structDecl, ipdl.ast.StructDecl)
         structDecl.__class__ = StructDecl
-        return structDecl
 
 class _StructField(_CompoundTypeComponent):
     def __init__(self, ipdltype, name, sd, side=None):
@@ -722,6 +774,8 @@ class _StructField(_CompoundTypeComponent):
         refexpr = self.refExpr(thisexpr)
         if 'Shmem' == self.ipdltype.name():
             refexpr = ExprCast(refexpr, Type('Shmem', ref=1), const=1)
+        if 'ByteBuf' == self.ipdltype.name():
+            refexpr = ExprCast(refexpr, Type('ByteBuf', ref=1), const=1)
         if 'FileDescriptor' == self.ipdltype.name():
             refexpr = ExprCast(refexpr, Type('FileDescriptor', ref=1), const=1)
         return refexpr
@@ -760,7 +814,6 @@ class UnionDecl(ipdl.ast.UnionDecl, HasFQName):
     def upgrade(unionDecl):
         assert isinstance(unionDecl, ipdl.ast.UnionDecl)
         unionDecl.__class__ = UnionDecl
-        return unionDecl
 
 
 class _UnionMember(_CompoundTypeComponent):
@@ -885,6 +938,8 @@ IPDL union type."""
     def getConstValue(self):
         v = ExprDeref(self.callGetConstPtr())
         # sigh
+        if 'ByteBuf' == self.ipdltype.name():
+            v = ExprCast(v, Type('ByteBuf', ref=1), const=1)
         if 'Shmem' == self.ipdltype.name():
             v = ExprCast(v, Type('Shmem', ref=1), const=1)
         if 'FileDescriptor' == self.ipdltype.name():
@@ -914,6 +969,10 @@ class MessageDecl(ipdl.ast.MessageDecl):
                 or self.decl.type.isCtor()
                 or self.decl.type.isDtor())
 
+    def hasAsyncReturns(self):
+        return (self.decl.type.isAsync() and
+                self.returns)
+
     def msgCtorFunc(self):
         return 'Msg_%s'% (self.decl.progname)
 
@@ -940,6 +999,16 @@ class MessageDecl(ipdl.ast.MessageDecl):
     def prettyReplyName(self, pfx=''):
         return pfx + self.replyCtorFunc()
 
+    def promiseName(self):
+        name = self.baseName()
+        if self.decl.type.isCtor():
+            name += 'Constructor'
+        name += 'Promise'
+        return name
+
+    def resolverName(self):
+        return self.baseName() + 'Resolver'
+
     def actorDecl(self):
         return self.params[0]
 
@@ -957,11 +1026,33 @@ class MessageDecl(ipdl.ast.MessageDecl):
                 return Decl(d.outType(side), d.name)
             else: assert 0
 
+        def makeResolverDecl(returns):
+            return Decl(Type(self.resolverName(), ref=2), 'aResolve')
+
+        def makeCallbackResolveDecl(returns):
+            if len(returns) > 1:
+                resolvetype = _tuple([d.bareType(side) for d in returns])
+            else:
+                resolvetype = returns[0].bareType(side)
+
+            return Decl(Type("mozilla::ipc::ResolveCallback", T=resolvetype, ref=2),
+                        'aResolve')
+
+        def makeCallbackRejectDecl(returns):
+            return Decl(Type("mozilla::ipc::RejectCallback", ref=2), 'aReject')
+
         cxxparams = [ ]
         if paramsems is not None:
             cxxparams.extend([ makeDecl(d, paramsems) for d in self.params ])
 
-        if returnsems is not None:
+        if returnsems is 'promise' and self.returns:
+            pass
+        elif returnsems is 'callback' and self.returns:
+            cxxparams.extend([ makeCallbackResolveDecl(self.returns),
+                               makeCallbackRejectDecl(self.returns) ])
+        elif returnsems is 'resolver' and self.returns:
+            cxxparams.extend([ makeResolverDecl(self.returns) ])
+        elif returnsems is not None:
             cxxparams.extend([ makeDecl(r, returnsems) for r in self.returns ])
 
         if not implicit and self.decl.type.hasImplicitActorParam():
@@ -994,6 +1085,10 @@ class MessageDecl(ipdl.ast.MessageDecl):
                 elif retcallsems is 'out':
                     cxxargs.append(ret.var())
                 else: assert 0
+            elif retsems is 'resolver':
+                pass
+        if retsems is 'resolver':
+            cxxargs.append(ExprMove(ExprVar('resolver')))
 
         if not implicit:
             assert self.decl.type.hasImplicitActorParam()
@@ -1013,12 +1108,9 @@ class MessageDecl(ipdl.ast.MessageDecl):
                         messageDecl.decl.type.constructedType()),
                     'actor'))
         messageDecl.__class__ = MessageDecl
-        return messageDecl
+
 
 ##--------------------------------------------------
-def _semsToChannelParts(sems):
-    return [ 'mozilla', 'ipc', 'MessageChannel' ]
-
 def _usesShmem(p):
     for md in p.messageDecls:
         for param in md.inParams:
@@ -1044,21 +1136,12 @@ class Protocol(ipdl.ast.Protocol):
     def cxxTypedefs(self):
         return self.decl.cxxtypedefs
 
-    def sendSems(self):
-        return self.decl.type.toplevel().sendSemantics
-
-    def channelName(self):
-        return '::'.join(_semsToChannelParts(self.sendSems()))
-
     def channelSel(self):
         if self.decl.type.isToplevel():  return '.'
         return '->'
 
     def channelType(self):
-        return Type('Channel', ptr=not self.decl.type.isToplevel())
-
-    def channelHeaderFile(self):
-        return '/'.join(_semsToChannelParts(self.sendSems())) +'.h'
+        return Type('MessageChannel', ptr=not self.decl.type.isToplevel())
 
     def managerInterfaceType(self, ptr=0):
         return Type('mozilla::ipc::IProtocol', ptr=ptr)
@@ -1215,7 +1298,6 @@ class Protocol(ipdl.ast.Protocol):
     def upgrade(protocol):
         assert isinstance(protocol, ipdl.ast.Protocol)
         protocol.__class__ = Protocol
-        return protocol
 
 
 class TranslationUnit(ipdl.ast.TranslationUnit):
@@ -1223,7 +1305,7 @@ class TranslationUnit(ipdl.ast.TranslationUnit):
     def upgrade(tu):
         assert isinstance(tu, ipdl.ast.TranslationUnit)
         tu.__class__ = TranslationUnit
-        return tu
+
 
 ##-----------------------------------------------------------------------------
 
@@ -1252,7 +1334,9 @@ with some new IPDL/C++ nodes that are tuned for C++ codegen."""
                                 Typedef(Type('mozilla::ipc::Endpoint'),
                                         'Endpoint', ['FooSide']),
                                 Typedef(Type('mozilla::ipc::TransportDescriptor'),
-                                        'TransportDescriptor') ])
+                                        'TransportDescriptor'),
+                                Typedef(Type('mozilla::ipc::ResponseRejectReason'),
+                                        'ResponseRejectReason') ])
         self.protocolName = None
 
     def visitTranslationUnit(self, tu):
@@ -1356,10 +1440,11 @@ class _GenerateProtocolCode(ipdl.ast.Visitor):
         self.structUnionDefns = []
         self.funcDefns = []
 
-    def lower(self, tu, cxxHeaderFile, cxxFile):
+    def lower(self, tu, cxxHeaderFile, cxxFile, segmentcapacitydict):
         self.protocol = tu.protocol
         self.hdrfile = cxxHeaderFile
         self.cppfile = cxxFile
+        self.segmentcapacitydict = segmentcapacitydict
         tu.accept(self)
 
     def visitTranslationUnit(self, tu):
@@ -1516,23 +1601,21 @@ class _GenerateProtocolCode(ipdl.ast.Visitor):
         for md in p.messageDecls:
             decls = []
 
+            # Look up the segment capacity used for serializing this
+            # message. If the capacity is not specified, use '0' for
+            # the default capacity (defined in ipc_message.cc)
+            name = '%s::%s' % (md.namespace, md.decl.progname)
+            segmentcapacity = self.segmentcapacitydict.get(name, 0)
+
             mfDecl, mfDefn = _splitFuncDeclDefn(
-                _generateMessageConstructor(md.msgCtorFunc(), md.msgId(),
-                                            md.decl.type.nested,
-                                            md.decl.type.prio,
-                                            md.prettyMsgName(p.name+'::'),
-                                            md.decl.type.compress))
+                _generateMessageConstructor(md, segmentcapacity, p,
+                                            forReply=False))
             decls.append(mfDecl)
             self.funcDefns.append(mfDefn)
 
             if md.hasReply():
                 rfDecl, rfDefn = _splitFuncDeclDefn(
-                    _generateMessageConstructor(
-                        md.replyCtorFunc(), md.replyId(),
-                        md.decl.type.nested,
-                        md.decl.type.prio,
-                        md.prettyReplyName(p.name+'::'),
-                        md.decl.type.compress))
+                    _generateMessageConstructor(md, 0, p, forReply=True))
                 decls.append(rfDecl)
                 self.funcDefns.append(rfDefn)
 
@@ -1565,8 +1648,6 @@ class _GenerateProtocolCode(ipdl.ast.Visitor):
             ExprVar('mozilla::ipc::CreateEndpoints'),
             args=[ _backstagePass(),
                    parentpidvar, childpidvar,
-                   _protocolId(p),
-                   ExprVar(_messageStartName(p) + 'Child'),
                    parentvar, childvar
                    ])))
         return openfunc
@@ -1631,7 +1712,20 @@ class _GenerateProtocolCode(ipdl.ast.Visitor):
 
 ##--------------------------------------------------
 
-def _generateMessageConstructor(clsname, msgid, nested, prio, prettyName, compress):
+def _generateMessageConstructor(md, segmentSize, protocol, forReply=False):
+    if forReply:
+        clsname = md.replyCtorFunc()
+        msgid = md.replyId()
+        replyEnum = 'REPLY'
+    else:
+        clsname = md.msgCtorFunc()
+        msgid = md.msgId()
+        replyEnum = 'NOT_REPLY'
+
+    nested = md.decl.type.nested
+    prio = md.decl.type.prio
+    compress = md.decl.type.compress
+
     routingId = ExprVar('routingId')
 
     func = FunctionDefn(FunctionDecl(
@@ -1640,37 +1734,71 @@ def _generateMessageConstructor(clsname, msgid, nested, prio, prettyName, compre
         ret=Type('IPC::Message', ptr=1)))
 
     if compress == 'compress':
-        compression = ExprVar('IPC::Message::COMPRESSION_ENABLED')
+        compression = 'COMPRESSION_ENABLED'
     elif compress:
         assert compress == 'compressall'
-        compression = ExprVar('IPC::Message::COMPRESSION_ALL')
+        compression = 'COMPRESSION_ALL'
     else:
-        compression = ExprVar('IPC::Message::COMPRESSION_NONE')
+        compression = 'COMPRESSION_NONE'
 
     if nested == ipdl.ast.NOT_NESTED:
-        nestedEnum = 'IPC::Message::NOT_NESTED'
+        nestedEnum = 'NOT_NESTED'
     elif nested == ipdl.ast.INSIDE_SYNC_NESTED:
-        nestedEnum = 'IPC::Message::NESTED_INSIDE_SYNC'
+        nestedEnum = 'NESTED_INSIDE_SYNC'
     else:
         assert nested == ipdl.ast.INSIDE_CPOW_NESTED
-        nestedEnum = 'IPC::Message::NESTED_INSIDE_CPOW'
+        nestedEnum = 'NESTED_INSIDE_CPOW'
 
     if prio == ipdl.ast.NORMAL_PRIORITY:
-        prioEnum = 'IPC::Message::NORMAL_PRIORITY'
+        prioEnum = 'NORMAL_PRIORITY'
+    elif prio == ipdl.ast.INPUT_PRIORITY:
+        prioEnum = 'INPUT_PRIORITY'
     else:
-        assert prio == ipdl.ast.HIGH_PRIORITY
-        prioEnum = 'IPC::Message::HIGH_PRIORITY'
+        prioEnum = 'HIGH_PRIORITY'
 
-    func.addstmt(
-        StmtReturn(ExprNew(Type('IPC::Message'),
-                           args=[ routingId,
-                                  ExprVar(msgid),
-                                  ExprVar(nestedEnum),
-                                  ExprVar(prioEnum),
-                                  compression,
-                                  ExprLiteral.String(prettyName),
-                                  # Pass `true` to recordWriteLatency to collect telemetry
-                                  ExprLiteral.TRUE ])))
+    if md.decl.type.isSync():
+        syncEnum = 'SYNC'
+    else:
+        syncEnum = 'ASYNC'
+
+    if md.decl.type.isInterrupt():
+        interruptEnum = 'INTERRUPT'
+    else:
+        interruptEnum = 'NOT_INTERRUPT'
+
+    if md.decl.type.isCtor():
+        ctorEnum = 'CONSTRUCTOR'
+    else:
+        ctorEnum = 'NOT_CONSTRUCTOR'
+
+    def messageEnum(valname):
+        return ExprVar('IPC::Message::' + valname)
+
+    flags = ExprCall(ExprVar('IPC::Message::HeaderFlags'),
+                     args=[ messageEnum(nestedEnum),
+                            messageEnum(prioEnum),
+                            messageEnum(compression),
+                            messageEnum(ctorEnum),
+                            messageEnum(syncEnum),
+                            messageEnum(interruptEnum),
+                            messageEnum(replyEnum) ])
+
+    segmentSize = int(segmentSize)
+    if segmentSize:
+        func.addstmt(
+            StmtReturn(ExprNew(Type('IPC::Message'),
+                               args=[ routingId,
+                                      ExprVar(msgid),
+                                      ExprLiteral.Int(int(segmentSize)),
+                                      flags,
+                                      # Pass `true` to recordWriteLatency to collect telemetry
+                                      ExprLiteral.TRUE ])))
+    else:
+        func.addstmt(
+            StmtReturn(ExprCall(ExprVar('IPC::Message::IPDLMessage'),
+                               args=[ routingId,
+                                      ExprVar(msgid),
+                                      flags ])))
 
     return func
 
@@ -1737,6 +1865,11 @@ stmt.  Some types generate both kinds.'''
         if s in self.visited: return
         self.visited.add(s)
         self.maybeTypedef('mozilla::ipc::Shmem', 'Shmem')
+
+    def visitByteBufType(self, s):
+        if s in self.visited: return
+        self.visited.add(s)
+        self.maybeTypedef('mozilla::ipc::ByteBuf', 'ByteBuf')
 
     def visitFDType(self, s):
         if s in self.visited: return
@@ -2335,10 +2468,8 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
 
     def standardTypedefs(self):
         return [
-            Typedef(Type('mozilla::ipc::IProtocol'), 'ProtocolBase'),
+            Typedef(Type('mozilla::ipc::IProtocol'), 'IProtocol'),
             Typedef(Type('IPC::Message'), 'Message'),
-            Typedef(Type(self.protocol.channelName()), 'Channel'),
-            Typedef(Type('mozilla::ipc::IProtocol'), 'ChannelListener'),
             Typedef(Type('base::ProcessHandle'), 'ProcessHandle'),
             Typedef(Type('mozilla::ipc::MessageChannel'), 'MessageChannel'),
             Typedef(Type('mozilla::ipc::SharedMemory'), 'SharedMemory'),
@@ -2434,13 +2565,6 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                 '"'+ _protocolHeaderName(self.protocol, self.side) +'.h"') ]
             + setToIncludes(self.externalIncludes))
 
-        if self.protocol.decl.type.isToplevel():
-            cf.addthings([
-                CppDirective('ifdef', 'MOZ_CRASHREPORTER'),
-                CppDirective('  include', '"nsXULAppAPI.h"'),
-                CppDirective('endif')
-            ])
-
         cppheaders = [CppDirective('include', '"%s"' % filename)
                       for filename in ipdl.builtin.CppIncludes]
 
@@ -2520,8 +2644,14 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             self.hdrfile.addthing(CppDirective('include', '"base/id_map.h"'))
 
         self.hdrfile.addthings([
-            CppDirective('include', '"'+ p.channelHeaderFile() +'"'),
+            CppDirective('include', '"mozilla/ipc/MessageChannel.h"'),
             Whitespace.NL ])
+
+        hasAsyncReturns = False
+        for md in p.messageDecls:
+            if md.hasAsyncReturns():
+                hasAsyncReturns = True
+                break
 
         inherits = []
         if ptype.isToplevel():
@@ -2529,6 +2659,11 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                                     viz='public'))
         else:
             inherits.append(Inherit(p.managerInterfaceType(), viz='public'))
+
+        if hasAsyncReturns:
+            inherits.append(Inherit(Type('SupportsWeakPtr', T=ExprVar(self.clsname)),
+                                    viz='public'))
+            self.hdrfile.addthing(CppDirective('include', '"mozilla/WeakPtr.h"'))
 
         if ptype.isToplevel() and self.side is 'parent':
             self.hdrfile.addthings([
@@ -2541,6 +2676,16 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             inherits=inherits,
             abstract=True)
 
+        if hasAsyncReturns:
+            self.cls.addstmts([
+                Label.PUBLIC,
+                Whitespace('', indent=1),
+                ExprCall(ExprVar('MOZ_DECLARE_WEAKREFERENCE_TYPENAME'),
+                         [ ExprVar(self.clsname) ]),
+                Whitespace.NL
+            ])
+
+        self.cls.addstmt(Label.PRIVATE)
         friends = _FindFriends().findFriends(ptype)
         if ptype.isManaged():
             friends.update(ptype.managers)
@@ -2556,10 +2701,8 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                 _makeForwardDeclForActor(friend, self.prettyside),
                 Whitespace.NL
             ])
-            self.cls.addstmts([
-                FriendClassDecl(_actorName(friend.fullname(),
-                                           self.prettyside)),
-                Whitespace.NL ])
+            self.cls.addstmt(FriendClassDecl(_actorName(friend.fullname(),
+                                                        self.prettyside)))
 
         self.cls.addstmt(Label.PROTECTED)
         for typedef in p.cxxTypedefs():
@@ -2571,6 +2714,20 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
 
         self.cls.addstmts([ Typedef(p.fqStateType(), 'State'), Whitespace.NL ])
 
+        if hasAsyncReturns:
+            self.cls.addstmt(Label.PUBLIC)
+            for md in p.messageDecls:
+                if self.sendsMessage(md) and md.hasAsyncReturns():
+                    self.cls.addstmt(
+                        Typedef(_makePromise(md.returns, self.side),
+                                md.promiseName()))
+                if self.receivesMessage(md) and md.hasAsyncReturns():
+                    self.cls.addstmt(
+                        Typedef(_makeResolver(md.returns, self.side),
+                                md.resolverName()))
+            self.cls.addstmt(Whitespace.NL)
+
+        self.cls.addstmt(Label.PROTECTED)
         # interface methods that the concrete subclass has to impl
         for md in p.messageDecls:
             isctor, isdtor = md.decl.type.isCtor(), md.decl.type.isDtor()
@@ -2578,9 +2735,10 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             if self.receivesMessage(md):
                 # generate Recv/Answer* interface
                 implicit = (not isdtor)
+                returnsems = 'resolver' if md.decl.type.isAsync() else 'out'
                 recvDecl = MethodDecl(
                     md.recvMethod().name,
-                    params=md.makeCxxParams(paramsems='move', returnsems='out',
+                    params=md.makeCxxParams(paramsems='move', returnsems=returnsems,
                                             side=self.side, implicit=implicit),
                     ret=Type('mozilla::ipc::IPCResult'), virtual=1)
 
@@ -2809,7 +2967,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                     ExprVar('MSG_ROUTING_CONTROL'), '!=', routevar))
                 routedvar = ExprVar('routed__')
                 routeif.ifb.addstmt(
-                    StmtDecl(Decl(Type('ChannelListener', ptr=1),
+                    StmtDecl(Decl(Type('IProtocol', ptr=1),
                                   routedvar.name),
                              _lookupListener(routevar)))
                 failif = StmtIf(ExprPrefixUnop(routedvar, '!'))
@@ -2994,6 +3152,18 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
 
         if len(ptype.manages):
             destroysubtree.addstmt(Whitespace.NL)
+
+        # Reject pending responses for actor before calling ActorDestroy().
+        rejectPendingResponsesMethod = ExprSelect(self.protocol.callGetChannel(),
+                                                  '->',
+                                                  'RejectPendingResponsesForActor')
+        destroysubtree.addstmts([ Whitespace('// Reject owning pending responses.\n',
+                                             indent=1),
+                                  StmtExpr(ExprCall(rejectPendingResponsesMethod,
+                                                    args=[ ExprVar('this') ])),
+                                  Whitespace.NL
+                                 ])
+
         destroysubtree.addstmts([ Whitespace('// Finally, destroy "us".\n',
                                              indent=1),
                                   StmtExpr(ExprCall(_destroyMethod(),
@@ -3060,7 +3230,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         sizevar = ExprVar('aSize')
         typevar = ExprVar('aType')
         unsafevar = ExprVar('aUnsafe')
-        protocolbase = Type('ProtocolBase', ptr=1)
+        protocolbase = Type('IProtocol', ptr=1)
         sourcevar = ExprVar('aSource')
         ivar = ExprVar('i')
         kidsvar = ExprVar('kids')
@@ -3213,6 +3383,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         class findSpecialTypes(TypeVisitor):
             def visitActorType(self, a): specialtypes.add(a)
             def visitShmemType(self, s): specialtypes.add(s)
+            def visitByteBufType(self, s): specialtypes.add(s)
             def visitFDType(self, s): specialtypes.add(s)
             def visitStructType(self, s):
                 specialtypes.add(s)
@@ -3237,12 +3408,13 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                 ret.ipdltype.accept(findSpecialTypes())
 
         for t in specialtypes:
-            if t.isActor():    self.implementActorPickling(t)
-            elif t.isArray():  self.implementSpecialArrayPickling(t)
-            elif t.isShmem():  self.implementShmemPickling(t)
-            elif t.isFD():     self.implementFDPickling(t)
-            elif t.isStruct(): self.implementStructPickling(t)
-            elif t.isUnion():  self.implementUnionPickling(t)
+            if t.isActor():     self.implementActorPickling(t)
+            elif t.isArray():   self.implementSpecialArrayPickling(t)
+            elif t.isShmem():   self.implementShmemPickling(t)
+            elif t.isByteBuf(): self.implementByteBufPickling(t)
+            elif t.isFD():      self.implementFDPickling(t)
+            elif t.isStruct():  self.implementStructPickling(t)
+            elif t.isUnion():   self.implementUnionPickling(t)
             else:
                 assert 0 and 'unknown special type'
 
@@ -3262,6 +3434,19 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                                          args=[ msgvar, itervar, var ])))
 
         self.cls.addstmts([ write, Whitespace.NL, read, Whitespace.NL ])
+
+    def implementByteBufPickling(self, bytebuftype):
+        var = self.var
+        msgvar = self.msgvar
+        itervar = self.itervar
+        intype = _cxxRefType(bytebuftype, self.side)
+
+        write = MethodDefn(self.writeMethodDecl(intype, var))
+        write.addstmt(StmtExpr(ExprCall(ExprVar('IPC::WriteParam'),
+                                        args=[ msgvar, var ])))
+
+        self.cls.addstmts([ write, Whitespace.NL ])
+        # the rest of generic pickling will work fine for us
 
     def implementActorPickling(self, actortype):
         # Note that we pickle based on *protocol* type and *not* actor
@@ -3700,6 +3885,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         isdtor = md.decl.type.isDtor()
         decltype = md.decl.type
         sendmethod = None
+        promisesendmethod = None
         helpermethod = None
         recvlbl, recvcase = None, None
 
@@ -3727,7 +3913,8 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             elif isdtor:
                 sendmethod = self.genBlockingDtorMethod(md)
             elif isasync:
-                sendmethod = self.genAsyncSendMethod(md)
+                sendmethod, promisesendmethod, (recvlbl, recvcase) = \
+                    self.genAsyncSendMethod(md)
             else:
                 sendmethod = self.genBlockingSendMethod(md)
 
@@ -3737,6 +3924,8 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
 
         if sendmethod is not None:
             self.cls.addstmts([ sendmethod, Whitespace.NL ])
+        if promisesendmethod is not None:
+            self.cls.addstmts([ promisesendmethod, Whitespace.NL ])
         if recvcase is not None:
             addRecvCase(recvlbl, recvcase)
             recvlbl, recvcase = None, None
@@ -3949,18 +4138,80 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
     def dtorEpilogue(self, md, actorexpr):
         return self.destroyActor(md, actorexpr)
 
+    def genRecvAsyncReplyCase(self, md):
+        lbl = CaseLabel(md.pqReplyId())
+        case = StmtBlock()
+        resolve, reason, prologue, desrej, desstmts = self.deserializeAsyncReply(
+            md, self.side, errfnRecv, errfnSentinel(_Result.ValuError))
+        ifnocallback = StmtIf(ExprNot(ExprVar('callback')))
+        ifnocallback.addifstmts(errfnRecv("Error unknown callback",
+                                          _Result.ProcessingError))
+
+        if len(md.returns) > 1:
+            resolvetype = _tuple([d.bareType(self.side) for d in md.returns])
+            resolvearg = ExprCall(ExprVar('MakeTuple'),
+                                  args=[ExprMove(p.var()) for p in md.returns])
+        else:
+            resolvetype = md.returns[0].bareType(self.side)
+            resolvearg = ExprMove(md.returns[0].var())
+
+        untypedcallback = Type("MessageChannel::UntypedCallbackHolder")
+        callbackptr = Type("MessageChannel::CallbackHolder", T=resolvetype)
+        callbackptr.ptr = 1
+        callback = ExprVar('callback')
+
+        getcallback = [ Whitespace.NL,
+                        # Get the untyped callback object by calling PopCallback()
+                        StmtDecl(Decl(_uniqueptr(untypedcallback), 'untypedCallback'),
+                                 init=ExprCall(ExprSelect(self.protocol.callGetChannel(),
+                                                          '->', 'PopCallback'),
+                                               args=[ self.msgvar ])),
+                        # Cast the untyped callback pointer to the correct poiner type
+                        StmtDecl(Decl(callbackptr, callback.name),
+                                 init=ExprCast(ExprCall(ExprSelect(ExprVar('untypedCallback'),
+                                                                   '.', 'get')),
+                                               callbackptr,
+                                               static=1)),
+                        ifnocallback ]
+
+        resolvecallback = [ StmtExpr(ExprCall(ExprSelect(callback, '->', 'Resolve'),
+                                              args=[ resolvearg ])) ]
+        rejectcallback = [ StmtExpr(ExprCall(ExprSelect(callback, '->', 'Reject'),
+                                             args=[ reason ])) ]
+        ifresolve = StmtIf(resolve)
+        ifresolve.addifstmts(desstmts)
+        ifresolve.addifstmts(resolvecallback)
+        ifresolve.addelsestmts(desrej)
+        ifresolve.addelsestmts(rejectcallback)
+        case.addstmts(prologue)
+        case.addstmts(getcallback)
+        case.addstmt(ifresolve)
+        case.addstmt(StmtReturn(_Result.Processed))
+        return (lbl, case)
+
     def genAsyncSendMethod(self, md):
         method = MethodDefn(self.makeSendMethodDecl(md))
         msgvar, stmts = self.makeMessage(md, errfnSend)
-        sendok, sendstmts = self.sendAsync(md, msgvar)
+        retvar, sendstmts = self.sendAsync(md, msgvar)
+
         method.addstmts(stmts
                         +[ Whitespace.NL ]
                         + self.genVerifyMessage(md.decl.type.verify, md.params,
                                                 errfnSend, ExprVar('msg__'))
                         + sendstmts
-                        +[ StmtReturn(sendok) ])
-        return method
+                        +[ StmtReturn(retvar) ])
 
+        # Add the promise overload if we need one.
+        if md.returns:
+            promisemethod = MethodDefn(self.makeSendMethodDecl(md, promise=True))
+            stmts = self.sendAsyncWithPromise(md)
+            promisemethod.addstmts(stmts)
+
+            (lbl, case) = self.genRecvAsyncReplyCase(md)
+        else:
+            (promisemethod, lbl, case) = (None, None, None)
+
+        return method, promisemethod, (lbl, case)
 
     def genBlockingSendMethod(self, md, fromActor=None):
         method = MethodDefn(self.makeSendMethodDecl(md))
@@ -4058,12 +4309,15 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                                         errfnSent=errfnSentinel(_Result.ValuError))
 
         idvar, saveIdStmts = self.saveActorId(md)
+        declstmts = [ StmtDecl(Decl(r.bareType(self.side), r.var().name))
+                      for r in md.returns ]
+        if md.decl.type.isAsync() and md.returns:
+            declstmts = self.makeResolver(md, errfnRecv, routingId=idvar)
         case.addstmts(
             stmts
             + self.transition(md)
-            + [ StmtDecl(Decl(r.bareType(self.side), r.var().name))
-                for r in md.returns ]
             + saveIdStmts
+            + declstmts
             + self.invokeRecvHandler(md)
             + [ Whitespace.NL ]
             + self.makeReply(md, errfnRecv, routingId=idvar)
@@ -4100,15 +4354,85 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                  + [ self.checkedWrite(p.ipdltype, p.var(), msgvar, sentinelKey=p.name, this=this)
                      for p in md.params ]
                  + [ Whitespace.NL ]
-                 + self.setMessageFlags(md, msgvar, reply=0))
+                 + self.setMessageFlags(md, msgvar))
         return msgvar, stmts
 
+
+    def makeResolver(self, md, errfn, routingId):
+        if routingId is None:
+            routingId = self.protocol.routingId()
+        if not md.decl.type.isAsync() or not md.hasReply():
+            return [ ]
+
+        sendok = ExprVar('sendok__')
+        seqno = ExprVar('seqno__')
+        resolve = ExprVar('resolve__')
+        reason = ExprVar('reason__')
+        resolvertype = Type(md.resolverName())
+        failifsendok = StmtIf(ExprNot(sendok))
+        failifsendok.addifstmt(_printWarningMessage('Error sending reply'))
+        sendmsg = (self.setMessageFlags(md, self.replyvar, seqno=seqno)
+                   + [ self.logMessage(md, self.replyvar, 'Sending reply '),
+                       StmtDecl(Decl(Type.BOOL, sendok.name),
+                                init=ExprCall(
+                                    ExprSelect(self.protocol.callGetChannel(),
+                                               '->', 'Send'),
+                                    args=[ self.replyvar ])),
+                       failifsendok ])
+        if len(md.returns) > 1:
+            resolvedecl = Decl(_tuple([p.moveType(self.side) for p in md.returns],
+                                      const=1, ref=1),
+                               'aParam')
+            destructexpr = ExprCall(ExprVar('Tie'),
+                                    args=[ p.var() for p in md.returns ])
+        else:
+            resolvedecl = Decl(md.returns[0].moveType(self.side), 'aParam')
+            destructexpr = md.returns[0].var()
+        selfvar = ExprVar('self__')
+        ifactorisdead = StmtIf(ExprNot(selfvar))
+        ifactorisdead.addifstmts([_printWarningMessage("Not resolving response because actor is dead."),
+                                  StmtReturn()])
+        ifactorisdestroyed = StmtIf(ExprBinary(self.protocol.stateVar(), '==',
+                                               self.protocol.deadState()))
+        ifactorisdestroyed.addifstmts([_printWarningMessage("Not resolving response because actor is destroyed."),
+                                  StmtReturn()])
+        returnifactorisdead = [ ifactorisdead,
+                                ifactorisdestroyed ]
+        resolverfn = ExprLambda([ExprVar.THIS, selfvar, routingId, seqno],
+                                 [resolvedecl])
+        resolverfn.addstmts(returnifactorisdead
+                            + [ StmtDecl(Decl(Type.BOOL, resolve.name),
+                                         init=ExprLiteral.TRUE) ]
+                            + [ StmtDecl(Decl(p.bareType(self.side), p.var().name))
+                               for p in md.returns ]
+                            + [ StmtExpr(ExprAssn(destructexpr, ExprMove(ExprVar('aParam')))),
+                                StmtDecl(Decl(Type('IPC::Message', ptr=1), self.replyvar.name),
+                                         init=ExprCall(ExprVar(md.pqReplyCtorFunc()),
+                                                       args=[ routingId ])) ]
+                            + [ self.checkedWrite(None, resolve, self.replyvar,
+                                                  sentinelKey=resolve.name) ]
+                            + [ self.checkedWrite(r.ipdltype, r.var(), self.replyvar,
+                                                  sentinelKey=r.name)
+                                 for r in md.returns ])
+        resolverfn.addstmts(sendmsg)
+
+        makeresolver = [ Whitespace.NL,
+                         StmtDecl(Decl(Type.INT32, seqno.name),
+                                  init=ExprCall(ExprSelect(self.msgvar, '.', 'seqno'))),
+                         StmtDecl(Decl(Type('WeakPtr', T=ExprVar(self.clsname)),
+                                       selfvar.name),
+                                  init=ExprVar.THIS),
+                         StmtDecl(Decl(resolvertype, 'resolver'),
+                                  init=resolverfn) ]
+        return makeresolver
 
     def makeReply(self, md, errfn, routingId):
         if routingId is None:
             routingId = self.protocol.routingId()
         # TODO special cases for async ctor/dtor replies
         if not md.decl.type.hasReply():
+            return [ ]
+        if md.decl.type.isAsync() and md.decl.type.hasReply():
             return [ ]
 
         replyvar = self.replyvar
@@ -4118,7 +4442,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
               Whitespace.NL ]
             + [ self.checkedWrite(r.ipdltype, r.var(), replyvar, sentinelKey=r.name)
                 for r in md.returns ]
-            + self.setMessageFlags(md, replyvar, reply=1)
+            + self.setMessageFlags(md, replyvar)
             + [ self.logMessage(md, replyvar, 'Sending reply ') ])
 
     def genVerifyMessage(self, verify, params, errfn, msgsrcVar):
@@ -4161,23 +4485,13 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
 
         return stmts
 
-    def setMessageFlags(self, md, var, reply):
+    def setMessageFlags(self, md, var, seqno=None):
         stmts = [ ]
 
-        if md.decl.type.isSync():
+        if seqno:
             stmts.append(StmtExpr(ExprCall(
-                ExprSelect(var, '->', 'set_sync'))))
-        elif md.decl.type.isInterrupt():
-            stmts.append(StmtExpr(ExprCall(
-                ExprSelect(var, '->', 'set_interrupt'))))
-
-        if md.decl.type.isCtor():
-            stmts.append(StmtExpr(ExprCall(
-                ExprSelect(var, '->', 'set_constructor'))))
-
-        if reply:
-            stmts.append(StmtExpr(ExprCall(
-                ExprSelect(var, '->', 'set_reply'))))
+                ExprSelect(var, '->', 'set_seqno'),
+                args=[ seqno ])))
 
         return stmts + [ Whitespace.NL ]
 
@@ -4225,8 +4539,65 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
 
         return stmts
 
+    def deserializeAsyncReply(self, md, side, errfn, errfnSent):
+        msgvar = self.msgvar
+        itervar = self.itervar
+        msgexpr = ExprAddrOf(msgvar)
+        isctor = md.decl.type.isCtor()
+        resolve = ExprVar('resolve__')
+        reason = ExprVar('reason__')
+        desresolve = [ StmtDecl(Decl(Type.BOOL, resolve.name)),
+                       self.checkedRead(None, ExprAddrOf(resolve), msgexpr,
+                                        ExprAddrOf(itervar),
+                                        errfn, "'%s'" % resolve.name,
+                                        sentinelKey=resolve.name, errfnSentinel=errfnSent) ]
+        desrej = [ StmtDecl(Decl(_ResponseRejectReason.Type(), reason.name)),
+                   self.checkedRead(None, ExprAddrOf(reason), msgexpr,
+                                    ExprAddrOf(itervar),
+                                    errfn, "'%s'" % reason.name,
+                                    sentinelKey=reason.name, errfnSentinel=errfnSent),
+                   self.endRead(msgvar, itervar) ]
+        prologue = ([
+            self.logMessage(md, msgexpr, 'Received ',
+                            receiving=True),
+            self.profilerLabel(md),
+            Whitespace.NL
+        ])
 
-    def deserializeReply(self, md, replyexpr, side, errfn, errfnSentinel, actor=None):
+        if not md.returns:
+            return prologue
+
+        prologue.extend([ StmtDecl(Decl(_iterType(ptr=0), itervar.name),
+                                   initargs=[ msgvar ]) ]
+                        + desresolve)
+
+        start, decls, reads = 0, [], []
+        if isctor:
+            # return the raw actor handle so that its ID can be used
+            # to construct the "real" actor
+            handlevar = self.handlevar
+            handletype = Type('ActorHandle')
+            decls = [ StmtDecl(Decl(handletype, handlevar.name)) ]
+            reads = [ self.checkedRead(None, ExprAddrOf(handlevar), msgexpr,
+                                       ExprAddrOf(itervar),
+                                       errfn, "'%s'" % handletype.name,
+                                       sentinelKey='actor', errfnSentinel=errfnSent) ]
+            start = 1
+
+        stmts = (
+            decls + [ StmtDecl(Decl(p.bareType(side), p.var().name))
+                      for p in md.returns ]
+            + [ Whitespace.NL ]
+            + reads + [ self.checkedRead(p.ipdltype, ExprAddrOf(p.var()),
+                                         msgexpr, ExprAddrOf(itervar),
+                                         errfn, "'%s'" % p.bareType(side).name,
+                                         sentinelKey=p.name, errfnSentinel=errfnSent)
+                        for p in md.returns[start:] ]
+            + [ self.endRead(msgvar, itervar) ])
+
+        return resolve, reason, prologue, desrej, stmts
+
+    def deserializeReply(self, md, replyexpr, side, errfn, errfnSentinel, actor=None, decls=False):
         stmts = [ Whitespace.NL,
                    self.logMessage(md, replyexpr,
                                    'Received reply ', actor, receiving=True) ]
@@ -4234,10 +4605,16 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             return stmts
 
         itervar = self.itervar
+        declstmts = []
+        if decls:
+             declstmts = [ StmtDecl(Decl(p.bareType(side), p.var().name))
+                           for p in md.returns ]
         stmts.extend(
             [ Whitespace.NL,
               StmtDecl(Decl(_iterType(ptr=0), itervar.name),
                        initargs= [ self.replyvar ]) ]
+            + declstmts
+            + [ Whitespace.NL ]
             + [ self.checkedRead(r.ipdltype, r.var(),
                                  ExprAddrOf(self.replyvar),
                                  ExprAddrOf(self.itervar),
@@ -4250,20 +4627,29 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
 
     def sendAsync(self, md, msgexpr, actor=None):
         sendok = ExprVar('sendok__')
-        return (
-            sendok,
-            ([ Whitespace.NL,
-               self.logMessage(md, msgexpr, 'Sending ', actor),
-               self.profilerLabel(md) ]
-            + self.transition(md, actor)
-            + [ Whitespace.NL,
-                StmtDecl(Decl(Type.BOOL, sendok.name),
-                         init=ExprCall(
-                             ExprSelect(self.protocol.callGetChannel(actor),
-                                        '->', 'Send'),
-                             args=[ msgexpr ]))
-            ])
-        )
+        resolvefn = ExprVar('aResolve')
+        rejectfn = ExprVar('aReject')
+
+        sendargs = [ msgexpr ]
+        stmts = [ Whitespace.NL,
+                  self.logMessage(md, msgexpr, 'Sending ', actor),
+                  self.profilerLabel(md) ] + self.transition(md, actor)
+        stmts.append(Whitespace.NL)
+
+        # Generate the actual call expression.
+        send = ExprSelect(self.protocol.callGetChannel(actor), '->', 'Send')
+        if md.returns:
+            stmts.append(StmtExpr(ExprCall(send, args=[ msgexpr,
+                                                        ExprVar('this'),
+                                                        ExprMove(resolvefn),
+                                                        ExprMove(rejectfn) ])))
+            retvar = None
+        else:
+            stmts.append(StmtDecl(Decl(Type.BOOL, sendok.name),
+                                  init=ExprCall(send, args=[ msgexpr ])))
+            retvar = sendok
+
+        return (retvar, stmts)
 
     def sendBlocking(self, md, msgexpr, replyexpr, actor=None):
         sendok = ExprVar('sendok__')
@@ -4276,10 +4662,9 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             + [ Whitespace.NL,
                 StmtDecl(Decl(Type.BOOL, sendok.name)),
                 StmtBlock([
-                    StmtDecl(Decl(Type('GeckoProfilerTracingRAII'),
-                                  'syncIPCTracer'),
-                             initargs=[ ExprLiteral.String("IPC"),
-                                        ExprLiteral.String(self.protocol.name + "::" + md.prettyMsgName()) ]),
+                    StmtExpr(ExprCall(ExprVar('AUTO_PROFILER_TRACING'),
+                             [ ExprLiteral.String("IPC"),
+                               ExprLiteral.String(self.protocol.name + "::" + md.prettyMsgName()) ])),
                     StmtExpr(ExprAssn(sendok,
                                       ExprCall(ExprSelect(self.protocol.callGetChannel(actor),
                                                           '->',
@@ -4288,6 +4673,42 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                 ])
             ])
         )
+
+    def sendAsyncWithPromise(self, md):
+        # Create a new promise, and forward to the callback send overload.
+        retpromise = ExprVar('promise__')
+        promise = _makePromise(md.returns, self.side, resolver=True)
+        stmts = [ Whitespace.NL,
+                  StmtDecl(Decl(_refptr(promise), retpromise.name),
+                           init=ExprNew(promise, args=[ExprVar('__func__')])) ]
+
+        if len(md.returns) > 1:
+            resolvetype = _tuple([d.bareType(self.side) for d in md.returns])
+        else:
+            resolvetype = md.returns[0].bareType(self.side)
+        resolvetype.ref = 2
+
+        resolvefn = ExprLambda([ retpromise ],
+                               [ Decl(resolvetype, "aValue") ])
+        resolvefn.addstmts([
+            StmtExpr(ExprCall(ExprSelect(retpromise, '->', 'Resolve'),
+                              args=[ ExprMove(ExprVar('aValue')),
+                                     ExprVar('__func__') ])),
+        ])
+
+        rejectfn = ExprLambda([ retpromise ],
+                              [ Decl(_ResponseRejectReason.Type(), "aReason") ])
+        rejectfn.addstmts([
+            StmtExpr(ExprCall(ExprSelect(retpromise, '->', 'Reject'),
+                              args=[ ExprVar('aReason'),
+                                     ExprVar('__func__') ])),
+        ])
+
+        args = [ p.var() for p in md.params ] + [ resolvefn, rejectfn ]
+        stmts += [ Whitespace.NL,
+                   StmtExpr(ExprCall(ExprVar(md.sendMethod().name), args=args)),
+                   StmtReturn(retpromise) ]
+        return stmts
 
     def callAllocActor(self, md, retsems, side):
         return ExprCall(
@@ -4317,9 +4738,12 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         return ExprCall(ExprSelect(actorexpr, '->', 'DeallocSubtree'))
 
     def invokeRecvHandler(self, md, implicit=1):
+        retsems = 'in'
+        if md.decl.type.isAsync() and md.returns:
+            retsems = 'resolver'
         failif = StmtIf(ExprNot(
             ExprCall(md.recvMethod(),
-                     args=md.makeCxxArgs(paramsems='move', retsems='in',
+                     args=md.makeCxxArgs(paramsems='move', retsems=retsems,
                                          retcallsems='out',
                                          implicit=implicit))))
         failif.addifstmts([
@@ -4334,14 +4758,25 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         decl.static = 1
         return decl
 
-    def makeSendMethodDecl(self, md):
+    def makeSendMethodDecl(self, md, promise=False):
         implicit = md.decl.type.hasImplicitActorParam()
+        if md.decl.type.isAsync() and md.returns:
+            if promise:
+                returnsems = 'promise'
+                rettype = _refptr(Type(md.promiseName()))
+            else:
+                returnsems = 'callback'
+                rettype = Type.VOID
+        else:
+            assert not promise
+            returnsems = 'out'
+            rettype = Type.BOOL
         decl = MethodDecl(
             md.sendMethod().name,
-            params=md.makeCxxParams(paramsems='in', returnsems='out',
+            params=md.makeCxxParams(paramsems='in', returnsems=returnsems,
                                     side=self.side, implicit=implicit),
-            warn_unused=(self.side == 'parent'),
-            ret=Type.BOOL)
+            warn_unused=(self.side == 'parent' and returnsems != 'callback'),
+            ret=rettype)
         if md.decl.type.isCtor():
             decl.ret = md.actorDecl().bareType(self.side)
         return decl
@@ -4361,10 +4796,10 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                                              else 'mozilla::ipc::MessageDirection::eSending') ])) ])
 
     def profilerLabel(self, md):
-        return StmtExpr(ExprCall(ExprVar('PROFILER_LABEL'),
-                                 [ ExprLiteral.String(self.protocol.name),
-                                   ExprLiteral.String(md.prettyMsgName()),
-                                   ExprVar('js::ProfileEntry::Category::OTHER') ]))
+        labelStr = self.protocol.name + '::' + md.prettyMsgName()
+        return StmtExpr(ExprCall(ExprVar('AUTO_PROFILER_LABEL'),
+                                 [ ExprLiteral.String(labelStr),
+                                   ExprVar('OTHER') ]))
 
     def saveActorId(self, md):
         idvar = ExprVar('id__')

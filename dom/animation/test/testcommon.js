@@ -17,7 +17,7 @@ const MS_PER_SEC = 1000;
 
 /* The recommended minimum precision to use for time values[1].
  *
- * [1] https://w3c.github.io/web-animations/#precision-of-time-values
+ * [1] https://drafts.csswg.org/web-animations/#precision-of-time-values
  */
 var TIME_PRECISION = 0.0005; // ms
 
@@ -212,6 +212,24 @@ function waitForFrame() {
 }
 
 /**
+ * Waits for a requestAnimationFrame callback in the next refresh driver tick.
+ * Note that 'dom.animations-api.core.enabled' pref should be true to use this
+ * function.
+ */
+function waitForNextFrame() {
+  const timeAtStart = document.timeline.currentTime;
+  return new Promise(resolve => {
+    window.requestAnimationFrame(() => {
+      if (timeAtStart === document.timeline.currentTime) {
+        window.requestAnimationFrame(resolve);
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
+/**
  * Returns a Promise that is resolved after the given number of consecutive
  * animation frames have occured (using requestAnimationFrame callbacks).
  *
@@ -219,18 +237,29 @@ function waitForFrame() {
  * @param onFrame  An optional function to be processed in each animation frame.
  */
 function waitForAnimationFrames(frameCount, onFrame) {
+  const timeAtStart = document.timeline.currentTime;
   return new Promise(function(resolve, reject) {
     function handleFrame() {
       if (onFrame && typeof onFrame === 'function') {
         onFrame();
       }
-      if (--frameCount <= 0) {
+      if (timeAtStart != document.timeline.currentTime &&
+          --frameCount <= 0) {
         resolve();
       } else {
         window.requestAnimationFrame(handleFrame); // wait another frame
       }
     }
     window.requestAnimationFrame(handleFrame);
+  });
+}
+
+/**
+ * Promise wrapper for requestIdleCallback.
+ */
+function waitForIdle() {
+  return new Promise(resolve => {
+    requestIdleCallback(resolve);
   });
 }
 
@@ -260,19 +289,17 @@ if (opener) {
   for (var funcName of ["async_test", "assert_not_equals", "assert_equals",
                         "assert_approx_equals", "assert_less_than",
                         "assert_less_than_equal", "assert_greater_than",
-                        "assert_greater_than_equal",
-                        "assert_not_exists",
                         "assert_between_inclusive",
                         "assert_true", "assert_false",
                         "assert_class_string", "assert_throws",
                         "assert_unreached", "assert_regexp_match",
                         "promise_test", "test"]) {
-    window[funcName] = opener[funcName].bind(opener);
+    if (opener[funcName]) {
+      window[funcName] = opener[funcName].bind(opener);
+    }
   }
 
   window.EventWatcher = opener.EventWatcher;
-  // Used for requestLongerTimeout.
-  window.W3CTest = opener.W3CTest;
 
   function done() {
     opener.add_completion_callback(function() {
@@ -299,9 +326,24 @@ function waitForDocumentLoad() {
  * Enters test refresh mode, and restores the mode when |t| finishes.
  */
 function useTestRefreshMode(t) {
-  SpecialPowers.DOMWindowUtils.advanceTimeAndRefresh(0);
-  t.add_cleanup(() => {
-    SpecialPowers.DOMWindowUtils.restoreNormalRefresh();
+  function ensureNoSuppressedPaints() {
+    return new Promise(resolve => {
+      function checkSuppressedPaints() {
+        if (!SpecialPowers.DOMWindowUtils.paintingSuppressed) {
+          resolve();
+        } else {
+          window.requestAnimationFrame(checkSuppressedPaints);
+        }
+      }
+      checkSuppressedPaints();
+    });
+  }
+
+  return ensureNoSuppressedPaints().then(() => {
+    SpecialPowers.DOMWindowUtils.advanceTimeAndRefresh(0);
+    t.add_cleanup(() => {
+      SpecialPowers.DOMWindowUtils.restoreNormalRefresh();
+    });
   });
 }
 
@@ -312,6 +354,13 @@ function isOMTAEnabled() {
   const OMTAPrefKey = 'layers.offmainthreadcomposition.async-animations';
   return SpecialPowers.DOMWindowUtils.layerManagerRemote &&
          SpecialPowers.getBoolPref(OMTAPrefKey);
+}
+
+/**
+ * Returns true if the document is styled by servo.
+ */
+function isStyledByServo() {
+  return SpecialPowers.DOMWindowUtils.isStyledByServo;
 }
 
 /**
@@ -334,4 +383,32 @@ function addSVGElement(target, tag, attrs) {
   }
   target.appendChild(element);
   return element;
+}
+
+/*
+ * Get Animation distance between two specified values for a specific property.
+ *
+ * @param target The target element.
+ * @param prop The CSS property.
+ * @param v1 The first property value.
+ * @param v2 The Second property value.
+ *
+ * @return The distance between |v1| and |v2| for |prop| on |target|.
+ */
+function getDistance(target, prop, v1, v2) {
+  if (!target) {
+    return 0.0;
+  }
+  return SpecialPowers.DOMWindowUtils
+           .computeAnimationDistance(target, prop, v1, v2);
+}
+
+/*
+ * A promise wrapper for waiting MozAfterPaint.
+ */
+function waitForPaints() {
+  // FIXME: Bug 1415065. Instead waiting for two requestAnimationFrames, we
+  // should wait for MozAfterPaint once after MozAfterPaint is fired properly
+  // (bug 1341294).
+  return waitForAnimationFrames(2);
 }

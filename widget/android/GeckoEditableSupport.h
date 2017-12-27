@@ -40,6 +40,8 @@ class GeckoEditableSupport final
 
     using EditableBase =
             java::GeckoEditableChild::Natives<GeckoEditableSupport>;
+    using EditableClient = java::TextInputController::EditableClient;
+    using EditableListener = java::TextInputController::EditableListener;
 
     // RAII helper class that automatically sends an event reply through
     // OnImeSynchronize, as required by events like OnImeReplaceText.
@@ -137,15 +139,14 @@ public:
     {
         struct IMEEvent : nsAppShell::LambdaEvent<Functor>
         {
-            using Base = nsAppShell::LambdaEvent<Functor>;
-            using Base::LambdaEvent;
+            IMEEvent(Functor&& l) : nsAppShell::LambdaEvent<Functor>(Move(l)) {}
 
             nsAppShell::Event::Type ActivityType() const override
             {
                 using GES = GeckoEditableSupport;
-                if (Base::lambda.IsTarget(&GES::OnKeyEvent) ||
-                        Base::lambda.IsTarget(&GES::OnImeReplaceText) ||
-                        Base::lambda.IsTarget(&GES::OnImeUpdateComposition)) {
+                if (this->lambda.IsTarget(&GES::OnKeyEvent) ||
+                        this->lambda.IsTarget(&GES::OnImeReplaceText) ||
+                        this->lambda.IsTarget(&GES::OnImeUpdateComposition)) {
                     return nsAppShell::Event::Type::kUIActivity;
                 }
                 return nsAppShell::Event::Type::kGeneralActivity;
@@ -153,12 +154,12 @@ public:
 
             void Run() override
             {
-                if (!Base::lambda.GetNativeObject()) {
+                if (!this->lambda.GetNativeObject()) {
                     // Ignore stale calls after disposal.
                     jni::GetGeckoThreadEnv()->ExceptionClear();
                     return;
                 }
-                Base::Run();
+                nsAppShell::LambdaEvent<Functor>::Run();
             }
         };
         nsAppShell::PostEvent(mozilla::MakeUnique<IMEEvent>(
@@ -241,7 +242,7 @@ public:
             int32_t aRangeBackColor, int32_t aRangeLineColor);
 
     // Update styling for the active composition using previous-added ranges.
-    void OnImeUpdateComposition(int32_t aStart, int32_t aEnd);
+    void OnImeUpdateComposition(int32_t aStart, int32_t aEnd, int32_t aFlags);
 
     // Set cursor mode whether IME requests
     void OnImeRequestCursorUpdates(int aRequestMode);

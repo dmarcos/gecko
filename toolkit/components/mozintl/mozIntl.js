@@ -3,35 +3,24 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+Components.utils.import("resource://gre/modules/Services.jsm");
 
 const Cc = Components.classes;
 const Ci = Components.interfaces;
 
 const mozIntlHelper =
   Cc["@mozilla.org/mozintlhelper;1"].getService(Ci.mozIMozIntlHelper);
-const localeSvc =
-  Cc["@mozilla.org/intl/localeservice;1"].getService(Ci.mozILocaleService);
 const osPrefs =
   Cc["@mozilla.org/intl/ospreferences;1"].getService(Ci.mozIOSPreferences);
 
 /**
  * This helper function retrives currently used app locales, allowing
- * all mozIntl APIs to use the current app locales unless called with
- * explicitly listed locales.
+ * all mozIntl APIs to use the current regional prefs locales unless
+ * called with explicitly listed locales.
  */
 function getLocales(locales) {
   if (!locales) {
-    return localeSvc.getAppLocalesAsBCP47();
-  }
-  return locales;
-}
-
-function getLocale(locales) {
-  if (!locales) {
-    return localeSvc.getAppLocale();
-  }
-  if (Array.isArray(locales)) {
-    return [0];
+    return Services.locale.getRegionalPrefsLocales();
   }
   return locales;
 }
@@ -78,14 +67,6 @@ class MozIntl {
     }
 
     return this._cache.getLocaleInfo(getLocales(locales), ...args);
-  }
-
-  createPluralRules(locales, ...args) {
-    if (!this._cache.hasOwnProperty("PluralRules")) {
-      mozIntlHelper.addPluralRulesConstructor(this._cache);
-    }
-
-    return new this._cache.PluralRules(getLocales(locales), ...args);
   }
 
   createDateTimeFormat(locales, options, ...args) {

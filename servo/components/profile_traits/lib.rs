@@ -7,13 +7,11 @@
 //! modules won't have to depend on `profile`.
 
 #![deny(unsafe_code)]
-#![feature(box_syntax)]
 
 extern crate ipc_channel;
 #[macro_use]
 extern crate log;
-#[macro_use]
-extern crate serde_derive;
+#[macro_use] extern crate serde;
 extern crate servo_config;
 extern crate signpost;
 

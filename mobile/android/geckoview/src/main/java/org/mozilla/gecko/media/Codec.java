@@ -16,9 +16,13 @@ import android.view.Surface;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+
+import org.mozilla.gecko.gfx.GeckoSurface;
 
 /* package */ final class Codec extends ICodec.Stub implements IBinder.DeathRecipient {
     private static final String LOGTAG = "GeckoRemoteCodec";
@@ -107,7 +111,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
         }
 
         private synchronized void onBuffer(int index) {
-            if (mStopped) {
+            if (mStopped || !isValidBuffer(index)) {
                 return;
             }
 
@@ -125,6 +129,15 @@ import java.util.concurrent.ConcurrentLinkedQueue;
                 reportError(Error.FATAL, new Exception("FAIL: input buffer queue is full"));
             }
 
+        }
+
+        private boolean isValidBuffer(final int index) {
+            try {
+                return mCodec.getInputBuffer(index) != null;
+            } catch (IllegalStateException e) {
+                if (DEBUG) { Log.d(LOGTAG, "invalid input buffer#" + index, e); }
+                return false;
+            }
         }
 
         private void feedSampleToBuffer() {
@@ -230,7 +243,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
         }
 
         private synchronized void onBuffer(int index, MediaCodec.BufferInfo info) {
-            if (mStopped) {
+            if (mStopped || !isValidBuffer(index)) {
                 return;
             }
 
@@ -246,6 +259,15 @@ import java.util.concurrent.ConcurrentLinkedQueue;
             boolean eos = (info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
             if (DEBUG && eos) {
                 Log.d(LOGTAG, "output EOS");
+            }
+        }
+
+        private boolean isValidBuffer(final int index) {
+            try {
+                return (mCodec.getOutputBuffer(index) != null) || mRenderToSurface;
+            } catch (IllegalStateException e) {
+                if (DEBUG) { Log.e(LOGTAG, "invalid buffer#" + index, e); }
+                return false;
             }
         }
 
@@ -326,8 +348,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
     private InputProcessor mInputProcessor;
     private OutputProcessor mOutputProcessor;
     private SamplePool mSamplePool;
-    // Value will be updated after configure called.
+    // Values will be updated after configure called.
     private volatile boolean mIsAdaptivePlaybackSupported = false;
+    private boolean mIsTunneledPlaybackSupported = false;
 
     public synchronized void setCallbacks(ICodecCallbacks callbacks) throws RemoteException {
         mCallbacks = callbacks;
@@ -347,7 +370,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
     @Override
     public synchronized boolean configure(FormatParam format,
-                                          Surface surface,
+                                          GeckoSurface surface,
                                           int flags,
                                           String drmStubId) throws RemoteException {
         if (mCallbacks == null) {
@@ -357,53 +380,95 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
         if (mCodec != null) {
             if (DEBUG) { Log.d(LOGTAG, "release existing codec: " + mCodec); }
-            releaseCodec();
+            mCodec.release();
         }
 
         if (DEBUG) { Log.d(LOGTAG, "configure " + this); }
 
-        MediaFormat fmt = format.asFormat();
-        String codecName = getCodecForFormat(fmt, flags == MediaCodec.CONFIGURE_FLAG_ENCODE ? true : false);
-        if (codecName == null) {
-            Log.e(LOGTAG, "FAIL: cannot find codec");
+        final MediaFormat fmt = format.asFormat();
+        final String mime = fmt.getString(MediaFormat.KEY_MIME);
+        if (mime == null || mime.isEmpty()) {
+            Log.e(LOGTAG, "invalid MIME type: " + mime);
             return false;
         }
 
-        try {
-            AsyncCodec codec = AsyncCodecFactory.create(codecName);
-
-            MediaCrypto crypto = RemoteMediaDrmBridgeStub.getMediaCrypto(drmStubId);
-            if (DEBUG) {
-                boolean hasCrypto = crypto != null;
-                Log.d(LOGTAG, "configure mediacodec with crypto(" + hasCrypto + ") / Id :" + drmStubId);
+        final List<String> found = findMatchingCodecNames(mime, flags == MediaCodec.CONFIGURE_FLAG_ENCODE);
+        for (final String name : found) {
+            final AsyncCodec codec = configureCodec(name, fmt, surface, flags, drmStubId);
+            if (codec == null) {
+                Log.w(LOGTAG, "unable to configure " + name + ". Try next.");
+                continue;
             }
-
-            codec.setCallbacks(new Callbacks(), null);
-
-            boolean renderToSurface = surface != null;
-            // Video decoder should config with adaptive playback capability.
-            if (renderToSurface) {
-                mIsAdaptivePlaybackSupported = codec.isAdaptivePlaybackSupported(
-                                                   fmt.getString(MediaFormat.KEY_MIME));
-                if (mIsAdaptivePlaybackSupported) {
-                    if (DEBUG) { Log.d(LOGTAG, "codec supports adaptive playback  = " + mIsAdaptivePlaybackSupported); }
-                    // TODO: may need to find a way to not use hard code to decide the max w/h.
-                    fmt.setInteger(MediaFormat.KEY_MAX_WIDTH, 1920);
-                    fmt.setInteger(MediaFormat.KEY_MAX_HEIGHT, 1080);
-                }
-            }
-
-            codec.configure(fmt, surface, crypto, flags);
             mCodec = codec;
             mInputProcessor = new InputProcessor();
+            final boolean renderToSurface = surface != null;
             mOutputProcessor = new OutputProcessor(renderToSurface);
-            mSamplePool = new SamplePool(codecName, renderToSurface);
+            mSamplePool = new SamplePool(name, renderToSurface);
+            if (renderToSurface) {
+                mIsTunneledPlaybackSupported = mCodec.isTunneledPlaybackSupported(mime);
+            }
             if (DEBUG) { Log.d(LOGTAG, codec.toString() + " created. Render to surface?" + renderToSurface); }
             return true;
-        } catch (Exception e) {
-            Log.e(LOGTAG, "FAIL: cannot create codec -- " + codecName);
-            e.printStackTrace();
-            return false;
+        }
+
+        return false;
+    }
+
+    private List<String> findMatchingCodecNames(final String mimeType, final boolean isEncoder) {
+        final int numCodecs = MediaCodecList.getCodecCount();
+        final List<String> found = new ArrayList<>();
+        for (int i = 0; i < numCodecs; i++) {
+            final MediaCodecInfo info = MediaCodecList.getCodecInfoAt(i);
+            if (info.isEncoder() == !isEncoder) {
+                continue;
+            }
+
+            final String[] types = info.getSupportedTypes();
+            for (final String t : types) {
+                if (t.equalsIgnoreCase(mimeType)) {
+                    found.add(info.getName());
+                    if (DEBUG) {
+                        Log.d(LOGTAG, "found " + (isEncoder ? "encoder:" : "decoder:") +
+                                info.getName() + " for mime:" + mimeType);
+                    }
+                }
+            }
+        }
+        return found;
+    }
+
+    private AsyncCodec configureCodec(final String name, final MediaFormat format,
+            final Surface surface, final int flags, final String drmStubId) {
+        try {
+            final AsyncCodec codec = AsyncCodecFactory.create(name);
+            codec.setCallbacks(new Callbacks(), null);
+
+            final MediaCrypto crypto = RemoteMediaDrmBridgeStub.getMediaCrypto(drmStubId);
+            if (DEBUG) {
+                Log.d(LOGTAG, "configure mediacodec with crypto(" + (crypto != null) + ") / Id :" + drmStubId);
+            }
+
+            if (surface != null) {
+                setupAdaptivePlayback(codec, format);
+            }
+
+            codec.configure(format, surface, crypto, flags);
+            return codec;
+        } catch (final Exception e) {
+            Log.e(LOGTAG, "codec creation error", e);
+            return null;
+        }
+    }
+
+    private void setupAdaptivePlayback(final AsyncCodec codec, final MediaFormat format) {
+        // Video decoder should config with adaptive playback capability.
+        mIsAdaptivePlaybackSupported = codec.isAdaptivePlaybackSupported(
+                format.getString(MediaFormat.KEY_MIME));
+        if (mIsAdaptivePlaybackSupported) {
+            if (DEBUG) { Log.d(LOGTAG, "codec supports adaptive playback  = " + mIsAdaptivePlaybackSupported); }
+            // TODO: may need to find a way to not use hard code to decide the max w/h.
+            format.setInteger(MediaFormat.KEY_MAX_WIDTH, 1920);
+            format.setInteger(MediaFormat.KEY_MAX_HEIGHT, 1080);
         }
     }
 
@@ -412,41 +477,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
         return mIsAdaptivePlaybackSupported;
     }
 
-    private void releaseCodec() {
-        try {
-            // In case Codec.stop() is not called yet.
-            mInputProcessor.stop();
-            mOutputProcessor.stop();
-
-            mCodec.release();
-        } catch (Exception e) {
-            reportError(Error.FATAL, e);
-        }
-        mCodec = null;
-    }
-
-    private String getCodecForFormat(MediaFormat format, boolean isEncoder) {
-        String mime = format.getString(MediaFormat.KEY_MIME);
-        if (mime == null) {
-            return null;
-        }
-        int numCodecs = MediaCodecList.getCodecCount();
-        for (int i = 0; i < numCodecs; i++) {
-            MediaCodecInfo info = MediaCodecList.getCodecInfoAt(i);
-            if (info.isEncoder() == !isEncoder) {
-                continue;
-            }
-            String[] types = info.getSupportedTypes();
-            for (String t : types) {
-                if (t.equalsIgnoreCase(mime)) {
-                    return info.getName();
-                }
-            }
-        }
-        return null;
-        // TODO: API 21+ is simpler.
-        //static MediaCodecList sCodecList = new MediaCodecList(MediaCodecList.ALL_CODECS);
-        //return sCodecList.findDecoderForFormat(format);
+    @Override
+    public synchronized boolean isTunneledPlaybackSupported() {
+        return mIsTunneledPlaybackSupported;
     }
 
     @Override
@@ -467,6 +500,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
         }
         try {
             mCallbacks.onError(error == Error.FATAL);
+        } catch (NullPointerException ne) {
+            // mCallbacks has been disposed by release().
         } catch (RemoteException re) {
             re.printStackTrace();
         }
@@ -542,7 +577,16 @@ import java.util.concurrent.ConcurrentLinkedQueue;
     @Override
     public synchronized void release() throws RemoteException {
         if (DEBUG) { Log.d(LOGTAG, "release " + this); }
-        releaseCodec();
+        try {
+            // In case Codec.stop() is not called yet.
+            mInputProcessor.stop();
+            mOutputProcessor.stop();
+
+            mCodec.release();
+        } catch (Exception e) {
+            reportError(Error.FATAL, e);
+        }
+        mCodec = null;
         mSamplePool.reset();
         mSamplePool = null;
         mCallbacks.asBinder().unlinkToDeath(this, 0);

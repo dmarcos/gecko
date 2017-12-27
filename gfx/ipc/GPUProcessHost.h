@@ -1,6 +1,6 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * vim: sts=8 sw=2 ts=2 tw=99 et :
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -27,7 +27,7 @@ class GPUChild;
 // GPUProcessHosts are allocated and managed by GPUProcessManager. For all
 // intents and purposes it is a singleton, though more than one may be allocated
 // at a time due to its shutdown being asynchronous.
-class GPUProcessHost final : public ipc::GeckoChildProcessHost
+class GPUProcessHost final : public mozilla::ipc::GeckoChildProcessHost
 {
   friend class GPUChild;
 
@@ -43,7 +43,7 @@ public:
     virtual void OnProcessUnexpectedShutdown(GPUProcessHost* aHost)
     {}
 
-    virtual void OnProcessDeviceReset(GPUProcessHost* aHost)
+    virtual void OnRemoteProcessDeviceReset(GPUProcessHost* aHost)
     {}
   };
 
@@ -121,7 +121,7 @@ private:
   DISALLOW_COPY_AND_ASSIGN(GPUProcessHost);
 
   Listener* mListener;
-  ipc::TaskFactory<GPUProcessHost> mTaskFactory;
+  mozilla::ipc::TaskFactory<GPUProcessHost> mTaskFactory;
 
   enum class LaunchPhase {
     Unlaunched,

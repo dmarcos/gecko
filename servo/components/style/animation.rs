@@ -8,27 +8,27 @@
 use Atom;
 use bezier::Bezier;
 use context::SharedStyleContext;
-use dom::{OpaqueNode, UnsafeNode};
-use euclid::point::Point2D;
+use dom::OpaqueNode;
 use font_metrics::FontMetricsProvider;
-use keyframes::{KeyframesStep, KeyframesStepValue};
-use properties::{self, CascadeFlags, ComputedValues, Importance};
+use properties::{self, CascadeFlags, ComputedValues, LonghandId};
 use properties::animated_properties::{AnimatedProperty, TransitionProperty};
 use properties::longhands::animation_direction::computed_value::single_value::T as AnimationDirection;
-use properties::longhands::animation_iteration_count::single_value::computed_value::T as AnimationIterationCount;
 use properties::longhands::animation_play_state::computed_value::single_value::T as AnimationPlayState;
-use properties::longhands::transition_timing_function::single_value::computed_value::StartEnd;
-use properties::longhands::transition_timing_function::single_value::computed_value::T as TransitionTimingFunction;
-use std::sync::Arc;
+use rule_tree::CascadeLevel;
+use servo_arc::Arc;
 use std::sync::mpsc::Sender;
+use stylesheets::keyframes_rule::{KeyframesStep, KeyframesStepValue};
 use timer::Timer;
 use values::computed::Time;
+use values::computed::transform::TimingFunction;
+use values::generics::box_::AnimationIterationCount;
+use values::generics::transform::{StepPosition, TimingFunction as GenericTimingFunction};
 
 /// This structure represents a keyframes animation current iteration state.
 ///
 /// If the iteration count is infinite, there's no other state, otherwise we
 /// have to keep track the current iteration and the max iteration count.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub enum KeyframesIterationState {
     /// Infinite iterations, so no need to track a state.
     Infinite,
@@ -39,7 +39,7 @@ pub enum KeyframesIterationState {
 /// This structure represents wether an animation is actually running.
 ///
 /// An animation can be running, or paused at a given time.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub enum KeyframesRunningState {
     /// This animation is paused. The inner field is the percentage of progress
     /// when it was paused, from 0 to 1.
@@ -52,7 +52,7 @@ pub enum KeyframesRunningState {
 /// duration, the current and maximum iteration count, and the state (either
 /// playing or paused).
 // TODO: unify the use of f32/f64 in this file.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct KeyframesAnimationState {
     /// The time this animation started at.
     pub started_at: f64,
@@ -103,11 +103,11 @@ impl KeyframesAnimationState {
 
         // Update the next iteration direction if applicable.
         match self.direction {
-            AnimationDirection::alternate |
-            AnimationDirection::alternate_reverse => {
+            AnimationDirection::Alternate |
+            AnimationDirection::AlternateReverse => {
                 self.current_direction = match self.current_direction {
-                    AnimationDirection::normal => AnimationDirection::reverse,
-                    AnimationDirection::reverse => AnimationDirection::normal,
+                    AnimationDirection::Normal => AnimationDirection::Reverse,
+                    AnimationDirection::Reverse => AnimationDirection::Normal,
                     _ => unreachable!(),
                 };
             }
@@ -188,7 +188,7 @@ pub enum Animation {
     /// the f64 field is the start time as returned by `time::precise_time_s()`.
     ///
     /// The `bool` field is werther this animation should no longer run.
-    Transition(OpaqueNode, UnsafeNode, f64, AnimationFrame, bool),
+    Transition(OpaqueNode, f64, AnimationFrame, bool),
     /// A keyframes animation is identified by a name, and can have a
     /// node-dependent state (i.e. iteration count, etc.).
     Keyframes(OpaqueNode, Atom, KeyframesAnimationState),
@@ -200,7 +200,7 @@ impl Animation {
     pub fn mark_as_expired(&mut self) {
         debug_assert!(!self.is_expired());
         match *self {
-            Animation::Transition(_, _, _, _, ref mut expired) => *expired = true,
+            Animation::Transition(_, _, _, ref mut expired) => *expired = true,
             Animation::Keyframes(_, _, ref mut state) => state.expired = true,
         }
     }
@@ -209,7 +209,7 @@ impl Animation {
     #[inline]
     pub fn is_expired(&self) -> bool {
         match *self {
-            Animation::Transition(_, _, _, _, expired) => expired,
+            Animation::Transition(_, _, _, expired) => expired,
             Animation::Keyframes(_, _, ref state) => state.expired,
         }
     }
@@ -218,7 +218,7 @@ impl Animation {
     #[inline]
     pub fn node(&self) -> &OpaqueNode {
         match *self {
-            Animation::Transition(ref node, _, _, _, _) => node,
+            Animation::Transition(ref node, _, _, _) => node,
             Animation::Keyframes(ref node, _, _) => node,
         }
     }
@@ -231,11 +231,20 @@ impl Animation {
             Animation::Keyframes(_, _, ref state) => state.is_paused(),
         }
     }
+
+    /// Whether this animation is a transition.
+    #[inline]
+    pub fn is_transition(&self) -> bool {
+        match *self {
+            Animation::Transition(..) => true,
+            Animation::Keyframes(..) => false,
+        }
+    }
 }
 
 
 /// A single animation frame of a single property.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct AnimationFrame {
     /// A description of the property animation that is occurring.
     pub property_animation: PropertyAnimation,
@@ -245,10 +254,10 @@ pub struct AnimationFrame {
 }
 
 /// Represents an animation for a given property.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct PropertyAnimation {
     property: AnimatedProperty,
-    timing_function: TransitionTimingFunction,
+    timing_function: TimingFunction,
     duration: Time, // TODO: isn't this just repeated?
 }
 
@@ -262,52 +271,75 @@ impl PropertyAnimation {
     /// and new styles.  Any number of animations may be returned, from zero (if
     /// the property did not animate) to one (for a single transition property)
     /// to arbitrarily many (for `all`).
-    pub fn from_transition(transition_index: usize,
-                           old_style: &ComputedValues,
-                           new_style: &mut ComputedValues)
-                           -> Vec<PropertyAnimation> {
+    pub fn from_transition(
+        transition_index: usize,
+        old_style: &ComputedValues,
+        new_style: &mut ComputedValues,
+    ) -> Vec<PropertyAnimation> {
         let mut result = vec![];
         let box_style = new_style.get_box();
         let transition_property = box_style.transition_property_at(transition_index);
         let timing_function = box_style.transition_timing_function_mod(transition_index);
         let duration = box_style.transition_duration_mod(transition_index);
 
-
-        if transition_property != TransitionProperty::All {
-            if let Some(property_animation) =
-                    PropertyAnimation::from_transition_property(transition_property,
-                                                                timing_function,
-                                                                duration,
-                                                                old_style,
-                                                                new_style) {
-                result.push(property_animation)
+        match transition_property {
+            TransitionProperty::Unsupported(_) => result,
+            TransitionProperty::Shorthand(ref shorthand_id) => {
+                shorthand_id.longhands().iter().filter_map(|longhand| {
+                    PropertyAnimation::from_longhand(
+                        &longhand,
+                        timing_function,
+                        duration,
+                        old_style,
+                        new_style,
+                    )
+                }).collect()
             }
-            return result
+            TransitionProperty::Longhand(ref longhand_id) => {
+                let animation = PropertyAnimation::from_longhand(
+                    longhand_id,
+                    timing_function,
+                    duration,
+                    old_style,
+                    new_style,
+                );
+
+                if let Some(animation) = animation {
+                    result.push(animation);
+                }
+                result
+            }
+            TransitionProperty::All => {
+                TransitionProperty::each(|longhand_id| {
+                    let animation = PropertyAnimation::from_longhand(
+                        longhand_id,
+                        timing_function,
+                        duration,
+                        old_style,
+                        new_style,
+                    );
+
+                    if let Some(animation) = animation {
+                        result.push(animation);
+                    }
+                });
+                result
+            }
         }
-
-        TransitionProperty::each(|transition_property| {
-            if let Some(property_animation) =
-                    PropertyAnimation::from_transition_property(transition_property,
-                                                                timing_function,
-                                                                duration,
-                                                                old_style,
-                                                                new_style) {
-                result.push(property_animation)
-            }
-        });
-
-        result
     }
 
-    fn from_transition_property(transition_property: TransitionProperty,
-                                timing_function: TransitionTimingFunction,
-                                duration: Time,
-                                old_style: &ComputedValues,
-                                new_style: &ComputedValues)
-                                -> Option<PropertyAnimation> {
-        let animated_property = AnimatedProperty::from_transition_property(&transition_property,
-                                                                           old_style,
-                                                                           new_style);
+    fn from_longhand(
+        longhand: &LonghandId,
+        timing_function: TimingFunction,
+        duration: Time,
+        old_style: &ComputedValues,
+        new_style: &ComputedValues,
+    ) -> Option<PropertyAnimation> {
+        let animated_property = AnimatedProperty::from_longhand(
+            longhand,
+            old_style,
+            new_style,
+        )?;
 
         let property_animation = PropertyAnimation {
             property: animated_property,
@@ -324,19 +356,37 @@ impl PropertyAnimation {
 
     /// Update the given animation at a given point of progress.
     pub fn update(&self, style: &mut ComputedValues, time: f64) {
+        let epsilon = 1. / (200. * (self.duration.seconds() as f64));
         let progress = match self.timing_function {
-            TransitionTimingFunction::CubicBezier(p1, p2) => {
-                // See `WebCore::AnimationBase::solveEpsilon(double)` in WebKit.
-                let epsilon = 1.0 / (200.0 * (self.duration.seconds() as f64));
-                Bezier::new(Point2D::new(p1.x as f64, p1.y as f64),
-                            Point2D::new(p2.x as f64, p2.y as f64)).solve(time, epsilon)
-            }
-            TransitionTimingFunction::Steps(steps, StartEnd::Start) => {
+            GenericTimingFunction::CubicBezier { x1, y1, x2, y2 } => {
+                Bezier::new(x1, y1, x2, y2).solve(time, epsilon)
+            },
+            GenericTimingFunction::Steps(steps, StepPosition::Start) => {
                 (time * (steps as f64)).ceil() / (steps as f64)
-            }
-            TransitionTimingFunction::Steps(steps, StartEnd::End) => {
+            },
+            GenericTimingFunction::Steps(steps, StepPosition::End) => {
                 (time * (steps as f64)).floor() / (steps as f64)
-            }
+            },
+            GenericTimingFunction::Frames(frames) => {
+                // https://drafts.csswg.org/css-timing/#frames-timing-functions
+                let mut out = (time * (frames as f64)).floor() / ((frames - 1) as f64);
+                if out > 1.0 {
+                    // FIXME: Basically, during the animation sampling process, the input progress
+                    // should be in the range of [0, 1]. However, |time| is not accurate enough
+                    // here, which means |time| could be larger than 1.0 in the last animation
+                    // frame. (It should be equal to 1.0 exactly.) This makes the output of frames
+                    // timing function jumps to the next frame/level.
+                    // However, this solution is still not correct because |time| is possible
+                    // outside the range of [0, 1] after introducing Web Animations. We should fix
+                    // this problem when implementing web animations.
+                    out = 1.0;
+                }
+                out
+            },
+            GenericTimingFunction::Keyword(keyword) => {
+                let (x1, x2, y1, y2) = keyword.to_bezier();
+                Bezier::new(x1, x2, y1, y2).solve(time, epsilon)
+            },
         };
 
         self.property.update(style, progress);
@@ -357,17 +407,15 @@ impl PropertyAnimation {
 /// Inserts transitions into the queue of running animations as applicable for
 /// the given style difference. This is called from the layout worker threads.
 /// Returns true if any animations were kicked off and false otherwise.
-//
-// TODO(emilio): Take rid of this mutex splitting SharedLayoutContex into a
-// cloneable part and a non-cloneable part..
-pub fn start_transitions_if_applicable(new_animations_sender: &Sender<Animation>,
-                                       opaque_node: OpaqueNode,
-                                       unsafe_node: UnsafeNode,
-                                       old_style: &ComputedValues,
-                                       new_style: &mut Arc<ComputedValues>,
-                                       timer: &Timer,
-                                       possibly_expired_animations: &[PropertyAnimation])
-                                       -> bool {
+#[cfg(feature = "servo")]
+pub fn start_transitions_if_applicable(
+    new_animations_sender: &Sender<Animation>,
+    opaque_node: OpaqueNode,
+    old_style: &ComputedValues,
+    new_style: &mut Arc<ComputedValues>,
+    timer: &Timer,
+    possibly_expired_animations: &[PropertyAnimation]
+) -> bool {
     let mut had_animations = false;
     for i in 0..new_style.get_box().transition_property_count() {
         // Create any property animations, if applicable.
@@ -375,20 +423,22 @@ pub fn start_transitions_if_applicable(new_animations_sender: &Sender<Animation>
                                                                      old_style,
                                                                      Arc::make_mut(new_style));
         for property_animation in property_animations {
-            // Per [1], don't trigger a new transition if the end state for that transition is
-            // the same as that of a transition that's already running on the same node.
-            //
-            // [1]: https://drafts.csswg.org/css-transitions/#starting
-            if possibly_expired_animations.iter().any(|animation| {
-                    animation.has_the_same_end_value_as(&property_animation)
-               }) {
-                continue
-            }
-
             // Set the property to the initial value.
+            //
             // NB: get_mut is guaranteed to succeed since we called make_mut()
             // above.
             property_animation.update(Arc::get_mut(new_style).unwrap(), 0.0);
+
+            // Per [1], don't trigger a new transition if the end state for that
+            // transition is the same as that of a transition that's already
+            // running on the same node.
+            //
+            // [1]: https://drafts.csswg.org/css-transitions/#starting
+            if possibly_expired_animations.iter().any(|animation| {
+                animation.has_the_same_end_value_as(&property_animation)
+            }) {
+                continue
+            }
 
             // Kick off the animation.
             let box_style = new_style.get_box();
@@ -396,7 +446,7 @@ pub fn start_transitions_if_applicable(new_animations_sender: &Sender<Animation>
             let start_time =
                 now + (box_style.transition_delay_mod(i).seconds() as f64);
             new_animations_sender
-                .send(Animation::Transition(opaque_node, unsafe_node, start_time, AnimationFrame {
+                .send(Animation::Transition(opaque_node, start_time, AnimationFrame {
                     duration: box_style.transition_duration_mod(i).seconds() as f64,
                     property_animation: property_animation,
                 }, /* is_expired = */ false)).unwrap();
@@ -411,32 +461,40 @@ pub fn start_transitions_if_applicable(new_animations_sender: &Sender<Animation>
 fn compute_style_for_animation_step(context: &SharedStyleContext,
                                     step: &KeyframesStep,
                                     previous_style: &ComputedValues,
-                                    style_from_cascade: &ComputedValues,
+                                    style_from_cascade: &Arc<ComputedValues>,
                                     font_metrics_provider: &FontMetricsProvider)
-                                    -> ComputedValues {
+                                    -> Arc<ComputedValues> {
     match step.value {
         KeyframesStepValue::ComputedValues => style_from_cascade.clone(),
         KeyframesStepValue::Declarations { block: ref declarations } => {
             let guard = declarations.read_with(context.guards.author);
 
-            // No !important in keyframes.
-            debug_assert!(guard.declarations().iter()
-                            .all(|&(_, importance)| importance == Importance::Normal));
-
             let iter = || {
-                guard.declarations().iter().rev().map(|&(ref decl, _importance)| decl)
+                // It's possible to have !important properties in keyframes
+                // so we have to filter them out.
+                // See the spec issue https://github.com/w3c/csswg-drafts/issues/1824
+                // Also we filter our non-animatable properties.
+                guard.normal_declaration_iter()
+                     .filter(|declaration| declaration.is_animatable())
+                     .map(|decl| (decl, CascadeLevel::Animations))
             };
 
+            // This currently ignores visited styles, which seems acceptable,
+            // as existing browsers don't appear to animate visited styles.
             let computed =
-                properties::apply_declarations(&context.stylist.device,
-                                               /* is_root = */ false,
+                properties::apply_declarations(context.stylist.device(),
+                                               /* pseudo = */ None,
+                                               previous_style.rules(),
                                                iter,
-                                               previous_style,
-                                               previous_style,
-                                               /* cascade_info = */ None,
-                                               &*context.error_reporter,
+                                               Some(previous_style),
+                                               Some(previous_style),
+                                               Some(previous_style),
+                                               /* visited_style = */ None,
                                                font_metrics_provider,
-                                               CascadeFlags::empty());
+                                               CascadeFlags::empty(),
+                                               context.quirks_mode(),
+                                               /* rule_cache = */ None,
+                                               &mut Default::default());
             computed
         }
     }
@@ -453,13 +511,19 @@ pub fn maybe_start_animations(context: &SharedStyleContext,
 
     let box_style = new_style.get_box();
     for (i, name) in box_style.animation_name_iter().enumerate() {
+        let name = if let Some(atom) = name.as_atom() {
+            atom
+        } else {
+            continue
+        };
+
         debug!("maybe_start_animations: name={}", name);
         let total_duration = box_style.animation_duration_mod(i).seconds();
         if total_duration == 0. {
             continue
         }
 
-        if let Some(ref anim) = context.stylist.animations().get(&name.0) {
+        if let Some(ref anim) = context.stylist.get_animation(name) {
             debug!("maybe_start_animations: animation {} found", name);
 
             // If this animation doesn't have any keyframe, we can just continue
@@ -482,20 +546,20 @@ pub fn maybe_start_animations(context: &SharedStyleContext,
             let animation_direction = box_style.animation_direction_mod(i);
 
             let initial_direction = match animation_direction {
-                AnimationDirection::normal |
-                AnimationDirection::alternate => AnimationDirection::normal,
-                AnimationDirection::reverse |
-                AnimationDirection::alternate_reverse => AnimationDirection::reverse,
+                AnimationDirection::Normal |
+                AnimationDirection::Alternate => AnimationDirection::Normal,
+                AnimationDirection::Reverse |
+                AnimationDirection::AlternateReverse => AnimationDirection::Reverse,
             };
 
             let running_state = match box_style.animation_play_state_mod(i) {
-                AnimationPlayState::paused => KeyframesRunningState::Paused(0.),
-                AnimationPlayState::running => KeyframesRunningState::Running,
+                AnimationPlayState::Paused => KeyframesRunningState::Paused(0.),
+                AnimationPlayState::Running => KeyframesRunningState::Running,
             };
 
 
             new_animations_sender
-                .send(Animation::Keyframes(node, name.0.clone(), KeyframesAnimationState {
+                .send(Animation::Keyframes(node, name.clone(), KeyframesAnimationState {
                     started_at: animation_start,
                     duration: duration as f64,
                     delay: delay as f64,
@@ -542,7 +606,7 @@ pub fn update_style_for_animation(context: &SharedStyleContext,
     debug_assert!(!animation.is_expired());
 
     match *animation {
-        Animation::Transition(_, _, start_time, ref frame, _) => {
+        Animation::Transition(_, start_time, ref frame, _) => {
             debug!("update_style_for_animation: transition found");
             let now = context.timer.seconds();
             let mut new_style = (*style).clone();
@@ -563,7 +627,7 @@ pub fn update_style_for_animation(context: &SharedStyleContext,
                 KeyframesRunningState::Paused(progress) => started_at + duration * progress,
             };
 
-            let animation = match context.stylist.animations().get(name) {
+            let animation = match context.stylist.get_animation(name) {
                 None => {
                     warn!("update_style_for_animation: Animation {:?} not found", name);
                     return;
@@ -573,9 +637,10 @@ pub fn update_style_for_animation(context: &SharedStyleContext,
 
             debug_assert!(!animation.steps.is_empty());
 
-            let maybe_index = style.get_box()
-                                   .animation_name_iter()
-                                   .position(|animation_name| *name == animation_name.0);
+            let maybe_index = style
+                .get_box()
+                .animation_name_iter()
+                .position(|animation_name| Some(name) == animation_name.as_atom());
 
             let index = match maybe_index {
                 Some(index) => index,
@@ -607,7 +672,7 @@ pub fn update_style_for_animation(context: &SharedStyleContext,
             let last_keyframe_position;
             let target_keyframe_position;
             match state.current_direction {
-                AnimationDirection::normal => {
+                AnimationDirection::Normal => {
                     target_keyframe_position =
                         animation.steps.iter().position(|step| {
                             total_progress as f32 <= step.start_percentage.0
@@ -617,7 +682,7 @@ pub fn update_style_for_animation(context: &SharedStyleContext,
                         if pos != 0 { Some(pos - 1) } else { None }
                     }).unwrap_or(0);
                 }
-                AnimationDirection::reverse => {
+                AnimationDirection::Reverse => {
                     target_keyframe_position =
                         animation.steps.iter().rev().position(|step| {
                             total_progress as f32 <= 1. - step.start_percentage.0
@@ -647,10 +712,10 @@ pub fn update_style_for_animation(context: &SharedStyleContext,
             let relative_timespan = (target_keyframe.start_percentage.0 - last_keyframe.start_percentage.0).abs();
             let relative_duration = relative_timespan as f64 * duration;
             let last_keyframe_ended_at = match state.current_direction {
-                AnimationDirection::normal => {
+                AnimationDirection::Normal => {
                     state.started_at + (total_duration * last_keyframe.start_percentage.0 as f64)
                 }
-                AnimationDirection::reverse => {
+                AnimationDirection::Reverse => {
                     state.started_at + (total_duration * (1. - last_keyframe.start_percentage.0 as f64))
                 }
                 _ => unreachable!(),
@@ -681,22 +746,26 @@ pub fn update_style_for_animation(context: &SharedStyleContext,
 
             let mut new_style = (*style).clone();
 
-            for transition_property in &animation.properties_changed {
+            for property in animation.properties_changed.iter() {
                 debug!("update_style_for_animation: scanning prop {:?} for animation \"{}\"",
-                       transition_property, name);
-                match PropertyAnimation::from_transition_property(*transition_property,
-                                                                  timing_function,
-                                                                  Time::from_seconds(relative_duration as f32),
-                                                                  &from_style,
-                                                                  &target_style) {
+                       property, name);
+                let animation = PropertyAnimation::from_longhand(
+                    &property,
+                    timing_function,
+                    Time::from_seconds(relative_duration as f32),
+                    &from_style,
+                    &target_style
+                );
+
+                match animation {
                     Some(property_animation) => {
-                        debug!("update_style_for_animation: got property animation for prop {:?}", transition_property);
+                        debug!("update_style_for_animation: got property animation for prop {:?}", property);
                         debug!("update_style_for_animation: {:?}", property_animation);
                         property_animation.update(Arc::make_mut(&mut new_style), relative_progress);
                     }
                     None => {
                         debug!("update_style_for_animation: property animation {:?} not animating",
-                               transition_property);
+                               property);
                     }
                 }
             }
@@ -708,6 +777,7 @@ pub fn update_style_for_animation(context: &SharedStyleContext,
 }
 
 /// Update the style in the node when it finishes.
+#[cfg(feature = "servo")]
 pub fn complete_expired_transitions(node: OpaqueNode, style: &mut Arc<ComputedValues>,
                                     context: &SharedStyleContext) -> bool {
     let had_animations_to_expire;
@@ -718,7 +788,7 @@ pub fn complete_expired_transitions(node: OpaqueNode, style: &mut Arc<ComputedVa
         if let Some(ref animations) = animations_to_expire {
             for animation in *animations {
                 // TODO: support animation-fill-mode
-                if let Animation::Transition(_, _, _, ref frame, _) = *animation {
+                if let Animation::Transition(_, _, ref frame, _) = *animation {
                     frame.property_animation.update(Arc::make_mut(style), 1.0);
                 }
             }

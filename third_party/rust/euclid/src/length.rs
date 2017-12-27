@@ -8,33 +8,30 @@
 // except according to those terms.
 //! A one-dimensional length, tagged with its units.
 
-use scale_factor::ScaleFactor;
+use scale::TypedScale;
 use num::Zero;
 
-use heapsize::HeapSizeOf;
 use num_traits::{NumCast, Saturating};
+use num::One;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::ops::{Add, Sub, Mul, Div, Neg};
-use std::ops::{AddAssign, SubAssign};
+use std::ops::{AddAssign, SubAssign, MulAssign, DivAssign};
 use std::marker::PhantomData;
 use std::fmt;
 
 /// A one-dimensional distance, with value represented by `T` and unit of measurement `Unit`.
 ///
-/// `T` can be any numeric type, for example a primitive type like u64 or f32.
+/// `T` can be any numeric type, for example a primitive type like `u64` or `f32`.
 ///
-/// `Unit` is not used in the representation of a Length value. It is used only at compile time
-/// to ensure that a Length stored with one unit is converted explicitly before being used in an
+/// `Unit` is not used in the representation of a `Length` value. It is used only at compile time
+/// to ensure that a `Length` stored with one unit is converted explicitly before being used in an
 /// expression that requires a different unit.  It may be a type without values, such as an empty
 /// enum.
 ///
-/// You can multiply a Length by a `scale_factor::ScaleFactor` to convert it from one unit to
-/// another. See the `ScaleFactor` docs for an example.
-// Uncomment the derive, and remove the macro call, once heapsize gets
-// PhantomData<T> support.
+/// You can multiply a `Length` by a `scale::TypedScale` to convert it from one unit to
+/// another. See the `TypedScale` docs for an example.
 #[repr(C)]
-#[derive(RustcDecodable, RustcEncodable)]
 pub struct Length<T, Unit>(pub T, PhantomData<Unit>);
 
 impl<T: Clone, Unit> Clone for Length<T, Unit> {
@@ -45,15 +42,9 @@ impl<T: Clone, Unit> Clone for Length<T, Unit> {
 
 impl<T: Copy, Unit> Copy for Length<T, Unit> {}
 
-impl<Unit, T: HeapSizeOf> HeapSizeOf for Length<T, Unit> {
-    fn heap_size_of_children(&self) -> usize {
-        self.0.heap_size_of_children()
-    }
-}
-
-impl<Unit, T> Deserialize for Length<T, Unit> where T: Deserialize {
-    fn deserialize<D>(deserializer: D) -> Result<Length<T, Unit>,D::Error>
-                      where D: Deserializer {
+impl<'de, Unit, T> Deserialize<'de> for Length<T, Unit> where T: Deserialize<'de> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                      where D: Deserializer<'de> {
         Ok(Length(try!(Deserialize::deserialize(deserializer)), PhantomData))
     }
 }
@@ -65,7 +56,7 @@ impl<T, Unit> Serialize for Length<T, Unit> where T: Serialize {
 }
 
 impl<T, Unit> Length<T, Unit> {
-    pub fn new(x: T) -> Length<T, Unit> {
+    pub fn new(x: T) -> Self {
         Length(x, PhantomData)
     }
 }
@@ -131,27 +122,61 @@ impl<U, T: Clone + Saturating> Saturating for Length<T, U> {
 
 // length / length
 impl<Src, Dst, T: Clone + Div<T, Output=T>> Div<Length<T, Src>> for Length<T, Dst> {
-    type Output = ScaleFactor<T, Src, Dst>;
+    type Output = TypedScale<T, Src, Dst>;
     #[inline]
-    fn div(self, other: Length<T, Src>) -> ScaleFactor<T, Src, Dst> {
-        ScaleFactor::new(self.get() / other.get())
+    fn div(self, other: Length<T, Src>) -> TypedScale<T, Src, Dst> {
+        TypedScale::new(self.get() / other.get())
+    }
+}
+
+// length * scalar
+impl<T: Copy + Mul<T, Output=T>, U> Mul<T> for Length<T, U> {
+    type Output = Self;
+    #[inline]
+    fn mul(self, scale: T) -> Self {
+        Length::new(self.get() * scale)
+    }
+}
+
+// length *= scalar
+impl<T: Copy + Mul<T, Output=T>, U> MulAssign<T> for Length<T, U> {
+    #[inline]
+    fn mul_assign(&mut self, scale: T) {
+        *self = *self * scale
+    }
+}
+
+// length / scalar
+impl<T: Copy + Div<T, Output=T>, U> Div<T> for Length<T, U> {
+    type Output = Self;
+    #[inline]
+    fn div(self, scale: T) -> Self {
+        Length::new(self.get() / scale)
+    }
+}
+
+// length /= scalar
+impl<T: Copy + Div<T, Output=T>, U> DivAssign<T> for Length<T, U> {
+    #[inline]
+    fn div_assign(&mut self, scale: T) {
+        *self = *self / scale
     }
 }
 
 // length * scaleFactor
-impl<Src, Dst, T: Clone + Mul<T, Output=T>> Mul<ScaleFactor<T, Src, Dst>> for Length<T, Src> {
+impl<Src, Dst, T: Clone + Mul<T, Output=T>> Mul<TypedScale<T, Src, Dst>> for Length<T, Src> {
     type Output = Length<T, Dst>;
     #[inline]
-    fn mul(self, scale: ScaleFactor<T, Src, Dst>) -> Length<T, Dst> {
+    fn mul(self, scale: TypedScale<T, Src, Dst>) -> Length<T, Dst> {
         Length::new(self.get() * scale.get())
     }
 }
 
 // length / scaleFactor
-impl<Src, Dst, T: Clone + Div<T, Output=T>> Div<ScaleFactor<T, Src, Dst>> for Length<T, Dst> {
+impl<Src, Dst, T: Clone + Div<T, Output=T>> Div<TypedScale<T, Src, Dst>> for Length<T, Dst> {
     type Output = Length<T, Src>;
     #[inline]
-    fn div(self, scale: ScaleFactor<T, Src, Dst>) -> Length<T, Src> {
+    fn div(self, scale: TypedScale<T, Src, Dst>) -> Length<T, Src> {
         Length::new(self.get() / scale.get())
     }
 }
@@ -173,11 +198,11 @@ impl<Unit, T0: NumCast + Clone> Length<T0, Unit> {
 }
 
 impl<Unit, T: Clone + PartialEq> PartialEq for Length<T, Unit> {
-    fn eq(&self, other: &Length<T, Unit>) -> bool { self.get().eq(&other.get()) }
+    fn eq(&self, other: &Self) -> bool { self.get().eq(&other.get()) }
 }
 
 impl<Unit, T: Clone + PartialOrd> PartialOrd for Length<T, Unit> {
-    fn partial_cmp(&self, other: &Length<T, Unit>) -> Option<Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.get().partial_cmp(&other.get())
     }
 }
@@ -185,12 +210,24 @@ impl<Unit, T: Clone + PartialOrd> PartialOrd for Length<T, Unit> {
 impl<Unit, T: Clone + Eq> Eq for Length<T, Unit> {}
 
 impl<Unit, T: Clone + Ord> Ord for Length<T, Unit> {
-    fn cmp(&self, other: &Length<T, Unit>) -> Ordering { self.get().cmp(&other.get()) }
+    fn cmp(&self, other: &Self) -> Ordering { self.get().cmp(&other.get()) }
 }
 
 impl<Unit, T: Zero> Zero for Length<T, Unit> {
-    fn zero() -> Length<T, Unit> {
+    fn zero() -> Self {
         Length::new(Zero::zero())
+    }
+}
+
+impl<T, U> Length<T, U>
+where T: Copy + One + Add<Output=T> + Sub<Output=T> + Mul<Output=T> {
+    /// Linearly interpolate between this length and another length.
+    ///
+    /// `t` is expected to be between zero and one.
+    #[inline]
+    pub fn lerp(&self, other: Self, t: T) -> Self {
+        let one_t = T::one() - t;
+        Length::new(one_t * self.get() + t * other.get())
     }
 }
 
@@ -199,9 +236,8 @@ mod tests {
     use super::Length;
     use num::Zero;
 
-    use heapsize::HeapSizeOf;
     use num_traits::Saturating;
-    use scale_factor::ScaleFactor;
+    use scale::TypedScale;
     use std::f32::INFINITY;
 
     extern crate serde_test;
@@ -224,26 +260,6 @@ mod tests {
 
         assert_eq!(one_foot.get(), 12.0);
         assert_eq!(variable_length.get(), 24.0);
-    }
-
-    #[test]
-    fn test_heapsizeof_builtins() {
-        // Heap size of built-ins is zero by default.
-        let one_foot: Length<f32, Inch> = Length::new(12.0);
-
-        let heap_size_length_f32 = one_foot.heap_size_of_children();
-
-        assert_eq!(heap_size_length_f32, 0);
-    }
-
-    #[test]
-    fn test_heapsizeof_length_vector() {
-        // Heap size of any Length is just the heap size of the length value.
-        for n in 0..5 {
-            let length: Length<Vec<f32>, Inch> = Length::new(Vec::with_capacity(n));
-
-            assert_eq!(length.heap_size_of_children(), length.0.heap_size_of_children());
-        }
     }
 
     #[test]
@@ -348,21 +364,21 @@ mod tests {
 
     #[test]
     fn test_division_by_length() {
-        // Division results in a ScaleFactor from denominator units
+        // Division results in a TypedScale from denominator units
         // to numerator units.
         let length: Length<f32, Cm> = Length::new(5.0);
         let duration: Length<f32, Second> = Length::new(10.0);
 
         let result = length / duration;
 
-        let expected: ScaleFactor<f32, Second, Cm> = ScaleFactor::new(0.5);
+        let expected: TypedScale<f32, Second, Cm> = TypedScale::new(0.5);
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_multiplication() {
         let length_mm: Length<f32, Mm> = Length::new(10.0);
-        let cm_per_mm: ScaleFactor<f32, Mm, Cm> = ScaleFactor::new(0.1);
+        let cm_per_mm: TypedScale<f32, Mm, Cm> = TypedScale::new(0.1);
 
         let result = length_mm * cm_per_mm;
 
@@ -371,14 +387,54 @@ mod tests {
     }
 
     #[test]
+    fn test_multiplication_with_scalar() {
+        let length_mm: Length<f32, Mm> = Length::new(10.0);
+
+        let result = length_mm * 2.0;
+
+        let expected: Length<f32, Mm> = Length::new(20.0);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_multiplication_assignment() {
+        let mut length: Length<f32, Mm> = Length::new(10.0);
+
+        length *= 2.0;
+
+        let expected: Length<f32, Mm> = Length::new(20.0);
+        assert_eq!(length, expected);
+    }
+
+    #[test]
     fn test_division_by_scalefactor() {
         let length: Length<f32, Cm> = Length::new(5.0);
-        let cm_per_second: ScaleFactor<f32, Second, Cm> = ScaleFactor::new(10.0);
+        let cm_per_second: TypedScale<f32, Second, Cm> = TypedScale::new(10.0);
 
         let result = length / cm_per_second;
 
         let expected: Length<f32, Second> = Length::new(0.5);
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_division_by_scalar() {
+        let length: Length<f32, Cm> = Length::new(5.0);
+
+        let result = length / 2.0;
+
+        let expected: Length<f32, Cm> = Length::new(2.5);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_division_assignment() {
+        let mut length: Length<f32, Mm> = Length::new(10.0);
+
+        length /= 2.0;
+
+        let expected: Length<f32, Mm> = Length::new(5.0);
+        assert_eq!(length, expected);
     }
 
     #[test]
@@ -443,7 +499,7 @@ mod tests {
 
         let result = length / length_zero;
 
-        let expected: ScaleFactor<f32, Cm, Cm> = ScaleFactor::new(INFINITY);
+        let expected: TypedScale<f32, Cm, Cm> = TypedScale::new(INFINITY);
         assert_eq!(result, expected);
     }
 }

@@ -1,24 +1,25 @@
-/* globals communication, shot, main, auth, catcher, analytics, browser */
+/* globals communication, shot, main, auth, catcher, analytics, buildSettings, blobConverters */
 
 "use strict";
 
-this.takeshot = (function () {
+this.takeshot = (function() {
   let exports = {};
   const Shot = shot.AbstractShot;
   const { sendEvent } = analytics;
 
   communication.register("takeShot", catcher.watchFunction((sender, options) => {
-    let { captureType, captureText, scroll, selectedPos, shotId, shot } = options;
+    let { captureType, captureText, scroll, selectedPos, shotId, shot, imageBlob } = options;
     shot = new Shot(main.getBackend(), shotId, shot);
+    shot.favicon = sender.tab.favIconUrl;
     let capturePromise = Promise.resolve();
     let openedTab;
-    if (! shot.clipNames().length) {
+    if (!shot.clipNames().length) {
       // canvas.drawWindow isn't available, so we fall back to captureVisibleTab
       capturePromise = screenshotPage(selectedPos, scroll).then((dataUrl) => {
         shot.addClip({
           createdDate: Date.now(),
           image: {
-            url: dataUrl,
+            url: "data:",
             captureType,
             text: captureText,
             location: selectedPos,
@@ -29,6 +30,16 @@ this.takeshot = (function () {
           }
         });
       });
+    }
+    let convertBlobPromise = Promise.resolve();
+    if (buildSettings.uploadBinary && !imageBlob) {
+      imageBlob = blobConverters.dataUrlToBlob(shot.getClip(shot.clipNames()[0]).image.url);
+      shot.getClip(shot.clipNames()[0]).image.url = "";
+    } else if (!buildSettings.uploadBinary && imageBlob) {
+      convertBlobPromise = blobConverters.blobToDataUrl(imageBlob).then((dataUrl) => {
+        shot.getClip(shot.clipNames()[0]).image.url = dataUrl;
+      });
+      imageBlob = null;
     }
     let shotAbTests = {};
     let abTests = auth.getAbTests();
@@ -41,13 +52,28 @@ this.takeshot = (function () {
       shot.abTests = shotAbTests;
     }
     return catcher.watchPromise(capturePromise.then(() => {
+      return convertBlobPromise;
+    }).then(() => {
       return browser.tabs.create({url: shot.creatingUrl})
     }).then((tab) => {
       openedTab = tab;
-      return uploadShot(shot);
+      sendEvent('internal', 'open-shot-tab');
+      return uploadShot(shot, imageBlob);
     }).then(() => {
-      return browser.tabs.update(openedTab.id, {url: shot.viewUrl});
+      return browser.tabs.update(openedTab.id, {url: shot.viewUrl}).then(
+        null,
+        (error) => {
+          // FIXME: If https://bugzilla.mozilla.org/show_bug.cgi?id=1365718 is resolved,
+          // use the errorCode added as an additional check:
+          if ((/invalid tab id/i).test(error)) {
+            // This happens if the tab was closed before the upload completed
+            return browser.tabs.create({url: shot.viewUrl});
+          }
+          throw error;
+        }
+      );
     }).then(() => {
+      catcher.watchPromise(communication.sendToBootstrap('incrementUploadCount'));
       return shot.viewUrl;
     }).catch((error) => {
       browser.tabs.remove(openedTab.id);
@@ -96,20 +122,74 @@ this.takeshot = (function () {
     }));
   }
 
-  function uploadShot(shot) {
-    return auth.authHeaders().then((headers) => {
-      headers["content-type"] = "application/json";
-      let body = JSON.stringify(shot.asJson());
-      let req = new Request(shot.jsonUrl, {
+  /** Combines two buffers or Uint8Array's */
+  function concatBuffers(buffer1, buffer2) {
+    var tmp = new Uint8Array(buffer1.byteLength + buffer2.byteLength);
+    tmp.set(new Uint8Array(buffer1), 0);
+    tmp.set(new Uint8Array(buffer2), buffer1.byteLength);
+    return tmp.buffer;
+  }
+
+  /** Creates a multipart TypedArray, given {name: value} fields
+      and {name: blob} files
+
+      Returns {body, "content-type"}
+      */
+  function createMultipart(fields, fileField, fileFilename, blob) {
+    let boundary = "---------------------------ScreenshotBoundary" + Date.now();
+    return blobConverters.blobToArray(blob).then((blobAsBuffer) => {
+      let body = [];
+      for (let name in fields) {
+        body.push("--" + boundary);
+        body.push(`Content-Disposition: form-data; name="${name}"`);
+        body.push("");
+        body.push(fields[name]);
+      }
+      body.push("--" + boundary);
+      body.push(`Content-Disposition: form-data; name="${fileField}"; filename="${fileFilename}"`);
+      body.push(`Content-Type: ${blob.type}`);
+      body.push("");
+      body.push("");
+      body = body.join("\r\n");
+      let enc = new TextEncoder("utf-8");
+      body = enc.encode(body);
+      body = concatBuffers(body.buffer, blobAsBuffer);
+      let tail = `\r\n--${boundary}--`;
+      tail = enc.encode(tail);
+      body = concatBuffers(body, tail.buffer);
+      return {
+        "content-type": `multipart/form-data; boundary=${boundary}`,
+        body
+      };
+    });
+  }
+
+  function uploadShot(shot, blob) {
+    let headers;
+    return auth.authHeaders().then((_headers) => {
+      headers = _headers;
+      if (blob) {
+        return createMultipart(
+          {shot: JSON.stringify(shot.asJson())},
+          "blob", "screenshot.png", blob
+        );
+      }
+      return {
+        "content-type": "application/json",
+        body: JSON.stringify(shot.asJson())
+      };
+
+    }).then((submission) => {
+      headers["content-type"] = submission["content-type"];
+      sendEvent("upload", "started", {eventValue: Math.floor(submission.body.length / 1000)});
+      return fetch(shot.jsonUrl, {
         method: "PUT",
         mode: "cors",
         headers,
-        body
+        body: submission.body
       });
-      sendEvent("upload", "started", {eventValue: Math.floor(body.length / 1000)});
-      return fetch(req);
     }).then((resp) => {
-      if (! resp.ok) {
+      if (!resp.ok) {
         sendEvent("upload-failed", `status-${resp.status}`);
         let exc = new Error(`Response failed with status ${resp.status}`);
         exc.popupMessage = "REQUEST_ERROR";
@@ -120,6 +200,7 @@ this.takeshot = (function () {
     }, (error) => {
       // FIXME: I'm not sure what exceptions we can expect
       sendEvent("upload-failed", "connection");
+      error.popupMessage = "CONNECTION_ERROR";
       throw error;
     });
   }

@@ -8,7 +8,7 @@
  */
 
 callback RTCSessionDescriptionCallback = void (RTCSessionDescriptionInit description);
-callback RTCPeerConnectionErrorCallback = void (DOMError error);
+callback RTCPeerConnectionErrorCallback = void (DOMException error);
 callback RTCStatsCallback = void (RTCStatsReport report);
 
 enum RTCSignalingState {
@@ -36,6 +36,18 @@ enum RTCIceConnectionState {
     "closed"
 };
 
+enum mozPacketDumpType {
+  "rtp", // dump unencrypted rtp as the MediaPipeline sees it
+  "srtp", // dump encrypted rtp as the MediaPipeline sees it
+  "rtcp", // dump unencrypted rtcp as the MediaPipeline sees it
+  "srtcp" // dump encrypted rtcp as the MediaPipeline sees it
+};
+
+callback mozPacketCallback = void (unsigned long level,
+                                   mozPacketDumpType type,
+                                   boolean sending,
+                                   ArrayBuffer packet);
+
 dictionary RTCDataChannelInit {
   boolean        ordered = true;
   unsigned short maxPacketLifeTime;
@@ -56,13 +68,9 @@ dictionary RTCAnswerOptions : RTCOfferAnswerOptions {
 };
 
 dictionary RTCOfferOptions : RTCOfferAnswerOptions {
-  long    offerToReceiveVideo;
-  long    offerToReceiveAudio;
+  boolean offerToReceiveVideo;
+  boolean offerToReceiveAudio;
   boolean iceRestart = false;
-
-  // Mozilla proprietary options (at risk: Bug 1196974)
-  boolean mozDontOfferDataChannel;
-  boolean mozBundleOnly;
 };
 
 interface RTCDataChannel;
@@ -86,7 +94,11 @@ interface RTCPeerConnection : EventTarget  {
   Promise<void> setLocalDescription (RTCSessionDescriptionInit description);
   Promise<void> setRemoteDescription (RTCSessionDescriptionInit description);
   readonly attribute RTCSessionDescription? localDescription;
+  readonly attribute RTCSessionDescription? currentLocalDescription;
+  readonly attribute RTCSessionDescription? pendingLocalDescription;
   readonly attribute RTCSessionDescription? remoteDescription;
+  readonly attribute RTCSessionDescription? currentRemoteDescription;
+  readonly attribute RTCSessionDescription? pendingRemoteDescription;
   readonly attribute RTCSignalingState signalingState;
   Promise<void> addIceCandidate ((RTCIceCandidateInit or RTCIceCandidate)? candidate);
   readonly attribute boolean? canTrickleIceCandidates;
@@ -116,11 +128,37 @@ interface RTCPeerConnection : EventTarget  {
                         MediaStream... moreStreams);
   void removeTrack(RTCRtpSender sender);
 
+  RTCRtpTransceiver addTransceiver((MediaStreamTrack or DOMString) trackOrKind,
+                                   optional RTCRtpTransceiverInit init);
+
   sequence<RTCRtpSender> getSenders();
   sequence<RTCRtpReceiver> getReceivers();
+  sequence<RTCRtpTransceiver> getTransceivers();
 
+  // test-only: for testing getContributingSources
   [ChromeOnly]
-  void mozSelectSsrc(RTCRtpReceiver receiver, unsigned short ssrcIndex);
+  DOMHighResTimeStamp mozGetNowInRtpSourceReferenceTime();
+  // test-only: for testing getContributingSources
+  [ChromeOnly]
+  void mozInsertAudioLevelForContributingSource(RTCRtpReceiver receiver,
+                                                unsigned long source,
+                                                DOMHighResTimeStamp timestamp,
+                                                boolean hasLevel,
+                                                byte level);
+  [ChromeOnly]
+  void mozAddRIDExtension(RTCRtpReceiver receiver, unsigned short extensionId);
+  [ChromeOnly]
+  void mozAddRIDFilter(RTCRtpReceiver receiver, DOMString rid);
+  [ChromeOnly]
+  void mozSetPacketCallback(mozPacketCallback callback);
+  [ChromeOnly]
+  void mozEnablePacketDump(unsigned long level,
+                           mozPacketDumpType type,
+                           boolean sending);
+  [ChromeOnly]
+  void mozDisablePacketDump(unsigned long level,
+                            mozPacketDumpType type,
+                            boolean sending);
 
   void close ();
   attribute EventHandler onnegotiationneeded;

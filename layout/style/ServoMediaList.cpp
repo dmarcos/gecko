@@ -26,10 +26,11 @@ ServoMediaList::ServoMediaList()
 {
 }
 
-ServoMediaList::ServoMediaList(const nsAString& aMedia)
+ServoMediaList::ServoMediaList(const nsAString& aMedia,
+                               dom::CallerType aCallerType)
   : ServoMediaList()
 {
-  SetText(aMedia);
+  SetTextInternal(aMedia, aCallerType);
 }
 
 void
@@ -41,8 +42,15 @@ ServoMediaList::GetText(nsAString& aMediaText)
 void
 ServoMediaList::SetText(const nsAString& aMediaText)
 {
+  SetTextInternal(aMediaText, dom::CallerType::NonSystem);
+}
+
+void
+ServoMediaList::SetTextInternal(const nsAString& aMediaText,
+                                dom::CallerType aCallerType)
+{
   NS_ConvertUTF16toUTF8 mediaText(aMediaText);
-  Servo_MediaList_SetText(mRawList, &mediaText);
+  Servo_MediaList_SetText(mRawList, &mediaText, aCallerType);
 }
 
 uint32_t
@@ -56,6 +64,9 @@ ServoMediaList::IndexedGetter(uint32_t aIndex, bool& aFound,
                               nsAString& aReturn)
 {
   aFound = Servo_MediaList_GetMediumAt(mRawList, aIndex, &aReturn);
+  if (!aFound) {
+    SetDOMStringToNull(aReturn);
+  }
 }
 
 nsresult
@@ -82,9 +93,10 @@ ServoMediaList::Delete(const nsAString& aOldMedium)
 bool
 ServoMediaList::Matches(nsPresContext* aPresContext) const
 {
-  const RawServoStyleSet& rawSet =
+  const RawServoStyleSet* rawSet =
     aPresContext->StyleSet()->AsServo()->RawSet();
-  return Servo_MediaList_Matches(mRawList, &rawSet);
+  MOZ_ASSERT(rawSet, "The RawServoStyleSet should be valid!");
+  return Servo_MediaList_Matches(mRawList, rawSet);
 }
 
 } // namespace mozilla

@@ -8,7 +8,7 @@ Cu.import("resource://gre/modules/ExtensionSearchHandler.jsm");
 
 let controller = Cc["@mozilla.org/autocomplete/controller;1"].getService(Ci.nsIAutoCompleteController);
 
-add_task(function* test_correct_errors_are_thrown() {
+add_task(async function test_correct_errors_are_thrown() {
   let keyword = "foo";
   let anotherKeyword = "bar";
   let unregisteredKeyword = "baz";
@@ -133,10 +133,10 @@ add_task(function* test_correct_errors_are_thrown() {
   // Try setting the default suggestion for a word that was never registered.
   Assert.throws(() => ExtensionSearchHandler.setDefaultSuggestion(unregisteredKeyword, {description: "test"}));
 
-  yield cleanup();
+  await cleanup();
 });
 
-add_task(function* test_correct_events_are_emitted() {
+add_task(async function test_correct_events_are_emitted() {
   let events = [];
   function checkEvents(expectedEvents) {
     Assert.equal(events.length, expectedEvents.length, "The correct number of events fired");
@@ -182,7 +182,7 @@ add_task(function* test_correct_events_are_emitted() {
   ExtensionSearchHandler.unregisterKeyword(keyword);
 });
 
-add_task(function* test_removes_suggestion_if_its_content_is_typed_in() {
+add_task(async function test_removes_suggestion_if_its_content_is_typed_in() {
   let keyword = "test";
   let extensionName = "Foo Bar";
 
@@ -195,14 +195,17 @@ add_task(function* test_removes_suggestion_if_its_content_is_typed_in() {
           {content: "bar", description: "second suggestion"},
           {content: "baz", description: "third suggestion"},
         ]);
-        controller.stopSearch();
+        // The API doesn't have a way to notify when addition is complete.
+        do_timeout(1000, () => {
+          controller.stopSearch();
+        });
       }
     }
   };
 
   ExtensionSearchHandler.registerKeyword(keyword, mockExtension);
 
-  yield check_autocomplete({
+  await check_autocomplete({
     search: `${keyword} unmatched`,
     searchParam: "enable-actions",
     matches: [
@@ -213,7 +216,7 @@ add_task(function* test_removes_suggestion_if_its_content_is_typed_in() {
     ]
   });
 
-  yield check_autocomplete({
+  await check_autocomplete({
     search: `${keyword} foo`,
     searchParam: "enable-actions",
     matches: [
@@ -223,7 +226,7 @@ add_task(function* test_removes_suggestion_if_its_content_is_typed_in() {
     ]
   });
 
-  yield check_autocomplete({
+  await check_autocomplete({
     search: `${keyword} bar`,
     searchParam: "enable-actions",
     matches: [
@@ -233,7 +236,7 @@ add_task(function* test_removes_suggestion_if_its_content_is_typed_in() {
     ]
   });
 
-  yield check_autocomplete({
+  await check_autocomplete({
     search: `${keyword} baz`,
     searchParam: "enable-actions",
     matches: [
@@ -244,15 +247,15 @@ add_task(function* test_removes_suggestion_if_its_content_is_typed_in() {
   });
 
   ExtensionSearchHandler.unregisterKeyword(keyword);
-  yield cleanup();
+  await cleanup();
 });
 
-add_task(function* test_extension_results_should_come_first() {
+add_task(async function test_extension_results_should_come_first() {
   let keyword = "test";
   let extensionName = "Omnibox Example";
 
   let uri = NetUtil.newURI(`http://a.com/b`);
-  yield PlacesTestUtils.addVisits([
+  await PlacesTestUtils.addVisits([
     { uri, title: `${keyword} -` },
   ]);
 
@@ -266,7 +269,9 @@ add_task(function* test_extension_results_should_come_first() {
           {content: "baz", description: "third suggestion"},
         ]);
       }
-      controller.stopSearch();
+      // Do not stop the search here, of we'd not fetch results after the
+      // extension ones. The timeout in unifiedComplete will let us proceed
+      // after a few seconds.
     }
   };
 
@@ -275,7 +280,7 @@ add_task(function* test_extension_results_should_come_first() {
   // Start an input session before testing MSG_INPUT_CHANGED.
   ExtensionSearchHandler.handleSearch(keyword, `${keyword} `, () => {});
 
-  yield check_autocomplete({
+  await check_autocomplete({
     search: `${keyword} -`,
     searchParam: "enable-actions",
     matches: [
@@ -288,10 +293,10 @@ add_task(function* test_extension_results_should_come_first() {
   });
 
   ExtensionSearchHandler.unregisterKeyword(keyword);
-  yield cleanup();
+  await cleanup();
 });
 
-add_task(function* test_setting_the_default_suggestion() {
+add_task(async function test_setting_the_default_suggestion() {
   let keyword = "test";
   let extensionName = "Omnibox Example";
 
@@ -300,8 +305,11 @@ add_task(function* test_setting_the_default_suggestion() {
     emit(message, text, id) {
       if (message === ExtensionSearchHandler.MSG_INPUT_CHANGED) {
         ExtensionSearchHandler.addSuggestions(keyword, id, []);
+        // The API doesn't have a way to notify when addition is complete.
+        do_timeout(1000, () => {
+          controller.stopSearch();
+        });
       }
-      controller.stopSearch();
     }
   };
 
@@ -312,7 +320,7 @@ add_task(function* test_setting_the_default_suggestion() {
   });
 
   let searchString = `${keyword} search query`;
-  yield check_autocomplete({
+  await check_autocomplete({
     search: searchString,
     searchParam: "enable-actions",
     matches: [
@@ -324,7 +332,7 @@ add_task(function* test_setting_the_default_suggestion() {
     description: "foo bar"
   });
 
-  yield check_autocomplete({
+  await check_autocomplete({
     search: searchString,
     searchParam: "enable-actions",
     matches: [
@@ -333,10 +341,10 @@ add_task(function* test_setting_the_default_suggestion() {
   });
 
   ExtensionSearchHandler.unregisterKeyword(keyword);
-  yield cleanup();
+  await cleanup();
 });
 
-add_task(function* test_maximum_number_of_suggestions_is_enforced() {
+add_task(async function test_maximum_number_of_suggestions_is_enforced() {
   let keyword = "test";
   let extensionName = "Omnibox Example";
 
@@ -356,7 +364,10 @@ add_task(function* test_maximum_number_of_suggestions_is_enforced() {
           {content: "i", description: "ninth suggestion"},
           {content: "j", description: "tenth suggestion"},
         ]);
-        controller.stopSearch();
+        // The API doesn't have a way to notify when addition is complete.
+        do_timeout(1000, () => {
+          controller.stopSearch();
+        });
       }
     }
   };
@@ -366,7 +377,7 @@ add_task(function* test_maximum_number_of_suggestions_is_enforced() {
   // Start an input session before testing MSG_INPUT_CHANGED.
   ExtensionSearchHandler.handleSearch(keyword, `${keyword} `, () => {});
 
-  yield check_autocomplete({
+  await check_autocomplete({
     search: `${keyword} #`,
     searchParam: "enable-actions",
     matches: [
@@ -380,5 +391,5 @@ add_task(function* test_maximum_number_of_suggestions_is_enforced() {
   });
 
   ExtensionSearchHandler.unregisterKeyword(keyword);
-  yield cleanup();
+  await cleanup();
 });

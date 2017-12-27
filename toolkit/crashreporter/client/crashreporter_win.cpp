@@ -139,13 +139,13 @@ static void RemoveUnusedValues(const wchar_t* key, LPCTSTR valueName)
 {
   HKEY hRegKey;
 
-  if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, key, 0, KEY_SET_VALUE, &hRegKey) 
+  if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, key, 0, KEY_SET_VALUE, &hRegKey)
       == ERROR_SUCCESS) {
     RegDeleteValue(hRegKey, valueName);
     RegCloseKey(hRegKey);
   }
 
-  if (RegOpenKeyEx(HKEY_CURRENT_USER, key, 0, KEY_SET_VALUE, &hRegKey) 
+  if (RegOpenKeyEx(HKEY_CURRENT_USER, key, 0, KEY_SET_VALUE, &hRegKey)
       == ERROR_SUCCESS) {
     RegDeleteValue(hRegKey, valueName);
     RegCloseKey(hRegKey);
@@ -309,11 +309,11 @@ static void GetThemeSizes(HWND hwnd)
   if (!themeDLL)
     return;
 
-  OpenThemeDataPtr openTheme = 
+  OpenThemeDataPtr openTheme =
     (OpenThemeDataPtr)GetProcAddress(themeDLL, "OpenThemeData");
   CloseThemeDataPtr closeTheme =
     (CloseThemeDataPtr)GetProcAddress(themeDLL, "CloseThemeData");
-  GetThemePartSizePtr getThemePartSize = 
+  GetThemePartSizePtr getThemePartSize =
     (GetThemePartSizePtr)GetProcAddress(themeDLL, "GetThemePartSize");
 
   if (!openTheme || !closeTheme || !getThemePartSize) {
@@ -414,7 +414,14 @@ static DWORD WINAPI SendThreadProc(LPVOID param)
     }
   }
 
-  PostMessage(td->hDlg, WM_UPLOADCOMPLETE, finishedOk ? 1 : 0, 0);
+  if (gAutoSubmit) {
+    // Ordinarily this is done on the main thread in CrashReporterDialogProc,
+    // for auto submit we don't run that and it should be safe to finish up
+    // here as is done on other platforms.
+    SendCompleted(finishedOk, WideToUTF8(gSendData.serverResponse));
+  } else {
+    PostMessage(td->hDlg, WM_UPLOADCOMPLETE, finishedOk ? 1 : 0, 0);
+  }
 
   return 0;
 }
@@ -598,7 +605,7 @@ static BOOL CALLBACK ViewReportDialogProc(HWND hwndDlg, UINT message,
 {
   switch (message) {
   case WM_INITDIALOG: {
-    SetWindowText(hwndDlg, Str(ST_VIEWREPORTTITLE).c_str());    
+    SetWindowText(hwndDlg, Str(ST_VIEWREPORTTITLE).c_str());
     SetDlgItemText(hwndDlg, IDOK, Str(ST_OK).c_str());
     SendDlgItemMessage(hwndDlg, IDC_VIEWREPORTTEXT,
                        EM_SETTARGETDEVICE, (WPARAM)nullptr, 0);
@@ -673,7 +680,7 @@ static LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam,
     // if the control contains text or is focused, draw it normally
     if (GetFocus() == hwnd || windowText[0] != '\0')
       return CallWindowProc(super, hwnd, uMsg, wParam, lParam);
-    
+
     GetClientRect(hwnd, &r);
     hdc = BeginPaint(hwnd, &ps);
     FillRect(hdc, &r, GetSysColorBrush(IsWindowEnabled(hwnd)
@@ -700,7 +707,7 @@ static LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam,
     if (wParam & (1<<24) || wParam & (1<<29) ||
         (wParam < ' ' && wParam != '\n'))
       break;
-  
+
     wchar_t ch[2] = { (wchar_t)wParam, 0 };
     if (NewTextLength(hwnd, ch) > MAX_COMMENT_LENGTH)
       return 0;
@@ -711,7 +718,7 @@ static LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam,
   case WM_PASTE: {
     if (IsClipboardFormatAvailable(CF_UNICODETEXT) &&
         OpenClipboard(hwnd)) {
-      HGLOBAL hg = GetClipboardData(CF_UNICODETEXT); 
+      HGLOBAL hg = GetClipboardData(CF_UNICODETEXT);
       wchar_t* pastedText = (wchar_t*)GlobalLock(hg);
       int newSize = 0;
 
@@ -775,9 +782,9 @@ static int ResizeControl(HWND hwndButton, RECT& rect, wstring text,
     if (textIncrease < 0)
       return 0;
     int existingTextPadding;
-    if (userDefinedPadding == 0) 
+    if (userDefinedPadding == 0)
       existingTextPadding = (rect.right - rect.left) - oldSize.cx;
-    else 
+    else
       existingTextPadding = userDefinedPadding;
     sizeDiff = textIncrease + existingTextPadding;
 
@@ -912,7 +919,7 @@ static BOOL CALLBACK CrashReporterDialogProc(HWND hwndDlg, UINT message,
 
     if (!CheckBoolKey(gCrashReporterKey.c_str(),
                       SUBMIT_REPORT_VALUE, &enabled))
-      enabled = ShouldEnableSending();
+      enabled = true;
 
     CheckDlgButton(hwndDlg, IDC_SUBMITREPORTCHECK, enabled ? BST_CHECKED
                                                            : BST_UNCHECKED);
@@ -1039,7 +1046,7 @@ static BOOL CALLBACK CrashReporterDialogProc(HWND hwndDlg, UINT message,
     SendDlgItemMessage(hwndDlg, IDC_DESCRIPTIONTEXT,
                        EM_SETEVENTMASK, (WPARAM)nullptr,
                        ENM_REQUESTRESIZE);
-    
+
     wstring description = Str(ST_CRASHREPORTERHEADER);
     description += L"\n\n";
     description += Str(ST_CRASHREPORTERDESCRIPTION);
@@ -1356,6 +1363,16 @@ bool UIShowCrashUI(const StringTable& files,
   if (gStrings.find("isRTL") != gStrings.end() &&
       gStrings["isRTL"] == "yes")
     gRTLlayout = true;
+
+  if (gAutoSubmit) {
+    gSendData.queryParameters = gQueryParameters;
+
+    gThreadHandle = CreateThread(nullptr, 0, SendThreadProc, &gSendData, 0,
+                                 nullptr);
+    WaitForSingleObject(gThreadHandle, INFINITE);
+    // SendCompleted was called from SendThreadProc
+    return true;
+  }
 
   return 1 == DialogBoxParamMaybeRTL(IDD_SENDDIALOG, nullptr,
                                      (DLGPROC)CrashReporterDialogProc, 0);

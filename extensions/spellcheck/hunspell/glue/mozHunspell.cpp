@@ -59,7 +59,7 @@
 
 #include "mozHunspell.h"
 #include "nsReadableUtils.h"
-#include "nsXPIDLString.h"
+#include "nsString.h"
 #include "nsIObserverService.h"
 #include "nsISimpleEnumerator.h"
 #include "nsIDirectoryEnumerator.h"
@@ -67,7 +67,6 @@
 #include "nsDirectoryServiceUtils.h"
 #include "nsDirectoryServiceDefs.h"
 #include "mozISpellI18NManager.h"
-#include "nsUnicharUtilCIID.h"
 #include "nsUnicharUtils.h"
 #include "nsCRT.h"
 #include "mozInlineSpellChecker.h"
@@ -75,11 +74,10 @@
 #include <stdlib.h>
 #include "nsIPrefService.h"
 #include "nsIPrefBranch.h"
-#include "mozilla/dom/EncodingUtils.h"
 #include "mozilla/dom/ContentParent.h"
 
 using mozilla::dom::ContentParent;
-using mozilla::dom::EncodingUtils;
+using namespace mozilla;
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(mozHunspell)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(mozHunspell)
@@ -93,10 +91,7 @@ NS_INTERFACE_MAP_BEGIN(mozHunspell)
   NS_INTERFACE_MAP_ENTRIES_CYCLE_COLLECTION(mozHunspell)
 NS_INTERFACE_MAP_END
 
-NS_IMPL_CYCLE_COLLECTION(mozHunspell,
-                         mPersonalDictionary,
-                         mEncoder,
-                         mDecoder)
+NS_IMPL_CYCLE_COLLECTION(mozHunspell, mPersonalDictionary)
 
 template<> mozilla::Atomic<size_t> mozilla::CountingAllocatorBase<HunspellAllocator>::sAmount(0);
 
@@ -169,13 +164,18 @@ NS_IMETHODIMP mozHunspell::SetDictionary(const char16_t *aDictionary)
 
   nsAutoCString dictFileName, affFileName;
 
-  // XXX This isn't really good. nsIFile->NativePath isn't safe for all
-  // character sets on Windows.
-  // A better way would be to QI to nsIFile, and get a filehandle
-  // from there. Only problem is that hunspell wants a path
-
+#ifdef XP_WIN
+  nsAutoString affFileNameU;
+  nsresult rv = affFile->GetPath(affFileNameU);
+  NS_ENSURE_SUCCESS(rv, rv);
+  // Hunspell 1.5+ supports UTF-8 file paths on Windows
+  // by prefixing "\\\\?\\".
+  affFileName.AssignLiteral("\\\\?\\");
+  AppendUTF16toUTF8(affFileNameU, affFileName);
+#else
   nsresult rv = affFile->GetNativePath(affFileName);
   NS_ENSURE_SUCCESS(rv, rv);
+#endif
 
   if (mAffixFileName.Equals(affFileName.get()))
     return NS_OK;
@@ -200,16 +200,13 @@ NS_IMETHODIMP mozHunspell::SetDictionary(const char16_t *aDictionary)
   if (!mHunspell)
     return NS_ERROR_OUT_OF_MEMORY;
 
-  nsAutoCString label(mHunspell->get_dict_encoding().c_str());
-  nsAutoCString encoding;
-  if (!EncodingUtils::FindEncodingForLabelNoReplacement(label, encoding)) {
+  auto encoding =
+    Encoding::ForLabelNoReplacement(mHunspell->get_dict_encoding());
+  if (!encoding) {
     return NS_ERROR_UCONV_NOCONV;
   }
-  mEncoder = EncodingUtils::EncoderForEncoding(encoding);
-  mDecoder = EncodingUtils::DecoderForEncoding(encoding);
-
-  if (mEncoder)
-    mEncoder->SetOutputErrorBehavior(mEncoder->kOnError_Signal, nullptr, '?');
+  mEncoder = encoding->NewEncoder();
+  mDecoder = encoding->NewDecoderWithoutBOMHandling();
 
   int32_t pos = mDictionary.FindChar('-');
   if (pos == -1)
@@ -322,8 +319,8 @@ mozHunspell::LoadDictionaryList(bool aNotifyChildProcesses)
   // check preferences first
   nsCOMPtr<nsIPrefBranch> prefs(do_GetService(NS_PREFSERVICE_CONTRACTID));
   if (prefs) {
-    nsCString extDictPath;
-    rv = prefs->GetCharPref("spellchecker.dictionary_path", getter_Copies(extDictPath));
+    nsAutoCString extDictPath;
+    rv = prefs->GetCharPref("spellchecker.dictionary_path", extDictPath);
     if (NS_SUCCEEDED(rv)) {
       // set the spellchecker.dictionary_path
       rv = NS_NewNativeLocalFile(extDictPath, true, getter_AddRefs(dictDir));
@@ -486,20 +483,31 @@ mozHunspell::ConvertCharset(const char16_t* aStr, std::string* aDst)
   NS_ENSURE_ARG_POINTER(aDst);
   NS_ENSURE_TRUE(mEncoder, NS_ERROR_NULL_POINTER);
 
-  int32_t outLength;
-  int32_t inLength = NS_strlen(aStr);
-  nsresult rv = mEncoder->GetMaxLength(aStr, inLength, &outLength);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  aDst->resize(outLength);
-
-  char* dst = &aDst->operator[](0);
-  rv = mEncoder->Convert(aStr, &inLength, dst, &outLength);
-  if (NS_SUCCEEDED(rv)) {
-    aDst->resize(outLength);
+  auto src = MakeStringSpan(aStr);
+  CheckedInt<size_t> needed =
+    mEncoder->MaxBufferLengthFromUTF16WithoutReplacement(src.Length());
+  if (!needed.isValid()) {
+    return NS_ERROR_OUT_OF_MEMORY;
   }
 
-  return rv;
+  aDst->resize(needed.value());
+
+  char* dstPtr = &aDst->operator[](0);
+  auto dst = MakeSpan(reinterpret_cast<uint8_t*>(dstPtr), needed.value());
+
+  uint32_t result;
+  size_t read;
+  size_t written;
+  Tie(result, read, written) =
+    mEncoder->EncodeFromUTF16WithoutReplacement(src, dst, true);
+  Unused << read;
+  MOZ_ASSERT(result != kOutputFull);
+  if (result != kInputEmpty) {
+    return NS_ERROR_UENC_NOMAPPING;
+  }
+  aDst->resize(written);
+  mEncoder->Encoding()->NewEncoderInto(*mEncoder);
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -553,22 +561,42 @@ NS_IMETHODIMP mozHunspell::Suggest(const char16_t *aWord, char16_t ***aSuggestio
     if (*aSuggestions) {
       uint32_t index = 0;
       for (index = 0; index < *aSuggestionCount && NS_SUCCEEDED(rv); ++index) {
+        // If the IDL used an array of AString, we could use
+        // Encoding::DecodeWithoutBOMHandling() here.
         // Convert the suggestion to utf16
-        int32_t inLength = suggestions[index].size();
-        int32_t outLength;
-        rv = mDecoder->GetMaxLength(suggestions[index].c_str(), inLength, &outLength);
-        if (NS_SUCCEEDED(rv))
-        {
-          (*aSuggestions)[index] = (char16_t *) moz_xmalloc(sizeof(char16_t) * (outLength+1));
-          if ((*aSuggestions)[index])
-          {
-            rv = mDecoder->Convert(suggestions[index].c_str(), &inLength, (*aSuggestions)[index], &outLength);
-            if (NS_SUCCEEDED(rv))
-              (*aSuggestions)[index][outLength] = 0;
-          }
-          else
-            rv = NS_ERROR_OUT_OF_MEMORY;
+        Span<const char> charSrc(suggestions[index]);
+        auto src = AsBytes(charSrc);
+        CheckedInt<size_t> needed =
+          mDecoder->MaxUTF16BufferLength(src.Length());
+        if (!needed.isValid()) {
+          rv = NS_ERROR_OUT_OF_MEMORY;
+          break;
         }
+        size_t dstLen = needed.value();
+        needed += 1;
+        needed *= sizeof(char16_t);
+        if (!needed.isValid()) {
+          rv = NS_ERROR_OUT_OF_MEMORY;
+          break;
+        }
+        (*aSuggestions)[index] = (char16_t*)moz_xmalloc(needed.value());
+        if (!((*aSuggestions)[index])) {
+          rv = NS_ERROR_OUT_OF_MEMORY;
+          break;
+        }
+        auto dst = MakeSpan((*aSuggestions)[index], dstLen);
+        uint32_t result;
+        size_t read;
+        size_t written;
+        bool hadErrors;
+        Tie(result, read, written, hadErrors) =
+          mDecoder->DecodeToUTF16(src, dst, true);
+        MOZ_ASSERT(result == kInputEmpty);
+        MOZ_ASSERT(read == src.Length());
+        MOZ_ASSERT(written <= dstLen);
+        Unused << hadErrors;
+        (*aSuggestions)[index][written] = 0;
+        mDecoder->Encoding()->NewDecoderWithoutBOMHandlingInto(*mDecoder);
       }
 
       if (NS_FAILED(rv))

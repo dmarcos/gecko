@@ -11,13 +11,24 @@ add_task(function* () {
   let { monitor } = yield initNetMonitor(SIMPLE_URL);
   info("Starting test... ");
 
-  let { document, gStore, parent } = monitor.panelWin;
+  let { document, store, parent } = monitor.panelWin;
 
-  for (let [column, shown] of gStore.getState().ui.columns) {
-    let visibleColumns = [...gStore.getState().ui.columns]
-      .filter(([_, visible]) => visible);
+  let initialColumns = store.getState().ui.columns;
+  for (let column in initialColumns) {
+    let shown = initialColumns[column];
+
+    let columns = store.getState().ui.columns;
+    let visibleColumns = [];
+    for (let c in columns) {
+      if (columns[c]) {
+        visibleColumns.push(c);
+      }
+    }
 
     if (visibleColumns.length === 1) {
+      if (!shown) {
+        continue;
+      }
       yield testLastMenuItem(column);
       break;
     }

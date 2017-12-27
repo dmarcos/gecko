@@ -11,7 +11,7 @@
 #include "nsIServiceManager.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIInterfaceRequestorUtils.h"
-#include "nsXPIDLString.h"
+#include "nsString.h"
 #include "nsReadableUtils.h"
 #include "nsMimeTypes.h"
 #include "nsMemory.h"
@@ -28,6 +28,7 @@
 #include "nsProxyRelease.h"
 #include "nsContentSecurityManager.h"
 #include "nsContentUtils.h"
+#include "nsNetUtil.h"
 
 // we need windows.h to read out registry information...
 #include <windows.h>
@@ -71,7 +72,8 @@ nsIconChannel::nsIconChannel()
 nsIconChannel::~nsIconChannel()
 {
   if (mLoadInfo) {
-    NS_ReleaseOnMainThread(mLoadInfo.forget());
+    NS_ReleaseOnMainThreadSystemGroup(
+      "nsIconChannel::mLoadInfo", mLoadInfo.forget());
   }
 }
 
@@ -155,6 +157,12 @@ NS_IMETHODIMP
 nsIconChannel::SetLoadFlags(uint32_t aLoadAttributes)
 {
   return mPump->SetLoadFlags(aLoadAttributes);
+}
+
+NS_IMETHODIMP
+nsIconChannel::GetIsDocument(bool *aIsDocument)
+{
+  return NS_GetIsDocumentChannel(this, aIsDocument);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -245,7 +253,10 @@ nsIconChannel::AsyncOpen(nsIStreamListener* aListener,
   }
 
   // Init our streampump
-  rv = mPump->Init(inStream, int64_t(-1), int64_t(-1), 0, 0, false);
+  nsCOMPtr<nsIEventTarget> target =
+    nsContentUtils::GetEventTargetByLoadInfo(mLoadInfo,
+                                             mozilla::TaskCategory::Other);
+  rv = mPump->Init(inStream, 0, 0, false, target);
   if (NS_FAILED(rv)) {
     mCallbacks = nullptr;
     return rv;
@@ -323,7 +334,7 @@ GetSizeInfoFlag(uint32_t aDesiredImageSize)
 nsresult
 nsIconChannel::GetHIconFromFile(HICON* hIcon)
 {
-  nsXPIDLCString contentType;
+  nsCString contentType;
   nsCString fileExt;
   nsCOMPtr<nsIFile> localFile; // file we want an icon for
   uint32_t desiredImageSize;

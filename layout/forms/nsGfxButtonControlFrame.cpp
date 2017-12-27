@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -10,16 +11,13 @@
 #include "mozilla/StyleSetHandleInlines.h"
 #include "mozilla/dom/HTMLInputElement.h"
 #include "nsContentUtils.h"
-// MouseEvent suppression in PP
-#include "nsContentList.h"
-
 #include "nsIDOMHTMLInputElement.h"
 #include "nsTextNode.h"
 
 using namespace mozilla;
 
-nsGfxButtonControlFrame::nsGfxButtonControlFrame(nsStyleContext* aContext):
-  nsHTMLButtonControlFrame(aContext)
+nsGfxButtonControlFrame::nsGfxButtonControlFrame(nsStyleContext* aContext)
+  : nsHTMLButtonControlFrame(aContext, kClassID)
 {
 }
 
@@ -31,16 +29,10 @@ NS_NewGfxButtonControlFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 
 NS_IMPL_FRAMEARENA_HELPERS(nsGfxButtonControlFrame)
 
-void nsGfxButtonControlFrame::DestroyFrom(nsIFrame* aDestructRoot)
+void nsGfxButtonControlFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
-  nsContentUtils::DestroyAnonymousContent(&mTextContent);
-  nsHTMLButtonControlFrame::DestroyFrom(aDestructRoot);
-}
-
-nsIAtom*
-nsGfxButtonControlFrame::GetType() const
-{
-  return nsGkAtoms::gfxButtonControlFrame;
+  aPostDestroyData.AddAnonymousContent(mTextContent.forget());
+  nsHTMLButtonControlFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 #ifdef DEBUG_FRAME_DUMP
@@ -56,8 +48,9 @@ nsGfxButtonControlFrame::GetFrameName(nsAString& aResult) const
 nsresult
 nsGfxButtonControlFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
 {
-  nsXPIDLString label;
-  GetLabel(label);
+  nsAutoString label;
+  nsresult rv = GetLabel(label);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   // Add a child text content node for the label
   mTextContent = new nsTextNode(mContent->NodeInfo()->NodeInfoManager());
@@ -89,7 +82,7 @@ NS_QUERYFRAME_TAIL_INHERITING(nsHTMLButtonControlFrame)
 // label from a string bundle as is done for all other UI strings.
 // See bug 16999 for further details.
 nsresult
-nsGfxButtonControlFrame::GetDefaultLabel(nsXPIDLString& aString) const
+nsGfxButtonControlFrame::GetDefaultLabel(nsAString& aString) const
 {
   nsCOMPtr<nsIFormControl> form = do_QueryInterface(mContent);
   NS_ENSURE_TRUE(form, NS_ERROR_UNEXPECTED);
@@ -112,7 +105,7 @@ nsGfxButtonControlFrame::GetDefaultLabel(nsXPIDLString& aString) const
 }
 
 nsresult
-nsGfxButtonControlFrame::GetLabel(nsXPIDLString& aLabel)
+nsGfxButtonControlFrame::GetLabel(nsString& aLabel)
 {
   // Get the text from the "value" property on our content if there is
   // one; otherwise set it to a default value (localized).
@@ -158,7 +151,7 @@ nsGfxButtonControlFrame::GetLabel(nsXPIDLString& aLabel)
 
 nsresult
 nsGfxButtonControlFrame::AttributeChanged(int32_t         aNameSpaceID,
-                                          nsIAtom*        aAttribute,
+                                          nsAtom*        aAttribute,
                                           int32_t         aModType)
 {
   nsresult rv = NS_OK;
@@ -166,10 +159,10 @@ nsGfxButtonControlFrame::AttributeChanged(int32_t         aNameSpaceID,
   // If the value attribute is set, update the text of the label
   if (nsGkAtoms::value == aAttribute) {
     if (mTextContent && mContent) {
-      nsXPIDLString label;
+      nsAutoString label;
       rv = GetLabel(label);
       NS_ENSURE_SUCCESS(rv, rv);
-    
+
       mTextContent->SetText(label, true);
     } else {
       rv = NS_ERROR_UNEXPECTED;
@@ -182,12 +175,6 @@ nsGfxButtonControlFrame::AttributeChanged(int32_t         aNameSpaceID,
   return rv;
 }
 
-bool
-nsGfxButtonControlFrame::IsLeaf() const
-{
-  return true;
-}
-
 nsContainerFrame*
 nsGfxButtonControlFrame::GetContentInsertionFrame()
 {
@@ -195,7 +182,7 @@ nsGfxButtonControlFrame::GetContentInsertionFrame()
 }
 
 nsresult
-nsGfxButtonControlFrame::HandleEvent(nsPresContext* aPresContext, 
+nsGfxButtonControlFrame::HandleEvent(nsPresContext* aPresContext,
                                      WidgetGUIEvent* aEvent,
                                      nsEventStatus* aEventStatus)
 {

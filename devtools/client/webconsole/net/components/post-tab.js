@@ -3,45 +3,67 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const React = require("devtools/client/shared/vendor/react");
+const { Component, createFactory } = require("devtools/client/shared/vendor/react");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
+const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
 
-const TreeView = React.createFactory(require("devtools/client/shared/components/tree/tree-view"));
+const TreeView =
+  createFactory(require("devtools/client/shared/components/tree/TreeView"));
 
-const { REPS, MODE, parseURLEncodedText } = require("devtools/client/shared/components/reps/reps");
-const Rep = React.createFactory(REPS.Rep);
+const { REPS, MODE, parseURLEncodedText } =
+  require("devtools/client/shared/components/reps/reps");
+const { Rep } = REPS;
 
 // Network
-const NetInfoParams = React.createFactory(require("./net-info-params"));
-const NetInfoGroupList = React.createFactory(require("./net-info-group-list"));
-const Spinner = React.createFactory(require("./spinner"));
-const SizeLimit = React.createFactory(require("./size-limit"));
+const NetInfoParams = createFactory(require("./net-info-params"));
+const NetInfoGroupList = createFactory(require("./net-info-group-list"));
+const Spinner = createFactory(require("./spinner"));
+const SizeLimit = createFactory(require("./size-limit"));
 const NetUtils = require("../utils/net");
 const Json = require("../utils/json");
-
-// Shortcuts
-const DOM = React.DOM;
-const PropTypes = React.PropTypes;
 
 /**
  * This template represents 'Post' tab displayed when the user
  * expands network log in the Console panel. It's responsible for
  * displaying posted data (HTTP post body).
  */
-var PostTab = React.createClass({
-  propTypes: {
-    data: PropTypes.shape({
-      request: PropTypes.object.isRequired
-    }),
-    actions: PropTypes.object.isRequired
-  },
+class PostTab extends Component {
+  static get propTypes() {
+    return {
+      data: PropTypes.shape({
+        request: PropTypes.object.isRequired
+      }),
+      actions: PropTypes.object.isRequired
+    };
+  }
 
-  displayName: "PostTab",
+  constructor(props) {
+    super(props);
+    this.isJson = this.isJson.bind(this);
+    this.parseJson = this.parseJson.bind(this);
+    this.renderJson = this.renderJson.bind(this);
+    this.parseXml = this.parseXml.bind(this);
+    this.isXml = this.isXml.bind(this);
+    this.renderXml = this.renderXml.bind(this);
+    this.renderMultiPart = this.renderMultiPart.bind(this);
+    this.renderUrlEncoded = this.renderUrlEncoded.bind(this);
+    this.renderRawData = this.renderRawData.bind(this);
+  }
+
+  componentDidMount() {
+    let { actions, data: file } = this.props;
+
+    if (!file.request.postData) {
+      // TODO: use async action objects as soon as Redux is in place
+      actions.requestData("requestPostData");
+    }
+  }
 
   isJson(file) {
     let text = file.request.postData.text;
     let value = NetUtils.getHeaderValue(file.request.headers, "content-type");
     return Json.isJSON(value, text);
-  },
+  }
 
   parseJson(file) {
     let postData = file.request.postData;
@@ -51,7 +73,7 @@ var PostTab = React.createClass({
 
     let jsonString = new String(postData.text);
     return Json.parseJSONString(jsonString);
-  },
+  }
 
   /**
    * Render JSON post data as an expandable tree.
@@ -83,7 +105,7 @@ var PostTab = React.createClass({
       }),
       name: Locale.$STR("jsonScopeName")
     };
-  },
+  }
 
   parseXml(file) {
     let text = file.request.postData.text;
@@ -95,7 +117,7 @@ var PostTab = React.createClass({
       mimeType: NetUtils.getHeaderValue(file.request.headers, "content-type"),
       text: text,
     });
-  },
+  }
 
   isXml(file) {
     if (isLongString(file.request.postData.text)) {
@@ -108,7 +130,7 @@ var PostTab = React.createClass({
     }
 
     return NetUtils.isHTML(value);
-  },
+  }
 
   renderXml(file) {
     let text = file.request.postData.text;
@@ -127,7 +149,7 @@ var PostTab = React.createClass({
 
     // Proper component for rendering XML should be used (see bug 1247392)
     return null;
-  },
+  }
 
   /**
    * Multipart post data are parsed and nicely rendered
@@ -142,9 +164,7 @@ var PostTab = React.createClass({
     if (NetUtils.isMultiPartRequest(file)) {
       // TODO: render multi part request (bug: 1247423)
     }
-
-    return;
-  },
+  }
 
   /**
    * URL encoded post data are nicely rendered as a list
@@ -168,7 +188,7 @@ var PostTab = React.createClass({
       content: NetInfoParams({params: params}),
       name: Locale.$STR("netRequest.params")
     };
-  },
+  }
 
   renderRawData(file) {
     let text = file.request.postData.text;
@@ -181,7 +201,7 @@ var PostTab = React.createClass({
       group = {
         key: "raw-longstring",
         name: Locale.$STR("netRequest.rawData"),
-        content: DOM.div({className: "netInfoResponseContent"},
+        content: dom.div({className: "netInfoResponseContent"},
           sanitize(text.initial),
           SizeLimit({
             actions: this.props.actions,
@@ -195,29 +215,20 @@ var PostTab = React.createClass({
       group = {
         key: "raw",
         name: Locale.$STR("netRequest.rawData"),
-        content: DOM.div({className: "netInfoResponseContent"},
+        content: dom.div({className: "netInfoResponseContent"},
           sanitize(text)
         )
       };
     }
 
     return group;
-  },
-
-  componentDidMount() {
-    let { actions, data: file } = this.props;
-
-    if (!file.request.postData) {
-      // TODO: use async action objects as soon as Redux is in place
-      actions.requestData("requestPostData");
-    }
-  },
+  }
 
   render() {
-    let { actions, data: file } = this.props;
+    let { data: file } = this.props;
 
     if (file.discardRequestBody) {
-      return DOM.span({className: "netInfoBodiesDiscarded"},
+      return dom.span({className: "netInfoBodiesDiscarded"},
         Locale.$STR("netRequest.requestBodyDiscarded")
       );
     }
@@ -248,8 +259,8 @@ var PostTab = React.createClass({
     }
 
     return (
-      DOM.div({className: "postTabBox"},
-        DOM.div({className: "panelContent"},
+      dom.div({className: "postTabBox"},
+        dom.div({className: "panelContent"},
           NetInfoGroupList({
             groups: groups
           })
@@ -257,7 +268,7 @@ var PostTab = React.createClass({
       )
     );
   }
-});
+}
 
 // Helpers
 

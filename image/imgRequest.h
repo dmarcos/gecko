@@ -15,7 +15,7 @@
 
 #include "nsCOMPtr.h"
 #include "nsProxyRelease.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 #include "nsError.h"
 #include "nsIAsyncVerifyRedirectCallback.h"
 #include "mozilla/Mutex.h"
@@ -66,13 +66,13 @@ public:
   NS_DECL_NSIASYNCVERIFYREDIRECTCALLBACK
 
   MOZ_MUST_USE nsresult Init(nsIURI* aURI,
-                             nsIURI* aCurrentURI,
+                             nsIURI* aFinalURI,
                              bool aHadInsecureRedirect,
                              nsIRequest* aRequest,
                              nsIChannel* aChannel,
                              imgCacheEntry* aCacheEntry,
                              nsISupports* aCX,
-                             nsIPrincipal* aLoadingPrincipal,
+                             nsIPrincipal* aTriggeringPrincipal,
                              int32_t aCORSMode,
                              ReferrerPolicy aReferrerPolicy);
 
@@ -116,7 +116,7 @@ public:
   bool GetMultipart() const;
 
   // Returns whether we went through an insecure (non-HTTPS) redirect at some
-  // point during loading. This does not consider the current URI.
+  // point during loading. This does not consider the final URI.
   bool HadInsecureRedirect() const;
 
   // The CORS mode for which we loaded this image.
@@ -127,9 +127,9 @@ public:
 
   // The principal for the document that loaded this image. Used when trying to
   // validate a CORS image load.
-  already_AddRefed<nsIPrincipal> GetLoadingPrincipal() const
+  already_AddRefed<nsIPrincipal> GetTriggeringPrincipal() const
   {
-    nsCOMPtr<nsIPrincipal> principal = mLoadingPrincipal;
+    nsCOMPtr<nsIPrincipal> principal = mTriggeringPrincipal;
     return principal.forget();
   }
 
@@ -152,8 +152,10 @@ public:
 
   // OK to use on any thread.
   nsresult GetURI(ImageURL** aURI);
-  nsresult GetCurrentURI(nsIURI** aURI);
+  nsresult GetFinalURI(nsIURI** aURI);
+  bool IsScheme(const char* aScheme) const;
   bool IsChrome() const;
+  bool IsData() const;
 
   nsresult GetImageErrorCode(void);
 
@@ -170,6 +172,8 @@ public:
   /// Adjust the priority of the underlying network request by @aDelta on behalf
   /// of @aProxy.
   void AdjustPriority(imgRequestProxy* aProxy, int32_t aDelta);
+
+  void BoostPriority(uint32_t aCategory);
 
   /// Returns a weak pointer to the underlying request.
   nsIRequest* GetRequest() const { return mRequest; }
@@ -223,6 +227,8 @@ private:
   /// Returns true if StartDecoding() was called.
   bool IsDecodeRequested() const;
 
+  void AdjustPriorityInternal(int32_t aDelta);
+
   // Weak reference to parent loader; this request cannot outlive its owner.
   imgLoader* mLoader;
   nsCOMPtr<nsIRequest> mRequest;
@@ -231,10 +237,11 @@ private:
   // refcounting issues with nsStandardURL.
   RefPtr<ImageURL> mURI;
   // The URI of the resource we ended up loading after all redirects, etc.
-  nsCOMPtr<nsIURI> mCurrentURI;
-  // The principal of the document which loaded this image. Used when
-  // validating for CORS.
-  nsCOMPtr<nsIPrincipal> mLoadingPrincipal;
+  nsCOMPtr<nsIURI> mFinalURI;
+  // The principal which triggered the load of this image. Generally either
+  // the principal of the document the image is being loaded into, or of the
+  // stylesheet which specified the image to load. Used when validating for CORS.
+  nsCOMPtr<nsIPrincipal> mTriggeringPrincipal;
   // The principal of this image.
   nsCOMPtr<nsIPrincipal> mPrincipal;
   nsCOMPtr<nsIProperties> mProperties;
@@ -274,6 +281,9 @@ private:
   ReferrerPolicy mReferrerPolicy;
 
   nsresult mImageErrorCode;
+
+  // The categories of prioritization strategy that have been requested.
+  uint32_t mBoostCategoriesRequested = 0;
 
   mutable mozilla::Mutex mMutex;
 

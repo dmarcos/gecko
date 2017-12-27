@@ -1,5 +1,6 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
+/* eslint-disable mozilla/no-arbitrary-setTimeout */
 
 // gBrowser.selectedTab.lastAccessed and Date.now() called from this test can't
 // run concurrently, and therefore don't always match exactly.
@@ -26,7 +27,7 @@ function test() {
 
 function step2() {
   isCurrent(originalTab, "selected tab has the current timestamp");
-  newTab = gBrowser.addTab("about:blank", {skipAnimation: true});
+  newTab = BrowserTestUtils.addTab(gBrowser, "about:blank", {skipAnimation: true});
   nextStep(step3);
 }
 

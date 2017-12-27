@@ -2,6 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 from mozboot.base import BaseBootstrapper
 
 
@@ -12,7 +14,6 @@ class OpenBSDBootstrapper(BaseBootstrapper):
         self.packages = [
             'mercurial',
             'autoconf-2.13',
-            'cargo',
             'gmake',
             'gtar',
             'rust',
@@ -45,3 +46,7 @@ class OpenBSDBootstrapper(BaseBootstrapper):
         # TODO: Figure out what not to install for artifact mode
         # we use -z because there's no other way to say "any autoconf-2.13"
         self.run_as_root(['pkg_add', '-z'] + self.browser_packages)
+
+    def ensure_stylo_packages(self, state_dir, checkout_root):
+        # Already installed as browser package
+        pass

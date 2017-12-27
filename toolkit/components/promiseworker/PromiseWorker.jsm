@@ -24,10 +24,8 @@ const Ci = Components.interfaces;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
 
-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-  "resource://gre/modules/Promise.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Task",
-  "resource://gre/modules/Task.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PromiseUtils",
+  "resource://gre/modules/PromiseUtils.jsm");
 
 /**
  * An implementation of queues (FIFO).
@@ -90,9 +88,6 @@ const EXCEPTION_CONSTRUCTORS = {
     result.stack = error.stack;
     return result;
   },
-  StopIteration() {
-    return StopIteration;
-  }
 };
 
 /**
@@ -126,7 +121,7 @@ this.BasePromiseWorker = function(url) {
    * }
    *
    * By default, this covers EvalError, InternalError, RangeError,
-   * ReferenceError, SyntaxError, TypeError, URIError, StopIteration.
+   * ReferenceError, SyntaxError, TypeError, URIError.
    */
   this.ExceptionHandlers = Object.create(EXCEPTION_CONSTRUCTORS);
 
@@ -169,11 +164,11 @@ this.BasePromiseWorker.prototype = {
    * Instantiate the worker lazily.
    */
   get _worker() {
-    delete this._worker;
-    let worker = new ChromeWorker(this._url);
-    Object.defineProperty(this, "_worker", {value:
-      worker
-    });
+    if (this.__worker) {
+      return this.__worker;
+    }
+
+    let worker = this.__worker = new ChromeWorker(this._url);
 
     // We assume that we call to _worker for the purpose of calling
     // postMessage().
@@ -260,13 +255,13 @@ this.BasePromiseWorker.prototype = {
    * @return {promise}
    */
   post(fun, args, closure, transfers) {
-    return Task.spawn(function* postMessage() {
+    return (async function postMessage() {
       // Normalize in case any of the arguments is a promise
       if (args) {
-        args = yield Promise.resolve(Promise.all(args));
+        args = await Promise.resolve(Promise.all(args));
       }
       if (transfers) {
-        transfers = yield Promise.resolve(Promise.all(transfers));
+        transfers = await Promise.resolve(Promise.all(transfers));
       } else {
         transfers = [];
       }
@@ -300,14 +295,14 @@ this.BasePromiseWorker.prototype = {
         throw ex;
       }
 
-      let deferred = Promise.defer();
+      let deferred = PromiseUtils.defer();
       this._queue.push({deferred, closure, id});
       this.log("Message posted");
 
       let reply;
       try {
         this.log("Expecting reply");
-        reply = yield deferred.promise;
+        reply = await deferred.promise;
       } catch (error) {
         this.log("Got error", error);
         reply = error;
@@ -358,7 +353,36 @@ this.BasePromiseWorker.prototype = {
       }
       return reply.ok;
 
-    }.bind(this));
+    }.bind(this))();
+  },
+
+  /**
+   * Terminate the worker, if it has been created at all, and set things up to
+   * be instantiated lazily again on the next `post()`.
+   * If there are pending Promises in the queue, we'll reject them and clear it.
+   */
+  terminate() {
+    if (!this.__worker) {
+      return;
+    }
+
+    try {
+      this.__worker.terminate();
+      delete this.__worker;
+    } catch (ex) {
+      // Ignore exceptions, only log them.
+      this.log("Error whilst terminating ChromeWorker: " + ex.message);
+    }
+
+    let error;
+    while (!this._queue.isEmpty()) {
+      if (!error) {
+        // We create this lazily, because error objects are not cheap.
+        error = new Error("Internal error: worker terminated");
+      }
+      let {deferred} = this._queue.pop();
+      deferred.reject(error);
+    }
   }
 };
 

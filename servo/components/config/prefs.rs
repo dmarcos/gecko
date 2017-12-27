@@ -3,10 +3,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use basedir::default_config_dir;
+use num_cpus;
 use opts;
 use resource_files::resources_dir_path;
 use rustc_serialize::json::{Json, ToJson};
 use std::borrow::ToOwned;
+use std::cmp::max;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write, stderr};
@@ -15,12 +17,15 @@ use std::sync::{Arc, RwLock};
 
 lazy_static! {
     pub static ref PREFS: Preferences = {
-        let prefs = read_prefs().ok().unwrap_or_else(HashMap::new);
-        Preferences(Arc::new(RwLock::new(prefs)))
+        let defaults = default_prefs();
+        if let Ok(prefs) = read_prefs() {
+            defaults.extend(prefs);
+        }
+        defaults
     };
 }
 
-#[derive(PartialEq, Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum PrefValue {
     Boolean(bool),
     String(String),
@@ -108,7 +113,7 @@ impl Pref {
     }
 
     fn from_json(data: Json) -> Result<Pref, ()> {
-        let value = try!(PrefValue::from_json(data));
+        let value = PrefValue::from_json(data)?;
         Ok(Pref::new_default(value))
     }
 
@@ -144,12 +149,19 @@ impl ToJson for Pref {
     }
 }
 
+pub fn default_prefs() -> Preferences {
+    let prefs = Preferences(Arc::new(RwLock::new(HashMap::new())));
+    prefs.set("layout.threads", PrefValue::Number(
+        max(num_cpus::get() * 3 / 4, 1) as f64));
+    prefs
+}
+
 pub fn read_prefs_from_file<T>(mut file: T)
     -> Result<HashMap<String, Pref>, ()> where T: Read {
-    let json = try!(Json::from_reader(&mut file).or_else(|e| {
+    let json = Json::from_reader(&mut file).or_else(|e| {
         println!("Ignoring invalid JSON in preferences: {:?}.", e);
         Err(())
-    }));
+    })?;
 
     let mut prefs = HashMap::new();
     if let Json::Object(obj) = json {
@@ -193,14 +205,14 @@ fn init_user_prefs(path: &mut PathBuf) {
 }
 
 fn read_prefs() -> Result<HashMap<String, Pref>, ()> {
-    let mut path = try!(resources_dir_path().map_err(|_| ()));
+    let mut path = resources_dir_path().map_err(|_| ())?;
     path.push("prefs.json");
 
-    let file = try!(File::open(path).or_else(|e| {
+    let file = File::open(path).or_else(|e| {
         writeln!(&mut stderr(), "Error opening preferences: {:?}.", e)
             .expect("failed printing to stderr");
         Err(())
-    }));
+    })?;
 
     read_prefs_from_file(file)
 }
@@ -260,5 +272,13 @@ impl Preferences {
 
     pub fn is_webvr_enabled(&self) -> bool {
         self.get("dom.webvr.enabled").as_boolean().unwrap_or(false)
+    }
+
+    pub fn is_dom_to_texture_enabled(&self) -> bool {
+        self.get("dom.webgl.dom_to_texture.enabled").as_boolean().unwrap_or(false)
+    }
+
+    pub fn is_webgl2_enabled(&self) -> bool {
+        self.get("dom.webgl2.enabled").as_boolean().unwrap_or(false)
     }
 }

@@ -11,14 +11,13 @@
 
 #include "mozilla/Assertions.h"
 #include "mozilla/EndianUtils.h"
+#include "BufferReader.h"
 #include "nsAutoPtr.h"
 #include "VideoUtils.h"
 #include "TimeUnits.h"
-#include "prenv.h"
 
 using mozilla::media::TimeUnit;
 using mozilla::media::TimeIntervals;
-using mp4_demuxer::ByteReader;
 
 namespace mozilla {
 
@@ -27,13 +26,15 @@ namespace mozilla {
 WAVDemuxer::WAVDemuxer(MediaResource* aSource)
   : mSource(aSource)
 {
+  DDLINKCHILD("source", aSource);
 }
 
 bool
 WAVDemuxer::InitInternal()
 {
   if (!mTrackDemuxer) {
-    mTrackDemuxer = new WAVTrackDemuxer(mSource);
+    mTrackDemuxer = new WAVTrackDemuxer(mSource.GetResource());
+    DDLINKCHILD("track demuxer", mTrackDemuxer.get());
   }
   return mTrackDemuxer->Init();
 }
@@ -46,12 +47,6 @@ WAVDemuxer::Init()
       NS_ERROR_DOM_MEDIA_METADATA_ERR, __func__);
   }
   return InitPromise::CreateAndResolve(NS_OK, __func__);
-}
-
-bool
-WAVDemuxer::HasTrackType(TrackInfo::TrackType aType) const
-{
-  return aType == TrackInfo::kAudioTrack;
 }
 
 uint32_t
@@ -77,7 +72,7 @@ WAVDemuxer::IsSeekable() const
 
 // WAVTrackDemuxer
 
-WAVTrackDemuxer::WAVTrackDemuxer(MediaResourceIndex aSource)
+WAVTrackDemuxer::WAVTrackDemuxer(MediaResource* aSource)
   : mSource(aSource)
   , mOffset(0)
   , mFirstChunkOffset(0)
@@ -88,6 +83,7 @@ WAVTrackDemuxer::WAVTrackDemuxer(MediaResourceIndex aSource)
   , mSamplesPerSecond(0)
   , mChannels(0)
 {
+  DDLINKCHILD("source", aSource);
   Reset();
 }
 
@@ -173,8 +169,8 @@ WAVTrackDemuxer::RIFFParserInit()
   if (!riffHeader) {
     return false;
   }
-  ByteReader RIFFReader(riffHeader->Data(), 12);
-  mRIFFParser.Parse(RIFFReader);
+  BufferReader RIFFReader(riffHeader->Data(), 12);
+  Unused << mRIFFParser.Parse(RIFFReader);
   return mRIFFParser.RiffHeader().IsValid(11);
 }
 
@@ -185,8 +181,8 @@ WAVTrackDemuxer::HeaderParserInit()
   if (!header) {
     return false;
   }
-  ByteReader HeaderReader(header->Data(), 8);
-  mHeaderParser.Parse(HeaderReader);
+  BufferReader HeaderReader(header->Data(), 8);
+  Unused << mHeaderParser.Parse(HeaderReader);
   return true;
 }
 
@@ -197,9 +193,9 @@ WAVTrackDemuxer::FmtChunkParserInit()
   if (!fmtChunk) {
     return false;
   }
-  ByteReader fmtReader(fmtChunk->Data(),
-                       mHeaderParser.GiveHeader().ChunkSize());
-  mFmtParser.Parse(fmtReader);
+  BufferReader fmtReader(fmtChunk->Data(),
+                         mHeaderParser.GiveHeader().ChunkSize());
+  Unused << mFmtParser.Parse(fmtReader);
   return true;
 }
 
@@ -212,8 +208,10 @@ WAVTrackDemuxer::ListChunkParserInit(uint32_t aChunkSize)
   if (!infoTag) {
     return false;
   }
-  ByteReader infoTagReader(infoTag->Data(), 4);
-  if (!infoTagReader.CanRead32() || infoTagReader.ReadU32() != INFO_CODE) {
+
+  BufferReader infoTagReader(infoTag->Data(), 4);
+  auto res = infoTagReader.ReadU32();
+  if (res.isErr() || (res.isOk() && res.unwrap() != INFO_CODE)) {
     return false;
   }
 
@@ -531,7 +529,7 @@ WAVTrackDemuxer::GetNextChunk(const MediaByteRange& aRange)
   ++mNumParsedChunks;
   ++mChunkIndex;
 
-  datachunk->mTime = Duration(mChunkIndex - 1).ToMicroseconds();
+  datachunk->mTime = Duration(mChunkIndex - 1);
 
   if (static_cast<uint32_t>(mChunkIndex) * DATA_CHUNK_SIZE < mDataLength) {
     datachunk->mDuration = Duration(1);
@@ -543,7 +541,7 @@ WAVTrackDemuxer::GetNextChunk(const MediaByteRange& aRange)
   datachunk->mTimecode = datachunk->mTime;
   datachunk->mKeyframe = true;
 
-  MOZ_ASSERT(datachunk->mTime >= 0);
+  MOZ_ASSERT(!datachunk->mTime.IsNegative());
   MOZ_ASSERT(!datachunk->mDuration.IsNegative());
 
   return datachunk.forget();
@@ -626,10 +624,12 @@ WAVTrackDemuxer::Read(uint8_t* aBuffer, int64_t aOffset, int32_t aSize)
 
 // RIFFParser
 
-uint32_t
-RIFFParser::Parse(ByteReader& aReader)
+Result<uint32_t, nsresult>
+RIFFParser::Parse(BufferReader& aReader)
 {
-  while (aReader.CanRead8() && !mRiffHeader.ParseNext(aReader.ReadU8())) { }
+  for (auto res = aReader.ReadU8();
+       res.isOk() && !mRiffHeader.ParseNext(res.unwrap()); res = aReader.ReadU8())
+  {}
 
   if (mRiffHeader.IsValid()) {
     return RIFF_CHUNK_SIZE;
@@ -705,10 +705,12 @@ RIFFParser::RIFFHeader::Update(uint8_t c)
 
 // HeaderParser
 
-uint32_t
-HeaderParser::Parse(ByteReader& aReader)
+Result<uint32_t, nsresult>
+HeaderParser::Parse(BufferReader& aReader)
 {
-  while (aReader.CanRead8() && !mHeader.ParseNext(aReader.ReadU8())) { }
+  for (auto res = aReader.ReadU8();
+       res.isOk() && !mHeader.ParseNext(res.unwrap()); res = aReader.ReadU8())
+  {}
 
   if (mHeader.IsValid()) {
     return CHUNK_HEAD_SIZE;
@@ -784,10 +786,12 @@ HeaderParser::ChunkHeader::Update(uint8_t c)
 
 // FormatParser
 
-uint32_t
-FormatParser::Parse(ByteReader& aReader)
+Result<uint32_t, nsresult>
+FormatParser::Parse(BufferReader& aReader)
 {
-  while (aReader.CanRead8() && !mFmtChunk.ParseNext(aReader.ReadU8())) { }
+  for (auto res = aReader.ReadU8();
+       res.isOk() && !mFmtChunk.ParseNext(res.unwrap()); res = aReader.ReadU8())
+  {}
 
   if (mFmtChunk.IsValid()) {
     return FMT_CHUNK_MIN_SIZE;
@@ -865,8 +869,8 @@ FormatParser::FormatChunk::ParseNext(uint8_t c)
 bool
 FormatParser::FormatChunk::IsValid() const
 {
-  return (FrameSize() == SampleRate() * Channels() / 8)
-         && (mPos >= FMT_CHUNK_MIN_SIZE);
+  return (FrameSize() == SampleRate() * Channels() / 8) &&
+         (mPos >= FMT_CHUNK_MIN_SIZE);
 }
 
 void

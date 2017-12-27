@@ -16,7 +16,7 @@
 namespace mozilla {
 
 /* static */ void
-EffectSet::PropertyDtor(void* aObject, nsIAtom* aPropertyName,
+EffectSet::PropertyDtor(void* aObject, nsAtom* aPropertyName,
                         void* aPropertyValue, void* aData)
 {
   EffectSet* effectSet = static_cast<EffectSet*>(aPropertyValue);
@@ -42,7 +42,11 @@ EffectSet::Traverse(nsCycleCollectionTraversalCallback& aCallback)
 EffectSet::GetEffectSet(const dom::Element* aElement,
                         CSSPseudoElementType aPseudoType)
 {
-  nsIAtom* propName = GetEffectSetPropertyAtom(aPseudoType);
+  if (!aElement->MayHaveAnimations()) {
+    return nullptr;
+  }
+
+  nsAtom* propName = GetEffectSetPropertyAtom(aPseudoType);
   return static_cast<EffectSet*>(aElement->GetProperty(propName));
 }
 
@@ -53,10 +57,6 @@ EffectSet::GetEffectSet(const nsIFrame* aFrame)
     EffectCompositor::GetAnimationElementAndPseudoForFrame(aFrame);
 
   if (!target) {
-    return nullptr;
-  }
-
-  if (!target->mElement->MayHaveAnimations()) {
     return nullptr;
   }
 
@@ -72,7 +72,7 @@ EffectSet::GetOrCreateEffectSet(dom::Element* aElement,
     return effectSet;
   }
 
-  nsIAtom* propName = GetEffectSetPropertyAtom(aPseudoType);
+  nsAtom* propName = GetEffectSetPropertyAtom(aPseudoType);
   effectSet = new EffectSet();
 
   nsresult rv = aElement->SetProperty(propName, effectSet,
@@ -94,7 +94,7 @@ EffectSet::GetOrCreateEffectSet(dom::Element* aElement,
 EffectSet::DestroyEffectSet(dom::Element* aElement,
                             CSSPseudoElementType aPseudoType)
 {
-  nsIAtom* propName = GetEffectSetPropertyAtom(aPseudoType);
+  nsAtom* propName = GetEffectSetPropertyAtom(aPseudoType);
   EffectSet* effectSet =
     static_cast<EffectSet*>(aElement->GetProperty(propName));
   if (!effectSet) {
@@ -115,10 +115,10 @@ EffectSet::UpdateAnimationGeneration(nsPresContext* aPresContext)
     aPresContext->RestyleManager()->GetAnimationGeneration();
 }
 
-/* static */ nsIAtom**
+/* static */ nsAtom**
 EffectSet::GetEffectSetPropertyAtoms()
 {
-  static nsIAtom* effectSetPropertyAtoms[] =
+  static nsAtom* effectSetPropertyAtoms[] =
     {
       nsGkAtoms::animationEffectsProperty,
       nsGkAtoms::animationEffectsForBeforeProperty,
@@ -129,7 +129,7 @@ EffectSet::GetEffectSetPropertyAtoms()
   return effectSetPropertyAtoms;
 }
 
-/* static */ nsIAtom*
+/* static */ nsAtom*
 EffectSet::GetEffectSetPropertyAtom(CSSPseudoElementType aPseudoType)
 {
   switch (aPseudoType) {

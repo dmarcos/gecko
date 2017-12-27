@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -64,36 +65,31 @@ public:
   using Nothing = mozilla::Nothing;
   using Visibility = mozilla::Visibility;
 
-  typedef mozilla::image::DrawResult DrawResult;
+  typedef mozilla::image::ImgDrawResult ImgDrawResult;
   typedef mozilla::layers::ImageContainer ImageContainer;
   typedef mozilla::layers::ImageLayer ImageLayer;
   typedef mozilla::layers::LayerManager LayerManager;
 
-  NS_DECL_FRAMEARENA_HELPERS
-
-  explicit nsImageFrame(nsStyleContext* aContext);
-
-  NS_DECL_QUERYFRAME_TARGET(nsImageFrame)
+  NS_DECL_FRAMEARENA_HELPERS(nsImageFrame)
   NS_DECL_QUERYFRAME
 
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData) override;
   virtual void DidSetStyleContext(nsStyleContext* aOldStyleContext) override;
 
   virtual void Init(nsIContent*       aContent,
                     nsContainerFrame* aParent,
                     nsIFrame*         aPrevInFlow) override;
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
-  virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
-  virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
+  virtual nscoord GetMinISize(gfxContext *aRenderingContext) override;
+  virtual nscoord GetPrefISize(gfxContext *aRenderingContext) override;
   virtual mozilla::IntrinsicSize GetIntrinsicSize() override;
   virtual nsSize GetIntrinsicRatio() override;
   virtual void Reflow(nsPresContext*           aPresContext,
                       ReflowOutput&     aDesiredSize,
                       const ReflowInput& aReflowInput,
                       nsReflowStatus&          aStatus) override;
-  
+
   virtual nsresult  GetContentForEvent(mozilla::WidgetEvent* aEvent,
                                        nsIContent** aContent) override;
   virtual nsresult HandleEvent(nsPresContext* aPresContext,
@@ -102,7 +98,7 @@ public:
   virtual nsresult GetCursor(const nsPoint& aPoint,
                              nsIFrame::Cursor& aCursor) override;
   virtual nsresult AttributeChanged(int32_t aNameSpaceID,
-                                    nsIAtom* aAttribute,
+                                    nsAtom* aAttribute,
                                     int32_t aModType) override;
 
   void OnVisibilityChange(Visibility aNewVisibility,
@@ -112,8 +108,6 @@ public:
   virtual mozilla::a11y::AccType AccessibleType() override;
 #endif
 
-  virtual nsIAtom* GetType() const override;
-
   virtual bool IsFrameOfType(uint32_t aFlags) const override
   {
     return nsAtomicContainerFrame::IsFrameOfType(aFlags &
@@ -122,7 +116,7 @@ public:
 
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override;
-  void List(FILE* out = stderr, const char* aPrefix = "", 
+  void List(FILE* out = stderr, const char* aPrefix = "",
             uint32_t aFlags = 0) const override;
 #endif
 
@@ -152,8 +146,8 @@ public:
    */
   static bool ShouldCreateImageFrameFor(mozilla::dom::Element* aElement,
                                           nsStyleContext* aStyleContext);
-  
-  DrawResult DisplayAltFeedback(nsRenderingContext& aRenderingContext,
+
+  ImgDrawResult DisplayAltFeedback(gfxContext& aRenderingContext,
                                 const nsRect& aDirtyRect,
                                 nsPoint aPt,
                                 uint32_t aFlags);
@@ -173,7 +167,7 @@ public:
   nsImageMap* GetImageMap();
   nsImageMap* GetExistingImageMap() const { return mImageMap; }
 
-  virtual void AddInlineMinISize(nsRenderingContext *aRenderingContext,
+  virtual void AddInlineMinISize(gfxContext *aRenderingContext,
                                  InlineMinISizeData *aData) override;
 
   void DisconnectMap();
@@ -182,13 +176,19 @@ public:
   virtual bool ReflowFinished() override;
   virtual void ReflowCallbackCanceled() override;
 
+private:
+  friend nsIFrame* NS_NewImageFrame(nsIPresShell*, nsStyleContext*);
+  explicit nsImageFrame(nsStyleContext* aContext)
+    : nsImageFrame(aContext, kClassID) {}
+
 protected:
+  nsImageFrame(nsStyleContext* aContext, ClassID aID);
   virtual ~nsImageFrame();
 
   void EnsureIntrinsicSizeAndRatio();
 
   virtual mozilla::LogicalSize
-  ComputeSize(nsRenderingContext *aRenderingContext,
+  ComputeSize(gfxContext *aRenderingContext,
               mozilla::WritingMode aWritingMode,
               const mozilla::LogicalSize& aCBSize,
               nscoord aAvailableISize,
@@ -217,15 +217,15 @@ protected:
                         int32_t              aLength,
                         nscoord              aMaxWidth,
                         uint32_t&            aMaxFit,
-                        nsRenderingContext& aContext,
+                        gfxContext&          aContext,
                         nsFontMetrics&      aFontMetrics);
 
   void DisplayAltText(nsPresContext*      aPresContext,
-                      nsRenderingContext& aRenderingContext,
+                      gfxContext&          aRenderingContext,
                       const nsString&      aAltText,
                       const nsRect&        aRect);
 
-  DrawResult PaintImage(nsRenderingContext& aRenderingContext, nsPoint aPt,
+  ImgDrawResult PaintImage(gfxContext& aRenderingContext, nsPoint aPt,
                         const nsRect& aDirtyRect, imgIContainer* aImage,
                         uint32_t aFlags);
 
@@ -341,7 +341,7 @@ private:
   bool mForceSyncDecoding;
 
   static nsIIOService* sIOService;
-  
+
   /* loading / broken image icon support */
 
   // XXXbz this should be handled by the prescontext, I think; that
@@ -393,10 +393,10 @@ private:
     bool             mPrefShowPlaceholders;
     bool             mPrefShowLoadingPlaceholder;
   };
-  
+
 public:
   static IconLoad* gIconLoad; // singleton pattern: one LoadIcons instance is used
-  
+
   friend class nsDisplayImage;
 };
 
@@ -425,9 +425,9 @@ public:
   virtual nsDisplayItemGeometry* AllocateGeometry(nsDisplayListBuilder* aBuilder) override;
   virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
                                          const nsDisplayItemGeometry* aGeometry,
-                                         nsRegion* aInvalidRegion) override;
+                                         nsRegion* aInvalidRegion) const override;
   virtual void Paint(nsDisplayListBuilder* aBuilder,
-                     nsRenderingContext* aCtx) override;
+                     gfxContext* aCtx) override;
 
   virtual already_AddRefed<imgIContainer> GetImage() override;
 
@@ -435,12 +435,12 @@ public:
    * @return The dest rect we'll use when drawing this image, in app units.
    *         Not necessarily contained in this item's bounds.
    */
-  virtual nsRect GetDestRect() override;
+  virtual nsRect GetDestRect() const override;
 
   virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
                                    LayerManager* aManager,
                                    const ContainerLayerParameters& aParameters) override;
-  nsRect GetBounds(bool* aSnap)
+  nsRect GetBounds(bool* aSnap) const
   {
     *aSnap = true;
 
@@ -449,17 +449,22 @@ public:
   }
 
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
-                           bool* aSnap) override
+                           bool* aSnap) const override
   {
     return GetBounds(aSnap);
   }
 
   virtual nsRegion GetOpaqueRegion(nsDisplayListBuilder* aBuilder,
-                                   bool* aSnap) override;
+                                   bool* aSnap) const override;
 
   virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
                                              LayerManager* aManager,
                                              const ContainerLayerParameters& aContainerParameters) override;
+  virtual bool CreateWebRenderCommands(mozilla::wr::DisplayListBuilder& aBuilder,
+                                       mozilla::wr::IpcResourceUpdateQueue& aResources,
+                                       const StackingContextHelper& aSc,
+                                       mozilla::layers::WebRenderLayerManager* aManager,
+                                       nsDisplayListBuilder* aDisplayListBuilder) override;
 
   NS_DISPLAY_DECL_NAME("Image", TYPE_IMAGE)
 private:

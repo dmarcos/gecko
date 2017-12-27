@@ -107,11 +107,11 @@ function removeUnicodeExtensions(locale) {
     var left = callFunction(String_substring, locale, 0, pos);
     var right = callFunction(String_substring, locale, pos);
 
-    var extensions;
     var unicodeLocaleExtensionSequenceRE = getUnicodeLocaleExtensionSequenceRE();
-    while ((extensions = regexp_exec_no_statics(unicodeLocaleExtensionSequenceRE, left)) !== null) {
-        left = callFunction(String_replace, left, extensions[0], "");
-        unicodeLocaleExtensionSequenceRE.lastIndex = 0;
+    var extensions = regexp_exec_no_statics(unicodeLocaleExtensionSequenceRE, left);
+    if (extensions !== null) {
+        left = callFunction(String_substring, left, 0, extensions.index) +
+               callFunction(String_substring, left, extensions.index + extensions[0].length);
     }
 
     var combined = left + right;
@@ -246,7 +246,7 @@ function getDuplicateVariantRE() {
         // Match everything in a langtag prior to any variants, and maybe some
         // of the variants as well (which makes this pattern inefficient but
         // not wrong, for our purposes);
-        "(?:" + alphanum + "{2,8}-)+" +
+        "^(?:" + alphanum + "{2,8}-)+" +
         // a variant, parenthesised so that we can refer back to it later;
         "(" + variant + ")-" +
         // zero or more subtags at least two characters long (thus stopping
@@ -382,7 +382,7 @@ function CanonicalizeLanguageTag(locale) {
     if (hasOwn(locale, langTagMappings))
         return langTagMappings[locale];
 
-    var subtags = StringSplitString(ToString(locale), "-");
+    var subtags = StringSplitString(locale, "-");
     var i = 0;
 
     // Handle the standard part: All subtags before the first singleton or "x".
@@ -427,8 +427,10 @@ function CanonicalizeLanguageTag(locale) {
             // "zh-nan" -> "nan"
             // Note that the script generating extlangMappings makes sure that
             // no extlang mapping will replace a normal language code.
-            subtag = extlangMappings[subtag].preferred;
-            if (i === 1 && extlangMappings[subtag].prefix === subtags[0]) {
+            // The preferred value for all current deprecated extlang subtags
+            // is equal to the extlang subtag, so we only need remove the
+            // redundant prefix to get the preferred value.
+            if (i === 1 && extlangMappings[subtag] === subtags[0]) {
                 callFunction(std_Array_shift, subtags);
                 i--;
             }
@@ -436,25 +438,31 @@ function CanonicalizeLanguageTag(locale) {
         subtags[i] = subtag;
         i++;
     }
-    var normal = callFunction(std_Array_join, callFunction(std_Array_slice, subtags, 0, i), "-");
+
+    // Directly return when the language tag doesn't contain any extension or
+    // private use sub-tags.
+    if (i === subtags.length)
+        return callFunction(std_Array_join, subtags, "-");
+
+    var normal = ArrayJoinRange(subtags, "-", 0, i);
 
     // Extension sequences are sorted by their singleton characters.
     // "u-ca-chinese-t-zh-latn" -> "t-zh-latn-u-ca-chinese"
-    var extensions = new List();
+    var extensions = [];
     while (i < subtags.length && subtags[i] !== "x") {
         var extensionStart = i;
         i++;
         while (i < subtags.length && subtags[i].length > 1)
             i++;
-        var extension = callFunction(std_Array_join, callFunction(std_Array_slice, subtags, extensionStart, i), "-");
-        callFunction(std_Array_push, extensions, extension);
+        var extension = ArrayJoinRange(subtags, "-", extensionStart, i);
+        _DefineDataProperty(extensions, extensions.length, extension);
     }
-    callFunction(std_Array_sort, extensions);
+    callFunction(ArraySort, extensions);
 
     // Private use sequences are left as is. "x-private"
     var privateUse = "";
     if (i < subtags.length)
-        privateUse = callFunction(std_Array_join, callFunction(std_Array_slice, subtags, i), "-");
+        privateUse = ArrayJoinRange(subtags, "-", i);
 
     // Put everything back together.
     var canonical = normal;
@@ -473,6 +481,26 @@ function CanonicalizeLanguageTag(locale) {
 
 
 /**
+ * Joins the array elements in the given range with the supplied separator.
+ */
+function ArrayJoinRange(array, separator, from, to = array.length) {
+    assert(typeof separator === "string", "|separator| is a string value");
+    assert(typeof from === "number", "|from| is a number value");
+    assert(typeof to === "number", "|to| is a number value");
+    assert(0 <= from && from <= to && to <= array.length, "|from| and |to| form a valid range");
+
+    if (from === to)
+        return "";
+
+    var result = array[from];
+    for (var i = from + 1; i < to; i++) {
+        result += separator + array[i];
+    }
+    return result;
+}
+
+
+/**
  * Returns true if the input contains only ASCII alphabetical characters.
  */
 function IsASCIIAlphaString(s) {
@@ -481,7 +509,7 @@ function IsASCIIAlphaString(s) {
     for (var i = 0; i < s.length; i++) {
         var c = callFunction(std_String_charCodeAt, s, i);
         if (!((0x41 <= c && c <= 0x5A) || (0x61 <= c && c <= 0x7A)))
-            return false
+            return false;
     }
     return true;
 }
@@ -629,13 +657,13 @@ function DefaultLocaleIgnoringAvailableLocales() {
  * Spec: ECMAScript Internationalization API Specification, 6.2.4.
  */
 function DefaultLocale() {
-    const runtimeDefaultLocale = RuntimeDefaultLocale();
-    if (runtimeDefaultLocale === localeCache.runtimeDefaultLocale)
+    if (IsRuntimeDefaultLocale(localeCache.runtimeDefaultLocale))
         return localeCache.defaultLocale;
 
     // If we didn't have a cache hit, compute the candidate default locale.
     // Then use it as the actual default locale if ICU supports that locale
     // (perhaps via fallback).  Otherwise use the last-ditch locale.
+    var runtimeDefaultLocale = RuntimeDefaultLocale();
     var candidate = DefaultLocaleIgnoringAvailableLocales();
     var locale;
     if (BestAvailableLocaleIgnoringDefault(callFunction(collatorInternalProperties.availableLocales,
@@ -733,11 +761,11 @@ function CanonicalizeTimeZoneName(timeZone) {
  * ES2017 Intl draft rev 4a23f407336d382ed5e3471200c690c9b020b5f3
  */
 function DefaultTimeZone() {
-    const icuDefaultTimeZone = intl_defaultTimeZone();
-    if (timeZoneCache.icuDefaultTimeZone === icuDefaultTimeZone)
+    if (intl_isDefaultTimeZone(timeZoneCache.icuDefaultTimeZone))
         return timeZoneCache.defaultTimeZone;
 
     // Verify that the current ICU time zone is a valid ECMA-402 time zone.
+    var icuDefaultTimeZone = intl_defaultTimeZone();
     var timeZone = intl_IsValidTimeZoneName(icuDefaultTimeZone);
     if (timeZone === null) {
         // Before defaulting to "UTC", try to represent the default time zone
@@ -792,7 +820,7 @@ function addSpecialMissingLanguageTags(availableLocales) {
 
     // Also forcibly provide the last-ditch locale.
     var lastDitch = lastDitchLocale();
-    assert(lastDitch === "en-GB" && availableLocales["en"],
+    assert(lastDitch === "en-GB" && availableLocales.en,
            "shouldn't be a need to add every locale implied by the last-" +
            "ditch locale, merely just the last-ditch locale");
     availableLocales[lastDitch] = true;
@@ -806,10 +834,13 @@ function addSpecialMissingLanguageTags(availableLocales) {
  */
 function CanonicalizeLocaleList(locales) {
     if (locales === undefined)
-        return new List();
-    var seen = new List();
-    if (typeof locales === "string")
-        locales = [locales];
+        return [];
+    if (typeof locales === "string") {
+        if (!IsStructurallyValidLanguageTag(locales))
+            ThrowRangeError(JSMSG_INVALID_LANGUAGE_TAG, locales);
+        return [CanonicalizeLanguageTag(locales)];
+    }
+    var seen = [];
     var O = ToObject(locales);
     var len = ToLength(O.length);
     var k = 0;
@@ -825,7 +856,7 @@ function CanonicalizeLocaleList(locales) {
                 ThrowRangeError(JSMSG_INVALID_LANGUAGE_TAG, tag);
             tag = CanonicalizeLanguageTag(tag);
             if (callFunction(ArrayIndexOf, seen, tag) === -1)
-                callFunction(std_Array_push, seen, tag);
+                _DefineDataProperty(seen, seen.length, tag);
         }
         k++;
     }
@@ -898,7 +929,6 @@ function BestAvailableLocaleIgnoringDefault(availableLocales, locale) {
     return BestAvailableLocaleHelper(availableLocales, locale, false);
 }
 
-var noRelevantExtensionKeys = [];
 
 /**
  * Compares a BCP 47 language priority list against the set of locales in
@@ -930,10 +960,7 @@ function LookupMatcher(availableLocales, requestedLocales) {
         if (locale !== noExtensionsLocale) {
             var unicodeLocaleExtensionSequenceRE = getUnicodeLocaleExtensionSequenceRE();
             var extensionMatch = regexp_exec_no_statics(unicodeLocaleExtensionSequenceRE, locale);
-            var extension = extensionMatch[0];
-            var extensionIndex = extensionMatch.index;
-            result.extension = extension;
-            result.extensionIndex = extensionIndex;
+            result.extension = extensionMatch[0];
         }
     } else {
         result.locale = DefaultLocale();
@@ -958,6 +985,79 @@ function BestFitMatcher(availableLocales, requestedLocales) {
 
 
 /**
+ * Returns the Unicode extension value subtags for the requested key subtag.
+ *
+ * NOTE: PR to add UnicodeExtensionValue to ECMA-402 isn't yet written.
+ */
+function UnicodeExtensionValue(extension, key) {
+    assert(typeof extension === "string", "extension is a string value");
+    assert(function() {
+        var unicodeLocaleExtensionSequenceRE = getUnicodeLocaleExtensionSequenceRE();
+        var extensionMatch = regexp_exec_no_statics(unicodeLocaleExtensionSequenceRE, extension);
+        return extensionMatch !== null && extensionMatch[0] === extension;
+    }(), "extension is a Unicode extension subtag");
+    assert(typeof key === "string", "key is a string value");
+    assert(key.length === 2, "key is a Unicode extension key subtag");
+
+    // Step 1.
+    var size = extension.length;
+
+    // Step 2.
+    var searchValue = "-" + key + "-";
+
+    // Step 3.
+    var pos = callFunction(std_String_indexOf, extension, searchValue);
+
+    // Step 4.
+    if (pos !== -1) {
+        // Step 4.a.
+        var start = pos + 4;
+
+        // Step 4.b.
+        var end = start;
+
+        // Step 4.c.
+        var k = start;
+
+        // Steps 4.d-e.
+        while (true) {
+            // Step 4.e.i.
+            var e = callFunction(std_String_indexOf, extension, "-", k);
+
+            // Step 4.e.ii.
+            var len = e === -1 ? size - k : e - k;
+
+            // Step 4.e.iii.
+            if (len === 2)
+                break;
+
+            // Step 4.e.iv.
+            if (e === -1) {
+                end = size;
+                break;
+            }
+
+            // Step 4.e.v.
+            end = e;
+            k = e + 1;
+        }
+
+        // Step 4.f.
+        return callFunction(String_substring, extension, start, end);
+    }
+
+    // Step 5.
+    searchValue = "-" + key;
+
+    // Steps 6-7.
+    if (callFunction(std_String_endsWith, extension, searchValue))
+        return "";
+
+    // Step 8 (implicit).
+}
+
+
+/**
  * Compares a BCP 47 language priority list against availableLocales and
  * determines the best available language to meet the request. Options specified
  * through Unicode extension subsequences are negotiated separately, taking the
@@ -978,19 +1078,8 @@ function ResolveLocale(availableLocales, requestedLocales, options, relevantExte
     // Step 4.
     var foundLocale = r.locale;
 
-    // Step 5.a.
+    // Step 5 (Not applicable in this implementation).
     var extension = r.extension;
-    var extensionIndex, extensionSubtags, extensionSubtagsLength;
-
-    // Step 5.
-    if (extension !== undefined) {
-        // Step 5.b.
-        extensionIndex = r.extensionIndex;
-
-        // Steps 5.d-e.
-        extensionSubtags = StringSplitString(ToString(extension), "-");
-        extensionSubtagsLength = extensionSubtags.length;
-    }
 
     // Steps 6-7.
     var result = new Record();
@@ -999,68 +1088,51 @@ function ResolveLocale(availableLocales, requestedLocales, options, relevantExte
     // Step 8.
     var supportedExtension = "-u";
 
-    // Steps 9-11.
-    var i = 0;
-    var len = relevantExtensionKeys.length;
-    var foundLocaleData;
-    if (len > 0) {
-        // In this implementation, localeData is a function, not an object.
-        // Step 11.b.
-        foundLocaleData = localeData(foundLocale);
-    }
-    while (i < len) {
-        // Step 11.a.
+    // In this implementation, localeData is a function, not an object.
+    var localeDataProvider = localeData();
+
+    // Steps 9-12.
+    for (var i = 0; i < relevantExtensionKeys.length; i++) {
+        // Step 12.a.
         var key = relevantExtensionKeys[i];
 
-        // Step 11.c.
-        var keyLocaleData = foundLocaleData[key];
-
-        // Locale data provides default value.
-        // Step 11.d.
-        var value = keyLocaleData[0];
+        // Steps 12.b-d (The locale data is only computed when needed).
+        var keyLocaleData = undefined;
+        var value = undefined;
 
         // Locale tag may override.
 
-        // Step 11.e.
+        // Step 12.e.
         var supportedExtensionAddition = "";
 
-        // Step 11.f is implemented by Utilities.js.
+        // Step 12.f.
+        if (extension !== undefined) {
+            // NB: The step annotations don't yet match the ES2017 Intl draft,
+            // 94045d234762ad107a3d09bb6f7381a65f1a2f9b, because the PR to add
+            // the new UnicodeExtensionValue abstract operation still needs to
+            // be written.
 
-        var valuePos;
+            // Step 12.f.i.
+            var requestedValue = UnicodeExtensionValue(extension, key);
 
-        // Step 11.g.
-        if (extensionSubtags !== undefined) {
-            // Step 11.g.i.
-            var keyPos = callFunction(ArrayIndexOf, extensionSubtags, key);
+            // Step 12.f.ii.
+            if (requestedValue !== undefined) {
+                // Steps 12.b-c.
+                keyLocaleData = callFunction(localeDataProvider[key], null, foundLocale);
 
-            // Step 11.g.ii.
-            if (keyPos !== -1) {
-                // Step 11.g.ii.1.
-                if (keyPos + 1 < extensionSubtagsLength &&
-                    extensionSubtags[keyPos + 1].length > 2)
-                {
-                    // Step 11.g.ii.1.a.
-                    var requestedValue = extensionSubtags[keyPos + 1];
-
-                    // Step 11.g.ii.1.b.
-                    valuePos = callFunction(ArrayIndexOf, keyLocaleData, requestedValue);
-
-                    // Step 11.g.ii.1.c.
-                    if (valuePos !== -1) {
+                // Step 12.f.ii.1.
+                if (requestedValue !== "") {
+                    // Step 12.f.ii.1.a.
+                    if (callFunction(ArrayIndexOf, keyLocaleData, requestedValue) !== -1) {
                         value = requestedValue;
                         supportedExtensionAddition = "-" + key + "-" + value;
                     }
                 } else {
-                    // Step 11.g.ii.2.
+                    // Step 12.f.ii.2.
 
                     // According to the LDML spec, if there's no type value,
                     // and true is an allowed value, it's used.
-
-                    // Step 11.g.ii.2.a.
-                    valuePos = callFunction(ArrayIndexOf, keyLocaleData, "true");
-
-                    // Step 11.g.ii.2.b.
-                    if (valuePos !== -1)
+                    if (callFunction(ArrayIndexOf, keyLocaleData, "true") !== -1)
                         value = "true";
                 }
             }
@@ -1068,35 +1140,64 @@ function ResolveLocale(availableLocales, requestedLocales, options, relevantExte
 
         // Options override all.
 
-        // Step 11.h.i.
+        // Step 12.g.i.
         var optionsValue = options[key];
 
-        // Step 11.h, 11.h.ii.
-        if (optionsValue !== undefined &&
-            callFunction(ArrayIndexOf, keyLocaleData, optionsValue) !== -1)
-        {
-            // Step 11.h.ii.1.
-            if (optionsValue !== value) {
+        // Step 12.g, 12.g.ii.
+        if (optionsValue !== undefined && optionsValue !== value) {
+            // Steps 12.b-c.
+            if (keyLocaleData === undefined)
+                keyLocaleData = callFunction(localeDataProvider[key], null, foundLocale);
+
+            if (callFunction(ArrayIndexOf, keyLocaleData, optionsValue) !== -1) {
                 value = optionsValue;
                 supportedExtensionAddition = "";
             }
         }
 
-        // Steps 11.i-k.
+        // Locale data provides default value.
+        if (value === undefined) {
+            // Steps 12.b-d.
+            value = keyLocaleData === undefined
+                    ? callFunction(localeDataProvider.default[key], null, foundLocale)
+                    : keyLocaleData[0];
+        }
+
+        // Steps 12.h-j.
+        assert(typeof value === "string" || value === null, "unexpected locale data value");
         result[key] = value;
         supportedExtension += supportedExtensionAddition;
-        i++;
     }
 
-    // Step 12.
+    // Step 13.
     if (supportedExtension.length > 2) {
-        var preExtension = callFunction(String_substring, foundLocale, 0, extensionIndex);
-        var postExtension = callFunction(String_substring, foundLocale, extensionIndex);
-        foundLocale = preExtension + supportedExtension + postExtension;
+        assert(!callFunction(std_String_startsWith, foundLocale, "x-"),
+               "unexpected privateuse-only locale returned from ICU");
+
+        // Step 13.a.
+        var privateIndex = callFunction(std_String_indexOf, foundLocale, "-x-");
+
+        // Steps 13.b-c.
+        if (privateIndex === -1) {
+            foundLocale += supportedExtension;
+        } else {
+            var preExtension = callFunction(String_substring, foundLocale, 0, privateIndex);
+            var postExtension = callFunction(String_substring, foundLocale, privateIndex);
+            foundLocale = preExtension + supportedExtension + postExtension;
+        }
+
+        // Step 13.d.
+        assert(IsStructurallyValidLanguageTag(foundLocale), "invalid locale after concatenation");
+
+        // Step 13.e (Not required in this implementation, because we don't
+        // canonicalize Unicode extension subtags).
+        assert(foundLocale === CanonicalizeLanguageTag(foundLocale), "same locale with extension");
     }
 
-    // Steps 13-14.
+    // Step 14.
     result.locale = foundLocale;
+
+    // Step 15.
     return result;
 }
 
@@ -1111,7 +1212,7 @@ function ResolveLocale(availableLocales, requestedLocales, options, relevantExte
 function LookupSupportedLocales(availableLocales, requestedLocales) {
     // Steps 1-2.
     var len = requestedLocales.length;
-    var subset = new List();
+    var subset = [];
 
     // Steps 3-4.
     var k = 0;
@@ -1123,14 +1224,14 @@ function LookupSupportedLocales(availableLocales, requestedLocales) {
         // Step 4.c-d.
         var availableLocale = BestAvailableLocale(availableLocales, noExtensionsLocale);
         if (availableLocale !== undefined)
-            callFunction(std_Array_push, subset, locale);
+            _DefineDataProperty(subset, subset.length, locale);
 
         // Step 4.e.
         k++;
     }
 
     // Steps 5-6.
-    return callFunction(std_Array_slice, subset, 0);
+    return subset;
 }
 
 
@@ -1296,7 +1397,8 @@ function initializeIntlObject(obj, type, lazyData) {
     assert((type === "Collator" && IsCollator(obj)) ||
            (type === "DateTimeFormat" && IsDateTimeFormat(obj)) ||
            (type === "NumberFormat" && IsNumberFormat(obj)) ||
-           (type === "PluralRules" && IsPluralRules(obj)),
+           (type === "PluralRules" && IsPluralRules(obj)) ||
+           (type === "RelativeTimeFormat" && IsRelativeTimeFormat(obj)),
            "type must match the object's class");
     assert(IsObject(lazyData), "non-object lazy data");
 
@@ -1363,7 +1465,9 @@ function maybeInternalProperties(internals) {
  */
 function getIntlObjectInternals(obj) {
     assert(IsObject(obj), "getIntlObjectInternals called with non-Object");
-    assert(IsCollator(obj) || IsDateTimeFormat(obj) || IsNumberFormat(obj) || IsPluralRules(obj),
+    assert(IsCollator(obj) || IsDateTimeFormat(obj) ||
+           IsNumberFormat(obj) || IsPluralRules(obj) ||
+           IsRelativeTimeFormat(obj),
            "getIntlObjectInternals called with non-Intl object");
 
     var internals = UnsafeGetReservedSlot(obj, INTL_INTERNALS_OBJECT_SLOT);
@@ -1373,7 +1477,8 @@ function getIntlObjectInternals(obj) {
     assert((internals.type === "Collator" && IsCollator(obj)) ||
            (internals.type === "DateTimeFormat" && IsDateTimeFormat(obj)) ||
            (internals.type === "NumberFormat" && IsNumberFormat(obj)) ||
-           (internals.type === "PluralRules" && IsPluralRules(obj)),
+           (internals.type === "PluralRules" && IsPluralRules(obj)) ||
+           (internals.type === "RelativeTimeFormat" && IsRelativeTimeFormat(obj)),
            "type must match the object's class");
     assert(hasOwn("lazyData", internals), "missing lazyData");
     assert(hasOwn("internalProps", internals), "missing internalProps");
@@ -1397,13 +1502,13 @@ function getInternals(obj) {
     // Otherwise it's time to fully create them.
     var type = internals.type;
     if (type === "Collator")
-        internalProps = resolveCollatorInternals(internals.lazyData)
+        internalProps = resolveCollatorInternals(internals.lazyData);
     else if (type === "DateTimeFormat")
-        internalProps = resolveDateTimeFormatInternals(internals.lazyData)
+        internalProps = resolveDateTimeFormatInternals(internals.lazyData);
     else if (type === "NumberFormat")
         internalProps = resolveNumberFormatInternals(internals.lazyData);
     else
-        internalProps = resolvePluralRulesInternals(internals.lazyData)
+        internalProps = resolvePluralRulesInternals(internals.lazyData);
     setInternalProperties(internals, internalProps);
     return internalProps;
 }
@@ -1488,15 +1593,11 @@ function resolveCollatorInternals(lazyCollatorData) {
     // Steps 21-22.
     var s = lazyCollatorData.rawSensitivity;
     if (s === undefined) {
-        if (collatorIsSorting) {
-            // Step 21.a.
-            s = "variant";
-        } else {
-            // Step 21.b.
-            var dataLocale = r.dataLocale;
-            var dataLocaleData = localeData(dataLocale);
-            s = dataLocaleData.sensitivity;
-        }
+        // In theory the default sensitivity for the "search" collator is
+        // locale dependent; in reality the CLDR/ICU default strength is
+        // always tertiary. Therefore use "variant" as the default value for
+        // both collation modes.
+        s = "variant";
     }
     internalProps.sensitivity = s;
 
@@ -1579,12 +1680,10 @@ function InitializeCollator(collator, locales, options) {
     // Steps 4-5.
     //
     // If we ever need more speed here at startup, we should try to detect the
-    // case where |options === undefined| and Object.prototype hasn't been
-    // mucked with.  (|options| is fully consumed in this method, so it's not a
-    // concern that Object.prototype might be touched between now and when
-    // |resolveCollatorInternals| is called.)  For now, just keep it simple.
+    // case where |options === undefined| and then directly use the default
+    // value for each option.  For now, just keep it simple.
     if (options === undefined)
-        options = {};
+        options = std_Object_create(null);
     else
         options = ToObject(options);
 
@@ -1669,49 +1768,97 @@ var collatorInternalProperties = {
 
 
 /**
- * Returns the default caseFirst values for the given locale and usage. The
- * first element in the returned array denotes the default value per ES2017
- * Intl, 9.1 Internal slots of Service Constructors.
+ * Returns the actual locale used when a collator for |locale| is constructed.
  */
-function collatorCaseFirst(locale, usage) {
+function collatorActualLocale(locale) {
     assert(typeof locale === "string", "locale should be string");
-    assert(usage === "sort" || usage === "search", "invalid usage option");
 
-    if (usage === "sort") {
-        // If |locale| is the default locale (e.g. da-DK), but only supported
-        // through a fallback (da), we need to get the actual locale before we
-        // can call intl_isUpperCaseFirst. Also see BestAvailableLocaleHelper.
-        var availableLocales = callFunction(collatorInternalProperties.availableLocales,
-                                            collatorInternalProperties);
-        var actualLocale = BestAvailableLocaleIgnoringDefault(availableLocales, locale);
+    // If |locale| is the default locale (e.g. da-DK), but only supported
+    // through a fallback (da), we need to get the actual locale before we
+    // can call intl_isUpperCaseFirst. Also see BestAvailableLocaleHelper.
+    var availableLocales = callFunction(collatorInternalProperties.availableLocales,
+                                        collatorInternalProperties);
+    return BestAvailableLocaleIgnoringDefault(availableLocales, locale);
+}
 
-        if (intl_isUpperCaseFirst(actualLocale))
-            return ["upper", "false", "lower"];
-    }
+
+/**
+ * Returns the default caseFirst values for the given locale. The first
+ * element in the returned array denotes the default value per ES2017 Intl,
+ * 9.1 Internal slots of Service Constructors.
+ */
+function collatorSortCaseFirst(locale) {
+    var actualLocale = collatorActualLocale(locale);
+    if (intl_isUpperCaseFirst(actualLocale))
+        return ["upper", "false", "lower"];
 
     // Default caseFirst values for all other languages.
     return ["false", "lower", "upper"];
 }
 
 
-function collatorSortLocaleData(locale) {
-    return {
-        co: intl_availableCollations(locale),
-        kn: ["false", "true"],
-        kf: collatorCaseFirst(locale, "sort"),
-    };
+/**
+ * Returns the default caseFirst value for the given locale.
+ */
+function collatorSortCaseFirstDefault(locale) {
+    var actualLocale = collatorActualLocale(locale);
+    if (intl_isUpperCaseFirst(actualLocale))
+        return "upper";
+
+    // Default caseFirst value for all other languages.
+    return "false";
 }
 
 
-function collatorSearchLocaleData(locale) {
+function collatorSortLocaleData() {
+    /* eslint-disable object-shorthand */
     return {
-        co: [null],
-        kn: ["false", "true"],
-        kf: collatorCaseFirst(locale, "search"),
-        // In theory the default sensitivity is locale dependent;
-        // in reality the CLDR/ICU default strength is always tertiary.
-        sensitivity: "variant"
+        co: intl_availableCollations,
+        kn: function() {
+            return ["false", "true"];
+        },
+        kf: collatorSortCaseFirst,
+        default: {
+            co: function() {
+                // The first element of the collations array must be |null|
+                // per ES2017 Intl, 10.2.3 Internal Slots.
+                return null;
+            },
+            kn: function() {
+                return "false";
+            },
+            kf: collatorSortCaseFirstDefault,
+        }
     };
+    /* eslint-enable object-shorthand */
+}
+
+
+function collatorSearchLocaleData() {
+    /* eslint-disable object-shorthand */
+    return {
+        co: function() {
+            return [null];
+        },
+        kn: function() {
+            return ["false", "true"];
+        },
+        kf: function() {
+            return ["false", "lower", "upper"];
+        },
+        default: {
+            co: function() {
+                return null;
+            },
+            kn: function() {
+                return "false";
+            },
+            kf: function() {
+                return "false";
+            },
+        }
+    };
+    /* eslint-enable object-shorthand */
 }
 
 
@@ -2026,12 +2173,10 @@ function InitializeNumberFormat(numberFormat, thisValue, locales, options) {
     // Steps 4-5.
     //
     // If we ever need more speed here at startup, we should try to detect the
-    // case where |options === undefined| and Object.prototype hasn't been
-    // mucked with.  (|options| is fully consumed in this method, so it's not a
-    // concern that Object.prototype might be touched between now and when
-    // |resolveNumberFormatInternals| is called.)  For now just keep it simple.
+    // case where |options === undefined| and then directly use the default
+    // value for each option.  For now, just keep it simple.
     if (options === undefined)
-        options = {};
+        options = std_Object_create(null);
     else
         options = ToObject(options);
 
@@ -2166,9 +2311,12 @@ function getNumberingSystems(locale) {
 }
 
 
-function numberFormatLocaleData(locale) {
+function numberFormatLocaleData() {
     return {
-        nu: getNumberingSystems(locale)
+        nu: getNumberingSystems,
+        default: {
+            nu: intl_numberingSystem,
+        }
     };
 }
 
@@ -2224,8 +2372,14 @@ _SetCanonicalName(Intl_NumberFormat_format_get, "get format");
 
 
 function Intl_NumberFormat_formatToParts(value) {
-    // Steps 1-3.
-    var nf = UnwrapNumberFormat(this, "formatToParts");
+    // Step 1.
+    var nf = this;
+
+    // Steps 2-3.
+    if (!IsObject(nf) || !IsNumberFormat(nf)) {
+        ThrowTypeError(JSMSG_INTL_OBJECT_NOT_INITED, "NumberFormat", "formatToParts",
+                       "NumberFormat");
+    }
 
     // Ensure the NumberFormat internals are resolved.
     getNumberFormatInternals(nf);
@@ -2292,6 +2446,8 @@ function resolveDateTimeFormatInternals(lazyDateTimeFormatData) {
     //         localeMatcher: "lookup" / "best fit",
     //
     //         hour12: true / false,  // optional
+    //
+    //         hourCycle: "h11" / "h12" / "h23" / "h24", // optional
     //       }
     //
     //     timeZone: IANA time zone name,
@@ -2352,6 +2508,12 @@ function resolveDateTimeFormatInternals(lazyDateTimeFormatData) {
     // Step 18.
     var formatOpt = lazyDateTimeFormatData.formatOpt;
 
+    // Copy the hourCycle setting, if present, to the format options. But
+    // only do this if no hour12 option is present, because the latter takes
+    // precedence over hourCycle.
+    if (r.hc !== null && formatOpt.hour12 === undefined)
+        formatOpt.hourCycle = r.hc;
+
     // Steps 27-28, more or less - see comment after this function.
     var pattern;
     if (lazyDateTimeFormatData.mozExtensions) {
@@ -2374,6 +2536,11 @@ function resolveDateTimeFormatInternals(lazyDateTimeFormatData) {
       pattern = toBestICUPattern(dataLocale, formatOpt);
     }
 
+    // If the hourCycle option was set, adjust the resolved pattern to use the
+    // requested hour cycle representation.
+    if (formatOpt.hourCycle !== undefined)
+        pattern = replaceHourRepresentation(pattern, formatOpt.hourCycle);
+
     // Step 29.
     internalProps.pattern = pattern;
 
@@ -2383,6 +2550,47 @@ function resolveDateTimeFormatInternals(lazyDateTimeFormatData) {
     // The caller is responsible for associating |internalProps| with the right
     // object using |setInternalProperties|.
     return internalProps;
+}
+
+
+/**
+ * Replaces all hour pattern characters in |pattern| to use the matching hour
+ * representation for |hourCycle|.
+ */
+function replaceHourRepresentation(pattern, hourCycle) {
+    var hour;
+    switch (hourCycle) {
+      case "h11":
+        hour = "K";
+        break;
+      case "h12":
+        hour = "h";
+        break;
+      case "h23":
+        hour = "H";
+        break;
+      case "h24":
+        hour = "k";
+        break;
+    }
+    assert(hour !== undefined, "Unexpected hourCycle requested: " + hourCycle);
+
+    // Parse the pattern according to the format specified in
+    // https://unicode.org/reports/tr35/tr35-dates.html#Date_Format_Patterns
+    // and replace all hour symbols with |hour|.
+    var resultPattern = "";
+    var inQuote = false;
+    for (var i = 0; i < pattern.length; i++) {
+        var ch = pattern[i];
+        if (ch === "'") {
+            inQuote = !inQuote;
+        } else if (!inQuote && (ch === "h" || ch === "H" || ch === "k" || ch === "K")) {
+            ch = hour;
+        }
+        resultPattern += ch;
+    }
+
+    return resultPattern;
 }
 
 
@@ -2463,7 +2671,8 @@ function InitializeDateTimeFormat(dateTimeFormat, thisValue, locales, options, m
     //         // all the properties/values listed in Table 3
     //         // (weekday, era, year, month, day, &c.)
     //
-    //         hour12: true / false  // optional
+    //         hour12: true / false,  // optional
+    //         hourCycle: "h11" / "h12" / "h23" / "h24", // optional
     //       }
     //
     //     formatMatcher: "basic" / "best fit",
@@ -2474,25 +2683,29 @@ function InitializeDateTimeFormat(dateTimeFormat, thisValue, locales, options, m
     // never a subset of them.
     var lazyDateTimeFormatData = std_Object_create(null);
 
-    // Step 3.
+    // Step 1.
     var requestedLocales = CanonicalizeLocaleList(locales);
     lazyDateTimeFormatData.requestedLocales = requestedLocales;
 
-    // Step 4.
+    // Step 2.
     options = ToDateTimeOptions(options, "any", "date");
 
     // Compute options that impact interpretation of locale.
-    // Step 5.
+    // Step 3.
     var localeOpt = new Record();
     lazyDateTimeFormatData.localeOpt = localeOpt;
 
-    // Steps 6-7.
+    // Steps 4-5.
     var localeMatcher =
         GetOption(options, "localeMatcher", "string", ["lookup", "best fit"],
                   "best fit");
     localeOpt.localeMatcher = localeMatcher;
 
-    // Steps 15-17.
+    // Step 6.
+    var hc = GetOption(options, "hourCycle", "string", ["h11", "h12", "h23", "h24"], undefined);
+    localeOpt.hc = hc;
+
+    // Steps 15-18.
     var tz = options.timeZone;
     if (tz !== undefined) {
         // Step 15.a.
@@ -2511,7 +2724,7 @@ function InitializeDateTimeFormat(dateTimeFormat, thisValue, locales, options, m
     }
     lazyDateTimeFormatData.timeZone = tz;
 
-    // Step 18.
+    // Step 19.
     var formatOpt = new Record();
     lazyDateTimeFormatData.formatOpt = formatOpt;
 
@@ -2527,7 +2740,7 @@ function InitializeDateTimeFormat(dateTimeFormat, thisValue, locales, options, m
         lazyDateTimeFormatData.timeStyle = timeStyle;
     }
 
-    // Step 19.
+    // Step 20.
     // 12.1, Table 4: Components of date and time formats.
     formatOpt.weekday = GetOption(options, "weekday", "string", ["narrow", "short", "long"],
                                   undefined);
@@ -2542,9 +2755,9 @@ function InitializeDateTimeFormat(dateTimeFormat, thisValue, locales, options, m
     formatOpt.timeZoneName = GetOption(options, "timeZoneName", "string", ["short", "long"],
                                        undefined);
 
-    // Steps 20-21 provided by ICU - see comment after this function.
+    // Steps 21-22 provided by ICU - see comment after this function.
 
-    // Step 22.
+    // Step 23.
     //
     // For some reason (ICU not exposing enough interface?) we drop the
     // requested format matcher on the floor after this.  In any case, even if
@@ -2555,9 +2768,9 @@ function InitializeDateTimeFormat(dateTimeFormat, thisValue, locales, options, m
                   "best fit");
     void formatMatcher;
 
-    // Steps 23-25 provided by ICU, more or less - see comment after this function.
+    // Steps 24-26 provided by ICU, more or less - see comment after this function.
 
-    // Step 26.
+    // Step 27.
     var hr12  = GetOption(options, "hour12", "boolean", undefined, undefined);
 
     // Pass hr12 on to ICU.
@@ -2641,6 +2854,7 @@ function InitializeDateTimeFormat(dateTimeFormat, thisValue, locales, options, m
 // - [[weekday]], [[era]], [[year]], [[month]], [[day]], [[hour]], [[minute]],
 //   [[second]], [[timeZoneName]]
 // - [[hour12]]
+// - [[hourCycle]]
 // - [[hourNo0]]
 // When needed for the resolvedOptions method, the resolveICUPattern function
 // maps the instance's ICU pattern back to the specified properties of the
@@ -2714,12 +2928,24 @@ function toBestICUPattern(locale, options) {
         skeleton += "d";
         break;
     }
+    // If hour12 and hourCycle are both present, hour12 takes precedence.
     var hourSkeletonChar = "j";
     if (options.hour12 !== undefined) {
         if (options.hour12)
             hourSkeletonChar = "h";
         else
             hourSkeletonChar = "H";
+    } else {
+        switch (options.hourCycle) {
+        case "h11":
+        case "h12":
+            hourSkeletonChar = "h";
+            break;
+        case "h23":
+        case "h24":
+            hourSkeletonChar = "H";
+            break;
+        }
     }
     switch (options.hour) {
     case "2-digit":
@@ -2856,14 +3082,24 @@ var dateTimeFormatInternalProperties = {
         addSpecialMissingLanguageTags(locales);
         return (this._availableLocales = locales);
     },
-    relevantExtensionKeys: ["ca", "nu"]
+    relevantExtensionKeys: ["ca", "nu", "hc"]
 };
 
 
-function dateTimeFormatLocaleData(locale) {
+function dateTimeFormatLocaleData() {
     return {
-        ca: intl_availableCalendars(locale),
-        nu: getNumberingSystems(locale)
+        ca: intl_availableCalendars,
+        nu: getNumberingSystems,
+        hc: () => {
+            return [null, "h11", "h12", "h23", "h24"];
+        },
+        default: {
+            ca: intl_defaultCalendar,
+            nu: intl_numberingSystem,
+            hc: () => {
+                return null;
+            }
+        }
     };
 }
 
@@ -2921,8 +3157,14 @@ _SetCanonicalName(Intl_DateTimeFormat_format_get, "get format");
  * Intl.DateTimeFormat.prototype.formatToParts ( date )
  */
 function Intl_DateTimeFormat_formatToParts(date) {
-    // Steps 1-3.
-    var dtf = UnwrapDateTimeFormat(this, "formatToParts");
+    // Step 1.
+    var dtf = this;
+
+    // Steps 2-3.
+    if (!IsObject(dtf) || !IsDateTimeFormat(dtf)) {
+        ThrowTypeError(JSMSG_INTL_OBJECT_NOT_INITED, "DateTimeFormat", "formatToParts",
+                       "DateTimeFormat");
+    }
 
     // Ensure the DateTimeFormat internals are resolved.
     getDateTimeFormatInternals(dtf);
@@ -3059,10 +3301,24 @@ function resolveICUPattern(pattern, result) {
             }
             if (hasOwn(c, icuPatternCharToComponent))
                 _DefineDataProperty(result, icuPatternCharToComponent[c], value);
-            if (c === "h" || c === "K")
+            switch (c) {
+            case "h":
+                _DefineDataProperty(result, "hourCycle", "h12");
                 _DefineDataProperty(result, "hour12", true);
-            else if (c === "H" || c === "k")
+                break;
+            case "K":
+                _DefineDataProperty(result, "hourCycle", "h11");
+                _DefineDataProperty(result, "hour12", true);
+                break;
+            case "H":
+                _DefineDataProperty(result, "hourCycle", "h23");
                 _DefineDataProperty(result, "hour12", false);
+                break;
+            case "k":
+                _DefineDataProperty(result, "hourCycle", "h24");
+                _DefineDataProperty(result, "hour12", false);
+                break;
+            }
         }
     }
 }
@@ -3077,6 +3333,7 @@ function resolveICUPattern(pattern, result) {
  * Spec: ECMAScript 402 API, PluralRules, 1.3.3.
  */
 var pluralRulesInternalProperties = {
+    localeData: pluralRulesLocaleData,
     _availableLocales: null,
     availableLocales: function() // eslint-disable-line object-shorthand
     {
@@ -3087,8 +3344,16 @@ var pluralRulesInternalProperties = {
         locales = intl_PluralRules_availableLocales();
         addSpecialMissingLanguageTags(locales);
         return (this._availableLocales = locales);
-    }
+    },
+    relevantExtensionKeys: [],
 };
+
+
+function pluralRulesLocaleData() {
+    // PluralRules don't support any extension keys.
+    return {};
+}
+
 
 /**
  * Compute an internal properties object from |lazyPluralRulesData|.
@@ -3104,7 +3369,7 @@ function resolvePluralRulesInternals(lazyPluralRulesData) {
     const r = ResolveLocale(callFunction(PluralRules.availableLocales, PluralRules),
                           lazyPluralRulesData.requestedLocales,
                           lazyPluralRulesData.opt,
-                          noRelevantExtensionKeys, undefined);
+                          PluralRules.relevantExtensionKeys, PluralRules.localeData);
 
     // Step 14.
     internalProps.locale = r.locale;
@@ -3195,7 +3460,7 @@ function InitializePluralRules(pluralRules, locales, options) {
 
     // Steps 4-5.
     if (options === undefined)
-        options = {};
+        options = std_Object_create(null);
     else
         options = ToObject(options);
 
@@ -3276,10 +3541,15 @@ function Intl_PluralRules_resolvedOptions() {
 
     var internals = getPluralRulesInternals(this);
 
+    var internalsPluralCategories = internals.pluralCategories;
+    var pluralCategories = [];
+    for (var i = 0; i < internalsPluralCategories.length; i++)
+        _DefineDataProperty(pluralCategories, i, internalsPluralCategories[i]);
+
     var result = {
         locale: internals.locale,
         type: internals.type,
-        pluralCategories: callFunction(std_Array_slice, internals.pluralCategories, 0),
+        pluralCategories,
         minimumIntegerDigits: internals.minimumIntegerDigits,
         minimumFractionDigits: internals.minimumFractionDigits,
         maximumFractionDigits: internals.maximumFractionDigits,
@@ -3299,6 +3569,231 @@ function Intl_PluralRules_resolvedOptions() {
 }
 
 
+/********** Intl.RelativeTimeFormat **********/
+
+/**
+ * RelativeTimeFormat internal properties.
+ *
+ * Spec: ECMAScript 402 API, RelativeTimeFormat, 1.3.3.
+ */
+var relativeTimeFormatInternalProperties = {
+    localeData: relativeTimeFormatLocaleData,
+    _availableLocales: null,
+    availableLocales: function() // eslint-disable-line object-shorthand
+    {
+        var locales = this._availableLocales;
+        if (locales)
+            return locales;
+
+        locales = intl_RelativeTimeFormat_availableLocales();
+        addSpecialMissingLanguageTags(locales);
+        return (this._availableLocales = locales);
+    },
+    relevantExtensionKeys: [],
+};
+
+function relativeTimeFormatLocaleData() {
+    // RelativeTimeFormat doesn't support any extension keys.
+    return {};
+}
+
+/**
+ * Compute an internal properties object from |lazyRelativeTimeFormatData|.
+ */
+function resolveRelativeTimeFormatInternals(lazyRelativeTimeFormatData) {
+    assert(IsObject(lazyRelativeTimeFormatData), "lazy data not an object?");
+
+    var internalProps = std_Object_create(null);
+
+    var RelativeTimeFormat = relativeTimeFormatInternalProperties;
+
+    // Step 16.
+    const r = ResolveLocale(callFunction(RelativeTimeFormat.availableLocales, RelativeTimeFormat),
+                            lazyRelativeTimeFormatData.requestedLocales,
+                            lazyRelativeTimeFormatData.opt,
+                            RelativeTimeFormat.relevantExtensionKeys,
+                            RelativeTimeFormat.localeData);
+
+    // Step 17.
+    internalProps.locale = r.locale;
+    internalProps.style = lazyRelativeTimeFormatData.style;
+    internalProps.type = lazyRelativeTimeFormatData.type;
+
+    return internalProps;
+}
+
+/**
+ * Returns an object containing the RelativeTimeFormat internal properties of |obj|,
+ * or throws a TypeError if |obj| isn't RelativeTimeFormat-initialized.
+ */
+function getRelativeTimeFormatInternals(obj, methodName) {
+    assert(IsObject(obj), "getRelativeTimeFormatInternals called with non-object");
+    assert(IsRelativeTimeFormat(obj), "getRelativeTimeFormatInternals called with non-RelativeTimeFormat");
+
+    var internals = getIntlObjectInternals(obj);
+    assert(internals.type === "RelativeTimeFormat", "bad type escaped getIntlObjectInternals");
+
+    var internalProps = maybeInternalProperties(internals);
+    if (internalProps)
+        return internalProps;
+
+    internalProps = resolveRelativeTimeFormatInternals(internals.lazyData);
+    setInternalProperties(internals, internalProps);
+    return internalProps;
+}
+
+/**
+ * Initializes an object as a RelativeTimeFormat.
+ *
+ * This method is complicated a moderate bit by its implementing initialization
+ * as a *lazy* concept.  Everything that must happen now, does -- but we defer
+ * all the work we can until the object is actually used as a RelativeTimeFormat.
+ * This later work occurs in |resolveRelativeTimeFormatInternals|; steps not noted
+ * here occur there.
+ *
+ * Spec: ECMAScript 402 API, RelativeTimeFormat, 1.1.1.
+ */
+function InitializeRelativeTimeFormat(relativeTimeFormat, locales, options) {
+    assert(IsObject(relativeTimeFormat),
+           "InitializeRelativeimeFormat called with non-object");
+    assert(IsRelativeTimeFormat(relativeTimeFormat),
+           "InitializeRelativeTimeFormat called with non-RelativeTimeFormat");
+
+    // Lazy RelativeTimeFormat data has the following structure:
+    //
+    //   {
+    //     requestedLocales: List of locales,
+    //     style: "long" / "short" / "narrow",
+    //     type: "numeric" / "text",
+    //
+    //     opt: // opt object computer in InitializeRelativeTimeFormat
+    //       {
+    //         localeMatcher: "lookup" / "best fit",
+    //       }
+    //   }
+    //
+    // Note that lazy data is only installed as a final step of initialization,
+    // so every RelativeTimeFormat lazy data object has *all* these properties, never a
+    // subset of them.
+    const lazyRelativeTimeFormatData = std_Object_create(null);
+
+    // Step 3.
+    let requestedLocales = CanonicalizeLocaleList(locales);
+    lazyRelativeTimeFormatData.requestedLocales = requestedLocales;
+
+    // Steps 4-5.
+    if (options === undefined)
+        options = std_Object_create(null);
+    else
+        options = ToObject(options);
+
+    // Step 6.
+    let opt = new Record();
+
+    // Steps 7-8.
+    let matcher = GetOption(options, "localeMatcher", "string", ["lookup", "best fit"], "best fit");
+    opt.localeMatcher = matcher;
+
+    lazyRelativeTimeFormatData.opt = opt;
+
+    // Steps 13-14.
+    const style = GetOption(options, "style", "string", ["long", "short", "narrow"], "long");
+    lazyRelativeTimeFormatData.style = style;
+
+    // This option is in the process of being added to the spec.
+    // See: https://github.com/tc39/proposal-intl-relative-time/issues/9
+    const type = GetOption(options, "type", "string", ["numeric", "text"], "numeric");
+    lazyRelativeTimeFormatData.type = type;
+
+    initializeIntlObject(relativeTimeFormat, "RelativeTimeFormat", lazyRelativeTimeFormatData);
+}
+
+/**
+ * Returns the subset of the given locale list for which this locale list has a
+ * matching (possibly fallback) locale. Locales appear in the same order in the
+ * returned list as in the input list.
+ *
+ * Spec: ECMAScript 402 API, RelativeTimeFormat, 1.3.2.
+ */
+function Intl_RelativeTimeFormat_supportedLocalesOf(locales /*, options*/) {
+    var options = arguments.length > 1 ? arguments[1] : undefined;
+
+    // Step 1.
+    var availableLocales = callFunction(relativeTimeFormatInternalProperties.availableLocales,
+                                        relativeTimeFormatInternalProperties);
+    // Step 2.
+    let requestedLocales = CanonicalizeLocaleList(locales);
+
+    // Step 3.
+    return SupportedLocales(availableLocales, requestedLocales, options);
+}
+
+/**
+ * Returns a String value representing the written form of a relative date
+ * formatted according to the effective locale and the formatting options
+ * of this RelativeTimeFormat object.
+ *
+ * Spec: ECMAScript 402 API, RelativeTImeFormat, 1.4.3.
+ */
+function Intl_RelativeTimeFormat_format(value, unit) {
+    // Step 1.
+    let relativeTimeFormat = this;
+
+    // Step 2.
+    if (!IsObject(relativeTimeFormat) || !IsRelativeTimeFormat(relativeTimeFormat))
+        ThrowTypeError(JSMSG_INTL_OBJECT_NOT_INITED, "RelativeTimeFormat", "format", "RelativeTimeFormat");
+
+    // Ensure the RelativeTimeFormat internals are resolved.
+    getRelativeTimeFormatInternals(relativeTimeFormat);
+
+    // Step 3.
+    let t = ToNumber(value);
+
+    // Step 4.
+    let u = ToString(unit);
+
+    switch (u) {
+      case "second":
+      case "minute":
+      case "hour":
+      case "day":
+      case "week":
+      case "month":
+      case "quarter":
+      case "year":
+        break;
+      default:
+        ThrowRangeError(JSMSG_INVALID_OPTION_VALUE, "unit", u);
+    }
+
+    // Step 5.
+    return intl_FormatRelativeTime(relativeTimeFormat, t, u);
+}
+
+/**
+ * Returns the resolved options for a PluralRules object.
+ *
+ * Spec: ECMAScript 402 API, RelativeTimeFormat, 1.4.4.
+ */
+function Intl_RelativeTimeFormat_resolvedOptions() {
+    // Check "this RelativeTimeFormat object" per introduction of section 1.4.
+    if (!IsObject(this) || !IsRelativeTimeFormat(this)) {
+        ThrowTypeError(JSMSG_INTL_OBJECT_NOT_INITED, "RelativeTimeFormat", "resolvedOptions",
+                       "RelativeTimeFormat");
+    }
+
+    var internals = getRelativeTimeFormatInternals(this, "resolvedOptions");
+
+    var result = {
+        locale: internals.locale,
+        style: internals.style,
+        type: internals.type,
+    };
+
+    return result;
+}
+
+
 /********** Intl **********/
 
 
@@ -3308,16 +3803,8 @@ function Intl_PluralRules_resolvedOptions() {
  * ES2017 Intl draft rev 947aa9a0c853422824a0c9510d8f09be3eb416b9
  */
 function Intl_getCanonicalLocales(locales) {
-    // Step 1.
-    var localeList = CanonicalizeLocaleList(locales);
-
-    // Step 2 (Inlined CreateArrayFromList).
-    var array = [];
-
-    for (var n = 0, len = localeList.length; n < len; n++)
-        _DefineDataProperty(array, n, localeList[n]);
-
-    return array;
+    // Steps 1-2.
+    return CanonicalizeLocaleList(locales);
 }
 
 /**
@@ -3414,8 +3901,8 @@ function Intl_getDisplayNames(locales, options) {
 
     // 2. If options is undefined, then
     if (options === undefined)
-        // a. Let options be ObjectCreate(%ObjectPrototype%).
-        options = {};
+        // a. Let options be ObjectCreate(null).
+        options = std_Object_create(null);
     // 3. Else,
     else
         // a. Let options be ? ToObject(options).
@@ -3522,4 +4009,3 @@ function Intl_getLocaleInfo(locales) {
 
   return intl_GetLocaleInfo(r.locale);
 }
-

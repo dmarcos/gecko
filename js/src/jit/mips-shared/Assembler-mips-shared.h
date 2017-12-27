@@ -10,6 +10,7 @@
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/MathAlgorithms.h"
+#include "mozilla/Sprintf.h"
 
 #include "jit/CompactBuffer.h"
 #include "jit/IonCode.h"
@@ -79,7 +80,6 @@ struct SecondScratchRegisterScope : public AutoRegisterScope
 
 // Use arg reg from EnterJIT function as OsrFrameReg.
 static constexpr Register OsrFrameReg = a3;
-static constexpr Register ArgumentsRectifierReg = s3;
 static constexpr Register CallTempReg0 = t0;
 static constexpr Register CallTempReg1 = t1;
 static constexpr Register CallTempReg2 = t2;
@@ -102,7 +102,7 @@ static constexpr Register InvalidReg { Registers::invalid_reg };
 static constexpr FloatRegister InvalidFloatReg;
 
 static constexpr Register StackPointer = sp;
-static constexpr Register FramePointer = InvalidReg;
+static constexpr Register FramePointer = fp;
 static constexpr Register ReturnReg = v0;
 static constexpr FloatRegister ReturnSimd128Reg = InvalidFloatReg;
 static constexpr FloatRegister ScratchSimd128Reg = InvalidFloatReg;
@@ -732,7 +732,8 @@ PatchJump(CodeLocationJump& jump_, CodeLocationLabel label,
 void
 PatchBackedge(CodeLocationJump& jump_, CodeLocationLabel label, JitZoneGroup::BackedgeTarget target);
 
-typedef js::jit::AssemblerBuffer<1024, Instruction> MIPSBuffer;
+static constexpr int32_t SliceSize = 1024;
+typedef js::jit::AssemblerBuffer<SliceSize, Instruction> MIPSBuffer;
 
 class MIPSBufferWithExecutableCopy : public MIPSBuffer
 {
@@ -747,21 +748,24 @@ class MIPSBufferWithExecutableCopy : public MIPSBuffer
         }
     }
 
-    bool appendBuffer(const MIPSBufferWithExecutableCopy& other) {
+    bool appendRawCode(const uint8_t* code, size_t numBytes) {
         if (this->oom())
             return false;
-
-        for (Slice* cur = other.head; cur != nullptr; cur = cur->getNext()) {
-            this->putBytes(cur->length(), &cur->instructions);
-            if (this->oom())
-                return false;
+        while (numBytes > SliceSize) {
+            this->putBytes(SliceSize, code);
+            numBytes -= SliceSize;
+            code += SliceSize;
         }
-        return true;
+        this->putBytes(numBytes, code);
+        return !this->oom();
     }
 };
 
 class AssemblerMIPSShared : public AssemblerShared
 {
+#ifdef JS_JITSPEW
+   Sprinter* printer;
+#endif
   public:
 
     enum Condition {
@@ -873,18 +877,19 @@ class AssemblerMIPSShared : public AssemblerShared
     };
 
     js::Vector<RelativePatch, 8, SystemAllocPolicy> jumps_;
-    js::Vector<uint32_t, 8, SystemAllocPolicy> longJumps_;
 
     CompactBufferWriter jumpRelocations_;
     CompactBufferWriter dataRelocations_;
-    CompactBufferWriter preBarriers_;
 
     MIPSBufferWithExecutableCopy m_buffer;
 
   public:
     AssemblerMIPSShared()
       : m_buffer(),
-        isFinished(false)
+#ifdef JS_JITSPEW
+       printer(nullptr),
+#endif
+       isFinished(false)
     { }
 
     static Condition InvertCondition(Condition cond);
@@ -903,21 +908,46 @@ class AssemblerMIPSShared : public AssemblerShared
             dataRelocations_.writeUnsigned(nextOffset().getOffset());
         }
     }
-    void writePrebarrierOffset(CodeOffset label) {
-        preBarriers_.writeUnsigned(label.offset());
-    }
 
   public:
     bool oom() const;
 
-    void disableProtection() {}
-    void enableProtection() {}
-    void setLowerBoundForProtection(size_t) {}
-    void unprotectRegion(unsigned char*, size_t) {}
-    void reprotectRegion(unsigned char*, size_t) {}
-
     void setPrinter(Sprinter* sp) {
+#ifdef JS_JITSPEW
+            printer = sp;
+#endif
     }
+
+#ifdef JS_JITSPEW
+    inline void spew(const char* fmt, ...) MOZ_FORMAT_PRINTF(2, 3) {
+        if (MOZ_UNLIKELY(printer || JitSpewEnabled(JitSpew_Codegen))) {
+            va_list va;
+            va_start(va, fmt);
+            spew(fmt, va);
+            va_end(va);
+        }
+    }
+
+    void decodeBranchInstAndSpew(InstImm branch);
+#else
+    MOZ_ALWAYS_INLINE void spew(const char* fmt, ...) MOZ_FORMAT_PRINTF(2, 3) {
+    }
+#endif
+
+#ifdef JS_JITSPEW
+    MOZ_COLD void spew(const char* fmt, va_list va) MOZ_FORMAT_PRINTF(2, 0) {
+        // Buffer to hold the formatted string. Note that this may contain
+        // '%' characters, so do not pass it directly to printf functions.
+        char buf[200];
+
+        int i = VsprintfLiteral(buf, fmt, va);
+        if (i > -1) {
+            if (printer)
+                printer->printf("%s\n", buf);
+            js::jit::JitSpew(js::jit::JitSpew_Codegen, "%s", buf);
+        }
+    }
+#endif
 
     static const Register getStackPointer() {
         return StackPointer;
@@ -927,18 +957,18 @@ class AssemblerMIPSShared : public AssemblerShared
     bool isFinished;
   public:
     void finish();
-    bool asmMergeWith(const AssemblerMIPSShared& other);
+    bool appendRawCode(const uint8_t* code, size_t numBytes);
+    bool reserve(size_t size);
+    bool swapBuffer(wasm::Bytes& bytes);
     void executableCopy(void* buffer, bool flushICache = true);
     void copyJumpRelocationTable(uint8_t* dest);
     void copyDataRelocationTable(uint8_t* dest);
-    void copyPreBarrierTable(uint8_t* dest);
 
     // Size of the instruction stream, in bytes.
     size_t size() const;
     // Size of the jump relocation table, in bytes.
     size_t jumpRelocationTableBytes() const;
     size_t dataRelocationTableBytes() const;
-    size_t preBarrierTableBytes() const;
 
     // Size of the data table, in bytes.
     size_t bytesNeeded() const;
@@ -1204,17 +1234,16 @@ class AssemblerMIPSShared : public AssemblerShared
     void bind(Label* label, BufferOffset boff = BufferOffset());
     void bindLater(Label* label, wasm::TrapDesc target);
     virtual void bind(InstImm* inst, uintptr_t branch, uintptr_t target) = 0;
-    virtual void Bind(uint8_t* rawCode, CodeOffset* label, const void* address) = 0;
     void bind(CodeOffset* label) {
+        label->bind(currentOffset());
+    }
+    void use(CodeOffset* label) {
         label->bind(currentOffset());
     }
     uint32_t currentOffset() {
         return nextOffset().getOffset();
     }
     void retarget(Label* label, Label* target);
-
-    // See Bind
-    size_t labelToPatchOffset(CodeOffset label) { return label.offset(); }
 
     void call(Label* label);
     void call(void* target);
@@ -1250,24 +1279,18 @@ class AssemblerMIPSShared : public AssemblerShared
             writeRelocation(src);
     }
 
-    void addLongJump(BufferOffset src) {
-        enoughMemory_ &= longJumps_.append(src.getOffset());
+    void addLongJump(BufferOffset src, BufferOffset dst) {
+        CodeOffset patchAt(src.getOffset());
+        CodeOffset target(dst.getOffset());
+        addCodeLabel(CodeLabel(patchAt, target));
     }
 
   public:
-    size_t numLongJumps() const {
-        return longJumps_.length();
-    }
-    uint32_t longJump(size_t i) {
-        return longJumps_[i];
-    }
-
     void flushBuffer() {
     }
 
     void comment(const char* msg) {
-        // This is not implemented because setPrinter() is not implemented.
-        // TODO spew("; %s", msg);
+        spew("; %s", msg);
     }
 
     static uint32_t NopSize() { return 4; }
@@ -1284,8 +1307,6 @@ class AssemblerMIPSShared : public AssemblerShared
     static void ToggleToCmp(CodeLocationLabel inst_);
 
     static void UpdateLuiOriValue(Instruction* inst0, Instruction* inst1, uint32_t value);
-
-    void processCodeLabels(uint8_t* rawCode);
 
     bool bailed() {
         return m_buffer.bail();
@@ -1531,7 +1552,15 @@ class InstGS : public Instruction
 inline bool
 IsUnaligned(const wasm::MemoryAccessDesc& access)
 {
-    return access.align() && access.align() < access.byteSize();
+    if (!access.align())
+        return false;
+
+#ifdef JS_CODEGEN_MIPS32
+    if (access.type() == Scalar::Int64 && access.align() >= 4)
+        return false;
+#endif
+
+    return access.align() < access.byteSize();
 }
 
 } // namespace jit

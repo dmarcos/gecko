@@ -3,7 +3,7 @@
     "message": "ウェブからスクリーンショットを撮って、一時的または永久にそれを保存しましょう。"
   },
   "addonAuthorsList": {
-    "message": "Mozilla <screenshots-feedback@mozilla.org>"
+    "message": "Mozilla <screenshots-feedback@mozilla.com>"
   },
   "contextMenuLabel": {
     "message": "スクリーンショットを撮る"
@@ -29,13 +29,50 @@
   "downloadScreenshot": {
     "message": "ダウンロード"
   },
+  "downloadOnlyNotice": {
+    "message": "ダウンロード専用モードが有効になっています。"
+  },
+  "downloadOnlyDetails": {
+    "message": "Firefox Screenshots は以下のような状況では自動的にダウンロード専用モードへ切り替わります。"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "プライベートブラウジングを使用している場合。"
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "サードパーティ Cookie が無効になっている場合。"
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "「履歴を一切記憶させない」設定が有効になっている場合。"
+  },
   "notificationLinkCopiedTitle": {
     "message": "リンクをコピーしました"
   },
   "notificationLinkCopiedDetails": {
-    "message": "ショットへのリンクがクリップボードにコピーされました。$META_KEY$+V キーで貼り付けられます。",
+    "message": "ショットへのリンクがクリップボードへコピーされました。$META_KEY$+V キーで貼り付けられます。",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "コピー"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "ショットをコピーしました"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "ショットがクリップボードへコピーされました。$META_KEY$+V キーで貼り付けられます。",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "この画像は $PIXELS$px にトリミングされました。",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -47,7 +84,7 @@
     "message": "申し訳ありませんが、ショットを保存できませんでした。また後で試してください。"
   },
   "connectionErrorTitle": {
-    "message": "スクリーンショットへ接続できません。"
+    "message": "Screenshots ライブラリへ接続できません。"
   },
   "connectionErrorDetails": {
     "message": "お使いのインターネット接続を確認してください。インターネットへ接続できる場合は、Firefox Screenshots サービスに一時的な問題が発生しているものと思われます。"
@@ -64,32 +101,47 @@
   "selfScreenshotErrorTitle": {
     "message": "Firefox Screenshots ページのショットは撮れません。"
   },
+  "emptySelectionErrorTitle": {
+    "message": "選択範囲が小さすぎます"
+  },
+  "privateWindowErrorTitle": {
+    "message": "Screenshots はプライベートブラウジングモードでは使用できません"
+  },
+  "privateWindowErrorDetails": {
+    "message": "ご不便をおかけして申し訳ありません。今後のリリースでこの機能を提供できるよう取り組んでいます。"
+  },
   "genericErrorTitle": {
     "message": "Firefox Screenshots に問題が発生しました。"
   },
   "genericErrorDetails": {
     "message": "何か問題が発生したようです。再度試すか、別のページのショットを撮ってみてください。"
   },
-  "tourBodyOne": {
+  "tourBodyIntro": {
     "message": "Firefox を離れることなく、スクリーンショットを撮影、保存、共有。"
   },
-  "tourHeaderTwo": {
-    "message": "必要なものだけをキャプチャー"
+  "tourHeaderPageAction": {
+    "message": "新たな保存方法"
   },
-  "tourBodyTwo": {
-    "message": "クリック＆ドラッグでページの一部だけをキャプチャーできます。また、マウスを当てれば選択範囲が強調表示されます。"
+  "tourBodyPageAction": {
+    "message": "スクリーンショットを撮りたいときは、いつでもアドレスバー内のページアクションメニューを開いてください。"
   },
-  "tourHeaderThree": {
+  "tourHeaderClickAndDrag": {
+    "message": "必要な部分だけをキャプチャ"
+  },
+  "tourBodyClickAndDrag": {
+    "message": "クリック＆ドラッグでページの一部だけをキャプチャできます。また、マウスを当てれば選択範囲が強調表示されます。"
+  },
+  "tourHeaderFullPage": {
+    "message": "ウィンドウもしくはページ全体をキャプチャ"
+  },
+  "tourBodyFullPage": {
+    "message": "右上のボタンを選択して、ウィンドウ内の表示範囲もしくはページ全体をキャプチャしましょう。"
+  },
+  "tourHeaderDownloadUpload": {
     "message": "お好きなように"
   },
-  "tourBodyThree": {
+  "tourBodyDownloadUpload": {
     "message": "切り取ったショットを簡単に共有できるようウェブ上に保存したり、手元へダウンロードしたり。また「自分のショット」ボタンをクリックすれば、これまでに撮ったすべてのショットを見られます。"
-  },
-  "tourHeaderFour": {
-    "message": "ウィンドウもしくはページ全体をキャプチャー"
-  },
-  "tourBodyFour": {
-    "message": "右上のボタンを選択して、ウィンドウ内の表示範囲もしくはページ全体をキャプチャーしましょう。"
   },
   "tourSkip": {
     "message": "スキップ"
@@ -103,8 +155,8 @@
   "tourDone": {
     "message": "完了"
   },
-  "termsAndPrivacyNotice": {
-    "message": "Firefox Screenshots を使うことで、あなたは Screenshots の $TERMSANDPRIVACYNOTICETERMSLINK$ と $TERMSANDPRIVACYNOTICEPRIVACYLINK$ に同意したことになります。",
+  "termsAndPrivacyNotice2": {
+    "message": "Firefox Screenshots を使うことで、あなたは $TERMSANDPRIVACYNOTICETERMSLINK$ と $TERMSANDPRIVACYNOTICEPRIVACYLINK$ に同意したことになります。",
     "placeholders": {
       "termsandprivacynoticetermslink": {
         "content": "$1"
@@ -119,5 +171,8 @@
   },
   "termsAndPrivacyNoticyPrivacyLink": {
     "message": "プライバシー通知"
+  },
+  "libraryLabel": {
+    "message": "スクリーンショット"
   }
 }

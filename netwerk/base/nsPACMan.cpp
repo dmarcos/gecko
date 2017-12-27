@@ -50,6 +50,32 @@ HttpRequestSucceeded(nsIStreamLoader *loader)
   return result;
 }
 
+// Read preference setting of extra JavaScript context heap size.
+// PrefService tends to be run on main thread, where ProxyAutoConfig runs on
+// ProxyResolution thread, so it's read here and passed to ProxyAutoConfig.
+static uint32_t
+GetExtraJSContextHeapSize()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  static int32_t extraSize = -1;
+
+  if (extraSize < 0) {
+    nsCOMPtr<nsIPrefBranch> prefs = do_GetService(NS_PREFSERVICE_CONTRACTID);
+    int32_t value;
+
+    if (prefs && NS_SUCCEEDED(prefs->GetIntPref(
+        "network.proxy.autoconfig_extra_jscontext_heap_size", &value))) {
+      LOG(("autoconfig_extra_jscontext_heap_size: %d\n", value));
+
+      extraSize = value;
+    }
+  }
+
+  return extraSize < 0 ? 0 : extraSize;
+}
+
+
 //-----------------------------------------------------------------------------
 
 // The ExecuteCallback runnable is triggered by
@@ -59,9 +85,9 @@ HttpRequestSucceeded(nsIStreamLoader *loader)
 class ExecuteCallback final : public Runnable
 {
 public:
-  ExecuteCallback(nsPACManCallback *aCallback,
-                  nsresult status)
-    : mCallback(aCallback)
+  ExecuteCallback(nsPACManCallback* aCallback, nsresult status)
+    : Runnable("net::ExecuteCallback")
+    , mCallback(aCallback)
     , mStatus(status)
   {
   }
@@ -99,8 +125,9 @@ private:
 class ShutdownThread final : public Runnable
 {
 public:
-  explicit ShutdownThread(nsIThread *thread)
-    : mThread(thread)
+  explicit ShutdownThread(nsIThread* thread)
+    : Runnable("net::ShutdownThread")
+    , mThread(thread)
   {
   }
 
@@ -120,8 +147,9 @@ private:
 class WaitForThreadShutdown final : public Runnable
 {
 public:
-  explicit WaitForThreadShutdown(nsPACMan *aPACMan)
-    : mPACMan(aPACMan)
+  explicit WaitForThreadShutdown(nsPACMan* aPACMan)
+    : Runnable("net::WaitForThreadShutdown")
+    , mPACMan(aPACMan)
   {
   }
 
@@ -148,8 +176,9 @@ private:
 class PACLoadComplete final : public Runnable
 {
 public:
-  explicit PACLoadComplete(nsPACMan *aPACMan)
-    : mPACMan(aPACMan)
+  explicit PACLoadComplete(nsPACMan* aPACMan)
+    : Runnable("net::PACLoadComplete")
+    , mPACMan(aPACMan)
   {
   }
 
@@ -175,11 +204,13 @@ class ExecutePACThreadAction final : public Runnable
 {
 public:
   // by default we just process the queue
-  explicit ExecutePACThreadAction(nsPACMan *aPACMan)
-    : mPACMan(aPACMan)
+  explicit ExecutePACThreadAction(nsPACMan* aPACMan)
+    : Runnable("net::ExecutePACThreadAction")
+    , mPACMan(aPACMan)
     , mCancel(false)
     , mCancelStatus(NS_OK)
     , mSetupPAC(false)
+    , mExtraHeapSize(0)
   { }
 
   void CancelQueue (nsresult status)
@@ -188,11 +219,15 @@ public:
     mCancelStatus = status;
   }
 
-  void SetupPAC (const char *text, uint32_t datalen, nsCString &pacURI)
+  void SetupPAC (const char *text,
+                 uint32_t datalen,
+                 nsCString &pacURI,
+                 uint32_t extraHeapSize)
   {
     mSetupPAC = true;
     mSetupPACData.Assign(text, datalen);
     mSetupPACURI = pacURI;
+    mExtraHeapSize = extraHeapSize;
   }
 
   NS_IMETHOD Run() override
@@ -207,12 +242,15 @@ public:
     if (mSetupPAC) {
       mSetupPAC = false;
 
+      nsCOMPtr<nsIEventTarget> target = mPACMan->GetNeckoTarget();
       mPACMan->mPAC.Init(mSetupPACURI,
                          mSetupPACData,
-                         mPACMan->mIncludePath);
+                         mPACMan->mIncludePath,
+                         mExtraHeapSize,
+                         target);
 
       RefPtr<PACLoadComplete> runnable = new PACLoadComplete(mPACMan);
-      NS_DispatchToMainThread(runnable);
+      mPACMan->Dispatch(runnable.forget());
       return NS_OK;
     }
 
@@ -227,16 +265,19 @@ private:
   nsresult  mCancelStatus;
 
   bool                 mSetupPAC;
+  uint32_t             mExtraHeapSize;
   nsCString            mSetupPACData;
   nsCString            mSetupPACURI;
 };
 
 //-----------------------------------------------------------------------------
 
-PendingPACQuery::PendingPACQuery(nsPACMan *pacMan, nsIURI *uri,
-                                 nsPACManCallback *callback,
+PendingPACQuery::PendingPACQuery(nsPACMan* pacMan,
+                                 nsIURI* uri,
+                                 nsPACManCallback* callback,
                                  bool mainThreadResponse)
-  : mPACMan(pacMan)
+  : Runnable("net::PendingPACQuery")
+  , mPACMan(pacMan)
   , mCallback(callback)
   , mOnMainThreadOnly(mainThreadResponse)
 {
@@ -254,7 +295,7 @@ PendingPACQuery::Complete(nsresult status, const nsCString &pacString)
   RefPtr<ExecuteCallback> runnable = new ExecuteCallback(mCallback, status);
   runnable->SetPACString(pacString);
   if (mOnMainThreadOnly)
-    NS_DispatchToMainThread(runnable);
+    mPACMan->Dispatch(runnable.forget());
   else
     runnable->Run();
 }
@@ -268,7 +309,7 @@ PendingPACQuery::UseAlternatePACFile(const nsCString &pacURL)
   RefPtr<ExecuteCallback> runnable = new ExecuteCallback(mCallback, NS_OK);
   runnable->SetPACURL(pacURL);
   if (mOnMainThreadOnly)
-    NS_DispatchToMainThread(runnable);
+    mPACMan->Dispatch(runnable.forget());
   else
     runnable->Run();
 }
@@ -289,8 +330,9 @@ static uint32_t sThreadLocalIndex = 0xdeadbeef; // out of range
 static const char *kPACIncludePath =
   "network.proxy.autoconfig_url.include_path";
 
-nsPACMan::nsPACMan()
-  : mLoadPending(false)
+nsPACMan::nsPACMan(nsIEventTarget *mainThreadEventTarget)
+  : NeckoTargetHolder(mainThreadEventTarget)
+  , mLoadPending(false)
   , mShutdown(false)
   , mLoadFailureCount(0)
   , mInProgress(false)
@@ -306,13 +348,15 @@ nsPACMan::nsPACMan()
 
 nsPACMan::~nsPACMan()
 {
+  MOZ_ASSERT(mShutdown, "Shutdown must be called before dtor.");
+
   if (mPACThread) {
     if (NS_IsMainThread()) {
       mPACThread->Shutdown();
     }
     else {
       RefPtr<ShutdownThread> runnable = new ShutdownThread(mPACThread);
-      NS_DispatchToMainThread(runnable);
+      Dispatch(runnable.forget());
     }
   }
 
@@ -329,10 +373,12 @@ nsPACMan::Shutdown()
   }
   mShutdown = true;
   CancelExistingLoad();
+
+  MOZ_ASSERT(mPACThread, "mPAC requires mPACThread to shutdown");
   PostCancelPendingQ(NS_ERROR_ABORT);
 
   RefPtr<WaitForThreadShutdown> runnable = new WaitForThreadShutdown(this);
-  NS_DispatchToMainThread(runnable);
+  Dispatch(runnable.forget());
 }
 
 nsresult
@@ -399,8 +445,12 @@ nsPACMan::LoadPACFromURI(const nsCString &spec)
   // queries the enter between now and when we actually load the PAC file.
 
   if (!mLoadPending) {
-    nsresult rv;
-    if (NS_FAILED(rv = NS_DispatchToCurrentThread(NewRunnableMethod(this, &nsPACMan::StartLoading))))
+    nsCOMPtr<nsIRunnable> runnable =
+      NewRunnableMethod("nsPACMan::StartLoading", this, &nsPACMan::StartLoading);
+    nsresult rv = NS_IsMainThread()
+      ? Dispatch(runnable.forget())
+      : GetCurrentThreadEventTarget()->Dispatch(runnable.forget());
+    if (NS_FAILED(rv))
       return rv;
     mLoadPending = true;
   }
@@ -671,7 +721,7 @@ nsPACMan::OnStreamComplete(nsIStreamLoader *loader,
 
     RefPtr<ExecutePACThreadAction> pending =
       new ExecutePACThreadAction(this);
-    pending->SetupPAC(text, dataLen, pacURI);
+    pending->SetupPAC(text, dataLen, pacURI, GetExtraJSContextHeapSize());
     if (mPACThread)
       mPACThread->Dispatch(pending, nsIEventTarget::DISPATCH_NORMAL);
 

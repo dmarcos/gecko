@@ -12,7 +12,9 @@ EXPORTS.mozilla.dom += [
     'FileReaderSync.h',
     'ServiceWorkerCommon.h',
     'ServiceWorkerContainer.h',
+    'ServiceWorkerDescriptor.h',
     'ServiceWorkerEvents.h',
+    'ServiceWorkerIPCUtils.h',
     'ServiceWorkerRegistrar.h',
     'ServiceWorkerRegistration.h',
     'WorkerLocation.h',
@@ -35,11 +37,9 @@ EXPORTS.mozilla.dom.workers += [
 # Stuff needed for the bindings, not really public though.
 EXPORTS.mozilla.dom.workers.bindings += [
     'ServiceWorker.h',
-    'ServiceWorkerClient.h',
-    'ServiceWorkerClients.h',
-    'ServiceWorkerWindowClient.h',
     'SharedWorker.h',
     'WorkerHolder.h',
+    'WorkerHolderToken.h',
 ]
 
 XPIDL_MODULE = 'dom_workers'
@@ -57,9 +57,8 @@ UNIFIED_SOURCES += [
     'RuntimeService.cpp',
     'ScriptLoader.cpp',
     'ServiceWorker.cpp',
-    'ServiceWorkerClient.cpp',
-    'ServiceWorkerClients.cpp',
     'ServiceWorkerContainer.cpp',
+    'ServiceWorkerDescriptor.cpp',
     'ServiceWorkerEvents.cpp',
     'ServiceWorkerInfo.cpp',
     'ServiceWorkerJob.cpp',
@@ -78,10 +77,10 @@ UNIFIED_SOURCES += [
     'ServiceWorkerUpdateJob.cpp',
     'ServiceWorkerUpdaterChild.cpp',
     'ServiceWorkerUpdaterParent.cpp',
-    'ServiceWorkerWindowClient.cpp',
     'SharedWorker.cpp',
     'WorkerDebuggerManager.cpp',
     'WorkerHolder.cpp',
+    'WorkerHolderToken.cpp',
     'WorkerLocation.cpp',
     'WorkerNavigator.cpp',
     'WorkerPrivate.cpp',
@@ -91,6 +90,7 @@ UNIFIED_SOURCES += [
 ]
 
 IPDL_SOURCES += [
+    'IPCServiceWorkerDescriptor.ipdlh',
     'PServiceWorkerManager.ipdl',
     'PServiceWorkerUpdater.ipdl',
     'ServiceWorkerRegistrarTypes.ipdlh',
@@ -134,5 +134,5 @@ BROWSER_CHROME_MANIFESTS += ['test/browser.ini']
 
 TEST_DIRS += ['test/gtest']
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

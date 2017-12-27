@@ -37,11 +37,15 @@ class ErrorResult;
 class MediaByteBuffer;
 template <typename T> class AsyncEventRunner;
 
+DDLoggedTypeName(dom::SourceBuffer);
+
 namespace dom {
 
 class TimeRanges;
 
-class SourceBuffer final : public DOMEventTargetHelper
+class SourceBuffer final
+  : public DOMEventTargetHelper
+  , public DecoderDoctorLifeLogger<SourceBuffer>
 {
 public:
   /** WebIDL Methods. */
@@ -182,6 +186,8 @@ private:
   const MediaContainerType mType;
 
   RefPtr<TimeRanges> mBuffered;
+
+  MozPromiseRequestHolder<MediaSource::ActiveCompletionPromise> mCompletionPromise;
 };
 
 } // namespace dom

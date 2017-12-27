@@ -1,6 +1,6 @@
 {
   "addonAuthorsList": {
-    "message": "ਮੌਜ਼ੀਲਾ <screenshots-feedback@mozilla.org>"
+    "message": "ਮੌਜ਼ੀਲਾ <screenshots-feedback@mozilla.com>"
   },
   "contextMenuLabel": {
     "message": "ਸਕਰੀਨ-ਸ਼ਾਟ ਲਵੋ"
@@ -31,6 +31,9 @@
   },
   "requestErrorTitle": {
     "message": "ਖ਼ਰਾਬ ਹੈ।"
+  },
+  "tourHeaderPageAction": {
+    "message": "ਸੰਭਾਲਣ ਦਾ ਨਵਾਂ ਢੰਗ"
   },
   "tourSkip": {
     "message": "ਛੱਡੋ"

@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* eslint-env browser */
-/* globals DebuggerClient, DebuggerServer, Telemetry */
+/* globals Telemetry */
 
 "use strict";
 
@@ -11,11 +11,9 @@ const { loader } = Components.utils.import(
   "resource://devtools/shared/Loader.jsm", {});
 const { BrowserLoader } = Components.utils.import(
   "resource://devtools/client/shared/browser-loader.js", {});
+const { Services } = Components.utils.import(
+  "resource://gre/modules/Services.jsm", {});
 
-loader.lazyRequireGetter(this, "DebuggerClient",
-  "devtools/shared/client/main", true);
-loader.lazyRequireGetter(this, "DebuggerServer",
-  "devtools/server/main", true);
 loader.lazyRequireGetter(this, "Telemetry",
   "devtools/client/shared/telemetry");
 
@@ -27,34 +25,35 @@ const { require } = BrowserLoader({
 const { createFactory } = require("devtools/client/shared/vendor/react");
 const { render, unmountComponentAtNode } = require("devtools/client/shared/vendor/react-dom");
 
-const AboutDebuggingApp = createFactory(require("./components/aboutdebugging"));
+const AboutDebuggingApp = createFactory(require("./components/Aboutdebugging"));
+const { createClient } = require("./modules/connect");
 
 var AboutDebugging = {
-  init() {
-    if (!DebuggerServer.initialized) {
-      DebuggerServer.init();
+  async init() {
+    if (!Services.prefs.getBoolPref("devtools.enabled", true)) {
+      // If DevTools are disabled, navigate to about:devtools.
+      window.location = "about:devtools?reason=AboutDebugging";
+      return;
     }
-    DebuggerServer.allowChromeProcess = true;
-    // We want a full featured server for about:debugging. Especially the
-    // "browser actors" like addons.
-    DebuggerServer.registerActors({ root: true, browser: true, tab: true });
 
-    this.client = new DebuggerClient(DebuggerServer.connectPipe());
+    let {connect, client} = await createClient();
 
-    this.client.connect().then(() => {
-      let client = this.client;
-      let telemetry = new Telemetry();
+    this.client = client;
+    await this.client.connect();
 
-      render(AboutDebuggingApp({ client, telemetry }),
-        document.querySelector("#body"));
-    });
+    let telemetry = new Telemetry();
+
+    render(AboutDebuggingApp({ client, connect, telemetry }),
+      document.querySelector("#body"));
   },
 
   destroy() {
     unmountComponentAtNode(document.querySelector("#body"));
 
-    this.client.close();
-    this.client = null;
+    if (this.client) {
+      this.client.close();
+      this.client = null;
+    }
   },
 };
 

@@ -10,7 +10,7 @@ use dom::cssmediarule::CSSMediaRule;
 use dom::cssstylesheet::CSSStyleSheet;
 use dom::csssupportsrule::CSSSupportsRule;
 use dom_struct::dom_struct;
-use std::sync::Arc;
+use servo_arc::Arc;
 use style::shared_lock::{SharedRwLock, Locked};
 use style::stylesheets::CssRules as StyleCssRules;
 
@@ -37,7 +37,7 @@ impl CSSConditionRule {
 }
 
 impl CSSConditionRuleMethods for CSSConditionRule {
-    /// https://drafts.csswg.org/css-conditional-3/#dom-cssconditionrule-conditiontext
+    /// <https://drafts.csswg.org/css-conditional-3/#dom-cssconditionrule-conditiontext>
     fn ConditionText(&self) -> DOMString {
         if let Some(rule) = self.downcast::<CSSMediaRule>() {
             rule.get_condition_text()
@@ -48,7 +48,7 @@ impl CSSConditionRuleMethods for CSSConditionRule {
         }
     }
 
-    /// https://drafts.csswg.org/css-conditional-3/#dom-cssconditionrule-conditiontext
+    /// <https://drafts.csswg.org/css-conditional-3/#dom-cssconditionrule-conditiontext>
     fn SetConditionText(&self, text: DOMString) {
         if let Some(rule) = self.downcast::<CSSMediaRule>() {
             rule.set_condition_text(text)

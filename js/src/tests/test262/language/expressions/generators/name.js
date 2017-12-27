@@ -1,4 +1,4 @@
-// Copyright (C) Copyright 2015 the V8 project authors. All rights reserved.
+// Copyright (C) 2015 the V8 project authors. All rights reserved.
 // This code is governed by the BSD license found in the LICENSE file.
 
 /*---
@@ -21,6 +21,7 @@ info: >
     [...]
     10. Perform SetFunctionName(closure, name).
 includes: [propertyHelper.js]
+features: [generators]
 ---*/
 
 assert.sameValue(Object.hasOwnProperty.call(function*() {}, 'name'), false);

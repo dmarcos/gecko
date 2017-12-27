@@ -70,7 +70,7 @@ var gEMEHandler = {
       case "api-disabled":
       case "cdm-disabled":
         notificationId = "drmContentDisabled";
-        buttonCallback = gEMEHandler.ensureEMEEnabled.bind(gEMEHandler, browser, keySystem)
+        buttonCallback = gEMEHandler.ensureEMEEnabled.bind(gEMEHandler, browser, keySystem);
         params = [this.getLearnMoreLink(notificationId)];
         break;
 
@@ -119,11 +119,12 @@ var gEMEHandler = {
       });
     }
 
-    let iconURL = "chrome://browser/skin/drm-icon.svg#chains-black";
+    let iconURL = "chrome://browser/skin/drm-icon.svg";
 
     // Do a little dance to get rich content into the notification:
     let fragment = document.createDocumentFragment();
     let descriptionContainer = document.createElement("description");
+    // eslint-disable-next-line no-unsanitized/property
     descriptionContainer.innerHTML = message;
     while (descriptionContainer.childNodes.length) {
       fragment.appendChild(descriptionContainer.childNodes[0]);
@@ -167,7 +168,9 @@ var gEMEHandler = {
     let mainAction = {
       label: gNavigatorBundle.getString(btnLabelId),
       accessKey: gNavigatorBundle.getString(btnAccessKeyId),
-      callback() { openPreferences("panePrivacy"); },
+      callback() {
+        openPreferences("general-drm", {origin: "browserMedia"});
+      },
       dismiss: true
     };
     let options = {
@@ -268,7 +271,7 @@ let gDecoderDoctorHandler = {
     type = type.toLowerCase();
     // Error out early on invalid ReportId
     if (!(/^\w+$/mi).test(decoderDoctorReportId)) {
-      return
+      return;
     }
     let title = gDecoderDoctorHandler.getLabelForNotificationBox(type);
     if (!title) {
@@ -372,7 +375,7 @@ let gDecoderDoctorHandler = {
       histogram.add(decoderDoctorReportId, TELEMETRY_DDSTAT_SOLVED);
     }
   },
-}
+};
 
 window.getGroupMessageManager("browsers").addMessageListener("DecoderDoctor:Notification", gDecoderDoctorHandler);
 window.getGroupMessageManager("browsers").addMessageListener("EMEVideo:ContentMediaKeysRequest", gEMEHandler);

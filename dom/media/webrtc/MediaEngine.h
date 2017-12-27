@@ -30,8 +30,7 @@ enum {
  * Abstract interface for managing audio and video devices. Each platform
  * must implement a concrete class that will map these classes and methods
  * to the appropriate backend. For example, on Desktop platforms, these will
- * correspond to equivalent webrtc (GIPS) calls, and on B2G they will map to
- * a Gonk interface.
+ * correspond to equivalent webrtc (GIPS) calls.
  */
 class MediaEngineVideoSource;
 class MediaEngineAudioSource;
@@ -49,17 +48,11 @@ public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(MediaEngine)
 
   static const int DEFAULT_VIDEO_FPS = 30;
-  static const int DEFAULT_VIDEO_MIN_FPS = 10;
   static const int DEFAULT_43_VIDEO_WIDTH = 640;
   static const int DEFAULT_43_VIDEO_HEIGHT = 480;
   static const int DEFAULT_169_VIDEO_WIDTH = 1280;
   static const int DEFAULT_169_VIDEO_HEIGHT = 720;
 
-#ifndef MOZ_B2G
-  static const int DEFAULT_SAMPLE_RATE = 32000;
-#else
-  static const int DEFAULT_SAMPLE_RATE = 16000;
-#endif
   // This allows using whatever rate the graph is using for the
   // MediaStreamTrack. This is useful for microphone data, we know it's already
   // at the correct rate for insertion in the MSG.
@@ -92,7 +85,6 @@ public:
     : mWidth(0)
     , mHeight(0)
     , mFPS(0)
-    , mMinFPS(0)
     , mFreq(0)
     , mAecOn(false)
     , mAgcOn(false)
@@ -100,17 +92,16 @@ public:
     , mAec(0)
     , mAgc(0)
     , mNoise(0)
-    , mPlayoutDelay(0)
     , mFullDuplex(false)
     , mExtendedFilter(false)
     , mDelayAgnostic(false)
     , mFakeDeviceChangeEventOn(false)
+    , mChannels(0)
   {}
 
   int32_t mWidth;
   int32_t mHeight;
   int32_t mFPS;
-  int32_t mMinFPS;
   int32_t mFreq; // for test tones (fake:true)
   bool mAecOn;
   bool mAgcOn;
@@ -118,11 +109,11 @@ public:
   int32_t mAec;
   int32_t mAgc;
   int32_t mNoise;
-  int32_t mPlayoutDelay;
   bool mFullDuplex;
   bool mExtendedFilter;
   bool mDelayAgnostic;
   bool mFakeDeviceChangeEventOn;
+  int32_t mChannels;
 
   // mWidth and/or mHeight may be zero (=adaptive default), so use functions.
 
@@ -224,6 +215,7 @@ public:
     NS_INLINE_DECL_THREADSAFE_REFCOUNTING(AllocationHandle);
   protected:
     ~AllocationHandle() {}
+    static uint64_t sId;
   public:
     AllocationHandle(const dom::MediaTrackConstraints& aConstraints,
                      const mozilla::ipc::PrincipalInfo& aPrincipalInfo,
@@ -233,11 +225,15 @@ public:
     : mConstraints(aConstraints),
       mPrincipalInfo(aPrincipalInfo),
       mPrefs(aPrefs),
+#ifdef MOZ_WEBRTC
+      mId(sId++),
+#endif
       mDeviceId(aDeviceId) {}
   public:
     NormalizedConstraints mConstraints;
     mozilla::ipc::PrincipalInfo mPrincipalInfo;
     MediaEnginePrefs mPrefs;
+    uint64_t mId;
     nsString mDeviceId;
   };
 
@@ -277,9 +273,6 @@ public:
    * immediately after. */
   virtual nsresult Start(SourceMediaStream*, TrackID, const PrincipalHandle&) = 0;
 
-  /* tell the source if there are any direct listeners attached */
-  virtual void SetDirectListeners(bool) = 0;
-
   /* Called when the stream wants more data */
   virtual void NotifyPull(MediaStreamGraph* aGraph,
                           SourceMediaStream *aSource,
@@ -307,7 +300,6 @@ public:
 
   /* If implementation of MediaEngineSource supports TakePhoto(), the picture
    * should be return via aCallback object. Otherwise, it returns NS_ERROR_NOT_IMPLEMENTED.
-   * Currently, only Gonk MediaEngineSource implementation supports it.
    */
   virtual nsresult TakePhoto(MediaEnginePhotoCallback* aCallback) = 0;
 
@@ -352,17 +344,15 @@ public:
   void GetSettings(dom::MediaTrackSettings& aOutSettings)
   {
     MOZ_ASSERT(NS_IsMainThread());
-    aOutSettings = mSettings;
+    aOutSettings = *mSettings;
   }
 
 protected:
   // Only class' own members can be initialized in constructor initializer list.
   explicit MediaEngineSource(MediaEngineState aState)
     : mState(aState)
-#ifdef DEBUG
-    , mOwningThread(PR_GetCurrentThread())
-#endif
     , mInShutdown(false)
+    , mSettings(MakeRefPtr<media::Refcountable<dom::MediaTrackSettings>>())
   {}
 
   /* UpdateSingleSource - Centralized abstract function to implement in those
@@ -379,6 +369,7 @@ protected:
   virtual nsresult
   UpdateSingleSource(const AllocationHandle* aHandle,
                      const NormalizedConstraints& aNetConstraints,
+                     const NormalizedConstraints& aNewConstraint,
                      const MediaEnginePrefs& aPrefs,
                      const nsString& aDeviceId,
                      const char** aOutBadConstraint) {
@@ -407,6 +398,7 @@ protected:
     // aHandle and/or aConstraintsUpdate may be nullptr (see below)
 
     AutoTArray<const NormalizedConstraints*, 10> allConstraints;
+    AutoTArray<const NormalizedConstraints*, 1> updatedConstraint;
     for (auto& registered : mRegisteredHandles) {
       if (aConstraintsUpdate && registered.get() == aHandle) {
         continue; // Don't count old constraints
@@ -415,9 +407,13 @@ protected:
     }
     if (aConstraintsUpdate) {
       allConstraints.AppendElement(aConstraintsUpdate);
+      updatedConstraint.AppendElement(aConstraintsUpdate);
     } else if (aHandle) {
       // In the case of AddShareOfSingleSource, the handle isn't registered yet.
       allConstraints.AppendElement(&aHandle->mConstraints);
+      updatedConstraint.AppendElement(&aHandle->mConstraints);
+    } else {
+      updatedConstraint.AppendElements(allConstraints);
     }
 
     NormalizedConstraints netConstraints(allConstraints);
@@ -426,7 +422,8 @@ protected:
       return NS_ERROR_FAILURE;
     }
 
-    nsresult rv = UpdateSingleSource(aHandle, netConstraints, aPrefs, aDeviceId,
+    NormalizedConstraints newConstraint(updatedConstraint);
+    nsresult rv = UpdateSingleSource(aHandle, netConstraints, newConstraint, aPrefs, aDeviceId,
                                      aOutBadConstraint);
     if (NS_FAILED(rv)) {
       return rv;
@@ -439,18 +436,20 @@ protected:
 
   void AssertIsOnOwningThread()
   {
-    MOZ_ASSERT(PR_GetCurrentThread() == mOwningThread);
+    NS_ASSERT_OWNINGTHREAD(MediaEngineSource);
   }
 
   MediaEngineState mState;
-#ifdef DEBUG
-  PRThread* mOwningThread;
-#endif
+
+  NS_DECL_OWNINGTHREAD
+
   nsTArray<RefPtr<AllocationHandle>> mRegisteredHandles;
   bool mInShutdown;
 
-  // Main-thread only:
-  dom::MediaTrackSettings mSettings;
+  // The following is accessed on main-thread only. It has its own ref-count to
+  // avoid ref-counting MediaEngineSource itself in runnables.
+  // (MediaEngineSource subclasses balk on ref-counts too late during shutdown.)
+  RefPtr<media::Refcountable<dom::MediaTrackSettings>> mSettings;
 };
 
 class MediaEngineVideoSource : public MediaEngineSource

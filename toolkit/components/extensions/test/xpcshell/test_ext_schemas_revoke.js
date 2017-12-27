@@ -46,7 +46,7 @@ let json = [
             name: "sub_foo",
             type: "function",
             parameters: [],
-            returns: "integer",
+            returns: {type: "integer"},
           },
         ],
       },
@@ -98,7 +98,7 @@ function verify(expected) {
   recorded.length = 0;
 }
 
-do_register_cleanup(() => {
+registerCleanupFunction(() => {
   equal(recorded.length, 0, "No unchecked recorded events at shutdown");
 });
 
@@ -121,6 +121,9 @@ class APIImplementation extends SchemaAPIInterface {
 
   callFunction(...args) {
     this.record("callFunction", args);
+    if (this.name === "sub_foo") {
+      return 13;
+    }
   }
 
   callFunctionNoReturn(...args) {
@@ -182,9 +185,9 @@ function ignoreError(fn) {
   }
 }
 
-add_task(function* () {
+add_task(async function() {
   let url = "data:," + JSON.stringify(json);
-  yield Schemas.load(url);
+  await Schemas.load(url);
 
   let root = {};
   Schemas.inject(root, context);
@@ -229,7 +232,7 @@ add_task(function* () {
   }
 
   function check() {
-    do_print(`Check normal access (permissions: [${Array.from(permissions)}])`);
+    info(`Check normal access (permissions: [${Array.from(permissions)}])`);
 
     let ns = root.revokableNs;
 
@@ -264,7 +267,7 @@ add_task(function* () {
   }
 
   function capture() {
-    do_print("Capture values");
+    info("Capture values");
 
     let ns = root.revokableNs;
 
@@ -288,7 +291,7 @@ add_task(function* () {
   }
 
   function checkCaptured() {
-    do_print(`Check captured value access (permissions: [${Array.from(permissions)}])`);
+    info(`Check captured value access (permissions: [${Array.from(permissions)}])`);
 
     let {ns} = captured;
 
@@ -438,7 +441,7 @@ add_task(function* () {
 });
 
 
-add_task(function* test_neuter() {
+add_task(async function test_neuter() {
   context.permissionsChanged = null;
 
   let root = {};

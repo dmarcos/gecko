@@ -3,7 +3,7 @@
     "message": "Készítsen videoklipeket és képernyőképeket a webről, és mentse őket ideiglenesen vagy véglegesen."
   },
   "addonAuthorsList": {
-    "message": "Mozilla <screenshots-feedback@mozilla.org>"
+    "message": "Mozilla <screenshots-feedback@mozilla.com>"
   },
   "contextMenuLabel": {
     "message": "Készítsen képernyőképet"
@@ -29,6 +29,21 @@
   "downloadScreenshot": {
     "message": "Letöltés"
   },
+  "downloadOnlyNotice": {
+    "message": "Jelenleg csak letöltési módban van."
+  },
+  "downloadOnlyDetails": {
+    "message": "A Firefox Screenshots ezekben az esetekben automatikusan csak letöltési módba vált:"
+  },
+  "downloadOnlyDetailsPrivate": {
+    "message": "Privát böngészési ablakban."
+  },
+  "downloadOnlyDetailsThirdParty": {
+    "message": "Ha a harmadik féltől származó sütik tiltottak."
+  },
+  "downloadOnlyDetailsNeverRemember": {
+    "message": "A „Soha ne jegyezze meg az előzményeket” engedélyezett."
+  },
   "notificationLinkCopiedTitle": {
     "message": "Hivatkozás másolva"
   },
@@ -36,6 +51,28 @@
     "message": "A képernyőképre mutató hivatkozás a vágólapra lett másolva. Nyomjon $META_KEY$-V-t a beillesztéshez.",
     "placeholders": {
       "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "copyScreenshot": {
+    "message": "Másolás"
+  },
+  "notificationImageCopiedTitle": {
+    "message": "Képernyőkép másolva"
+  },
+  "notificationImageCopiedDetails": {
+    "message": "A képernyőkép a vágólapra lett másolva. Nyomjon $META_KEY$-V-t a beillesztéshez.",
+    "placeholders": {
+      "meta_key": {
+        "content": "$1"
+      }
+    }
+  },
+  "imageCroppedWarning": {
+    "message": "A kép $PIXELS$px méretűre lett vágva.",
+    "placeholders": {
+      "pixels": {
         "content": "$1"
       }
     }
@@ -62,34 +99,49 @@
     "message": "Ez egy nem szabványos weblap, így nem készíthet róla képernyőképet."
   },
   "selfScreenshotErrorTitle": {
-    "message": "Nem készíthet képet a Firefox képernyőképek oldalról!"
+    "message": "Nem készíthet képet a Firefox Screenshots oldalról!"
+  },
+  "emptySelectionErrorTitle": {
+    "message": "A kijelölés túl kicsi"
+  },
+  "privateWindowErrorTitle": {
+    "message": "A képernyőképek le vannak tiltva Privát böngészésben"
+  },
+  "privateWindowErrorDetails": {
+    "message": "Sajnáljuk a kényelmetlenséget. Dolgozunk ezen a funkción a jövőbeli kiadásokhoz."
   },
   "genericErrorTitle": {
-    "message": "Húha! A Firefox képernyőképek megkergült."
+    "message": "Húha! A Firefox Screenshots megkergült."
   },
   "genericErrorDetails": {
     "message": "Nem vagyunk benne biztosak, hogy mi történt. Próbálja újra, vagy készítsen képet egy másik oldalról."
   },
-  "tourBodyOne": {
+  "tourBodyIntro": {
     "message": "Készítsen, mentsen és osszon meg képernyőképeket, anélkül, hogy elhagyná a Firefoxot."
   },
-  "tourHeaderTwo": {
+  "tourHeaderPageAction": {
+    "message": "A mentés új módja"
+  },
+  "tourBodyPageAction": {
+    "message": "Nyissa le a lapműveletek menüt a címsávban bármikor, ha képernyőképet akar készíteni."
+  },
+  "tourHeaderClickAndDrag": {
     "message": "Csak azt mentse, amit szeretne"
   },
-  "tourBodyTwo": {
+  "tourBodyClickAndDrag": {
     "message": "Kattintson és húzzon, hogy csak a lap egy részét mentse el. Vagy csak rá is mutathat a kijelöléshez."
   },
-  "tourHeaderThree": {
-    "message": "Ahogy tetszik"
-  },
-  "tourBodyThree": {
-    "message": "Mentse a kivágott képeket a webre a könnyebb megosztáshoz, vagy töltse le a számítógépére. Rá is kattinthat a Képernyőképek gombra, hogy megtalálja az összes képét."
-  },
-  "tourHeaderFour": {
+  "tourHeaderFullPage": {
     "message": "Mentsen ablakokat vagy teljes lapokat"
   },
-  "tourBodyFour": {
+  "tourBodyFullPage": {
     "message": "Válassza a jobb felső sarokban lévő gombokat, hogy egy látható területet mentsen az ablakból, vagy elmentsen egy teljes oldalt."
+  },
+  "tourHeaderDownloadUpload": {
+    "message": "Ahogy tetszik"
+  },
+  "tourBodyDownloadUpload": {
+    "message": "Mentse a kivágott képeket a webre a könnyebb megosztáshoz, vagy töltse le a számítógépére. Rá is kattinthat a Képernyőképek gombra, hogy megtalálja az összes képét."
   },
   "tourSkip": {
     "message": "Kihagyás"
@@ -103,8 +155,8 @@
   "tourDone": {
     "message": "Kész"
   },
-  "termsAndPrivacyNotice": {
-    "message": "A Firefox képernyőképek használatával, Ön beleegyezik a képernyőképek $TERMSANDPRIVACYNOTICETERMSLINK$ és $TERMSANDPRIVACYNOTICEPRIVACYLINK$.",
+  "termsAndPrivacyNotice2": {
+    "message": "A Firefox képernyőképek használatával, Ön beleegyezik a $TERMSANDPRIVACYNOTICETERMSLINK$ és $TERMSANDPRIVACYNOTICEPRIVACYLINK$.",
     "placeholders": {
       "termsandprivacynoticetermslink": {
         "content": "$1"
@@ -115,9 +167,12 @@
     }
   },
   "termsAndPrivacyNoticeTermsLink": {
-    "message": "Feltételeibe"
+    "message": "Feltételekbe"
   },
   "termsAndPrivacyNoticyPrivacyLink": {
-    "message": "Adatvédelmi nyilatkozatába"
+    "message": "Adatvédelmi nyilatkozatba"
+  },
+  "libraryLabel": {
+    "message": "Képernyőképek"
   }
 }

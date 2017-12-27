@@ -17,20 +17,15 @@ if test "$OS_ARCH" = "WINNT"; then
   MOZ_MAINTENANCE_SERVICE=1
   if ! test "$HAVE_64BIT_BUILD"; then
     if test "$MOZ_UPDATE_CHANNEL" = "nightly" -o \
+            "$MOZ_UPDATE_CHANNEL" = "nightly-try" -o \
             "$MOZ_UPDATE_CHANNEL" = "aurora" -o \
             "$MOZ_UPDATE_CHANNEL" = "beta" -o \
-            "$MOZ_UPDATE_CHANNEL" = "beta-dev" -o \
-            "$MOZ_UPDATE_CHANNEL" = "release" -o \
-            "$MOZ_UPDATE_CHANNEL" = "release-dev"; then
+            "$MOZ_UPDATE_CHANNEL" = "release"; then
       if ! test "$MOZ_DEBUG"; then
         MOZ_STUB_INSTALLER=1
       fi
     fi
   fi
-fi
-
-if test "$NIGHTLY_BUILD"; then
-  MOZ_RUST_URLPARSE=1
 fi
 
 # Enable building ./signmar and running libmar signature tests
@@ -47,14 +42,18 @@ MOZ_APP_VERSION_DISPLAY=$FIREFOX_VERSION_DISPLAY
 MOZ_BRANDING_DIRECTORY=browser/branding/unofficial
 MOZ_OFFICIAL_BRANDING_DIRECTORY=browser/branding/official
 MOZ_APP_ID={ec8030f7-c20a-464f-9b0e-13a3a9e97384}
-# This should usually be the same as the value MAR_CHANNEL_ID.
+# ACCEPTED_MAR_CHANNEL_IDS should usually be the same as the value MAR_CHANNEL_ID.
 # If more than one ID is needed, then you should use a comma separated list
 # of values.
-ACCEPTED_MAR_CHANNEL_IDS=firefox-mozilla-central
 # The MAR_CHANNEL_ID must not contain the following 3 characters: ",\t "
-MAR_CHANNEL_ID=firefox-mozilla-central
+if test "$MOZ_UPDATE_CHANNEL" = "aurora"; then
+  ACCEPTED_MAR_CHANNEL_IDS=firefox-mozilla-aurora
+  MAR_CHANNEL_ID=firefox-mozilla-aurora
+else
+  ACCEPTED_MAR_CHANNEL_IDS=firefox-mozilla-central
+  MAR_CHANNEL_ID=firefox-mozilla-central
+fi
 MOZ_PROFILE_MIGRATOR=1
-MOZ_JSDOWNLOADS=1
 
 # Enable checking that add-ons are signed by the trusted root
 MOZ_ADDON_SIGNING=1

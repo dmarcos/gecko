@@ -2,9 +2,16 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-const BASE_URL = "http://mochi.test:8888/browser/browser/components/extensions/test/browser";
-const SOURCE_PAGE = `${BASE_URL}/webNav_createdTargetSource.html`;
-const OPENED_PAGE = `${BASE_URL}/webNav_createdTarget.html`;
+Services.scriptloader.loadSubScript(new URL("head_webNavigation.js", gTestPath).href,
+                                    this);
+
+async function clickContextMenuItem({pageElementSelector, contextMenuItemLabel}) {
+  const contentAreaContextMenu = await openContextMenu(pageElementSelector);
+  const item = contentAreaContextMenu.getElementsByAttribute("label", contextMenuItemLabel);
+  is(item.length, 1, `found contextMenu item for "${contextMenuItemLabel}"`);
+  item[0].click();
+  await closeContextMenu();
+}
 
 async function background() {
   const tabs = await browser.tabs.query({active: true, currentWindow: true});
@@ -34,34 +41,8 @@ async function background() {
   });
 }
 
-async function runTestCase({extension, openNavTarget, expectedWebNavProps}) {
-  await openNavTarget();
-
-  const webNavMsg = await extension.awaitMessage("webNavOnCreated");
-  const createdTabId = await extension.awaitMessage("tabsOnCreated");
-  const completedNavMsg = await extension.awaitMessage("webNavOnCompleted");
-
-  let {sourceTabId, sourceFrameId, url} = expectedWebNavProps;
-
-  is(webNavMsg.tabId, createdTabId, "Got the expected tabId property");
-  is(webNavMsg.sourceTabId, sourceTabId, "Got the expected sourceTabId property");
-  is(webNavMsg.sourceFrameId, sourceFrameId, "Got the expected sourceFrameId property");
-  is(webNavMsg.url, url, "Got the expected url property");
-
-  is(completedNavMsg.tabId, createdTabId, "Got the expected webNavigation.onCompleted tabId property");
-  is(completedNavMsg.url, url, "Got the expected webNavigation.onCompleted url property");
-}
-
-async function clickContextMenuItem({pageElementSelector, contextMenuItemLabel}) {
-  const contentAreaContextMenu = await openContextMenu(pageElementSelector);
-  const item = contentAreaContextMenu.getElementsByAttribute("label", contextMenuItemLabel);
-  is(item.length, 1, `found contextMenu item for "${contextMenuItemLabel}"`);
-  item[0].click();
-  await closeContextMenu();
-}
-
-add_task(function* test_on_created_navigation_target_from_context_menu() {
-  const tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, SOURCE_PAGE);
+add_task(async function test_on_created_navigation_target_from_context_menu() {
+  const tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, SOURCE_PAGE);
 
   const extension = ExtensionTestUtils.loadExtension({
     background,
@@ -70,13 +51,13 @@ add_task(function* test_on_created_navigation_target_from_context_menu() {
     },
   });
 
-  yield extension.startup();
+  await extension.startup();
 
-  const expectedSourceTab = yield extension.awaitMessage("expectedSourceTab");
+  const expectedSourceTab = await extension.awaitMessage("expectedSourceTab");
 
   info("Open link in a new tab from the context menu");
 
-  yield runTestCase({
+  await runCreatedNavigationTargetTest({
     extension,
     async openNavTarget() {
       await clickContextMenuItem({
@@ -93,7 +74,7 @@ add_task(function* test_on_created_navigation_target_from_context_menu() {
 
   info("Open link in a new window from the context menu");
 
-  yield runTestCase({
+  await runCreatedNavigationTargetTest({
     extension,
     async openNavTarget() {
       await clickContextMenuItem({
@@ -108,13 +89,13 @@ add_task(function* test_on_created_navigation_target_from_context_menu() {
     },
   });
 
-  yield BrowserTestUtils.removeTab(tab);
+  await BrowserTestUtils.removeTab(tab);
 
-  yield extension.unload();
+  await extension.unload();
 });
 
-add_task(function* test_on_created_navigation_target_from_context_menu_subframe() {
-  const tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, SOURCE_PAGE);
+add_task(async function test_on_created_navigation_target_from_context_menu_subframe() {
+  const tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, SOURCE_PAGE);
 
   const extension = ExtensionTestUtils.loadExtension({
     background,
@@ -123,13 +104,13 @@ add_task(function* test_on_created_navigation_target_from_context_menu_subframe(
     },
   });
 
-  yield extension.startup();
+  await extension.startup();
 
-  const expectedSourceTab = yield extension.awaitMessage("expectedSourceTab");
+  const expectedSourceTab = await extension.awaitMessage("expectedSourceTab");
 
   info("Open a subframe link in a new tab from the context menu");
 
-  yield runTestCase({
+  await runCreatedNavigationTargetTest({
     extension,
     async openNavTarget() {
       await clickContextMenuItem({
@@ -151,7 +132,7 @@ add_task(function* test_on_created_navigation_target_from_context_menu_subframe(
 
   info("Open a subframe link in a new window from the context menu");
 
-  yield runTestCase({
+  await runCreatedNavigationTargetTest({
     extension,
     async openNavTarget() {
       await clickContextMenuItem({
@@ -171,7 +152,7 @@ add_task(function* test_on_created_navigation_target_from_context_menu_subframe(
     },
   });
 
-  yield BrowserTestUtils.removeTab(tab);
+  await BrowserTestUtils.removeTab(tab);
 
-  yield extension.unload();
+  await extension.unload();
 });

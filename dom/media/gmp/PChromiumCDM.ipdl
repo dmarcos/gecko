@@ -56,8 +56,17 @@ child:
 
   async GiveBuffer(Shmem aShmem);
 
+  async PurgeShmems();
+
+  // cdm::ContentDecryptionModule9
+  async GetStatusForPolicy(uint32_t aPromiseId,
+                           nsCString aMinHdcpVersion);
+
 parent:
   async __delete__();
+
+  // cdm::Host9
+  async OnResolvePromiseWithKeyStatus(uint32_t aPromiseId, uint32_t aKeyStatus);
 
   // cdm::Host8
   async OnResolveNewSessionPromise(uint32_t aPromiseId, nsCString aSessionId);
@@ -95,7 +104,8 @@ parent:
   async OnDecoderInitDone(uint32_t aStatus);
 
   // Return values of cdm::ContentDecryptionModule8::DecryptAndDecodeFrame
-  async Decoded(CDMVideoFrame aFrame);
+  async DecodedShmem(CDMVideoFrame aFrame, Shmem aData);
+  async DecodedData(CDMVideoFrame aFrame, uint8_t[] aData);
   async DecodeFailed(uint32_t aStatus);
 
   async ResetVideoDecoderComplete();
@@ -103,6 +113,8 @@ parent:
   async DrainComplete();
 
   async Shutdown();
+
+  async IncreaseShmemPoolSize();
 };
 
 } // namespace gmp

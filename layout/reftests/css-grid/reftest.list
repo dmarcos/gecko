@@ -1,5 +1,3 @@
-default-preferences pref(layout.css.grid.enabled,true)
-
 fails == grid-whitespace-handling-1a.xhtml grid-whitespace-handling-1-ref.xhtml
 fails == grid-whitespace-handling-1b.xhtml grid-whitespace-handling-1-ref.xhtml
 == grid-whitespace-handling-2.xhtml  grid-whitespace-handling-2-ref.xhtml
@@ -112,9 +110,9 @@ skip-if(Android) == grid-auto-min-sizing-percent-001.html grid-auto-min-sizing-p
 == grid-item-auto-min-size-clamp-001.html grid-item-auto-min-size-clamp-001-ref.html
 == grid-item-auto-min-size-clamp-002.html grid-item-auto-min-size-clamp-002-ref.html
 == grid-item-auto-min-size-clamp-003.html grid-item-auto-min-size-clamp-003-ref.html
-== grid-item-auto-min-size-clamp-004.html grid-item-auto-min-size-clamp-004-ref.html
+# == grid-item-auto-min-size-clamp-004.html grid-item-auto-min-size-clamp-004-ref.html # bug 1421976
 == grid-item-auto-min-size-clamp-005.html grid-item-auto-min-size-clamp-005-ref.html
-== grid-item-auto-min-size-clamp-006.html grid-item-auto-min-size-clamp-006-ref.html
+# == grid-item-auto-min-size-clamp-006.html grid-item-auto-min-size-clamp-006-ref.html # bug 1421976
 == grid-item-auto-min-size-clamp-007.html grid-item-auto-min-size-clamp-007-ref.html
 == grid-item-overflow-stretch-001.html grid-item-overflow-stretch-001-ref.html
 == grid-item-overflow-stretch-002.html grid-item-overflow-stretch-002-ref.html
@@ -138,7 +136,7 @@ random-if(http.oscpu!="Linux\u0020i686") == grid-item-content-baseline-002.html 
 random-if(http.oscpu!="Linux\u0020i686") == grid-item-mixed-baseline-001.html grid-item-mixed-baseline-001-ref.html # ditto
 random-if(http.oscpu!="Linux\u0020i686") == grid-item-mixed-baseline-002.html grid-item-mixed-baseline-002-ref.html # ditto
 random-if(http.oscpu!="Linux\u0020i686") == grid-item-mixed-baseline-003.html grid-item-mixed-baseline-003-ref.html # ditto
-skip-if(!gtkWidget) == grid-item-mixed-baseline-004.html grid-item-mixed-baseline-004-ref.html # ditto
+skip-if(!gtkWidget) fails-if(styloVsGecko) == grid-item-mixed-baseline-004.html grid-item-mixed-baseline-004-ref.html # ditto. Also stylo bug 1396977.
 == grid-align-content-001.html grid-align-content-001-ref.html
 == grid-justify-content-001.html grid-justify-content-001-ref.html
 skip-if(Android&&isDebugBuild) == grid-justify-content-002.html grid-justify-content-002-ref.html # Bug 1245884 - slow
@@ -185,6 +183,8 @@ skip-if(Android&&isDebugBuild) == grid-row-gap-004.html grid-row-gap-004-ref.htm
 == grid-repeat-auto-fill-fit-009.html grid-repeat-auto-fill-fit-009-ref.html
 == grid-repeat-auto-fill-fit-010.html grid-repeat-auto-fill-fit-010-ref.html
 == grid-repeat-auto-fill-fit-011.html grid-repeat-auto-fill-fit-010-ref.html
+== grid-repeat-auto-fill-fit-012.html grid-repeat-auto-fill-fit-012-ref.html
+== grid-repeat-auto-fill-fit-013.html grid-repeat-auto-fill-fit-013-ref.html
 == grid-item-blockifying-001.html grid-item-blockifying-001-ref.html
 == grid-fragmentation-001.html grid-fragmentation-001-ref.html
 == grid-fragmentation-002.html grid-fragmentation-002-ref.html
@@ -233,7 +233,6 @@ asserts(0-10) == grid-fragmentation-015.html grid-fragmentation-015-ref.html # b
 == grid-fragmentation-dyn5-007.html grid-fragmentation-007-ref.html
 == grid-fragmentation-dyn5-008.html grid-fragmentation-008-ref.html
 == grid-fragmentation-dyn3-009.html grid-fragmentation-009-ref.html
-== grid-fragmentation-dyn3-009.html grid-fragmentation-009-ref.html
 == grid-fragmentation-dyn4-015.html grid-fragmentation-015-ref.html
 == grid-fragmentation-dyn1-015.html grid-fragmentation-015-ref.html
 == grid-fragmentation-dyn1-016.html grid-fragmentation-016-ref.html
@@ -247,10 +246,10 @@ asserts(0-10) == grid-fragmentation-015.html grid-fragmentation-015-ref.html # b
 == grid-fragmentation-dyn5-019.html grid-fragmentation-019-ref.html
 == grid-fragmentation-dyn1-020.html grid-fragmentation-020-ref.html
 == grid-fragmentation-dyn2-020.html grid-fragmentation-020-ref.html
-!= grid-fragmentation-dyn1-021.html grid-fragmentation-021-ref.html # bug 1251799
+== grid-fragmentation-dyn1-021.html grid-fragmentation-021-ref.html
 == grid-fragmentation-dyn2-021.html grid-fragmentation-021-ref.html
 == grid-fragmentation-dyn3-021.html grid-fragmentation-021-ref.html
-asserts(1-10) == grid-fragmentation-dyn4-021.html grid-fragmentation-021-ref.html # assertion related to bug 1251799 ?
+== grid-fragmentation-dyn4-021.html grid-fragmentation-021-ref.html
 == grid-fragmentation-dyn5-021.html grid-fragmentation-021-ref.html
 == grid-fragmentation-dyn2-022.html grid-fragmentation-007-ref.html
 == grid-fragmentation-dyn1-023.html grid-fragmentation-023-ref.html
@@ -279,10 +278,9 @@ asserts(1-10) == grid-fragmentation-dyn4-021.html grid-fragmentation-021-ref.htm
 == grid-fragmentation-dyn2-029.html grid-fragmentation-029-ref.html
 == grid-fragmentation-dyn2-030.html grid-fragmentation-030-ref.html
 == grid-fragmentation-dyn2-031.html grid-fragmentation-031-ref.html
+
 == bug1306106.html bug1306106-ref.html
 == grid-percent-intrinsic-sizing-001.html grid-percent-intrinsic-sizing-001-ref.html
-== grid-measuring-reflow-resize-static-001.html grid-measuring-reflow-resize-001-ref.html
-== grid-measuring-reflow-resize-dynamic-001.html grid-measuring-reflow-resize-001-ref.html
-== bug1349571.html bug1349571-ref.html
-== bug1356820.html bug1356820-ref.html
-== bug1350925.html bug1350925-ref.html
+== grid-item-align-dynamic-pos-001.html grid-item-align-dynamic-pos-001-ref.html
+== grid-item-align-dynamic-pos-002.html grid-item-align-dynamic-pos-002-ref.html
+== grid-item-align-dynamic-pos-003.html grid-item-align-dynamic-pos-003-ref.html

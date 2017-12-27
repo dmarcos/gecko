@@ -20,6 +20,7 @@
 #include "nsIAsyncOutputStream.h"
 #include "nsIDNSListener.h"
 #include "nsIClassInfo.h"
+#include "TCPFastOpen.h"
 #include "mozilla/net/DNS.h"
 #include "nsASocketHandler.h"
 #include "mozilla/Telemetry.h"
@@ -133,15 +134,6 @@ public:
                   const nsACString &hostRoute, uint16_t portRoute,
                   nsIProxyInfo *proxyInfo);
 
-    // Alternative Init method for when the IP-address of the host
-    // has been pre-resolved using a alternative means (e.g. FlyWeb service
-    // info).
-    nsresult InitPreResolved(const char **socketTypes, uint32_t typeCount,
-                             const nsACString &host, uint16_t port,
-                             const nsACString &hostRoute, uint16_t portRoute,
-                             nsIProxyInfo *proxyInfo,
-                             const mozilla::net::NetAddr* addr);
-
     // this method instructs the socket transport to use an already connected
     // socket with the given address.
     nsresult InitWithConnectedSocket(PRFileDesc *socketFD,
@@ -209,6 +201,7 @@ private:
     {
     public:
       explicit PRFileDescAutoLock(nsSocketTransport *aSocketTransport,
+                                  bool aAlsoDuringFastOpen,
                                   nsresult *aConditionWhileLocked = nullptr)
         : mSocketTransport(aSocketTransport)
         , mFd(nullptr)
@@ -221,7 +214,11 @@ private:
             return;
           }
         }
-        mFd = mSocketTransport->GetFD_Locked();
+        if (!aAlsoDuringFastOpen) {
+          mFd = mSocketTransport->GetFD_Locked();
+        } else {
+          mFd = mSocketTransport->GetFD_LockedAlsoDuringFastOpen();
+        }
       }
       ~PRFileDescAutoLock() {
         MutexAutoLock lock(mSocketTransport->mLock);
@@ -302,6 +299,7 @@ private:
     bool mProxyTransparentResolvesHost;
     bool mHttpsProxy;
     uint32_t     mConnectionFlags;
+    uint32_t     mTlsFlags;
     bool mReuseAddrPort;
 
     // The origin attributes are used to create sockets.  The first party domain
@@ -343,7 +341,6 @@ private:
     NetAddr                 mSelfAddr; // getsockname()
     Atomic<bool, Relaxed>   mNetAddrIsSet;
     Atomic<bool, Relaxed>   mSelfAddrIsSet;
-    Atomic<bool, Relaxed>   mNetAddrPreResolved;
 
     nsAutoPtr<NetAddr>      mBindAddr;
 
@@ -379,6 +376,9 @@ private:
     LockedPRFileDesc mFD;
     nsrefcnt         mFDref;       // mFD is closed when mFDref goes to zero.
     bool             mFDconnected; // mFD is available to consumer when TRUE.
+    bool             mFDFastOpenInProgress; // Fast Open is in progress, so
+                                            // socket available for some
+                                            // operations.
 
     // A delete protector reference to gSocketTransportService held for lifetime
     // of 'this'. Sometimes used interchangably with gSocketTransportService due
@@ -405,7 +405,9 @@ private:
     // mFD access methods: called with mLock held.
     //
     PRFileDesc *GetFD_Locked();
+    PRFileDesc *GetFD_LockedAlsoDuringFastOpen();
     void        ReleaseFD_Locked(PRFileDesc *fd);
+    bool FastOpenInProgress();
 
     //
     // stream state changes (called outside mLock):
@@ -413,7 +415,7 @@ private:
     void OnInputClosed(nsresult reason)
     {
         // no need to post an event if called on the socket thread
-        if (PR_GetCurrentThread() == gSocketThread)
+        if (OnSocketThread())
             OnMsgInputClosed(reason);
         else
             PostEvent(MSG_INPUT_CLOSED, reason);
@@ -421,7 +423,7 @@ private:
     void OnInputPending()
     {
         // no need to post an event if called on the socket thread
-        if (PR_GetCurrentThread() == gSocketThread)
+        if (OnSocketThread())
             OnMsgInputPending();
         else
             PostEvent(MSG_INPUT_PENDING);
@@ -429,7 +431,7 @@ private:
     void OnOutputClosed(nsresult reason)
     {
         // no need to post an event if called on the socket thread
-        if (PR_GetCurrentThread() == gSocketThread)
+        if (OnSocketThread())
             OnMsgOutputClosed(reason); // XXX need to not be inside lock!
         else
             PostEvent(MSG_OUTPUT_CLOSED, reason);
@@ -437,7 +439,7 @@ private:
     void OnOutputPending()
     {
         // no need to post an event if called on the socket thread
-        if (PR_GetCurrentThread() == gSocketThread)
+        if (OnSocketThread())
             OnMsgOutputPending();
         else
             PostEvent(MSG_OUTPUT_PENDING);
@@ -462,6 +464,14 @@ private:
     int32_t mKeepaliveIdleTimeS;
     int32_t mKeepaliveRetryIntervalS;
     int32_t mKeepaliveProbeCount;
+
+    // A Fast Open callback.
+    TCPFastOpen *mFastOpenCallback;
+    bool mFastOpenLayerHasBufferedData;
+    uint8_t mFastOpenStatus;
+    nsresult mFirstRetryError;
+
+    bool mDoNotRetryToConnect;
 };
 
 } // namespace net

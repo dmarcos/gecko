@@ -13,7 +13,7 @@
 #include "nsAutoPtr.h"
 #include "nsCOMArray.h"
 #include "nsTArray.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsTArray.h"
 #include "nsIPrincipal.h"
@@ -90,6 +90,16 @@ public:
   virtual nsIMessageSender* GetProcessMessageManager() const
   {
     return nullptr;
+  }
+
+  virtual nsresult DoGetRemoteType(nsAString& aRemoteType) const
+  {
+    aRemoteType.Truncate();
+    nsIMessageSender* parent = GetProcessMessageManager();
+    if (parent) {
+      return parent->GetRemoteType(aRemoteType);
+    }
+    return NS_OK;
   }
 
 protected:
@@ -331,7 +341,6 @@ public:
 private:
   nsSameProcessAsyncMessageBase(const nsSameProcessAsyncMessageBase&);
 
-  JS::RootingContext* mRootingCx;
   nsString mMessage;
   StructuredCloneData mData;
   JS::PersistentRooted<JSObject*> mCpows;
@@ -365,10 +374,9 @@ class nsMessageManagerScriptExecutor
 public:
   static void PurgeCache();
   static void Shutdown();
-  already_AddRefed<nsIXPConnectJSObjectHolder> GetGlobal()
+  JSObject* GetGlobal()
   {
-    nsCOMPtr<nsIXPConnectJSObjectHolder> ref = mGlobal;
-    return ref.forget();
+    return mGlobal;
   }
 
   void MarkScopesForCC();
@@ -387,7 +395,8 @@ protected:
                                     bool aRunInGlobalScope);
   bool InitChildGlobalInternal(nsISupports* aScope, const nsACString& aID);
   void Trace(const TraceCallbacks& aCallbacks, void* aClosure);
-  nsCOMPtr<nsIXPConnectJSObjectHolder> mGlobal;
+  void Unlink();
+  JS::TenuredHeap<JSObject*> mGlobal;
   nsCOMPtr<nsIPrincipal> mPrincipal;
   AutoTArray<JS::Heap<JSObject*>, 2> mAnonymousGlobalScopes;
 

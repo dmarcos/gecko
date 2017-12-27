@@ -4,13 +4,11 @@
 
 extern crate app_units;
 extern crate euclid;
-#[macro_use] extern crate heapsize;
+extern crate malloc_size_of;
+#[macro_use] extern crate malloc_size_of_derive;
 
-use app_units::{Au, MAX_AU};
-use euclid::point::Point2D;
-use euclid::rect::Rect;
-use euclid::size::Size2D;
-use std::i32;
+use app_units::{Au, MAX_AU, MIN_AU};
+use euclid::{Point2D, Rect, Size2D};
 
 // Units for use with euclid::length and euclid::scale_factor.
 
@@ -27,10 +25,8 @@ use std::i32;
 ///
 /// The ratio between DeviceIndependentPixel and DevicePixel for a given display be found by calling
 /// `servo::windowing::WindowMethods::hidpi_factor`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, MallocSizeOf)]
 pub enum DeviceIndependentPixel {}
-
-known_heap_size!(0, DeviceIndependentPixel);
 
 // An Au is an "App Unit" and represents 1/60th of a CSS pixel.  It was
 // originally proposed in 2002 as a standard unit of measure in Gecko.
@@ -38,7 +34,7 @@ known_heap_size!(0, DeviceIndependentPixel);
 
 #[inline(always)]
 pub fn max_rect() -> Rect<Au> {
-    Rect::new(Point2D::new(Au(i32::MIN / 2), Au(i32::MIN / 2)), Size2D::new(MAX_AU, MAX_AU))
+    Rect::new(Point2D::new(MIN_AU / 2, MIN_AU / 2), Size2D::new(MAX_AU, MAX_AU))
 }
 
 /// A helper function to convert a rect of `f32` pixels to a rect of app units.

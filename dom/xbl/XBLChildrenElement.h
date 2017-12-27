@@ -33,22 +33,15 @@ public:
   NS_DECL_ISUPPORTS_INHERITED
 
   // nsINode interface methods
-  virtual nsresult Clone(mozilla::dom::NodeInfo* aNodeInfo, nsINode** aResult) const override;
+  virtual nsresult Clone(mozilla::dom::NodeInfo* aNodeInfo, nsINode** aResult,
+                         bool aPreallocateChildren) const override;
 
   virtual nsIDOMNode* AsDOMNode() override { return this; }
-
-  // nsIContent interface methods
-  virtual nsresult UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
-                             bool aNotify) override;
-  virtual bool ParseAttribute(int32_t aNamespaceID,
-                              nsIAtom* aAttribute,
-                              const nsAString& aValue,
-                              nsAttrValue& aResult) override;
 
   void AppendInsertedChild(nsIContent* aChild)
   {
     mInsertedChildren.AppendElement(aChild);
-    aChild->SetXBLInsertionParent(GetParent());
+    aChild->SetXBLInsertionPoint(this);
 
     // Appending an inserted child causes the inserted
     // children to be projected instead of default content.
@@ -58,7 +51,7 @@ public:
   void InsertInsertedChildAt(nsIContent* aChild, uint32_t aIndex)
   {
     mInsertedChildren.InsertElementAt(aIndex, aChild);
-    aChild->SetXBLInsertionParent(GetParent());
+    aChild->SetXBLInsertionPoint(this);
 
     // Inserting an inserted child causes the inserted
     // children to be projected instead of default content.
@@ -80,8 +73,8 @@ public:
 
   void ClearInsertedChildren()
   {
-    for (uint32_t c = 0; c < mInsertedChildren.Length(); ++c) {
-      mInsertedChildren[c]->SetXBLInsertionParent(nullptr);
+    for (auto* child : mInsertedChildren) {
+      child->SetXBLInsertionPoint(nullptr);
     }
     mInsertedChildren.Clear();
 
@@ -96,7 +89,7 @@ public:
       for (nsIContent* child = static_cast<nsINode*>(this)->GetFirstChild();
            child;
            child = child->GetNextSibling()) {
-        child->SetXBLInsertionParent(GetParent());
+        child->SetXBLInsertionPoint(this);
       }
     }
   }
@@ -107,7 +100,7 @@ public:
       for (nsIContent* child = static_cast<nsINode*>(this)->GetFirstChild();
            child;
            child = child->GetNextSibling()) {
-        child->SetXBLInsertionParent(nullptr);
+        child->SetXBLInsertionPoint(nullptr);
       }
     }
   }
@@ -146,10 +139,13 @@ public:
 
 protected:
   ~XBLChildrenElement();
+  virtual nsresult BeforeSetAttr(int32_t aNamespaceID, nsAtom* aName,
+                                 const nsAttrValueOrString* aValue,
+                                 bool aNotify) override;
 
 private:
   nsTArray<nsIContent*> mInsertedChildren; // WEAK
-  nsTArray<nsCOMPtr<nsIAtom> > mIncludes;
+  nsTArray<RefPtr<nsAtom> > mIncludes;
 };
 
 } // namespace dom

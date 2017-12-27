@@ -697,7 +697,7 @@ class Redirection;
 
 class Simulator : public DecoderVisitor {
  public:
-  explicit Simulator(Decoder* decoder, FILE* stream = stdout);
+  explicit Simulator(JSContext* cx, Decoder* decoder, FILE* stream = stdout);
   ~Simulator();
 
   // Moz changes.
@@ -716,8 +716,11 @@ class Simulator : public DecoderVisitor {
   void setFP32Result(float result);
   void setFP64Result(double result);
   void VisitCallRedirection(const Instruction* instr);
-  static inline uintptr_t StackLimit() {
+  static uintptr_t StackLimit() {
     return Simulator::Current()->stackLimit();
+  }
+  static bool supportsAtomics() {
+    return true;
   }
 
   void ResetState();
@@ -2509,6 +2512,8 @@ class Simulator : public DecoderVisitor {
   void DoPrintf(const Instruction* instr);
 
   // Processor state ---------------------------------------
+
+  JSContext* const cx_;
 
   // Simulated monitors for exclusive access instructions.
   SimExclusiveLocalMonitor local_monitor_;

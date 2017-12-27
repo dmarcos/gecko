@@ -49,17 +49,18 @@ function test() {
   }
 
   function doTest(aIsPrivateMode, aWindow, aCallback) {
-    aWindow.gBrowser.selectedBrowser.addEventListener("load", function() {
+    BrowserTestUtils.browserLoaded(aWindow.gBrowser.selectedBrowser).then(() => {
       let sslStatus = new FakeSSLStatus();
       uri = aWindow.Services.io.newURI("https://localhost/img.png");
       gSSService.processHeader(Ci.nsISiteSecurityService.HEADER_HSTS, uri,
-                               "max-age=1000", sslStatus, privacyFlags(aIsPrivateMode));
+                               "max-age=1000", sslStatus, privacyFlags(aIsPrivateMode),
+                               Ci.nsISiteSecurityService.SOURCE_ORGANIC_REQUEST);
       ok(gSSService.isSecureURI(Ci.nsISiteSecurityService.HEADER_HSTS, uri,
                                 privacyFlags(aIsPrivateMode)),
                                 "checking sts host");
 
       aCallback();
-    }, {capture: true, once: true});
+    });
 
     aWindow.gBrowser.selectedBrowser.loadURI(testURI);
   }

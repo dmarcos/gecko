@@ -12,7 +12,7 @@
 #include "mozilla/EndianUtils.h"
 #include "mozilla/PodOperations.h"
 #include "mozilla/SyncRunnable.h"
-#include "mozilla/SizePrintfMacros.h"
+#include "VideoUtils.h"
 
 #include <inttypes.h>  // For PRId64
 
@@ -21,8 +21,9 @@ extern "C" {
 #include "opus/opus_multistream.h"
 }
 
-#define OPUS_DEBUG(arg, ...) MOZ_LOG(sPDMLog, mozilla::LogLevel::Debug, \
-    ("OpusDataDecoder(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
+#define OPUS_DEBUG(arg, ...)                                                   \
+  DDMOZ_LOG(                                                                   \
+    sPDMLog, mozilla::LogLevel::Debug, "::%s: " arg, __func__, ##__VA_ARGS__)
 
 namespace mozilla {
 
@@ -69,14 +70,20 @@ OpusDataDecoder::Init()
   uint8_t *p = mInfo.mCodecSpecificConfig->Elements();
   if (length < sizeof(uint64_t)) {
     OPUS_DEBUG("CodecSpecificConfig too short to read codecDelay!");
-    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
+    return InitPromise::CreateAndReject(
+      MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                  RESULT_DETAIL("CodecSpecificConfig too short to read codecDelay!")),
+      __func__);
   }
   int64_t codecDelay = BigEndian::readUint64(p);
   length -= sizeof(uint64_t);
   p += sizeof(uint64_t);
   if (NS_FAILED(DecodeHeader(p, length))) {
     OPUS_DEBUG("Error decoding header!");
-    return InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
+    return InitPromise::CreateAndReject(
+      MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                  RESULT_DETAIL("Error decoding header!")),
+      __func__);
   }
 
   int r;
@@ -103,7 +110,10 @@ OpusDataDecoder::Init()
   }
 
   return r == OPUS_OK ? InitPromise::CreateAndResolve(TrackInfo::kAudioTrack, __func__)
-                      : InitPromise::CreateAndReject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
+                      : InitPromise::CreateAndReject(
+                          MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
+                          RESULT_DETAIL("could not create opus multistream decoder!")),
+                          __func__);
 }
 
 nsresult
@@ -167,17 +177,18 @@ OpusDataDecoder::ProcessDecode(MediaRawData* aSample)
       __func__);
   }
 
-  if (!mLastFrameTime || mLastFrameTime.ref() != aSample->mTime) {
+  if (!mLastFrameTime ||
+      mLastFrameTime.ref() != aSample->mTime.ToMicroseconds()) {
     // We are starting a new block.
     mFrames = 0;
-    mLastFrameTime = Some(aSample->mTime);
+    mLastFrameTime = Some(aSample->mTime.ToMicroseconds());
   }
 
   // Maximum value is 63*2880, so there's no chance of overflow.
   int frames_number =
     opus_packet_get_nb_frames(aSample->Data(), aSample->Size());
   if (frames_number <= 0) {
-    OPUS_DEBUG("Invalid packet header: r=%d length=%" PRIuSIZE, frames_number,
+    OPUS_DEBUG("Invalid packet header: r=%d length=%zu", frames_number,
                aSample->Size());
     return DecodePromise::CreateAndReject(
       MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,
@@ -231,7 +242,7 @@ OpusDataDecoder::ProcessDecode(MediaRawData* aSample)
       __func__);
   }
   NS_ASSERTION(ret == frames, "Opus decoded too few audio samples");
-  CheckedInt64 startTime = aSample->mTime;
+  auto startTime = aSample->mTime;
 
   // Trim the initial frames while the decoder is settling.
   if (mSkip > 0) {
@@ -242,7 +253,7 @@ OpusDataDecoder::ProcessDecode(MediaRawData* aSample)
     PodMove(buffer.get(),
             buffer.get() + skipFrames * channels,
             keepFrames * channels);
-    startTime = startTime + FramesToUsecs(skipFrames, mOpusParser->mRate);
+    startTime = startTime + FramesToTimeUnit(skipFrames, mOpusParser->mRate);
     frames = keepFrames;
     mSkip -= skipFrames;
   }
@@ -286,17 +297,17 @@ OpusDataDecoder::ProcessDecode(MediaRawData* aSample)
   }
 #endif
 
-  CheckedInt64 duration = FramesToUsecs(frames, mOpusParser->mRate);
-  if (!duration.isValid()) {
+  auto duration = FramesToTimeUnit(frames, mOpusParser->mRate);
+  if (!duration.IsValid()) {
     return DecodePromise::CreateAndReject(
       MediaResult(NS_ERROR_DOM_MEDIA_OVERFLOW_ERR,
                   RESULT_DETAIL("Overflow converting WebM audio duration")),
       __func__);
   }
-  CheckedInt64 time = startTime -
-                      FramesToUsecs(mOpusParser->mPreSkip, mOpusParser->mRate) +
-                      FramesToUsecs(mFrames, mOpusParser->mRate);
-  if (!time.isValid()) {
+  auto time = startTime -
+              FramesToTimeUnit(mOpusParser->mPreSkip, mOpusParser->mRate) +
+              FramesToTimeUnit(mFrames, mOpusParser->mRate);
+  if (!time.IsValid()) {
     return DecodePromise::CreateAndReject(
       MediaResult(NS_ERROR_DOM_MEDIA_OVERFLOW_ERR,
                   RESULT_DETAIL("Overflow shifting tstamp by codec delay")),
@@ -307,7 +318,7 @@ OpusDataDecoder::ProcessDecode(MediaRawData* aSample)
   mFrames += frames;
 
   return DecodePromise::CreateAndResolve(
-    DecodedData{ new AudioData(aSample->mOffset, time.value(), duration.value(),
+    DecodedData{ new AudioData(aSample->mOffset, time, duration,
                                frames, Move(buffer), mOpusParser->mChannels,
                                mOpusParser->mRate) },
     __func__);

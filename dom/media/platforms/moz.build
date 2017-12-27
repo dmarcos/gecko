@@ -14,6 +14,7 @@ EXPORTS += [
     'MediaTelemetryConstants.h',
     'PDMFactory.h',
     'PlatformDecoderModule.h',
+    'ReorderQueue.h',
     'SimpleMap.h',
     'wrappers/H264Converter.h',
     'wrappers/MediaDataDecoderProxy.h'
@@ -36,6 +37,7 @@ UNIFIED_SOURCES += [
 ]
 
 DIRS += [
+    'agnostic/bytestreams',
     'agnostic/eme',
     'agnostic/gmp',
     'omx'
@@ -58,6 +60,14 @@ if CONFIG['MOZ_FFVPX']:
 if CONFIG['MOZ_FFMPEG']:
     DIRS += [
         'ffmpeg',
+    ]
+
+if CONFIG['MOZ_AV1']:
+    EXPORTS += [
+        'agnostic/AOMDecoder.h',
+    ]
+    UNIFIED_SOURCES += [
+        'agnostic/AOMDecoder.cpp',
     ]
 
 if CONFIG['MOZ_APPLEMEDIA']:
@@ -89,5 +99,5 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
 
 FINAL_LIBRARY = 'xul'
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

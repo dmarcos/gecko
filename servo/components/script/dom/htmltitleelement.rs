@@ -6,14 +6,14 @@ use dom::bindings::codegen::Bindings::HTMLTitleElementBinding;
 use dom::bindings::codegen::Bindings::HTMLTitleElementBinding::HTMLTitleElementMethods;
 use dom::bindings::codegen::Bindings::NodeBinding::NodeMethods;
 use dom::bindings::inheritance::Castable;
-use dom::bindings::js::Root;
+use dom::bindings::root::DomRoot;
 use dom::bindings::str::DOMString;
 use dom::document::Document;
 use dom::htmlelement::HTMLElement;
 use dom::node::{ChildrenMutation, Node};
 use dom::virtualmethods::VirtualMethods;
 use dom_struct::dom_struct;
-use html5ever_atoms::LocalName;
+use html5ever::{LocalName, Prefix};
 
 #[dom_struct]
 pub struct HTMLTitleElement {
@@ -21,7 +21,7 @@ pub struct HTMLTitleElement {
 }
 
 impl HTMLTitleElement {
-    fn new_inherited(local_name: LocalName, prefix: Option<DOMString>, document: &Document) -> HTMLTitleElement {
+    fn new_inherited(local_name: LocalName, prefix: Option<Prefix>, document: &Document) -> HTMLTitleElement {
         HTMLTitleElement {
             htmlelement: HTMLElement::new_inherited(local_name, prefix, document)
         }
@@ -29,9 +29,9 @@ impl HTMLTitleElement {
 
     #[allow(unrooted_must_root)]
     pub fn new(local_name: LocalName,
-               prefix: Option<DOMString>,
-               document: &Document) -> Root<HTMLTitleElement> {
-        Node::reflect_node(box HTMLTitleElement::new_inherited(local_name, prefix, document),
+               prefix: Option<Prefix>,
+               document: &Document) -> DomRoot<HTMLTitleElement> {
+        Node::reflect_node(Box::new(HTMLTitleElement::new_inherited(local_name, prefix, document)),
                            document,
                            HTMLTitleElementBinding::Wrap)
     }

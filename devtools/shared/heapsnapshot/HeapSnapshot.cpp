@@ -147,7 +147,7 @@ struct GetOrInternStringMatcher
     size_t length = str->length() / sizeof(CharT);
     auto tempString = reinterpret_cast<const CharT*>(str->data());
 
-    UniquePtr<CharT[], NSFreePolicy> owned(NS_strndup(tempString, length));
+    UniqueFreePtr<CharT[]> owned(NS_strndup(tempString, length));
     if (!owned || !internedStrings.append(Move(owned)))
       return nullptr;
 
@@ -1436,8 +1436,7 @@ WriteHeapGraph(JSContext* cx,
 static unsigned long
 msSinceProcessCreation(const TimeStamp& now)
 {
-  bool ignored;
-  auto duration = now - TimeStamp::ProcessCreation(ignored);
+  auto duration = now - TimeStamp::ProcessCreation();
   return (unsigned long) duration.ToMilliseconds();
 }
 
@@ -1569,11 +1568,11 @@ using namespace JS;
 using namespace devtools;
 
 /* static */ void
-ThreadSafeChromeUtils::SaveHeapSnapshotShared(GlobalObject& global,
-                                              const HeapSnapshotBoundaries& boundaries,
-                                              nsAString& outFilePath,
-                                              nsAString& outSnapshotId,
-                                              ErrorResult& rv)
+ChromeUtils::SaveHeapSnapshotShared(GlobalObject& global,
+                                    const HeapSnapshotBoundaries& boundaries,
+                                    nsAString& outFilePath,
+                                    nsAString& outSnapshotId,
+                                    ErrorResult& rv)
 {
   auto start = TimeStamp::Now();
 
@@ -1638,29 +1637,29 @@ ThreadSafeChromeUtils::SaveHeapSnapshotShared(GlobalObject& global,
 }
 
 /* static */ void
-ThreadSafeChromeUtils::SaveHeapSnapshot(GlobalObject& global,
-                                        const HeapSnapshotBoundaries& boundaries,
-                                        nsAString& outFilePath,
-                                        ErrorResult& rv)
+ChromeUtils::SaveHeapSnapshot(GlobalObject& global,
+                              const HeapSnapshotBoundaries& boundaries,
+                              nsAString& outFilePath,
+                              ErrorResult& rv)
 {
   nsAutoString snapshotId;
   SaveHeapSnapshotShared(global, boundaries, outFilePath, snapshotId, rv);
 }
 
 /* static */ void
-ThreadSafeChromeUtils::SaveHeapSnapshotGetId(GlobalObject& global,
-                                             const HeapSnapshotBoundaries& boundaries,
-                                             nsAString& outSnapshotId,
-                                             ErrorResult& rv)
+ChromeUtils::SaveHeapSnapshotGetId(GlobalObject& global,
+                                   const HeapSnapshotBoundaries& boundaries,
+                                   nsAString& outSnapshotId,
+                                   ErrorResult& rv)
 {
   nsAutoString filePath;
   SaveHeapSnapshotShared(global, boundaries, filePath, outSnapshotId, rv);
 }
 
 /* static */ already_AddRefed<HeapSnapshot>
-ThreadSafeChromeUtils::ReadHeapSnapshot(GlobalObject& global,
-                                        const nsAString& filePath,
-                                        ErrorResult& rv)
+ChromeUtils::ReadHeapSnapshot(GlobalObject& global,
+                              const nsAString& filePath,
+                              ErrorResult& rv)
 {
   auto start = TimeStamp::Now();
 

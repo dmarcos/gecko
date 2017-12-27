@@ -48,7 +48,7 @@ CheckMetadata(const ImageTestCase& aTestCase,
   ASSERT_TRUE(NS_SUCCEEDED(rv));
 
   // Write the data into a SourceBuffer.
-  NotNull<RefPtr<SourceBuffer>> sourceBuffer = WrapNotNull(new SourceBuffer());
+  auto sourceBuffer = MakeNotNull<RefPtr<SourceBuffer>>();
   sourceBuffer->ExpectLength(length);
   rv = sourceBuffer->AppendFromInputStream(inputStream, length);
   ASSERT_TRUE(NS_SUCCEEDED(rv));
@@ -90,7 +90,12 @@ CheckMetadata(const ImageTestCase& aTestCase,
 
   IntSize metadataSize = decoder->Size();
   EXPECT_EQ(aTestCase.mSize.width, metadataSize.width);
-  EXPECT_EQ(aTestCase.mSize.height, metadataSize.height);
+  if (aBMPWithinICO == BMPWithinICO::YES) {
+    // Half the data is considered to be part of the AND mask if embedded
+    EXPECT_EQ(aTestCase.mSize.height / 2, metadataSize.height);
+  } else {
+    EXPECT_EQ(aTestCase.mSize.height, metadataSize.height);
+  }
 
   bool expectTransparency = aBMPWithinICO == BMPWithinICO::YES
                           ? true

@@ -7,12 +7,10 @@
 "use strict";
 
 const { Ci } = require("chrome");
-const { Class } = require("sdk/core/heritage");
 const Services = require("Services");
-
-loader.lazyRequireGetter(this, "HarCollector", "devtools/client/netmonitor/har/har-collector", true);
-loader.lazyRequireGetter(this, "HarExporter", "devtools/client/netmonitor/har/har-exporter", true);
-loader.lazyRequireGetter(this, "HarUtils", "devtools/client/netmonitor/har/har-utils", true);
+const { HarCollector } = require("./har-collector");
+const { HarExporter } = require("./har-exporter");
+const { HarUtils } = require("./har-utils");
 
 const prefDomain = "devtools.netmonitor.har.";
 
@@ -36,7 +34,11 @@ const trace = {
  * If the default log directory preference isn't set the following
  * directory is used by default: <profile>/har/logs
  */
-var HarAutomation = Class({
+function HarAutomation(toolbox) {
+  this.initialize(toolbox);
+}
+
+HarAutomation.prototype = {
   // Initialization
 
   initialize: function (toolbox) {
@@ -166,6 +168,7 @@ var HarAutomation = Class({
     let title = form.title || form.url;
 
     let options = {
+      requestData: null,
       getString: this.getString.bind(this),
       view: this,
       items: items,
@@ -201,7 +204,7 @@ var HarAutomation = Class({
   getString: function (stringGrip) {
     return this.webConsoleClient.getString(stringGrip);
   },
-});
+};
 
 // Helpers
 

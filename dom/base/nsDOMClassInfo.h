@@ -20,7 +20,8 @@
 #endif
 
 struct nsGlobalNameStruct;
-class nsGlobalWindow;
+class nsGlobalWindowInner;
+class nsGlobalWindowOuter;
 
 struct nsDOMClassInfoData;
 
@@ -92,13 +93,6 @@ public:
    */
   static bool ObjectIsNativeWrapper(JSContext* cx, JSObject* obj);
 
-  static nsISupports *GetNative(nsIXPConnectWrappedNative *wrapper, JSObject *obj);
-
-  static nsIXPConnect *XPConnect()
-  {
-    return sXPConnect;
-  }
-
 protected:
   friend nsIClassInfo* NS_GetDOMClassInfoInstance(nsDOMClassInfoID aID);
 
@@ -121,46 +115,6 @@ public:
   static jsid sConstructor_id;
   static jsid sWrappedJSObject_id;
 };
-
-// THIS ONE ISN'T SAFE!! It assumes that the private of the JSObject is
-// an nsISupports.
-inline
-const nsQueryInterface
-do_QueryWrappedNative(nsIXPConnectWrappedNative *wrapper, JSObject *obj)
-{
-  return nsQueryInterface(nsDOMClassInfo::GetNative(wrapper, obj));
-}
-
-// THIS ONE ISN'T SAFE!! It assumes that the private of the JSObject is
-// an nsISupports.
-inline
-const nsQueryInterfaceWithError
-do_QueryWrappedNative(nsIXPConnectWrappedNative *wrapper, JSObject *obj,
-                      nsresult *aError)
-
-{
-  return nsQueryInterfaceWithError(nsDOMClassInfo::GetNative(wrapper, obj),
-                                   aError);
-}
-
-inline
-nsQueryInterface
-do_QueryWrapper(JSContext *cx, JSObject *obj)
-{
-  nsISupports *native =
-    nsDOMClassInfo::XPConnect()->GetNativeOfWrapper(cx, obj);
-  return nsQueryInterface(native);
-}
-
-inline
-nsQueryInterfaceWithError
-do_QueryWrapper(JSContext *cx, JSObject *obj, nsresult* error)
-{
-  nsISupports *native =
-    nsDOMClassInfo::XPConnect()->GetNativeOfWrapper(cx, obj);
-  return nsQueryInterfaceWithError(native, error);
-}
-
 
 typedef nsDOMClassInfo nsDOMGenericSH;
 
@@ -187,13 +141,14 @@ public:
 class nsWindowSH
 {
 protected:
-  static nsresult GlobalResolve(nsGlobalWindow *aWin, JSContext *cx,
+  static nsresult GlobalResolve(nsGlobalWindowInner *aWin, JSContext *cx,
                                 JS::Handle<JSObject*> obj, JS::Handle<jsid> id,
                                 JS::MutableHandle<JS::PropertyDescriptor> desc);
 
-  friend class nsGlobalWindow;
+  friend class nsGlobalWindowInner;
+  friend class nsGlobalWindowOuter;
 public:
-  static bool NameStructEnabled(JSContext* aCx, nsGlobalWindow *aWin,
+  static bool NameStructEnabled(JSContext* aCx, nsGlobalWindowInner *aWin,
                                 const nsAString& aName,
                                 const nsGlobalNameStruct& aNameStruct);
 };
@@ -254,26 +209,6 @@ public:
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
   {
     return new nsDOMConstructorSH(aData);
-  }
-};
-
-class nsNonDOMObjectSH : public nsDOMGenericSH
-{
-protected:
-  explicit nsNonDOMObjectSH(nsDOMClassInfoData* aData) : nsDOMGenericSH(aData)
-  {
-  }
-
-  virtual ~nsNonDOMObjectSH()
-  {
-  }
-
-public:
-  NS_IMETHOD GetFlags(uint32_t *aFlags) override;
-
-  static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
-  {
-    return new nsNonDOMObjectSH(aData);
   }
 };
 

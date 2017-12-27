@@ -1,5 +1,28 @@
+with Files("*"):
+    BUG_COMPONENT = ("Testing", "General")
+
+with Files("awsy/**"):
+    BUG_COMPONENT = ("Testing", "AWSY")
+    SCHEDULES.exclusive = ["awsy"]
+
+with Files("config/**"):
+    BUG_COMPONENT = ("Testing", "General")
+
+with Files("*.py"):
+    BUG_COMPONENT = ("Testing", "General")
+
+with Files("moz.build"):
+    BUG_COMPONENT = ("Testing", "General")
+
+with Files("*.mk"):
+    BUG_COMPONENT = ("Testing", "General")
+
+with Files("README.txt"):
+    BUG_COMPONENT = ("Testing", "General")
+
 with Files("talos/**"):
     BUG_COMPONENT = ("Testing", "Talos")
+    SCHEDULES.exclusive = ['talos']
 
 with Files("talos/talos/tests/v8_7/**"):
     BUG_COMPONENT = ("Core", "Javascript Engine")
@@ -28,6 +51,9 @@ with Files("talos/talos/tests/scroll/**"):
 with Files("talos/talos/tests/tabpaint/**"):
     BUG_COMPONENT = ("Firefox", "Tabbed Browser")
 
+with Files("talos/talos/tests/cpstartup/**"):
+    BUG_COMPONENT = ("Firefox", "Tabbed Browser")
+
 with Files("talos/talos/tests/tart/**"):
     BUG_COMPONENT = ("Firefox", "Tabbed Browser")
 
@@ -54,18 +80,18 @@ with Files("config/tooltool-manifests/**"):
 
 with Files("*cppunittest*"):
     BUG_COMPONENT = ("Testing", "General")
+    SCHEDULES.exclusive = ['cppunittest']
 
 with Files("gtest/**"):
     BUG_COMPONENT = ("Testing", "General")
+    SCHEDULES.exclusive = ['gtest']
 
 with Files("specialpowers/**"):
     BUG_COMPONENT = ("Testing", "Mochitest")
 
 with Files("crashtest/**"):
     BUG_COMPONENT = ("Testing", "Reftest")
-
-with Files("crashtest/autophone-crashtest-webrtc.list"):
-    BUG_COMPONENT = ("Testing", "Autophone")
+    SCHEDULES.exclusive = ['reftest']
 
 with Files("config/marionette*"):
     BUG_COMPONENT = ("Testing", "Marionette")
@@ -74,16 +100,13 @@ with Files("config/mozbase_requirements.txt"):
     BUG_COMPONENT = ("Testing", "Mozbase")
 
 with Files("config/firefox_ui_requirements.txt"):
-    BUG_COMPONENT = ("Testing", "Firfox UI Tests")
-
-with Files("config/external-media-tests-requirements.txt"):
-    BUG_COMPONENT = ("Testing", "external-media-tests")
+    BUG_COMPONENT = ("Testing", "Firefox UI Tests")
 
 with Files("tools/**"):
     BUG_COMPONENT = ("Testing", "General")
 
 with Files("tools/fileid/**"):
-    BUG_COMPONENT = ("Toolkit", "Breakpad Integration")
+    BUG_COMPONENT = ("Toolkit", "Crash Reporting")
 
 with Files("tools/iceserver/**"):
     BUG_COMPONENT = ("Core", "WebRTC: Networking")
@@ -92,10 +115,10 @@ with Files("tools/websocketprocessbridge/**"):
     BUG_COMPONENT = ("Core", "WebRTC: Networking")
 
 with Files("tools/fileid/**"):
-    BUG_COMPONENT = ("Toolkit", "Breakpad Integration")
+    BUG_COMPONENT = ("Toolkit", "Crash Reporting")
 
 with Files("tools/minidumpwriter/**"):
-    BUG_COMPONENT = ("Toolkit", "Breakpad Integration")
+    BUG_COMPONENT = ("Toolkit", "Crash Reporting")
 
 with Files("remote*"):
     BUG_COMPONENT = ("Firefox for Android", "Testing")

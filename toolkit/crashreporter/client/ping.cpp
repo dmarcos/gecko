@@ -15,7 +15,7 @@
 #elif defined(XP_MACOSX)
 #include <CoreFoundation/CoreFoundation.h>
 #elif defined(XP_WIN)
-#include <Objbase.h>
+#include <objbase.h>
 #endif
 
 #include "json/json.h"
@@ -122,6 +122,7 @@ CreateMetadataNode(StringTable& strings)
 {
   // The following list should be kept in sync with the one in CrashManager.jsm
   const char *entries[] = {
+    "AsyncShutdownTimeout",
     "AvailablePageFile",
     "AvailablePhysicalMemory",
     "AvailableVirtualMemory",
@@ -131,16 +132,18 @@ CreateMetadataNode(StringTable& strings)
     "ContainsMemoryReport",
     "CrashTime",
     "EventLoopNestingLevel",
+    "ipc_channel_error",
     "IsGarbageCollecting",
     "MozCrashReason",
     "OOMAllocationSize",
     "ProductID",
     "ProductName",
     "ReleaseChannel",
+    "RemoteType",
     "SecondsSinceLastCrash",
+    "ShutdownProgress",
     "StartupCrash",
     "SystemMemoryUsePercentage",
-    "TelemetrySessionId",
     "TextureUsage",
     "TotalPageFile",
     "TotalPhysicalMemory",

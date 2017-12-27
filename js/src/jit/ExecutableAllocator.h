@@ -46,7 +46,6 @@
 #include "jit/mips32/Simulator-mips32.h"
 #include "jit/mips64/Simulator-mips64.h"
 #include "jit/ProcessExecutableMemory.h"
-#include "js/GCAPI.h"
 #include "js/HashTable.h"
 #include "js/Vector.h"
 
@@ -75,6 +74,8 @@ extern  "C" void sync_instruction_memory(caddr_t v, u_int len);
 #if defined(JS_CODEGEN_ARM) && defined(XP_IOS)
 #include <libkern/OSCacheControl.h>
 #endif
+
+struct JSRuntime;
 
 namespace JS {
     struct CodeSizes;
@@ -219,7 +220,7 @@ class ExecutableAllocator
 
     static void poisonCode(JSRuntime* rt, JitPoisonRangeVector& ranges);
 
-#if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64) || defined(JS_SIMULATOR_ARM64)
+#if defined(JS_CODEGEN_X86) || defined(JS_CODEGEN_X64) || defined(JS_SIMULATOR_ARM64) || defined(JS_CODEGEN_NONE)
     static void cacheFlush(void*, size_t)
     {
     }
@@ -259,7 +260,7 @@ class ExecutableAllocator
     {
         __clear_cache(code, reinterpret_cast<char*>(code) + size);
     }
-#elif defined(JS_CODEGEN_ARM) && defined(XP_IOS)
+#elif (defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64)) && defined(XP_IOS)
     static void cacheFlush(void* code, size_t size)
     {
         sys_icache_invalidate(code, size);
@@ -297,7 +298,7 @@ class ExecutableAllocator
                 : "r0", "r1", "r2");
         }
     }
-#elif defined(JS_CODEGEN_ARM64) && (defined(__linux__) || defined(ANDROID)) && defined(__GNUC__)
+#elif defined(JS_CODEGEN_ARM64)
     static void cacheFlush(void* code, size_t size)
     {
         vixl::CPU::EnsureIAndDCacheCoherency(code, size);

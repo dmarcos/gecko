@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -24,13 +25,13 @@ class SVGViewFrame : public nsFrame
   NS_NewSVGViewFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 protected:
   explicit SVGViewFrame(nsStyleContext* aContext)
-    : nsFrame(aContext)
+    : nsFrame(aContext, kClassID)
   {
     AddStateBits(NS_FRAME_IS_NONDISPLAY);
   }
 
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(SVGViewFrame)
 
 #ifdef DEBUG
   virtual void Init(nsIContent*       aContent,
@@ -50,15 +51,8 @@ public:
   }
 #endif
 
-  /**
-   * Get the "type" of the frame
-   *
-   * @see nsGkAtoms::svgFELeafFrame
-   */
-  virtual nsIAtom* GetType() const override;
-
   virtual nsresult AttributeChanged(int32_t  aNameSpaceID,
-                                    nsIAtom* aAttribute,
+                                    nsAtom* aAttribute,
                                     int32_t  aModType) override;
 
   virtual bool ComputeCustomOverflow(nsOverflowAreas& aOverflowAreas) override {
@@ -88,19 +82,13 @@ SVGViewFrame::Init(nsIContent*       aContent,
 }
 #endif /* DEBUG */
 
-nsIAtom *
-SVGViewFrame::GetType() const
-{
-  return nsGkAtoms::svgViewFrame;
-}
-
 nsresult
 SVGViewFrame::AttributeChanged(int32_t  aNameSpaceID,
-                               nsIAtom* aAttribute,
+                               nsAtom* aAttribute,
                                int32_t  aModType)
 {
   // Ignore zoomAndPan as it does not cause the <svg> element to re-render
-    
+
   if (aNameSpaceID == kNameSpaceID_None &&
       (aAttribute == nsGkAtoms::preserveAspectRatio ||
        aAttribute == nsGkAtoms::viewBox ||

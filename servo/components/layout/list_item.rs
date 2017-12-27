@@ -11,6 +11,7 @@ use app_units::Au;
 use block::BlockFlow;
 use context::{LayoutContext, with_thread_local_font_context};
 use display_list_builder::{DisplayListBuildState, ListItemFlowDisplayListBuilding};
+use display_list_builder::StackingContextCollectionState;
 use euclid::Point2D;
 use floats::FloatKind;
 use flow::{Flow, FlowClass, OpaqueFlow};
@@ -18,14 +19,18 @@ use fragment::{CoordinateSystem, Fragment, FragmentBorderBoxIterator, GeneratedC
 use fragment::Overflow;
 use generated_content;
 use inline::InlineFlow;
-use std::sync::Arc;
-use style::computed_values::{list_style_type, position};
+use style::computed_values::list_style_type::T as ListStyleType;
+use style::computed_values::position::T as Position;
 use style::logical_geometry::LogicalSize;
-use style::properties::ServoComputedValues;
-use style::servo::restyle_damage::RESOLVE_GENERATED_CONTENT;
+use style::properties::ComputedValues;
+use style::servo::restyle_damage::ServoRestyleDamage;
+
+#[allow(unsafe_code)]
+unsafe impl ::flow::HasBaseFlow for ListItemFlow {}
 
 /// A block with the CSS `display` property equal to `list-item`.
 #[derive(Debug)]
+#[repr(C)]
 pub struct ListItemFlow {
     /// Data common to all block flows.
     pub block_flow: BlockFlow,
@@ -46,13 +51,13 @@ impl ListItemFlow {
 
         if let Some(ref marker) = this.marker_fragments.first() {
             match marker.style().get_list().list_style_type {
-                list_style_type::T::disc |
-                list_style_type::T::none |
-                list_style_type::T::circle |
-                list_style_type::T::square |
-                list_style_type::T::disclosure_open |
-                list_style_type::T::disclosure_closed => {}
-                _ => this.block_flow.base.restyle_damage.insert(RESOLVE_GENERATED_CONTENT),
+                ListStyleType::Disc |
+                ListStyleType::None |
+                ListStyleType::Circle |
+                ListStyleType::Square |
+                ListStyleType::DisclosureOpen |
+                ListStyleType::DisclosureClosed => {}
+                _ => this.block_flow.base.restyle_damage.insert(ServoRestyleDamage::RESOLVE_GENERATED_CONTENT),
             }
         }
 
@@ -120,12 +125,16 @@ impl Flow for ListItemFlow {
         }
     }
 
-    fn compute_absolute_position(&mut self, layout_context: &LayoutContext) {
-        self.block_flow.compute_absolute_position(layout_context)
+    fn compute_stacking_relative_position(&mut self, layout_context: &LayoutContext) {
+        self.block_flow.compute_stacking_relative_position(layout_context)
     }
 
     fn place_float_if_applicable<'a>(&mut self) {
         self.block_flow.place_float_if_applicable()
+    }
+
+    fn contains_roots_of_absolute_flow_tree(&self) -> bool {
+        self.block_flow.contains_roots_of_absolute_flow_tree()
     }
 
     fn is_absolute_containing_block(&self) -> bool {
@@ -144,11 +153,11 @@ impl Flow for ListItemFlow {
         self.build_display_list_for_list_item(state);
     }
 
-    fn collect_stacking_contexts(&mut self, state: &mut DisplayListBuildState) {
+    fn collect_stacking_contexts(&mut self, state: &mut StackingContextCollectionState) {
         self.block_flow.collect_stacking_contexts(state);
     }
 
-    fn repair_style(&mut self, new_style: &Arc<ServoComputedValues>) {
+    fn repair_style(&mut self, new_style: &::ServoArc<ComputedValues>) {
         self.block_flow.repair_style(new_style)
     }
 
@@ -169,7 +178,7 @@ impl Flow for ListItemFlow {
     }
 
     /// The 'position' property of this flow.
-    fn positioning(&self) -> position::T {
+    fn positioning(&self) -> Position {
         self.block_flow.positioning()
     }
 
@@ -198,7 +207,7 @@ impl Flow for ListItemFlow {
                                                              .early_absolute_position_info
                                                              .relative_containing_block_mode,
                                                          CoordinateSystem::Own)
-                           .translate(stacking_context_position));
+                           .translate(&stacking_context_position.to_vector()));
             }
         }
     }
@@ -221,17 +230,20 @@ pub enum ListStyleTypeContent {
 
 impl ListStyleTypeContent {
     /// Returns the content to be used for the given value of the `list-style-type` property.
-    pub fn from_list_style_type(list_style_type: list_style_type::T) -> ListStyleTypeContent {
+    pub fn from_list_style_type(list_style_type: ListStyleType) -> ListStyleTypeContent {
         // Just to keep things simple, use a nonbreaking space (Unicode 0xa0) to provide the marker
         // separation.
         match list_style_type {
-            list_style_type::T::none => ListStyleTypeContent::None,
-            list_style_type::T::disc | list_style_type::T::circle | list_style_type::T::square |
-            list_style_type::T::disclosure_open | list_style_type::T::disclosure_closed => {
+            ListStyleType::None => ListStyleTypeContent::None,
+            ListStyleType::Disc |
+            ListStyleType::Circle |
+            ListStyleType::Square |
+            ListStyleType::DisclosureOpen |
+            ListStyleType::DisclosureClosed => {
                 let text = generated_content::static_representation(list_style_type);
                 ListStyleTypeContent::StaticText(text)
             }
-            _ => ListStyleTypeContent::GeneratedContent(box GeneratedContentInfo::ListItem),
+            _ => ListStyleTypeContent::GeneratedContent(Box::new(GeneratedContentInfo::ListItem)),
         }
     }
 }

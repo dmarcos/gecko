@@ -14,9 +14,9 @@
 
 #include "builtin/Object.h"
 #include "jit/JitFrames.h"
+#include "proxy/Proxy.h"
 #include "vm/HelperThreads.h"
 #include "vm/Interpreter.h"
-#include "vm/ProxyObject.h"
 #include "vm/Symbol.h"
 
 namespace js {
@@ -55,9 +55,7 @@ class CompartmentChecker
 
     void check(JSCompartment* c) {
         if (c && !compartment->runtimeFromAnyThread()->isAtomsCompartment(c)) {
-            if (!compartment)
-                compartment = c;
-            else if (c != compartment)
+            if (c != compartment)
                 fail(compartment, c);
         }
     }
@@ -68,9 +66,11 @@ class CompartmentChecker
     }
 
     void check(JSObject* obj) {
-        MOZ_ASSERT(JS::ObjectIsNotGray(obj));
-        if (obj)
+        if (obj) {
+            MOZ_ASSERT(JS::ObjectIsNotGray(obj));
+            MOZ_ASSERT(!js::gc::IsAboutToBeFinalizedUnbarriered(&obj));
             check(obj->compartment());
+        }
     }
 
     template<typename T>
@@ -198,7 +198,7 @@ class CompartmentChecker
  * depends on other objects not having been swept yet.
  */
 #define START_ASSERT_SAME_COMPARTMENT()                                 \
-    if (JS::CurrentThreadIsHeapBusy())                                  \
+    if (cx->heapState != JS::HeapState::Idle)                           \
         return;                                                         \
     CompartmentChecker c(cx)
 
@@ -339,13 +339,9 @@ CallJSNativeConstructor(JSContext* cx, Native native, const CallArgs& args)
      * - CallOrConstructBoundFunction is an exception as well because we might
      *   have used bind on a proxy function.
      *
-     * - new Iterator(x) is user-hookable; it returns x.__iterator__() which
-     *   could be any object.
-     *
      * - (new Object(Object)) returns the callee.
      */
     MOZ_ASSERT_IF(native != js::proxy_Construct &&
-                  native != js::IteratorConstructor &&
                   (!callee->is<JSFunction>() || callee->as<JSFunction>().native() != obj_construct),
                   args.rval().isObject() && callee != &args.rval().toObject());
 
@@ -367,14 +363,14 @@ CallJSGetterOp(JSContext* cx, GetterOp op, HandleObject obj, HandleId id,
 }
 
 MOZ_ALWAYS_INLINE bool
-CallJSSetterOp(JSContext* cx, SetterOp op, HandleObject obj, HandleId id, MutableHandleValue vp,
+CallJSSetterOp(JSContext* cx, SetterOp op, HandleObject obj, HandleId id, HandleValue v,
                ObjectOpResult& result)
 {
     if (!CheckRecursionLimit(cx))
         return false;
 
-    assertSameCompartment(cx, obj, id, vp);
-    return op(cx, obj, id, vp, result);
+    assertSameCompartment(cx, obj, id, v);
+    return op(cx, obj, id, v, result);
 }
 
 inline bool
@@ -409,6 +405,9 @@ CheckForInterrupt(JSContext* cx)
     // C++ loops of library builtins.
     if (MOZ_UNLIKELY(cx->hasPendingInterrupt()))
         return cx->handleInterrupt();
+
+    JS_INTERRUPT_POSSIBLY_FAIL();
+
     return true;
 }
 
@@ -451,17 +450,29 @@ JSContext::runningWithTrustedPrincipals()
 }
 
 inline void
-JSContext::enterCompartment(
-    JSCompartment* c,
-    const js::AutoLockForExclusiveAccess* maybeLock /* = nullptr */)
+JSContext::enterNonAtomsCompartment(JSCompartment* c)
 {
     enterCompartmentDepth_++;
 
-    if (!c->zone()->isAtomsZone())
-        enterZoneGroup(c->zone()->group());
+    MOZ_ASSERT(!c->zone()->isAtomsZone());
+    c->holdGlobal();
+    enterZoneGroup(c->zone()->group());
+    c->releaseGlobal();
 
     c->enter();
-    setCompartment(c, maybeLock);
+    setCompartment(c, nullptr);
+}
+
+inline void
+JSContext::enterAtomsCompartment(JSCompartment* c,
+                                 const js::AutoLockForExclusiveAccess& lock)
+{
+    enterCompartmentDepth_++;
+
+    MOZ_ASSERT(c->zone()->isAtomsZone());
+
+    c->enter();
+    setCompartment(c, &lock);
 }
 
 template <typename T>
@@ -469,7 +480,7 @@ inline void
 JSContext::enterCompartmentOf(const T& target)
 {
     MOZ_ASSERT(JS::CellIsNotGray(target));
-    enterCompartment(target->compartment(), nullptr);
+    enterNonAtomsCompartment(target->compartment());
 }
 
 inline void
@@ -529,7 +540,7 @@ inline void
 JSContext::enterZoneGroup(js::ZoneGroup* group)
 {
     MOZ_ASSERT(this == js::TlsContext.get());
-    group->enter();
+    group->enter(this);
 }
 
 inline void
@@ -547,9 +558,6 @@ JSContext::currentScript(jsbytecode** ppc,
         *ppc = nullptr;
 
     js::Activation* act = activation();
-    while (act && act->isJit() && !act->asJit()->isActive())
-        act = act->prev();
-
     if (!act)
         return nullptr;
 
@@ -559,14 +567,13 @@ JSContext::currentScript(jsbytecode** ppc,
         return nullptr;
 
     if (act->isJit()) {
+        if (act->hasWasmExitFP())
+            return nullptr;
         JSScript* script = nullptr;
         js::jit::GetPcScript(const_cast<JSContext*>(this), &script, ppc);
         MOZ_ASSERT(allowCrossCompartment || script->compartment() == compartment());
         return script;
     }
-
-    if (act->isWasm())
-        return nullptr;
 
     MOZ_ASSERT(act->isInterpreter());
 

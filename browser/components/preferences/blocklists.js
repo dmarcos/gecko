@@ -8,7 +8,6 @@ const CONTENT_LIST_ID = "content";
 const TRACK_SUFFIX = "-track-digest256";
 const TRACKING_TABLE_PREF = "urlclassifier.trackingTable";
 const LISTS_PREF_BRANCH = "browser.safebrowsing.provider.mozilla.lists.";
-const UPDATE_TIME_PREF = "browser.safebrowsing.provider.mozilla.nextupdatetime";
 
 var gBlocklistManager = {
   _type: "",
@@ -112,37 +111,22 @@ var gBlocklistManager = {
     }
 
     if (activeList !== selected.id) {
-      const Cc = Components.classes, Ci = Components.interfaces;
-      let msg = this._bundle.getFormattedString("blocklistChangeRequiresRestart",
-                                                [this._brandShortName]);
-      let title = this._bundle.getFormattedString("shouldRestartTitle",
-                                                  [this._brandShortName]);
-      let shouldProceed = Services.prompt.confirm(window, title, msg);
-      if (shouldProceed) {
-        let cancelQuit = Cc["@mozilla.org/supports-PRBool;1"]
-                           .createInstance(Ci.nsISupportsPRBool);
-        Services.obs.notifyObservers(cancelQuit, "quit-application-requested",
-                                     "restart");
-        shouldProceed = !cancelQuit.data;
-
-        if (shouldProceed) {
-          let trackingTable = Services.prefs.getCharPref(TRACKING_TABLE_PREF);
-          if (selected.id != CONTENT_LIST_ID) {
-            trackingTable = trackingTable.replace("," + CONTENT_LIST_ID + TRACK_SUFFIX, "");
-          } else {
-            trackingTable += "," + CONTENT_LIST_ID + TRACK_SUFFIX;
-          }
-          Services.prefs.setCharPref(TRACKING_TABLE_PREF, trackingTable);
-          Services.prefs.setCharPref(UPDATE_TIME_PREF, 42);
-
-          Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit |
-                                Ci.nsIAppStartup.eRestart);
-        }
+      let trackingTable = Services.prefs.getCharPref(TRACKING_TABLE_PREF);
+      if (selected.id != CONTENT_LIST_ID) {
+        trackingTable = trackingTable.replace("," + CONTENT_LIST_ID + TRACK_SUFFIX, "");
+      } else {
+        trackingTable += "," + CONTENT_LIST_ID + TRACK_SUFFIX;
       }
+      Services.prefs.setCharPref(TRACKING_TABLE_PREF, trackingTable);
 
-      // Don't close the dialog in case we didn't quit.
-      return;
+      // Force an update after changing the tracking protection table.
+      let listmanager = Components.classes["@mozilla.org/url-classifier/listmanager;1"]
+                        .getService(Components.interfaces.nsIUrlListManager);
+      if (listmanager) {
+        listmanager.forceUpdates(trackingTable);
+      }
     }
+
     window.close();
   },
 

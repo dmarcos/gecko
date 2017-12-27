@@ -27,8 +27,9 @@
 
 #include "jsatominlines.h"
 #include "jscompartmentinlines.h"
-#include "jsgcinlines.h"
 
+#include "gc/Marking-inl.h"
+#include "gc/ObjectKind-inl.h"
 #include "vm/ShapedObject-inl.h"
 #include "vm/TypeInference-inl.h"
 
@@ -40,8 +41,28 @@ MaybeConvertUnboxedObjectToNative(JSContext* cx, JSObject* obj)
 {
     if (obj->is<UnboxedPlainObject>())
         return UnboxedPlainObject::convertToNative(cx, obj);
-    if (obj->is<UnboxedArrayObject>())
-        return UnboxedArrayObject::convertToNative(cx, obj);
+    return true;
+}
+
+static MOZ_ALWAYS_INLINE bool
+ClassMayResolveId(const JSAtomState& names, const Class* clasp, jsid id, JSObject* maybeObj)
+{
+    MOZ_ASSERT_IF(maybeObj, maybeObj->getClass() == clasp);
+
+    if (!clasp->getResolve()) {
+        // Sanity check: we should only have a mayResolve hook if we have a
+        // resolve hook.
+        MOZ_ASSERT(!clasp->getMayResolve(), "Class with mayResolve hook but no resolve hook");
+        return false;
+    }
+
+    if (JSMayResolveOp mayResolve = clasp->getMayResolve()) {
+        // Tell the analysis our mayResolve hooks won't trigger GC.
+        JS::AutoSuppressGCAnalysis nogc;
+        if (!mayResolve(names, id, maybeObj))
+            return false;
+    }
+
     return true;
 }
 
@@ -99,10 +120,11 @@ JSObject::finalize(js::FreeOp* fop)
                 // Don't free the elements until object finalization finishes,
                 // so that other objects can access these elements while they
                 // are themselves finalized.
+                MOZ_ASSERT(elements->numShiftedElements() == 0);
                 fop->freeLater(elements);
             }
         } else {
-            fop->free_(elements);
+            fop->free_(nobj->getUnshiftedElementsHeader());
         }
     }
 
@@ -118,6 +140,24 @@ js::NativeObject::sweepDictionaryListPointer()
     // not try to access the dead object.
     if (shape_->listp == &shape_)
         shape_->listp = nullptr;
+}
+
+MOZ_ALWAYS_INLINE void
+js::NativeObject::updateDictionaryListPointerAfterMinorGC(NativeObject* old)
+{
+    MOZ_ASSERT(this == Forwarded(old));
+
+    // Dictionary objects can be allocated in the nursery and when they are
+    // tenured the shape's pointer into the object needs to be updated.
+    if (shape_->listp == &old->shape_)
+        shape_->listp = &shape_;
+}
+
+inline void
+js::gc::MakeAccessibleAfterMovingGC(JSObject* obj)
+{
+    if (obj->isNative())
+        obj->as<NativeObject>().updateShapeAfterMovingGC();
 }
 
 /* static */ inline bool
@@ -218,12 +258,6 @@ js::GetElementNoGC(JSContext* cx, JSObject* obj, const Value& receiver, uint32_t
 }
 
 inline bool
-js::GetElementNoGC(JSContext* cx, JSObject* obj, JSObject* receiver, uint32_t index, Value* vp)
-{
-    return GetElementNoGC(cx, obj, ObjectValue(*receiver), index, vp);
-}
-
-inline bool
 js::DeleteProperty(JSContext* cx, HandleObject obj, HandleId id, ObjectOpResult& result)
 {
     MarkTypePropertyNonData(cx, obj, id);
@@ -241,6 +275,48 @@ js::DeleteElement(JSContext* cx, HandleObject obj, uint32_t index, ObjectOpResul
     return DeleteProperty(cx, obj, id, result);
 }
 
+MOZ_ALWAYS_INLINE bool
+js::MaybeHasInterestingSymbolProperty(JSContext* cx, JSObject* obj, Symbol* symbol,
+                                      JSObject** holder)
+{
+    MOZ_ASSERT(symbol->isInterestingSymbol());
+
+    jsid id = SYMBOL_TO_JSID(symbol);
+    do {
+        if (obj->maybeHasInterestingSymbolProperty() ||
+            MOZ_UNLIKELY(ClassMayResolveId(cx->names(), obj->getClass(), id, obj)))
+        {
+            if (holder)
+                *holder = obj;
+            return true;
+        }
+        obj = obj->staticPrototype();
+    } while (obj);
+
+    return false;
+}
+
+MOZ_ALWAYS_INLINE bool
+js::GetInterestingSymbolProperty(JSContext* cx, HandleObject obj, Symbol* sym, MutableHandleValue vp)
+{
+    JSObject* holder;
+    if (!MaybeHasInterestingSymbolProperty(cx, obj, sym, &holder)) {
+#ifdef DEBUG
+        RootedValue receiver(cx, ObjectValue(*obj));
+        RootedId id(cx, SYMBOL_TO_JSID(sym));
+        if (!GetProperty(cx, obj, receiver, id, vp))
+            return false;
+        MOZ_ASSERT(vp.isUndefined());
+#endif
+        vp.setUndefined();
+        return true;
+    }
+
+    RootedObject holderRoot(cx, holder);
+    RootedValue receiver(cx, ObjectValue(*obj));
+    RootedId id(cx, SYMBOL_TO_JSID(sym));
+    return GetProperty(cx, holderRoot, receiver, id, vp);
+}
 
 /* * */
 
@@ -381,12 +457,6 @@ JSObject::isBoundFunction() const
 }
 
 inline bool
-JSObject::watched() const
-{
-    return hasAllFlags(js::BaseShape::WATCHED);
-}
-
-inline bool
 JSObject::isDelegate() const
 {
     return hasAllFlags(js::BaseShape::DELEGATE);
@@ -398,16 +468,21 @@ JSObject::hasUncacheableProto() const
     return hasAllFlags(js::BaseShape::UNCACHEABLE_PROTO);
 }
 
-inline bool
-JSObject::hadElementsAccess() const
+MOZ_ALWAYS_INLINE bool
+JSObject::maybeHasInterestingSymbolProperty() const
 {
-    return hasAllFlags(js::BaseShape::HAD_ELEMENTS_ACCESS);
-}
+    const js::NativeObject* nobj;
+    if (isNative()) {
+        nobj = &as<js::NativeObject>();
+    } else if (is<js::UnboxedPlainObject>()) {
+        nobj = as<js::UnboxedPlainObject>().maybeExpando();
+        if (!nobj)
+            return false;
+    } else {
+        return true;
+    }
 
-inline bool
-JSObject::isIndexed() const
-{
-    return hasAllFlags(js::BaseShape::INDEXED);
+    return nobj->hasInterestingSymbol();
 }
 
 inline bool
@@ -427,12 +502,6 @@ inline bool
 JSObject::isNewGroupUnknown() const
 {
     return hasAllFlags(js::BaseShape::NEW_GROUP_UNKNOWN);
-}
-
-inline bool
-JSObject::wasNewScriptCleared() const
-{
-    return hasAllFlags(js::BaseShape::NEW_SCRIPT_CLEARED);
 }
 
 namespace js {
@@ -491,26 +560,37 @@ HasNativeMethodPure(JSObject* obj, PropertyName* name, JSNative native, JSContex
 static MOZ_ALWAYS_INLINE bool
 HasNoToPrimitiveMethodPure(JSObject* obj, JSContext* cx)
 {
-    jsid id = SYMBOL_TO_JSID(cx->wellKnownSymbols().toPrimitive);
+    Symbol* toPrimitive = cx->wellKnownSymbols().toPrimitive;
+    JSObject* holder;
+    if (!MaybeHasInterestingSymbolProperty(cx, obj, toPrimitive, &holder)) {
+#ifdef DEBUG
+        JSObject* pobj;
+        PropertyResult prop;
+        MOZ_ASSERT(LookupPropertyPure(cx, obj, SYMBOL_TO_JSID(toPrimitive), &pobj, &prop));
+        MOZ_ASSERT(!prop);
+#endif
+        return true;
+    }
+
     JSObject* pobj;
     PropertyResult prop;
-    if (!LookupPropertyPure(cx, obj, id, &pobj, &prop))
+    if (!LookupPropertyPure(cx, holder, SYMBOL_TO_JSID(toPrimitive), &pobj, &prop))
         return false;
 
     return !prop;
 }
 
+extern bool
+ToPropertyKeySlow(JSContext* cx, HandleValue argument, MutableHandleId result);
+
 /* ES6 draft rev 28 (2014 Oct 14) 7.1.14 */
-inline bool
+MOZ_ALWAYS_INLINE bool
 ToPropertyKey(JSContext* cx, HandleValue argument, MutableHandleId result)
 {
-    // Steps 1-2.
-    RootedValue key(cx, argument);
-    if (!ToPrimitive(cx, JSTYPE_STRING, &key))
-        return false;
+    if (MOZ_LIKELY(argument.isPrimitive()))
+        return ValueToId<CanGC>(cx, argument, result);
 
-    // Steps 3-4.
-    return ValueToId<CanGC>(cx, key, result);
+    return ToPropertyKeySlow(cx, argument, result);
 }
 
 /*
@@ -739,6 +819,105 @@ InitClass(JSContext* cx, HandleObject obj, HandleObject parent_proto,
           NativeObject** ctorp = nullptr,
           gc::AllocKind ctorKind = gc::AllocKind::FUNCTION);
 
+MOZ_ALWAYS_INLINE const char*
+GetObjectClassName(JSContext* cx, HandleObject obj)
+{
+    assertSameCompartment(cx, obj);
+
+    if (obj->is<ProxyObject>())
+        return Proxy::className(cx, obj);
+
+    return obj->getClass()->name;
+}
+
+inline bool
+IsCallable(const Value& v)
+{
+    return v.isObject() && v.toObject().isCallable();
+}
+
+// ES6 rev 24 (2014 April 27) 7.2.5 IsConstructor
+inline bool
+IsConstructor(const Value& v)
+{
+    return v.isObject() && v.toObject().isConstructor();
+}
+
+MOZ_ALWAYS_INLINE bool
+CreateThis(JSContext* cx, HandleObject callee, JSScript* calleeScript, HandleObject newTarget,
+           NewObjectKind newKind, MutableHandleValue thisv)
+{
+    if (callee->isBoundFunction()) {
+        thisv.setMagic(JS_UNINITIALIZED_LEXICAL);
+        return true;
+    }
+
+    if (calleeScript->isDerivedClassConstructor()) {
+        MOZ_ASSERT(callee->as<JSFunction>().isClassConstructor());
+        thisv.setMagic(JS_UNINITIALIZED_LEXICAL);
+        return true;
+    }
+
+    MOZ_ASSERT(thisv.isMagic(JS_IS_CONSTRUCTING));
+
+    JSObject* obj = CreateThisForFunction(cx, callee, newTarget, newKind);
+    if (!obj)
+        return false;
+
+    thisv.setObject(*obj);
+    return true;
+}
+
 } /* namespace js */
+
+MOZ_ALWAYS_INLINE bool
+JSObject::isCallable() const
+{
+    if (is<JSFunction>())
+        return true;
+    return callHook() != nullptr;
+}
+
+MOZ_ALWAYS_INLINE bool
+JSObject::isConstructor() const
+{
+    if (is<JSFunction>()) {
+        const JSFunction& fun = as<JSFunction>();
+        return fun.isConstructor();
+    }
+    return constructHook() != nullptr;
+}
+
+MOZ_ALWAYS_INLINE JSNative
+JSObject::callHook() const
+{
+    const js::Class* clasp = getClass();
+
+    if (JSNative call = clasp->getCall())
+        return call;
+
+    if (is<js::ProxyObject>()) {
+        const js::ProxyObject& p = as<js::ProxyObject>();
+        if (p.handler()->isCallable(const_cast<JSObject*>(this)))
+            return js::proxy_Call;
+    }
+    return nullptr;
+}
+
+MOZ_ALWAYS_INLINE JSNative
+JSObject::constructHook() const
+{
+    const js::Class* clasp = getClass();
+
+    if (JSNative construct = clasp->getConstruct())
+        return construct;
+
+    if (is<js::ProxyObject>()) {
+        const js::ProxyObject& p = as<js::ProxyObject>();
+        if (p.handler()->isConstructor(const_cast<JSObject*>(this)))
+            return js::proxy_Construct;
+    }
+    return nullptr;
+}
 
 #endif /* jsobjinlines_h */

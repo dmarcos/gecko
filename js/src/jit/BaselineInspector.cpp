@@ -15,6 +15,7 @@
 
 #include "vm/EnvironmentObject-inl.h"
 #include "vm/ObjectGroup-inl.h"
+#include "vm/ReceiverGuard-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -280,9 +281,14 @@ BaselineInspector::monomorphicStub(jsbytecode* pc)
     if (!hasBaselineScript())
         return nullptr;
 
-    const ICEntry& entry = icEntryFromPC(pc);
+    // IonBuilder::analyzeNewLoopTypes may call this (via expectedResultType
+    // below) on code that's unreachable, according to BytecodeAnalysis. Use
+    // maybeICEntryFromPC to handle this.
+    const ICEntry* entry = maybeICEntryFromPC(pc);
+    if (!entry)
+        return nullptr;
 
-    ICStub* stub = entry.firstStub();
+    ICStub* stub = entry->firstStub();
     ICStub* next = stub->next();
 
     if (!next || !next->isFallback())
@@ -315,7 +321,9 @@ MIRType
 BaselineInspector::expectedResultType(jsbytecode* pc)
 {
     // Look at the IC entries for this op to guess what type it will produce,
-    // returning MIRType::None otherwise.
+    // returning MIRType::None otherwise. Note that IonBuilder may call this
+    // for bytecode ops that are unreachable and don't have a Baseline IC, see
+    // comment in monomorphicStub.
 
     ICStub* stub = monomorphicStub(pc);
     if (!stub)
@@ -532,10 +540,8 @@ BaselineInspector::hasSeenDoubleResult(jsbytecode* pc)
 
     if (stub->isUnaryArith_Fallback())
         return stub->toUnaryArith_Fallback()->sawDoubleResult();
-    else
-        return stub->toBinaryArith_Fallback()->sawDoubleResult();
 
-    return false;
+    return stub->toBinaryArith_Fallback()->sawDoubleResult();
 }
 
 JSObject*
@@ -620,25 +626,25 @@ BaselineInspector::getTemplateObjectForNative(jsbytecode* pc, Native native)
 }
 
 bool
-BaselineInspector::isOptimizableCallStringSplit(jsbytecode* pc, JSString** strOut, JSString** sepOut,
-                                                JSObject** objOut)
+BaselineInspector::isOptimizableConstStringSplit(jsbytecode* pc, JSString** strOut,
+                                                 JSString** sepOut, ArrayObject** objOut)
 {
     if (!hasBaselineScript())
         return false;
 
     const ICEntry& entry = icEntryFromPC(pc);
 
-    // If StringSplit stub is attached, must have only one stub attached.
+    // If ConstStringSplit stub is attached, must have only one stub attached.
     if (entry.fallbackStub()->numOptimizedStubs() != 1)
         return false;
 
     ICStub* stub = entry.firstStub();
-    if (stub->kind() != ICStub::Call_StringSplit)
+    if (stub->kind() != ICStub::Call_ConstStringSplit)
         return false;
 
-    *strOut = stub->toCall_StringSplit()->expectedStr();
-    *sepOut = stub->toCall_StringSplit()->expectedSep();
-    *objOut = stub->toCall_StringSplit()->templateObject();
+    *strOut = stub->toCall_ConstStringSplit()->expectedStr();
+    *sepOut = stub->toCall_ConstStringSplit()->expectedSep();
+    *objOut = stub->toCall_ConstStringSplit()->templateObject();
     return true;
 }
 
@@ -1213,6 +1219,101 @@ BaselineInspector::commonSetPropFunction(jsbytecode* pc, JSObject** holder, Shap
         return false;
 
     MOZ_ASSERT(*isOwnProperty == !*holder);
+    return true;
+}
+
+static bool
+GetCacheIRReceiverForProtoReadSlot(ICCacheIR_Monitored* stub, ReceiverGuard* receiver,
+                                   JSObject** holderResult)
+{
+    // We match:
+    //
+    //   GuardIsObject 0
+    //   <ReceiverGuard>
+    //   1: LoadObject holder
+    //   GuardShape 1
+    //   LoadFixedSlotResult 1 or LoadDynamicSlotResult 1
+
+    *receiver = ReceiverGuard();
+    CacheIRReader reader(stub->stubInfo());
+
+    ObjOperandId objId = ObjOperandId(0);
+    if (!reader.matchOp(CacheOp::GuardIsObject, objId))
+        return false;
+
+    if (!MatchCacheIRReceiverGuard(reader, stub, stub->stubInfo(), objId, receiver))
+        return false;
+
+    if (!reader.matchOp(CacheOp::LoadObject))
+        return false;
+    ObjOperandId holderId = reader.objOperandId();
+    JSObject* holder = stub->stubInfo()->getStubField<JSObject*>(stub, reader.stubOffset()).get();
+
+    if (!reader.matchOp(CacheOp::GuardShape, holderId))
+        return false;
+    Shape* holderShape = stub->stubInfo()->getStubField<Shape*>(stub, reader.stubOffset());
+
+    if (!reader.matchOpEither(CacheOp::LoadFixedSlotResult, CacheOp::LoadDynamicSlotResult))
+        return false;
+    if (reader.objOperandId() != holderId)
+        return false;
+
+    if (holder->maybeShape() != holderShape)
+        return false;
+    if (*holderResult && *holderResult != holder)
+        return false;
+
+    *holderResult = holder;
+    return true;
+}
+
+bool
+BaselineInspector::maybeInfoForProtoReadSlot(jsbytecode* pc, ReceiverVector& receivers,
+                                             ObjectGroupVector& convertUnboxedGroups,
+                                             JSObject** holder)
+{
+    // This is like maybeInfoForPropertyOp, but for when the property exists on
+    // the prototype.
+
+    MOZ_ASSERT(receivers.empty());
+    MOZ_ASSERT(convertUnboxedGroups.empty());
+    MOZ_ASSERT(!*holder);
+
+    if (!hasBaselineScript())
+        return true;
+
+    MOZ_ASSERT(isValidPC(pc));
+    const ICEntry& entry = icEntryFromPC(pc);
+
+    ICStub* stub = entry.firstStub();
+    while (stub->next()) {
+        ReceiverGuard receiver;
+        if (stub->isCacheIR_Monitored()) {
+            if (!GetCacheIRReceiverForProtoReadSlot(stub->toCacheIR_Monitored(), &receiver,
+                                                    holder))
+            {
+                receivers.clear();
+                return true;
+            }
+        } else {
+            receivers.clear();
+            return true;
+        }
+
+        if (!AddReceiver(receiver, receivers, convertUnboxedGroups))
+            return false;
+
+        stub = stub->next();
+    }
+
+    if (stub->toGetProp_Fallback()->hadUnoptimizableAccess())
+        receivers.clear();
+
+    // Don't inline if there are more than 5 receivers.
+    if (receivers.length() > 5)
+        receivers.clear();
+
+    MOZ_ASSERT_IF(!receivers.empty(), *holder);
     return true;
 }
 

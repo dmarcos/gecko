@@ -8,7 +8,6 @@
 
 #include "mozilla/DebugOnly.h"
 
-#include "jsapi.h"
 #include "jscompartment.h"
 #include "jsgc.h"
 #include "jsobj.h"
@@ -272,6 +271,7 @@ struct StatsClosure
     SourceSet seenSources;
     wasm::Metadata::SeenSet wasmSeenMetadata;
     wasm::ShareableBytes::SeenSet wasmSeenBytes;
+    wasm::Code::SeenSet wasmSeenCode;
     wasm::Table::SeenSet wasmSeenTables;
     bool anonymize;
 
@@ -285,6 +285,7 @@ struct StatsClosure
         return seenSources.init() &&
                wasmSeenMetadata.init() &&
                wasmSeenBytes.init() &&
+               wasmSeenCode.init() &&
                wasmSeenTables.init();
     }
 };
@@ -314,14 +315,17 @@ StatsZoneCallback(JSRuntime* rt, void* data, Zone* zone)
     // CollectRuntimeStats reserves enough space.
     MOZ_ALWAYS_TRUE(rtStats->zoneStatsVector.growBy(1));
     ZoneStats& zStats = rtStats->zoneStatsVector.back();
-    if (!zStats.initStrings(rt))
+    if (!zStats.initStrings())
         MOZ_CRASH("oom");
     rtStats->initExtraZoneStats(zone, &zStats);
     rtStats->currZoneStats = &zStats;
 
     zone->addSizeOfIncludingThis(rtStats->mallocSizeOf_,
                                  &zStats.typePool,
+                                 &zStats.regexpZone,
+                                 &zStats.jitZone,
                                  &zStats.baselineStubsOptimized,
+                                 &zStats.cachedCFG,
                                  &zStats.uniqueIdMap,
                                  &zStats.shapeTables,
                                  &rtStats->runtime.atomsMarkBitmaps);
@@ -336,7 +340,7 @@ StatsCompartmentCallback(JSContext* cx, void* data, JSCompartment* compartment)
     // CollectRuntimeStats reserves enough space.
     MOZ_ALWAYS_TRUE(rtStats->compartmentStatsVector.growBy(1));
     CompartmentStats& cStats = rtStats->compartmentStatsVector.back();
-    if (!cStats.initClasses(cx->runtime()))
+    if (!cStats.initClasses())
         MOZ_CRASH("oom");
     rtStats->initExtraCompartmentStats(compartment, &cStats);
 
@@ -353,7 +357,6 @@ StatsCompartmentCallback(JSContext* cx, void* data, JSCompartment* compartment)
                                         &cStats.lazyArrayBuffersTable,
                                         &cStats.objectMetadataTable,
                                         &cStats.crossCompartmentWrappersTable,
-                                        &cStats.regexpCompartment,
                                         &cStats.savedStacksSet,
                                         &cStats.varNamesSet,
                                         &cStats.nonSyntacticLexicalScopesTable,
@@ -473,6 +476,7 @@ StatsCellCallback(JSRuntime* rt, void* data, void* thing, JS::TraceKind traceKin
             module.addSizeOfMisc(rtStats->mallocSizeOf_,
                                  &closure->wasmSeenMetadata,
                                  &closure->wasmSeenBytes,
+                                 &closure->wasmSeenCode,
                                  &info.objectsNonHeapCodeWasm,
                                  &info.objectsMallocHeapMisc);
         } else if (obj->is<WasmInstanceObject>()) {
@@ -482,6 +486,7 @@ StatsCellCallback(JSRuntime* rt, void* data, void* thing, JS::TraceKind traceKin
             instance.addSizeOfMisc(rtStats->mallocSizeOf_,
                                    &closure->wasmSeenMetadata,
                                    &closure->wasmSeenBytes,
+                                   &closure->wasmSeenCode,
                                    &closure->wasmSeenTables,
                                    &info.objectsNonHeapCodeWasm,
                                    &info.objectsMallocHeapMisc);
@@ -614,10 +619,10 @@ StatsCellCallback(JSRuntime* rt, void* data, void* thing, JS::TraceKind traceKin
 }
 
 bool
-ZoneStats::initStrings(JSRuntime* rt)
+ZoneStats::initStrings()
 {
     isTotals = false;
-    allStrings = rt->new_<StringsHashMap>();
+    allStrings = js_new<StringsHashMap>();
     if (!allStrings || !allStrings->init()) {
         js_delete(allStrings);
         allStrings = nullptr;
@@ -627,10 +632,10 @@ ZoneStats::initStrings(JSRuntime* rt)
 }
 
 bool
-CompartmentStats::initClasses(JSRuntime* rt)
+CompartmentStats::initClasses()
 {
     isTotals = false;
-    allClasses = rt->new_<ClassesHashMap>();
+    allClasses = js_new<ClassesHashMap>();
     if (!allClasses || !allClasses->init()) {
         js_delete(allClasses);
         allClasses = nullptr;
@@ -877,6 +882,15 @@ JS::PeakSizeOfTemporary(const JSContext* cx)
     return cx->tempLifoAlloc().peakSizeOfExcludingThis();
 }
 
+JS_PUBLIC_API(void)
+JS::CollectTraceLoggerStateStats(RuntimeStats* rtStats)
+{
+#ifdef JS_TRACE_LOGGING
+    rtStats->runtime.tracelogger += SizeOfTraceLogState(rtStats->mallocSizeOf_);
+    rtStats->runtime.tracelogger += SizeOfTraceLogGraphState(rtStats->mallocSizeOf_);
+#endif
+}
+
 namespace JS {
 
 class SimpleJSRuntimeStats : public JS::RuntimeStats
@@ -936,8 +950,8 @@ AddSizeOfTab(JSContext* cx, HandleObject obj, MallocSizeOf mallocSizeOf, ObjectP
 }
 
 JS_PUBLIC_API(bool)
-AddServoSizeOf(JSContext* cx, MallocSizeOf mallocSizeOf, ObjectPrivateVisitor *opv,
-               ServoSizes *sizes)
+AddServoSizeOf(JSContext* cx, MallocSizeOf mallocSizeOf, ObjectPrivateVisitor* opv,
+               ServoSizes* sizes)
 {
     SimpleJSRuntimeStats rtStats(mallocSizeOf);
 

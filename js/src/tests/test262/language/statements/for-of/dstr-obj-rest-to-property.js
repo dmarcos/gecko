@@ -5,7 +5,7 @@
 description: When DestructuringAssignmentTarget is an object property, its value should be binded as rest object. (For..of statement)
 esid: sec-for-in-and-for-of-statements-runtime-semantics-labelledevaluation
 es6id: 13.7.5.11
-features: [destructuring-binding]
+features: [object-rest, destructuring-binding]
 flags: [generated]
 includes: [propertyHelper.js]
 info: |
@@ -34,10 +34,11 @@ for ({...src.y} of [{ x: 1, y: 2}]) {
   assert.sameValue(src.y.x, 1);
   assert.sameValue(src.y.y, 2);
 
-  verifyEnumerable(src, "y");
-  verifyWritable(src, "y");
-  verifyConfigurable(src, "y");
-
+  verifyProperty(src, "y", {
+    enumerable: true,
+    writable: true,
+    configurable: true
+  });
   counter += 1;
 }
 

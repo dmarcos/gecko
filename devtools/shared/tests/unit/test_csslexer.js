@@ -16,7 +16,7 @@ const domutils = Components.classes["@mozilla.org/inspector/dom-utils;1"]
 // An object that acts like a CSSLexer but verifies that the DOM lexer
 // and the JS lexer do the same thing.
 function DoubleLexer(input) {
-  do_print("DoubleLexer input: " + input);
+  info("DoubleLexer input: " + input);
   this.domLexer = domutils.getCSSLexer(input);
   this.jsLexer = jsLexer.getCSSLexer(input);
 }
@@ -128,8 +128,7 @@ var LEX_TESTS = [
              ["url:http://example.com"]],
   // In CSS Level 3, this is an ordinary URL, not a BAD_URL.
   ["url(http://example.com", ["url:http://example.com"]],
-  // See bug 1153981 to understand why this gets a SYMBOL token.
-  ["url(http://example.com @", ["bad_url:http://example.com", "symbol:@"]],
+  ["url(http://example.com @", ["bad_url:http://example.com"]],
   ["quo\\ting", ["ident:quoting"]],
   ["'bad string\n", ["bad_string:bad string", "whitespace"]],
   ["~=", ["includes"]],
@@ -183,7 +182,7 @@ function test_lexer_eofchar(cssText, argText, expectedAppend,
     // Nothing.
   }
 
-  do_print("EOF char test, input = " + cssText);
+  info("EOF char test, input = " + cssText);
 
   let result = lexer.performEOFFixup(argText, true);
   equal(result, expectedAppend);

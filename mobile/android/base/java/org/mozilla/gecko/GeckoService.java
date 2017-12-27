@@ -89,7 +89,6 @@ public class GeckoService extends Service {
 
     @Override // Service
     public void onCreate() {
-        GeckoAppShell.ensureCrashHandling();
         GeckoThread.onResume();
         super.onCreate();
 
@@ -162,7 +161,8 @@ public class GeckoService extends Service {
         }
 
         if (!GeckoThread.initMainProcessWithProfile(
-                profileName, profileDir != null ? new File(profileDir) : null)) {
+                profileName, profileDir != null ? new File(profileDir) : null,
+                GeckoApplication.addDefaultGeckoArgs(null))) {
             Log.w(LOGTAG, "Ignoring due to profile mismatch: " +
                           profileName + " [" + profileDir + ']');
 

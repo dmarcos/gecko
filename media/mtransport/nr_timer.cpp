@@ -55,6 +55,7 @@
 #include "nsComponentManagerUtils.h"
 #include "nsServiceManagerUtils.h"
 #include "nsIEventTarget.h"
+#include "nsINamed.h"
 #include "nsITimer.h"
 #include "nsNetCID.h"
 #include "runnable_utils.h"
@@ -87,7 +88,8 @@ protected:
 };
 
 class nrappkitTimerCallback : public nrappkitCallback,
-                              public nsITimerCallback {
+                              public nsITimerCallback,
+                              public nsINamed {
  public:
   // We're going to release ourself in the callback, so we need to be threadsafe
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -110,18 +112,24 @@ class nrappkitTimerCallback : public nrappkitCallback,
     Release(); // Will cause deletion of this object.
   }
 
+  NS_IMETHOD
+  GetName(nsACString& aName) override {
+    aName.AssignLiteral("nrappkitTimerCallback");
+    return NS_OK;
+  }
+
  private:
   nsCOMPtr<nsITimer> timer_;
   virtual ~nrappkitTimerCallback() {}
 };
 
-NS_IMPL_ISUPPORTS(nrappkitTimerCallback, nsITimerCallback)
+NS_IMPL_ISUPPORTS(nrappkitTimerCallback, nsITimerCallback, nsINamed)
 
 NS_IMETHODIMP nrappkitTimerCallback::Notify(nsITimer *timer) {
   r_log(LOG_GENERIC, LOG_DEBUG, "Timer callback fired (set in %s:%d)",
         function_.c_str(), line_);
   MOZ_RELEASE_ASSERT(timer == timer_);
-  cb_(0, 0, cb_arg_);
+  cb_(nullptr, 0, cb_arg_);
 
   // Allow the timer to go away.
   timer_ = nullptr;
@@ -137,7 +145,7 @@ class nrappkitScheduledCallback : public nrappkitCallback {
 
   void Run() {
     if (cb_) {
-      cb_(0, 0, cb_arg_);
+      cb_(nullptr, 0, cb_arg_);
     }
   }
 
@@ -199,14 +207,12 @@ static int nr_async_timer_set_nonzero(int timeout, NR_async_cb cb, void *arg,
   nsresult rv;
   CheckSTSThread();
 
-  nsCOMPtr<nsITimer> timer = do_CreateInstance(NS_TIMER_CONTRACTID, &rv);
-  if (NS_FAILED(rv)) {
-    return(R_FAILED);
-  }
-
   nrappkitTimerCallback* callback =
       new nrappkitTimerCallback(cb, arg, func, l);
-  rv = timer->InitWithCallback(callback, timeout, nsITimer::TYPE_ONE_SHOT);
+
+  nsCOMPtr<nsITimer> timer;
+  rv = NS_NewTimerWithCallback(getter_AddRefs(timer),
+                               callback, timeout, nsITimer::TYPE_ONE_SHOT);
   if (NS_FAILED(rv)) {
     return R_FAILED;
   }

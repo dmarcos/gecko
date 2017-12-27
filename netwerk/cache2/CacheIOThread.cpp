@@ -36,7 +36,7 @@ public:
 
 static CacheIOTelemetry::size_type const kGranularity = 30;
 
-CacheIOTelemetry::size_type 
+CacheIOTelemetry::size_type
 CacheIOTelemetry::mMinLengthToReport[CacheIOThread::LAST_LEVEL] = {
   kGranularity, kGranularity, kGranularity, kGranularity,
   kGranularity, kGranularity, kGranularity, kGranularity
@@ -148,7 +148,7 @@ BlockingIOWatcher::~BlockingIOWatcher()
 void BlockingIOWatcher::InitThread()
 {
   // GetCurrentThread() only returns a pseudo handle, hence DuplicateHandle
-  BOOL result = ::DuplicateHandle(
+  ::DuplicateHandle(
     GetCurrentProcess(),
     GetCurrentThread(),
     GetCurrentProcess(),
@@ -234,6 +234,7 @@ CacheIOThread::CacheIOThread()
 , mRerunCurrentEvent(false)
 , mShutdown(false)
 , mIOCancelableEvents(0)
+, mEventCounter(0)
 #ifdef DEBUG
 , mInsideLoop(true)
 #endif
@@ -442,7 +443,8 @@ void CacheIOThread::ThreadFunc(void* aClosure)
 {
   // XXXmstange We'd like to register this thread with the profiler, but doing
   // so causes leaks, see bug 1323100.
-  PR_SetCurrentThreadName("Cache2 I/O");
+  NS_SetCurrentThreadName("Cache2 I/O");
+
   mozilla::IOInterposer::RegisterCurrentThread();
   CacheIOThread* thread = static_cast<CacheIOThread*>(aClosure);
   thread->ThreadFunc();
@@ -490,6 +492,7 @@ loopStart:
           nsIThread *thread = mXPCOMThread;
           rv = thread->ProcessNextEvent(false, &processedEvent);
 
+          ++mEventCounter;
           MOZ_ASSERT(mBlockingIOWatcher);
           mBlockingIOWatcher->NotifyOperationDone();
         } while (NS_SUCCEEDED(rv) && processedEvent);
@@ -541,7 +544,7 @@ void CacheIOThread::LoopOneLevel(uint32_t aLevel)
   mCurrentlyExecutingLevel = aLevel;
 
   bool returnEvents = false;
-  bool reportTelementry = true;
+  bool reportTelemetry = true;
 
   EventQueue::size_type index;
   {
@@ -555,8 +558,8 @@ void CacheIOThread::LoopOneLevel(uint32_t aLevel)
         break;
       }
 
-      if (reportTelementry) {
-        reportTelementry = false;
+      if (reportTelemetry) {
+        reportTelemetry = false;
         CacheIOTelemetry::Report(aLevel, length);
       }
 
@@ -575,6 +578,7 @@ void CacheIOThread::LoopOneLevel(uint32_t aLevel)
         break;
       }
 
+      ++mEventCounter;
       --mQueueLength[aLevel];
 
       // Release outside the lock.
@@ -591,7 +595,7 @@ bool CacheIOThread::EventsPending(uint32_t aLastLevel)
   return mLowestLevelWaiting < aLastLevel || mHasXPCOMEvents;
 }
 
-NS_IMETHODIMP CacheIOThread::OnDispatchedEvent(nsIThreadInternal *thread)
+NS_IMETHODIMP CacheIOThread::OnDispatchedEvent()
 {
   MonitorAutoLock lock(mMonitor);
   mHasXPCOMEvents = true;

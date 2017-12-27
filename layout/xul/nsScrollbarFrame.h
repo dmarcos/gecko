@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,13 +18,18 @@ class nsIScrollbarMediator;
 
 nsIFrame* NS_NewScrollbarFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
-class nsScrollbarFrame : public nsBoxFrame
+class nsScrollbarFrame final : public nsBoxFrame
 {
 public:
-    explicit nsScrollbarFrame(nsStyleContext* aContext):
-      nsBoxFrame(aContext), mScrollbarMediator(nullptr) {}
+  explicit nsScrollbarFrame(nsStyleContext* aContext)
+    : nsBoxFrame(aContext, kClassID)
+    , mIncrement(0)
+    , mSmoothScroll(false)
+    , mScrollbarMediator(nullptr)
+  {}
 
-  NS_DECL_QUERYFRAME_TARGET(nsScrollbarFrame)
+  NS_DECL_QUERYFRAME
+  NS_DECL_FRAMEARENA_HELPERS(nsScrollbarFrame)
 
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override {
@@ -33,11 +39,8 @@ public:
 
   // nsIFrame overrides
   virtual nsresult AttributeChanged(int32_t aNameSpaceID,
-                                    nsIAtom* aAttribute,
+                                    nsAtom* aAttribute,
                                     int32_t aModType) override;
-
-  NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
 
   NS_IMETHOD HandlePress(nsPresContext* aPresContext,
                          mozilla::WidgetGUIEvent* aEvent,
@@ -64,8 +67,6 @@ public:
                       ReflowOutput&     aDesiredSize,
                       const ReflowInput& aReflowInput,
                       nsReflowStatus&          aStatus) override;
-
-  virtual nsIAtom* GetType() const override;  
 
   void SetScrollbarMediatorContent(nsIContent* aMediator);
   nsIScrollbarMediator* GetScrollbarMediator();

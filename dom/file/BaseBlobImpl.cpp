@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/dom/BaseBlobImpl.h"
+#include "nsRFPService.h"
 #include "prtime.h"
 
 namespace mozilla {
@@ -63,7 +64,7 @@ BaseBlobImpl::GetLastModified(ErrorResult& aRv)
 {
   MOZ_ASSERT(mIsFile, "Should only be called on files");
   if (IsDateUnknown()) {
-    mLastModificationDate = PR_Now();
+    mLastModificationDate = nsRFPService::ReduceTimePrecisionAsUSecs(PR_Now());
   }
 
   return mLastModificationDate / PR_USEC_PER_MSEC;
@@ -90,7 +91,7 @@ BaseBlobImpl::GetSendInfo(nsIInputStream** aBody, uint64_t* aContentLength,
   ErrorResult rv;
 
   nsCOMPtr<nsIInputStream> stream;
-  GetInternalStream(getter_AddRefs(stream), rv);
+  CreateInputStream(getter_AddRefs(stream), rv);
   if (NS_WARN_IF(rv.Failed())) {
     return rv.StealNSResult();
   }

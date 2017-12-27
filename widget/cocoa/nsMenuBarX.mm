@@ -28,6 +28,8 @@
 #include "nsIStringBundle.h"
 #include "nsToolkitCompsCID.h"
 
+#include "mozilla/dom/Element.h"
+
 NativeMenuItemTarget* nsMenuBarX::sNativeEventTarget = nil;
 nsMenuBarX* nsMenuBarX::sLastGeckoMenuBarPainted = nullptr;
 NSMenu* sApplicationMenu = nil;
@@ -44,7 +46,8 @@ static nsIContent* sQuitItemContent   = nullptr;
 
 NS_IMPL_ISUPPORTS(nsNativeMenuServiceX, nsINativeMenuService)
 
-NS_IMETHODIMP nsNativeMenuServiceX::CreateNativeMenuBar(nsIWidget* aParent, nsIContent* aMenuBarNode)
+NS_IMETHODIMP nsNativeMenuServiceX::CreateNativeMenuBar(nsIWidget* aParent,
+                                                        mozilla::dom::Element* aMenuBarElement)
 {
   NS_ASSERTION(NS_IsMainThread(), "Attempting to create native menu bar on wrong thread!");
 
@@ -52,7 +55,7 @@ NS_IMETHODIMP nsNativeMenuServiceX::CreateNativeMenuBar(nsIWidget* aParent, nsIC
   if (!mb)
     return NS_ERROR_OUT_OF_MEMORY;
 
-  return mb->Create(aParent, aMenuBarNode);
+  return mb->Create(aParent, aMenuBarElement);
 }
 
 //
@@ -131,7 +134,7 @@ nsMenuBarX::~nsMenuBarX()
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
 
-nsresult nsMenuBarX::Create(nsIWidget* aParent, nsIContent* aContent)
+nsresult nsMenuBarX::Create(nsIWidget* aParent, Element* aContent)
 {
   if (!aParent)
     return NS_ERROR_INVALID_ARG;
@@ -142,7 +145,7 @@ nsresult nsMenuBarX::Create(nsIWidget* aParent, nsIContent* aContent)
   if (mContent) {
     AquifyMenuBar();
 
-    nsresult rv = nsMenuGroupOwnerX::Create(mContent);
+    nsresult rv = nsMenuGroupOwnerX::Create(aContent);
     if (NS_FAILED(rv))
       return rv;
 
@@ -167,7 +170,7 @@ void nsMenuBarX::ConstructNativeMenus()
         menuContent->IsXULElement(nsGkAtoms::menu)) {
       nsMenuX* newMenu = new nsMenuX();
       if (newMenu) {
-        nsresult rv = newMenu->Create(this, this, menuContent);
+        nsresult rv = newMenu->Create(this, this, menuContent->AsElement());
         if (NS_SUCCEEDED(rv))
           InsertMenuAtIndex(newMenu, GetMenuCount());
         else
@@ -193,14 +196,14 @@ void nsMenuBarX::ConstructFallbackNativeMenus()
     return;
   }
 
-  nsXPIDLString labelUTF16;
-  nsXPIDLString keyUTF16;
+  nsAutoString labelUTF16;
+  nsAutoString keyUTF16;
 
-  const char16_t* labelProp = u"quitMenuitem.label";
-  const char16_t* keyProp = u"quitMenuitem.key";
+  const char* labelProp = "quitMenuitem.label";
+  const char* keyProp = "quitMenuitem.key";
 
-  stringBundle->GetStringFromName(labelProp, getter_Copies(labelUTF16));
-  stringBundle->GetStringFromName(keyProp, getter_Copies(keyUTF16));
+  stringBundle->GetStringFromName(labelProp, labelUTF16);
+  stringBundle->GetStringFromName(keyProp, keyUTF16);
 
   NSString* labelStr = [NSString stringWithUTF8String:
                         NS_ConvertUTF16toUTF8(labelUTF16).get()];
@@ -304,15 +307,19 @@ void nsMenuBarX::RemoveMenuAtIndex(uint32_t aIndex)
 
 void nsMenuBarX::ObserveAttributeChanged(nsIDocument* aDocument,
                                          nsIContent* aContent,
-                                         nsIAtom* aAttribute)
+                                         nsAtom* aAttribute)
 {
 }
 
 void nsMenuBarX::ObserveContentRemoved(nsIDocument* aDocument,
+                                       nsIContent* aContainer,
                                        nsIContent* aChild,
-                                       int32_t aIndexInContainer)
+                                       nsIContent* aPreviousSibling)
 {
-  RemoveMenuAtIndex(aIndexInContainer);
+  nsINode* parent = NODE_FROM(aContainer, aDocument);
+  MOZ_ASSERT(parent);
+  int32_t index = parent->IndexOf(aPreviousSibling) + 1;
+  RemoveMenuAtIndex(index);
 }
 
 void nsMenuBarX::ObserveContentInserted(nsIDocument* aDocument,
@@ -527,6 +534,11 @@ void nsMenuBarX::ApplicationMenuOpened()
   }
 }
 
+bool nsMenuBarX::PerformKeyEquivalent(NSEvent* theEvent)
+{
+  return [mNativeMenu performSuperKeyEquivalent:theEvent];
+}
+
 // Hide the item in the menu by setting the 'hidden' attribute. Returns it in |outHiddenNode| so
 // the caller can hang onto it if they so choose. It is acceptable to pass nsull
 // for |outHiddenNode| if the caller doesn't care about the hidden node.
@@ -534,11 +546,11 @@ void nsMenuBarX::HideItem(nsIDOMDocument* inDoc, const nsAString & inID, nsICont
 {
   nsCOMPtr<nsIDOMElement> menuItem;
   inDoc->GetElementById(inID, getter_AddRefs(menuItem));
-  nsCOMPtr<nsIContent> menuContent(do_QueryInterface(menuItem));
-  if (menuContent) {
-    menuContent->SetAttr(kNameSpaceID_None, nsGkAtoms::hidden, NS_LITERAL_STRING("true"), false);
+  nsCOMPtr<Element> menuElement(do_QueryInterface(menuItem));
+  if (menuElement) {
+    menuElement->SetAttr(kNameSpaceID_None, nsGkAtoms::hidden, NS_LITERAL_STRING("true"), false);
     if (outHiddenNode) {
-      *outHiddenNode = menuContent.get();
+      *outHiddenNode = menuElement.get();
       NS_IF_ADDREF(*outHiddenNode);
     }
   }
@@ -874,6 +886,11 @@ static BOOL gMenuItemsExecuteCommands = YES;
 
   // Return NO so that we can handle the event via NSView's "keyDown:".
   return NO;
+}
+
+- (BOOL)performSuperKeyEquivalent:(NSEvent*)theEvent
+{
+  return [super performKeyEquivalent:theEvent];
 }
 
 @end

@@ -7,7 +7,6 @@
 
 #include "GLContext.h"
 #include "WebGLFramebuffer.h"
-#include "mozilla/SizePrintfMacros.h"
 
 namespace mozilla {
 
@@ -56,14 +55,12 @@ WebGL2Context::ValidateClearBuffer(const char* funcName, GLenum buffer, GLint dr
     }
 
     if (availElemCount < requiredElements) {
-        ErrorInvalidValue("%s: Not enough elements. Require %" PRIuSIZE ". Given %" PRIuSIZE ".",
+        ErrorInvalidValue("%s: Not enough elements. Require %zu. Given %zu.",
                           funcName, requiredElements, availElemCount);
         return false;
     }
 
     ////
-
-    MakeContextCurrent();
 
     const auto& fb = mBoundDrawFramebuffer;
     if (fb) {

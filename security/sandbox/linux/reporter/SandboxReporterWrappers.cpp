@@ -29,7 +29,7 @@ public:
   { }
 
 private:
-  ~SandboxReportWrapper() { }
+  ~SandboxReportWrapper() = default;
   SandboxReport mReport;
 };
 
@@ -74,6 +74,9 @@ NS_IMETHODIMP SandboxReportWrapper::GetProcType(nsACString& aProcType)
   switch (mReport.mProcType) {
   case SandboxReport::ProcType::CONTENT:
     aProcType.AssignLiteral("content");
+    return NS_OK;
+  case SandboxReport::ProcType::FILE:
+    aProcType.AssignLiteral("file");
     return NS_OK;
   case SandboxReport::ProcType::MEDIA_PLUGIN:
     aProcType.AssignLiteral("mediaPlugin");
@@ -132,7 +135,7 @@ public:
   { }
 
 private:
-  ~SandboxReportArray() { }
+  ~SandboxReportArray() = default;
   uint64_t mOffset;
   nsTArray<SandboxReport> mArray;
 };
@@ -173,10 +176,10 @@ public:
   NS_DECL_ISUPPORTS
   NS_DECL_MOZISANDBOXREPORTER
 
-  SandboxReporterWrapper() { }
+  SandboxReporterWrapper() = default;
 
 private:
-  ~SandboxReporterWrapper() { }
+  ~SandboxReporterWrapper() = default;
 };
 
 NS_IMPL_ISUPPORTS(SandboxReporterWrapper, mozISandboxReporter)

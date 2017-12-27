@@ -25,7 +25,7 @@ class EventChainPreVisitor;
 
 namespace dom {
 
-class DOMError;
+class DOMException;
 class DOMStringList;
 class IDBDatabase;
 class IDBObjectStore;
@@ -76,7 +76,7 @@ public:
 
 private:
   RefPtr<IDBDatabase> mDatabase;
-  RefPtr<DOMError> mError;
+  RefPtr<DOMException> mError;
   nsTArray<nsString> mObjectStoreNames;
   nsTArray<RefPtr<IDBObjectStore>> mObjectStores;
   nsTArray<RefPtr<IDBObjectStore>> mDeletedObjectStores;
@@ -109,6 +109,7 @@ private:
   bool mCreating;
   bool mRegistered;
   bool mAbortedByScript;
+  bool mNotedActiveTransaction;
 
 #ifdef DEBUG
   bool mSentCommitOrAbort;
@@ -152,6 +153,10 @@ public:
     } else {
       mBackgroundActor.mNormalBackgroundActor = nullptr;
     }
+
+    // Note inactive transaction here if we didn't receive the Complete message
+    // from the parent.
+    MaybeNoteInactiveTransaction();
   }
 
   indexedDB::BackgroundRequestChild*
@@ -277,7 +282,7 @@ public:
   IDBTransactionMode
   GetMode(ErrorResult& aRv) const;
 
-  DOMError*
+  DOMException*
   GetError() const;
 
   already_AddRefed<IDBObjectStore>
@@ -323,13 +328,19 @@ private:
   ~IDBTransaction();
 
   void
-  AbortInternal(nsresult aAbortCode, already_AddRefed<DOMError> aError);
+  AbortInternal(nsresult aAbortCode, already_AddRefed<DOMException> aError);
 
   void
   SendCommit();
 
   void
   SendAbort(nsresult aResultCode);
+
+  void
+  NoteActiveTransaction();
+
+  void
+  MaybeNoteInactiveTransaction();
 
   void
   OnNewRequest();

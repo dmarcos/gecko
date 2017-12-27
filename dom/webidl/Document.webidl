@@ -55,9 +55,9 @@ interface Document : Node {
   [Pure]
   Element? getElementById(DOMString elementId);
 
-  [NewObject, Throws]
+  [CEReactions, NewObject, Throws]
   Element createElement(DOMString localName, optional (ElementCreationOptions or DOMString) options);
-  [NewObject, Throws]
+  [CEReactions, NewObject, Throws]
   Element createElementNS(DOMString? namespace, DOMString qualifiedName, optional (ElementCreationOptions or DOMString) options);
   [NewObject]
   DocumentFragment createDocumentFragment();
@@ -68,12 +68,12 @@ interface Document : Node {
   [NewObject, Throws]
   ProcessingInstruction createProcessingInstruction(DOMString target, DOMString data);
 
-  [Throws]
+  [CEReactions, Throws]
   Node importNode(Node node, optional boolean deep = false);
-  [Throws]
+  [CEReactions, Throws]
   Node adoptNode(Node node);
 
-  [NewObject, Throws]
+  [NewObject, Throws, NeedsCallerType]
   Event createEvent(DOMString interface);
 
   [NewObject, Throws]
@@ -111,9 +111,9 @@ partial interface Document {
 
   // DOM tree accessors
   //(Not proxy yet)getter object (DOMString name);
-  [SetterThrows, Pure]
+  [CEReactions, SetterThrows, Pure]
            attribute DOMString title;
-  [Pure]
+  [CEReactions, Pure]
            attribute DOMString dir;
   //(HTML only)         attribute HTMLElement? body;
   //(HTML only)readonly attribute HTMLHeadElement? head;
@@ -123,7 +123,8 @@ partial interface Document {
   //(HTML only)readonly attribute HTMLCollection links;
   //(HTML only)readonly attribute HTMLCollection forms;
   //(HTML only)readonly attribute HTMLCollection scripts;
-  //(HTML only)NodeList getElementsByName(DOMString elementName);
+  [Pure]
+  NodeList getElementsByName(DOMString elementName);
   //(Not implemented)readonly attribute DOMElementMap cssElementMap;
 
   // dynamic markup insertion
@@ -154,7 +155,6 @@ partial interface Document {
   [LenientThis] attribute EventHandler onreadystatechange;
 
   // Gecko extensions?
-                attribute EventHandler onwheel;
                 attribute EventHandler onbeforescriptexecute;
                 attribute EventHandler onafterscriptexecute;
 
@@ -264,17 +264,12 @@ partial interface Document {
   attribute EventHandler onpointerlockerror;
 };
 
-//http://dvcs.w3.org/hg/webcomponents/raw-file/tip/spec/custom/index.html#dfn-document-register
-partial interface Document {
-    // this is deprecated from CustomElements v0
-    [Throws, Func="CustomElementRegistry::IsCustomElementEnabled"]
-    object registerElement(DOMString name, optional ElementRegistrationOptions options);
-};
-
 // http://dvcs.w3.org/hg/webperf/raw-file/tip/specs/PageVisibility/Overview.html#sec-document-interface
+// https://w3c.github.io/page-visibility/#extensions-to-the-document-interface
 partial interface Document {
   readonly attribute boolean hidden;
   readonly attribute VisibilityState visibilityState;
+           attribute EventHandler onvisibilitychange;
 };
 
 // http://dev.w3.org/csswg/cssom/#extensions-to-the-document-interface
@@ -309,7 +304,7 @@ partial interface Document {
   //(Not implemented)NodeList  findAll(DOMString selectors, optional (Element or sequence<Node>)? refNodes);
 };
 
-// http://w3c.github.io/web-animations/#extensions-to-the-document-interface
+// https://drafts.csswg.org/web-animations/#extensions-to-the-document-interface
 partial interface Document {
   [Func="nsDocument::IsWebAnimationsEnabled"]
   readonly attribute DocumentTimeline timeline;
@@ -384,11 +379,20 @@ partial interface Document {
 
   // Blocks the initial document parser until the given promise is settled.
   [ChromeOnly, Throws]
-  Promise<any> blockParsing(Promise<any> promise);
+  Promise<any> blockParsing(Promise<any> promise,
+                            optional BlockParsingOptions options);
 
   // like documentURI, except that for error pages, it returns the URI we were
   // trying to load when we hit an error, rather than the error page's own URI.
   [ChromeOnly] readonly attribute URI? mozDocumentURIIfNotForErrorPages;
+};
+
+dictionary BlockParsingOptions {
+  /**
+   * If true, blocks script-created parsers (created via document.open()) in
+   * addition to network-created parsers.
+   */
+  boolean blockScriptCreated = true;
 };
 
 // Extension to give chrome JS the ability to determine when a document was
@@ -427,6 +431,12 @@ partial interface Document {
    */
   [ChromeOnly, Throws]
   void removeAnonymousContent(AnonymousContent aContent);
+};
+
+// http://w3c.github.io/selection-api/#extensions-to-document-interface
+partial interface Document {
+  [Throws]
+  Selection? getSelection();
 };
 
 // Extension to give chrome JS the ability to determine whether

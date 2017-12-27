@@ -1,8 +1,5 @@
-commit 1327925dafa2fffea089131f71e3d455a1064999
-Merge: 0cc55bb e54c471
-Author: Leo Balter <leonardo.balter@gmail.com>
-Date:   Thu Mar 9 10:30:58 2017 -0500
+commit 8311965251953d4745aeb68c98fb71fab2eac1d0
+Author: André Bargull <andre.bargull@gmail.com>
+Date:   Fri Dec 1 11:16:43 2017 -0800
 
-    Merge pull request #892 from leobalter/generator-spread
-    
-    Add tests for object spread on yield value
+    Fix copy-paste bugs in BigInt tests (#1361)

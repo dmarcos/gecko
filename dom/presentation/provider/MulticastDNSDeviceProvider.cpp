@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,7 +12,6 @@
 #include "mozilla/Logging.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
-#include "mozilla/SizePrintfMacros.h"
 #include "mozilla/Unused.h"
 #include "nsComponentManagerUtils.h"
 #include "nsIObserverService.h"
@@ -145,14 +145,14 @@ MulticastDNSDeviceProvider::Init()
     return rv;
   }
 
-  mDiscoveryTimer = do_CreateInstance(NS_TIMER_CONTRACTID, &rv);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
+  mDiscoveryTimer = NS_NewTimer();
+  if (NS_WARN_IF(!mDiscoveryTimer)) {
+    return NS_ERROR_OUT_OF_MEMORY;
   }
 
-  mServerRetryTimer = do_CreateInstance(NS_TIMER_CONTRACTID, &rv);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
+  mServerRetryTimer = NS_NewTimer();
+  if (NS_WARN_IF(!mServerRetryTimer)) {
+    return NS_ERROR_OUT_OF_MEMORY;
   }
   Preferences::AddStrongObservers(this, kObservedPrefs);
 
@@ -161,7 +161,8 @@ MulticastDNSDeviceProvider::Init()
   mDiscoverable = Preferences::GetBool(PREF_PRESENTATION_DISCOVERABLE);
   mDiscoverableEncrypted = Preferences::GetBool(PREF_PRESENTATION_DISCOVERABLE_ENCRYPTED);
   mServerRetryMs = Preferences::GetUint(PREF_PRESENTATION_DISCOVERABLE_RETRY_MS);
-  mServiceName = Preferences::GetCString(PREF_PRESENTATION_DEVICE_NAME);
+  mServiceName.Truncate();
+  Preferences::GetCString(PREF_PRESENTATION_DEVICE_NAME, mServiceName);
 
 #ifdef MOZ_WIDGET_ANDROID
   // FIXME: Bug 1185806 - Provide a common device name setting.
@@ -834,8 +835,10 @@ MulticastDNSDeviceProvider::OnRegistrationFailed(nsIDNSServiceInfo* aServiceInfo
   mRegisterRequest = nullptr;
 
   if (aErrorCode == nsIDNSRegistrationListener::ERROR_SERVICE_NOT_RUNNING) {
-    return NS_DispatchToMainThread(
-             NewRunnableMethod(this, &MulticastDNSDeviceProvider::RegisterMDNSService));
+    return NS_DispatchToMainThread(NewRunnableMethod(
+      "dom::presentation::MulticastDNSDeviceProvider::RegisterMDNSService",
+      this,
+      &MulticastDNSDeviceProvider::RegisterMDNSService));
   }
 
   return NS_OK;
@@ -1097,7 +1100,8 @@ MulticastDNSDeviceProvider::Observe(nsISupports* aSubject,
     } else if (data.EqualsLiteral(PREF_PRESENTATION_DISCOVERABLE)) {
       OnDiscoverableChanged(Preferences::GetBool(PREF_PRESENTATION_DISCOVERABLE));
     } else if (data.EqualsLiteral(PREF_PRESENTATION_DEVICE_NAME)) {
-      nsAdoptingCString newServiceName = Preferences::GetCString(PREF_PRESENTATION_DEVICE_NAME);
+      nsAutoCString newServiceName;
+      Preferences::GetCString(PREF_PRESENTATION_DEVICE_NAME, newServiceName);
       if (!mServiceName.Equals(newServiceName)) {
         OnServiceNameChanged(newServiceName);
       }

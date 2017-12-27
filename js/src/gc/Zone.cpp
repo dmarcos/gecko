@@ -6,8 +6,6 @@
 
 #include "gc/Zone.h"
 
-#include "jsgc.h"
-
 #include "gc/Policy.h"
 #include "jit/BaselineJIT.h"
 #include "jit/Ion.h"
@@ -17,6 +15,7 @@
 
 #include "jscompartmentinlines.h"
 #include "jsgcinlines.h"
+#include "gc/Marking-inl.h"
 
 using namespace js;
 using namespace js::gc;
@@ -38,27 +37,28 @@ JS::Zone::Zone(JSRuntime* rt, ZoneGroup* group)
     weakCaches_(group),
     gcWeakKeys_(group, SystemAllocPolicy(), rt->randomHashCodeScrambler()),
     gcSweepGroupEdges_(group),
-    hasDeadProxies_(group),
-    typeDescrObjects_(group, this, SystemAllocPolicy()),
+    typeDescrObjects_(group, this),
+    regExps(this),
     markedAtoms_(group),
     atomCache_(group),
     externalStringCache_(group),
+    functionToStringCache_(group),
     usage(&rt->gc.usage),
     threshold(),
     gcDelayBytes(0),
     propertyTree_(group, this),
-    baseShapes_(group, this, BaseShapeSet()),
-    initialShapes_(group, this, InitialShapeSet()),
+    baseShapes_(group, this),
+    initialShapes_(group, this),
+    nurseryShapes_(group),
     data(group, nullptr),
     isSystem(group, false),
 #ifdef DEBUG
     gcLastSweepGroupIndex(group, 0),
 #endif
     jitZone_(group, nullptr),
-    gcState_(NoGC),
     gcScheduled_(false),
+    gcScheduledSaved_(false),
     gcPreserveCode_(group, false),
-    jitUsingBarriers_(group, false),
     keepShapeTables_(group, false),
     listNext_(group, NotOnList)
 {
@@ -68,8 +68,8 @@ JS::Zone::Zone(JSRuntime* rt, ZoneGroup* group)
 
     AutoLockGC lock(rt);
     threshold.updateAfterGC(8192, GC_NORMAL, rt->gc.tunables, rt->gc.schedulingState, lock);
-    setGCMaxMallocBytes(rt->gc.maxMallocBytesAllocated() * 0.9);
-    jitCodeCounter.setMax(jit::MaxCodeBytesPerProcess * 0.8);
+    setGCMaxMallocBytes(rt->gc.tunables.maxMallocBytes(), lock);
+    jitCodeCounter.setMax(jit::MaxCodeBytesPerProcess * 0.8, lock);
 }
 
 Zone::~Zone()
@@ -82,13 +82,17 @@ Zone::~Zone()
     js_delete(jitZone_.ref());
 
 #ifdef DEBUG
-    // Avoid assertion destroying the weak map list if the embedding leaked GC things.
-    if (!rt->gc.shutdownCollectedEverything())
+    // Avoid assertions failures warning that not everything has been destroyed
+    // if the embedding leaked GC things.
+    if (!rt->gc.shutdownCollectedEverything()) {
         gcWeakMapList().clear();
+        regExps.clear();
+    }
 #endif
 }
 
-bool Zone::init(bool isSystemArg)
+bool
+Zone::init(bool isSystemArg)
 {
     isSystem = isSystemArg;
     return uniqueIds().init() &&
@@ -96,19 +100,13 @@ bool Zone::init(bool isSystemArg)
            gcWeakKeys().init() &&
            typeDescrObjects().init() &&
            markedAtoms().init() &&
-           atomCache().init();
+           atomCache().init() &&
+           regExps.init();
 }
 
 void
-Zone::setNeedsIncrementalBarrier(bool needs, ShouldUpdateJit updateJit)
+Zone::setNeedsIncrementalBarrier(bool needs)
 {
-    if (updateJit == UpdateJit && needs != jitUsingBarriers_) {
-        jit::ToggleBarriers(this, needs);
-        jitUsingBarriers_ = needs;
-    }
-
-    MOZ_ASSERT_IF(needs && isAtomsZone(),
-                  !runtimeFromActiveCooperatingThread()->hasHelperThreadZones());
     MOZ_ASSERT_IF(needs, canCollect());
     needsIncrementalBarrier_ = needs;
 }
@@ -168,7 +166,7 @@ Zone::sweepBreakpoints(FreeOp* fop)
                 // live.
                 MOZ_ASSERT_IF(isGCSweeping() && dbgobj->zone()->isCollecting(),
                               dbgobj->zone()->isGCSweeping() ||
-                              (!scriptGone && dbgobj->asTenured().isMarked()));
+                              (!scriptGone && dbgobj->asTenured().isMarkedAny()));
 
                 bool dying = scriptGone || IsAboutToBeFinalized(&dbgobj);
                 MOZ_ASSERT_IF(!dying, !IsAboutToBeFinalized(&bp->getHandlerRef()));
@@ -259,8 +257,8 @@ Zone::discardJitCode(FreeOp* fop, bool discardBaselineCode)
 void
 JS::Zone::checkUniqueIdTableAfterMovingGC()
 {
-    for (UniqueIdMap::Enum e(uniqueIds()); !e.empty(); e.popFront())
-        js::gc::CheckGCThingAfterMovingGC(e.front().key());
+    for (auto r = uniqueIds().all(); !r.empty(); r.popFront())
+        js::gc::CheckGCThingAfterMovingGC(r.front().key());
 }
 #endif
 
@@ -280,7 +278,11 @@ Zone::createJitZone(JSContext* cx)
     if (!cx->runtime()->getJitRuntime(cx))
         return nullptr;
 
-    jitZone_ = cx->new_<js::jit::JitZone>();
+    UniquePtr<jit::JitZone> jitZone(cx->new_<js::jit::JitZone>());
+    if (!jitZone || !jitZone->init(cx))
+        return nullptr;
+
+    jitZone_ = jitZone.release();
     return jitZone_;
 }
 
@@ -297,13 +299,14 @@ Zone::hasMarkedCompartments()
 bool
 Zone::canCollect()
 {
-    // Zones cannot be collected while in use by other threads.
-    if (usedByHelperThread())
-        return false;
-    JSRuntime* rt = runtimeFromAnyThread();
-    if (isAtomsZone() && rt->hasHelperThreadZones())
-        return false;
-    return true;
+    // The atoms zone cannot be collected while off-thread parsing is taking
+    // place.
+    if (isAtomsZone())
+        return !runtimeFromAnyThread()->hasHelperThreadZones();
+
+    // Zones that will be or are currently used by other threads cannot be
+    // collected.
+    return !group()->createdForHelperThread();
 }
 
 void
@@ -348,6 +351,8 @@ Zone::nextZone() const
 void
 Zone::clearTables()
 {
+    MOZ_ASSERT(regExps.empty());
+
     if (baseShapes().initialized())
         baseShapes().clear();
     if (initialShapes().initialized())
@@ -373,6 +378,21 @@ Zone::addTypeDescrObject(JSContext* cx, HandleObject obj)
     }
 
     return true;
+}
+
+void
+Zone::deleteEmptyCompartment(JSCompartment* comp)
+{
+    MOZ_ASSERT(comp->zone() == this);
+    MOZ_ASSERT(arenas.checkEmptyArenaLists());
+    for (auto& i : compartments()) {
+        if (i == comp) {
+            compartments().erase(&i);
+            comp->destroy(runtimeFromActiveCooperatingThread()->defaultFreeOp());
+            return;
+        }
+    }
+    MOZ_CRASH("Compartment not found");
 }
 
 ZoneList::ZoneList()
@@ -470,7 +490,7 @@ ZoneList::clear()
 }
 
 JS_PUBLIC_API(void)
-JS::shadow::RegisterWeakCache(JS::Zone* zone, WeakCache<void*>* cachep)
+JS::shadow::RegisterWeakCache(JS::Zone* zone, detail::WeakCacheBase* cachep)
 {
     zone->registerWeakCache(cachep);
 }

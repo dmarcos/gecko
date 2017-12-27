@@ -10,8 +10,9 @@
 #define NS_SMILCSSPROPERTY_H_
 
 #include "mozilla/Attributes.h"
+#include "mozilla/StyleBackendType.h"
 #include "nsISMILAttr.h"
-#include "nsIAtom.h"
+#include "nsAtom.h"
 #include "nsCSSPropertyID.h"
 #include "nsCSSValue.h"
 
@@ -58,10 +59,14 @@ public:
    * SMIL animation.
    *
    * @param   aProperty  The property to check for animation support.
+   * @param   aBackend   The style backend to check for animation support.
+   *                     This is a temporary measure until the Servo backend
+   *                     supports all animatable properties (bug 1353918).
    * @return  true if the given property is supported for SMIL animation, or
    *          false otherwise
    */
-  static bool IsPropertyAnimatable(nsCSSPropertyID aPropID);
+  static bool IsPropertyAnimatable(nsCSSPropertyID aPropID,
+                                   mozilla::StyleBackendType aBackend);
 
 protected:
   nsCSSPropertyID mPropID;

@@ -5,20 +5,21 @@
 """
 Set up a browser environment before running a test.
 """
+from __future__ import absolute_import, print_function
 
 import os
-import re
 import tempfile
+
 import mozfile
-from mozprocess import ProcessHandler
-from mozprofile.profile import Profile
-
+import mozinfo
+import mozrunner
 from mozlog import get_proxy_logger
-
+from mozprocess import ProcessHandlerMixin
+from mozprofile.profile import Profile
 from talos import utils
-from talos.utils import TalosError
 from talos.gecko_profile import GeckoProfile
-
+from talos.utils import TalosError, run_in_debug_mode
+from talos import heavy
 
 LOG = get_proxy_logger()
 
@@ -47,9 +48,6 @@ class FFSetup(object):
       # here the profile is removed
     """
 
-    PROFILE_REGEX = re.compile('__metrics(.*)__metrics',
-                               re.DOTALL | re.MULTILINE)
-
     def __init__(self, browser_config, test_config):
         self.browser_config, self.test_config = browser_config, test_config
         self._tmp_dir = tempfile.mkdtemp()
@@ -58,6 +56,7 @@ class FFSetup(object):
         # (in etlparser.py). TODO fix that ?
         self.profile_dir = os.path.join(self._tmp_dir, 'profile')
         self.gecko_profile = None
+        self.debug_mode = run_in_debug_mode(browser_config)
 
     def _init_env(self):
         self.env = dict(os.environ)
@@ -95,47 +94,81 @@ class FFSetup(object):
         if self.test_config.get('extensions'):
             extensions.append(self.test_config['extensions'])
 
-        if self.browser_config['develop'] or \
-           self.browser_config['branch_name'] == 'Try':
-            extensions = [os.path.dirname(i) for i in extensions]
+        # downloading a profile instead of using the empty one
+        if self.test_config['profile'] is not None:
+            path = heavy.download_profile(self.test_config['profile'])
+            self.test_config['profile_path'] = path
 
-        profile = Profile.clone(
-            os.path.normpath(self.test_config['profile_path']),
-            self.profile_dir,
-            restore=False)
+        profile_path = os.path.normpath(self.test_config['profile_path'])
+        LOG.info("Cloning profile located at %s" % profile_path)
+
+        def _feedback(directory, content):
+            # Called by shutil.copytree on each visited directory.
+            # Used here to display info.
+            #
+            # Returns the items that should be ignored by
+            # shutil.copytree when copying the tree, so always returns
+            # an empty list.
+            sub = directory.split(profile_path)[-1].lstrip("/")
+            if sub:
+                LOG.info("=> %s" % sub)
+            return []
+
+        profile = Profile.clone(profile_path,
+                                self.profile_dir,
+                                ignore=_feedback,
+                                restore=False)
 
         profile.set_preferences(preferences)
+
+        # installing addons
+        LOG.info("Installing Add-ons")
         profile.addon_manager.install_addons(extensions)
 
+        # installing webextensions
+        webextensions = self.test_config.get('webextensions', None)
+        if isinstance(webextensions, basestring):
+            webextensions = [webextensions]
+
+        if webextensions is not None:
+            LOG.info("Installing Webextensions")
+            for webext in webextensions:
+                filename = utils.interpolate(webext)
+                if mozinfo.os == 'win':
+                    filename = filename.replace('/', '\\')
+                if not filename.endswith('.xpi'):
+                    continue
+                if not os.path.exists(filename):
+                    continue
+
+                profile.addon_manager.install_from_path(filename)
+
     def _run_profile(self):
-        command_args = utils.GenerateBrowserCommandLine(
-            self.browser_config["browser_path"],
-            self.browser_config["extra_args"],
-            self.profile_dir,
-            self.browser_config["init_url"]
-        )
+        runner_cls = mozrunner.runners.get(
+            mozinfo.info.get(
+                'appname',
+                'firefox'),
+            mozrunner.Runner)
+        args = [self.browser_config["extra_args"], self.browser_config["init_url"]]
+        runner = runner_cls(profile=self.profile_dir,
+                            binary=self.browser_config["browser_path"],
+                            cmdargs=args,
+                            env=self.env,
+                            process_class=ProcessHandlerMixin,
+                            process_args={})
 
-        def browser_log(line):
-            LOG.process_output(browser.pid, line)
+        runner.start(outputTimeout=30)
+        proc = runner.process_handler
+        LOG.process_start(proc.pid, "%s %s" % (self.browser_config["browser_path"],
+                                               ' '.join(args)))
 
-        browser = ProcessHandler(command_args, env=self.env,
-                                 processOutputLine=browser_log)
-        browser.run()
-        LOG.process_start(browser.pid, ' '.join(command_args))
         try:
-            exit_code = browser.wait()
-        except KeyboardInterrupt:
-            browser.kill()
-            raise
+            exit_code = proc.wait()
+        except Exception:
+            proc.kill()
+            raise TalosError("Browser Failed to close properly during warmup")
 
-        LOG.process_exit(browser.pid, exit_code)
-        results_raw = '\n'.join(browser.output)
-
-        if not self.PROFILE_REGEX.search(results_raw):
-            LOG.info("Could not find %s in browser output"
-                     % self.PROFILE_REGEX.pattern)
-            LOG.info("Raw results:%s" % results_raw)
-            raise TalosError("browser failed to close after being initialized")
+        LOG.process_exit(proc.pid, exit_code)
 
     def _init_gecko_profile(self):
         upload_dir = os.getenv('MOZ_UPLOAD_DIR')
@@ -149,7 +182,12 @@ class FFSetup(object):
             self.gecko_profile.update_env(self.env)
 
     def clean(self):
-        mozfile.remove(self._tmp_dir)
+        try:
+            mozfile.remove(self._tmp_dir)
+        except Exception as e:
+            print("Exception while removing profile directory: %s" % self._tmp_dir)
+            print(e)
+
         if self.gecko_profile:
             self.gecko_profile.clean()
 
@@ -159,7 +197,8 @@ class FFSetup(object):
         self._init_env()
         self._init_profile()
         try:
-            self._run_profile()
+            if not self.debug_mode:
+                self._run_profile()
         except:
             self.clean()
             raise

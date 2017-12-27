@@ -90,12 +90,14 @@ public:
 
   TextTrack* GetTrack();
 
-  virtual nsresult Clone(mozilla::dom::NodeInfo* aNodeInfo, nsINode** aResult) const override;
+  virtual nsresult Clone(mozilla::dom::NodeInfo* aNodeInfo, nsINode** aResult,
+                         bool aPreallocateChildren) const override;
 
   // Override ParseAttribute() to convert kind strings to enum values.
   virtual bool ParseAttribute(int32_t aNamespaceID,
-                              nsIAtom* aAttribute,
+                              nsAtom* aAttribute,
                               const nsAString& aValue,
+                              nsIPrincipal* aMaybeScriptedPrincipal,
                               nsAttrValue& aResult) override;
 
   // Override BindToTree() so that we can trigger a load when we become

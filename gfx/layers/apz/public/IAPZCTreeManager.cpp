@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=99: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,7 +11,9 @@
 #include "mozilla/EventStateManager.h"      // for WheelPrefs
 #include "mozilla/layers/APZThreadUtils.h"  // for AssertOnCompositorThread, etc
 #include "mozilla/MouseEvents.h"            // for WidgetMouseEvent
+#include "mozilla/TextEvents.h"             // for WidgetKeyboardEvent
 #include "mozilla/TouchEvents.h"            // for WidgetTouchEvent
+#include "mozilla/WheelHandlingHelper.h"    // for AutoWheelDeltaAdjuster
 
 namespace mozilla {
 namespace layers {
@@ -22,17 +24,12 @@ WillHandleMouseEvent(const WidgetMouseEventBase& aEvent)
   return aEvent.mMessage == eMouseMove ||
          aEvent.mMessage == eMouseDown ||
          aEvent.mMessage == eMouseUp ||
-         aEvent.mMessage == eDragEnd;
+         aEvent.mMessage == eDragEnd ||
+         (gfxPrefs::TestEventsAsyncEnabled() && aEvent.mMessage == eMouseHitTest);
 }
 
-// Returns whether or not a wheel event action will be (or was) performed by
-// APZ. If this returns true, the event must not perform a synchronous
-// scroll.
-//
-// Even if this returns false, all wheel events in APZ-aware widgets must
-// be sent through APZ so they are transformed correctly for TabParent.
-static bool
-WillHandleWheelEvent(WidgetWheelEvent* aEvent)
+/* static */ bool
+IAPZCTreeManager::WillHandleWheelEvent(WidgetWheelEvent* aEvent)
 {
   return EventStateManager::WheelEventIsScrollAction(aEvent) &&
          (aEvent->mDeltaMode == nsIDOMWheelEvent::DOM_DELTA_LINE ||
@@ -75,11 +72,12 @@ IAPZCTreeManager::ReceiveInputEvent(
         mouseEvent.mRefPoint.x = input.mOrigin.x;
         mouseEvent.mRefPoint.y = input.mOrigin.y;
         mouseEvent.mFlags.mHandledByAPZ = input.mHandledByAPZ;
+        mouseEvent.mFocusSequenceNumber = input.mFocusSequenceNumber;
         return status;
 
       }
 
-      TransformEventRefPoint(&mouseEvent.mRefPoint, aOutTargetGuid);
+      ProcessUnhandledEvent(&mouseEvent.mRefPoint, aOutTargetGuid, &aEvent.mFocusSequenceNumber);
       return nsEventStatus_eIgnore;
     }
     case eTouchEventClass: {
@@ -98,6 +96,7 @@ IAPZCTreeManager::ReceiveInputEvent(
           touchInput.mTouches[i].ToNewDOMTouch();
       }
       touchEvent.mFlags.mHandledByAPZ = touchInput.mHandledByAPZ;
+      touchEvent.mFocusSequenceNumber = touchInput.mFocusSequenceNumber;
       return result;
 
     }
@@ -116,41 +115,61 @@ IAPZCTreeManager::ReceiveInputEvent(
           scrollMode = ScrollWheelInput::SCROLLMODE_SMOOTH;
         }
 
-        ScreenPoint origin(wheelEvent.mRefPoint.x, wheelEvent.mRefPoint.y);
-        ScrollWheelInput input(wheelEvent.mTime, wheelEvent.mTimeStamp, 0,
-                               scrollMode,
-                               ScrollWheelInput::DeltaTypeForDeltaMode(
-                                                   wheelEvent.mDeltaMode),
-                               origin,
-                               wheelEvent.mDeltaX, wheelEvent.mDeltaY,
-                               wheelEvent.mAllowToOverrideSystemScrollSpeed);
+        // AutoWheelDeltaAdjuster may adjust the delta values for default
+        // action hander.  The delta values will be restored automatically
+        // when its instance is destroyed.
+        AutoWheelDeltaAdjuster adjuster(wheelEvent);
 
-        // We add the user multiplier as a separate field, rather than premultiplying
-        // it, because if the input is converted back to a WidgetWheelEvent, then
-        // EventStateManager would apply the delta a second time. We could in theory
-        // work around this by asking ESM to customize the event much sooner, and
-        // then save the "mCustomizedByUserPrefs" bit on ScrollWheelInput - but for
-        // now, this seems easier.
-        EventStateManager::GetUserPrefsForWheelEvent(&wheelEvent,
-          &input.mUserDeltaMultiplierX,
-          &input.mUserDeltaMultiplierY);
+        // If the wheel event becomes no-op event, don't handle it as scroll.
+        if (wheelEvent.mDeltaX || wheelEvent.mDeltaY) {
+          ScreenPoint origin(wheelEvent.mRefPoint.x, wheelEvent.mRefPoint.y);
+          ScrollWheelInput input(wheelEvent.mTime, wheelEvent.mTimeStamp, 0,
+                                 scrollMode,
+                                 ScrollWheelInput::DeltaTypeForDeltaMode(
+                                                     wheelEvent.mDeltaMode),
+                                 origin,
+                                 wheelEvent.mDeltaX, wheelEvent.mDeltaY,
+                                 wheelEvent.mAllowToOverrideSystemScrollSpeed);
 
-        nsEventStatus status = ReceiveInputEvent(input, aOutTargetGuid, aOutInputBlockId);
-        wheelEvent.mRefPoint.x = input.mOrigin.x;
-        wheelEvent.mRefPoint.y = input.mOrigin.y;
-        wheelEvent.mFlags.mHandledByAPZ = input.mHandledByAPZ;
-        return status;
+          // We add the user multiplier as a separate field, rather than premultiplying
+          // it, because if the input is converted back to a WidgetWheelEvent, then
+          // EventStateManager would apply the delta a second time. We could in theory
+          // work around this by asking ESM to customize the event much sooner, and
+          // then save the "mCustomizedByUserPrefs" bit on ScrollWheelInput - but for
+          // now, this seems easier.
+          EventStateManager::GetUserPrefsForWheelEvent(&wheelEvent,
+            &input.mUserDeltaMultiplierX,
+            &input.mUserDeltaMultiplierY);
+
+          nsEventStatus status = ReceiveInputEvent(input, aOutTargetGuid, aOutInputBlockId);
+          wheelEvent.mRefPoint.x = input.mOrigin.x;
+          wheelEvent.mRefPoint.y = input.mOrigin.y;
+          wheelEvent.mFlags.mHandledByAPZ = input.mHandledByAPZ;
+          wheelEvent.mFocusSequenceNumber = input.mFocusSequenceNumber;
+          return status;
+        }
       }
 
       UpdateWheelTransaction(aEvent.mRefPoint, aEvent.mMessage);
-      TransformEventRefPoint(&aEvent.mRefPoint, aOutTargetGuid);
+      ProcessUnhandledEvent(&aEvent.mRefPoint, aOutTargetGuid, &aEvent.mFocusSequenceNumber);
       return nsEventStatus_eIgnore;
 
+    }
+    case eKeyboardEventClass: {
+      WidgetKeyboardEvent& keyboardEvent = *aEvent.AsKeyboardEvent();
+
+      KeyboardInput input(keyboardEvent);
+
+      nsEventStatus status = ReceiveInputEvent(input, aOutTargetGuid, aOutInputBlockId);
+
+      keyboardEvent.mFlags.mHandledByAPZ = input.mHandledByAPZ;
+      keyboardEvent.mFocusSequenceNumber = input.mFocusSequenceNumber;
+      return status;
     }
     default: {
 
       UpdateWheelTransaction(aEvent.mRefPoint, aEvent.mMessage);
-      TransformEventRefPoint(&aEvent.mRefPoint, aOutTargetGuid);
+      ProcessUnhandledEvent(&aEvent.mRefPoint, aOutTargetGuid, &aEvent.mFocusSequenceNumber);
       return nsEventStatus_eIgnore;
 
     }

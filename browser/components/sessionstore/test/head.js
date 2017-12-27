@@ -28,7 +28,6 @@ registerCleanupFunction(() => {
   }
 });
 
-const {Promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
 const {SessionStore} = Cu.import("resource:///modules/sessionstore/SessionStore.jsm", {});
 const {SessionSaver} = Cu.import("resource:///modules/sessionstore/SessionSaver.jsm", {});
 const {SessionFile} = Cu.import("resource:///modules/sessionstore/SessionFile.jsm", {});
@@ -94,18 +93,24 @@ function waitForBrowserState(aState, aSetStateCallback) {
   let windowObserving = false;
   let restoreHiddenTabs = Services.prefs.getBoolPref(
                           "browser.sessionstore.restore_hidden_tabs");
+  let restoreTabsLazily = Services.prefs.getBoolPref(
+                          "browser.sessionstore.restore_tabs_lazily");
 
   aState.windows.forEach(function(winState) {
     winState.tabs.forEach(function(tabState) {
-      if (restoreHiddenTabs || !tabState.hidden)
+      if (!restoreTabsLazily && (restoreHiddenTabs || !tabState.hidden))
         expectedTabsRestored++;
     });
   });
 
-  // There must be only hidden tabs and restoreHiddenTabs = false. We still
+  // If there are only hidden tabs and restoreHiddenTabs = false, we still
   // expect one of them to be restored because it gets shown automatically.
-  if (!expectedTabsRestored)
+  // Otherwise if lazy tab restore there will only be one tab restored per window.
+  if (!expectedTabsRestored) {
     expectedTabsRestored = 1;
+  } else if (restoreTabsLazily) {
+    expectedTabsRestored = aState.windows.length;
+  }
 
   function onSSTabRestored(aEvent) {
     if (++tabsRestored == expectedTabsRestored) {
@@ -264,15 +269,15 @@ function forceSaveState() {
 function promiseRecoveryFileContents() {
   let promise = forceSaveState();
   return promise.then(function() {
-    return OS.File.read(SessionFile.Paths.recovery, { encoding: "utf-8" });
+    return OS.File.read(SessionFile.Paths.recovery, { encoding: "utf-8", compression: "lz4" });
   });
 }
 
-var promiseForEachSessionRestoreFile = Task.async(function*(cb) {
+var promiseForEachSessionRestoreFile = async function(cb) {
   for (let key of SessionFile.Paths.loadOrder) {
     let data = "";
     try {
-      data = yield OS.File.read(SessionFile.Paths[key], { encoding: "utf-8" });
+      data = await OS.File.read(SessionFile.Paths[key], { encoding: "utf-8", compression: "lz4" });
     } catch (ex) {
       // Ignore missing files
       if (!(ex instanceof OS.File.Error && ex.becauseNoSuchFile)) {
@@ -281,7 +286,7 @@ var promiseForEachSessionRestoreFile = Task.async(function*(cb) {
     }
     cb(data, key);
   }
-});
+};
 
 function promiseBrowserLoaded(aBrowser, ignoreSubFrames = true, wantLoad = null) {
   return BrowserTestUtils.browserLoaded(aBrowser, !ignoreSubFrames, wantLoad);
@@ -376,11 +381,11 @@ var gProgressListener = {
     for (let win of BrowserWindowIterator()) {
       for (let i = 0; i < win.gBrowser.tabs.length; i++) {
         let browser = win.gBrowser.tabs[i].linkedBrowser;
-        if (!browser.__SS_restoreState)
+        if (browser.isConnected && !browser.__SS_restoreState)
           wasRestored++;
         else if (browser.__SS_restoreState == TAB_STATE_RESTORING)
           isRestoring++;
-        else if (browser.__SS_restoreState == TAB_STATE_NEEDS_RESTORE)
+        else if (browser.__SS_restoreState == TAB_STATE_NEEDS_RESTORE || !browser.isConnected)
           needsRestore++;
       }
     }
@@ -466,20 +471,12 @@ function promiseDelayedStartupFinished(aWindow) {
   return new Promise(resolve => whenDelayedStartupFinished(aWindow, resolve));
 }
 
-function promiseEvent(element, eventType, isCapturing = false) {
-  return new Promise(resolve => {
-    element.addEventListener(eventType, function(event) {
-      resolve(event);
-    }, {capture: isCapturing, once: true});
-  });
-}
-
 function promiseTabRestored(tab) {
-  return promiseEvent(tab, "SSTabRestored");
+  return BrowserTestUtils.waitForEvent(tab, "SSTabRestored");
 }
 
 function promiseTabRestoring(tab) {
-  return promiseEvent(tab, "SSTabRestoring");
+  return BrowserTestUtils.waitForEvent(tab, "SSTabRestoring");
 }
 
 function sendMessage(browser, name, data = {}) {
@@ -516,7 +513,7 @@ function promiseRemoveTab(tab) {
 
 // Write DOMSessionStorage data to the given browser.
 function modifySessionStorage(browser, storageData, storageOptions = {}) {
-  return ContentTask.spawn(browser, [storageData, storageOptions], function* ([data, options]) {
+  return ContentTask.spawn(browser, [storageData, storageOptions], async function([data, options]) {
     let frame = content;
     if (options && "frameIndex" in options) {
       frame = content.frames[options.frameIndex];
@@ -552,10 +549,17 @@ function popPrefs() {
   return SpecialPowers.popPrefEnv();
 }
 
-function* checkScroll(tab, expected, msg) {
+async function checkScroll(tab, expected, msg) {
   let browser = tab.linkedBrowser;
-  yield TabStateFlusher.flush(browser);
+  await TabStateFlusher.flush(browser);
 
   let scroll = JSON.parse(ss.getTabState(tab)).scroll || null;
   is(JSON.stringify(scroll), JSON.stringify(expected), msg);
+}
+
+function whenDomWindowClosedHandled(aCallback) {
+  Services.obs.addObserver(function observer(aSubject, aTopic) {
+    Services.obs.removeObserver(observer, aTopic);
+    aCallback();
+  }, "sessionstore-debug-domwindowclosed-handled");
 }

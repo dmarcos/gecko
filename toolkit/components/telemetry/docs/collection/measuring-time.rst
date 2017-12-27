@@ -3,7 +3,7 @@ Measuring elapsed time
 ======================
 
 To make it easier to measure how long operations take, we have helpers for both JavaScript and C++.
-These helpers record the elapsed time into histograms, so you have to create suitable histograms for them first.
+These helpers record the elapsed time into histograms, so you have to create suitable :doc:`histograms` for them first.
 
 From JavaScript
 ===============
@@ -16,16 +16,20 @@ API:
 .. code-block:: js
 
     TelemetryStopwatch = {
-      // Start, cancel & finish recording elapsed time into a histogram.
-      // |aObject| is optional. If specificied, the timer is associated with this
+      // Start, check if running, cancel & finish recording elapsed time into a
+      // histogram.
+      // |aObject| is optional. If specified, the timer is associated with this
       // object, so multiple time measurements can be done concurrently.
       start(histogramId, aObject);
+      running(histogramId, aObject);
       cancel(histogramId, aObject);
       finish(histogramId, aObject);
-      // Start, cancel & finished recording elapsed time into a keyed histogram.
-      // |key| specificies the key to record into.
+      // Start, check if running, cancel & finish recording elapsed time into a
+      // keyed histogram.
+      // |key| specifies the key to record into.
       // |aObject| is optional and used as above.
       startKeyed(histogramId, key, aObject);
+      runningKeyed(histogramId, key, aObject);
       cancelKeyed(histogramId, key, aObject);
       finishKeyed(histogramId, key, aObject);
     };
@@ -44,11 +48,17 @@ Example:
     // ... do more work.
     TelemetryStopwatch.finish("SAMPLE_FILE_LOAD_TIME_MS");
 
+    // Another loading attempt? Start stopwatch again if
+    // not already running.
+    if (!TelemetryStopwatch.running("SAMPLE_FILE_LOAD_TIME_MS")) {
+      TelemetryStopwatch.start("SAMPLE_FILE_LOAD_TIME_MS");
+    }
+
     // Periodically, it's necessary to attempt to finish a
     // TelemetryStopwatch that's already been canceled or
     // finished. Normally, that throws a warning to the
     // console. If the TelemetryStopwatch being possibly
-    // cancelled or finished is expected behaviour, the
+    // canceled or finished is expected behaviour, the
     // warning can be suppressed by passing the optional
     // aCanceledOkay argument.
 

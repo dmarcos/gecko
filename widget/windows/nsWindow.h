@@ -12,6 +12,7 @@
 
 #include "mozilla/RefPtr.h"
 #include "nsBaseWidget.h"
+#include "CompositorWidget.h"
 #include "nsWindowBase.h"
 #include "nsdefs.h"
 #include "nsIdleService.h"
@@ -25,8 +26,10 @@
 #include "nsITimer.h"
 #include "nsRegion.h"
 #include "mozilla/EventForwards.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/TimeStamp.h"
+#include "mozilla/webrender/WebRenderTypes.h"
 #include "nsMargin.h"
 #include "nsRegionFwd.h"
 
@@ -67,7 +70,7 @@ struct MSGResult;
  * Native WIN32 window wrapper.
  */
 
-class nsWindow : public nsWindowBase
+class nsWindow final : public nsWindowBase
 {
   typedef mozilla::TimeStamp TimeStamp;
   typedef mozilla::TimeDuration TimeDuration;
@@ -76,9 +79,10 @@ class nsWindow : public nsWindowBase
   typedef mozilla::widget::NativeKey NativeKey;
   typedef mozilla::widget::MSGResult MSGResult;
   typedef mozilla::widget::IMEContext IMEContext;
+  typedef mozilla::widget::PlatformCompositorWidgetDelegate PlatformCompositorWidgetDelegate;
 
 public:
-  nsWindow();
+  explicit nsWindow(bool aIsChildWindow = false);
 
   NS_DECL_ISUPPORTS_INHERITED
 
@@ -133,6 +137,7 @@ public:
                                           int32_t aVertical) override;
   virtual void            PlaceBehind(nsTopLevelWidgetZPlacement aPlacement, nsIWidget *aWidget, bool aActivate) override;
   virtual void            SetSizeMode(nsSizeMode aMode) override;
+  virtual void            SuppressAnimation(bool aSuppress) override;
   virtual void            Enable(bool aState) override;
   virtual bool            IsEnabled() const override;
   virtual nsresult        SetFocus(bool aRaise) override;
@@ -176,6 +181,7 @@ public:
   virtual LayerManager*   GetLayerManager(PLayerTransactionChild* aShadowManager = nullptr,
                                           LayersBackend aBackendHint = mozilla::layers::LayersBackend::LAYERS_NONE,
                                           LayerManagerPersistence aPersistence = LAYER_MANAGER_CURRENT) override;
+  void                    SetCompositorWidgetDelegate(CompositorWidgetDelegate* delegate) override;
   virtual MOZ_MUST_USE nsresult OnDefaultButtonLoaded(const LayoutDeviceIntRect& aButtonRect) override;
   virtual nsresult        SynthesizeNativeKeyEvent(int32_t aNativeKeyboardLayout,
                                                    int32_t aNativeKeyCode,
@@ -264,6 +270,8 @@ public:
   bool WidgetTypeSupportsAcceleration() override;
 
   void                    ForcePresent();
+  bool                    TouchEventShouldStartDrag(mozilla::EventMessage aEventMessage,
+                                                    LayoutDeviceIntPoint aEventPoint);
 
   /**
    * AssociateDefaultIMC() associates or disassociates the default IMC for
@@ -316,6 +324,7 @@ public:
 
   void GetCompositorWidgetInitData(mozilla::widget::CompositorWidgetInitData* aInitData) override;
   bool IsTouchWindow() const { return mTouchWindow; }
+  bool SynchronouslyRepaintOnResize() override;
 
 protected:
   virtual ~nsWindow();
@@ -492,6 +501,10 @@ protected:
   void                    ClearCachedResources();
   nsIWidgetListener*      GetPaintListener();
 
+  virtual void AddWindowOverlayWebRenderCommands(mozilla::layers::WebRenderBridgeChild* aWrBridge,
+                                                 mozilla::wr::DisplayListBuilder& aBuilder,
+                                                 mozilla::wr::IpcResourceUpdateQueue& aResourceUpdates) override;
+
   already_AddRefed<SourceSurface> CreateScrollSnapshot() override;
 
   struct ScrollSnapshot
@@ -556,6 +569,8 @@ protected:
   static bool           sJustGotActivate;
   static bool           sIsInMouseCapture;
   static bool           sHaveInitializedPrefs;
+
+  PlatformCompositorWidgetDelegate* mCompositorWidgetDelegate;
 
   // Always use the helper method to read this property.  See bug 603793.
   static TriStateBool   sHasBogusPopupsDropShadowOnMultiMonitor;
@@ -635,9 +650,15 @@ protected:
   // Whether we're in the process of sending a WM_SETTEXT ourselves
   bool                  mSendingSetText;
 
+  // Whether we we're created as a NS_CHILD_CID window (aka ChildWindow) or not.
+  bool                  mIsChildWindow : 1;
+
   // The point in time at which the last paint completed. We use this to avoid
   //  painting too rapidly in response to frequent input events.
   TimeStamp mLastPaintEndTime;
+
+  // The location of the window buttons in the window.
+  mozilla::Maybe<LayoutDeviceIntRect> mWindowButtonsRect;
 
   // Caching for hit test results
   POINT mCachedHitTestPoint;
@@ -660,18 +681,6 @@ protected:
 
   // Pointer events processing and management
   WinPointerEvents mPointerEvents;
-};
-
-/**
- * A child window is a window with different style.
- */
-class ChildWindow : public nsWindow {
-
-public:
-  ChildWindow() {}
-
-protected:
-  virtual DWORD WindowStyle();
 };
 
 #endif // Window_h__

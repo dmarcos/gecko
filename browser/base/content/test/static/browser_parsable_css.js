@@ -16,12 +16,16 @@ let whitelist = [
   // The debugger uses cross-browser CSS.
   {sourceName: /devtools\/client\/debugger\/new\/debugger.css/i,
    isFromDevTools: true},
+   // Reps uses cross-browser CSS.
+   {sourceName: /devtools-client-shared\/components\/reps\/reps.css/i,
+   isFromDevTools: true},
   // PDFjs is futureproofing its pseudoselectors, and those rules are dropped.
   {sourceName: /web\/viewer\.css$/i,
    errorMessage: /Unknown pseudo-class.*(fullscreen|selection)/i,
    isFromDevTools: false},
-  // Tracked in bug 1004428.
-  {sourceName: /aboutaccounts\/(main|normalize)\.css$/i,
+  // PDFjs rules needed for compat with other UAs.
+  {sourceName: /web\/viewer\.css$/i,
+   errorMessage: /Unknown property.*appearance/i,
    isFromDevTools: false},
   // Highlighter CSS uses a UA-only pseudo-class, see bug 985597.
   {sourceName: /highlighters\.css$/i,
@@ -31,6 +35,10 @@ let whitelist = [
   {sourceName: /responsive-ua\.css$/i,
    errorMessage: /Unknown pseudo-class.*moz-dropdown-list/i,
    isFromDevTools: true},
+  // UA-only media features.
+  {sourceName: /\b(autocomplete-item|svg)\.css$/,
+   errorMessage: /Expected media feature name but found \u2018-moz.*/i,
+   isFromDevTools: false},
 
   {sourceName: /\b(contenteditable|EditorOverride|svg|forms|html|mathml|ua)\.css$/i,
    errorMessage: /Unknown pseudo-class.*-moz-/i,
@@ -65,7 +73,7 @@ let whitelist = [
 
 if (!Services.prefs.getBoolPref("full-screen-api.unprefix.enabled")) {
   whitelist.push({
-    sourceName: /res\/(ua|html)\.css$/i,
+    sourceName: /(?:res|gre-resources)\/(ua|html)\.css$/i,
     errorMessage: /Unknown pseudo-class .*\bfullscreen\b/i,
     isFromDevTools: false
   });
@@ -243,7 +251,7 @@ function chromeFileExists(aURI) {
   return available > 0;
 }
 
-add_task(function* checkAllTheCSS() {
+add_task(async function checkAllTheCSS() {
   // Since we later in this test use Services.console.getMessageArray(),
   // better to not have some messages from previous tests in the array.
   Services.console.reset();
@@ -252,19 +260,19 @@ add_task(function* checkAllTheCSS() {
   // This asynchronously produces a list of URLs (sadly, mostly sync on our
   // test infrastructure because it runs against jarfiles there, and
   // our zipreader APIs are all sync)
-  let uris = yield generateURIsFromDirTree(appDir, [".css", ".manifest"]);
+  let uris = await generateURIsFromDirTree(appDir, [".css", ".manifest"]);
 
   // Create a clean iframe to load all the files into. This needs to live at a
   // chrome URI so that it's allowed to load and parse any styles.
   let testFile = getRootDirectory(gTestPath) + "dummy_page.html";
-  let HiddenFrame = Cu.import("resource://gre/modules/HiddenFrame.jsm", {}).HiddenFrame;
+  let HiddenFrame = Cu.import("resource://testing-common/HiddenFrame.jsm", {}).HiddenFrame;
   let hiddenFrame = new HiddenFrame();
-  let win = yield hiddenFrame.get();
+  let win = await hiddenFrame.get();
   let iframe = win.document.createElementNS("http://www.w3.org/1999/xhtml", "html:iframe");
   win.document.documentElement.appendChild(iframe);
   let iframeLoaded = BrowserTestUtils.waitForEvent(iframe, "load", true);
   iframe.contentWindow.location = testFile;
-  yield iframeLoaded;
+  await iframeLoaded;
   let doc = iframe.contentWindow.document;
 
   // Parse and remove all manifests from the list.
@@ -272,51 +280,59 @@ add_task(function* checkAllTheCSS() {
   // so that all chrome paths can be recorded.
   let manifestPromises = [];
   uris = uris.filter(uri => {
-    if (uri.path.endsWith(".manifest")) {
+    if (uri.pathQueryRef.endsWith(".manifest")) {
       manifestPromises.push(parseManifest(uri));
       return false;
     }
     return true;
   });
   // Wait for all manifest to be parsed
-  yield Promise.all(manifestPromises);
-
-  // We build a list of promises that get resolved when their respective
-  // files have loaded and produced no errors.
-  let allPromises = [];
+  await Promise.all(manifestPromises);
 
   // filter out either the devtools paths or the non-devtools paths:
   let isDevtools = SimpleTest.harnessParameters.subsuite == "devtools";
   let devtoolsPathBits = ["webide", "devtools"];
   uris = uris.filter(uri => isDevtools == devtoolsPathBits.some(path => uri.spec.includes(path)));
 
-  for (let uri of uris) {
-    let linkEl = doc.createElement("link");
+  let loadCSS = chromeUri => new Promise(resolve => {
+    let linkEl, onLoad, onError;
+    onLoad = e => {
+      processCSSRules(linkEl.sheet);
+      resolve();
+      linkEl.removeEventListener("load", onLoad);
+      linkEl.removeEventListener("error", onError);
+    };
+    onError = e => {
+      ok(false, "Loading " + linkEl.getAttribute("href") + " threw an error!");
+      resolve();
+      linkEl.removeEventListener("load", onLoad);
+      linkEl.removeEventListener("error", onError);
+    };
+    linkEl = doc.createElement("link");
     linkEl.setAttribute("rel", "stylesheet");
-    allPromises.push(new Promise(resolve => {
-      let onLoad = (e) => {
-        processCSSRules(linkEl.sheet);
-        resolve();
-        linkEl.removeEventListener("load", onLoad);
-        linkEl.removeEventListener("error", onError);
-      };
-      let onError = (e) => {
-        ok(false, "Loading " + linkEl.getAttribute("href") + " threw an error!");
-        resolve();
-        linkEl.removeEventListener("load", onLoad);
-        linkEl.removeEventListener("error", onError);
-      };
-      linkEl.addEventListener("load", onLoad);
-      linkEl.addEventListener("error", onError);
-      linkEl.setAttribute("type", "text/css");
-      let chromeUri = convertToCodeURI(uri.spec);
-      linkEl.setAttribute("href", chromeUri + kPathSuffix);
-    }));
+    linkEl.setAttribute("type", "text/css");
+    linkEl.addEventListener("load", onLoad);
+    linkEl.addEventListener("error", onError);
+    linkEl.setAttribute("href", chromeUri + kPathSuffix);
     doc.head.appendChild(linkEl);
+  });
+
+  // We build a list of promises that get resolved when their respective
+  // files have loaded and produced no errors.
+  const kInContentCommonCSS = "chrome://global/skin/in-content/common.css";
+  let allPromises = uris.map((uri) => convertToCodeURI(uri.spec))
+                    .filter((uri) => uri !== kInContentCommonCSS);
+
+  // Make sure chrome://global/skin/in-content/common.css is loaded before other
+  // stylesheets in order to guarantee the --in-content variables can be
+  // correctly referenced.
+  if (allPromises.length !== uris.length) {
+    await loadCSS(kInContentCommonCSS);
   }
 
   // Wait for all the files to have actually loaded:
-  yield Promise.all(allPromises);
+  allPromises = allPromises.map(loadCSS);
+  await Promise.all(allPromises);
 
   // Check if all the files referenced from CSS actually exist.
   for (let [image, references] of imageURIsToReferencesMap) {

@@ -19,25 +19,25 @@ function test() {
 
   waitForExplicitFinish();
 
-  gPrefService.setBoolPref(ENABLE_PREF_NAME, true);
+  Services.prefs.setBoolPref(ENABLE_PREF_NAME, true);
 
   is(1, AeroPeek.windows.length, "Got the expected number of windows");
 
   checkPreviews(1, "Browser starts with one preview");
 
-  gBrowser.addTab();
-  gBrowser.addTab();
-  gBrowser.addTab();
+  BrowserTestUtils.addTab(gBrowser);
+  BrowserTestUtils.addTab(gBrowser);
+  BrowserTestUtils.addTab(gBrowser);
 
   checkPreviews(4, "Correct number of previews after adding");
 
   for (let preview of AeroPeek.previews)
     ok(preview.visible, "Preview is shown as expected");
 
-  gPrefService.setBoolPref(ENABLE_PREF_NAME, false);
+  Services.prefs.setBoolPref(ENABLE_PREF_NAME, false);
   is(0, AeroPeek.previews.length, "Should have 0 previews when disabled");
 
-  gPrefService.setBoolPref(ENABLE_PREF_NAME, true);
+  Services.prefs.setBoolPref(ENABLE_PREF_NAME, true);
   checkPreviews(4, "Previews are back when re-enabling");
   for (let preview of AeroPeek.previews)
     ok(preview.visible, "Preview is shown as expected after re-enabling");
@@ -66,7 +66,7 @@ function test() {
   checkPreviews(1, "Expected number of previews after closing selected tab via browser");
 
   // Add a new tab
-  gBrowser.addTab();
+  BrowserTestUtils.addTab(gBrowser);
   checkPreviews(2);
   // Check default selection
   checkSelectedTab();
@@ -78,8 +78,8 @@ function test() {
   getPreviewForTab(gBrowser.tabs[1]).controller.onClose();
   checkPreviews(1);
 
-  if (gPrefService.prefHasUserValue(ENABLE_PREF_NAME))
-    gPrefService.setBoolPref(ENABLE_PREF_NAME, !gPrefService.getBoolPref(ENABLE_PREF_NAME));
+  if (Services.prefs.prefHasUserValue(ENABLE_PREF_NAME))
+    Services.prefs.setBoolPref(ENABLE_PREF_NAME, !Services.prefs.getBoolPref(ENABLE_PREF_NAME));
 
   finish();
 

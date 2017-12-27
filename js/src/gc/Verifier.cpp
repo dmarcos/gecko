@@ -13,16 +13,16 @@
 #include "mozilla/Sprintf.h"
 
 #include "jscntxt.h"
-#include "jsgc.h"
 #include "jsprf.h"
 
 #include "gc/GCInternals.h"
 #include "gc/Zone.h"
-#include "js/GCAPI.h"
 #include "js/HashTable.h"
 
 #include "jscntxtinlines.h"
 #include "jsgcinlines.h"
+
+#include "gc/Marking-inl.h"
 
 using namespace js;
 using namespace js::gc;
@@ -194,12 +194,16 @@ gc::GCRuntime::startVerifyPreBarriers()
     if (!trc)
         return;
 
-    AutoPrepareForTracing prep(TlsContext.get(), WithAtoms);
+    JSContext* cx = TlsContext.get();
+    AutoPrepareForTracing prep(cx, WithAtoms);
 
-    for (auto chunk = allNonEmptyChunks(); !chunk.done(); chunk.next())
-        chunk->bitmap.clear();
+    {
+        AutoLockGC lock(cx->runtime());
+        for (auto chunk = allNonEmptyChunks(lock); !chunk.done(); chunk.next())
+            chunk->bitmap.clear();
+    }
 
-    gcstats::AutoPhase ap(stats(), gcstats::PHASE_TRACE_HEAP);
+    gcstats::AutoPhase ap(stats(), gcstats::PhaseKind::TRACE_HEAP);
 
     const size_t size = 64 * 1024 * 1024;
     trc->root = (VerifyNode*)js_malloc(size);
@@ -246,7 +250,7 @@ gc::GCRuntime::startVerifyPreBarriers()
 
     for (ZonesIter zone(rt, WithAtoms); !zone.done(); zone.next()) {
         MOZ_ASSERT(!zone->usedByHelperThread());
-        zone->setNeedsIncrementalBarrier(true, Zone::UpdateJit);
+        zone->setNeedsIncrementalBarrier(true);
         zone->arenas.purge();
     }
 
@@ -261,7 +265,7 @@ oom:
 static bool
 IsMarkedOrAllocated(TenuredCell* cell)
 {
-    return cell->isMarked() || cell->arena()->allocatedDuringIncremental;
+    return cell->isMarkedAny() || cell->arena()->allocatedDuringIncremental;
 }
 
 struct CheckEdgeTracer : public JS::CallbackTracer {
@@ -340,7 +344,7 @@ gc::GCRuntime::endVerifyPreBarriers()
         if (!zone->needsIncrementalBarrier())
             compartmentCreated = true;
 
-        zone->setNeedsIncrementalBarrier(false, Zone::UpdateJit);
+        zone->setNeedsIncrementalBarrier(false);
     }
 
     /*
@@ -458,6 +462,7 @@ class HeapCheckTracerBase : public JS::CallbackTracer
     virtual void checkCell(Cell* cell) = 0;
 
   protected:
+    void dumpCellInfo(Cell* cell);
     void dumpCellPath();
 
     Cell* parentCell() {
@@ -525,7 +530,7 @@ HeapCheckTracerBase::onChild(const JS::GCCellPtr& thing)
 
     // Don't trace into GC in zones being used by helper threads.
     Zone* zone = thing.is<JSObject>() ? thing.as<JSObject>().zone() : cell->asTenured().zone();
-    if (zone->group() && zone->group()->usedByHelperThread)
+    if (zone->group() && zone->group()->usedByHelperThread())
         return;
 
     WorkItem item(thing, contextName(), parentIndex);
@@ -555,6 +560,30 @@ HeapCheckTracerBase::traceHeap(AutoLockForExclusiveAccess& lock)
     return !oom;
 }
 
+static const char*
+GetCellColorName(Cell* cell)
+{
+    if (cell->isMarkedBlack())
+        return "black";
+    if (cell->isMarkedGray())
+        return "gray";
+    return "white";
+}
+
+void
+HeapCheckTracerBase::dumpCellInfo(Cell* cell)
+{
+    auto kind = cell->getTraceKind();
+    JSObject* obj = kind == JS::TraceKind::Object ? static_cast<JSObject*>(cell) : nullptr;
+
+    fprintf(stderr, "%s %s", GetCellColorName(cell), GCTraceKindToAscii(kind));
+    if (obj)
+        fprintf(stderr, " %s", obj->getClass()->name);
+    fprintf(stderr, " %p", cell);
+    if (obj)
+        fprintf(stderr, " (compartment %p)", obj->compartment());
+}
+
 void
 HeapCheckTracerBase::dumpCellPath()
 {
@@ -562,8 +591,9 @@ HeapCheckTracerBase::dumpCellPath()
     for (int index = parentIndex; index != -1; index = stack[index].parentIndex) {
         const WorkItem& parent = stack[index];
         Cell* cell = parent.thing.asCell();
-        fprintf(stderr, "  from %s %p %s edge\n",
-                GCTraceKindToAscii(cell->getTraceKind()), cell, name);
+        fprintf(stderr, "  from ");
+        dumpCellInfo(cell);
+        fprintf(stderr, " %s edge\n", name);
         name = parent.name;
     }
     fprintf(stderr, "  from root %s\n", name);
@@ -590,7 +620,7 @@ CheckHeapTracer::CheckHeapTracer(JSRuntime* rt)
 inline static bool
 IsValidGCThingPointer(Cell* cell)
 {
-    return (uintptr_t(cell) & CellMask) == 0;
+    return (uintptr_t(cell) & CellAlignMask) == 0;
 }
 
 void
@@ -610,7 +640,7 @@ CheckHeapTracer::check(AutoLockForExclusiveAccess& lock)
         return;
 
     if (failures)
-        fprintf(stderr, "Heap check: %" PRIuSIZE " failure(s)\n", failures);
+        fprintf(stderr, "Heap check: %zu failure(s)\n", failures);
     MOZ_RELEASE_ASSERT(failures == 0);
 }
 
@@ -625,7 +655,7 @@ js::gc::CheckHeapAfterGC(JSRuntime* rt)
 
 #endif /* JSGC_HASH_TABLE_CHECKS */
 
-#ifdef DEBUG
+#if defined(JS_GC_ZEAL) || defined(DEBUG)
 
 class CheckGrayMarkingTracer final : public HeapCheckTracerBase
 {
@@ -648,17 +678,23 @@ void
 CheckGrayMarkingTracer::checkCell(Cell* cell)
 {
     Cell* parent = parentCell();
-    if (!cell->isTenured() || !parent || !parent->isTenured())
+    if (!parent)
         return;
 
-    TenuredCell* tenuredCell = &cell->asTenured();
-    TenuredCell* tenuredParent = &parent->asTenured();
-    if (tenuredParent->isMarked(BLACK) && !tenuredParent->isMarked(GRAY) &&
-        tenuredCell->isMarked(GRAY))
-    {
+    if (parent->isMarkedBlack() && cell->isMarkedGray()) {
         failures++;
-        fprintf(stderr, "Found black to gray edge %p\n", cell);
+
+        fprintf(stderr, "Found black to gray edge to ");
+        dumpCellInfo(cell);
+        fprintf(stderr, "\n");
         dumpCellPath();
+
+#ifdef DEBUG
+        if (cell->is<JSObject>()) {
+            fprintf(stderr, "\n");
+            DumpObject(cell->as<JSObject>(), stderr);
+        }
+#endif
     }
 }
 
@@ -672,15 +708,14 @@ CheckGrayMarkingTracer::check(AutoLockForExclusiveAccess& lock)
 }
 
 JS_FRIEND_API(bool)
-js::CheckGrayMarkingState(JSContext* cx)
+js::CheckGrayMarkingState(JSRuntime* rt)
 {
-    JSRuntime* rt = cx->runtime();
     MOZ_ASSERT(!JS::CurrentThreadIsHeapCollecting());
     MOZ_ASSERT(!rt->gc.isIncrementalGCInProgress());
     if (!rt->gc.areGrayBitsValid())
         return true;
 
-    gcstats::AutoPhase ap(rt->gc.stats(), gcstats::PHASE_TRACE_HEAP);
+    gcstats::AutoPhase ap(rt->gc.stats(), gcstats::PhaseKind::TRACE_HEAP);
     AutoTraceSession session(rt, JS::HeapState::Tracing);
     CheckGrayMarkingTracer tracer(rt);
     if (!tracer.init())
@@ -689,4 +724,4 @@ js::CheckGrayMarkingState(JSContext* cx)
     return tracer.check(session.lock);
 }
 
-#endif // DEBUG
+#endif // defined(JS_GC_ZEAL) || defined(DEBUG)

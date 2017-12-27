@@ -16,27 +16,24 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
- 
-  expect = '[(new Boolean(true)), (void 0), (new Boolean(true)), ' + 
+
+  expect = '[(new Boolean(true)), (void 0), (new Boolean(true)), ' +
     '(new Boolean(true)), (void 0), (void 0), "", "", (void 0)]';
 
   var out = [];
-  for each (var e in [(new Boolean(true)), 
-                      (void 0), 
-                      (new Boolean(true)), 
-                      (new Boolean(true)), 
-                      (void 0), 
-                      (void 0), 
-                      "", 
-                      "", 
-                      (void 0)])
+  for (var e of [(new Boolean(true)),
+                 (void 0),
+                 (new Boolean(true)),
+                 (new Boolean(true)),
+                 (void 0),
+                 (void 0),
+                 "",
+                 "",
+                 (void 0)])
              out.push(e);
   print(actual = uneval(out));
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

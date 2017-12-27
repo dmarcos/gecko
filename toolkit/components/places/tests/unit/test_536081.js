@@ -8,9 +8,9 @@ const TEST_URL =
   { u: "http://www.google.com/search?q=testing%3Bthis&ie=utf-8&oe=utf-8&aq=t&rls=org.mozilla:en-US:unofficial&client=firefox-a",
     s: "goog" };
 
-add_task(function* () {
+add_task(async function() {
   print("Testing url: " + TEST_URL.u);
-  yield PlacesTestUtils.addVisits(uri(TEST_URL.u));
+  await PlacesTestUtils.addVisits(uri(TEST_URL.u));
 
   let query = PlacesUtils.history.getNewQuery();
   query.searchTerms = TEST_URL.s;
@@ -19,16 +19,16 @@ add_task(function* () {
   let root = PlacesUtils.history.executeQuery(query, options).root;
   root.containerOpen = true;
   let cc = root.childCount;
-  do_check_eq(cc, 1);
+  Assert.equal(cc, 1);
 
   print("Checking url is in the query.");
   let node = root.getChild(0);
   print("Found " + node.uri);
 
-  do_check_true(yield PlacesTestUtils.isPageInDB(TEST_URL.u));
+  Assert.ok(await PlacesTestUtils.isPageInDB(TEST_URL.u));
 
   root.containerOpen = false;
-  yield PlacesUtils.history.remove(node.uri);
+  await PlacesUtils.history.remove(node.uri);
 
-  do_check_false(yield PlacesTestUtils.isPageInDB(TEST_URL.u));
+  Assert.equal(false, await PlacesTestUtils.isPageInDB(TEST_URL.u));
 });

@@ -4,12 +4,13 @@
 
 //! Geometry in flow-relative space.
 
-use euclid::{Point2D, Rect, Size2D};
+use euclid::{Point2D, Rect, Size2D, SideOffsets2D};
 use euclid::num::Zero;
-use euclid::side_offsets::SideOffsets2D;
+use properties::style_structs;
 use std::cmp::{max, min};
 use std::fmt::{self, Debug, Error, Formatter};
 use std::ops::{Add, Sub};
+use unicode_bidi as bidi;
 
 pub enum BlockFlowDirection {
     TopToBottom,
@@ -24,52 +25,112 @@ pub enum InlineBaseDirection {
 
 // TODO: improve the readability of the WritingMode serialization, refer to the Debug:fmt()
 bitflags!(
-    #[cfg_attr(feature = "servo", derive(HeapSizeOf, Serialize))]
-    pub flags WritingMode: u8 {
-        const FLAG_RTL = 1 << 0,
-        const FLAG_VERTICAL = 1 << 1,
-        const FLAG_VERTICAL_LR = 1 << 2,
+    #[cfg_attr(feature = "servo", derive(MallocSizeOf, Serialize))]
+    pub struct WritingMode: u8 {
+        const RTL = 1 << 0;
+        const VERTICAL = 1 << 1;
+        const VERTICAL_LR = 1 << 2;
         /// For vertical writing modes only.  When set, line-over/line-under
         /// sides are inverted from block-start/block-end.  This flag is
         /// set when sideways-lr is used.
-        const FLAG_LINE_INVERTED = 1 << 3,
-        const FLAG_SIDEWAYS = 1 << 4,
-        const FLAG_UPRIGHT = 1 << 5,
+        const LINE_INVERTED = 1 << 3;
+        const SIDEWAYS = 1 << 4;
+        const UPRIGHT = 1 << 5;
     }
 );
 
 impl WritingMode {
+    /// Return a WritingMode bitflags from the relevant CSS properties.
+    pub fn new(inheritedbox_style: &style_structs::InheritedBox) -> Self {
+        use properties::longhands::direction::computed_value::T as Direction;
+        use properties::longhands::writing_mode::computed_value::T as SpecifiedWritingMode;
+
+        let mut flags = WritingMode::empty();
+
+        match inheritedbox_style.clone_direction() {
+            Direction::Ltr => {},
+            Direction::Rtl => {
+                flags.insert(WritingMode::RTL);
+            },
+        }
+
+        match inheritedbox_style.clone_writing_mode() {
+            SpecifiedWritingMode::HorizontalTb => {},
+            SpecifiedWritingMode::VerticalRl => {
+                flags.insert(WritingMode::VERTICAL);
+            },
+            SpecifiedWritingMode::VerticalLr => {
+                flags.insert(WritingMode::VERTICAL);
+                flags.insert(WritingMode::VERTICAL_LR);
+            },
+            #[cfg(feature = "gecko")]
+            SpecifiedWritingMode::SidewaysRl => {
+                flags.insert(WritingMode::VERTICAL);
+                flags.insert(WritingMode::SIDEWAYS);
+            },
+            #[cfg(feature = "gecko")]
+            SpecifiedWritingMode::SidewaysLr => {
+                flags.insert(WritingMode::VERTICAL);
+                flags.insert(WritingMode::VERTICAL_LR);
+                flags.insert(WritingMode::LINE_INVERTED);
+                flags.insert(WritingMode::SIDEWAYS);
+            },
+        }
+
+        #[cfg(feature = "gecko")]
+        {
+            use properties::longhands::text_orientation::computed_value::T as TextOrientation;
+
+            // If FLAG_SIDEWAYS is already set, this means writing-mode is
+            // either sideways-rl or sideways-lr, and for both of these values,
+            // text-orientation has no effect.
+            if !flags.intersects(WritingMode::SIDEWAYS) {
+                match inheritedbox_style.clone_text_orientation() {
+                    TextOrientation::Mixed => {},
+                    TextOrientation::Upright => {
+                        flags.insert(WritingMode::UPRIGHT);
+                    },
+                    TextOrientation::Sideways => {
+                        flags.insert(WritingMode::SIDEWAYS);
+                    },
+                }
+            }
+        }
+
+        flags
+    }
+
     #[inline]
     pub fn is_vertical(&self) -> bool {
-        self.intersects(FLAG_VERTICAL)
+        self.intersects(WritingMode::VERTICAL)
     }
 
     /// Assuming .is_vertical(), does the block direction go left to right?
     #[inline]
     pub fn is_vertical_lr(&self) -> bool {
-        self.intersects(FLAG_VERTICAL_LR)
+        self.intersects(WritingMode::VERTICAL_LR)
     }
 
     /// Assuming .is_vertical(), does the inline direction go top to bottom?
     #[inline]
     pub fn is_inline_tb(&self) -> bool {
         // https://drafts.csswg.org/css-writing-modes-3/#logical-to-physical
-        self.intersects(FLAG_RTL) == self.intersects(FLAG_LINE_INVERTED)
+        self.intersects(WritingMode::RTL) == self.intersects(WritingMode::LINE_INVERTED)
     }
 
     #[inline]
     pub fn is_bidi_ltr(&self) -> bool {
-        !self.intersects(FLAG_RTL)
+        !self.intersects(WritingMode::RTL)
     }
 
     #[inline]
     pub fn is_sideways(&self) -> bool {
-        self.intersects(FLAG_SIDEWAYS)
+        self.intersects(WritingMode::SIDEWAYS)
     }
 
     #[inline]
     pub fn is_upright(&self) -> bool {
-        self.intersects(FLAG_UPRIGHT)
+        self.intersects(WritingMode::UPRIGHT)
     }
 
     #[inline]
@@ -121,7 +182,7 @@ impl WritingMode {
 
     #[inline]
     pub fn inline_base_direction(&self) -> InlineBaseDirection {
-        if self.intersects(FLAG_RTL) {
+        if self.intersects(WritingMode::RTL) {
             InlineBaseDirection::RightToLeft
         } else {
             InlineBaseDirection::LeftToRight
@@ -131,29 +192,33 @@ impl WritingMode {
     #[inline]
     /// The default bidirectional embedding level for this writing mode.
     ///
-    /// Returns 0 if the mode is LTR, or 1 otherwise.
-    pub fn to_bidi_level(&self) -> u8 {
-        !self.is_bidi_ltr() as u8
+    /// Returns bidi level 0 if the mode is LTR, or 1 otherwise.
+    pub fn to_bidi_level(&self) -> bidi::Level {
+        if self.is_bidi_ltr() {
+            bidi::Level::ltr()
+        } else {
+            bidi::Level::rtl()
+        }
     }
 }
 
 impl fmt::Display for WritingMode {
     fn fmt(&self, formatter: &mut Formatter) -> Result<(), Error> {
         if self.is_vertical() {
-            try!(write!(formatter, "V"));
+            write!(formatter, "V")?;
             if self.is_vertical_lr() {
-                try!(write!(formatter, " LR"));
+                write!(formatter, " LR")?;
             } else {
-                try!(write!(formatter, " RL"));
+                write!(formatter, " RL")?;
             }
-            if self.intersects(FLAG_SIDEWAYS) {
-                try!(write!(formatter, " Sideways"));
+            if self.intersects(WritingMode::SIDEWAYS) {
+                write!(formatter, " Sideways")?;
             }
-            if self.intersects(FLAG_LINE_INVERTED) {
-                try!(write!(formatter, " Inverted"));
+            if self.intersects(WritingMode::LINE_INVERTED) {
+                write!(formatter, " Inverted")?;
             }
         } else {
-            try!(write!(formatter, "H"));
+            write!(formatter, "H")?;
         }
         if self.is_bidi_ltr() {
             write!(formatter, " LTR")
@@ -171,12 +236,12 @@ impl fmt::Display for WritingMode {
 /// (in addition to taking it as a parameter to methods) and check it.
 /// In non-debug builds, make this storage zero-size and the checks no-ops.
 #[cfg(not(debug_assertions))]
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 #[cfg_attr(feature = "servo", derive(Serialize))]
 struct DebugWritingMode;
 
 #[cfg(debug_assertions)]
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 #[cfg_attr(feature = "servo", derive(Serialize))]
 struct DebugWritingMode {
     mode: WritingMode
@@ -228,7 +293,7 @@ impl Debug for DebugWritingMode {
 
 
 // Used to specify the logical direction.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "servo", derive(Serialize))]
 pub enum Direction {
     Inline,
@@ -236,7 +301,7 @@ pub enum Direction {
 }
 
 /// A 2D size in flow-relative dimensions
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 #[cfg_attr(feature = "servo", derive(Serialize))]
 pub struct LogicalSize<T> {
     pub inline: T,  // inline-size, a.k.a. logical width, a.k.a. measure
@@ -373,7 +438,7 @@ impl<T: Sub<T, Output=T>> Sub for LogicalSize<T> {
 
 
 /// A 2D point in flow-relative dimensions
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 #[cfg_attr(feature = "servo", derive(Serialize))]
 pub struct LogicalPoint<T> {
     /// inline-axis coordinate
@@ -546,7 +611,7 @@ impl<T: Copy + Sub<T, Output=T>> Sub<LogicalSize<T>> for LogicalPoint<T> {
 /// Represents the four sides of the margins, borders, or padding of a CSS box,
 /// or a combination of those.
 /// A positive "margin" can be added to a rectangle to obtain a bigger rectangle.
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 #[cfg_attr(feature = "servo", derive(Serialize))]
 pub struct LogicalMargin<T> {
     pub block_start: T,
@@ -850,7 +915,7 @@ impl<T: Sub<T, Output=T>> Sub for LogicalMargin<T> {
 
 
 /// A rectangle in flow-relative dimensions
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 #[cfg_attr(feature = "servo", derive(Serialize))]
 pub struct LogicalRect<T> {
     pub start: LogicalPoint<T>,
@@ -1098,7 +1163,7 @@ impl<T: Copy + Add<T, Output=T> + Sub<T, Output=T>> Sub<LogicalMargin<T>> for Lo
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PhysicalSide {
     Top,
     Right,

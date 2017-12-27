@@ -10,8 +10,8 @@
 #include "mozilla/OverflowChangedTracker.h"
 #include "nsChangeHint.h"
 #include "nsPresContext.h"
+#include "nsStringFwd.h"
 
-class nsCString;
 class nsCSSFrameConstructor;
 class nsStyleChangeList;
 
@@ -38,7 +38,14 @@ public:
 
   // Get an integer that increments every time we process pending restyles.
   // The value is never 0.
-  uint32_t GetRestyleGeneration() const { return mRestyleGeneration; }
+  uint64_t GetRestyleGeneration() const { return mRestyleGeneration; }
+  // Unlike GetRestyleGeneration, which means the actual restyling count,
+  // GetUndisplayedRestyleGeneration represents any possible DOM changes that
+  // can cause restyling. This is needed for getComputedStyle to work with
+  // non-styled (e.g. display: none) elements.
+  uint64_t GetUndisplayedRestyleGeneration() const {
+    return mUndisplayedRestyleGeneration;
+  }
 
   // Get an integer that increments every time there is a style change
   // as a result of a change to the :hover content state.
@@ -65,6 +72,11 @@ public:
   // WillDestroyFrameTree hasn't been called yet.
   void NotifyDestroyingFrame(nsIFrame* aFrame) {
     mOverflowChangedTracker.RemoveFrame(aFrame);
+    // If ProcessRestyledFrames is tracking frames which have been
+    // destroyed (to avoid re-visiting them), add this one to its set.
+    if (mDestroyedFrames) {
+      mDestroyedFrames->PutEntry(aFrame);
+    }
   }
 
   // Note: It's the caller's responsibility to make sure to wrap a
@@ -170,15 +182,17 @@ public:
                                   EventStates aStateMask);
   inline void AttributeWillChange(dom::Element* aElement,
                                   int32_t aNameSpaceID,
-                                  nsIAtom* aAttribute,
+                                  nsAtom* aAttribute,
                                   int32_t aModType,
                                   const nsAttrValue* aNewValue);
   inline void AttributeChanged(dom::Element* aElement,
                                int32_t aNameSpaceID,
-                               nsIAtom* aAttribute,
+                               nsAtom* aAttribute,
                                int32_t aModType,
                                const nsAttrValue* aOldValue);
   inline nsresult ReparentStyleContext(nsIFrame* aFrame);
+
+  inline void UpdateOnlyAnimationStyles();
 
   // Get a counter that increments on every style change, that we use to
   // track whether off-main-thread animations are up-to-date.
@@ -194,6 +208,11 @@ public:
   // such as changes made through the Web Animations API.
   void IncrementAnimationGeneration();
 
+  static void AddLayerChangesForAnimation(nsIFrame* aFrame,
+                                          nsIContent* aContent,
+                                          nsStyleChangeList&
+                                            aChangeListToProcess);
+
 protected:
   RestyleManager(StyleBackendType aType, nsPresContext* aPresContext);
 
@@ -207,8 +226,7 @@ protected:
 
   void ContentStateChangedInternal(Element* aElement,
                                    EventStates aStateMask,
-                                   nsChangeHint* aOutChangeHint,
-                                   nsRestyleHint* aOutRestyleHint);
+                                   nsChangeHint* aOutChangeHint);
 
   bool IsDisconnected() { return mPresContext == nullptr; }
 
@@ -223,6 +241,15 @@ protected:
       // longer has a RestyleManager.
       ++mRestyleGeneration;
     }
+    IncrementUndisplayedRestyleGeneration();
+  }
+
+  void IncrementUndisplayedRestyleGeneration() {
+    if (++mUndisplayedRestyleGeneration == 0) {
+      // Ensure mUndisplayedRestyleGeneration > 0, for the same reason as
+      // IncrementRestyleGeneration.
+      ++mUndisplayedRestyleGeneration;
+    }
   }
 
   nsPresContext* PresContext() const {
@@ -236,12 +263,18 @@ protected:
 
 private:
   nsPresContext* mPresContext; // weak, can be null after Disconnect().
-  uint32_t mRestyleGeneration;
+  uint64_t mRestyleGeneration;
+  uint64_t mUndisplayedRestyleGeneration;
   uint32_t mHoverGeneration;
 
-  const StyleBackendType mType;
+  // Used to keep track of frames that have been destroyed during
+  // ProcessRestyledFrames, so we don't try to touch them again even if
+  // they're referenced again later in the changelist.
+  mozilla::UniquePtr<nsTHashtable<nsPtrHashKey<const nsIFrame>>> mDestroyedFrames;
 
 protected:
+  const StyleBackendType mType;
+
   // True if we're in the middle of a nsRefreshDriver refresh
   bool mInStyleRefresh;
 
@@ -250,31 +283,6 @@ protected:
   uint64_t mAnimationGeneration;
 
   OverflowChangedTracker mOverflowChangedTracker;
-
-  /**
-   * These are protected static methods that help with the change hint
-   * processing bits of the restyle managers.
-   */
-  static nsIFrame*
-  GetNearestAncestorFrame(nsIContent* aContent);
-
-  static nsIFrame*
-  GetNextBlockInInlineSibling(FramePropertyTable* aPropTable, nsIFrame* aFrame);
-
-  /**
-   * Get the next continuation or similar ib-split sibling (assuming
-   * block/inline alternation), conditionally on it having the same style.
-   *
-   * Since this is used when deciding to copy the new style context, it
-   * takes as an argument the old style context to check if the style is
-   * the same.  When it is used in other contexts (i.e., where the next
-   * continuation would already have the new style context), the current
-   * style context should be passed.
-   */
-  static nsIFrame*
-  GetNextContinuationWithSameStyle(nsIFrame* aFrame,
-                                   nsStyleContext* aOldStyleContext,
-                                   bool* aHaveMoreContinuations = nullptr);
 
   AnimationsWithDestroyedFrame* mAnimationsWithDestroyedFrame = nullptr;
 

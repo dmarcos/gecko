@@ -38,6 +38,8 @@ public:
     , mActiveIterators(0)
     , mCalledPropertyDtor(false)
 #endif
+    , mMayHaveOpacityAnim(false)
+    , mMayHaveTransformAnim(false)
   {
     MOZ_COUNT_CTOR(EffectSet);
   }
@@ -51,7 +53,7 @@ public:
                "enumerated");
     MOZ_COUNT_DTOR(EffectSet);
   }
-  static void PropertyDtor(void* aObject, nsIAtom* aPropertyName,
+  static void PropertyDtor(void* aObject, nsAtom* aPropertyName,
                            void* aPropertyValue, void* aData);
 
   // Methods for supporting cycle-collection
@@ -67,6 +69,11 @@ public:
 
   void AddEffect(dom::KeyframeEffectReadOnly& aEffect);
   void RemoveEffect(dom::KeyframeEffectReadOnly& aEffect);
+
+  void SetMayHaveOpacityAnimation() { mMayHaveOpacityAnim = true; }
+  bool MayHaveOpacityAnimation() const { return mMayHaveOpacityAnim; }
+  void SetMayHaveTransformAnimation() { mMayHaveTransformAnim = true; }
+  bool MayHaveTransformAnimation() const { return mMayHaveTransformAnim; }
 
 private:
   typedef nsTHashtable<nsRefPtrHashKey<dom::KeyframeEffectReadOnly>>
@@ -185,7 +192,7 @@ public:
   void UpdateAnimationGeneration(nsPresContext* aPresContext);
   uint64_t GetAnimationGeneration() const { return mAnimationGeneration; }
 
-  static nsIAtom** GetEffectSetPropertyAtoms();
+  static nsAtom** GetEffectSetPropertyAtoms();
 
   nsCSSPropertyIDSet& PropertiesWithImportantRules()
   {
@@ -201,7 +208,7 @@ public:
   }
 
 private:
-  static nsIAtom* GetEffectSetPropertyAtom(CSSPseudoElementType aPseudoType);
+  static nsAtom* GetEffectSetPropertyAtom(CSSPseudoElementType aPseudoType);
 
   OwningEffectSet mEffects;
 
@@ -252,6 +259,9 @@ private:
 
   bool mCalledPropertyDtor;
 #endif
+
+  bool mMayHaveOpacityAnim;
+  bool mMayHaveTransformAnim;
 };
 
 } // namespace mozilla

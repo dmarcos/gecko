@@ -10,16 +10,13 @@
 const { require } = Components.utils.import("resource://devtools/shared/Loader.jsm", {});
 const sourceUtils = require("devtools/client/shared/source-utils");
 
-function run_test() {
-  run_next_test();
-}
-
 const CHROME_URLS = [
   "chrome://foo", "resource://baz", "jar:file:///Users/root"
 ];
 
 const CONTENT_URLS = [
-  "http://mozilla.org", "https://mozilla.org", "file:///Users/root", "app://fxosapp"
+  "http://mozilla.org", "https://mozilla.org", "file:///Users/root", "app://fxosapp",
+  "blob:http://mozilla.org", "blob:https://mozilla.org"
 ];
 
 // Test `sourceUtils.parseURL`
@@ -59,6 +56,13 @@ add_task(function* () {
     ok(!sourceUtils.isChromeScheme(url),
        `${url} correctly identified as not chrome scheme`);
   }
+});
+
+// Test `sourceUtils.isWASM`.
+add_task(function* () {
+  ok(sourceUtils.isWASM("wasm-function[66240] (?:13870536)"),
+                        "wasm function correctly identified");
+  ok(!sourceUtils.isWASM(CHROME_URLS[0]), `A chrome url does not identify as wasm.`);
 });
 
 // Test `sourceUtils.isDataScheme`.

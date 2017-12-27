@@ -6,9 +6,7 @@
 #ifndef mozilla_widget_AndroidCompositorWidget_h
 #define mozilla_widget_AndroidCompositorWidget_h
 
-#include "GLContext.h"
-#include "GLLibraryEGL.h"
-#include "GLTypes.h"
+#include "GLDefs.h"
 #include "mozilla/widget/InProcessCompositorWidget.h"
 
 struct ANativeWindow;
@@ -28,19 +26,6 @@ public:
     using InProcessCompositorWidget::InProcessCompositorWidget;
 
     AndroidCompositorWidget* AsAndroid() override { return this; }
-
-    void SetFirstPaintViewport(const LayerIntPoint& aOffset,
-                               const CSSToLayerScale& aZoom,
-                               const CSSRect& aCssPageRect);
-
-    void SyncFrameMetrics(const ParentLayerPoint& aScrollOffset,
-                          const CSSToParentLayerScale& aZoom,
-                          const CSSRect& aCssPageRect,
-                          const CSSRect& aDisplayPort,
-                          const CSSToLayerScale& aPaintedResolution,
-                          bool aLayersUpdated,
-                          int32_t aPaintSyncId,
-                          ScreenMargin& aFixedLayerMargins);
 
     EGLNativeWindowType GetEGLNativeWindow();
 

@@ -92,8 +92,6 @@ nsSMILCompositor::ComposeAttribute(bool& aMightHavePendingStyleUpdates)
   nsSMILValue sandwichResultValue;
   if (!mAnimationFunctions[firstFuncToCompose]->WillReplace()) {
     sandwichResultValue = smilAttr->GetBaseValue();
-    MOZ_ASSERT(!sandwichResultValue.IsNull(),
-               "Result of GetBaseValue should not be null");
   }
   UpdateCachedBaseValue(sandwichResultValue);
 
@@ -160,7 +158,8 @@ nsSMILCompositor::GetCSSPropertyToAnimate() const
     nsCSSProps::LookupProperty(nsDependentAtomString(mKey.mAttributeName),
                                CSSEnabledState::eForAllContent);
 
-  if (!nsSMILCSSProperty::IsPropertyAnimatable(propID)) {
+  if (!nsSMILCSSProperty::IsPropertyAnimatable(propID,
+        mKey.mElement->OwnerDoc()->GetStyleBackendType())) {
     return eCSSProperty_UNKNOWN;
   }
 

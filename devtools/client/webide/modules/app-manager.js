@@ -4,12 +4,11 @@
 
 const {Cu} = require("chrome");
 
-const promise = require("promise");
 const {TargetFactory} = require("devtools/client/framework/target");
 const Services = require("Services");
 const {FileUtils} = Cu.import("resource://gre/modules/FileUtils.jsm", {});
-const EventEmitter = require("devtools/shared/event-emitter");
-const {TextEncoder, OS} = Cu.import("resource://gre/modules/osfile.jsm", {});
+const EventEmitter = require("devtools/shared/old-event-emitter");
+const {OS} = Cu.import("resource://gre/modules/osfile.jsm", {});
 const {AppProjects} = require("devtools/client/webide/modules/app-projects");
 const TabStore = require("devtools/client/webide/modules/tab-store");
 const {AppValidator} = require("devtools/client/webide/modules/app-validator");
@@ -21,7 +20,6 @@ const {Task} = require("devtools/shared/task");
 const {RuntimeScanners, RuntimeTypes} = require("devtools/client/webide/modules/runtimes");
 const {NetUtil} = Cu.import("resource://gre/modules/NetUtil.jsm", {});
 const Telemetry = require("devtools/client/shared/telemetry");
-const {ProjectBuilding} = require("./build");
 
 const Strings = Services.strings.createBundle("chrome://devtools/locale/webide.properties");
 
@@ -277,7 +275,7 @@ var AppManager = exports.AppManager = {
 
   reloadTab: function () {
     if (this.selectedProject && this.selectedProject.type != "tab") {
-      return promise.reject("tried to reload non-tab project");
+      return Promise.reject("tried to reload non-tab project");
     }
     return this.getTarget().then(target => {
       target.activeTab.reload();
@@ -313,7 +311,7 @@ var AppManager = exports.AppManager = {
 
     let app = this._getProjectFront(this.selectedProject);
     if (!app) {
-      return promise.reject("Can't find app front for selected project");
+      return Promise.reject("Can't find app front for selected project");
     }
 
     return Task.spawn(function* () {
@@ -325,9 +323,9 @@ var AppManager = exports.AppManager = {
         try {
           return yield app.getTarget();
         } catch (e) {}
-        let deferred = promise.defer();
-        setTimeout(deferred.resolve, 500);
-        yield deferred.promise;
+        return new Promise(resolve => {
+          setTimeout(resolve, 500);
+        });
       }
 
       AppManager.reportError("error_cantConnectToApp", app.manifest.manifestURL);
@@ -427,19 +425,6 @@ var AppManager = exports.AppManager = {
     AppManager.update("project-removed");
   }),
 
-  packageProject: Task.async(function* (project) {
-    if (!project) {
-      return;
-    }
-    if (project.type == "packaged" ||
-        project.type == "hosted") {
-      yield ProjectBuilding.build({
-        project: project,
-        logger: this.update.bind(this, "pre-package")
-      });
-    }
-  }),
-
   _selectedRuntime: null,
   set selectedRuntime(value) {
     this._selectedRuntime = value;
@@ -460,36 +445,36 @@ var AppManager = exports.AppManager = {
 
     if (this.connected && this.selectedRuntime === runtime) {
       // Already connected
-      return promise.resolve();
+      return Promise.resolve();
     }
 
-    let deferred = promise.defer();
+    let deferred = new Promise((resolve, reject) => {
+      this.disconnectRuntime().then(() => {
+        this.selectedRuntime = runtime;
 
-    this.disconnectRuntime().then(() => {
-      this.selectedRuntime = runtime;
-
-      let onConnectedOrDisconnected = () => {
-        this.connection.off(Connection.Events.CONNECTED, onConnectedOrDisconnected);
-        this.connection.off(Connection.Events.DISCONNECTED, onConnectedOrDisconnected);
-        if (this.connected) {
-          deferred.resolve();
-        } else {
-          deferred.reject();
+        let onConnectedOrDisconnected = () => {
+          this.connection.off(Connection.Events.CONNECTED, onConnectedOrDisconnected);
+          this.connection.off(Connection.Events.DISCONNECTED, onConnectedOrDisconnected);
+          if (this.connected) {
+            resolve();
+          } else {
+            reject();
+          }
+        };
+        this.connection.on(Connection.Events.CONNECTED, onConnectedOrDisconnected);
+        this.connection.on(Connection.Events.DISCONNECTED, onConnectedOrDisconnected);
+        try {
+          // Reset the connection's state to defaults
+          this.connection.resetOptions();
+          // Only watch for errors here.  Final resolution occurs above, once
+          // we've reached the CONNECTED state.
+          this.selectedRuntime.connect(this.connection)
+                              .catch(e => reject(e));
+        } catch (e) {
+          reject(e);
         }
-      };
-      this.connection.on(Connection.Events.CONNECTED, onConnectedOrDisconnected);
-      this.connection.on(Connection.Events.DISCONNECTED, onConnectedOrDisconnected);
-      try {
-        // Reset the connection's state to defaults
-        this.connection.resetOptions();
-        // Only watch for errors here.  Final resolution occurs above, once
-        // we've reached the CONNECTED state.
-        this.selectedRuntime.connect(this.connection)
-                            .then(null, e => deferred.reject(e));
-      } catch (e) {
-        deferred.reject(e);
-      }
-    }, deferred.reject);
+      }, reject);
+    });
 
     // Record connection result in telemetry
     let logResult = result => {
@@ -499,10 +484,10 @@ var AppManager = exports.AppManager = {
                             "_CONNECTION_RESULT", result);
       }
     };
-    deferred.promise.then(() => logResult(true), () => logResult(false));
+    deferred.then(() => logResult(true), () => logResult(false));
 
     // If successful, record connection time in telemetry
-    deferred.promise.then(() => {
+    deferred.then(() => {
       const timerId = "DEVTOOLS_WEBIDE_CONNECTION_TIME_SECONDS";
       this._telemetry.startTimer(timerId);
       this.connection.once(Connection.Events.STATUS_CHANGED, () => {
@@ -514,7 +499,7 @@ var AppManager = exports.AppManager = {
       // Bug 1121100 may find a better way to silence these.
     });
 
-    return deferred.promise;
+    return deferred;
   },
 
   _recordRuntimeInfo: Task.async(function* () {
@@ -554,6 +539,10 @@ var AppManager = exports.AppManager = {
             this._listTabsResponse.consoleActor);
   },
 
+  get listTabsForm() {
+    return this._listTabsResponse;
+  },
+
   get deviceFront() {
     if (!this._listTabsResponse) {
       return null;
@@ -570,17 +559,18 @@ var AppManager = exports.AppManager = {
 
   disconnectRuntime: function () {
     if (!this.connected) {
-      return promise.resolve();
+      return Promise.resolve();
     }
-    let deferred = promise.defer();
-    this.connection.once(Connection.Events.DISCONNECTED, () => deferred.resolve());
-    this.connection.disconnect();
-    return deferred.promise;
+
+    return new Promise(resolve => {
+      this.connection.once(Connection.Events.DISCONNECTED, () => resolve());
+      this.connection.disconnect();
+    });
   },
 
   launchRuntimeApp: function () {
     if (this.selectedProject && this.selectedProject.type != "runtimeApp") {
-      return promise.reject("attempting to launch a non-runtime app");
+      return Promise.reject("attempting to launch a non-runtime app");
     }
     let app = this._getProjectFront(this.selectedProject);
     return app.launch();
@@ -588,7 +578,7 @@ var AppManager = exports.AppManager = {
 
   launchOrReloadRuntimeApp: function () {
     if (this.selectedProject && this.selectedProject.type != "runtimeApp") {
-      return promise.reject("attempting to launch / reload a non-runtime app");
+      return Promise.reject("attempting to launch / reload a non-runtime app");
     }
     let app = this._getProjectFront(this.selectedProject);
     if (!app.running) {
@@ -607,24 +597,23 @@ var AppManager = exports.AppManager = {
 
     if (!project || (project.type != "packaged" && project.type != "hosted")) {
       console.error("Can't install project. Unknown type of project.");
-      return promise.reject("Can't install");
+      return Promise.reject("Can't install");
     }
 
     if (!this._listTabsResponse) {
       this.reportError("error_cantInstallNotFullyConnected");
-      return promise.reject("Can't install");
+      return Promise.reject("Can't install");
     }
 
     if (!this._appsFront) {
       console.error("Runtime doesn't have a webappsActor");
-      return promise.reject("Can't install");
+      return Promise.reject("Can't install");
     }
 
     return Task.spawn(function* () {
       let self = AppManager;
 
-      // Package and validate project
-      yield self.packageProject(project);
+      // Validate project
       yield self.validateAndUpdateProject(project);
 
       if (project.errorsCount > 0) {
@@ -635,12 +624,12 @@ var AppManager = exports.AppManager = {
       let installPromise;
 
       if (project.type != "packaged" && project.type != "hosted") {
-        return promise.reject("Don't know how to install project");
+        return Promise.reject("Don't know how to install project");
       }
 
       let response;
       if (project.type == "packaged") {
-        let packageDir = yield ProjectBuilding.getPackageDir(project);
+        let packageDir = project.location;
         console.log("Installing app from " + packageDir);
 
         response = yield self._appsFront.installPackaged(packageDir,
@@ -674,15 +663,16 @@ var AppManager = exports.AppManager = {
 
       let {app} = response;
       if (!app.running) {
-        let deferred = promise.defer();
-        self.on("app-manager-update", function onUpdate(event, what) {
-          if (what == "project-started") {
-            self.off("app-manager-update", onUpdate);
-            deferred.resolve();
-          }
+        let deferred = new Promise(resolve => {
+          self.on("app-manager-update", function onUpdate(event, what) {
+            if (what == "project-started") {
+              self.off("app-manager-update", onUpdate);
+              resolve();
+            }
+          });
         });
         yield app.launch();
-        yield deferred.promise;
+        yield deferred;
       } else {
         yield app.reload();
       }
@@ -698,12 +688,12 @@ var AppManager = exports.AppManager = {
 
   validateAndUpdateProject: function (project) {
     if (!project) {
-      return promise.reject();
+      return Promise.reject();
     }
 
     return Task.spawn(function* () {
 
-      let packageDir = yield ProjectBuilding.getPackageDir(project);
+      let packageDir = project.location;
       let validation = new AppValidator({
         type: project.type,
         // Build process may place the manifest in a non-root directory
@@ -789,7 +779,6 @@ var AppManager = exports.AppManager = {
     this.runtimeList = {
       usb: [],
       wifi: [],
-      simulator: [],
       other: []
     };
   },
@@ -807,9 +796,6 @@ var AppManager = exports.AppManager = {
         case RuntimeTypes.WIFI:
           this.runtimeList.wifi.push(runtime);
           break;
-        case RuntimeTypes.SIMULATOR:
-          this.runtimeList.simulator.push(runtime);
-          break;
         default:
           this.runtimeList.other.push(runtime);
       }
@@ -823,7 +809,7 @@ var AppManager = exports.AppManager = {
 
   writeManifest: function (project) {
     if (project.type != "packaged") {
-      return promise.reject("Not a packaged app");
+      return Promise.reject("Not a packaged app");
     }
 
     if (!project.manifest) {

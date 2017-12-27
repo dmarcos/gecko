@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,6 +9,7 @@
 
 #include "jsapi.h"
 #include "js/StructuredClone.h"
+#include "mozilla/MemoryReporting.h"
 #include "mozilla/Move.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/dom/BindingDeclarations.h"
@@ -114,6 +116,15 @@ public:
   {
     MOZ_ASSERT(mBuffer, "Write() has never been called.");
     return mBuffer->data();
+  }
+
+  size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf)
+  {
+    size_t size = 0;
+    if (HasData()) {
+      size += mBuffer->sizeOfIncludingThis(aMallocSizeOf);
+    }
+    return size;
   }
 
 protected:
@@ -306,6 +317,12 @@ protected:
   bool mSupportsCloning;
   bool mSupportsTransferring;
 
+  // SizeOfExcludingThis is inherited from StructuredCloneHolderBase. It doesn't
+  // account for objects in the following arrays because a) they're not expected
+  // to be stored in long-lived StructuredCloneHolder objects, and b) in the
+  // case of BlobImpl objects, MemoryBlobImpls have their own memory reporters,
+  // and the other types do not hold significant amounts of memory alive.
+
   // Used for cloning blobs in the structured cloning algorithm.
   nsTArray<RefPtr<BlobImpl>> mBlobImplArray;
 
@@ -334,7 +351,7 @@ protected:
   mutable nsTArray<MessagePortIdentifier> mPortIdentifiers;
 
 #ifdef DEBUG
-  nsCOMPtr<nsIThread> mCreationThread;
+  nsCOMPtr<nsIEventTarget> mCreationEventTarget;
 #endif
 };
 

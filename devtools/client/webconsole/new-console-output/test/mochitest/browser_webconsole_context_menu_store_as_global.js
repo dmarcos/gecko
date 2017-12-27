@@ -12,80 +12,74 @@ const TEST_URI = `data:text/html;charset=utf-8,<script>
   window.bar = { baz: 1 };
   console.log("foo");
   console.log("foo", window.bar);
-  console.log(["foo", window.bar, 2]);
+  window.array = ["foo", window.bar, 2];
+  console.log(window.array);
+  window.longString = "foo" + "a".repeat(1e4);
+  console.log(window.longString);
 </script>`;
 
-add_task(function* () {
-  let hud = yield openNewTabAndConsole(TEST_URI);
+add_task(async function() {
+  let hud = await openNewTabAndConsole(TEST_URI);
 
-  let [msgWithText, msgWithObj, msgNested] =
-    yield waitFor(() => findMessages(hud, "foo"));
-  ok(msgWithText && msgWithObj && msgNested, "Three messages should have appeared");
-
-  let text = msgWithText.querySelector(".objectBox-string");
-  let objInMsgWithObj = msgWithObj.querySelector(".cm-variable");
-  let textInMsgWithObj = msgWithObj.querySelector(".objectBox-string");
-
-  // The third message has an object nested in an array, the array is therefore the top
-  // object, the object is the nested object.
-  let topObjInMsg = msgNested.querySelector(".objectBox-array > .cm-variable");
-  let nestedObjInMsg = msgNested.querySelector(".objectBox-object > .cm-variable");
+  let messages = await waitFor(() => findMessages(hud, "foo"));
+  is(messages.length, 4, "Four messages should have appeared");
+  let [msgWithText, msgWithObj, msgNested, msgLongStr] = messages;
+  let varIdx = 0;
 
   info("Check store as global variable is disabled for text only messages");
-  let menuPopup = yield openContextMenu(hud, text);
-  let storeMenuItem = menuPopup.querySelector("#console-menu-store");
-  ok(storeMenuItem.disabled, "store as global variable is disabled for text message");
-  yield hideContextMenu(hud);
+  await storeAsVariable(hud, msgWithText, "string");
 
   info("Check store as global variable is disabled for text in complex messages");
-  menuPopup = yield openContextMenu(hud, textInMsgWithObj);
-  storeMenuItem = menuPopup.querySelector("#console-menu-store");
-  ok(storeMenuItem.disabled,
-    "store as global variable is disabled for text in complex message");
-  yield hideContextMenu(hud);
+  await storeAsVariable(hud, msgWithObj, "string");
 
   info("Check store as global variable is enabled for objects in complex messages");
-  yield storeAsVariable(hud, objInMsgWithObj);
-
-  is(hud.jsterm.getInputValue(), "temp0", "Input was set");
-
-  let executedResult = yield hud.jsterm.execute();
-  ok(executedResult.textContent.includes("{ baz: 1 }"),
-     "Correct variable assigned into console");
+  await storeAsVariable(hud, msgWithObj, "object", varIdx++, "window.bar");
 
   info("Check store as global variable is enabled for top object in nested messages");
-  yield storeAsVariable(hud, topObjInMsg);
-
-  is(hud.jsterm.getInputValue(), "temp1", "Input was set");
-
-  executedResult = yield hud.jsterm.execute();
-  ok(executedResult.textContent.includes("[ \"foo\", Object, 2 ]"),
-     "Correct variable assigned into console " + executedResult.textContent);
+  await storeAsVariable(hud, msgNested, "array", varIdx++, "window.array");
 
   info("Check store as global variable is enabled for nested object in nested messages");
-  yield storeAsVariable(hud, nestedObjInMsg);
+  await storeAsVariable(hud, msgNested, "object", varIdx++, "window.bar");
 
-  is(hud.jsterm.getInputValue(), "temp2", "Input was set");
+  info("Check store as global variable is enabled for long strings");
+  await storeAsVariable(hud, msgLongStr, "string", varIdx++, "window.longString");
 
-  executedResult = yield hud.jsterm.execute();
-  ok(executedResult.textContent.includes("{ baz: 1 }"),
-     "Correct variable assigned into console " + executedResult.textContent);
+  info("Check store as global variable is enabled for invisible-to-debugger objects");
+  let onMessageInvisible = waitForMessage(hud, "foo");
+  ContentTask.spawn(gBrowser.selectedBrowser, null, () => {
+    let obj = Cu.Sandbox(Cu.getObjectPrincipal(content), {invisibleToDebugger: true});
+    content.wrappedJSObject.invisibleToDebugger = obj;
+    content.console.log("foo", obj);
+  });
+  let msgInvisible = (await onMessageInvisible).node;
+  await storeAsVariable(hud, msgInvisible, "object", varIdx++, "window.invisibleToDebugger");
 });
 
-function* storeAsVariable(hud, element) {
-  info("Check store as global variable is enabled");
-  let menuPopup = yield openContextMenu(hud, element);
+async function storeAsVariable(hud, msg, type, varIdx, equalTo) {
+  let element = msg.querySelector(".objectBox-" + type);
+  let menuPopup = await openContextMenu(hud, element);
   let storeMenuItem = menuPopup.querySelector("#console-menu-store");
-  ok(!storeMenuItem.disabled,
-    "store as global variable is enabled for object in complex message");
+
+  if (varIdx == null) {
+    ok(storeMenuItem.disabled, "store as global variable is disabled");
+    await hideContextMenu(hud);
+    return;
+  }
+
+  ok(!storeMenuItem.disabled, "store as global variable is enabled");
 
   info("Click on store as global variable");
   let onceInputSet = hud.jsterm.once("set-input-value");
   storeMenuItem.click();
 
   info("Wait for console input to be updated with the temp variable");
-  yield onceInputSet;
+  await onceInputSet;
 
   info("Wait for context menu to be hidden");
-  yield hideContextMenu(hud);
+  await hideContextMenu(hud);
+
+  is(hud.jsterm.getInputValue(), "temp" + varIdx, "Input was set");
+
+  let equal = await hud.jsterm.requestEvaluation("temp" + varIdx + " === " + equalTo);
+  is(equal.result, true, "Correct variable assigned into console.");
 }

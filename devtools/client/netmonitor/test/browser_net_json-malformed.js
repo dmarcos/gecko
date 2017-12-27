@@ -12,14 +12,14 @@ add_task(function* () {
   let { tab, monitor } = yield initNetMonitor(JSON_MALFORMED_URL);
   info("Starting test... ");
 
-  let { document, gStore, windowRequire } = monitor.panelWin;
+  let { document, store, windowRequire } = monitor.panelWin;
   let Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
   let {
     getDisplayedRequests,
     getSortedRequests,
   } = windowRequire("devtools/client/netmonitor/src/selectors/index");
 
-  gStore.dispatch(Actions.batchEnable(false));
+  store.dispatch(Actions.batchEnable(false));
 
   let wait = waitForNetworkEvents(monitor, 1);
   yield ContentTask.spawn(tab.linkedBrowser, {}, function* () {
@@ -27,10 +27,15 @@ add_task(function* () {
   });
   yield wait;
 
+  let requestItem = document.querySelector(".request-list-item");
+  let requestsListStatus = requestItem.querySelector(".requests-list-status");
+  EventUtils.sendMouseEvent({ type: "mouseover" }, requestsListStatus);
+  yield waitUntil(() => requestsListStatus.title);
+
   verifyRequestItemTarget(
     document,
-    getDisplayedRequests(gStore.getState()),
-    getSortedRequests(gStore.getState()).get(0),
+    getDisplayedRequests(store.getState()),
+    getSortedRequests(store.getState()).get(0),
     "GET",
     CONTENT_TYPE_SJS + "?fmt=json-malformed",
     {
@@ -62,7 +67,7 @@ add_task(function* () {
   is(jsonView.textContent === L10N.getStr("jsonScopeName"), false,
     "The response json view doesn't have the intended visibility.");
   is(tabpanel.querySelector(".CodeMirror-code") === null, false,
-    "The response editor doesn't have the intended visibility.");
+    "The response editor has the intended visibility.");
   is(tabpanel.querySelector(".response-image-box") === null, true,
     "The response image box doesn't have the intended visibility.");
 

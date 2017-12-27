@@ -6,6 +6,11 @@
 
 FINAL_TARGET = 'dist/bin/gtest'
 
+if CONFIG['ENABLE_TESTS']:
+	USE_LIBS += [
+	    'gkrust-gtest',
+	]
+
 USE_LIBS += [
     'static:xul',
     # xul-gtest is an intermediate static library. It is used as FINAL_TARGET
@@ -16,14 +21,15 @@ USE_LIBS += [
     'xul-gtest',
 ]
 
+if CONFIG['OS_ARCH'] == 'Linux' and CONFIG['OS_TARGET'] != 'Android':
+    GENERATED_FILES += ['symverscript']
+    GENERATED_FILES['symverscript'].script = '../gen_symverscript.py'
+    GENERATED_FILES['symverscript'].inputs = ['../symverscript.in']
+    SYMBOLS_FILE = '!symverscript'
+
 # This needs to come after static:xul to avoid things like libfallible coming
 # before StaticXULComponentStart.
 Libxul('xul-gtest-real')
-
-if CONFIG['MOZ_RUST']:
-    USE_LIBS += [
-        'gkrust-gtest',
-    ]
 
 DIRS += [
     'static',

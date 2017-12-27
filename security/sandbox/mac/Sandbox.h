@@ -41,14 +41,8 @@ typedef struct _MacSandboxInfo {
   _MacSandboxInfo()
     : type(MacSandboxType_Default), level(0), hasFilePrivileges(false),
       shouldLog(true) {}
-  _MacSandboxInfo(const struct _MacSandboxInfo& other)
-    : type(other.type), level(other.level),
-      hasFilePrivileges(other.hasFilePrivileges),
-      hasSandboxedProfile(other.hasSandboxedProfile),
-      pluginInfo(other.pluginInfo),
-      appPath(other.appPath), appBinaryPath(other.appBinaryPath),
-      appDir(other.appDir), appTempDir(other.appTempDir),
-      profileDir(other.profileDir), shouldLog(other.shouldLog) {}
+  _MacSandboxInfo(const struct _MacSandboxInfo& other) = default;
+
   MacSandboxType type;
   int32_t level;
   bool hasFilePrivileges;
@@ -59,12 +53,19 @@ typedef struct _MacSandboxInfo {
   std::string appDir;
   std::string appTempDir;
   std::string profileDir;
+  std::string debugWriteDir;
+
+  std::string testingReadPath1;
+  std::string testingReadPath2;
+  std::string testingReadPath3;
+  std::string testingReadPath4;
+
   bool shouldLog;
 } MacSandboxInfo;
 
 namespace mozilla {
 
-bool StartMacSandbox(MacSandboxInfo aInfo, std::string &aErrorMessage);
+bool StartMacSandbox(MacSandboxInfo const &aInfo, std::string &aErrorMessage);
 
 } // namespace mozilla
 

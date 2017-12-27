@@ -5,9 +5,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <map>
-#ifdef MOZ_WIDGET_GONK
-#include "GonkPermission.h"
-#endif // MOZ_WIDGET_GONK
 #include "nsCOMPtr.h"
 #include "nsIDOMElement.h"
 #include "nsIPrincipal.h"
@@ -21,6 +18,7 @@
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/TabParent.h"
+#include "mozilla/EventStateManager.h"
 #include "mozilla/Unused.h"
 #include "nsComponentManagerUtils.h"
 #include "nsArrayUtils.h"
@@ -32,7 +30,6 @@
 #include "nsIDocument.h"
 #include "nsIDOMEvent.h"
 #include "nsWeakPtr.h"
-#include "ScriptSettings.h"
 
 using mozilla::Unused;          // <snicker>
 using namespace mozilla::dom;
@@ -132,14 +129,16 @@ class ContentPermissionRequestParent : public PContentPermissionRequestParent
 {
  public:
   ContentPermissionRequestParent(const nsTArray<PermissionRequest>& aRequests,
-                                 Element* element,
-                                 const IPC::Principal& principal);
+                                 Element* aElement,
+                                 const IPC::Principal& aPrincipal,
+                                 const bool aIsHandlingUserInput);
   virtual ~ContentPermissionRequestParent();
 
   bool IsBeingDestroyed();
 
   nsCOMPtr<nsIPrincipal> mPrincipal;
   nsCOMPtr<Element> mElement;
+  bool mIsHandlingUserInput;
   RefPtr<nsContentPermissionRequestProxy> mProxy;
   nsTArray<PermissionRequest> mRequests;
 
@@ -152,13 +151,15 @@ class ContentPermissionRequestParent : public PContentPermissionRequestParent
 
 ContentPermissionRequestParent::ContentPermissionRequestParent(const nsTArray<PermissionRequest>& aRequests,
                                                                Element* aElement,
-                                                               const IPC::Principal& aPrincipal)
+                                                               const IPC::Principal& aPrincipal,
+                                                               const bool aIsHandlingUserInput)
 {
   MOZ_COUNT_CTOR(ContentPermissionRequestParent);
 
   mPrincipal = aPrincipal;
   mElement   = aElement;
   mRequests  = aRequests;
+  mIsHandlingUserInput = aIsHandlingUserInput;
 }
 
 ContentPermissionRequestParent::~ContentPermissionRequestParent()
@@ -260,7 +261,7 @@ ContentPermissionType::GetOptions(nsIArray** aOptions)
     rv = isupportsString->SetData(mOptions[i]);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    rv = options->AppendElement(isupportsString, false);
+    rv = options->AppendElement(isupportsString);
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
@@ -280,7 +281,7 @@ nsContentPermissionUtils::ConvertPermissionRequestToArray(nsTArray<PermissionReq
       new ContentPermissionType(aSrcArray[i].type(),
                                 aSrcArray[i].access(),
                                 aSrcArray[i].options());
-    aDesArray->AppendElement(cpt, false);
+    aDesArray->AppendElement(cpt);
   }
   return len;
 }
@@ -345,7 +346,7 @@ nsContentPermissionUtils::CreatePermissionArray(const nsACString& aType,
   RefPtr<ContentPermissionType> permType = new ContentPermissionType(aType,
                                                                        aAccess,
                                                                        aOptions);
-  types->AppendElement(permType, false);
+  types->AppendElement(permType);
   types.forget(aTypesArray);
 
   return NS_OK;
@@ -353,12 +354,13 @@ nsContentPermissionUtils::CreatePermissionArray(const nsACString& aType,
 
 /* static */ PContentPermissionRequestParent*
 nsContentPermissionUtils::CreateContentPermissionRequestParent(const nsTArray<PermissionRequest>& aRequests,
-                                                               Element* element,
-                                                               const IPC::Principal& principal,
+                                                               Element* aElement,
+                                                               const IPC::Principal& aPrincipal,
+                                                               const bool aIsHandlingUserInput,
                                                                const TabId& aTabId)
 {
   PContentPermissionRequestParent* parent =
-    new ContentPermissionRequestParent(aRequests, element, principal);
+    new ContentPermissionRequestParent(aRequests, aElement, aPrincipal, aIsHandlingUserInput);
   ContentPermissionRequestParentMap()[parent] = aTabId;
 
   return parent;
@@ -368,7 +370,6 @@ nsContentPermissionUtils::CreateContentPermissionRequestParent(const nsTArray<Pe
 nsContentPermissionUtils::AskPermission(nsIContentPermissionRequest* aRequest,
                                         nsPIDOMWindowInner* aWindow)
 {
-  MOZ_ASSERT(!aWindow || aWindow->IsInnerWindow());
   NS_ENSURE_STATE(aWindow && aWindow->IsCurrentInnerWindow());
 
   // for content process
@@ -393,11 +394,19 @@ nsContentPermissionUtils::AskPermission(nsIContentPermissionRequest* aRequest,
     rv = aRequest->GetPrincipal(getter_AddRefs(principal));
     NS_ENSURE_SUCCESS(rv, rv);
 
+    bool isHandlingUserInput;
+    rv = aRequest->GetIsHandlingUserInput(&isHandlingUserInput);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    ContentChild::GetSingleton()->SetEventTargetForActor(
+      req, aWindow->EventTargetFor(TaskCategory::Other));
+
     req->IPDLAddRef();
     ContentChild::GetSingleton()->SendPContentPermissionRequestConstructor(
       req,
       permArray,
       IPC::Principal(principal),
+      isHandlingUserInput,
       child->GetTabId());
     ContentPermissionRequestChildMap()[req.get()] = child->GetTabId();
 
@@ -648,6 +657,17 @@ nsContentPermissionRequestProxy::GetElement(nsIDOMElement * *aRequestingElement)
 
   nsCOMPtr<nsIDOMElement> elem = do_QueryInterface(mParent->mElement);
   elem.forget(aRequestingElement);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsContentPermissionRequestProxy::GetIsHandlingUserInput(bool* aIsHandlingUserInput)
+{
+  NS_ENSURE_ARG_POINTER(aIsHandlingUserInput);
+  if (mParent == nullptr) {
+    return NS_ERROR_FAILURE;
+  }
+  *aIsHandlingUserInput = mParent->mIsHandlingUserInput;
   return NS_OK;
 }
 

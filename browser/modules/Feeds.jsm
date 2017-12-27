@@ -17,15 +17,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
 const { interfaces: Ci, classes: Cc } = Components;
 
 this.Feeds = {
-  init() {
-    let mm = Cc["@mozilla.org/globalmessagemanager;1"].getService(Ci.nsIMessageListenerManager);
-    mm.addMessageListener("WCCR:registerProtocolHandler", this);
-    mm.addMessageListener("WCCR:registerContentHandler", this);
-
-    Services.ppmm.addMessageListener("WCCR:setAutoHandler", this);
-    Services.ppmm.addMessageListener("FeedConverter:addLiveBookmark", this);
-  },
-
+  // Listeners are added in nsBrowserGlue.js
   receiveMessage(aMessage) {
     let data = aMessage.data;
     switch (aMessage.name) {
@@ -83,14 +75,9 @@ this.Feeds = {
     }
 
     if (aIsFeed) {
-      // re-create the principal as it may be a CPOW.
-      // once this can't be a CPOW anymore, we should just use aPrincipal instead
-      // of creating a new one.
-      let principalURI = BrowserUtils.makeURIFromCPOW(aPrincipal.URI);
-      let principalToCheck =
-        Services.scriptSecurityManager.createCodebasePrincipal(principalURI, aPrincipal.originAttributes);
       try {
-        BrowserUtils.urlSecurityCheck(aLink.href, principalToCheck,
+        let href = BrowserUtils.makeURI(aLink.href, aLink.ownerDocument.characterSet);
+        BrowserUtils.urlSecurityCheck(href, aPrincipal,
                                       Ci.nsIScriptSecurityManager.DISALLOW_INHERIT_PRINCIPAL);
         return type || "application/rss+xml";
       } catch (ex) {

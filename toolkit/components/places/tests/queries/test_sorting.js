@@ -9,8 +9,8 @@ var tests = [];
 tests.push({
   _sortingMode: Ci.nsINavHistoryQueryOptions.SORT_BY_NONE,
 
-  *setup() {
-    do_print("Sorting test 1: SORT BY NONE");
+  async setup() {
+    info("Sorting test 1: SORT BY NONE");
 
     this._unsortedData = [
       { isBookmark: true,
@@ -41,7 +41,7 @@ tests.push({
     this._sortedData = this._unsortedData;
 
     // This function in head_queries.js creates our database with the above data
-    yield task_populateDB(this._unsortedData);
+    await task_populateDB(this._unsortedData);
   },
 
   check() {
@@ -70,8 +70,8 @@ tests.push({
 tests.push({
   _sortingMode: Ci.nsINavHistoryQueryOptions.SORT_BY_TITLE_ASCENDING,
 
-  *setup() {
-    do_print("Sorting test 2: SORT BY TITLE");
+  async setup() {
+    info("Sorting test 2: SORT BY TITLE");
 
     this._unsortedData = [
       { isBookmark: true,
@@ -112,7 +112,7 @@ tests.push({
     ];
 
     // This function in head_queries.js creates our database with the above data
-    yield task_populateDB(this._unsortedData);
+    await task_populateDB(this._unsortedData);
   },
 
   check() {
@@ -143,8 +143,8 @@ tests.push({
 tests.push({
   _sortingMode: Ci.nsINavHistoryQueryOptions.SORT_BY_DATE_ASCENDING,
 
-  *setup() {
-    do_print("Sorting test 3: SORT BY DATE");
+  async setup() {
+    info("Sorting test 3: SORT BY DATE");
 
     var timeInMicroseconds = Date.now() * 1000;
     this._unsortedData = [
@@ -210,7 +210,7 @@ tests.push({
     ];
 
     // This function in head_queries.js creates our database with the above data
-    yield task_populateDB(this._unsortedData);
+    await task_populateDB(this._unsortedData);
   },
 
   check() {
@@ -241,8 +241,8 @@ tests.push({
 tests.push({
   _sortingMode: Ci.nsINavHistoryQueryOptions.SORT_BY_URI_ASCENDING,
 
-  *setup() {
-    do_print("Sorting test 4: SORT BY URI");
+  async setup() {
+    info("Sorting test 4: SORT BY URI");
 
     var timeInMicroseconds = Date.now() * 1000;
     this._unsortedData = [
@@ -315,7 +315,7 @@ tests.push({
     ];
 
     // This function in head_queries.js creates our database with the above data
-    yield task_populateDB(this._unsortedData);
+    await task_populateDB(this._unsortedData);
   },
 
   check() {
@@ -345,8 +345,8 @@ tests.push({
 tests.push({
   _sortingMode: Ci.nsINavHistoryQueryOptions.SORT_BY_VISITCOUNT_ASCENDING,
 
-  *setup() {
-    do_print("Sorting test 5: SORT BY VISITCOUNT");
+  async setup() {
+    info("Sorting test 5: SORT BY VISITCOUNT");
 
     var timeInMicroseconds = Date.now() * 1000;
     this._unsortedData = [
@@ -402,9 +402,9 @@ tests.push({
     ];
 
     // This function in head_queries.js creates our database with the above data
-    yield task_populateDB(this._unsortedData);
+    await task_populateDB(this._unsortedData);
     // add visits to increase visit count
-    yield PlacesTestUtils.addVisits([
+    await PlacesTestUtils.addVisits([
       { uri: uri("http://example.com/a"), transition: TRANSITION_TYPED, visitDate: timeInMicroseconds },
       { uri: uri("http://example.com/b1"), transition: TRANSITION_TYPED, visitDate: timeInMicroseconds },
       { uri: uri("http://example.com/b1"), transition: TRANSITION_TYPED, visitDate: timeInMicroseconds },
@@ -444,8 +444,8 @@ tests.push({
 tests.push({
   _sortingMode: Ci.nsINavHistoryQueryOptions.SORT_BY_KEYWORD_ASCENDING,
 
-  *setup() {
-    do_print("Sorting test 6: SORT BY KEYWORD");
+  async setup() {
+    info("Sorting test 6: SORT BY KEYWORD");
 
     this._unsortedData = [
       { isBookmark: true,
@@ -510,7 +510,7 @@ tests.push({
     ];
 
     // This function in head_queries.js creates our database with the above data
-    yield task_populateDB(this._unsortedData);
+    await task_populateDB(this._unsortedData);
   },
 
   check() {
@@ -541,8 +541,8 @@ tests.push({
 tests.push({
   _sortingMode: Ci.nsINavHistoryQueryOptions.SORT_BY_DATEADDED_ASCENDING,
 
-  *setup() {
-    do_print("Sorting test 7: SORT BY DATEADDED");
+  async setup() {
+    info("Sorting test 7: SORT BY DATEADDED");
 
     var timeInMicroseconds = Date.now() * 1000;
     this._unsortedData = [
@@ -598,7 +598,7 @@ tests.push({
     ];
 
     // This function in head_queries.js creates our database with the above data
-    yield task_populateDB(this._unsortedData);
+    await task_populateDB(this._unsortedData);
   },
 
   check() {
@@ -629,8 +629,8 @@ tests.push({
 tests.push({
   _sortingMode: Ci.nsINavHistoryQueryOptions.SORT_BY_LASTMODIFIED_ASCENDING,
 
-  *setup() {
-    do_print("Sorting test 8: SORT BY LASTMODIFIED");
+  async setup() {
+    info("Sorting test 8: SORT BY LASTMODIFIED");
 
     var timeInMicroseconds = Date.now() * 1000;
     var timeAddedInMicroseconds = timeInMicroseconds - 10000;
@@ -694,7 +694,7 @@ tests.push({
     ];
 
     // This function in head_queries.js creates our database with the above data
-    yield task_populateDB(this._unsortedData);
+    await task_populateDB(this._unsortedData);
   },
 
   check() {
@@ -725,8 +725,8 @@ tests.push({
 tests.push({
   _sortingMode: Ci.nsINavHistoryQueryOptions.SORT_BY_TAGS_ASCENDING,
 
-  *setup() {
-    do_print("Sorting test 9: SORT BY TAGS");
+  async setup() {
+    info("Sorting test 9: SORT BY TAGS");
 
     this._unsortedData = [
       { isBookmark: true,
@@ -792,7 +792,7 @@ tests.push({
     ];
 
     // This function in head_queries.js creates our database with the above data
-    yield task_populateDB(this._unsortedData);
+    await task_populateDB(this._unsortedData);
   },
 
   check() {
@@ -825,8 +825,8 @@ tests.push({
 tests.push({
   _sortingMode: Ci.nsINavHistoryQueryOptions.SORT_BY_ANNOTATION_ASCENDING,
 
-  *setup() {
-    do_print("Sorting test 10: SORT BY ANNOTATION (int32)");
+  async setup() {
+    info("Sorting test 10: SORT BY ANNOTATION (int32)");
 
     var timeInMicroseconds = Date.now() * 1000;
     this._unsortedData = [
@@ -888,7 +888,7 @@ tests.push({
     ];
 
     // This function in head_queries.js creates our database with the above data
-    yield task_populateDB(this._unsortedData);
+    await task_populateDB(this._unsortedData);
   },
 
   check() {
@@ -920,8 +920,8 @@ tests.push({
 tests.push({
   _sortingMode: Ci.nsINavHistoryQueryOptions.SORT_BY_ANNOTATION_ASCENDING,
 
-  *setup() {
-    do_print("Sorting test 11: SORT BY ANNOTATION (int64)");
+  async setup() {
+    info("Sorting test 11: SORT BY ANNOTATION (int64)");
 
     var timeInMicroseconds = Date.now() * 1000;
     this._unsortedData = [
@@ -969,7 +969,7 @@ tests.push({
     ];
 
     // This function in head_queries.js creates our database with the above data
-    yield task_populateDB(this._unsortedData);
+    await task_populateDB(this._unsortedData);
   },
 
   check() {
@@ -1001,8 +1001,8 @@ tests.push({
 tests.push({
   _sortingMode: Ci.nsINavHistoryQueryOptions.SORT_BY_ANNOTATION_ASCENDING,
 
-  *setup() {
-    do_print("Sorting test 12: SORT BY ANNOTATION (string)");
+  async setup() {
+    info("Sorting test 12: SORT BY ANNOTATION (string)");
 
     var timeInMicroseconds = Date.now() * 1000;
     this._unsortedData = [
@@ -1050,7 +1050,7 @@ tests.push({
     ];
 
     // This function in head_queries.js creates our database with the above data
-    yield task_populateDB(this._unsortedData);
+    await task_populateDB(this._unsortedData);
   },
 
   check() {
@@ -1082,8 +1082,8 @@ tests.push({
 tests.push({
   _sortingMode: Ci.nsINavHistoryQueryOptions.SORT_BY_ANNOTATION_ASCENDING,
 
-  *setup() {
-    do_print("Sorting test 13: SORT BY ANNOTATION (double)");
+  async setup() {
+    info("Sorting test 13: SORT BY ANNOTATION (double)");
 
     var timeInMicroseconds = Date.now() * 1000;
     this._unsortedData = [
@@ -1131,7 +1131,7 @@ tests.push({
     ];
 
     // This function in head_queries.js creates our database with the above data
-    yield task_populateDB(this._unsortedData);
+    await task_populateDB(this._unsortedData);
   },
 
   check() {
@@ -1163,8 +1163,8 @@ tests.push({
 tests.push({
   _sortingMode: Ci.nsINavHistoryQueryOptions.SORT_BY_FRECENCY_ASCENDING,
 
-  *setup() {
-    do_print("Sorting test 13: SORT BY FRECENCY ");
+  async setup() {
+    info("Sorting test 13: SORT BY FRECENCY ");
 
     let timeInMicroseconds = PlacesUtils.toPRTime(Date.now() - 10000);
 
@@ -1224,7 +1224,7 @@ tests.push({
     ];
 
     // This function in head_queries.js creates our database with the above data
-    yield task_populateDB(this._unsortedData);
+    await task_populateDB(this._unsortedData);
   },
 
   check() {
@@ -1245,19 +1245,15 @@ tests.push({
   }
 });
 
-function run_test() {
-  run_next_test();
-}
-
-add_task(function* test_sorting() {
+add_task(async function test_sorting() {
   for (let test of tests) {
-    yield test.setup();
-    yield PlacesTestUtils.promiseAsyncUpdates();
+    await test.setup();
+    await PlacesTestUtils.promiseAsyncUpdates();
     test.check();
     // sorting reversed, usually SORT_BY have ASC and DESC
     test.check_reverse();
     // Execute cleanup tasks
-    yield PlacesUtils.bookmarks.eraseEverything();
-    yield PlacesTestUtils.clearHistory();
+    await PlacesUtils.bookmarks.eraseEverything();
+    await PlacesTestUtils.clearHistory();
   }
 });

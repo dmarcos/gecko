@@ -19,7 +19,6 @@
 #include "nsIObserver.h"
 #include "nsIObserverService.h"
 #include "nsIOutputStream.h"
-#include "nsIStartupCache.h"
 #include "nsIStorageStream.h"
 #include "nsIStreamBufferAccess.h"
 #include "nsIStringStream.h"
@@ -238,7 +237,7 @@ StartupCache::LoadArchive()
   nsresult rv = mFile->Exists(&exists);
   if (NS_FAILED(rv) || !exists)
     return NS_ERROR_FILE_NOT_FOUND;
-  
+
   mArchive = new nsZipArchive();
   rv = mArchive->OpenArchive(mFile);
   return rv;
@@ -267,15 +266,15 @@ GetBufferFromZipArchive(nsZipArchive *zip, bool doCRC, const char* id,
 // NOTE: this will not find a new entry until it has been written to disk!
 // Consumer should take ownership of the resulting buffer.
 nsresult
-StartupCache::GetBuffer(const char* id, UniquePtr<char[]>* outbuf, uint32_t* length) 
+StartupCache::GetBuffer(const char* id, UniquePtr<char[]>* outbuf, uint32_t* length)
 {
-  PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
+  AUTO_PROFILER_LABEL("StartupCache::GetBuffer", OTHER);
 
   NS_ASSERTION(NS_IsMainThread(), "Startup cache only available on main thread");
 
   WaitOnWriteThread();
   if (!mStartupWriteInitiated) {
-    CacheEntry* entry; 
+    CacheEntry* entry;
     nsDependentCString idStr(id);
     mTable.Get(idStr, &entry);
     if (entry) {
@@ -303,7 +302,7 @@ StartupCache::GetBuffer(const char* id, UniquePtr<char[]>* outbuf, uint32_t* len
 
 // Makes a copy of the buffer, client retains ownership of inbuf.
 nsresult
-StartupCache::PutBuffer(const char* id, const char* inbuf, uint32_t len) 
+StartupCache::PutBuffer(const char* id, const char* inbuf, uint32_t len)
 {
   NS_ASSERTION(NS_IsMainThread(), "Startup cache only available on main thread");
   WaitOnWriteThread();
@@ -316,8 +315,8 @@ StartupCache::PutBuffer(const char* id, const char* inbuf, uint32_t len)
 
   nsCString idStr(id);
   // Cache it for now, we'll write all together later.
-  CacheEntry* entry; 
-  
+  CacheEntry* entry;
+
   if (mTable.Get(idStr)) {
     NS_WARNING("Existing entry in StartupCache.");
     // Double-caching is undesirable but not an error.
@@ -383,7 +382,7 @@ CacheCloseHelper(const nsACString& key, const CacheEntry* data,
 #ifdef DEBUG
   bool hasEntry;
   rv = writer->HasEntry(key, &hasEntry);
-  NS_ASSERTION(NS_SUCCEEDED(rv) && hasEntry == false, 
+  NS_ASSERTION(NS_SUCCEEDED(rv) && hasEntry == false,
                "Existing entry in disk StartupCache.");
 #endif
   rv = writer->AddEntryStream(key, holder->time, true, stream, false);
@@ -394,12 +393,12 @@ CacheCloseHelper(const nsACString& key, const CacheEntry* data,
 }
 
 
-/** 
+/**
  * WriteToDisk writes the cache out to disk. Callers of WriteToDisk need to call WaitOnWriteThread
  * to make sure there isn't a write happening on another thread
  */
 void
-StartupCache::WriteToDisk() 
+StartupCache::WriteToDisk()
 {
   nsresult rv;
   mStartupWriteInitiated = true;
@@ -415,7 +414,7 @@ StartupCache::WriteToDisk()
   if (NS_FAILED(rv)) {
     NS_WARNING("could not open zipfile for write");
     return;
-  } 
+  }
 
   // If we didn't have an mArchive member, that means that we failed to
   // open the startup cache for reading.  Therefore, we need to record
@@ -428,7 +427,7 @@ StartupCache::WriteToDisk()
     zipW->SetComment(comment);
   }
 
-  nsCOMPtr<nsIStringInputStream> stream 
+  nsCOMPtr<nsIStringInputStream> stream
     = do_CreateInstance("@mozilla.org/io/string-input-stream;1", &rv);
   if (NS_FAILED(rv)) {
     NS_WARNING("Couldn't create string input stream.");
@@ -458,7 +457,7 @@ StartupCache::WriteToDisk()
 }
 
 void
-StartupCache::InvalidateCache() 
+StartupCache::InvalidateCache()
 {
   WaitOnWriteThread();
   mPendingWrites.Clear();
@@ -501,8 +500,8 @@ StartupCache::WaitOnWriteThread()
 void
 StartupCache::ThreadedWrite(void *aClosure)
 {
-  AutoProfilerRegister registerThread("StartupCache");
-  PR_SetCurrentThreadName("StartupCache");
+  AUTO_PROFILER_REGISTER_THREAD("StartupCache");
+  NS_SetCurrentThreadName("StartupCache");
   mozilla::IOInterposer::RegisterCurrentThread();
   /*
    * It is safe to use the pointer passed in aClosure to reference the
@@ -560,11 +559,11 @@ StartupCacheListener::Observe(nsISupports *subject, const char* topic, const cha
     sc->InvalidateCache();
   }
   return NS_OK;
-} 
+}
 
 nsresult
 StartupCache::GetDebugObjectOutputStream(nsIObjectOutputStream* aStream,
-                                         nsIObjectOutputStream** aOutStream) 
+                                         nsIObjectOutputStream** aOutStream)
 {
   NS_ENSURE_ARG_POINTER(aStream);
 #ifdef DEBUG
@@ -573,7 +572,7 @@ StartupCache::GetDebugObjectOutputStream(nsIObjectOutputStream* aStream,
 #else
   NS_ADDREF(*aOutStream = aStream);
 #endif
-  
+
   return NS_OK;
 }
 
@@ -581,9 +580,9 @@ nsresult
 StartupCache::ResetStartupWriteTimer()
 {
   mStartupWriteInitiated = false;
-  nsresult rv;
+  nsresult rv = NS_OK;
   if (!mTimer)
-    mTimer = do_CreateInstance("@mozilla.org/timer;1", &rv);
+    mTimer = NS_NewTimer();
   else
     rv = mTimer->Cancel();
   NS_ENSURE_SUCCESS(rv, rv);
@@ -603,29 +602,29 @@ StartupCache::StartupWriteComplete()
 
 // StartupCacheDebugOutputStream implementation
 #ifdef DEBUG
-NS_IMPL_ISUPPORTS(StartupCacheDebugOutputStream, nsIObjectOutputStream, 
+NS_IMPL_ISUPPORTS(StartupCacheDebugOutputStream, nsIObjectOutputStream,
                   nsIBinaryOutputStream, nsIOutputStream)
 
 bool
 StartupCacheDebugOutputStream::CheckReferences(nsISupports* aObject)
 {
   nsresult rv;
-  
+
   nsCOMPtr<nsIClassInfo> classInfo = do_QueryInterface(aObject);
   if (!classInfo) {
     NS_ERROR("aObject must implement nsIClassInfo");
     return false;
   }
-  
+
   uint32_t flags;
   rv = classInfo->GetFlags(&flags);
   NS_ENSURE_SUCCESS(rv, false);
   if (flags & nsIClassInfo::SINGLETON)
     return true;
-  
+
   nsISupportsHashKey* key = mObjectMap->GetEntry(aObject);
   if (key) {
-    NS_ERROR("non-singleton aObject is referenced multiple times in this" 
+    NS_ERROR("non-singleton aObject is referenced multiple times in this"
                   "serialization, we don't support that.");
     return false;
   }
@@ -639,7 +638,7 @@ nsresult
 StartupCacheDebugOutputStream::WriteObject(nsISupports* aObject, bool aIsStrongRef)
 {
   nsCOMPtr<nsISupports> rootObject(do_QueryInterface(aObject));
-  
+
   NS_ASSERTION(rootObject.get() == aObject,
                "bad call to WriteObject -- call WriteCompoundObject!");
   bool check = CheckReferences(aObject);
@@ -651,7 +650,7 @@ nsresult
 StartupCacheDebugOutputStream::WriteSingleRefObject(nsISupports* aObject)
 {
   nsCOMPtr<nsISupports> rootObject(do_QueryInterface(aObject));
-  
+
   NS_ASSERTION(rootObject.get() == aObject,
                "bad call to WriteSingleRefObject -- call WriteCompoundObject!");
   bool check = CheckReferences(aObject);
@@ -665,7 +664,7 @@ StartupCacheDebugOutputStream::WriteCompoundObject(nsISupports* aObject,
                                                 bool aIsStrongRef)
 {
   nsCOMPtr<nsISupports> rootObject(do_QueryInterface(aObject));
-  
+
   nsCOMPtr<nsISupports> roundtrip;
   rootObject->QueryInterface(aIID, getter_AddRefs(roundtrip));
   NS_ASSERTION(roundtrip.get() == aObject,
@@ -678,7 +677,7 @@ StartupCacheDebugOutputStream::WriteCompoundObject(nsISupports* aObject,
 }
 
 nsresult
-StartupCacheDebugOutputStream::WriteID(nsID const& aID) 
+StartupCacheDebugOutputStream::WriteID(nsID const& aID)
 {
   return mBinaryStream->WriteID(aID);
 }
@@ -695,74 +694,6 @@ StartupCacheDebugOutputStream::PutBuffer(char* aBuffer, uint32_t aLength)
   mBinaryStream->PutBuffer(aBuffer, aLength);
 }
 #endif //DEBUG
-
-StartupCacheWrapper* StartupCacheWrapper::gStartupCacheWrapper = nullptr;
-
-NS_IMPL_ISUPPORTS(StartupCacheWrapper, nsIStartupCache)
-
-StartupCacheWrapper* StartupCacheWrapper::GetSingleton() 
-{
-  if (!gStartupCacheWrapper)
-    gStartupCacheWrapper = new StartupCacheWrapper();
-
-  NS_ADDREF(gStartupCacheWrapper);
-  return gStartupCacheWrapper;
-}
-
-nsresult 
-StartupCacheWrapper::GetBuffer(const char* id, char** outbuf, uint32_t* length) 
-{
-  StartupCache* sc = StartupCache::GetSingleton();
-  if (!sc) {
-    return NS_ERROR_NOT_INITIALIZED;
-  }
-  UniquePtr<char[]> buf;
-  nsresult rv = sc->GetBuffer(id, &buf, length);
-  *outbuf = buf.release();
-  return rv;
-}
-
-nsresult
-StartupCacheWrapper::PutBuffer(const char* id, const char* inbuf, uint32_t length) 
-{
-  StartupCache* sc = StartupCache::GetSingleton();
-  if (!sc) {
-    return NS_ERROR_NOT_INITIALIZED;
-  }
-  return sc->PutBuffer(id, inbuf, length);
-}
-
-nsresult
-StartupCacheWrapper::InvalidateCache() 
-{
-  StartupCache* sc = StartupCache::GetSingleton();
-  if (!sc) {
-    return NS_ERROR_NOT_INITIALIZED;
-  }
-  sc->InvalidateCache();
-  return NS_OK;
-}
-
-nsresult 
-StartupCacheWrapper::GetDebugObjectOutputStream(nsIObjectOutputStream* stream,
-                                                nsIObjectOutputStream** outStream) 
-{
-  StartupCache* sc = StartupCache::GetSingleton();
-  if (!sc) {
-    return NS_ERROR_NOT_INITIALIZED;
-  }
-  return sc->GetDebugObjectOutputStream(stream, outStream);
-}
-
-nsresult
-StartupCacheWrapper::GetObserver(nsIObserver** obv) {
-  StartupCache* sc = StartupCache::GetSingleton();
-  if (!sc) {
-    return NS_ERROR_NOT_INITIALIZED;
-  }
-  NS_ADDREF(*obv = sc->mListener);
-  return NS_OK;
-}
 
 } // namespace scache
 } // namespace mozilla

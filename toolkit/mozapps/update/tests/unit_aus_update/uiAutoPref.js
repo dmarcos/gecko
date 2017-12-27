@@ -2,11 +2,9 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
-Components.utils.import("resource://testing-common/MockRegistrar.jsm");
-
 const WindowWatcher = {
   openWindow(aParent, aUrl, aName, aFeatures, aArgs) {
-    gCheckFunc();
+    check_showUpdateAvailable();
   },
 
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIWindowWatcher])
@@ -14,7 +12,7 @@ const WindowWatcher = {
 
 const WindowMediator = {
   getMostRecentWindow(aWindowType) {
-    do_execute_soon(check_status);
+    executeSoon(check_status);
     return { getInterface: XPCOMUtils.generateQI([Ci.nsIDOMWindow]) };
   },
 
@@ -42,14 +40,13 @@ function run_test() {
   let windowMediatorCID =
     MockRegistrar.register("@mozilla.org/appshell/window-mediator;1",
                            WindowMediator);
-  do_register_cleanup(() => {
+  registerCleanupFunction(() => {
     MockRegistrar.unregister(windowWatcherCID);
     MockRegistrar.unregister(windowMediatorCID);
   });
 
-  gCheckFunc = check_showUpdateAvailable;
-  let patches = getRemotePatchString("complete");
-  let updates = getRemoteUpdateString(patches, "minor", null, null, "1.0");
+  let patches = getRemotePatchString({});
+  let updates = getRemoteUpdateString({}, patches);
   gResponseBody = getRemoteUpdatesXMLString(updates);
   gAUS.notify(null);
 }
@@ -67,7 +64,7 @@ function check_status() {
   writeUpdatesToXMLFile(getLocalUpdatesXMLString(""), false);
   reloadUpdateManagerData();
 
-  do_execute_soon(doTestFinish);
+  executeSoon(doTestFinish);
 }
 
 function check_showUpdateAvailable() {

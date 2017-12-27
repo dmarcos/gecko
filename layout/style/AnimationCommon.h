@@ -1,4 +1,5 @@
-/* vim: set shiftwidth=2 tabstop=8 autoindent cindent expandtab: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -302,14 +303,13 @@ TimingParamsFromCSSParams(float aDuration, float aDelay,
              "aIterations should be nonnegative & finite, as ensured by "
              "CSSParser");
 
-  TimingParams timing;
-  timing.mDuration.emplace(StickyTimeDuration::FromMilliseconds(aDuration));
-  timing.mDelay = TimeDuration::FromMilliseconds(aDelay);
-  timing.mIterations = aIterationCount;
-  timing.mDirection = aDirection;
-  timing.mFill = aFillMode;
-
-  return timing;
+  return TimingParams {
+    aDuration,
+    aDelay,
+    aIterationCount,
+    aDirection,
+    aFillMode
+  };
 }
 
 } // namespace mozilla

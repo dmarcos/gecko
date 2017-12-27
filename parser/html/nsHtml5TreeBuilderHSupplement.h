@@ -3,8 +3,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #define NS_HTML5_TREE_BUILDER_HANDLE_ARRAY_LENGTH 512
-
   private:
+    using Encoding = mozilla::Encoding;
+    template <typename T> using NotNull = mozilla::NotNull<T>;
+
     nsHtml5OplessBuilder*                  mBuilder;
     // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     // If mBuilder is not null, the tree op machinery is not in use and
@@ -65,9 +67,17 @@
       accumulateCharacters(aBuf, aStart, aLength);
     }
 
-    void MarkAsBrokenAndRequestSuspension(nsresult aRv)
+    void
+    MarkAsBrokenAndRequestSuspensionWithBuilder(nsresult aRv)
     {
       mBuilder->MarkAsBroken(aRv);
+      requestSuspension();
+    }
+
+    void
+    MarkAsBrokenAndRequestSuspensionWithoutBuilder(nsresult aRv)
+    {
+      MarkAsBroken(aRv);
       requestSuspension();
     }
 
@@ -104,17 +114,20 @@
     
     void FlushLoads();
 
-    void SetDocumentCharset(nsACString& aCharset, int32_t aCharsetSource);
+    void SetDocumentCharset(NotNull<const Encoding*> aEncoding,
+                            int32_t aCharsetSource);
 
     void StreamEnded();
 
-    void NeedsCharsetSwitchTo(const nsACString& aEncoding,
+    void NeedsCharsetSwitchTo(NotNull<const Encoding*> aEncoding,
                               int32_t aSource,
                               int32_t aLineNumber);
 
     void MaybeComplainAboutCharset(const char* aMsgId,
                                    bool aError,
                                    int32_t aLineNumber);
+
+    void TryToDisableEncodingMenu();
 
     void AddSnapshotToScript(nsAHtml5TreeBuilderState* aSnapshot, int32_t aLine);
 
@@ -142,13 +155,13 @@
 
     void EnableViewSource(nsHtml5Highlighter* aHighlighter);
 
-    void errStrayStartTag(nsIAtom* aName);
+    void errStrayStartTag(nsAtom* aName);
 
-    void errStrayEndTag(nsIAtom* aName);
+    void errStrayEndTag(nsAtom* aName);
 
-    void errUnclosedElements(int32_t aIndex, nsIAtom* aName);
+    void errUnclosedElements(int32_t aIndex, nsAtom* aName);
 
-    void errUnclosedElementsImplied(int32_t aIndex, nsIAtom* aName);
+    void errUnclosedElementsImplied(int32_t aIndex, nsAtom* aName);
 
     void errUnclosedElementsCell(int32_t aIndex);
 
@@ -170,7 +183,7 @@
 
     void errNonSpaceInNoscriptInHead();
 
-    void errFooBetweenHeadAndBody(nsIAtom* aName);
+    void errFooBetweenHeadAndBody(nsAtom* aName);
 
     void errStartTagWithoutDoctype();
 
@@ -178,15 +191,15 @@
 
     void errStartSelectWhereEndSelectExpected();
 
-    void errStartTagWithSelectOpen(nsIAtom* aName);
+    void errStartTagWithSelectOpen(nsAtom* aName);
 
-    void errBadStartTagInHead(nsIAtom* aName);
+    void errBadStartTagInHead(nsAtom* aName);
 
     void errImage();
 
     void errIsindex();
 
-    void errFooSeenWhenFooOpen(nsIAtom* aName);
+    void errFooSeenWhenFooOpen(nsAtom* aName);
 
     void errHeadingWhenHeadingOpen();
 
@@ -194,27 +207,27 @@
 
     void errNoCellToClose();
 
-    void errStartTagInTable(nsIAtom* aName);
+    void errStartTagInTable(nsAtom* aName);
 
     void errFormWhenFormOpen();
 
     void errTableSeenWhileTableOpen();
 
-    void errStartTagInTableBody(nsIAtom* aName);
+    void errStartTagInTableBody(nsAtom* aName);
 
     void errEndTagSeenWithoutDoctype();
 
     void errEndTagAfterBody();
 
-    void errEndTagSeenWithSelectOpen(nsIAtom* aName);
+    void errEndTagSeenWithSelectOpen(nsAtom* aName);
 
     void errGarbageInColgroup();
 
     void errEndTagBr();
 
-    void errNoElementToCloseButEndTagSeen(nsIAtom* aName);
+    void errNoElementToCloseButEndTagSeen(nsAtom* aName);
 
-    void errHtmlStartTagInForeignContext(nsIAtom* aName);
+    void errHtmlStartTagInForeignContext(nsAtom* aName);
 
     void errTableClosedWhileCaptionOpen();
 
@@ -224,17 +237,17 @@
 
     void errUnclosedChildrenInRuby();
 
-    void errStartTagSeenWithoutRuby(nsIAtom* aName);
+    void errStartTagSeenWithoutRuby(nsAtom* aName);
 
     void errSelfClosing();
 
     void errNoCheckUnclosedElementsOnStack();
 
-    void errEndTagDidNotMatchCurrentOpenElement(nsIAtom* aName, nsIAtom* aOther);
+    void errEndTagDidNotMatchCurrentOpenElement(nsAtom* aName, nsAtom* aOther);
 
-    void errEndTagViolatesNestingRules(nsIAtom* aName);
+    void errEndTagViolatesNestingRules(nsAtom* aName);
 
-    void errEndWithUnclosedElements(nsIAtom* aName);
+    void errEndWithUnclosedElements(nsAtom* aName);
 
     void MarkAsBroken(nsresult aRv);
 

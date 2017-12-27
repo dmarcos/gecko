@@ -3,6 +3,8 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
+/* import-globals-from helpers.js */
+
 var bufferCache = [];
 var utils = SpecialPowers.getDOMWindowUtils(window);
 
@@ -18,7 +20,7 @@ function getRandomBuffer(size)
   let buffer = getBuffer(size);
   let view = new Uint8Array(buffer);
   for (let i = 0; i < size; i++) {
-    view[i] = parseInt(Math.random() * 255)
+    view[i] = parseInt(Math.random() * 255);
   }
   return buffer;
 }
@@ -35,7 +37,7 @@ function getRandomView(size)
 {
   let view = getView(size);
   for (let i = 0; i < size; i++) {
-    view[i] = parseInt(Math.random() * 255)
+    view[i] = parseInt(Math.random() * 255);
   }
   return view;
 }
@@ -57,12 +59,12 @@ function compareBuffers(buffer1, buffer2)
 
 function getBlob(type, view)
 {
-  return new Blob([view], {type: type});
+  return new Blob([view], {type});
 }
 
 function getFile(name, type, view)
 {
-  return new File([view], name, {type: type});
+  return new File([view], name, {type});
 }
 
 function getRandomBlob(size)
@@ -143,7 +145,7 @@ function verifyBlob(blob1, blob2, fileId, blobReadHandler)
           testGenerator.next();
         }
       }
-    }
+    };
   }
 
   let reader = new FileReader();
@@ -159,7 +161,7 @@ function verifyBlob(blob1, blob2, fileId, blobReadHandler)
         testGenerator.next();
       }
     }
-  }
+  };
 }
 
 function verifyBlobArray(blobs1, blobs2, expectedFileIds)
@@ -207,8 +209,8 @@ function verifyWasmModule(module1, module2)
   let getGlobalForObject = SpecialPowers.Cu.getGlobalForObject;
   let testingFunctions = SpecialPowers.Cu.getJSTestingFunctions();
   let wasmExtractCode = SpecialPowers.unwrap(testingFunctions.wasmExtractCode);
-  let exp1 = wasmExtractCode(module1);
-  let exp2 = wasmExtractCode(module2);
+  let exp1 = wasmExtractCode(module1, "ion");
+  let exp2 = wasmExtractCode(module2, "ion");
   let code1 = exp1.code;
   let code2 = exp2.code;
   ok(code1 instanceof getGlobalForObject(code1).Uint8Array, "Instance of Uint8Array");

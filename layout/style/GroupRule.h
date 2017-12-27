@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -79,13 +80,14 @@ struct GeckoGroupRuleRules
 struct ServoGroupRuleRules
 {
   explicit ServoGroupRuleRules(already_AddRefed<ServoCssRules> aRawRules)
-    : mRuleList(new ServoCSSRuleList(Move(aRawRules))) {}
+    : mRuleList(new ServoCSSRuleList(Move(aRawRules), nullptr)) {}
   ServoGroupRuleRules(ServoGroupRuleRules&& aOther)
     : mRuleList(Move(aOther.mRuleList)) {}
   ServoGroupRuleRules(const ServoGroupRuleRules& aCopy) {
     // Do we ever clone Servo rules?
     MOZ_ASSERT_UNREACHABLE("stylo: Cloning GroupRule not implemented");
   }
+  ~ServoGroupRuleRules();
 
   void SetParentRule(GroupRule* aParentRule) {
     if (mRuleList) {
@@ -99,8 +101,10 @@ struct ServoGroupRuleRules
   }
 
   void Clear() {
-    mRuleList->DropReference();
-    mRuleList = nullptr;
+    if (mRuleList) {
+      mRuleList->DropReference();
+      mRuleList = nullptr;
+    }
   }
   void Traverse(nsCycleCollectionTraversalCallback& cb) {
     ImplCycleCollectionTraverse(cb, mRuleList, "mRuleList");
@@ -141,7 +145,8 @@ class GroupRule : public Rule
 {
 protected:
   GroupRule(uint32_t aLineNumber, uint32_t aColumnNumber);
-  explicit GroupRule(already_AddRefed<ServoCssRules> aRules);
+  GroupRule(already_AddRefed<ServoCssRules> aRules,
+            uint32_t aLineNumber, uint32_t aColumnNumber);
   GroupRule(const GroupRule& aCopy);
   virtual ~GroupRule();
 public:

@@ -220,7 +220,7 @@ public:
    * Convert attribute value of the given node to positive integer. If no
    * attribute or wrong value then false is returned.
    */
-  static bool GetUIntAttr(nsIContent *aContent, nsIAtom *aAttr,
+  static bool GetUIntAttr(nsIContent *aContent, nsAtom *aAttr,
                           int32_t* aUInt);
 
   /**
@@ -299,7 +299,7 @@ public:
    * only. In contrast to nsWhitespaceTokenizer class it takes into account
    * non-breaking space (0xa0).
    */
-  static bool IsWhitespaceString(const nsSubstring& aString);
+  static bool IsWhitespaceString(const nsAString& aString);
 
   /**
    * Returns true if the given character is whitespace symbol.

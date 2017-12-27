@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -116,7 +117,7 @@ public:
   // The MathML REC precisely defines an "embellished operator" as:
   // - an <mo> element;
   // - or one of the elements <msub>, <msup>, <msubsup>, <munder>, <mover>,
-  //   <munderover>, <mmultiscripts>, <mfrac>, or <semantics>, whose first 
+  //   <munderover>, <mmultiscripts>, <mfrac>, or <semantics>, whose first
   //   argument exists and is an embellished operator;
   //- or one of the elements <mstyle>, <mphantom>, or <mpadded>, such that
   //   an <mrow> containing the same arguments would be an embellished
@@ -149,7 +150,7 @@ public:
                                 nsStyleContext*   aStyleContext,
                                 float             aFontSizeInflation);
 
-  static nscoord 
+  static nscoord
   CalcLength(nsPresContext*   aPresContext,
              nsStyleContext*   aStyleContext,
              const nsCSSValue& aCSSValue,
@@ -193,20 +194,20 @@ public:
   }
 
   // helper methods for getting sup/subdrop's from a child
-  static void 
+  static void
   GetSubDropFromChild(nsIFrame*       aChild,
                       nscoord&        aSubDrop,
-                      float           aFontSizeInflation) 
+                      float           aFontSizeInflation)
   {
     RefPtr<nsFontMetrics> fm =
       nsLayoutUtils::GetFontMetricsForFrame(aChild, aFontSizeInflation);
     GetSubDrop(fm, aSubDrop);
   }
 
-  static void 
+  static void
   GetSupDropFromChild(nsIFrame*       aChild,
                       nscoord&        aSupDrop,
-                      float           aFontSizeInflation) 
+                      float           aFontSizeInflation)
   {
     RefPtr<nsFontMetrics> fm =
       nsLayoutUtils::GetFontMetricsForFrame(aChild, aFontSizeInflation);
@@ -215,7 +216,7 @@ public:
 
   static void
   GetSkewCorrectionFromChild(nsIFrame*       aChild,
-                             nscoord&        aSkewCorrection) 
+                             nscoord&        aSkewCorrection)
   {
     // default is 0
     // individual classes should over-ride this method if necessary
@@ -224,8 +225,8 @@ public:
 
   // 2 levels of subscript shifts
   static void
-  GetSubScriptShifts(nsFontMetrics* fm, 
-                     nscoord&        aSubScriptShift1, 
+  GetSubScriptShifts(nsFontMetrics* fm,
+                     nscoord&        aSubScriptShift1,
                      nscoord&        aSubScriptShift2)
   {
     nscoord xHeight = fm->XHeight();
@@ -235,9 +236,9 @@ public:
 
   // 3 levels of superscript shifts
   static void
-  GetSupScriptShifts(nsFontMetrics* fm, 
-                     nscoord&        aSupScriptShift1, 
-                     nscoord&        aSupScriptShift2, 
+  GetSupScriptShifts(nsFontMetrics* fm,
+                     nscoord&        aSupScriptShift1,
+                     nscoord&        aSupScriptShift2,
                      nscoord&        aSupScriptShift3)
   {
     nscoord xHeight = fm->XHeight();
@@ -265,9 +266,9 @@ public:
   }
 
   static void
-  GetNumeratorShifts(nsFontMetrics* fm, 
-                     nscoord&        numShift1, 
-                     nscoord&        numShift2, 
+  GetNumeratorShifts(nsFontMetrics* fm,
+                     nscoord&        numShift1,
+                     nscoord&        numShift2,
                      nscoord&        numShift3)
   {
     nscoord xHeight = fm->XHeight();
@@ -277,8 +278,8 @@ public:
   }
 
   static void
-  GetDenominatorShifts(nsFontMetrics* fm, 
-                       nscoord&        denShift1, 
+  GetDenominatorShifts(nsFontMetrics* fm,
+                       nscoord&        denShift1,
                        nscoord&        denShift2)
   {
     nscoord xHeight = fm->XHeight();
@@ -306,7 +307,7 @@ public:
   }
 
   static void
-  GetBigOpSpacings(nsFontMetrics* fm, 
+  GetBigOpSpacings(nsFontMetrics* fm,
                    nscoord&        bigOpSpacing1,
                    nscoord&        bigOpSpacing2,
                    nscoord&        bigOpSpacing3,
@@ -363,19 +364,20 @@ protected:
    */
   void DisplayBar(nsDisplayListBuilder* aBuilder,
                   nsIFrame* aFrame, const nsRect& aRect,
-                  const nsDisplayListSet& aLists);
+                  const nsDisplayListSet& aLists,
+                  uint32_t aIndex = 0);
 
   // information about the presentation policy of the frame
   nsPresentationData mPresentationData;
 
   // information about a container that is an embellished operator
   nsEmbellishData mEmbellishData;
-  
+
   // Metrics that _exactly_ enclose the text of the frame
   nsBoundingMetrics mBoundingMetrics;
-  
+
   // Reference point of the frame: mReference.y is the baseline
-  nsPoint mReference; 
+  nsPoint mReference;
 };
 
 #endif /* nsMathMLFrame_h___ */

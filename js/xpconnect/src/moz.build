@@ -23,6 +23,7 @@ UNIFIED_SOURCES += [
     'XPCException.cpp',
     'XPCJSContext.cpp',
     'XPCJSID.cpp',
+    'XPCJSRuntime.cpp',
     'XPCJSWeakReference.cpp',
     'XPCLocale.cpp',
     'XPCLog.cpp',
@@ -61,5 +62,5 @@ LOCAL_INCLUDES += [
     '/xpcom/reflect/xptinfo',
 ]
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-shadow', '-Werror=format']

@@ -2,6 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 from setuptools import setup
 
 PACKAGE_VERSION = '0.25'
@@ -9,7 +11,7 @@ PACKAGE_VERSION = '0.25'
 setup(name='mozprocess',
       version=PACKAGE_VERSION,
       description="Mozilla-authored process handling",
-      long_description='see http://mozbase.readthedocs.org/',
+      long_description="see https://firefox-source-docs.mozilla.org/mozbase/index.html",
       classifiers=['Environment :: Console',
                    'Intended Audience :: Developers',
                    'License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)',

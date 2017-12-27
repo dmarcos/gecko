@@ -5,12 +5,12 @@
 use document_loader::DocumentLoader;
 use dom::bindings::codegen::Bindings::DOMImplementationBinding;
 use dom::bindings::codegen::Bindings::DOMImplementationBinding::DOMImplementationMethods;
-use dom::bindings::codegen::Bindings::DocumentBinding::DocumentMethods;
+use dom::bindings::codegen::Bindings::DocumentBinding::{DocumentMethods, ElementCreationOptions};
 use dom::bindings::codegen::Bindings::NodeBinding::NodeMethods;
 use dom::bindings::error::Fallible;
 use dom::bindings::inheritance::Castable;
-use dom::bindings::js::{JS, Root};
 use dom::bindings::reflector::{Reflector, reflect_dom_object};
+use dom::bindings::root::{Dom, DomRoot};
 use dom::bindings::str::DOMString;
 use dom::bindings::xmlname::{namespace_from_domstring, validate_qualified_name};
 use dom::document::{Document, HasBrowsingContext, IsHTMLDocument};
@@ -30,20 +30,20 @@ use script_traits::DocumentActivity;
 #[dom_struct]
 pub struct DOMImplementation {
     reflector_: Reflector,
-    document: JS<Document>,
+    document: Dom<Document>,
 }
 
 impl DOMImplementation {
     fn new_inherited(document: &Document) -> DOMImplementation {
         DOMImplementation {
             reflector_: Reflector::new(),
-            document: JS::from_ref(document),
+            document: Dom::from_ref(document),
         }
     }
 
-    pub fn new(document: &Document) -> Root<DOMImplementation> {
+    pub fn new(document: &Document) -> DomRoot<DOMImplementation> {
         let window = document.window();
-        reflect_dom_object(box DOMImplementation::new_inherited(document),
+        reflect_dom_object(Box::new(DOMImplementation::new_inherited(document)),
                            window,
                            DOMImplementationBinding::Wrap)
     }
@@ -56,8 +56,8 @@ impl DOMImplementationMethods for DOMImplementation {
                           qualified_name: DOMString,
                           pubid: DOMString,
                           sysid: DOMString)
-                          -> Fallible<Root<DocumentType>> {
-        try!(validate_qualified_name(&qualified_name));
+                          -> Fallible<DomRoot<DocumentType>> {
+        validate_qualified_name(&qualified_name)?;
         Ok(DocumentType::new(qualified_name, Some(pubid), Some(sysid), &self.document))
     }
 
@@ -66,7 +66,7 @@ impl DOMImplementationMethods for DOMImplementation {
                       maybe_namespace: Option<DOMString>,
                       qname: DOMString,
                       maybe_doctype: Option<&DocumentType>)
-                      -> Fallible<Root<XMLDocument>> {
+                      -> Fallible<DomRoot<XMLDocument>> {
         let win = self.document.window();
         let loader = DocumentLoader::new(&self.document.loader());
         let namespace = namespace_from_domstring(maybe_namespace.to_owned());
@@ -92,7 +92,8 @@ impl DOMImplementationMethods for DOMImplementation {
         let maybe_elem = if qname.is_empty() {
             None
         } else {
-            match doc.upcast::<Document>().CreateElementNS(maybe_namespace, qname) {
+            let options = ElementCreationOptions { is: None };
+            match doc.upcast::<Document>().CreateElementNS(maybe_namespace, qname, &options) {
                 Err(error) => return Err(error),
                 Ok(elem) => Some(elem),
             }
@@ -120,7 +121,7 @@ impl DOMImplementationMethods for DOMImplementation {
     }
 
     // https://dom.spec.whatwg.org/#dom-domimplementation-createhtmldocument
-    fn CreateHTMLDocument(&self, title: Option<DOMString>) -> Root<Document> {
+    fn CreateHTMLDocument(&self, title: Option<DOMString>) -> DomRoot<Document> {
         let win = self.document.window();
         let loader = DocumentLoader::new(&self.document.loader());
 
@@ -136,7 +137,8 @@ impl DOMImplementationMethods for DOMImplementation {
                                 DocumentSource::NotFromParser,
                                 loader,
                                 None,
-                                None);
+                                None,
+                                Default::default());
 
         {
             // Step 3.
@@ -148,14 +150,14 @@ impl DOMImplementationMethods for DOMImplementation {
         {
             // Step 4.
             let doc_node = doc.upcast::<Node>();
-            let doc_html = Root::upcast::<Node>(HTMLHtmlElement::new(local_name!("html"),
+            let doc_html = DomRoot::upcast::<Node>(HTMLHtmlElement::new(local_name!("html"),
                                                                      None,
                                                                      &doc));
             doc_node.AppendChild(&doc_html).expect("Appending failed");
 
             {
                 // Step 5.
-                let doc_head = Root::upcast::<Node>(HTMLHeadElement::new(local_name!("head"),
+                let doc_head = DomRoot::upcast::<Node>(HTMLHeadElement::new(local_name!("head"),
                                                                          None,
                                                                          &doc));
                 doc_html.AppendChild(&doc_head).unwrap();
@@ -164,7 +166,7 @@ impl DOMImplementationMethods for DOMImplementation {
                 if let Some(title_str) = title {
                     // Step 6.1.
                     let doc_title =
-                        Root::upcast::<Node>(HTMLTitleElement::new(local_name!("title"),
+                        DomRoot::upcast::<Node>(HTMLTitleElement::new(local_name!("title"),
                                                                    None,
                                                                    &doc));
                     doc_head.AppendChild(&doc_title).unwrap();

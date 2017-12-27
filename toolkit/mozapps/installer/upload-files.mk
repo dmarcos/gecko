@@ -122,13 +122,13 @@ ifeq ($(MOZ_PKG_FORMAT),ZIP)
   endif
   PKG_SUFFIX	= .zip
   INNER_MAKE_PACKAGE = $(call py_action,make_zip,'$(MOZ_PKG_DIR)' '$(PACKAGE)')
-  INNER_UNMAKE_PACKAGE = $(call py_action,make_unzip,'$(UNPACKAGE)')
+  INNER_UNMAKE_PACKAGE = $(call py_action,make_unzip,$(UNPACKAGE))
 endif
 
 ifeq ($(MOZ_PKG_FORMAT),SFX7Z)
   PKG_SUFFIX	= .exe
-  INNER_MAKE_PACKAGE = $(call py_action,7z_exe_archive,'$(MOZ_PKG_DIR)' '$(MOZ_INSTALLER_PATH)/app.tag' '$(MOZ_SFX_PACKAGE)' '$(PACKAGE)')
-  INNER_UNMAKE_PACKAGE = $(call py_action,7z_exe_extract,'$(UNPACKAGE)' '$(MOZ_PKG_DIR)')
+  INNER_MAKE_PACKAGE = $(call py_action,exe_7z_archive,'$(MOZ_PKG_DIR)' '$(MOZ_INSTALLER_PATH)/app.tag' '$(MOZ_SFX_PACKAGE)' '$(PACKAGE)')
+  INNER_UNMAKE_PACKAGE = $(call py_action,exe_7z_extract,$(UNPACKAGE) $(MOZ_PKG_DIR))
 endif
 
 #Create an RPM file
@@ -221,7 +221,7 @@ ifeq ($(MOZ_PKG_FORMAT),DMG)
         $(if $(MOZ_PKG_MAC_DSSTORE),--dsstore '$(MOZ_PKG_MAC_DSSTORE)') \
         $(if $(MOZ_PKG_MAC_BACKGROUND),--background '$(MOZ_PKG_MAC_BACKGROUND)') \
         $(if $(MOZ_PKG_MAC_ICON),--icon '$(MOZ_PKG_MAC_ICON)') \
-        '$(UNPACKAGE)' '$(MOZ_PKG_DIR)' \
+        $(UNPACKAGE) $(MOZ_PKG_DIR) \
         )
 endif
 
@@ -239,7 +239,7 @@ endif
 
 ifdef MOZ_SIGN_PREPARED_PACKAGE_CMD
   ifeq (Darwin, $(OS_ARCH))
-    MAKE_PACKAGE    = cd ./$(PKG_DMG_SOURCE) && $(MOZ_SIGN_PREPARED_PACKAGE_CMD) $(MOZ_MACBUNDLE_NAME) \
+    MAKE_PACKAGE    = cd ./$(PKG_DMG_SOURCE) && $(MOZ_SIGN_PREPARED_PACKAGE_CMD) '$(MOZ_MACBUNDLE_NAME)' \
                       && cd $(PACKAGE_BASE_DIR) && $(INNER_MAKE_PACKAGE)
   else
     MAKE_PACKAGE    = $(MOZ_SIGN_PREPARED_PACKAGE_CMD) $(MOZ_PKG_DIR) \
@@ -278,6 +278,7 @@ NO_PKG_FILES += \
 	pk12util* \
 	BadCertServer* \
 	OCSPStaplingServer* \
+	SymantecSanctionsServer* \
 	GenerateOCSPResponse* \
 	chrome/chrome.rdf \
 	chrome/app-chrome.manifest \
@@ -319,22 +320,13 @@ GARBAGE		+= $(DIST)/$(PACKAGE) $(PACKAGE)
 
 PKG_ARG = , '$(pkg)'
 
-# MOZ_PKG_MANIFEST is the canonical way to define the package manifest (which
-# the packager will preprocess), but for a smooth transition, we derive it
-# from the now deprecated MOZ_PKG_MANIFEST_P when MOZ_PKG_MANIFEST is not
-# defined.
-ifndef MOZ_PKG_MANIFEST
-  ifdef MOZ_PKG_MANIFEST_P
-    MOZ_PKG_MANIFEST := $(MOZ_PKG_MANIFEST_P)
-  endif # MOZ_PKG_MANIFEST_P
-endif # MOZ_PKG_MANIFEST
-
 ifndef MOZ_PACKAGER_FORMAT
   MOZ_PACKAGER_FORMAT = $(error MOZ_PACKAGER_FORMAT is not set)
 endif
 
 ifneq (android,$(MOZ_WIDGET_TOOLKIT))
   OPTIMIZEJARS = 1
+  JAR_COMPRESSION ?= none
 endif
 
 # A js binary is needed to perform verification of JavaScript minification.
@@ -396,6 +388,7 @@ UPLOAD_FILES= \
   $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(WP_TEST_PACKAGE)) \
   $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(GTEST_PACKAGE)) \
   $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(SYMBOL_ARCHIVE_BASENAME).zip) \
+  $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(GENERATED_SOURCE_FILE_PACKAGE)) \
   $(call QUOTED_WILDCARD,$(MOZ_SOURCESTAMP_FILE)) \
   $(call QUOTED_WILDCARD,$(MOZ_BUILDINFO_FILE)) \
   $(call QUOTED_WILDCARD,$(MOZ_BUILDID_INFO_TXT_FILE)) \
@@ -403,15 +396,31 @@ UPLOAD_FILES= \
   $(call QUOTED_WILDCARD,$(MOZ_TEST_PACKAGES_FILE)) \
   $(call QUOTED_WILDCARD,$(PKG_JSSHELL)) \
   $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(SYMBOL_FULL_ARCHIVE_BASENAME).zip) \
+  $(call QUOTED_WILDCARD,$(topobjdir)/$(MOZ_BUILD_APP)/installer/windows/instgen/setup.exe) \
+  $(call QUOTED_WILDCARD,$(topobjdir)/$(MOZ_BUILD_APP)/installer/windows/instgen/setup-stub.exe) \
+  $(call QUOTED_WILDCARD,$(topsrcdir)/toolchains.json) \
   $(if $(UPLOAD_EXTRA_FILES), $(foreach f, $(UPLOAD_EXTRA_FILES), $(wildcard $(DIST)/$(f))))
+
+ifneq ($(filter-out en-US x-test,$(AB_CD)),)
+  UPLOAD_FILES += \
+    $(call QUOTED_WILDCARD,$(topobjdir)/$(MOZ_BUILD_APP)/installer/windows/l10ngen/setup.exe) \
+    $(call QUOTED_WILDCARD,$(topobjdir)/$(MOZ_BUILD_APP)/installer/windows/l10ngen/setup-stub.exe)
+endif
+
 
 ifdef MOZ_CODE_COVERAGE
   UPLOAD_FILES += \
-    $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(CODE_COVERAGE_ARCHIVE_BASENAME).zip)
+    $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(CODE_COVERAGE_ARCHIVE_BASENAME).zip) \
+    $(call QUOTED_WILDCARD,$(topobjdir)/chrome-map.json) \
+    $(NULL)
 endif
 
 ifdef MOZ_STYLO
   UPLOAD_FILES += $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(STYLO_BINDINGS_PACKAGE))
+endif
+
+ifdef ENABLE_MOZSEARCH_PLUGIN
+  UPLOAD_FILES += $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(MOZSEARCH_ARCHIVE_BASENAME).zip)
 endif
 
 SIGN_CHECKSUM_CMD=

@@ -23,6 +23,11 @@ module.exports = envConfig => {
       publicPath: "/"
     },
     module: {
+      noParse: [
+        /netmonitor\/panel\.js/i,
+        /debugger\/new\/panel\.js/i
+      ],
+
       // Disable handling of unknown requires
       unknownContextRegExp: /$^/,
       unknownContextCritical: false,
@@ -38,23 +43,46 @@ module.exports = envConfig => {
         {
           test: /event-emitter/,
           exclude: /node_modules/,
-          loaders: [path.join(__dirname, "./webpack/rewrite-event-emitter")],
+          loaders: ["rewrite-event-emitter"],
         }, {
-          // Replace all references to this.browserRequire() by require() in
-          // client/inspector/*.js files
           test: /client(\/|\\)inspector(\/|\\).*\.js$/,
-          loaders: [path.join(__dirname, "./webpack/rewrite-browser-require")],
+          loaders: [
+            // Replace all references to this.browserRequire() by require()
+            "rewrite-browser-require",
+            // Replace all references to loader.lazyRequire() by require()
+            "rewrite-lazy-require",
+          ],
+        }, {
+          test: /shared(\/|\\)inspector(\/|\\)css-logic\.js$/,
+          loaders: [
+            // Replace a very specific lazy importer, which should really be moved to
+            // /server ...
+            "rewrite-css-logic-importer",
+          ],
+        }, {
+          test: /react-redux\.js$/,
+          loaders: [
+            // Replace dynamic paths in react-redux file
+            "rewrite-react-redux",
+          ],
+        }, {
+          // Replace all references sdk's lazyRequire by require()
+          test: /sdk(\/|\\).*\.js$/,
+          loaders: ["rewrite-sdk-lazy-require"],
         }
       ]
     },
     resolveLoader: {
       root: [
         path.resolve("./node_modules"),
-        path.resolve("./webpack"),
+        path.resolve("../shared/webpack"),
       ]
     },
     resolve: {
       alias: {
+        "react": "devtools/client/shared/vendor/react",
+        "redux": "devtools/client/shared/vendor/redux",
+        "react-dom": "devtools/client/shared/vendor/react-dom",
         "acorn/util/walk": path.join(__dirname, "../../shared/acorn/walk"),
         "acorn": path.join(__dirname, "../../shared/acorn"),
         "devtools/client/framework/about-devtools-toolbox":
@@ -71,18 +99,21 @@ module.exports = envConfig => {
         "devtools/shared/DevToolsUtils":
           path.join(__dirname, "./webpack/devtools-utils-sham.js"),
         "devtools/shared/locales": path.join(__dirname, "../../shared/locales/en-US"),
-        "devtools/shared/platform": path.join(__dirname, "../../shared/platform/content"),
+        "devtools/shared/platform/clipboard": path.join(__dirname,
+          "../../client/shared/webpack/shims/platform-clipboard-stub"),
+        "devtools/shared/platform/stack": path.join(__dirname,
+          "../../client/shared/webpack/shims/platform-stack-stub"),
         "devtools": path.join(__dirname, "../../"),
         "gcli": path.join(__dirname, "../../shared/gcli/source/lib/gcli"),
         "method": path.join(__dirname, "../../../addon-sdk/source/lib/method"),
         "modules/libpref/init/all":
           path.join(__dirname, "../../../modules/libpref/init/all.js"),
+        "devtools/shared/generate-uuid":
+          path.join(__dirname, "./webpack/uuid-sham.js"),
         "sdk": path.join(__dirname, "../../../addon-sdk/source/lib/sdk"),
         "Services": path.join(__dirname, "../shared/shim/Services.js"),
         "toolkit/locales":
           path.join(__dirname, "../../../toolkit/locales/en-US/chrome/global"),
-        "react": "devtools/client/shared/vendor/react",
-        "react-dom": "devtools/client/shared/vendor/react-dom",
       },
     },
 

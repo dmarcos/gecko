@@ -19,6 +19,8 @@ EXPORTS.mozilla.dom.ipc += [
 ]
 
 EXPORTS.mozilla.dom += [
+    'CoalescedInputData.h',
+    'CoalescedMouseData.h',
     'CoalescedWheelData.h',
     'ContentBridgeChild.h',
     'ContentBridgeParent.h',
@@ -50,6 +52,7 @@ EXPORTS.mozilla += [
 ]
 
 UNIFIED_SOURCES += [
+    'CoalescedMouseData.cpp',
     'CoalescedWheelData.cpp',
     'ColorPickerParent.cpp',
     'ContentBridgeChild.cpp',
@@ -93,6 +96,7 @@ IPDL_SOURCES += [
     'PCycleCollectWithLogs.ipdl',
     'PDocumentRenderer.ipdl',
     'PFilePicker.ipdl',
+    'PLoginReputation.ipdl',
     'PPluginWidget.ipdl',
     'PProcessHangMonitor.ipdl',
     'PTabContext.ipdlh',
@@ -126,7 +130,6 @@ LOCAL_INCLUDES += [
     '/dom/geolocation',
     '/dom/media/webspeech/synth/ipc',
     '/dom/security',
-    '/dom/storage',
     '/dom/workers',
     '/extensions/cookie',
     '/extensions/spellcheck/src',
@@ -157,7 +160,7 @@ if CONFIG['OS_ARCH'] != 'WINNT':
 
 DEFINES['BIN_SUFFIX'] = '"%s"' % CONFIG['BIN_SUFFIX']
 
-if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gtk2', 'gonk'):
+if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gtk2'):
     DEFINES['MOZ_ENABLE_FREETYPE'] = True
 
 if CONFIG['MOZ_TOOLKIT_SEARCH']:
@@ -171,5 +174,5 @@ MOCHITEST_MANIFESTS += ['tests/mochitest.ini']
 
 CXXFLAGS += CONFIG['TK_CFLAGS']
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']

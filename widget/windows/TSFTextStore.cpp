@@ -3,25 +3,26 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#define INPUTSCOPE_INIT_GUID
+#define TEXTATTRS_INIT_GUID
+#include "TSFTextStore.h"
+
 #include <olectl.h>
 #include <algorithm>
-
-#include "mozilla/Logging.h"
-
 #include "nscore.h"
-#include "nsWindow.h"
-#include "nsPrintfCString.h"
+
+#include "IMMHandler.h"
+#include "WinIMEHandler.h"
 #include "WinUtils.h"
 #include "mozilla/AutoRestore.h"
+#include "mozilla/Logging.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/TextEventDispatcher.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/WindowsVersion.h"
 #include "nsIXULRuntime.h"
-
-#define INPUTSCOPE_INIT_GUID
-#define TEXTATTRS_INIT_GUID
-#include "TSFTextStore.h"
+#include "nsWindow.h"
+#include "nsPrintfCString.h"
 
 namespace mozilla {
 namespace widget {
@@ -130,23 +131,6 @@ public:
 };
 
 static const char*
-GetIMEEnabledName(IMEState::Enabled aIMEEnabled)
-{
-  switch (aIMEEnabled) {
-    case IMEState::DISABLED:
-      return "DISABLED";
-    case IMEState::ENABLED:
-      return "ENABLED";
-    case IMEState::PASSWORD:
-      return "PASSWORD";
-    case IMEState::PLUGIN:
-      return "PLUGIN";
-    default:
-      return "Invalid";
-  }
-}
-
-static const char*
 GetFocusChangeName(InputContextAction::FocusChange aFocusChange)
 {
   switch (aFocusChange) {
@@ -160,6 +144,8 @@ GetFocusChangeName(InputContextAction::FocusChange aFocusChange)
       return "MENU_GOT_PSEUDO_FOCUS";
     case InputContextAction::MENU_LOST_PSEUDO_FOCUS:
       return "MENU_LOST_PSEUDO_FOCUS";
+    case InputContextAction::WIDGET_CREATED:
+      return "WIDGET_CREATED";
     default:
       return "Unknown";
   }
@@ -691,6 +677,253 @@ private:
   }
 };
 
+class GetIMEStateString : public nsAutoCString
+{
+public:
+  explicit GetIMEStateString(const IMEState& aIMEState)
+  {
+    AppendLiteral("{ mEnabled=");
+    switch (aIMEState.mEnabled) {
+      case IMEState::DISABLED:
+        AppendLiteral("DISABLED");
+        break;
+      case IMEState::ENABLED:
+        AppendLiteral("ENABLED");
+        break;
+      case IMEState::PASSWORD:
+        AppendLiteral("PASSWORD");
+        break;
+      case IMEState::PLUGIN:
+        AppendLiteral("PLUGIN");
+        break;
+      case IMEState::UNKNOWN:
+        AppendLiteral("UNKNOWN");
+        break;
+      default:
+        AppendPrintf("Unknown value (%d)", aIMEState.mEnabled);
+        break;
+    }
+    AppendLiteral(", mOpen=");
+    switch (aIMEState.mOpen) {
+      case IMEState::OPEN_STATE_NOT_SUPPORTED:
+        AppendLiteral("OPEN_STATE_NOT_SUPPORTED or DONT_CHANGE_OPEN_STATE");
+        break;
+      case IMEState::OPEN:
+        AppendLiteral("OPEN");
+        break;
+      case IMEState::CLOSED:
+        AppendLiteral("CLOSED");
+        break;
+      default:
+        AppendPrintf("Unknown value (%d)", aIMEState.mOpen);
+        break;
+    }
+    AppendLiteral(" }");
+  }
+};
+
+class GetInputContextString : public nsAutoCString
+{
+public:
+  explicit GetInputContextString(const InputContext& aInputContext)
+  {
+    AppendPrintf("{ mIMEState=%s, ",
+                 GetIMEStateString(aInputContext.mIMEState).get());
+    AppendLiteral("mOrigin=");
+    switch (aInputContext.mOrigin) {
+      case InputContext::ORIGIN_MAIN:
+        AppendLiteral("ORIGIN_MAIN");
+        break;
+      case InputContext::ORIGIN_CONTENT:
+        AppendLiteral("ORIGIN_CONTENT");
+        break;
+      default:
+        AppendPrintf("Unknown value (%d)", aInputContext.mOrigin);
+        break;
+    }
+    AppendPrintf(", mHTMLInputType=\"%s\", mHTMLInputInputmode=\"%s\", "
+                 "mActionHint=\"%s\", mMayBeIMEUnaware=%s }",
+                 NS_ConvertUTF16toUTF8(aInputContext.mHTMLInputType).get(),
+                 NS_ConvertUTF16toUTF8(aInputContext.mHTMLInputInputmode).get(),
+                 NS_ConvertUTF16toUTF8(aInputContext.mActionHint).get(),
+                 GetBoolName(aInputContext.mMayBeIMEUnaware));
+  }
+};
+
+class GetInputScopeString : public nsAutoCString
+{
+public:
+  explicit GetInputScopeString(const nsTArray<InputScope>& aList)
+  {
+    for (InputScope inputScope : aList) {
+      if (!IsEmpty()) {
+        AppendLiteral(", ");
+      }
+      switch (inputScope) {
+        case IS_DEFAULT:
+          AppendLiteral("IS_DEFAULT");
+          break;
+        case IS_URL:
+          AppendLiteral("IS_URL");
+          break;
+        case IS_FILE_FULLFILEPATH:
+          AppendLiteral("IS_FILE_FULLFILEPATH");
+          break;
+        case IS_FILE_FILENAME:
+          AppendLiteral("IS_FILE_FILENAME");
+          break;
+        case IS_EMAIL_USERNAME:
+          AppendLiteral("IS_EMAIL_USERNAME");
+          break;
+        case IS_EMAIL_SMTPEMAILADDRESS:
+          AppendLiteral("IS_EMAIL_SMTPEMAILADDRESS");
+          break;
+        case IS_LOGINNAME:
+          AppendLiteral("IS_LOGINNAME");
+          break;
+        case IS_PERSONALNAME_FULLNAME:
+          AppendLiteral("IS_PERSONALNAME_FULLNAME");
+          break;
+        case IS_PERSONALNAME_PREFIX:
+          AppendLiteral("IS_PERSONALNAME_PREFIX");
+          break;
+        case IS_PERSONALNAME_GIVENNAME:
+          AppendLiteral("IS_PERSONALNAME_GIVENNAME");
+          break;
+        case IS_PERSONALNAME_MIDDLENAME:
+          AppendLiteral("IS_PERSONALNAME_MIDDLENAME");
+          break;
+        case IS_PERSONALNAME_SURNAME:
+          AppendLiteral("IS_PERSONALNAME_SURNAME");
+          break;
+        case IS_PERSONALNAME_SUFFIX:
+          AppendLiteral("IS_PERSONALNAME_SUFFIX");
+          break;
+        case IS_ADDRESS_FULLPOSTALADDRESS:
+          AppendLiteral("IS_ADDRESS_FULLPOSTALADDRESS");
+          break;
+        case IS_ADDRESS_POSTALCODE:
+          AppendLiteral("IS_ADDRESS_POSTALCODE");
+          break;
+        case IS_ADDRESS_STREET:
+          AppendLiteral("IS_ADDRESS_STREET");
+          break;
+        case IS_ADDRESS_STATEORPROVINCE:
+          AppendLiteral("IS_ADDRESS_STATEORPROVINCE");
+          break;
+        case IS_ADDRESS_CITY:
+          AppendLiteral("IS_ADDRESS_CITY");
+          break;
+        case IS_ADDRESS_COUNTRYNAME:
+          AppendLiteral("IS_ADDRESS_COUNTRYNAME");
+          break;
+        case IS_ADDRESS_COUNTRYSHORTNAME:
+          AppendLiteral("IS_ADDRESS_COUNTRYSHORTNAME");
+          break;
+        case IS_CURRENCY_AMOUNTANDSYMBOL:
+          AppendLiteral("IS_CURRENCY_AMOUNTANDSYMBOL");
+          break;
+        case IS_CURRENCY_AMOUNT:
+          AppendLiteral("IS_CURRENCY_AMOUNT");
+          break;
+        case IS_DATE_FULLDATE:
+          AppendLiteral("IS_DATE_FULLDATE");
+          break;
+        case IS_DATE_MONTH:
+          AppendLiteral("IS_DATE_MONTH");
+          break;
+        case IS_DATE_DAY:
+          AppendLiteral("IS_DATE_DAY");
+          break;
+        case IS_DATE_YEAR:
+          AppendLiteral("IS_DATE_YEAR");
+          break;
+        case IS_DATE_MONTHNAME:
+          AppendLiteral("IS_DATE_MONTHNAME");
+          break;
+        case IS_DATE_DAYNAME:
+          AppendLiteral("IS_DATE_DAYNAME");
+          break;
+        case IS_DIGITS:
+          AppendLiteral("IS_DIGITS");
+          break;
+        case IS_NUMBER:
+          AppendLiteral("IS_NUMBER");
+          break;
+        case IS_ONECHAR:
+          AppendLiteral("IS_ONECHAR");
+          break;
+        case IS_PASSWORD:
+          AppendLiteral("IS_PASSWORD");
+          break;
+        case IS_TELEPHONE_FULLTELEPHONENUMBER:
+          AppendLiteral("IS_TELEPHONE_FULLTELEPHONENUMBER");
+          break;
+        case IS_TELEPHONE_COUNTRYCODE:
+          AppendLiteral("IS_TELEPHONE_COUNTRYCODE");
+          break;
+        case IS_TELEPHONE_AREACODE:
+          AppendLiteral("IS_TELEPHONE_AREACODE");
+          break;
+        case IS_TELEPHONE_LOCALNUMBER:
+          AppendLiteral("IS_TELEPHONE_LOCALNUMBER");
+          break;
+        case IS_TIME_FULLTIME:
+          AppendLiteral("IS_TIME_FULLTIME");
+          break;
+        case IS_TIME_HOUR:
+          AppendLiteral("IS_TIME_HOUR");
+          break;
+        case IS_TIME_MINORSEC:
+          AppendLiteral("IS_TIME_MINORSEC");
+          break;
+        case IS_NUMBER_FULLWIDTH:
+          AppendLiteral("IS_NUMBER_FULLWIDTH");
+          break;
+        case IS_ALPHANUMERIC_HALFWIDTH:
+          AppendLiteral("IS_ALPHANUMERIC_HALFWIDTH");
+          break;
+        case IS_ALPHANUMERIC_FULLWIDTH:
+          AppendLiteral("IS_ALPHANUMERIC_FULLWIDTH");
+          break;
+        case IS_CURRENCY_CHINESE:
+          AppendLiteral("IS_CURRENCY_CHINESE");
+          break;
+        case IS_BOPOMOFO:
+          AppendLiteral("IS_BOPOMOFO");
+          break;
+        case IS_HIRAGANA:
+          AppendLiteral("IS_HIRAGANA");
+          break;
+        case IS_KATAKANA_HALFWIDTH:
+          AppendLiteral("IS_KATAKANA_HALFWIDTH");
+          break;
+        case IS_KATAKANA_FULLWIDTH:
+          AppendLiteral("IS_KATAKANA_FULLWIDTH");
+          break;
+        case IS_HANJA:
+          AppendLiteral("IS_HANJA");
+          break;
+        case IS_PHRASELIST:
+          AppendLiteral("IS_PHRASELIST");
+          break;
+        case IS_REGULAREXPRESSION:
+          AppendLiteral("IS_REGULAREXPRESSION");
+          break;
+        case IS_SRGS:
+          AppendLiteral("IS_SRGS");
+          break;
+        case IS_XML:
+          AppendLiteral("IS_XML");
+          break;
+        default:
+          AppendPrintf("Unknown Value(%d)", inputScope);
+          break;
+      }
+    }
+  }
+};
+
 /******************************************************************/
 /* InputScopeImpl                                                 */
 /******************************************************************/
@@ -704,7 +937,7 @@ public:
     : mInputScopes(aList)
   {
     MOZ_LOG(sTextStoreLog, LogLevel::Info,
-      ("0x%p InputScopeImpl()", this));
+      ("0x%p InputScopeImpl(%s)", this, GetInputScopeString(aList).get()));
   }
 
   NS_INLINE_DECL_IUNKNOWN_REFCOUNTING(InputScopeImpl)
@@ -769,7 +1002,30 @@ public:
   static TSFStaticSink* GetInstance()
   {
     if (!sInstance) {
-      sInstance = new TSFStaticSink();
+      RefPtr<ITfThreadMgr> threadMgr = TSFTextStore::GetThreadMgr();
+      if (NS_WARN_IF(!threadMgr)) {
+        MOZ_LOG(sTextStoreLog, LogLevel::Error,
+          ("TSFStaticSink::GetInstance() FAILED to initialize TSFStaticSink "
+           "instance due to no ThreadMgr instance"));
+        return nullptr;
+      }
+      RefPtr<ITfInputProcessorProfiles> inputProcessorProfiles =
+        TSFTextStore::GetInputProcessorProfiles();
+      if (NS_WARN_IF(!inputProcessorProfiles)) {
+        MOZ_LOG(sTextStoreLog, LogLevel::Error,
+          ("TSFStaticSink::GetInstance() FAILED to initialize TSFStaticSink "
+           "instance due to no InputProcessorProfiles instance"));
+        return nullptr;
+      }
+      RefPtr<TSFStaticSink> staticSink = new TSFStaticSink();
+      if (NS_WARN_IF(!staticSink->Init(threadMgr, inputProcessorProfiles))) {
+        staticSink->Destroy();
+        MOZ_LOG(sTextStoreLog, LogLevel::Error,
+          ("TSFStaticSink::GetInstance() FAILED to initialize TSFStaticSink "
+           "instance"));
+        return nullptr;
+      }
+      sInstance = staticSink.forget();
     }
     return sInstance;
   }
@@ -805,8 +1061,9 @@ public:
     return mActiveTIPKeyboardDescription;
   }
 
-  static bool IsIMM_IME()
+  static bool IsIMM_IMEActive()
   {
+    // Use IMM API until TSFStaticSink starts to work.
     if (!sInstance || !sInstance->EnsureInitActiveTIPKeyboard()) {
       return IsIMM_IME(::GetKeyboardLayout(0));
     }
@@ -818,31 +1075,76 @@ public:
      return (::ImmGetIMEFileNameW(aHKL, nullptr, 0) > 0);
   }
 
-  bool EnsureInitActiveTIPKeyboard();
+#define DECL_AND_IMPL_IS_TIP_ACTIVE(aMethod)                                   \
+  static bool aMethod()                                                        \
+  {                                                                            \
+    RefPtr<TSFStaticSink> staticSink = GetInstance();                          \
+    if (NS_WARN_IF(!staticSink) ||                                             \
+        NS_WARN_IF(!staticSink->EnsureInitActiveTIPKeyboard())) {              \
+      return false;                                                            \
+    }                                                                          \
+    return staticSink->aMethod ## Internal();                                  \
+  }
 
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSJapaneseIMEActive)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSOfficeJapaneseIME2010Active)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsGoogleJapaneseInputActive)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsATOKActive)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsATOK2011Active)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsATOK2012Active)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsATOK2013Active)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsATOK2014Active)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsATOK2015Active)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsATOK2016Active)
+
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSChangJieActive)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSQuickActive)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsFreeChangJieActive)
+
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSPinyinActive)
+  DECL_AND_IMPL_IS_TIP_ACTIVE(IsMSWubiActive)
+
+#undef DECL_AND_IMPL_IS_TIP_ACTIVE
+
+  // Note that ATOK 2011 - 2016 refers native caret position for deciding its
+  // popup window position.
+  static bool IsATOKReferringNativeCaretActive()
+  {
+    RefPtr<TSFStaticSink> staticSink = GetInstance();
+    if (NS_WARN_IF(!staticSink) ||
+        NS_WARN_IF(!staticSink->EnsureInitActiveTIPKeyboard())) {
+      return false;
+    }
+    return staticSink->IsATOKActiveInternal() &&
+           (staticSink->IsATOK2011ActiveInternal() ||
+            staticSink->IsATOK2012ActiveInternal() ||
+            staticSink->IsATOK2013ActiveInternal() ||
+            staticSink->IsATOK2014ActiveInternal() ||
+            staticSink->IsATOK2015ActiveInternal() ||
+            staticSink->IsATOK2016ActiveInternal());
+  }
+
+private:
   /****************************************************************************
    * Japanese TIP
    ****************************************************************************/
 
   // Note that TIP name may depend on the language of the environment.
   // For example, some TIP may use localized name for its target language
-  // environment but English name for the others.
+  // environment but English name for the others.  Therefore, we should
+  // compare GUID as far as possible.
 
-  bool IsMSJapaneseIMEActive() const
+  bool IsMSJapaneseIMEActiveInternal() const
   {
-    // FYI: Name of MS-IME for Japanese is same as MS-IME for Korean.
-    //      Therefore, we need to check the langid too.
-    return mLangID == 0x411 &&
-      (mActiveTIPKeyboardDescription.EqualsLiteral("Microsoft IME") ||
-       mActiveTIPKeyboardDescription.Equals(
-         NS_LITERAL_STRING(u"Microsoft \xC785\xB825\xAE30")) ||
-       mActiveTIPKeyboardDescription.Equals(
-         NS_LITERAL_STRING(u"\x5FAE\x8F6F\x8F93\x5165\x6CD5")) ||
-       mActiveTIPKeyboardDescription.Equals(
-         NS_LITERAL_STRING(u"\x5FAE\x8EDF\x8F38\x5165\x6CD5")));
+    // {A76C93D9-5523-4E90-AAFA-4DB112F9AC76} (Win7, Win8.1, Win10)
+    static const GUID kGUID = {
+      0xA76C93D9, 0x5523, 0x4E90,
+        { 0xAA, 0xFA, 0x4D, 0xB1, 0x12, 0xF9, 0xAC, 0x76 }
+    };
+    return mActiveTIPGUID == kGUID;
   }
 
-  bool IsMSOfficeJapaneseIME2010Active() const
+  bool IsMSOfficeJapaneseIME2010ActiveInternal() const
   {
     // {54EDCC94-1524-4BB1-9FB7-7BABE4F4CA64}
     static const GUID kGUID = {
@@ -852,14 +1154,24 @@ public:
     return mActiveTIPGUID == kGUID;
   }
 
-  bool IsATOKActive() const
+  bool IsGoogleJapaneseInputActiveInternal() const
+  {
+    // {773EB24E-CA1D-4B1B-B420-FA985BB0B80D}
+    static const GUID kGUID = {
+      0x773EB24E, 0xCA1D, 0x4B1B,
+        { 0xB4, 0x20, 0xFA, 0x98, 0x5B, 0xB0, 0xB8, 0x0D }
+    };
+    return mActiveTIPGUID == kGUID;
+  }
+
+  bool IsATOKActiveInternal() const
   {
     // FYI: Name of ATOK includes the release year like "ATOK 2015".
     return StringBeginsWith(mActiveTIPKeyboardDescription,
                             NS_LITERAL_STRING("ATOK "));
   }
 
-  bool IsATOK2011Active() const
+  bool IsATOK2011ActiveInternal() const
   {
     // {F9C24A5C-8A53-499D-9572-93B2FF582115}
     static const GUID kGUID = {
@@ -869,7 +1181,7 @@ public:
     return mActiveTIPGUID == kGUID;
   }
 
-  bool IsATOK2012Active() const
+  bool IsATOK2012ActiveInternal() const
   {
     // {1DE01562-F445-401B-B6C3-E5B18DB79461}
     static const GUID kGUID = {
@@ -879,7 +1191,7 @@ public:
     return mActiveTIPGUID == kGUID;
   }
 
-  bool IsATOK2013Active() const
+  bool IsATOK2013ActiveInternal() const
   {
     // {3C4DB511-189A-4168-B6EA-BFD0B4C85615}
     static const GUID kGUID = {
@@ -889,7 +1201,7 @@ public:
     return mActiveTIPGUID == kGUID;
   }
 
-  bool IsATOK2014Active() const
+  bool IsATOK2014ActiveInternal() const
   {
     // {4EF33B79-6AA9-4271-B4BF-9321C279381B}
     static const GUID kGUID = {
@@ -899,7 +1211,7 @@ public:
     return mActiveTIPGUID == kGUID;
   }
 
-  bool IsATOK2015Active() const
+  bool IsATOK2015ActiveInternal() const
   {
     // {EAB4DC00-CE2E-483D-A86A-E6B99DA9599A}
     static const GUID kGUID = {
@@ -909,7 +1221,7 @@ public:
     return mActiveTIPGUID == kGUID;
   }
 
-  bool IsATOK2016Active() const
+  bool IsATOK2016ActiveInternal() const
   {
     // {0B557B4C-5740-4110-A60A-1493FA10BF2B}
     static const GUID kGUID = {
@@ -919,72 +1231,97 @@ public:
     return mActiveTIPGUID == kGUID;
   }
 
-  // Note that ATOK 2011 - 2016 refers native caret position for deciding its
-  // popup window position.
-  bool IsATOKReferringNativeCaretActive() const
-  {
-    return IsATOKActive() &&
-           (IsATOK2011Active() || IsATOK2012Active() || IsATOK2013Active() ||
-            IsATOK2014Active() || IsATOK2015Active() || IsATOK2016Active());
-  }
+  // * ATOK 2017
+  //   - {6DBFD8F5-701D-11E6-920F-782BCBA6348F}
 
   /****************************************************************************
    * Traditional Chinese TIP
    ****************************************************************************/
 
-  bool IsMSChangJieActive() const
+  bool IsMSChangJieActiveInternal() const
   {
-    return mActiveTIPKeyboardDescription.EqualsLiteral("Microsoft ChangJie") ||
-      mActiveTIPKeyboardDescription.Equals(
-        NS_LITERAL_STRING(u"\x5FAE\x8F6F\x4ED3\x9889")) ||
-      mActiveTIPKeyboardDescription.Equals(
-        NS_LITERAL_STRING(u"\x5FAE\x8EDF\x5009\x9821"));
+    // {4BDF9F03-C7D3-11D4-B2AB-0080C882687E} (Win7, Win8.1, Win10)
+    static const GUID kGUID = {
+      0x4BDF9F03, 0xC7D3, 0x11D4,
+        { 0xB2, 0xAB, 0x00, 0x80, 0xC8, 0x82, 0x68, 0x7E }
+    };
+    return mActiveTIPGUID == kGUID;
   }
 
-  bool IsMSQuickQuickActive() const
+  bool IsMSQuickActiveInternal() const
   {
-    return mActiveTIPKeyboardDescription.EqualsLiteral("Microsoft Quick") ||
-      mActiveTIPKeyboardDescription.Equals(
-        NS_LITERAL_STRING(u"\x5FAE\x8F6F\x901F\x6210")) ||
-      mActiveTIPKeyboardDescription.Equals(
-        NS_LITERAL_STRING(u"\x5FAE\x8EDF\x901F\x6210"));
+    // {6024B45F-5C54-11D4-B921-0080C882687E} (Win7, Win8.1, Win10)
+    static const GUID kGUID = {
+      0x6024B45F, 0x5C54, 0x11D4,
+        { 0xB9, 0x21, 0x00, 0x80, 0xC8, 0x82, 0x68, 0x7E }
+    };
+    return mActiveTIPGUID == kGUID;
   }
 
-  bool IsFreeChangJieActive() const
-  {
-    // FYI: The TIP name is misspelled...
-    return mActiveTIPKeyboardDescription.EqualsLiteral("Free CangJie IME 10");
-  }
+  // NOTE: There are some other Traditional Chinese TIPs installed in Windows:
+  // * Microsoft Bopomofo
+  //   - {B2F9C502-1742-11D4-9790-0080C882687E} (Win8.1, Win10)
+  // * Chinese Traditional Array (version 6.0)
+  //   - {D38EFF65-AA46-4FD5-91A7-67845FB02F5B} (Win7, Win8.1)
+  // * Chinese Traditional DaYi (version 6.0)
+  //   - {037B2C25-480C-4D7F-B027-D6CA6B69788A} (Win7, Win8.1)
+  // * Phonetic
+  //   - {761309DE-317A-11D4-9B5D-0080C882687E} (Win7)
+  // * New ChangJie
+  //   - {F3BA907A-6C7E-11D4-97FA-0080C882687E} (Win7)
+  // * New Phonetic
+  //   - {B2F9C502-1742-11D4-9790-0080C882687E} (Win7)
+  // * New Quick
+  //   - {0B883BA0-C1C7-11D4-87F9-0080C882687E} (Win7)
 
-  bool IsEasyChangjeiActive() const
+  bool IsFreeChangJieActiveInternal() const
   {
-    return
-      mActiveTIPKeyboardDescription.Equals(
-        NS_LITERAL_STRING(
-          u"\x4E2D\x6587 (\x7E41\x9AD4) - \x6613\x9821\x8F38\x5165\x6CD5"));
+    // {B58630B5-0ED3-4335-BBC9-E77BBCB43CAD}
+    static const GUID kGUID = {
+      0xB58630B5, 0x0ED3, 0x4335,
+        { 0xBB, 0xC9, 0xE7, 0x7B, 0xBC, 0xB4, 0x3C, 0xAD }
+    };
+    return mActiveTIPGUID == kGUID;
   }
 
   /****************************************************************************
    * Simplified Chinese TIP
    ****************************************************************************/
 
-  bool IsMSPinyinActive() const
+  bool IsMSPinyinActiveInternal() const
   {
-    return mActiveTIPKeyboardDescription.EqualsLiteral("Microsoft Pinyin") ||
-      mActiveTIPKeyboardDescription.Equals(
-        NS_LITERAL_STRING(u"\x5FAE\x8F6F\x62FC\x97F3")) ||
-      mActiveTIPKeyboardDescription.Equals(
-        NS_LITERAL_STRING(u"\x5FAE\x8EDF\x62FC\x97F3"));
+    // FYI: This matches with neither "Microsoft Pinyin ABC Input Style" nor
+    //      "Microsoft Pinyin New Experience Input Style" on Win7.
+
+    // {FA550B04-5AD7-411F-A5AC-CA038EC515D7} (Win8.1, Win10)
+    static const GUID kGUID = {
+      0xFA550B04, 0x5AD7, 0x411F,
+        { 0xA5, 0xAC, 0xCA, 0x03, 0x8E, 0xC5, 0x15, 0xD7 }
+    };
+    return mActiveTIPGUID == kGUID;
   }
 
-  bool IsMSWubiActive() const
+  bool IsMSWubiActiveInternal() const
   {
-    return mActiveTIPKeyboardDescription.EqualsLiteral("Microsoft Wubi") ||
-      mActiveTIPKeyboardDescription.Equals(
-        NS_LITERAL_STRING(u"\x5FAE\x8F6F\x4E94\x7B14")) ||
-      mActiveTIPKeyboardDescription.Equals(
-        NS_LITERAL_STRING(u"\x5FAE\x8EDF\x4E94\x7B46"));
+    // {82590C13-F4DD-44F4-BA1D-8667246FDF8E} (Win8.1, Win10)
+    static const GUID kGUID = {
+      0x82590C13, 0xF4DD, 0x44F4,
+        { 0xBA, 0x1D, 0x86, 0x67, 0x24, 0x6F, 0xDF, 0x8E }
+    };
+    return mActiveTIPGUID == kGUID;
   }
+
+  // NOTE: There are some other Simplified Chinese TIPs installed in Windows:
+  // * Chinese Simplified QuanPin (version 6.0)
+  //   - {54FC610E-6ABD-4685-9DDD-A130BDF1B170} (Win8.1)
+  // * Chinese Simplified ZhengMa (version 6.0)
+  //   - {733B4D81-3BC3-4132-B91A-E9CDD5E2BFC9} (Win8.1)
+  // * Chinese Simplified ShuangPin (version 6.0)
+  //   - {EF63706D-31C4-490E-9DBB-BD150ADC454B} (Win8.1)
+  // * Microsoft Pinyin ABC Input Style
+  //   - {FCA121D2-8C6D-41FB-B2DE-A2AD110D4820} (Win7)
+  // * Microsoft Pinyin New Experience Input Style
+  //   - {F3BA9077-6C7E-11D4-97FA-0080C882687E} (Win7)
 
 public: // ITfInputProcessorProfileActivationSink
   STDMETHODIMP OnActivated(DWORD, LANGID, REFCLSID, REFGUID, REFGUID,
@@ -993,6 +1330,8 @@ public: // ITfInputProcessorProfileActivationSink
 private:
   TSFStaticSink();
   virtual ~TSFStaticSink() {}
+
+  bool EnsureInitActiveTIPKeyboard();
 
   void Destroy();
 
@@ -1123,6 +1462,8 @@ TSFStaticSink::OnActivated(DWORD dwProfileType,
     mIsIMM_IME = IsIMM_IME(hkl);
     GetTIPDescription(rclsid, mLangID, guidProfile,
                       mActiveTIPKeyboardDescription);
+    // Notify IMEHandler of changing active keyboard layout.
+    IMEHandler::OnKeyboardLayoutChanged();
   }
   MOZ_LOG(sTextStoreLog, LogLevel::Info,
     ("0x%p TSFStaticSink::OnActivated(dwProfileType=%s (0x%08X), "
@@ -1249,6 +1590,52 @@ TSFStaticSink::IsTIPCategoryKeyboard(REFCLSID aTextService, LANGID aLangID,
 }
 
 /******************************************************************/
+/* TSFPreference                                                  */
+/******************************************************************/
+
+class TSFPrefs final
+{
+public:
+#define DECL_AND_IMPL_BOOL_PREF(aPref, aName, aDefaultValue)                   \
+  static bool aName ()                                                         \
+  {                                                                            \
+    static bool s ## aName ## Value =                                          \
+      Preferences::GetBool(aPref, aDefaultValue);                              \
+    return s ## aName ## Value;                                                \
+  }
+
+  DECL_AND_IMPL_BOOL_PREF(
+    "intl.tsf.hack.atok.create_native_caret",
+    NeedToCreateNativeCaretForLegacyATOK, true)
+  DECL_AND_IMPL_BOOL_PREF(
+    "intl.tsf.hack.atok.do_not_return_no_layout_error_of_composition_string",
+    DoNotReturnNoLayoutErrorToATOKOfCompositionString, true)
+  DECL_AND_IMPL_BOOL_PREF(
+    "intl.tsf.hack.ms_simplified_chinese.do_not_return_no_layout_error",
+    DoNotReturnNoLayoutErrorToMSSimplifiedTIP, true)
+  DECL_AND_IMPL_BOOL_PREF(
+    "intl.tsf.hack.ms_traditional_chinese.do_not_return_no_layout_error",
+    DoNotReturnNoLayoutErrorToMSTraditionalTIP, true)
+  DECL_AND_IMPL_BOOL_PREF(
+    "intl.tsf.hack.free_chang_jie.do_not_return_no_layout_error",
+    DoNotReturnNoLayoutErrorToFreeChangJie, true)
+  DECL_AND_IMPL_BOOL_PREF(
+    "intl.tsf.hack.ms_japanese_ime.do_not_return_no_layout_error_at_first_char",
+    DoNotReturnNoLayoutErrorToMSJapaneseIMEAtFirstChar, true)
+  DECL_AND_IMPL_BOOL_PREF(
+    "intl.tsf.hack.ms_japanese_ime.do_not_return_no_layout_error_at_caret",
+    DoNotReturnNoLayoutErrorToMSJapaneseIMEAtCaret, true)
+  DECL_AND_IMPL_BOOL_PREF(
+    "intl.tsf.hack.ms_simplified_chinese.query_insert_result",
+    NeedToHackQueryInsertForMSSimplifiedTIP, true)
+  DECL_AND_IMPL_BOOL_PREF(
+    "intl.tsf.hack.ms_traditional_chinese.query_insert_result",
+    NeedToHackQueryInsertForMSTraditionalTIP, true)
+
+#undef DECL_AND_IMPL_BOOL_PREF
+};
+
+/******************************************************************/
 /* TSFTextStore                                                   */
 /******************************************************************/
 
@@ -1257,22 +1644,12 @@ StaticRefPtr<ITfMessagePump> TSFTextStore::sMessagePump;
 StaticRefPtr<ITfKeystrokeMgr> TSFTextStore::sKeystrokeMgr;
 StaticRefPtr<ITfDisplayAttributeMgr> TSFTextStore::sDisplayAttrMgr;
 StaticRefPtr<ITfCategoryMgr> TSFTextStore::sCategoryMgr;
+StaticRefPtr<ITfCompartment> TSFTextStore::sCompartmentForOpenClose;
 StaticRefPtr<ITfDocumentMgr> TSFTextStore::sDisabledDocumentMgr;
 StaticRefPtr<ITfContext> TSFTextStore::sDisabledContext;
 StaticRefPtr<ITfInputProcessorProfiles> TSFTextStore::sInputProcessorProfiles;
 StaticRefPtr<TSFTextStore> TSFTextStore::sEnabledTextStore;
 DWORD TSFTextStore::sClientId  = 0;
-
-bool TSFTextStore::sCreateNativeCaretForLegacyATOK = false;
-bool TSFTextStore::sDoNotReturnNoLayoutErrorToATOKOfCompositionString = false;
-bool TSFTextStore::sDoNotReturnNoLayoutErrorToMSSimplifiedTIP = false;
-bool TSFTextStore::sDoNotReturnNoLayoutErrorToMSTraditionalTIP = false;
-bool TSFTextStore::sDoNotReturnNoLayoutErrorToFreeChangJie = false;
-bool TSFTextStore::sDoNotReturnNoLayoutErrorToEasyChangjei = false;
-bool TSFTextStore::sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtFirstChar = false;
-bool TSFTextStore::sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtCaret = false;
-bool TSFTextStore::sHackQueryInsertForMSSimplifiedTIP = false;
-bool TSFTextStore::sHackQueryInsertForMSTraditionalTIP = false;
 
 #define TEXTSTORE_DEFAULT_VIEW (1)
 
@@ -1321,7 +1698,13 @@ TSFTextStore::Init(nsWindowBase* aWidget,
     ("0x%p TSFTextStore::Init(aWidget=0x%p)",
      this, aWidget));
 
-  TSFStaticSink::GetInstance()->EnsureInitActiveTIPKeyboard();
+  if (NS_WARN_IF(!aWidget) || NS_WARN_IF(aWidget->Destroyed())) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("0x%p   TSFTextStore::Init() FAILED due to being initialized with "
+       "destroyed widget",
+       this));
+    return false;
+  }
 
   if (mDocumentMgr) {
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
@@ -1330,14 +1713,6 @@ TSFTextStore::Init(nsWindowBase* aWidget,
     return false;
   }
 
-  // Create document manager
-  HRESULT hr = sThreadMgr->CreateDocumentMgr(getter_AddRefs(mDocumentMgr));
-  if (FAILED(hr)) {
-    MOZ_LOG(sTextStoreLog, LogLevel::Error,
-      ("0x%p   TSFTextStore::Init() FAILED to create DocumentMgr "
-       "(0x%08X)", this, hr));
-    return false;
-  }
   mWidget = aWidget;
   if (NS_WARN_IF(!mWidget)) {
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
@@ -1353,30 +1728,62 @@ TSFTextStore::Init(nsWindowBase* aWidget,
     return false;
   }
 
+  SetInputScope(aContext.mHTMLInputType, aContext.mHTMLInputInputmode);
+
+  // Create document manager
+  RefPtr<ITfThreadMgr> threadMgr = sThreadMgr;
+  RefPtr<ITfDocumentMgr> documentMgr;
+  HRESULT hr = threadMgr->CreateDocumentMgr(getter_AddRefs(documentMgr));
+  if (NS_WARN_IF(FAILED(hr))) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("0x%p   TSFTextStore::Init() FAILED to create ITfDocumentMgr "
+       "(0x%08X)", this, hr));
+    return false;
+  }
+  if (NS_WARN_IF(mDestroyed)) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("0x%p   TSFTextStore::Init() FAILED to create ITfDocumentMgr due to "
+       "TextStore being destroyed during calling "
+       "ITfThreadMgr::CreateDocumentMgr()", this));
+    return false;
+  }
   // Create context and add it to document manager
-  hr = mDocumentMgr->CreateContext(sClientId, 0,
-                                   static_cast<ITextStoreACP*>(this),
-                                   getter_AddRefs(mContext), &mEditCookie);
-  if (FAILED(hr)) {
+  RefPtr<ITfContext> context;
+  hr = documentMgr->CreateContext(sClientId, 0,
+                                  static_cast<ITextStoreACP*>(this),
+                                  getter_AddRefs(context), &mEditCookie);
+  if (NS_WARN_IF(FAILED(hr))) {
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
       ("0x%p   TSFTextStore::Init() FAILED to create the context "
        "(0x%08X)", this, hr));
-    mDocumentMgr = nullptr;
+    return false;
+  }
+  if (NS_WARN_IF(mDestroyed)) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("0x%p   TSFTextStore::Init() FAILED to create ITfContext due to "
+       "TextStore being destroyed during calling "
+       "ITfDocumentMgr::CreateContext()", this));
     return false;
   }
 
-  SetInputScope(aContext.mHTMLInputType, aContext.mHTMLInputInputmode);
-
-  hr = mDocumentMgr->Push(mContext);
-  if (FAILED(hr)) {
+  hr = documentMgr->Push(context);
+  if (NS_WARN_IF(FAILED(hr))) {
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
       ("0x%p   TSFTextStore::Init() FAILED to push the context (0x%08X)",
        this, hr));
-    // XXX Why don't we use NS_IF_RELEASE() here??
-    mContext = nullptr;
-    mDocumentMgr = nullptr;
     return false;
   }
+  if (NS_WARN_IF(mDestroyed)) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("0x%p   TSFTextStore::Init() FAILED to create ITfContext due to "
+       "TextStore being destroyed during calling ITfDocumentMgr::Push()",
+       this));
+    documentMgr->Pop(TF_POPF_ALL);
+    return false;
+  }
+
+  mDocumentMgr = documentMgr;
+  mContext = context;
 
   MOZ_LOG(sTextStoreLog, LogLevel::Info,
     ("0x%p   TSFTextStore::Init() succeeded: "
@@ -1426,7 +1833,8 @@ TSFTextStore::Destroy()
       ("0x%p   TSFTextStore::Destroy(), calling "
        "ITextStoreACPSink::OnLayoutChange(TS_LC_DESTROY)...",
        this));
-    mSink->OnLayoutChange(TS_LC_DESTROY, TEXTSTORE_DEFAULT_VIEW);
+    RefPtr<ITextStoreACPSink> sink = mSink;
+    sink->OnLayoutChange(TS_LC_DESTROY, TEXTSTORE_DEFAULT_VIEW);
   }
 
   // If this is called during handling a keydown or keyup message, we should
@@ -1450,8 +1858,8 @@ TSFTextStore::ReleaseTSFObjects()
 
   mContext = nullptr;
   if (mDocumentMgr) {
-    mDocumentMgr->Pop(TF_POPF_ALL);
-    mDocumentMgr = nullptr;
+    RefPtr<ITfDocumentMgr> documentMgr = mDocumentMgr.forget();
+    documentMgr->Pop(TF_POPF_ALL);
   }
   mSink = nullptr;
   mWidget = nullptr;
@@ -1618,7 +2026,8 @@ TSFTextStore::RequestLock(DWORD dwLockFlags,
     // Don't release this instance during this lock because this is called by
     // TSF but they don't grab us during this call.
     RefPtr<TSFTextStore> kungFuDeathGrip(this);
-    *phrSession = mSink->OnLockGranted(mLock);
+    RefPtr<ITextStoreACPSink> sink = mSink;
+    *phrSession = sink->OnLockGranted(mLock);
     MOZ_LOG(sTextStoreLog, LogLevel::Info,
       ("0x%p   Unlocked (%s) <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
        "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<",
@@ -1631,7 +2040,7 @@ TSFTextStore::RequestLock(DWORD dwLockFlags,
         ("0x%p   Locking for the request in the queue (%s) >>>>>>>>>>>>>>"
          ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>",
          this, GetLockFlagNameStr(mLock).get()));
-      mSink->OnLockGranted(mLock);
+      sink->OnLockGranted(mLock);
       MOZ_LOG(sTextStoreLog, LogLevel::Info,
         ("0x%p   Unlocked (%s) <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
          "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<",
@@ -1716,6 +2125,14 @@ TSFTextStore::FlushPendingActions()
     mPendingActions.Clear();
     mPendingSelectionChangeData.Clear();
     mHasReturnedNoLayoutError = false;
+    return;
+  }
+
+  // Some TIP may request lock but does nothing during the lock.  In such case,
+  // this should do nothing.  For example, when MS-IME for Japanese is active
+  // and we're inactivating, this case occurs and causes different behavior
+  // from the other TIPs.
+  if (mPendingActions.IsEmpty()) {
     return;
   }
 
@@ -1955,6 +2372,8 @@ TSFTextStore::MaybeFlushPendingNotifications()
 
   // When there is no cached content, we can sync actual contents and TSF/TIP
   // expecting contents.
+  RefPtr<TSFTextStore> kungFuDeathGrip = this;
+  Unused << kungFuDeathGrip;
   if (!mContentForTSF.IsInitialized()) {
     if (mPendingTextChangeData.IsValid()) {
       MOZ_LOG(sTextStoreLog, LogLevel::Info,
@@ -2023,12 +2442,13 @@ TSFTextStore::QueryInsert(LONG acpTestStart,
 
   // XXX need to adjust to cluster boundary
   // Assume we are given good offsets for now
-  const TSFStaticSink* kSink = TSFStaticSink::GetInstance();
   if (IsWin8OrLater() && !mComposition.IsComposing() &&
-      ((sHackQueryInsertForMSTraditionalTIP &&
-         (kSink->IsMSChangJieActive() || kSink->IsMSQuickQuickActive())) ||
-       (sHackQueryInsertForMSSimplifiedTIP &&
-         (kSink->IsMSPinyinActive() || kSink->IsMSWubiActive())))) {
+      ((TSFPrefs::NeedToHackQueryInsertForMSTraditionalTIP() &&
+         (TSFStaticSink::IsMSChangJieActive() ||
+          TSFStaticSink::IsMSQuickActive())) ||
+       (TSFPrefs::NeedToHackQueryInsertForMSSimplifiedTIP() &&
+         (TSFStaticSink::IsMSPinyinActive() ||
+          TSFStaticSink::IsMSWubiActive())))) {
     MOZ_LOG(sTextStoreLog, LogLevel::Warning,
       ("0x%p   TSFTextStore::QueryInsert() WARNING using different "
        "result for the TIP", this));
@@ -2084,6 +2504,18 @@ TSFTextStore::GetSelection(ULONG ulIndex,
 
   Selection& selectionForTSF = SelectionForTSFRef();
   if (selectionForTSF.IsDirty()) {
+    if (DoNotReturnErrorFromGetSelection()) {
+      AutoSetTemporarySelection temprarySetter(selectionForTSF);
+      *pSelection = selectionForTSF.ACP();
+      *pcFetched = 1;
+      MOZ_LOG(sTextStoreLog, LogLevel::Info,
+        ("0x%p   TSFTextStore::GetSelection() returns fake selection range "
+         "for avoiding a crash in TSF, "
+         "acpStart=%d, acpEnd=%d (length=%d), reverted=%s",
+         this, selectionForTSF.StartOffset(), selectionForTSF.EndOffset(),
+         selectionForTSF.Length(), GetBoolName(selectionForTSF.IsReversed())));
+      return S_OK;
+    }
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
       ("0x%p   TSFTextStore::GetSelection() FAILED due to "
        "SelectionForTSFRef() failure", this));
@@ -2092,8 +2524,24 @@ TSFTextStore::GetSelection(ULONG ulIndex,
   *pSelection = selectionForTSF.ACP();
   *pcFetched = 1;
   MOZ_LOG(sTextStoreLog, LogLevel::Info,
-    ("0x%p   TSFTextStore::GetSelection() succeeded", this));
+    ("0x%p   TSFTextStore::GetSelection() succeeded, "
+     "acpStart=%d, acpEnd=%d (length=%d), reverted=%s",
+     this, selectionForTSF.StartOffset(), selectionForTSF.EndOffset(),
+     selectionForTSF.Length(), GetBoolName(selectionForTSF.IsReversed())));
   return S_OK;
+}
+
+// static
+bool
+TSFTextStore::DoNotReturnErrorFromGetSelection()
+{
+  // There is a crash bug of TSF if we return error from GetSelection().
+  // That was introduced in Anniversary Update (build 14393, see bug 1312302)
+  // TODO: We should avoid to run this hack on fixed builds.  When we get
+  //       exact build number, we should get back here.
+  static bool sTSFMayCrashIfGetSelectionReturnsError =
+    IsWindows10BuildOrLater(14393);
+  return sTSFMayCrashIfGetSelectionReturnsError;
 }
 
 bool
@@ -2318,9 +2766,12 @@ TSFTextStore::GetDisplayAttribute(ITfProperty* aAttrProperty,
     return E_FAIL;
   }
 
-  NS_ENSURE_TRUE(sCategoryMgr, E_FAIL);
+  RefPtr<ITfCategoryMgr> categoryMgr = GetCategoryMgr();
+  if (NS_WARN_IF(!categoryMgr)) {
+    return E_FAIL;
+  }
   GUID guid;
-  hr = sCategoryMgr->GetGUID(DWORD(propValue.lVal), &guid);
+  hr = categoryMgr->GetGUID(DWORD(propValue.lVal), &guid);
   ::VariantClear(&propValue);
   if (FAILED(hr)) {
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
@@ -2329,10 +2780,13 @@ TSFTextStore::GetDisplayAttribute(ITfProperty* aAttrProperty,
     return hr;
   }
 
-  NS_ENSURE_TRUE(sDisplayAttrMgr, E_FAIL);
+  RefPtr<ITfDisplayAttributeMgr> displayAttrMgr = GetDisplayAttributeMgr();
+  if (NS_WARN_IF(!displayAttrMgr)) {
+    return E_FAIL;
+  }
   RefPtr<ITfDisplayAttributeInfo> info;
-  hr = sDisplayAttrMgr->GetDisplayAttributeInfo(guid, getter_AddRefs(info),
-                                                nullptr);
+  hr = displayAttrMgr->GetDisplayAttributeInfo(guid, getter_AddRefs(info),
+                                               nullptr);
   if (FAILED(hr) || !info) {
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
       ("0x%p   TSFTextStore::GetDisplayAttribute() FAILED due to "
@@ -3173,6 +3627,29 @@ TSFTextStore::SetInputScope(const nsString& aHTMLInputType,
   if (aHTMLInputType.IsEmpty() || aHTMLInputType.EqualsLiteral("text")) {
     if (aHTMLInputInputMode.EqualsLiteral("url")) {
       mInputScopes.AppendElement(IS_URL);
+    } else if (aHTMLInputInputMode.EqualsLiteral("mozAwesomebar")) {
+      // Even if Awesomebar has focus, user may not input URL directly.
+      // However, on-screen keyboard for URL should be shown because it has
+      // some useful additional keys like ".com" and they are not hindrances
+      // even when inputting non-URL text, e.g., words to search something in
+      // the web.  On the other hand, MS-IME for Japanese and Google Japanese
+      // Input make their open state "closed" automatically if we notify them
+      // of URL as the input scope.  However, this is very annoying for the
+      // users when they try to input some words to search the web or
+      // bookmark/history items.  Therefore, if they are active, we need to
+      // notify them of the default input scope for avoiding this issue.
+      // FYI: Google Japanese Input may be an IMM-IME.  If it's installed on
+      //      Win7, it's always IMM-IME.  Otherwise, basically, it's a TIP.
+      //      However, if it's installed on Win7 and has not been updated yet
+      //      after the OS is upgraded to Win8 or later, it's still an IMM-IME.
+      //      Therefore, we also need to check with IMMHandler here.
+      if (TSFStaticSink::IsMSJapaneseIMEActive() ||
+          TSFStaticSink::IsGoogleJapaneseInputActive() ||
+          IMMHandler::IsGoogleJapaneseInputActive()) {
+        return;
+      }
+      // Don't append IS_SEARCH here for showing on-screen keyboard for URL.
+      mInputScopes.AppendElement(IS_URL);
     } else if (aHTMLInputInputMode.EqualsLiteral("email")) {
       mInputScopes.AppendElement(IS_EMAIL_SMTPEMAILADDRESS);
     } else if (aHTMLInputType.EqualsLiteral("tel")) {
@@ -3701,7 +4178,6 @@ TSFTextStore::GetTextExt(TsViewCookie vcView,
 
   bool dontReturnNoLayoutError = false;
 
-  const TSFStaticSink* kSink = TSFStaticSink::GetInstance();
   if (mComposition.IsComposing() && mComposition.mStart < acpEnd &&
       mContentForTSF.IsLayoutChangedAt(acpEnd)) {
     const Selection& selectionForTSF = SelectionForTSFRef();
@@ -3710,23 +4186,23 @@ TSFTextStore::GetTextExt(TsViewCookie vcView,
     // released yet.  So, we can hack it without prefs  because there must be
     // no developers who want to disable this hack for tests.
     const bool kIsMSOfficeJapaneseIME2010 =
-      kSink->IsMSOfficeJapaneseIME2010Active();
+      TSFStaticSink::IsMSOfficeJapaneseIME2010Active();
     // MS IME for Japanese doesn't support asynchronous handling at deciding
     // its suggest list window position.  The feature was implemented
     // starting from Windows 8.  And also we may meet same trouble in e10s
     // mode on Win7.  So, we should never return TS_E_NOLAYOUT to MS IME for
     // Japanese.
     if (kIsMSOfficeJapaneseIME2010 ||
-        ((sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtFirstChar ||
-          sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtCaret) &&
-         kSink->IsMSJapaneseIMEActive())) {
+        ((TSFPrefs::DoNotReturnNoLayoutErrorToMSJapaneseIMEAtFirstChar() ||
+          TSFPrefs::DoNotReturnNoLayoutErrorToMSJapaneseIMEAtCaret()) &&
+         TSFStaticSink::IsMSJapaneseIMEActive())) {
       // Basically, MS-IME tries to retrieve whole composition string rect
       // at deciding suggest window immediately after unlocking the document.
       // However, in e10s mode, the content hasn't updated yet in most cases.
       // Therefore, if the first character at the retrieving range rect is
       // available, we should use it as the result.
       if ((kIsMSOfficeJapaneseIME2010 ||
-           sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtFirstChar) &&
+           TSFPrefs::DoNotReturnNoLayoutErrorToMSJapaneseIMEAtFirstChar()) &&
           acpStart < acpEnd) {
         acpEnd = acpStart;
         dontReturnNoLayoutError = true;
@@ -3736,7 +4212,7 @@ TSFTextStore::GetTextExt(TsViewCookie vcView,
       // before unlocking the document.  In such case, we should return the
       // nearest character rect.
       else if ((kIsMSOfficeJapaneseIME2010 ||
-                sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtCaret) &&
+                TSFPrefs::DoNotReturnNoLayoutErrorToMSJapaneseIMEAtCaret()) &&
                acpStart == acpEnd &&
                selectionForTSF.IsCollapsed() &&
                selectionForTSF.EndOffset() == acpEnd) {
@@ -3762,35 +4238,33 @@ TSFTextStore::GetTextExt(TsViewCookie vcView,
     //     Mozilla window classes and we stop creating native caret for ATOK
     //     because creating native caret causes ATOK refers caret position
     //     when GetTextExt() returns TS_E_NOLAYOUT.
-    else if (sDoNotReturnNoLayoutErrorToATOKOfCompositionString &&
-             kSink->IsATOKActive() &&
-             (!kSink->IsATOKReferringNativeCaretActive() ||
-              !sCreateNativeCaretForLegacyATOK) &&
+    else if (TSFPrefs::DoNotReturnNoLayoutErrorToATOKOfCompositionString() &&
+             TSFStaticSink::IsATOKActive() &&
+             (!TSFStaticSink::IsATOKReferringNativeCaretActive() ||
+              !TSFPrefs::NeedToCreateNativeCaretForLegacyATOK()) &&
              mComposition.mStart == acpStart &&
              mComposition.EndOffset() == acpEnd) {
       dontReturnNoLayoutError = true;
     }
-    // Free ChangJie 2010 and Easy Changjei 1.0.12.0 doesn't handle
-    // ITfContextView::GetTextExt() properly.  Prehaps, it's due to the bug of
-    // TSF.  We need to check if this is necessary on Windows 10 before
-    // disabling this on Windows 10.
-    else if ((sDoNotReturnNoLayoutErrorToFreeChangJie &&
-              kSink->IsFreeChangJieActive()) ||
-             (sDoNotReturnNoLayoutErrorToEasyChangjei &&
-              kSink->IsEasyChangjeiActive())) {
+    // Free ChangJie 2010 doesn't handle ITfContextView::GetTextExt() properly.
+    // Prehaps, it's due to the bug of TSF.  We need to check if this is
+    // necessary on Windows 10 before disabling this on Windows 10.
+    else if (TSFPrefs::DoNotReturnNoLayoutErrorToFreeChangJie() &&
+             TSFStaticSink::IsFreeChangJieActive()) {
       acpEnd = mComposition.mStart;
       acpStart = std::min(acpStart, acpEnd);
       dontReturnNoLayoutError = true;
     }
     // Some Chinese TIPs of Microsoft doesn't show candidate window in e10s
     // mode on Win8 or later.
-    else if (IsWin8OrLater() &&
-             ((sDoNotReturnNoLayoutErrorToMSTraditionalTIP &&
-               (kSink->IsMSChangJieActive() ||
-                kSink->IsMSQuickQuickActive())) ||
-              (sDoNotReturnNoLayoutErrorToMSSimplifiedTIP &&
-                (kSink->IsMSPinyinActive() ||
-                 kSink->IsMSWubiActive())))) {
+    else if (
+      IsWin8OrLater() &&
+      ((TSFPrefs::DoNotReturnNoLayoutErrorToMSTraditionalTIP() &&
+        (TSFStaticSink::IsMSChangJieActive() ||
+         TSFStaticSink::IsMSQuickActive())) ||
+       (TSFPrefs::DoNotReturnNoLayoutErrorToMSSimplifiedTIP() &&
+         (TSFStaticSink::IsMSPinyinActive() ||
+          TSFStaticSink::IsMSWubiActive())))) {
       acpEnd = mComposition.mStart;
       acpStart = std::min(acpStart, acpEnd);
       dontReturnNoLayoutError = true;
@@ -3939,8 +4413,8 @@ TSFTextStore::GetTextExt(TsViewCookie vcView,
   // class name is one of Mozilla's windows for deciding candidate window
   // position.  Therefore, we need to create native caret only when ATOK 2011 -
   // 2016 is active.
-  if (sCreateNativeCaretForLegacyATOK &&
-      kSink->IsATOKReferringNativeCaretActive() &&
+  if (TSFPrefs::NeedToCreateNativeCaretForLegacyATOK() &&
+      TSFStaticSink::IsATOKReferringNativeCaretActive() &&
       mComposition.IsComposing() &&
       mComposition.mStart <= acpStart && mComposition.EndOffset() >= acpStart &&
       mComposition.mStart <= acpEnd && mComposition.EndOffset() >= acpEnd) {
@@ -3982,7 +4456,7 @@ TSFTextStore::GetScreenExt(TsViewCookie vcView,
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
       ("0x%p   TSFTextStore::GetScreenExt() returns empty rect "
        "due to already destroyed", this));
-    prc->left = prc->top = prc->right = prc->left = 0;
+    prc->left = prc->top = prc->right = prc->bottom = 0;
     return S_OK;
   }
 
@@ -4702,12 +5176,10 @@ TSFTextStore::OnFocusChange(bool aGotFocus,
 {
   MOZ_LOG(sTextStoreLog, LogLevel::Debug,
     ("  TSFTextStore::OnFocusChange(aGotFocus=%s, "
-     "aFocusedWidget=0x%p, aContext={ mIMEState={ mEnabled=%s }, "
-     "mHTMLInputType=\"%s\" }), "
+     "aFocusedWidget=0x%p, aContext=%s), "
      "sThreadMgr=0x%p, sEnabledTextStore=0x%p",
      GetBoolName(aGotFocus), aFocusedWidget,
-     GetIMEEnabledName(aContext.mIMEState.mEnabled),
-     NS_ConvertUTF16toUTF8(aContext.mHTMLInputType).get(),
+     GetInputContextString(aContext).get(),
      sThreadMgr.get(), sEnabledTextStore.get()));
 
   if (NS_WARN_IF(!IsInTSFMode())) {
@@ -4715,29 +5187,48 @@ TSFTextStore::OnFocusChange(bool aGotFocus,
   }
 
   RefPtr<ITfDocumentMgr> prevFocusedDocumentMgr;
+  bool hasFocus = ThinksHavingFocus();
+  RefPtr<TSFTextStore> oldTextStore = sEnabledTextStore.forget();
 
-  // If currently sEnableTextStore has focus, notifies TSF of losing focus.
-  if (ThinksHavingFocus()) {
+  // If currently oldTextStore still has focus, notifies TSF of losing focus.
+  if (hasFocus) {
+    RefPtr<ITfThreadMgr> threadMgr = sThreadMgr;
     DebugOnly<HRESULT> hr =
-      sThreadMgr->AssociateFocus(
-        sEnabledTextStore->mWidget->GetWindowHandle(),
+      threadMgr->AssociateFocus(
+        oldTextStore->mWidget->GetWindowHandle(),
         nullptr, getter_AddRefs(prevFocusedDocumentMgr));
     NS_ASSERTION(SUCCEEDED(hr), "Disassociating focus failed");
-    NS_ASSERTION(prevFocusedDocumentMgr == sEnabledTextStore->mDocumentMgr,
+    NS_ASSERTION(prevFocusedDocumentMgr == oldTextStore->mDocumentMgr,
                  "different documentMgr has been associated with the window");
   }
 
-  // If there is sEnabledTextStore, we don't use it in the new focused editor.
-  // Release it now.
-  if (sEnabledTextStore) {
-    sEnabledTextStore->Destroy();
-    sEnabledTextStore = nullptr;
+  // Even if there was a focused TextStore, we won't use it with new focused
+  // editor.  So, release it now.
+  if (oldTextStore) {
+    oldTextStore->Destroy();
+  }
+
+  if (NS_WARN_IF(!sThreadMgr)) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("  TSFTextStore::OnFocusChange() FAILED, due to "
+       "sThreadMgr being destroyed during calling "
+       "ITfThreadMgr::AssociateFocus()"));
+    return NS_ERROR_FAILURE;
+  }
+  if (NS_WARN_IF(sEnabledTextStore)) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("  TSFTextStore::OnFocusChange() FAILED, due to "
+       "nested event handling has created another focused TextStore during "
+       "calling ITfThreadMgr::AssociateFocus()"));
+    return NS_ERROR_FAILURE;
   }
 
   // If this is a notification of blur, move focus to the dummy document
   // manager.
   if (!aGotFocus || !aContext.mIMEState.IsEditable()) {
-    HRESULT hr = sThreadMgr->SetFocus(sDisabledDocumentMgr);
+    RefPtr<ITfThreadMgr> threadMgr = sThreadMgr;
+    RefPtr<ITfDocumentMgr> disabledDocumentMgr = sDisabledDocumentMgr;
+    HRESULT hr = threadMgr->SetFocus(disabledDocumentMgr);
     if (NS_WARN_IF(FAILED(hr))) {
       MOZ_LOG(sTextStoreLog, LogLevel::Error,
         ("  TSFTextStore::OnFocusChange() FAILED due to "
@@ -4752,15 +5243,21 @@ TSFTextStore::OnFocusChange(bool aGotFocus,
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
       ("  TSFTextStore::OnFocusChange() FAILED due to "
        "ITfThreadMgr::CreateAndSetFocus() failure"));
-    // If setting focus, we should destroy the TextStore completely because
-    // it causes memory leak.
-    if (sEnabledTextStore) {
-      sEnabledTextStore->Destroy();
-      sEnabledTextStore = nullptr;
-    }
     return NS_ERROR_FAILURE;
   }
   return NS_OK;
+}
+
+// static
+void
+TSFTextStore::EnsureToDestroyAndReleaseEnabledTextStoreIf(
+                RefPtr<TSFTextStore>& aTextStore)
+{
+  aTextStore->Destroy();
+  if (sEnabledTextStore == aTextStore) {
+    sEnabledTextStore = nullptr;
+  }
+  aTextStore = nullptr;
 }
 
 // static
@@ -4777,49 +5274,80 @@ TSFTextStore::CreateAndSetFocus(nsWindowBase* aFocusedWidget,
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
       ("  TSFTextStore::CreateAndSetFocus() FAILED due to "
        "TSFTextStore::Init() failure"));
+    EnsureToDestroyAndReleaseEnabledTextStoreIf(textStore);
     return false;
   }
-  if (NS_WARN_IF(!textStore->mDocumentMgr)) {
+  RefPtr<ITfDocumentMgr> newDocMgr = textStore->mDocumentMgr;
+  if (NS_WARN_IF(!newDocMgr)) {
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
       ("  TSFTextStore::CreateAndSetFocus() FAILED due to "
        "invalid TSFTextStore::mDocumentMgr"));
+    EnsureToDestroyAndReleaseEnabledTextStoreIf(textStore);
     return false;
   }
   if (aContext.mIMEState.mEnabled == IMEState::PASSWORD) {
     MarkContextAsKeyboardDisabled(textStore->mContext);
     RefPtr<ITfContext> topContext;
-    textStore->mDocumentMgr->GetTop(getter_AddRefs(topContext));
+    newDocMgr->GetTop(getter_AddRefs(topContext));
     if (topContext && topContext != textStore->mContext) {
       MarkContextAsKeyboardDisabled(topContext);
     }
   }
 
   HRESULT hr;
-  {
-    // Windows 10's softwware keyboard requires that SetSelection must be
-    // always successful into SetFocus.  If returning error, it might crash
-    // into TextInputFramework.dll.
-    AutoSetTemporarySelection setSelection(textStore->SelectionForTSFRef());
-
-    hr = sThreadMgr->SetFocus(textStore->mDocumentMgr);
-  }
+  RefPtr<ITfThreadMgr> threadMgr = sThreadMgr;
+  hr = threadMgr->SetFocus(newDocMgr);
 
   if (NS_WARN_IF(FAILED(hr))) {
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
       ("  TSFTextStore::CreateAndSetFocus() FAILED due to "
        "ITfTheadMgr::SetFocus() failure"));
+    EnsureToDestroyAndReleaseEnabledTextStoreIf(textStore);
     return false;
   }
+  if (NS_WARN_IF(!sThreadMgr)) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("  TSFTextStore::CreateAndSetFocus() FAILED due to "
+       "sThreadMgr being destroyed during calling "
+       "ITfTheadMgr::SetFocus()"));
+    EnsureToDestroyAndReleaseEnabledTextStoreIf(textStore);
+    return false;
+  }
+  if (NS_WARN_IF(sEnabledTextStore != textStore)) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("  TSFTextStore::CreateAndSetFocus() FAILED due to "
+       "creating TextStore has lost focus during calling "
+       "ITfThreadMgr::SetFocus()"));
+    EnsureToDestroyAndReleaseEnabledTextStoreIf(textStore);
+    return false;
+  }
+
   // Use AssociateFocus() for ensuring that any native focus event
   // never steal focus from our documentMgr.
   RefPtr<ITfDocumentMgr> prevFocusedDocumentMgr;
-  hr = sThreadMgr->AssociateFocus(aFocusedWidget->GetWindowHandle(),
-                                  textStore->mDocumentMgr,
-                                  getter_AddRefs(prevFocusedDocumentMgr));
+  hr = threadMgr->AssociateFocus(aFocusedWidget->GetWindowHandle(), newDocMgr,
+                                 getter_AddRefs(prevFocusedDocumentMgr));
   if (NS_WARN_IF(FAILED(hr))) {
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
       ("  TSFTextStore::CreateAndSetFocus() FAILED due to "
        "ITfTheadMgr::AssociateFocus() failure"));
+    EnsureToDestroyAndReleaseEnabledTextStoreIf(textStore);
+    return false;
+  }
+  if (NS_WARN_IF(!sThreadMgr)) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("  TSFTextStore::CreateAndSetFocus() FAILED due to "
+       "sThreadMgr being destroyed during calling "
+       "ITfTheadMgr::AssociateFocus()"));
+    EnsureToDestroyAndReleaseEnabledTextStoreIf(textStore);
+    return false;
+  }
+  if (NS_WARN_IF(sEnabledTextStore != textStore)) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("  TSFTextStore::CreateAndSetFocus() FAILED due to "
+       "creating TextStore has lost focus during calling "
+       "ITfTheadMgr::AssociateFocus()"));
+    EnsureToDestroyAndReleaseEnabledTextStoreIf(textStore);
     return false;
   }
 
@@ -4828,7 +5356,16 @@ TSFTextStore::CreateAndSetFocus(nsWindowBase* aFocusedWidget,
       ("  TSFTextStore::CreateAndSetFocus(), calling "
        "ITextStoreACPSink::OnLayoutChange(TS_LC_CREATE) for 0x%p...",
        textStore.get()));
-    textStore->mSink->OnLayoutChange(TS_LC_CREATE, TEXTSTORE_DEFAULT_VIEW);
+    RefPtr<ITextStoreACPSink> sink = textStore->mSink;
+    sink->OnLayoutChange(TS_LC_CREATE, TEXTSTORE_DEFAULT_VIEW);
+    if (NS_WARN_IF(sEnabledTextStore != textStore)) {
+      MOZ_LOG(sTextStoreLog, LogLevel::Error,
+        ("  TSFTextStore::CreateAndSetFocus() FAILED due to "
+         "creating TextStore has lost focus during calling "
+         "ITextStoreACPSink::OnLayoutChange(TS_LC_CREATE)"));
+      EnsureToDestroyAndReleaseEnabledTextStoreIf(textStore);
+      return false;
+    }
   }
   return true;
 }
@@ -4837,18 +5374,33 @@ TSFTextStore::CreateAndSetFocus(nsWindowBase* aFocusedWidget,
 IMENotificationRequests
 TSFTextStore::GetIMENotificationRequests()
 {
-  if (sThreadMgr && sEnabledTextStore && sEnabledTextStore->mDocumentMgr) {
-    RefPtr<ITfDocumentMgr> docMgr;
-    sThreadMgr->GetFocus(getter_AddRefs(docMgr));
-    if (docMgr == sEnabledTextStore->mDocumentMgr) {
-      return IMENotificationRequests(
-               IMENotificationRequests::NOTIFY_TEXT_CHANGE |
-               IMENotificationRequests::NOTIFY_POSITION_CHANGE |
-               IMENotificationRequests::NOTIFY_MOUSE_BUTTON_EVENT_ON_CHAR |
-               IMENotificationRequests::NOTIFY_DURING_DEACTIVE);
-    }
+  if (!sEnabledTextStore ||
+      NS_WARN_IF(!sEnabledTextStore->mDocumentMgr)) {
+    // If there is no active text store, we don't need any notifications
+    // since there is no sink which needs notifications.
+    return IMENotificationRequests();
   }
-  return IMENotificationRequests();
+
+  // Otherwise, requests all notifications since even if some of them may not
+  // be required by the sink of active TIP, active TIP may be changed and
+  // other TIPs may need all notifications.
+  // Note that Windows temporarily steal focus from active window if the main
+  // process which created the window becomes busy.  In this case, we shouldn't
+  // commit composition since user may want to continue to compose the
+  // composition after becoming not busy.  Therefore, we need notifications
+  // even during deactive.
+  // Be aware, we don't need to check actual focused text store.  For example,
+  // MS-IME for Japanese handles focus messages by themselves and sets focused
+  // text store to nullptr when the process is being inactivated.  However,
+  // we still need to reuse sEnabledTextStore if the process is activated and
+  // focused element isn't changed.  Therefore, if sEnabledTextStore isn't
+  // nullptr, we need to keep notifying the sink even when it is not focused
+  // text store for the thread manager.
+  return IMENotificationRequests(
+           IMENotificationRequests::NOTIFY_TEXT_CHANGE |
+           IMENotificationRequests::NOTIFY_POSITION_CHANGE |
+           IMENotificationRequests::NOTIFY_MOUSE_BUTTON_EVENT_ON_CHAR |
+           IMENotificationRequests::NOTIFY_DURING_DEACTIVE);
 }
 
 nsresult
@@ -4953,7 +5505,8 @@ TSFTextStore::NotifyTSFOfTextChange()
      "ITextStoreACPSink::OnTextChange(0, { acpStart=%ld, acpOldEnd=%ld, "
      "acpNewEnd=%ld })...", this, textChange.acpStart,
      textChange.acpOldEnd, textChange.acpNewEnd));
-  mSink->OnTextChange(0, &textChange);
+  RefPtr<ITextStoreACPSink> sink = mSink;
+  sink->OnTextChange(0, &textChange);
 }
 
 nsresult
@@ -5032,7 +5585,8 @@ TSFTextStore::NotifyTSFOfSelectionChange()
   MOZ_LOG(sTextStoreLog, LogLevel::Info,
     ("0x%p   TSFTextStore::NotifyTSFOfSelectionChange(), calling "
      "ITextStoreACPSink::OnSelectionChange()...", this));
-  mSink->OnSelectionChange();
+  RefPtr<ITextStoreACPSink> sink = mSink;
+  sink->OnSelectionChange();
 }
 
 nsresult
@@ -5104,7 +5658,8 @@ TSFTextStore::NotifyTSFOfLayoutChange()
       ("0x%p   TSFTextStore::NotifyTSFOfLayoutChange(), "
        "calling ITextStoreACPSink::OnLayoutChange()...",
        this));
-    HRESULT hr = mSink->OnLayoutChange(TS_LC_CHANGE, TEXTSTORE_DEFAULT_VIEW);
+    RefPtr<ITextStoreACPSink> sink = mSink;
+    HRESULT hr = sink->OnLayoutChange(TS_LC_CHANGE, TEXTSTORE_DEFAULT_VIEW);
     MOZ_LOG(sTextStoreLog, LogLevel::Info,
       ("0x%p   TSFTextStore::NotifyTSFOfLayoutChange(), "
        "called ITextStoreACPSink::OnLayoutChange()",
@@ -5464,7 +6019,8 @@ TSFTextStore::CommitCompositionInternal(bool aDiscard)
          "mSink->OnTextChange(0, { acpStart=%ld, acpOldEnd=%ld, "
          "acpNewEnd=%ld })...", this, textChange.acpStart,
          textChange.acpOldEnd, textChange.acpNewEnd));
-      mSink->OnTextChange(0, &textChange);
+      RefPtr<ITextStoreACPSink> sink = mSink;
+      sink->OnTextChange(0, &textChange);
     }
   }
   // Terminate two contexts, the base context (mContext) and the top
@@ -5514,10 +6070,12 @@ TSFTextStore::SetIMEOpenState(bool aState)
     ("TSFTextStore::SetIMEOpenState(aState=%s)",
      GetBoolName(aState)));
 
-  RefPtr<ITfCompartment> comp;
-  if (!GetCompartment(sThreadMgr,
-                      GUID_COMPARTMENT_KEYBOARD_OPENCLOSE,
-                      getter_AddRefs(comp))) {
+  if (!sThreadMgr) {
+    return;
+  }
+
+  RefPtr<ITfCompartment> comp = GetCompartmentForOpenClose();
+  if (NS_WARN_IF(!comp)) {
     MOZ_LOG(sTextStoreLog, LogLevel::Debug,
       ("  TSFTextStore::SetIMEOpenState() FAILED due to"
        "no compartment available"));
@@ -5527,30 +6085,54 @@ TSFTextStore::SetIMEOpenState(bool aState)
   VARIANT variant;
   variant.vt = VT_I4;
   variant.lVal = aState;
+  HRESULT hr = comp->SetValue(sClientId, &variant);
+  if (NS_WARN_IF(FAILED(hr))) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("  TSFTextStore::SetIMEOpenState() FAILED due to "
+       "ITfCompartment::SetValue() failure, hr=0x%08X", hr));
+    return;
+  }
   MOZ_LOG(sTextStoreLog, LogLevel::Debug,
     ("  TSFTextStore::SetIMEOpenState(), setting "
      "0x%04X to GUID_COMPARTMENT_KEYBOARD_OPENCLOSE...",
      variant.lVal));
-  comp->SetValue(sClientId, &variant);
 }
 
 // static
 bool
 TSFTextStore::GetIMEOpenState()
 {
-  RefPtr<ITfCompartment> comp;
-  if (!GetCompartment(sThreadMgr,
-                      GUID_COMPARTMENT_KEYBOARD_OPENCLOSE,
-                      getter_AddRefs(comp)))
+  if (!sThreadMgr) {
     return false;
+  }
+
+  RefPtr<ITfCompartment> comp = GetCompartmentForOpenClose();
+  if (NS_WARN_IF(!comp)) {
+    return false;
+  }
 
   VARIANT variant;
   ::VariantInit(&variant);
-  if (SUCCEEDED(comp->GetValue(&variant)) && variant.vt == VT_I4)
-    return variant.lVal != 0;
+  HRESULT hr = comp->GetValue(&variant);
+  if (NS_WARN_IF(FAILED(hr))) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("TSFTextStore::GetIMEOpenState() FAILED due to "
+       "ITfCompartment::GetValue() failure, hr=0x%08X", hr));
+    return false;
+  }
+  // Until IME is open in this process, the result may be empty.
+  if (variant.vt == VT_EMPTY) {
+    return false;
+  }
+  if (NS_WARN_IF(variant.vt != VT_I4)) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("TSFTextStore::GetIMEOpenState() FAILED due to "
+       "invalid result of ITfCompartment::GetValue()"));
+    ::VariantClear(&variant);
+    return false;
+  }
 
-  ::VariantClear(&variant); // clear up in case variant.vt != VT_I4
-  return false;
+  return variant.lVal != 0;
 }
 
 // static
@@ -5561,11 +6143,17 @@ TSFTextStore::SetInputContext(nsWindowBase* aWidget,
 {
   MOZ_LOG(sTextStoreLog, LogLevel::Debug,
     ("TSFTextStore::SetInputContext(aWidget=%p, "
-     "aContext.mIMEState.mEnabled=%s, aAction.mFocusChange=%s), "
-     "sEnabledTextStore=0x%p, ThinksHavingFocus()=%s",
-     aWidget, GetIMEEnabledName(aContext.mIMEState.mEnabled),
+     "aContext=%s, aAction.mFocusChange=%s), "
+     "sEnabledTextStore(0x%p)={ mWidget=0x%p }, ThinksHavingFocus()=%s",
+     aWidget, GetInputContextString(aContext).get(),
      GetFocusChangeName(aAction.mFocusChange), sEnabledTextStore.get(),
+     sEnabledTextStore ? sEnabledTextStore->mWidget.get() : nullptr,
      GetBoolName(ThinksHavingFocus())));
+
+  // When this is called when the widget is created, there is nothing to do.
+  if (aAction.mFocusChange == InputContextAction::WIDGET_CREATED) {
+    return;
+  }
 
   NS_ENSURE_TRUE_VOID(IsInTSFMode());
 
@@ -5657,27 +6245,10 @@ TSFTextStore::Initialize()
     return;
   }
 
-  // XXX MSDN documents that ITfInputProcessorProfiles is available only on
-  //     desktop apps.  However, there is no known way to obtain
-  //     ITfInputProcessorProfileMgr instance without ITfInputProcessorProfiles
-  //     instance.
-  RefPtr<ITfInputProcessorProfiles> inputProcessorProfiles;
-  HRESULT hr =
-    ::CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr,
-                       CLSCTX_INPROC_SERVER,
-                       IID_ITfInputProcessorProfiles,
-                       getter_AddRefs(inputProcessorProfiles));
-  if (FAILED(hr) || !inputProcessorProfiles) {
-    MOZ_LOG(sTextStoreLog, LogLevel::Error,
-      ("  TSFTextStore::Initialize() FAILED to create input processor "
-       "profiles, hr=0x%08X", hr));
-    return;
-  }
-
   RefPtr<ITfThreadMgr> threadMgr;
-  hr = ::CoCreateInstance(CLSID_TF_ThreadMgr, nullptr,
-                          CLSCTX_INPROC_SERVER, IID_ITfThreadMgr,
-                          getter_AddRefs(threadMgr));
+  HRESULT hr = ::CoCreateInstance(CLSID_TF_ThreadMgr, nullptr,
+                                  CLSCTX_INPROC_SERVER, IID_ITfThreadMgr,
+                                  getter_AddRefs(threadMgr));
   if (FAILED(hr) || !threadMgr) {
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
       ("  TSFTextStore::Initialize() FAILED to "
@@ -5685,52 +6256,10 @@ TSFTextStore::Initialize()
     return;
   }
 
-  RefPtr<ITfMessagePump> messagePump;
-  hr = threadMgr->QueryInterface(IID_ITfMessagePump,
-                                 getter_AddRefs(messagePump));
-  if (FAILED(hr) || !messagePump) {
-    MOZ_LOG(sTextStoreLog, LogLevel::Error,
-      ("  TSFTextStore::Initialize() FAILED to "
-       "QI message pump from the thread manager, hr=0x%08X", hr));
-    return;
-  }
-
-  RefPtr<ITfKeystrokeMgr> keystrokeMgr;
-  hr = threadMgr->QueryInterface(IID_ITfKeystrokeMgr,
-                                 getter_AddRefs(keystrokeMgr));
-  if (FAILED(hr) || !keystrokeMgr) {
-    MOZ_LOG(sTextStoreLog, LogLevel::Error,
-      ("  TSFTextStore::Initialize() FAILED to "
-       "QI keystroke manager from the thread manager, hr=0x%08X", hr));
-    return;
-  }
-
   hr = threadMgr->Activate(&sClientId);
   if (FAILED(hr)) {
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
       ("  TSFTextStore::Initialize() FAILED to activate, hr=0x%08X", hr));
-    return;
-  }
-
-  RefPtr<ITfDisplayAttributeMgr> displayAttributeMgr;
-  hr = ::CoCreateInstance(CLSID_TF_DisplayAttributeMgr, nullptr,
-                          CLSCTX_INPROC_SERVER, IID_ITfDisplayAttributeMgr,
-                          getter_AddRefs(displayAttributeMgr));
-  if (FAILED(hr) || !displayAttributeMgr) {
-    MOZ_LOG(sTextStoreLog, LogLevel::Error,
-      ("  TSFTextStore::Initialize() FAILED to create "
-       "a display attribute manager instance, hr=0x%08X", hr));
-    return;
-  }
-
-  RefPtr<ITfCategoryMgr> categoryMgr;
-  hr = ::CoCreateInstance(CLSID_TF_CategoryMgr, nullptr,
-                          CLSCTX_INPROC_SERVER, IID_ITfCategoryMgr,
-                          getter_AddRefs(categoryMgr));
-  if (FAILED(hr) || !categoryMgr) {
-    MOZ_LOG(sTextStoreLog, LogLevel::Error,
-      ("  TSFTextStore::Initialize() FAILED to create "
-       "a category manager instance, hr=0x%08X", hr));
     return;
   }
 
@@ -5758,80 +6287,168 @@ TSFTextStore::Initialize()
   MarkContextAsKeyboardDisabled(disabledContext);
   MarkContextAsEmpty(disabledContext);
 
-  MOZ_LOG(sTextStoreLog, LogLevel::Info,
-    ("  TSFTextStore::Initialize() is creating "
-     "a TSFStaticSink instance..."));
-  TSFStaticSink* staticSink = TSFStaticSink::GetInstance();
-  if (!staticSink->Init(threadMgr, inputProcessorProfiles)) {
-    TSFStaticSink::Shutdown();
-    MOZ_LOG(sTextStoreLog, LogLevel::Error,
-      ("  TSFTextStore::Initialize() FAILED to initialize TSFStaticSink "
-       "instance"));
-    return;
-  }
-
-  sInputProcessorProfiles = inputProcessorProfiles;
   sThreadMgr = threadMgr;
-  sMessagePump = messagePump;
-  sKeystrokeMgr = keystrokeMgr;
-  sDisplayAttrMgr = displayAttributeMgr;
-  sCategoryMgr = categoryMgr;
   sDisabledDocumentMgr = disabledDocumentMgr;
   sDisabledContext = disabledContext;
 
-  sCreateNativeCaretForLegacyATOK =
-    Preferences::GetBool("intl.tsf.hack.atok.create_native_caret", true);
-  sDoNotReturnNoLayoutErrorToATOKOfCompositionString =
-    Preferences::GetBool(
-      "intl.tsf.hack.atok.do_not_return_no_layout_error_of_composition_string",
-      true);
-  sDoNotReturnNoLayoutErrorToMSSimplifiedTIP =
-    Preferences::GetBool(
-      "intl.tsf.hack.ms_simplified_chinese.do_not_return_no_layout_error",
-      true);
-  sDoNotReturnNoLayoutErrorToMSTraditionalTIP =
-    Preferences::GetBool(
-      "intl.tsf.hack.ms_traditional_chinese.do_not_return_no_layout_error",
-      true);
-  sDoNotReturnNoLayoutErrorToFreeChangJie =
-    Preferences::GetBool(
-      "intl.tsf.hack.free_chang_jie.do_not_return_no_layout_error", true);
-  sDoNotReturnNoLayoutErrorToEasyChangjei =
-    Preferences::GetBool(
-      "intl.tsf.hack.easy_changjei.do_not_return_no_layout_error", true);
-  sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtFirstChar =
-    Preferences::GetBool(
-      "intl.tsf.hack.ms_japanese_ime."
-      "do_not_return_no_layout_error_at_first_char", true);
-  sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtCaret =
-    Preferences::GetBool(
-      "intl.tsf.hack.ms_japanese_ime.do_not_return_no_layout_error_at_caret",
-      true);
-  sHackQueryInsertForMSSimplifiedTIP =
-    Preferences::GetBool(
-      "intl.tsf.hack.ms_simplified_chinese.query_insert_result", true);
-  sHackQueryInsertForMSTraditionalTIP =
-    Preferences::GetBool(
-      "intl.tsf.hack.ms_traditional_chinese.query_insert_result", true);
-
   MOZ_LOG(sTextStoreLog, LogLevel::Info,
     ("  TSFTextStore::Initialize(), sThreadMgr=0x%p, "
-     "sClientId=0x%08X, sDisplayAttrMgr=0x%p, "
-     "sCategoryMgr=0x%p, sDisabledDocumentMgr=0x%p, sDisabledContext=%p, "
-     "sCreateNativeCaretForLegacyATOK=%s, "
-     "sDoNotReturnNoLayoutErrorToATOKOfCompositionString=%s, "
-     "sDoNotReturnNoLayoutErrorToFreeChangJie=%s, "
-     "sDoNotReturnNoLayoutErrorToEasyChangjei=%s, "
-     "sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtFirstChar=%s, "
-     "sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtCaret=%s",
-     sThreadMgr.get(), sClientId, sDisplayAttrMgr.get(),
-     sCategoryMgr.get(), sDisabledDocumentMgr.get(), sDisabledContext.get(),
-     GetBoolName(sCreateNativeCaretForLegacyATOK),
-     GetBoolName(sDoNotReturnNoLayoutErrorToATOKOfCompositionString),
-     GetBoolName(sDoNotReturnNoLayoutErrorToFreeChangJie),
-     GetBoolName(sDoNotReturnNoLayoutErrorToEasyChangjei),
-     GetBoolName(sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtFirstChar),
-     GetBoolName(sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtCaret)));
+     "sClientId=0x%08X, sDisabledDocumentMgr=0x%p, sDisabledContext=%p",
+     sThreadMgr.get(), sClientId,
+     sDisabledDocumentMgr.get(), sDisabledContext.get()));
+}
+
+// static
+already_AddRefed<ITfThreadMgr>
+TSFTextStore::GetThreadMgr()
+{
+  RefPtr<ITfThreadMgr> threadMgr = sThreadMgr;
+  return threadMgr.forget();
+}
+
+// static
+already_AddRefed<ITfMessagePump>
+TSFTextStore::GetMessagePump()
+{
+  static bool sInitialized = false;
+  if (!sThreadMgr) {
+    return nullptr;
+  }
+  if (sMessagePump) {
+    RefPtr<ITfMessagePump> messagePump = sMessagePump;
+    return messagePump.forget();
+  }
+  // If it tried to retrieve ITfMessagePump from sThreadMgr but it failed,
+  // we shouldn't retry it at every message due to performance reason.
+  // Although this shouldn't occur actually.
+  if (sInitialized) {
+    return nullptr;
+  }
+  sInitialized = true;
+
+  RefPtr<ITfMessagePump> messagePump;
+  HRESULT hr = sThreadMgr->QueryInterface(IID_ITfMessagePump,
+                                          getter_AddRefs(messagePump));
+  if (NS_WARN_IF(FAILED(hr)) || NS_WARN_IF(!messagePump)) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("TSFTextStore::GetMessagePump() FAILED to "
+       "QI message pump from the thread manager, hr=0x%08X", hr));
+    return nullptr;
+  }
+  sMessagePump = messagePump;
+  return messagePump.forget();
+}
+
+// static
+already_AddRefed<ITfDisplayAttributeMgr>
+TSFTextStore::GetDisplayAttributeMgr()
+{
+  RefPtr<ITfDisplayAttributeMgr> displayAttributeMgr;
+  if (sDisplayAttrMgr) {
+    displayAttributeMgr = sDisplayAttrMgr;
+    return displayAttributeMgr.forget();
+  }
+
+  HRESULT hr =
+    ::CoCreateInstance(CLSID_TF_DisplayAttributeMgr, nullptr,
+                       CLSCTX_INPROC_SERVER, IID_ITfDisplayAttributeMgr,
+                       getter_AddRefs(displayAttributeMgr));
+  if (NS_WARN_IF(FAILED(hr)) || NS_WARN_IF(!displayAttributeMgr)) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("TSFTextStore::GetDisplayAttributeMgr() FAILED to create "
+       "a display attribute manager instance, hr=0x%08X", hr));
+    return nullptr;
+  }
+  sDisplayAttrMgr = displayAttributeMgr;
+  return displayAttributeMgr.forget();
+}
+
+// static
+already_AddRefed<ITfCategoryMgr>
+TSFTextStore::GetCategoryMgr()
+{
+  RefPtr<ITfCategoryMgr> categoryMgr;
+  if (sCategoryMgr) {
+    categoryMgr = sCategoryMgr;
+    return categoryMgr.forget();
+  }
+  HRESULT hr =
+    ::CoCreateInstance(CLSID_TF_CategoryMgr, nullptr,
+                       CLSCTX_INPROC_SERVER, IID_ITfCategoryMgr,
+                       getter_AddRefs(categoryMgr));
+  if (NS_WARN_IF(FAILED(hr)) || NS_WARN_IF(!categoryMgr)) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("TSFTextStore::GetCategoryMgr() FAILED to create "
+       "a category manager instance, hr=0x%08X", hr));
+    return nullptr;
+  }
+  sCategoryMgr = categoryMgr;
+  return categoryMgr.forget();
+}
+
+// static
+already_AddRefed<ITfCompartment>
+TSFTextStore::GetCompartmentForOpenClose()
+{
+  if (sCompartmentForOpenClose) {
+    RefPtr<ITfCompartment> compartment = sCompartmentForOpenClose;
+    return compartment.forget();
+  }
+
+  if (!sThreadMgr) {
+    return nullptr;
+  }
+
+  RefPtr<ITfCompartmentMgr> compartmentMgr;
+  HRESULT hr = sThreadMgr->QueryInterface(IID_ITfCompartmentMgr,
+                                          getter_AddRefs(compartmentMgr));
+  if (NS_WARN_IF(FAILED(hr)) || NS_WARN_IF(!compartmentMgr)) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("TSFTextStore::GetCompartmentForOpenClose() FAILED due to"
+       "sThreadMgr not having ITfCompartmentMgr, hr=0x%08X", hr));
+    return nullptr;
+  }
+
+  RefPtr<ITfCompartment> compartment;
+  hr = compartmentMgr->GetCompartment(GUID_COMPARTMENT_KEYBOARD_OPENCLOSE,
+                                      getter_AddRefs(compartment));
+  if (NS_WARN_IF(FAILED(hr)) || NS_WARN_IF(!compartment)) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("TSFTextStore::GetCompartmentForOpenClose() FAILED due to"
+       "ITfCompartmentMgr::GetCompartment() failuere, hr=0x%08X", hr));
+    return nullptr;
+  }
+
+  sCompartmentForOpenClose = compartment;
+  return compartment.forget();
+}
+
+// static
+already_AddRefed<ITfInputProcessorProfiles>
+TSFTextStore::GetInputProcessorProfiles()
+{
+  RefPtr<ITfInputProcessorProfiles> inputProcessorProfiles;
+  if (sInputProcessorProfiles) {
+    inputProcessorProfiles = sInputProcessorProfiles;
+    return inputProcessorProfiles.forget();
+  }
+  // XXX MSDN documents that ITfInputProcessorProfiles is available only on
+  //     desktop apps.  However, there is no known way to obtain
+  //     ITfInputProcessorProfileMgr instance without ITfInputProcessorProfiles
+  //     instance.
+  HRESULT hr =
+    ::CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr,
+                       CLSCTX_INPROC_SERVER,
+                       IID_ITfInputProcessorProfiles,
+                       getter_AddRefs(inputProcessorProfiles));
+  if (NS_WARN_IF(FAILED(hr)) || NS_WARN_IF(!inputProcessorProfiles)) {
+    MOZ_LOG(sTextStoreLog, LogLevel::Error,
+      ("TSFTextStore::GetInputProcessorProfiles() FAILED to create input "
+       "processor profiles, hr=0x%08X", hr));
+    return nullptr;
+  }
+  sInputProcessorProfiles = inputProcessorProfiles;
+  return inputProcessorProfiles.forget();
 }
 
 // static
@@ -5847,6 +6464,7 @@ TSFTextStore::Terminate()
   sEnabledTextStore = nullptr;
   sDisabledDocumentMgr = nullptr;
   sDisabledContext = nullptr;
+  sCompartmentForOpenClose = nullptr;
   sInputProcessorProfiles = nullptr;
   sClientId = 0;
   if (sThreadMgr) {
@@ -5861,41 +6479,63 @@ TSFTextStore::Terminate()
 bool
 TSFTextStore::ProcessRawKeyMessage(const MSG& aMsg)
 {
-  if (!sKeystrokeMgr) {
+  if (!sThreadMgr) {
     return false; // not in TSF mode
+  }
+  static bool sInitialized = false;
+  if (!sKeystrokeMgr) {
+    // If it tried to retrieve ITfKeystrokeMgr from sThreadMgr but it failed,
+    // we shouldn't retry it at every keydown nor keyup due to performance
+    // reason.  Although this shouldn't occur actually.
+    if (sInitialized) {
+      return false;
+    }
+    sInitialized = true;
+    RefPtr<ITfKeystrokeMgr> keystrokeMgr;
+    HRESULT hr = sThreadMgr->QueryInterface(IID_ITfKeystrokeMgr,
+                                            getter_AddRefs(keystrokeMgr));
+    if (NS_WARN_IF(FAILED(hr)) || NS_WARN_IF(!keystrokeMgr)) {
+      MOZ_LOG(sTextStoreLog, LogLevel::Error,
+        ("TSFTextStore::ProcessRawKeyMessage() FAILED to "
+         "QI keystroke manager from the thread manager, hr=0x%08X", hr));
+      return false;
+    }
+    sKeystrokeMgr = keystrokeMgr.forget();
   }
 
   if (aMsg.message == WM_KEYDOWN) {
     BOOL eaten;
-    HRESULT hr = sKeystrokeMgr->TestKeyDown(aMsg.wParam, aMsg.lParam, &eaten);
-    if (FAILED(hr) || !eaten) {
+    RefPtr<ITfKeystrokeMgr> keystrokeMgr = sKeystrokeMgr;
+    HRESULT hr = keystrokeMgr->TestKeyDown(aMsg.wParam, aMsg.lParam, &eaten);
+    if (FAILED(hr) || !sKeystrokeMgr || !eaten) {
       return false;
     }
     RefPtr<TSFTextStore> textStore(sEnabledTextStore);
     if (textStore) {
       textStore->OnStartToHandleKeyMessage();
     }
-    hr = sKeystrokeMgr->KeyDown(aMsg.wParam, aMsg.lParam, &eaten);
+    hr = keystrokeMgr->KeyDown(aMsg.wParam, aMsg.lParam, &eaten);
     if (textStore) {
       textStore->OnEndHandlingKeyMessage();
     }
-    return SUCCEEDED(hr) && eaten;
+    return SUCCEEDED(hr) && (eaten || !sKeystrokeMgr);
   }
   if (aMsg.message == WM_KEYUP) {
     BOOL eaten;
-    HRESULT hr = sKeystrokeMgr->TestKeyUp(aMsg.wParam, aMsg.lParam, &eaten);
-    if (FAILED(hr) || !eaten) {
+    RefPtr<ITfKeystrokeMgr> keystrokeMgr = sKeystrokeMgr;
+    HRESULT hr = keystrokeMgr->TestKeyUp(aMsg.wParam, aMsg.lParam, &eaten);
+    if (FAILED(hr) || !sKeystrokeMgr || !eaten) {
       return false;
     }
     RefPtr<TSFTextStore> textStore(sEnabledTextStore);
     if (textStore) {
       textStore->OnStartToHandleKeyMessage();
     }
-    hr = sKeystrokeMgr->KeyUp(aMsg.wParam, aMsg.lParam, &eaten);
+    hr = keystrokeMgr->KeyUp(aMsg.wParam, aMsg.lParam, &eaten);
     if (textStore) {
       textStore->OnEndHandlingKeyMessage();
     }
-    return SUCCEEDED(hr) && eaten;
+    return SUCCEEDED(hr) && (eaten || !sKeystrokeMgr);
   }
   return false;
 }
@@ -5940,9 +6580,23 @@ TSFTextStore::ProcessMessage(nsWindowBase* aWindow,
 
 // static
 bool
-TSFTextStore::IsIMM_IME()
+TSFTextStore::IsIMM_IMEActive()
 {
-  return TSFStaticSink::IsIMM_IME();
+  return TSFStaticSink::IsIMM_IMEActive();
+}
+
+// static
+bool
+TSFTextStore::IsMSJapaneseIMEActive()
+{
+  return TSFStaticSink::IsMSJapaneseIMEActive();
+}
+
+// static
+bool
+TSFTextStore::IsGoogleJapaneseInputActive()
+{
+  return TSFStaticSink::IsGoogleJapaneseInputActive();
 }
 
 /******************************************************************/
@@ -6245,7 +6899,8 @@ TSFTextStore::MouseTracker::OnMouseButtonEvent(ULONG aEdge,
   MOZ_ASSERT(IsUsing(), "The caller must check before calling OnMouseEvent()");
 
   BOOL eaten = FALSE;
-  HRESULT hr = mSink->OnMouseEvent(aEdge, aQuadrant, aButtonStatus, &eaten);
+  RefPtr<ITfMouseSink> sink = mSink;
+  HRESULT hr = sink->OnMouseEvent(aEdge, aQuadrant, aButtonStatus, &eaten);
 
   MOZ_LOG(sTextStoreLog, LogLevel::Debug,
     ("0x%p   TSFTextStore::MouseTracker::OnMouseEvent(aEdge=%d, "
@@ -6260,7 +6915,9 @@ TSFTextStore::MouseTracker::OnMouseButtonEvent(ULONG aEdge,
 bool
 TSFTextStore::CurrentKeyboardLayoutHasIME()
 {
-  if (!sInputProcessorProfiles) {
+  RefPtr<ITfInputProcessorProfiles> inputProcessorProfiles =
+    TSFTextStore::GetInputProcessorProfiles();
+  if (!inputProcessorProfiles) {
     MOZ_LOG(sTextStoreLog, LogLevel::Error,
       ("TSFTextStore::CurrentKeyboardLayoutHasIME() FAILED due to "
        "there is no input processor profiles instance"));
@@ -6268,8 +6925,8 @@ TSFTextStore::CurrentKeyboardLayoutHasIME()
   }
   RefPtr<ITfInputProcessorProfileMgr> profileMgr;
   HRESULT hr =
-    sInputProcessorProfiles->QueryInterface(IID_ITfInputProcessorProfileMgr,
-                                            getter_AddRefs(profileMgr));
+    inputProcessorProfiles->QueryInterface(IID_ITfInputProcessorProfileMgr,
+                                           getter_AddRefs(profileMgr));
   if (FAILED(hr) || !profileMgr) {
     // On Windows Vista or later, ImmIsIME() API always returns true.
     // If we failed to obtain the profile manager, we cannot know if current

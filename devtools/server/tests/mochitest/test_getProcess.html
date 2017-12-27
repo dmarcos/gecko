@@ -17,7 +17,7 @@ Bug 1060093 - Test DebuggerServer.getProcess
 let Cu = Components.utils;
 
 let {require} = Cu.import("resource://devtools/shared/Loader.jsm", {});
-let {DebuggerClient} = require("devtools/shared/client/main");
+let {DebuggerClient} = require("devtools/shared/client/debugger-client");
 let {DebuggerServer} = require("devtools/server/main");
 let Services = require("Services");
 
@@ -38,12 +38,10 @@ window.onload = function () {
 
 function runTests() {
   // Instantiate a minimal server
-  if (!DebuggerServer.initialized) {
-    DebuggerServer.init();
-  }
+  DebuggerServer.init();
   DebuggerServer.allowChromeProcess = true;
   if (!DebuggerServer.createRootActor) {
-    DebuggerServer.addBrowserActors();
+    DebuggerServer.registerAllActors();
   }
 
   let client, iframe, processCount;
@@ -116,6 +114,7 @@ function runTests() {
   }
 
   function processScript() {
+    Components.utils.import("resource://gre/modules/Services.jsm");
     let listener = function () {
       Services.obs.removeObserver(listener, "sdk:loader:destroy");
       sendAsyncMessage("test:getProcess-destroy", null);

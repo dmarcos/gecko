@@ -1,5 +1,6 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -26,33 +27,41 @@ public:
   explicit VRDisplayClient(const VRDisplayInfo& aDisplayInfo);
 
   void UpdateDisplayInfo(const VRDisplayInfo& aDisplayInfo);
+  void UpdateSubmitFrameResult(const VRSubmitFrameResultInfo& aResult);
 
   const VRDisplayInfo& GetDisplayInfo() const { return mDisplayInfo; }
   virtual VRHMDSensorState GetSensorState();
+  void GetSubmitFrameResult(VRSubmitFrameResultInfo& aResult);
 
   virtual void ZeroSensor();
 
-  already_AddRefed<VRDisplayPresentation> BeginPresentation(const nsTArray<dom::VRLayer>& aLayers);
+  already_AddRefed<VRDisplayPresentation> BeginPresentation(const nsTArray<dom::VRLayer>& aLayers,
+                                                            uint32_t aGroup);
   void PresentationDestroyed();
 
-  void NotifyVsync();
-  void NotifyVRVsync();
-
   bool GetIsConnected() const;
-  bool GetIsPresenting() const;
 
   void NotifyDisconnected();
+  void SetGroupMask(uint32_t aGroupMask);
+
+  bool IsPresentationGenerationCurrent() const;
+  void MakePresentationGenerationCurrent();
 
 protected:
   virtual ~VRDisplayClient();
+
+  void FireEvents();
 
   VRDisplayInfo mDisplayInfo;
 
   bool bLastEventWasMounted;
   bool bLastEventWasPresenting;
 
-  TimeStamp mLastVSyncTime;
   int mPresentationCount;
+  uint64_t mLastEventFrameId;
+  uint32_t mLastPresentingGeneration;
+private:
+  VRSubmitFrameResultInfo mSubmitFrameResult;
 };
 
 } // namespace gfx

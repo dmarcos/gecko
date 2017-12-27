@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -26,10 +27,13 @@ class Loader;
 
 // If CSS_REPORT_PARSE_ERRORS is not defined, all of this class's
 // methods become inline stubs.
-class MOZ_STACK_CLASS ErrorReporter {
+class ErrorReporter {
 public:
   ErrorReporter(const nsCSSScanner &aScanner,
-                const CSSStyleSheet *aSheet,
+                const StyleSheet *aSheet,
+                const Loader *aLoader,
+                nsIURI *aURI);
+  ErrorReporter(const ServoStyleSheet *aSheet,
                 const Loader *aLoader,
                 nsIURI *aURI);
   ~ErrorReporter();
@@ -38,6 +42,7 @@ public:
 
   void OutputError();
   void OutputError(uint32_t aLineNumber, uint32_t aLineOffset);
+  void OutputError(uint32_t aLineNumber, uint32_t aLineOffset, const nsACString& aSource);
   void ClearError();
 
   // In all overloads of ReportUnexpected, aMessage is a stringbundle
@@ -50,6 +55,9 @@ public:
   void ReportUnexpected(const char *aMessage, const nsString& aParam);
   // one parameter, a token
   void ReportUnexpected(const char *aMessage, const nsCSSToken& aToken);
+  // one parameter which has already been escaped appropriately
+  void ReportUnexpectedUnescaped(const char *aMessage,
+                                 const nsAutoString& aParam);
   // two parameters, a token and a character, in that order
   void ReportUnexpected(const char *aMessage, const nsCSSToken& aToken,
                         char16_t aChar);
@@ -66,12 +74,14 @@ public:
 private:
   void AddToError(const nsString &aErrorText);
 
+  bool IsServo() const;
+
 #ifdef CSS_REPORT_PARSE_ERRORS
   nsAutoString mError;
   nsString mErrorLine;
   nsString mFileName;
   const nsCSSScanner *mScanner;
-  const CSSStyleSheet *mSheet;
+  const StyleSheet *mSheet;
   const Loader *mLoader;
   nsIURI *mURI;
   uint64_t mInnerWindowID;

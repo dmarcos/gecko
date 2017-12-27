@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=2 et tw=80 : */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -35,6 +35,7 @@
 #endif
 #include "mozilla/widget/CompositorWidget.h"
 #include "VRManager.h"
+#include "VRThread.h"
 
 namespace mozilla {
 
@@ -83,6 +84,8 @@ CompositorVsyncScheduler::CompositorVsyncScheduler(CompositorVsyncSchedulerOwner
   , mCurrentCompositeTask(nullptr)
   , mSetNeedsCompositeMonitor("SetNeedsCompositeMonitor")
   , mSetNeedsCompositeTask(nullptr)
+  , mCurrentVRListenerTaskMonitor("CurrentVRTaskMonitor")
+  , mCurrentVRListenerTask(nullptr)
 {
   mVsyncObserver = new Observer(this);
 
@@ -122,11 +125,28 @@ CompositorVsyncScheduler::PostCompositeTask(TimeStamp aCompositeTimestamp)
   // can be called from the compositor or vsync thread
   MonitorAutoLock lock(mCurrentCompositeTaskMonitor);
   if (mCurrentCompositeTask == nullptr && CompositorThreadHolder::Loop()) {
-    RefPtr<CancelableRunnable> task =
-      NewCancelableRunnableMethod<TimeStamp>(this, &CompositorVsyncScheduler::Composite,
-                                             aCompositeTimestamp);
+    RefPtr<CancelableRunnable> task = NewCancelableRunnableMethod<TimeStamp>(
+      "layers::CompositorVsyncScheduler::Composite",
+      this,
+      &CompositorVsyncScheduler::Composite,
+      aCompositeTimestamp);
     mCurrentCompositeTask = task;
     ScheduleTask(task.forget(), 0);
+  }
+}
+
+void
+CompositorVsyncScheduler::PostVRTask(TimeStamp aTimestamp)
+{
+  MonitorAutoLock lockVR(mCurrentVRListenerTaskMonitor);
+  if (mCurrentVRListenerTask == nullptr && VRListenerThreadHolder::Loop()) {
+    RefPtr<Runnable> task = NewRunnableMethod<TimeStamp>(
+      "layers::CompositorVsyncScheduler::DispatchVREvents",
+      this,
+      &CompositorVsyncScheduler::DispatchVREvents,
+      aTimestamp);
+    mCurrentVRListenerTask = task;
+    VRListenerThreadHolder::Loop()->PostDelayedTask(Move(task.forget()), 0);
   }
 }
 
@@ -181,8 +201,10 @@ CompositorVsyncScheduler::SetNeedsComposite()
 {
   if (!CompositorThreadHolder::IsInCompositorThread()) {
     MonitorAutoLock lock(mSetNeedsCompositeMonitor);
-    RefPtr<CancelableRunnable> task =
-      NewCancelableRunnableMethod(this, &CompositorVsyncScheduler::SetNeedsComposite);
+    RefPtr<CancelableRunnable> task = NewCancelableRunnableMethod(
+      "layers::CompositorVsyncScheduler::SetNeedsComposite",
+      this,
+      &CompositorVsyncScheduler::SetNeedsComposite);
     mSetNeedsCompositeTask = task;
     ScheduleTask(task.forget(), 0);
     return;
@@ -211,6 +233,7 @@ CompositorVsyncScheduler::NotifyVsync(TimeStamp aVsyncTimestamp)
   MOZ_ASSERT_IF(XRE_GetProcessType() == GeckoProcessType_GPU, CompositorThreadHolder::IsInCompositorThread());
   MOZ_ASSERT(!NS_IsMainThread());
   PostCompositeTask(aVsyncTimestamp);
+  PostVRTask(aVsyncTimestamp);
   return true;
 }
 
@@ -250,7 +273,6 @@ CompositorVsyncScheduler::Composite(TimeStamp aVsyncTimestamp)
   }
 
   DispatchTouchEvents(aVsyncTimestamp);
-  DispatchVREvents(aVsyncTimestamp);
 
   if (mNeedsComposite || mAsapScheduling) {
     mNeedsComposite = 0;
@@ -323,7 +345,16 @@ CompositorVsyncScheduler::DispatchTouchEvents(TimeStamp aVsyncTimestamp)
 void
 CompositorVsyncScheduler::DispatchVREvents(TimeStamp aVsyncTimestamp)
 {
-  MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
+  {
+    MonitorAutoLock lock(mCurrentVRListenerTaskMonitor);
+    mCurrentVRListenerTask = nullptr;
+  }
+  // This only allows to be called by CompositorVsyncScheduler::PostVRTask()
+  // When the process is going to shutdown, the runnable has chance to be executed
+  // by other threads, we only want it to be run at VRListenerThread.
+  if (!VRListenerThreadHolder::IsInVRListenerThread()) {
+    return;
+  }
 
   VRManager* vm = VRManager::Get();
   vm->NotifyVsync(aVsyncTimestamp);

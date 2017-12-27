@@ -12,12 +12,14 @@ include protocol PRenderFrame;
 include protocol PTexture;
 
 include "mozilla/GfxMessageUtils.h";
+include "mozilla/layers/LayersMessageUtils.h";
 
 using struct mozilla::layers::TextureInfo from "mozilla/layers/CompositorTypes.h";
 using struct mozilla::void_t from "ipc/IPCMessageUtils.h";
 using class mozilla::layers::APZTestData from "mozilla/layers/APZTestData.h";
 using mozilla::layers::FrameMetrics::ViewID from "FrameMetrics.h";
 using struct mozilla::layers::ScrollableLayerGuid from "FrameMetrics.h";
+using struct mozilla::layers::TextureFactoryIdentifier from "mozilla/layers/CompositorTypes.h";
 using mozilla::layers::LayersBackend from "mozilla/layers/LayersTypes.h";
 using mozilla::layers::LayerHandle from "mozilla/layers/LayersTypes.h";
 using mozilla::layers::CompositableHandle from "mozilla/layers/LayersTypes.h";
@@ -32,11 +34,6 @@ using mozilla::layers::CompositableHandle from "mozilla/layers/LayersTypes.h";
 
 namespace mozilla {
 namespace layers {
-
-union MaybeTransform {
-  Matrix4x4;
-  void_t;
-};
 
 /**
  * The PLayerTransaction protocol manages the layer tree for a single "browser".
@@ -69,6 +66,10 @@ parent:
   // Release an object that is no longer in use.
   async ReleaseLayer(LayerHandle layer);
   async ReleaseCompositable(CompositableHandle compositable);
+
+  // Tell the compositor to notify APZ that a layer has been confirmed for an
+  // input event.
+  async SetConfirmedTargetAPZC(uint64_t aInputBlockId, ScrollableLayerGuid[] aTargets);
 
   // Testing APIs
 
@@ -118,13 +119,14 @@ parent:
   // Query a named property from the last frame
   sync RequestProperty(nsString property) returns (float value);
 
-  // Tell the compositor to notify APZ that a layer has been confirmed for an
-  // input event.
-  async SetConfirmedTargetAPZC(uint64_t aInputBlockId, ScrollableLayerGuid[] aTargets);
+  // Return the TextureFactoryIdentifier for this compositor.
+  sync GetTextureFactoryIdentifier() returns (TextureFactoryIdentifier aIdentifier);
 
   async RecordPaintTimes(PaintTiming timing);
 
   async Shutdown();
+  sync ShutdownSync();
+
 child:
   async __delete__();
 };

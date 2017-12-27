@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <string>
 #include <sstream>
@@ -31,6 +32,12 @@
 
 #endif
 
+#include "MinidumpAnalyzerUtils.h"
+
+#if XP_WIN && HAVE_64BIT_BUILD
+#include "MozStackFrameSymbolizer.h"
+#endif
+
 namespace CrashReporter {
 
 using std::ios;
@@ -54,44 +61,10 @@ using google_breakpad::ProcessResult;
 using google_breakpad::ProcessState;
 using google_breakpad::StackFrame;
 
-#ifdef XP_WIN
+MinidumpAnalyzerOptions gMinidumpAnalyzerOptions;
 
-static wstring UTF8ToWide(const string& aUtf8Str, bool *aSuccess = nullptr)
-{
-  wchar_t* buffer = nullptr;
-  int buffer_size = MultiByteToWideChar(CP_UTF8, 0, aUtf8Str.c_str(),
-                                        -1, nullptr, 0);
-  if (buffer_size == 0) {
-    if (aSuccess) {
-      *aSuccess = false;
-    }
-
-    return L"";
-  }
-
-  buffer = new wchar_t[buffer_size];
-
-  if (buffer == nullptr) {
-    if (aSuccess) {
-      *aSuccess = false;
-    }
-
-    return L"";
-  }
-
-  MultiByteToWideChar(CP_UTF8, 0, aUtf8Str.c_str(),
-                      -1, buffer, buffer_size);
-  wstring str = buffer;
-  delete [] buffer;
-
-  if (aSuccess) {
-    *aSuccess = true;
-  }
-
-  return str;
-}
-
-#endif
+// Path of the minidump to be analyzed.
+static string gMinidumpPath;
 
 struct ModuleCompare {
   bool operator() (const CodeModule* aLhs, const CodeModule* aRhs) const {
@@ -273,7 +246,11 @@ ConvertProcessStateToJSON(const ProcessState& aProcessState, Json::Value& aRoot)
     crashInfo["address"] = ToHex(aProcessState.crash_address());
 
     if (requestingThread != -1) {
-      crashInfo["crashing_thread"] = requestingThread;
+      // Record the crashing thread index only if this is a full minidump
+      // and all threads' stacks are present, otherwise only the crashing
+      // thread stack is written out and this field is set to 0.
+      crashInfo["crashing_thread"] =
+        gMinidumpAnalyzerOptions.fullMinidump ? requestingThread : 0;
     }
   } else {
     crashInfo["type"] = Json::Value(Json::nullValue);
@@ -301,14 +278,25 @@ ConvertProcessStateToJSON(const ProcessState& aProcessState, Json::Value& aRoot)
   Json::Value threads(Json::arrayValue);
   int threadCount = aProcessState.threads()->size();
 
-  for (int threadIndex = 0; threadIndex < threadCount; ++threadIndex) {
+  if (!gMinidumpAnalyzerOptions.fullMinidump && (requestingThread != -1)) {
+    // Only add the crashing thread
     Json::Value thread;
     Json::Value stack(Json::arrayValue);
-    const CallStack* rawStack = aProcessState.threads()->at(threadIndex);
+    const CallStack* rawStack = aProcessState.threads()->at(requestingThread);
 
     ConvertStackToJSON(aProcessState, orderedModules, rawStack, stack);
     thread["frames"] = stack;
     threads.append(thread);
+   } else {
+    for (int threadIndex = 0; threadIndex < threadCount; ++threadIndex) {
+      Json::Value thread;
+      Json::Value stack(Json::arrayValue);
+      const CallStack* rawStack = aProcessState.threads()->at(threadIndex);
+
+      ConvertStackToJSON(aProcessState, orderedModules, rawStack, stack);
+      thread["frames"] = stack;
+      threads.append(thread);
+    }
   }
 
   aRoot["threads"] = threads;
@@ -319,9 +307,14 @@ ConvertProcessStateToJSON(const ProcessState& aProcessState, Json::Value& aRoot)
 
 static bool
 ProcessMinidump(Json::Value& aRoot, const string& aDumpFile) {
+#if XP_WIN && HAVE_64BIT_BUILD
+  MozStackFrameSymbolizer symbolizer;
+  MinidumpProcessor minidumpProcessor(&symbolizer, false);
+#else
   BasicSourceLineResolver resolver;
   // We don't have a valid symbol resolver so we pass nullptr instead.
   MinidumpProcessor minidumpProcessor(nullptr, &resolver);
+#endif
 
   // Process the minidump.
   Minidump dump(aDumpFile);
@@ -360,25 +353,6 @@ OpenAppend(const string& aFilename)
   return file;
 }
 
-// Check if a file exists at the specified path
-
-static bool
-FileExists(const string& aPath)
-{
-#if defined(XP_WIN)
-  DWORD attrs = GetFileAttributes(UTF8ToWide(aPath).c_str());
-  return (attrs != INVALID_FILE_ATTRIBUTES);
-#else // Non-Windows
-  struct stat sb;
-  int ret = stat(aPath.c_str(), &sb);
-  if (ret == -1 || !(sb.st_mode & S_IFREG)) {
-    return false;
-  }
-
-  return true;
-#endif // XP_WIN
-}
-
 // Update the extra data file by adding the StackTraces field holding the
 // JSON output of this program.
 
@@ -410,27 +384,39 @@ UpdateExtraDataFile(const string &aDumpPath, const Json::Value& aRoot)
 
 using namespace CrashReporter;
 
-int main(int argc, char** argv)
-{
-  string dumpPath;
-
-  if (argc > 1) {
-    dumpPath = argv[1];
-  }
-
-  if (dumpPath.empty()) {
+static void
+ParseArguments(int argc, char** argv) {
+  if (argc <= 1) {
     exit(EXIT_FAILURE);
   }
 
-  if (!FileExists(dumpPath)) {
+  for (int i = 1; i < argc - 1; i++) {
+    if (strcmp(argv[i], "--full") == 0) {
+      gMinidumpAnalyzerOptions.fullMinidump = true;
+    } else if ((strcmp(argv[i], "--force-use-module") == 0) && (i < argc - 2)) {
+      gMinidumpAnalyzerOptions.forceUseModule = argv[i + 1];
+      ++i;
+    } else {
+      exit(EXIT_FAILURE);
+    }
+  }
+
+  gMinidumpPath = argv[argc - 1];
+}
+
+int main(int argc, char** argv)
+{
+  ParseArguments(argc, argv);
+
+  if (!FileExists(gMinidumpPath)) {
     // The dump file does not exist
-    return 1;
+    exit(EXIT_FAILURE);
   }
 
   // Try processing the minidump
   Json::Value root;
-  if (ProcessMinidump(root, dumpPath)) {
-    UpdateExtraDataFile(dumpPath, root);
+  if (ProcessMinidump(root, gMinidumpPath)) {
+    UpdateExtraDataFile(gMinidumpPath, root);
   }
 
   exit(EXIT_SUCCESS);

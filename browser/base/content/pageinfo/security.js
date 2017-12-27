@@ -52,8 +52,7 @@ var security = {
     if (!isInsecure && status) {
       status.QueryInterface(nsISSLStatus);
       var cert = status.serverCert;
-      var issuerName =
-        this.mapIssuerOrganization(cert.issuerOrganization) || cert.issuerName;
+      var issuerName = cert.issuerOrganization || cert.issuerName;
 
       var retval = {
         hostName,
@@ -87,10 +86,10 @@ var security = {
           retval.version = "TLS 1.1";
           break;
         case nsISSLStatus.TLS_VERSION_1_2:
-          retval.version = "TLS 1.2"
+          retval.version = "TLS 1.2";
           break;
         case nsISSLStatus.TLS_VERSION_1_3:
-          retval.version = "TLS 1.3"
+          retval.version = "TLS 1.3";
           break;
       }
 
@@ -132,31 +131,15 @@ var security = {
     return null;
   },
 
-  // Interface for mapping a certificate issuer organization to
-  // the value to be displayed.
-  // Bug 82017 - this implementation should be moved to pipnss C++ code
-  mapIssuerOrganization(name) {
-    if (!name) return null;
-
-    if (name == "RSA Data Security, Inc.") return "Verisign, Inc.";
-
-    // No mapping required
-    return name;
-  },
-
   /**
    * Open the cookie manager window
    */
   viewCookies() {
-    var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]
-                       .getService(Components.interfaces.nsIWindowMediator);
-    var win = wm.getMostRecentWindow("Browser:Cookies");
-    var eTLDService = Components.classes["@mozilla.org/network/effective-tld-service;1"].
-                      getService(Components.interfaces.nsIEffectiveTLDService);
+    var win = Services.wm.getMostRecentWindow("Browser:Cookies");
 
     var eTLD;
     try {
-      eTLD = eTLDService.getBaseDomain(this.uri);
+      eTLD = Services.eTLD.getBaseDomain(this.uri);
     } catch (e) {
       // getBaseDomain will fail if the host is an IP address or is empty
       eTLD = this.uri.asciiHost;
@@ -195,14 +178,16 @@ function securityOnLoad(uri, windowInfo) {
   /* Set Identity section text */
   setText("security-identity-domain-value", info.hostName);
 
-  var owner, verifier;
+  var owner, verifier, validity;
   if (info.cert && !info.isBroken) {
+    validity = info.cert.validity.notAfterLocalDay;
+
     // Try to pull out meaningful values.  Technically these fields are optional
     // so we'll employ fallbacks where appropriate.  The EV spec states that Org
     // fields must be specified for subject and issuer so that case is simpler.
     if (info.isEV) {
       owner = info.cert.organization;
-      verifier = security.mapIssuerOrganization(info.cAName);
+      verifier = info.cAName;
     } else {
       // Technically, a non-EV cert might specify an owner in the O field or not,
       // depending on the CA's issuing policies.  However we don't have any programmatic
@@ -210,9 +195,7 @@ function securityOnLoad(uri, windowInfo) {
       // vetting standards are good enough (that's what EV is for) so we default to
       // treating these certs as domain-validated only.
       owner = pageInfoBundle.getString("securityNoOwner");
-      verifier = security.mapIssuerOrganization(info.cAName ||
-                                                info.cert.issuerCommonName ||
-                                                info.cert.issuerName);
+      verifier = info.cAName || info.cert.issuerCommonName || info.cert.issuerName;
     }
   } else {
     // We don't have valid identity credentials.
@@ -222,6 +205,11 @@ function securityOnLoad(uri, windowInfo) {
 
   setText("security-identity-owner-value", owner);
   setText("security-identity-verifier-value", verifier);
+  if (validity) {
+    setText("security-identity-validity-value", validity);
+  } else {
+    document.getElementById("security-identity-validity-row").hidden = true;
+  }
 
   /* Manage the View Cert button*/
   var viewCert = document.getElementById("security-view-cert");
@@ -326,10 +314,7 @@ function viewCertHelper(parent, cert) {
  * Return true iff we have cookies for uri
  */
 function hostHasCookies(uri) {
-  var cookieManager = Components.classes["@mozilla.org/cookiemanager;1"]
-                                .getService(Components.interfaces.nsICookieManager2);
-
-  return cookieManager.countCookiesFromHost(uri.asciiHost) > 0;
+  return Services.cookies.countCookiesFromHost(uri.asciiHost) > 0;
 }
 
 /**
@@ -337,9 +322,7 @@ function hostHasCookies(uri) {
  * saved passwords
  */
 function realmHasPasswords(uri) {
-  var passwordManager = Components.classes["@mozilla.org/login-manager;1"]
-                                  .getService(Components.interfaces.nsILoginManager);
-  return passwordManager.countLogins(uri.prePath, "", "") > 0;
+  return Services.logins.countLogins(uri.prePath, "", "") > 0;
 }
 
 /**

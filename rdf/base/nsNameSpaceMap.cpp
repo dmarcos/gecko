@@ -25,7 +25,7 @@ nsNameSpaceMap::~nsNameSpaceMap()
 }
 
 nsresult
-nsNameSpaceMap::Put(const nsAString& aURI, nsIAtom* aPrefix)
+nsNameSpaceMap::Put(const nsAString& aURI, nsAtom* aPrefix)
 {
     nsCString uriUTF8;
     AppendUTF16toUTF8(aURI, uriUTF8);
@@ -33,7 +33,7 @@ nsNameSpaceMap::Put(const nsAString& aURI, nsIAtom* aPrefix)
 }
 
 nsresult
-nsNameSpaceMap::Put(const nsCSubstring& aURI, nsIAtom* aPrefix)
+nsNameSpaceMap::Put(const nsACString& aURI, nsAtom* aPrefix)
 {
     Entry* entry;
 
@@ -53,7 +53,7 @@ nsNameSpaceMap::Put(const nsCSubstring& aURI, nsIAtom* aPrefix)
 }
 
 nsNameSpaceMap::const_iterator
-nsNameSpaceMap::GetNameSpaceOf(const nsCSubstring& aURI) const
+nsNameSpaceMap::GetNameSpaceOf(const nsACString& aURI) const
 {
     for (Entry* entry = mEntries; entry != nullptr; entry = entry->mNext) {
         if (StringBeginsWith(aURI, entry->mURI))

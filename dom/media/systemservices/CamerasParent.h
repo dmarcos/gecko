@@ -15,13 +15,13 @@
 #include "mozilla/ShmemPool.h"
 #include "mozilla/Atomics.h"
 #include "webrtc/modules/video_capture/video_capture.h"
-#include "webrtc/modules/video_render/video_render_impl.h"
 #include "webrtc/modules/video_capture/video_capture_defines.h"
 #include "webrtc/common_video/include/incoming_video_stream.h"
+#include "webrtc/media/base/videosinkinterface.h"
 
 // conflicts with #include of scoped_ptr.h
 #undef FF
-#include "webrtc/common.h"
+#include "webrtc/common_types.h"
 
 #include "CamerasChild.h"
 
@@ -38,25 +38,15 @@ namespace camera {
 class CamerasParent;
 
 class CallbackHelper :
-  public webrtc::VideoRenderCallback,
-  public webrtc::VideoCaptureDataCallback
+  public rtc::VideoSinkInterface<webrtc::VideoFrame>
 {
 public:
   CallbackHelper(CaptureEngine aCapEng, uint32_t aStreamId, CamerasParent *aParent)
     : mCapEngine(aCapEng), mStreamId(aStreamId), mParent(aParent) {};
 
-  // ViEExternalRenderer implementation. These callbacks end up
-  // running on the VideoCapture thread.
-  virtual int32_t RenderFrame(const uint32_t aStreamId, const webrtc::VideoFrame& video_frame) override;
-
+  // These callbacks end up running on the VideoCapture thread.
   // From  VideoCaptureCallback
-  virtual void OnIncomingCapturedFrame(const int32_t id, const webrtc::VideoFrame& videoFrame) override;
-  virtual void OnCaptureDelayChanged(const int32_t id, const int32_t delay) override;
-
-	// TODO(@@NG) This is now part of webrtc::VideoRenderer, not in the webrtc::VideoRenderCallback
-	// virtual bool IsTextureSupported() const override { return false; };
-	//
-	// virtual bool SmoothsRenderedFrames() const override { return false; }
+  virtual void OnFrame(const webrtc::VideoFrame& videoFrame) override;
 
   friend CamerasParent;
 
@@ -113,10 +103,11 @@ public:
   virtual void ActorDestroy(ActorDestroyReason aWhy) override;
   virtual mozilla::ipc::IPCResult RecvEnsureInitialized(const CaptureEngine&) override;
 
-  nsIThread* GetBackgroundThread() { return mPBackgroundThread; };
-  bool IsShuttingDown() { return !mChildIsAlive
-                              ||  mDestroyed
-                              || !mWebRTCAlive; };
+  nsIEventTarget* GetBackgroundEventTarget() { return mPBackgroundEventTarget; };
+  bool IsShuttingDown()
+  {
+    return !mChildIsAlive || mDestroyed || !mWebRTCAlive;
+  };
   ShmemBuffer GetBuffer(size_t aSize);
 
   // helper to forward to the PBackground thread
@@ -144,20 +135,27 @@ protected:
   // Can't take already_AddRefed because it can fail in stupid ways.
   nsresult DispatchToVideoCaptureThread(Runnable* event);
 
-  RefPtr<VideoEngine> mEngines[CaptureEngine::MaxEngine];
+  // sEngines will be accessed by VideoCapture thread only
+  // sNumOfCamerasParent, sNumOfOpenCamerasParentEngines, and sVideoCaptureThread will
+  // be accessed by main thread / PBackground thread / VideoCapture thread
+  // sNumOfCamerasParent and sThreadMonitor create & delete are protected by sMutex
+  // sNumOfOpenCamerasParentEngines and sVideoCaptureThread are protected by sThreadMonitor
+  static RefPtr<VideoEngine> sEngines[CaptureEngine::MaxEngine];
+  static int32_t sNumOfOpenCamerasParentEngines;
+  static int32_t sNumOfCamerasParents;
   nsTArray<CallbackHelper*> mCallbacks;
 
   // image buffers
   mozilla::ShmemPool mShmemPool;
 
   // PBackground parent thread
-  nsCOMPtr<nsIThread> mPBackgroundThread;
+  nsCOMPtr<nsISerialEventTarget> mPBackgroundEventTarget;
 
-  // Monitors creation of the thread below
-  Monitor mThreadMonitor;
+  static StaticMutex sMutex;
+  static Monitor* sThreadMonitor;
 
   // video processing thread - where webrtc.org capturer code runs
-  base::Thread* mVideoCaptureThread;
+  static base::Thread* sVideoCaptureThread;
 
   // Shutdown handling
   bool mChildIsAlive;
@@ -165,7 +163,9 @@ protected:
   // Above 2 are PBackground only, but this is potentially
   // read cross-thread.
   mozilla::Atomic<bool> mWebRTCAlive;
-  nsTArray<RefPtr<InputObserver>> mObservers;
+  RefPtr<InputObserver> mCameraObserver;
+  std::map<nsCString, std::map<uint32_t, webrtc::VideoCaptureCapability>>
+    mAllCandidateCapabilities;
 };
 
 PCamerasParent* CreateCamerasParent();

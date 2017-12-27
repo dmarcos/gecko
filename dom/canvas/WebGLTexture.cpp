@@ -152,7 +152,6 @@ WebGLTexture::Delete()
         cur.Clear(funcName);
     }
 
-    mContext->MakeContextCurrent();
     mContext->gl->fDeleteTextures(1, &mGLName);
 
     LinkedListElement<WebGLTexture>::removeFrom(mContext->mTextures);
@@ -314,8 +313,9 @@ WebGLTexture::IsComplete(const char* funcName, uint32_t texUnit,
 {
     *out_initFailed = false;
 
-    if (!EnsureLevelInitialized(funcName, mBaseMipmapLevel)) {
-        *out_initFailed = true;
+    const auto maxLevel = kMaxLevelCount - 1;
+    if (mBaseMipmapLevel > maxLevel) {
+        *out_reason = "`level_base` too high.";
         return false;
     }
 
@@ -444,6 +444,11 @@ WebGLTexture::IsComplete(const char* funcName, uint32_t texUnit,
         //    image is not cube complete, or TEXTURE_MIN_FILTER is one that requires a
         //    mipmap and the texture is not mipmap cube complete."
         // (already covered)
+    }
+
+    if (!EnsureLevelInitialized(funcName, mBaseMipmapLevel)) {
+        *out_initFailed = true;
+        return false;
     }
 
     return true;
@@ -641,7 +646,6 @@ ZeroTextureData(WebGLContext* webgl, const char* funcName, GLuint tex,
                            funcName);
 
     gl::GLContext* gl = webgl->GL();
-    gl->MakeCurrent();
 
     GLenum scopeBindTarget;
     switch (target.get()) {
@@ -876,14 +880,22 @@ WebGLTexture::GenerateMipmap(TexTarget texTarget)
       return;
     }
 
-    if (!mContext->IsWebGL2() && !baseImageInfo.IsPowerOfTwo()) {
-        mContext->ErrorInvalidOperation("%s: The base level of the texture does not have"
-                                        " power-of-two dimensions.",
-                                        funcName);
-        return;
+    const auto format = baseImageInfo.mFormat->format;
+    if (!mContext->IsWebGL2()) {
+        if (!baseImageInfo.IsPowerOfTwo()) {
+            mContext->ErrorInvalidOperation("%s: The base level of the texture does not"
+                                            " have power-of-two dimensions.",
+                                            funcName);
+            return;
+        }
+        if (format->isSRGB) {
+            mContext->ErrorInvalidOperation("%s: EXT_sRGB forbids GenerateMipmap with"
+                                            " sRGB.",
+                                            funcName);
+            return;
+        }
     }
 
-    auto format = baseImageInfo.mFormat->format;
     if (format->compression) {
         mContext->ErrorInvalidOperation("%s: Texture data at base level is compressed.",
                                         funcName);
@@ -924,7 +936,6 @@ WebGLTexture::GenerateMipmap(TexTarget texTarget)
 
     // Done with validation. Do the operation.
 
-    mContext->MakeContextCurrent();
     gl::GLContext* gl = mContext->gl;
 
     if (gl->WorkAroundDriverBugs()) {
@@ -952,8 +963,6 @@ WebGLTexture::GenerateMipmap(TexTarget texTarget)
 JS::Value
 WebGLTexture::GetTexParameter(TexTarget texTarget, GLenum pname)
 {
-    mContext->MakeContextCurrent();
-
     GLint i = 0;
     GLfloat f = 0.0f;
 
@@ -1209,7 +1218,6 @@ WebGLTexture::TexParameter(TexTarget texTarget, GLenum pname, const FloatOrInt& 
 
     ////////////////
 
-    mContext->MakeContextCurrent();
     if (!clamped.isFloat)
         mContext->gl->fTexParameteri(texTarget.get(), pname, clamped.i);
     else

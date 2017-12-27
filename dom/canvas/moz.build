@@ -66,6 +66,7 @@ EXPORTS.mozilla.dom += [
     'ImageBitmapRenderingContext.h',
     'ImageBitmapSource.h',
     'ImageData.h',
+    'ImageUtils.h',
     'OffscreenCanvas.h',
     'TextMetrics.h',
     'WebGLVertexArrayObject.h',
@@ -93,6 +94,7 @@ SOURCES += [
 
 # WebGL Sources
 UNIFIED_SOURCES += [
+    'CacheMap.cpp',
     'TexUnpackBlob.cpp',
     'WebGL1Context.cpp',
     'WebGL2Context.cpp',
@@ -135,7 +137,7 @@ UNIFIED_SOURCES += [
     'WebGLExtensionCompressedTextureETC1.cpp',
     'WebGLExtensionCompressedTexturePVRTC.cpp',
     'WebGLExtensionCompressedTextureS3TC.cpp',
-    'WebGLExtensionDebugGet.cpp',
+    'WebGLExtensionCompressedTextureS3TC_SRGB.cpp',
     'WebGLExtensionDebugRendererInfo.cpp',
     'WebGLExtensionDebugShaders.cpp',
     'WebGLExtensionDepthTexture.cpp',
@@ -146,6 +148,7 @@ UNIFIED_SOURCES += [
     'WebGLExtensionFragDepth.cpp',
     'WebGLExtensionInstancedArrays.cpp',
     'WebGLExtensionLoseContext.cpp',
+    'WebGLExtensionMOZDebug.cpp',
     'WebGLExtensionShaderTextureLod.cpp',
     'WebGLExtensionSRGB.cpp',
     'WebGLExtensionStandardDerivatives.cpp',
@@ -186,7 +189,7 @@ SOURCES += [
 ]
 
 # Suppress warnings from third-party code.
-if CONFIG['CLANG_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     SOURCES['MurmurHash3.cpp'].flags += ['-Wno-implicit-fallthrough']
 
 LOCAL_INCLUDES += [
@@ -217,10 +220,5 @@ CXXFLAGS += CONFIG['TK_CFLAGS']
 
 LOCAL_INCLUDES += CONFIG['SKIA_INCLUDES']
 
-if CONFIG['GNU_CXX']:
+if CONFIG['CC_TYPE'] in ('clang', 'gcc'):
     CXXFLAGS += ['-Wno-error=shadow']
-
-if CONFIG['_MSC_VER']:
-    # This is intended as a temporary workaround to unblock compilation
-    # on VS2015 in warnings as errors mode.
-    CXXFLAGS += ['-wd4312']

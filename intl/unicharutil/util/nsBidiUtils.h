@@ -6,7 +6,7 @@
 #ifndef nsBidiUtils_h__
 #define nsBidiUtils_h__
 
-#include "nsStringGlue.h"
+#include "nsString.h"
 
    /**
     *  Read ftp://ftp.unicode.org/Public/UNIDATA/ReadMe-Latest.txt
@@ -18,9 +18,9 @@
     *  and must also match the values used by ICU's UCharDirection.
     */
 
-enum nsCharType   { 
-  eCharType_LeftToRight              = 0, 
-  eCharType_RightToLeft              = 1, 
+enum nsCharType   {
+  eCharType_LeftToRight              = 0,
+  eCharType_RightToLeft              = 1,
   eCharType_EuropeanNumber           = 2,
   eCharType_EuropeanNumberSeparator  = 3,
   eCharType_EuropeanNumberTerminator = 4,
@@ -28,8 +28,8 @@ enum nsCharType   {
   eCharType_CommonNumberSeparator    = 6,
   eCharType_BlockSeparator           = 7,
   eCharType_SegmentSeparator         = 8,
-  eCharType_WhiteSpaceNeutral        = 9, 
-  eCharType_OtherNeutral             = 10, 
+  eCharType_WhiteSpaceNeutral        = 9,
+  eCharType_OtherNeutral             = 10,
   eCharType_LeftToRightEmbedding     = 11,
   eCharType_LeftToRightOverride      = 12,
   eCharType_RightToLeftArabic        = 13,
@@ -147,10 +147,17 @@ typedef enum nsCharType nsCharType;
    }
 
   /**
-   * Give an nsString.
+   * Give a 16-bit (UTF-16) text buffer and length
    * @return true if the string contains right-to-left characters
    */
-   bool HasRTLChars(const nsAString& aString);
+   bool HasRTLChars(const char16_t* aText, uint32_t aLength);
+
+  /**
+   * Convenience function to call the above on an nsAString.
+   */
+   inline bool HasRTLChars(const nsAString& aString) {
+     return HasRTLChars(aString.BeginReading(), aString.Length());
+   }
 
 // These values are shared with Preferences dialog
 //  ------------------

@@ -48,16 +48,18 @@ var models = require("devtools/client/memory/models");
 
 var Immutable = require("devtools/client/shared/vendor/immutable");
 var React = require("devtools/client/shared/vendor/react");
+const dom = require("devtools/client/shared/vendor/react-dom-factories");
 var ReactDOM = require("devtools/client/shared/vendor/react-dom");
-var Heap = React.createFactory(require("devtools/client/memory/components/heap"));
-var CensusTreeItem = React.createFactory(require("devtools/client/memory/components/census-tree-item"));
-var DominatorTreeComponent = React.createFactory(require("devtools/client/memory/components/dominator-tree"));
-var DominatorTreeItem = React.createFactory(require("devtools/client/memory/components/dominator-tree-item"));
-var ShortestPaths = React.createFactory(require("devtools/client/memory/components/shortest-paths"));
-var TreeMap = React.createFactory(require("devtools/client/memory/components/tree-map"));
-var SnapshotListItem = React.createFactory(require("devtools/client/memory/components/snapshot-list-item"));
-var List = React.createFactory(require("devtools/client/memory/components/list"));
-var Toolbar = React.createFactory(require("devtools/client/memory/components/toolbar"));
+var { createFactory } = React;
+var Heap = createFactory(require("devtools/client/memory/components/Heap"));
+var CensusTreeItem = createFactory(require("devtools/client/memory/components/CensusTreeItem"));
+var DominatorTreeComponent = createFactory(require("devtools/client/memory/components/DominatorTree"));
+var DominatorTreeItem = createFactory(require("devtools/client/memory/components/DominatorTreeItem"));
+var ShortestPaths = createFactory(require("devtools/client/memory/components/ShortestPaths"));
+var TreeMap = createFactory(require("devtools/client/memory/components/TreeMap"));
+var SnapshotListItem = createFactory(require("devtools/client/memory/components/SnapshotListItem"));
+var List = createFactory(require("devtools/client/memory/components/List"));
+var Toolbar = createFactory(require("devtools/client/memory/components/Toolbar"));
 
 // All tests are asynchronous.
 SimpleTest.waitForExplicitFinish();

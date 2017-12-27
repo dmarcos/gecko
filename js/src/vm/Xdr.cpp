@@ -31,10 +31,14 @@ template<XDRMode mode>
 void
 XDRState<mode>::postProcessContextErrors(JSContext* cx)
 {
-    if (!cx->helperThread() && cx->isExceptionPending()) {
-        MOZ_ASSERT(resultCode_ == JS::TranscodeResult_Ok);
+    // NOTE: This should only be called on transcode failure. Not all failure
+    // paths call XDRState::fail(...), so we should update resultCode_ if it
+    // doesn't hold a specific transcode error.
+
+    if (resultCode_ & JS::TranscodeResult_Failure)
+        MOZ_ASSERT_IF(!cx->helperThread(), !cx->isExceptionPending());
+    else
         resultCode_ = JS::TranscodeResult_Throw;
-    }
 }
 
 template<XDRMode mode>
@@ -79,8 +83,11 @@ static bool
 VersionCheck(XDRState<mode>* xdr)
 {
     JS::BuildIdCharVector buildId;
-    if (!xdr->cx()->buildIdOp() || !xdr->cx()->buildIdOp()(&buildId))
-        return xdr->fail(JS::TranscodeResult_Failure_BadBuildId);
+    MOZ_ASSERT(xdr->cx()->buildIdOp());
+    if (!xdr->cx()->buildIdOp()(&buildId)) {
+        ReportOutOfMemory(xdr->cx());
+        return xdr->fail(JS::TranscodeResult_Throw);
+    }
     MOZ_ASSERT(!buildId.empty());
 
     uint32_t buildIdLength;
@@ -321,7 +328,7 @@ XDRIncrementalEncoder::endSubTree()
 }
 
 bool
-XDRIncrementalEncoder::linearize()
+XDRIncrementalEncoder::linearize(JS::TranscodeBuffer& buffer)
 {
     if (oom_) {
         ReportOutOfMemory(cx());
@@ -355,7 +362,7 @@ XDRIncrementalEncoder::linearize()
         // buffer which would be serialized.
         MOZ_ASSERT(slice.sliceBegin <= slices_.length());
         MOZ_ASSERT(slice.sliceBegin + slice.sliceLength <= slices_.length());
-        if (!buffer_.append(slices_.begin() + slice.sliceBegin, slice.sliceLength)) {
+        if (!buffer.append(slices_.begin() + slice.sliceBegin, slice.sliceLength)) {
             ReportOutOfMemory(cx());
             return fail(JS::TranscodeResult_Throw);
         }

@@ -7,15 +7,14 @@
 #include "CertBlocklist.h"
 #include "ContentSignatureVerifier.h"
 #include "NSSErrorsService.h"
+#include "PKCS11ModuleDB.h"
 #include "PSMContentListener.h"
 #include "SecretDecoderRing.h"
 #include "TransportSecurityInfo.h"
 #include "mozilla/ModuleUtils.h"
 #include "nsCURILoader.h"
 #include "nsCertOverrideService.h"
-#include "nsCrypto.h"
 #include "nsCryptoHash.h"
-#include "nsDOMCID.h" // For the NS_CRYPTO_CONTRACTID define
 #include "nsDataSignatureVerifier.h"
 #include "nsICategoryManager.h"
 #include "nsKeyModule.h"
@@ -23,7 +22,6 @@
 #include "nsNSSCertificate.h"
 #include "nsNSSCertificateDB.h"
 #include "nsNSSComponent.h"
-#include "nsNSSU2FToken.h"
 #include "nsNSSVersion.h"
 #include "nsNTLMAuthModule.h"
 #include "nsNetCID.h"
@@ -107,11 +105,11 @@ Constructor(nsISupports* aOuter, REFNSIID aIID, void** aResult)
     }
 
     // Forward to the main thread synchronously.
-    mozilla::SyncRunnable::DispatchToThread(mainThread,
-      new SyncRunnable(NS_NewRunnableFunction([&]() {
+    mozilla::SyncRunnable::DispatchToThread(
+      mainThread,
+      new SyncRunnable(NS_NewRunnableFunction("psm::Constructor", [&]() {
         rv = Instantiate<InstanceClass, InitMethod>(aIID, aResult);
-      }))
-    );
+      })));
 
     return rv;
   }
@@ -147,7 +145,6 @@ NS_DEFINE_NAMED_CID(NS_FORMPROCESSOR_CID);
 #ifdef MOZ_XUL
 NS_DEFINE_NAMED_CID(NS_CERTTREE_CID);
 #endif
-NS_DEFINE_NAMED_CID(NS_PKCS11_CID);
 NS_DEFINE_NAMED_CID(NS_CRYPTO_HASH_CID);
 NS_DEFINE_NAMED_CID(NS_CRYPTO_HMAC_CID);
 NS_DEFINE_NAMED_CID(NS_NTLMAUTHMODULE_CID);
@@ -157,7 +154,6 @@ NS_DEFINE_NAMED_CID(NS_DATASIGNATUREVERIFIER_CID);
 NS_DEFINE_NAMED_CID(NS_CONTENTSIGNATUREVERIFIER_CID);
 NS_DEFINE_NAMED_CID(NS_CERTOVERRIDE_CID);
 NS_DEFINE_NAMED_CID(NS_RANDOMGENERATOR_CID);
-NS_DEFINE_NAMED_CID(NS_NSSU2FTOKEN_CID);
 NS_DEFINE_NAMED_CID(NS_SSLSTATUS_CID);
 NS_DEFINE_NAMED_CID(TRANSPORTSECURITYINFO_CID);
 NS_DEFINE_NAMED_CID(NS_NSSERRORSSERVICE_CID);
@@ -166,6 +162,10 @@ NS_DEFINE_NAMED_CID(NS_SECURE_BROWSER_UI_CID);
 NS_DEFINE_NAMED_CID(NS_SITE_SECURITY_SERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_CERT_BLOCKLIST_CID);
 
+// Components that require main thread initialization could cause a deadlock
+// in necko code (bug 1418752). To prevent it we initialize all such components
+// on main thread in advance in net_EnsurePSMInit(). Update that function when
+// new component with ThreadRestriction::MainThreadOnly is added.
 static const mozilla::Module::CIDEntry kNSSCIDs[] = {
   { &kNS_NSSCOMPONENT_CID, false, nullptr, nsNSSComponentConstructor },
   { &kNS_SSLSOCKETPROVIDER_CID, false, nullptr,
@@ -175,7 +175,7 @@ static const mozilla::Module::CIDEntry kNSSCIDs[] = {
   { &kNS_SECRETDECODERRING_CID, false, nullptr,
     Constructor<SecretDecoderRing> },
   { &kNS_PK11TOKENDB_CID, false, nullptr, Constructor<nsPK11TokenDB> },
-  { &kNS_PKCS11MODULEDB_CID, false, nullptr, Constructor<nsPKCS11ModuleDB> },
+  { &kNS_PKCS11MODULEDB_CID, false, nullptr, Constructor<PKCS11ModuleDB> },
   { &kNS_PSMCONTENTLISTEN_CID, false, nullptr, PSMContentListenerConstructor },
   { &kNS_X509CERT_CID, false, nullptr,
     Constructor<nsNSSCertificate, nullptr, ProcessRestriction::AnyProcess> },
@@ -186,7 +186,6 @@ static const mozilla::Module::CIDEntry kNSSCIDs[] = {
 #ifdef MOZ_XUL
   { &kNS_CERTTREE_CID, false, nullptr, Constructor<nsCertTree> },
 #endif
-  { &kNS_PKCS11_CID, false, nullptr, Constructor<nsPkcs11> },
   { &kNS_CRYPTO_HASH_CID, false, nullptr,
     Constructor<nsCryptoHash, nullptr, ProcessRestriction::AnyProcess> },
   { &kNS_CRYPTO_HMAC_CID, false, nullptr,
@@ -207,8 +206,6 @@ static const mozilla::Module::CIDEntry kNSSCIDs[] = {
                 ThreadRestriction::MainThreadOnly> },
   { &kNS_RANDOMGENERATOR_CID, false, nullptr,
     Constructor<nsRandomGenerator, nullptr, ProcessRestriction::AnyProcess> },
-  { &kNS_NSSU2FTOKEN_CID, false, nullptr,
-    Constructor<nsNSSU2FToken, &nsNSSU2FToken::Init> },
   { &kNS_SSLSTATUS_CID, false, nullptr,
     Constructor<nsSSLStatus, nullptr, ProcessRestriction::AnyProcess> },
   { &kTRANSPORTSECURITYINFO_CID, false, nullptr,
@@ -244,7 +241,6 @@ static const mozilla::Module::ContractIDEntry kNSSContracts[] = {
 #ifdef MOZ_XUL
   { NS_CERTTREE_CONTRACTID, &kNS_CERTTREE_CID },
 #endif
-  { NS_PKCS11_CONTRACTID, &kNS_PKCS11_CID },
   { NS_CRYPTO_HASH_CONTRACTID, &kNS_CRYPTO_HASH_CID },
   { NS_CRYPTO_HMAC_CONTRACTID, &kNS_CRYPTO_HMAC_CID },
   { "@mozilla.org/uriloader/psm-external-content-listener;1", &kNS_PSMCONTENTLISTEN_CID },
@@ -255,7 +251,6 @@ static const mozilla::Module::ContractIDEntry kNSSContracts[] = {
   { NS_CONTENTSIGNATUREVERIFIER_CONTRACTID, &kNS_CONTENTSIGNATUREVERIFIER_CID },
   { NS_CERTOVERRIDE_CONTRACTID, &kNS_CERTOVERRIDE_CID },
   { NS_RANDOMGENERATOR_CONTRACTID, &kNS_RANDOMGENERATOR_CID },
-  { NS_NSSU2FTOKEN_CONTRACTID, &kNS_NSSU2FTOKEN_CID },
   { NS_SECURE_BROWSER_UI_CONTRACTID, &kNS_SECURE_BROWSER_UI_CID },
   { NS_SSSERVICE_CONTRACTID, &kNS_SITE_SECURITY_SERVICE_CID },
   { NS_CERTBLOCKLIST_CONTRACTID, &kNS_CERT_BLOCKLIST_CID },

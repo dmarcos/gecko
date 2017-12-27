@@ -3,6 +3,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// This file is loaded into the browser window scope.
+/* eslint-env mozilla/browser-window */
+
 var PointerlockFsWarning = {
 
   _element: null,
@@ -40,14 +43,14 @@ var PointerlockFsWarning = {
 
   showPointerLock(aOrigin) {
     if (!document.fullscreen) {
-      let timeout = gPrefService.getIntPref("pointer-lock-api.warning.timeout");
+      let timeout = Services.prefs.getIntPref("pointer-lock-api.warning.timeout");
       this.show(aOrigin, "pointerlock-warning", timeout, 0);
     }
   },
 
   showFullScreen(aOrigin) {
-    let timeout = gPrefService.getIntPref("full-screen-api.warning.timeout");
-    let delay = gPrefService.getIntPref("full-screen-api.warning.delay");
+    let timeout = Services.prefs.getIntPref("full-screen-api.warning.timeout");
+    let delay = Services.prefs.getIntPref("full-screen-api.warning.delay");
     this.show(aOrigin, "fullscreen-warning", timeout, delay);
   },
 
@@ -75,7 +78,7 @@ var PointerlockFsWarning = {
     if (aOrigin) {
       this._origin = aOrigin;
     }
-    let uri = BrowserUtils.makeURI(this._origin);
+    let uri = Services.io.newURI(this._origin);
     let host = null;
     try {
       host = uri.host;
@@ -253,6 +256,8 @@ var FullScreen = {
   init() {
     // called when we go into full screen, even if initiated by a web page script
     window.addEventListener("fullscreen", this, true);
+    window.addEventListener("willenterfullscreen", this, true);
+    window.addEventListener("willexitfullscreen", this, true);
     window.addEventListener("MozDOMFullscreen:Entered", this,
                             /* useCapture */ true,
                             /* wantsUntrusted */ false);
@@ -272,6 +277,14 @@ var FullScreen = {
       window.messageManager.removeMessageListener(type, this);
     }
     this.cleanup();
+  },
+
+  willToggle(aWillEnterFullscreen) {
+    if (aWillEnterFullscreen) {
+      document.documentElement.setAttribute("inFullscreen", true);
+    } else {
+      document.documentElement.removeAttribute("inFullscreen");
+    }
   },
 
   toggle() {
@@ -345,6 +358,12 @@ var FullScreen = {
 
   handleEvent(event) {
     switch (event.type) {
+      case "willenterfullscreen":
+        this.willToggle(true);
+        break;
+      case "willexitfullscreen":
+        this.willToggle(false);
+        break;
       case "fullscreen":
         this.toggle();
         break;
@@ -510,7 +529,7 @@ var FullScreen = {
   _isPopupOpen: false,
   _isChromeCollapsed: false,
   _safeToCollapse() {
-    if (!gPrefService.getBoolPref("browser.fullscreen.autohide"))
+    if (!Services.prefs.getBoolPref("browser.fullscreen.autohide"))
       return false;
 
     // a popup menu is open in chrome: don't collapse chrome
@@ -554,10 +573,10 @@ var FullScreen = {
 
   // Autohide helpers for the context menu item
   getAutohide(aItem) {
-    aItem.setAttribute("checked", gPrefService.getBoolPref("browser.fullscreen.autohide"));
+    aItem.setAttribute("checked", Services.prefs.getBoolPref("browser.fullscreen.autohide"));
   },
   setAutohide() {
-    gPrefService.setBoolPref("browser.fullscreen.autohide", !gPrefService.getBoolPref("browser.fullscreen.autohide"));
+    Services.prefs.setBoolPref("browser.fullscreen.autohide", !Services.prefs.getBoolPref("browser.fullscreen.autohide"));
     // Try again to hide toolbar when we change the pref.
     FullScreen.hideNavToolbox(true);
   },
@@ -593,7 +612,7 @@ var FullScreen = {
 
     this._fullScrToggler.hidden = false;
 
-    if (aAnimate && gPrefService.getBoolPref("browser.fullscreen.animate")) {
+    if (aAnimate && Services.prefs.getBoolPref("toolkit.cosmeticAnimations.enabled")) {
       gNavToolbox.setAttribute("fullscreenShouldAnimate", true);
       // Hide the fullscreen toggler until the transition ends.
       let listener = () => {
@@ -636,7 +655,8 @@ var FullScreen = {
       }
     }
 
-    ToolbarIconColor.inferFromText();
+    ToolbarIconColor.inferFromText("fullscreen", aEnterFS);
+
 
     // For Lion fullscreen, all fullscreen controls are hidden, don't
     // bother to touch them. If we don't stop here, the following code

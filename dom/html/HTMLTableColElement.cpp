@@ -15,7 +15,7 @@ NS_IMPL_NS_NEW_HTML_ELEMENT(TableCol)
 namespace mozilla {
 namespace dom {
 
-// use the same protection as ancient code did 
+// use the same protection as ancient code did
 // http://lxr.mozilla.org/classic/source/lib/layout/laytable.c#46
 #define MAX_COLSPAN 1000
 
@@ -33,8 +33,9 @@ NS_IMPL_ELEMENT_CLONE(HTMLTableColElement)
 
 bool
 HTMLTableColElement::ParseAttribute(int32_t aNamespaceID,
-                                    nsIAtom* aAttribute,
+                                    nsAtom* aAttribute,
                                     const nsAString& aValue,
+                                    nsIPrincipal* aMaybeScriptedPrincipal,
                                     nsAttrValue& aResult)
 {
   if (aNamespaceID == kNameSpaceID_None) {
@@ -44,7 +45,7 @@ HTMLTableColElement::ParseAttribute(int32_t aNamespaceID,
     }
     if (aAttribute == nsGkAtoms::span) {
       /* protection from unrealistic large colspan values */
-      aResult.ParseIntWithFallback(aValue, 1, MAX_COLSPAN);
+      aResult.ParseClampedNonNegativeInt(aValue, 1, 1, MAX_COLSPAN);
       return true;
     }
     if (aAttribute == nsGkAtoms::width) {
@@ -59,7 +60,7 @@ HTMLTableColElement::ParseAttribute(int32_t aNamespaceID,
   }
 
   return nsGenericHTMLElement::ParseAttribute(aNamespaceID, aAttribute, aValue,
-                                              aResult);
+                                              aMaybeScriptedPrincipal, aResult);
 }
 
 void
@@ -89,7 +90,7 @@ HTMLTableColElement::MapAttributesIntoRule(const nsMappedAttributes* aAttributes
 }
 
 NS_IMETHODIMP_(bool)
-HTMLTableColElement::IsAttributeMapped(const nsIAtom* aAttribute) const
+HTMLTableColElement::IsAttributeMapped(const nsAtom* aAttribute) const
 {
   static const MappedAttributeEntry attributes[] = {
     { &nsGkAtoms::width },

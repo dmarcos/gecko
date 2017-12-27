@@ -3,15 +3,22 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// This header has two implementations, the real one in nsExceptionHandler.cpp
+// and a dummy in nsDummyExceptionHandler.cpp. The latter is used in builds
+// configured with --disable-crashreporter. If you add or remove a function
+// from this header you must update both implementations otherwise you'll break
+// builds that disable the crash reporter.
+
 #ifndef nsExceptionHandler_h__
 #define nsExceptionHandler_h__
 
 #include "mozilla/Assertions.h"
 
+#include <functional>
 #include <stddef.h>
 #include <stdint.h>
 #include "nsError.h"
-#include "nsStringGlue.h"
+#include "nsString.h"
 
 #if defined(XP_WIN32)
 #ifdef WIN32_LEAN_AND_MEAN
@@ -33,6 +40,19 @@ template<class KeyClass, class DataType> class nsDataHashtable;
 class nsCStringHashKey;
 
 namespace CrashReporter {
+
+/**
+ * Returns true if the crash reporter is using the dummy implementation.
+ */
+static inline bool
+IsDummy() {
+#ifdef MOZ_CRASHREPORTER
+  return false;
+#else
+  return true;
+#endif
+}
+
 nsresult SetExceptionHandler(nsIFile* aXREDirectory, bool force=false);
 nsresult UnsetExceptionHandler();
 
@@ -77,21 +97,19 @@ nsresult AppendAppNotesToCrashReport(const nsACString& data);
 
 void AnnotateOOMAllocationSize(size_t size);
 void AnnotateTexturesSize(size_t size);
-void AnnotatePendingIPC(size_t aNumOfPendingIPC,
-                        uint32_t aTopPendingIPCCount,
-                        const char* aTopPendingIPCName,
-                        uint32_t aTopPendingIPCType);
 nsresult SetGarbageCollecting(bool collecting);
 void SetEventloopNestingLevel(uint32_t level);
+void SetMinidumpAnalysisAllThreads();
 
 nsresult SetRestartArgs(int argc, char** argv);
 nsresult SetupExtraData(nsIFile* aAppDataDirectory,
                         const nsACString& aBuildID);
-bool GetLastRunCrashID(nsAString& id);
-
 // Registers an additional memory region to be included in the minidump
 nsresult RegisterAppMemory(void* ptr, size_t length);
 nsresult UnregisterAppMemory(void* ptr);
+
+// Include heap regions of the crash context.
+void SetIncludeContextHeap(bool aValue);
 
 // Functions for working with minidumps and .extras
 typedef nsDataHashtable<nsCStringHashKey, nsCString> AnnotationTable;
@@ -103,7 +121,6 @@ bool GetExtraFileForID(const nsAString& id, nsIFile** extraFile);
 bool GetExtraFileForMinidump(nsIFile* minidump, nsIFile** extraFile);
 bool AppendExtraData(const nsAString& id, const AnnotationTable& data);
 bool AppendExtraData(nsIFile* extraFile, const AnnotationTable& data);
-void RunMinidumpAnalyzer(const nsAString& id);
 
 /*
  * Renames the stand alone dump file aDumpFile to:
@@ -196,11 +213,14 @@ ThreadId CurrentThreadId();
  *   aIncomingDumpToPair.
  * @return bool indicating success or failure
  */
-bool CreateMinidumpsAndPair(ProcessHandle aTargetPid,
-                            ThreadId aTargetBlamedThread,
-                            const nsACString& aIncomingPairName,
-                            nsIFile* aIncomingDumpToPair,
-                            nsIFile** aTargetDumpOut);
+void
+CreateMinidumpsAndPair(ProcessHandle aTargetPid,
+                       ThreadId aTargetBlamedThread,
+                       const nsACString& aIncomingPairName,
+                       nsIFile* aIncomingDumpToPair,
+                       nsIFile** aTargetDumpOut,
+                       std::function<void(bool)>&& aCallback,
+                       bool aAsync);
 
 // Create an additional minidump for a child of a process which already has
 // a minidump (|parentMinidump|).
@@ -210,6 +230,10 @@ bool CreateAdditionalChildMinidump(ProcessHandle childPid,
                                    ThreadId childBlamedThread,
                                    nsIFile* parentMinidump,
                                    const nsACString& name);
+
+// Parent-side API, returns the tmp dir for child processes to use, accounting
+// for sandbox considerations.
+void GetChildProcessTmpDir(nsIFile** aOutTmpDir);
 
 #  if defined(XP_WIN32) || defined(XP_MACOSX)
 // Parent-side API for children
@@ -241,9 +265,9 @@ void UnregisterInjectorCallback(DWORD processID);
 
 // Child-side API
 bool SetRemoteExceptionHandler(const nsACString& crashPipe);
-void InitChildProcessTmpDir();
+void InitChildProcessTmpDir(nsIFile* aDirOverride = nullptr);
 
-#  elif defined(XP_LINUX)
+#  else
 // Parent-side API for children
 
 // Set the outparams for crash reporter server's fd (|childCrashFd|)
@@ -279,6 +303,10 @@ void AddLibraryMapping(const char* library_name,
                        size_t      file_offset);
 
 #endif
+
+// Annotates the crash report with the name of the calling thread.
+void SetCurrentThreadName(const char* aName);
+
 } // namespace CrashReporter
 
 #endif /* nsExceptionHandler_h__ */

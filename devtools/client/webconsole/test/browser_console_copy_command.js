@@ -46,11 +46,11 @@ add_task(function* testCopy() {
                   [obj.toSource(), JSON.stringify(obj, null, "  ")],
     [
       "$('#" + ID + "')",
-      content.document.getElementById(ID).outerHTML
+      gBrowser.contentDocumentAsCPOW.getElementById(ID).outerHTML
     ]
   ];
   for (let [source, reference] of samples) {
-    let deferredResult = promise.defer();
+    let deferredResult = defer();
 
     SimpleTest.waitForClipboard(
       "" + reference,

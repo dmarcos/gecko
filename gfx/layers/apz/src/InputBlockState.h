@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=8 et tw=80 : */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -27,6 +27,7 @@ class TouchBlockState;
 class WheelBlockState;
 class DragBlockState;
 class PanGestureBlockState;
+class KeyboardBlockState;
 
 /**
  * A base class that stores state common to various input blocks.
@@ -53,6 +54,25 @@ public:
   virtual ~InputBlockState()
   {}
 
+  virtual CancelableBlockState* AsCancelableBlock() {
+    return nullptr;
+  }
+  virtual TouchBlockState* AsTouchBlock() {
+    return nullptr;
+  }
+  virtual WheelBlockState* AsWheelBlock() {
+    return nullptr;
+  }
+  virtual DragBlockState* AsDragBlock() {
+    return nullptr;
+  }
+  virtual PanGestureBlockState* AsPanGestureBlock() {
+    return nullptr;
+  }
+  virtual KeyboardBlockState* AsKeyboardBlock() {
+    return nullptr;
+  }
+
   virtual bool SetConfirmedTargetApzc(const RefPtr<AsyncPanZoomController>& aTargetApzc,
                                       TargetConfirmationState aState,
                                       InputData* aFirstInput);
@@ -66,6 +86,18 @@ public:
   void SetScrolledApzc(AsyncPanZoomController* aApzc);
   AsyncPanZoomController* GetScrolledApzc() const;
   bool IsDownchainOfScrolledApzc(AsyncPanZoomController* aApzc) const;
+
+  /**
+   * Dispatch the event to the target APZC. Mostly this is a hook for
+   * subclasses to do any per-event processing they need to.
+   */
+  virtual void DispatchEvent(const InputData& aEvent) const;
+
+  /**
+   * Return true if this input block must stay active if it would otherwise
+   * be removed as the last item in the pending queue.
+   */
+  virtual bool MustStayActive() = 0;
 
 protected:
   virtual void UpdateTargetApzc(const RefPtr<AsyncPanZoomController>& aTargetApzc);
@@ -113,17 +145,8 @@ public:
   CancelableBlockState(const RefPtr<AsyncPanZoomController>& aTargetApzc,
                        bool aTargetConfirmed);
 
-  virtual TouchBlockState *AsTouchBlock() {
-    return nullptr;
-  }
-  virtual WheelBlockState *AsWheelBlock() {
-    return nullptr;
-  }
-  virtual DragBlockState *AsDragBlock() {
-    return nullptr;
-  }
-  virtual PanGestureBlockState *AsPanGestureBlock() {
-    return nullptr;
+  CancelableBlockState* AsCancelableBlock() override {
+    return this;
   }
 
   /**
@@ -165,12 +188,6 @@ public:
   bool IsDefaultPrevented() const;
 
   /**
-   * Dispatch the event to the target APZC. Mostly this is a hook for
-   * subclasses to do any per-event processing they need to.
-   */
-  virtual void DispatchEvent(const InputData& aEvent) const;
-
-  /**
    * @return true iff this block has received all the information it could
    *         have gotten from the content thread.
    */
@@ -181,12 +198,6 @@ public:
    *         to properly dispatch the events in the block.
    */
   virtual bool IsReadyForHandling() const;
-
-  /**
-   * Return true if this input block must stay active if it would otherwise
-   * be removed as the last item in the pending queue.
-   */
-  virtual bool MustStayActive() = 0;
 
   /**
    * Return a descriptive name for the block kind.
@@ -271,6 +282,8 @@ public:
    */
   void Update(ScrollWheelInput& aEvent);
 
+  ScrollDirections GetAllowedScrollDirections() const { return mAllowedScrollDirections; }
+
 protected:
   void UpdateTargetApzc(const RefPtr<AsyncPanZoomController>& aTargetApzc) override;
 
@@ -279,6 +292,7 @@ private:
   TimeStamp mLastMouseMove;
   uint32_t mScrollSeriesCounter;
   bool mTransactionEnded;
+  ScrollDirections mAllowedScrollDirections;
 };
 
 /**
@@ -301,11 +315,13 @@ public:
     return this;
   }
 
+  void SetInitialThumbPos(CSSCoord aThumbPos);
   void SetDragMetrics(const AsyncDragMetrics& aDragMetrics);
 
   void DispatchEvent(const InputData& aEvent) const override;
 private:
   AsyncDragMetrics mDragMetrics;
+  CSSCoord mInitialThumbPos;
   bool mReceivedMouseUp;
 };
 
@@ -341,9 +357,12 @@ public:
 
   void SetNeedsToWaitForContentResponse(bool aWaitForContentResponse);
 
+  ScrollDirections GetAllowedScrollDirections() const { return mAllowedScrollDirections; }
+
 private:
   bool mInterrupted;
   bool mWaitingForContentResponse;
+  ScrollDirections mAllowedScrollDirections;
 };
 
 /**
@@ -475,6 +494,30 @@ private:
   ScreenIntPoint mSlopOrigin;
   // A reference to the InputQueue's touch counter
   TouchCounter& mTouchCounter;
+};
+
+/**
+ * This class represents a set of keyboard inputs targeted at the same Apzc.
+ */
+class KeyboardBlockState : public InputBlockState
+{
+public:
+  explicit KeyboardBlockState(const RefPtr<AsyncPanZoomController>& aTargetApzc);
+
+  KeyboardBlockState* AsKeyboardBlock() override {
+    return this;
+  }
+
+  bool MustStayActive() override {
+    return false;
+  }
+
+  /**
+   * @return Whether or not overscrolling is prevented for this keyboard block.
+   */
+  bool AllowScrollHandoff() const {
+    return false;
+  }
 };
 
 } // namespace layers

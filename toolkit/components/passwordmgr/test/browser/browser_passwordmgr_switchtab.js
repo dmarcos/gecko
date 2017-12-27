@@ -5,10 +5,10 @@
 const PROMPT_URL = "chrome://global/content/commonDialog.xul";
 var { interfaces: Ci } = Components;
 
-add_task(function* test() {
-  yield new Promise(resolve => {
+add_task(async function test() {
+  await new Promise(resolve => {
 
-  let tab = gBrowser.addTab();
+  let tab = BrowserTestUtils.addTab(gBrowser);
   isnot(tab, gBrowser.selectedTab, "New tab shouldn't be selected");
 
   let listener = {
@@ -35,9 +35,7 @@ add_task(function* test() {
     gBrowser.removeTab(tab);
   });
 
-  tab.linkedBrowser.addEventListener("load", () => {
-    finish();
-  }, true);
+  BrowserTestUtils.browserLoaded(tab.linkedBrowser).then(() => finish());
   tab.linkedBrowser.loadURI("http://example.com/browser/toolkit/components/passwordmgr/test/browser/authenticate.sjs");
 
   });

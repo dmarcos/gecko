@@ -24,14 +24,12 @@ function setup_crash() {
   terminator.observe(null, "profile-before-change", null);
 
   dump("Waiting (actively) for the crash\n");
-  while (true) {
-    Services.tm.currentThread.processNextEvent(true);
-  }
+  Services.tm.spinEventLoopUntil(() => false);
 }
 
 
 function after_crash(mdump, extra) {
-  do_print("Crash signature: " + JSON.stringify(extra, null, "\t"));
+  info("Crash signature: " + JSON.stringify(extra, null, "\t"));
   Assert.equal(extra.ShutdownProgress, "profile-before-change");
 }
 

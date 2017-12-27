@@ -20,6 +20,7 @@
 #include "nsString.h"
 #include "nsStringBuffer.h"
 #include "nsDependentString.h"
+#include "nsPrintfCString.h"
 #include "nsMemory.h"
 #include "prprf.h"
 #include "nsStaticAtom.h"
@@ -34,6 +35,19 @@
 #else
 #include <pthread.h>
 #include <unistd.h>
+#endif
+
+#ifdef STRING_BUFFER_CANARY
+#define CHECK_STRING_BUFFER_CANARY(c)                                     \
+  do {                                                                    \
+    if ((c) != CANARY_OK) {                                               \
+      MOZ_CRASH_UNSAFE_PRINTF("Bad canary value %d", c);                  \
+    }                                                                     \
+  } while(0)
+#else
+#define CHECK_STRING_BUFFER_CANARY(c)                                     \
+  do {                                                                    \
+  } while(0)
 #endif
 
 using mozilla::Atomic;
@@ -107,11 +121,11 @@ static nsStringStats gStringStats;
 // ---------------------------------------------------------------------------
 
 void
-ReleaseData(void* aData, uint32_t aFlags)
+ReleaseData(void* aData, nsAString::DataFlags aFlags)
 {
-  if (aFlags & nsSubstring::F_SHARED) {
+  if (aFlags & nsAString::DataFlags::SHARED) {
     nsStringBuffer::FromData(aData)->Release();
-  } else if (aFlags & nsSubstring::F_OWNED) {
+  } else if (aFlags & nsAString::DataFlags::OWNED) {
     free(aData);
     STRING_STAT_INCREMENT(AdoptFree);
     // Treat this as destruction of a "StringAdopt" object for leak
@@ -139,17 +153,15 @@ public:
   {
     return mLength;
   }
-  uint32_t flags() const
+  DataFlags flags() const
   {
-    return mFlags;
+    return mDataFlags;
   }
 
-  void set(char_type* aData, size_type aLen, uint32_t aFlags)
+  void set(char_type* aData, size_type aLen, DataFlags aDataFlags)
   {
-    ReleaseData(mData, mFlags);
-    mData = aData;
-    mLength = aLen;
-    mFlags = aFlags;
+    ReleaseData(mData, mDataFlags);
+    SetData(aData, aLen, aDataFlags);
   }
 };
 
@@ -167,17 +179,15 @@ public:
   {
     return mLength;
   }
-  uint32_t flags() const
+  DataFlags flags() const
   {
-    return mFlags;
+    return mDataFlags;
   }
 
-  void set(char_type* aData, size_type aLen, uint32_t aFlags)
+  void set(char_type* aData, size_type aLen, DataFlags aDataFlags)
   {
-    ReleaseData(mData, mFlags);
-    mData = aData;
-    mLength = aLen;
-    mFlags = aFlags;
+    ReleaseData(mData, mDataFlags);
+    SetData(aData, aLen, aDataFlags);
   }
 };
 
@@ -209,6 +219,8 @@ nsStringBuffer::AddRef()
 void
 nsStringBuffer::Release()
 {
+  CHECK_STRING_BUFFER_CANARY(mCanary);
+
   // Since this may be the last release on this thread, we need
   // release semantics so that prior writes on this thread are visible
   // to the thread that destroys the object when it reads mValue with
@@ -221,6 +233,9 @@ nsStringBuffer::Release()
     // the last release on other threads, that is, to ensure that
     // writes prior to that release are now visible on this thread.
     count = mRefCount.load(std::memory_order_acquire);
+#ifdef STRING_BUFFER_CANARY
+    mCanary = CANARY_POISON;
+#endif
 
     STRING_STAT_INCREMENT(Free);
     free(this); // we were allocated with |malloc|
@@ -245,6 +260,9 @@ nsStringBuffer::Alloc(size_t aSize)
 
     hdr->mRefCount = 1;
     hdr->mStorageSize = aSize;
+#ifdef STRING_BUFFER_CANARY
+    hdr->mCanary = CANARY_OK;
+#endif
     NS_LOG_ADDREF(hdr, 1, "nsStringBuffer", sizeof(*hdr));
   }
   return dont_AddRef(hdr);
@@ -255,6 +273,7 @@ nsStringBuffer::Realloc(nsStringBuffer* aHdr, size_t aSize)
 {
   STRING_STAT_INCREMENT(Realloc);
 
+  CHECK_STRING_BUFFER_CANARY(aHdr->mCanary);
   NS_ASSERTION(aSize != 0, "zero capacity allocation not allowed");
   NS_ASSERTION(sizeof(nsStringBuffer) + aSize <= size_t(uint32_t(-1)) &&
                sizeof(nsStringBuffer) + aSize > aSize,
@@ -283,7 +302,7 @@ nsStringBuffer::FromString(const nsAString& aStr)
   const nsAStringAccessor* accessor =
     static_cast<const nsAStringAccessor*>(&aStr);
 
-  if (!(accessor->flags() & nsSubstring::F_SHARED)) {
+  if (!(accessor->flags() & nsAString::DataFlags::SHARED)) {
     return nullptr;
   }
 
@@ -296,7 +315,7 @@ nsStringBuffer::FromString(const nsACString& aStr)
   const nsACStringAccessor* accessor =
     static_cast<const nsACStringAccessor*>(&aStr);
 
-  if (!(accessor->flags() & nsCSubstring::F_SHARED)) {
+  if (!(accessor->flags() & nsACString::DataFlags::SHARED)) {
     return nullptr;
   }
 
@@ -313,9 +332,8 @@ nsStringBuffer::ToString(uint32_t aLen, nsAString& aStr,
   MOZ_DIAGNOSTIC_ASSERT(data[aLen] == char16_t(0),
                         "data should be null terminated");
 
-  // preserve class flags
-  uint32_t flags = accessor->flags();
-  flags = (flags & 0xFFFF0000) | nsSubstring::F_SHARED | nsSubstring::F_TERMINATED;
+  nsAString::DataFlags flags =
+    nsAString::DataFlags::SHARED | nsAString::DataFlags::TERMINATED;
 
   if (!aMoveOwnership) {
     AddRef();
@@ -333,9 +351,8 @@ nsStringBuffer::ToString(uint32_t aLen, nsACString& aStr,
   MOZ_DIAGNOSTIC_ASSERT(data[aLen] == char(0),
                         "data should be null terminated");
 
-  // preserve class flags
-  uint32_t flags = accessor->flags();
-  flags = (flags & 0xFFFF0000) | nsCSubstring::F_SHARED | nsCSubstring::F_TERMINATED;
+  nsACString::DataFlags flags =
+    nsACString::DataFlags::SHARED | nsACString::DataFlags::TERMINATED;
 
   if (!aMoveOwnership) {
     AddRef();
@@ -355,18 +372,18 @@ nsStringBuffer::SizeOfIncludingThisEvenIfShared(mozilla::MallocSizeOf aMallocSiz
   return aMallocSizeOf(this);
 }
 
+#ifdef STRING_BUFFER_CANARY
+void
+nsStringBuffer::FromDataCanaryCheckFailed() const
+{
+  MOZ_CRASH_UNSAFE_PRINTF("Bad canary value %d in FromData", mCanary);
+}
+#endif
+
 // ---------------------------------------------------------------------------
 
-
-// define nsSubstring
-#include "string-template-def-unichar.h"
+// define nsAString
 #include "nsTSubstring.cpp"
-#include "string-template-undef.h"
-
-// define nsCSubstring
-#include "string-template-def-char.h"
-#include "nsTSubstring.cpp"
-#include "string-template-undef.h"
 
 // Provide rust bindings to the nsA[C]String types
 extern "C" {
@@ -394,6 +411,11 @@ void Gecko_AssignCString(nsACString* aThis, const nsACString* aOther)
   aThis->Assign(*aOther);
 }
 
+void Gecko_TakeFromCString(nsACString* aThis, nsACString* aOther)
+{
+  aThis->Assign(mozilla::Move(*aOther));
+}
+
 void Gecko_AppendCString(nsACString* aThis, const nsACString* aOther)
 {
   aThis->Append(*aOther);
@@ -409,6 +431,11 @@ bool Gecko_FallibleAssignCString(nsACString* aThis, const nsACString* aOther)
   return aThis->Assign(*aOther, mozilla::fallible);
 }
 
+bool Gecko_FallibleTakeFromCString(nsACString* aThis, nsACString* aOther)
+{
+  return aThis->Assign(mozilla::Move(*aOther), mozilla::fallible);
+}
+
 bool Gecko_FallibleAppendCString(nsACString* aThis, const nsACString* aOther)
 {
   return aThis->Append(*aOther, mozilla::fallible);
@@ -419,6 +446,16 @@ bool Gecko_FallibleSetLengthCString(nsACString* aThis, uint32_t aLength)
   return aThis->SetLength(aLength, mozilla::fallible);
 }
 
+char* Gecko_BeginWritingCString(nsACString* aThis)
+{
+  return aThis->BeginWriting();
+}
+
+char* Gecko_FallibleBeginWritingCString(nsACString* aThis)
+{
+  return aThis->BeginWriting(mozilla::fallible);
+}
+
 void Gecko_FinalizeString(nsAString* aThis)
 {
   aThis->~nsAString();
@@ -427,6 +464,11 @@ void Gecko_FinalizeString(nsAString* aThis)
 void Gecko_AssignString(nsAString* aThis, const nsAString* aOther)
 {
   aThis->Assign(*aOther);
+}
+
+void Gecko_TakeFromString(nsAString* aThis, nsAString* aOther)
+{
+  aThis->Assign(mozilla::Move(*aOther));
 }
 
 void Gecko_AppendString(nsAString* aThis, const nsAString* aOther)
@@ -444,6 +486,11 @@ bool Gecko_FallibleAssignString(nsAString* aThis, const nsAString* aOther)
   return aThis->Assign(*aOther, mozilla::fallible);
 }
 
+bool Gecko_FallibleTakeFromString(nsAString* aThis, nsAString* aOther)
+{
+  return aThis->Assign(mozilla::Move(*aOther), mozilla::fallible);
+}
+
 bool Gecko_FallibleAppendString(nsAString* aThis, const nsAString* aOther)
 {
   return aThis->Append(*aOther, mozilla::fallible);
@@ -452,6 +499,16 @@ bool Gecko_FallibleAppendString(nsAString* aThis, const nsAString* aOther)
 bool Gecko_FallibleSetLengthString(nsAString* aThis, uint32_t aLength)
 {
   return aThis->SetLength(aLength, mozilla::fallible);
+}
+
+char16_t* Gecko_BeginWritingString(nsAString* aThis)
+{
+  return aThis->BeginWriting();
+}
+
+char16_t* Gecko_FallibleBeginWritingString(nsAString* aThis)
+{
+  return aThis->BeginWriting(mozilla::fallible);
 }
 
 } // extern "C"

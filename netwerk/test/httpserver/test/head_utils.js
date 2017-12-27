@@ -51,7 +51,7 @@ function makeBIS(stream)
 /**
  * Returns the contents of the file as a string.
  *
- * @param file : nsILocalFile
+ * @param file : nsIFile
  *   the file whose contents are to be read
  * @returns string
  *   the contents of the file
@@ -302,7 +302,7 @@ function runHttpTests(testArray, done)
 
       onStartRequest: function(request, cx)
       {
-        do_check_true(request === this._channel);
+        Assert.ok(request === this._channel);
         var ch = request.QueryInterface(Ci.nsIHttpChannel)
                         .QueryInterface(Ci.nsIHttpChannelInternal);
 
@@ -501,7 +501,7 @@ function runRawTests(testArray, done)
     {
       onInputStreamReady: function(stream)
       {
-        do_check_true(stream === this.stream);
+        Assert.ok(stream === this.stream);
         try
         {
           var bis = new BinaryInputStream(stream);

@@ -29,7 +29,25 @@ TEST_P(TlsConnectGeneric, ServerAuthBigRsa) {
 }
 
 TEST_P(TlsConnectGeneric, ServerAuthRsaChain) {
-  Reset(TlsAgent::kServerRsaChain);
+  Reset("rsa_chain");
+  Connect();
+  CheckKeys();
+  size_t chain_length;
+  EXPECT_TRUE(client_->GetPeerChainLength(&chain_length));
+  EXPECT_EQ(2UL, chain_length);
+}
+
+TEST_P(TlsConnectGeneric, ServerAuthRsaPssChain) {
+  Reset("rsa_pss_chain");
+  Connect();
+  CheckKeys();
+  size_t chain_length;
+  EXPECT_TRUE(client_->GetPeerChainLength(&chain_length));
+  EXPECT_EQ(2UL, chain_length);
+}
+
+TEST_P(TlsConnectGeneric, ServerAuthRsaCARsaPssChain) {
+  Reset("rsa_ca_rsa_pss_chain");
   Connect();
   CheckKeys();
   size_t chain_length;
@@ -141,13 +159,11 @@ TEST_P(TlsConnectTls12, ClientAuthBigRsaCheckSigAlg) {
 
 class TlsZeroCertificateRequestSigAlgsFilter : public TlsHandshakeFilter {
  public:
+  TlsZeroCertificateRequestSigAlgsFilter()
+      : TlsHandshakeFilter({kTlsHandshakeCertificateRequest}) {}
   virtual PacketFilter::Action FilterHandshake(
       const TlsHandshakeFilter::HandshakeHeader& header,
       const DataBuffer& input, DataBuffer* output) {
-    if (header.handshake_type() != kTlsHandshakeCertificateRequest) {
-      return KEEP;
-    }
-
     TlsParser parser(input);
     std::cerr << "Zeroing CertReq.supported_signature_algorithms" << std::endl;
 
@@ -581,8 +597,7 @@ class EnforceNoActivity : public PacketFilter {
 TEST_P(TlsConnectGenericPre13, AuthCompleteDelayed) {
   client_->SetAuthCertificateCallback(AuthCompleteBlock);
 
-  server_->StartConnect();
-  client_->StartConnect();
+  StartConnect();
   client_->Handshake();  // Send ClientHello
   server_->Handshake();  // Send ServerHello
   client_->Handshake();  // Send ClientKeyExchange and Finished
@@ -610,8 +625,7 @@ TEST_P(TlsConnectGenericPre13, AuthCompleteDelayed) {
 TEST_P(TlsConnectTls13, AuthCompleteDelayed) {
   client_->SetAuthCertificateCallback(AuthCompleteBlock);
 
-  server_->StartConnect();
-  client_->StartConnect();
+  StartConnect();
   client_->Handshake();  // Send ClientHello
   server_->Handshake();  // Send ServerHello
   EXPECT_EQ(TlsAgent::STATE_CONNECTING, client_->state());
@@ -716,8 +730,8 @@ TEST_F(TlsAgentStreamTestServer, ConfigureCertRsaPss) {
                                        &ServerCertDataRsaPss));
 }
 
-// mode, version, certificate, auth type, signature scheme
-typedef std::tuple<std::string, uint16_t, std::string, SSLAuthType,
+// variant, version, certificate, auth type, signature scheme
+typedef std::tuple<SSLProtocolVariant, uint16_t, std::string, SSLAuthType,
                    SSLSignatureScheme>
     SignatureSchemeProfile;
 
@@ -778,7 +792,7 @@ TEST_P(TlsSignatureSchemeConfiguration, SignatureSchemeConfigBoth) {
 INSTANTIATE_TEST_CASE_P(
     SignatureSchemeRsa, TlsSignatureSchemeConfiguration,
     ::testing::Combine(
-        TlsConnectTestBase::kTlsModesAll, TlsConnectTestBase::kTlsV12Plus,
+        TlsConnectTestBase::kTlsVariantsAll, TlsConnectTestBase::kTlsV12Plus,
         ::testing::Values(TlsAgent::kServerRsaSign),
         ::testing::Values(ssl_auth_rsa_sign),
         ::testing::Values(ssl_sig_rsa_pkcs1_sha256, ssl_sig_rsa_pkcs1_sha384,
@@ -787,42 +801,42 @@ INSTANTIATE_TEST_CASE_P(
 // PSS with SHA-512 needs a bigger key to work.
 INSTANTIATE_TEST_CASE_P(
     SignatureSchemeBigRsa, TlsSignatureSchemeConfiguration,
-    ::testing::Combine(TlsConnectTestBase::kTlsModesAll,
+    ::testing::Combine(TlsConnectTestBase::kTlsVariantsAll,
                        TlsConnectTestBase::kTlsV12Plus,
                        ::testing::Values(TlsAgent::kRsa2048),
                        ::testing::Values(ssl_auth_rsa_sign),
                        ::testing::Values(ssl_sig_rsa_pss_sha512)));
 INSTANTIATE_TEST_CASE_P(
     SignatureSchemeRsaSha1, TlsSignatureSchemeConfiguration,
-    ::testing::Combine(TlsConnectTestBase::kTlsModesAll,
+    ::testing::Combine(TlsConnectTestBase::kTlsVariantsAll,
                        TlsConnectTestBase::kTlsV12,
                        ::testing::Values(TlsAgent::kServerRsa),
                        ::testing::Values(ssl_auth_rsa_sign),
                        ::testing::Values(ssl_sig_rsa_pkcs1_sha1)));
 INSTANTIATE_TEST_CASE_P(
     SignatureSchemeEcdsaP256, TlsSignatureSchemeConfiguration,
-    ::testing::Combine(TlsConnectTestBase::kTlsModesAll,
+    ::testing::Combine(TlsConnectTestBase::kTlsVariantsAll,
                        TlsConnectTestBase::kTlsV12Plus,
                        ::testing::Values(TlsAgent::kServerEcdsa256),
                        ::testing::Values(ssl_auth_ecdsa),
                        ::testing::Values(ssl_sig_ecdsa_secp256r1_sha256)));
 INSTANTIATE_TEST_CASE_P(
     SignatureSchemeEcdsaP384, TlsSignatureSchemeConfiguration,
-    ::testing::Combine(TlsConnectTestBase::kTlsModesAll,
+    ::testing::Combine(TlsConnectTestBase::kTlsVariantsAll,
                        TlsConnectTestBase::kTlsV12Plus,
                        ::testing::Values(TlsAgent::kServerEcdsa384),
                        ::testing::Values(ssl_auth_ecdsa),
                        ::testing::Values(ssl_sig_ecdsa_secp384r1_sha384)));
 INSTANTIATE_TEST_CASE_P(
     SignatureSchemeEcdsaP521, TlsSignatureSchemeConfiguration,
-    ::testing::Combine(TlsConnectTestBase::kTlsModesAll,
+    ::testing::Combine(TlsConnectTestBase::kTlsVariantsAll,
                        TlsConnectTestBase::kTlsV12Plus,
                        ::testing::Values(TlsAgent::kServerEcdsa521),
                        ::testing::Values(ssl_auth_ecdsa),
                        ::testing::Values(ssl_sig_ecdsa_secp521r1_sha512)));
 INSTANTIATE_TEST_CASE_P(
     SignatureSchemeEcdsaSha1, TlsSignatureSchemeConfiguration,
-    ::testing::Combine(TlsConnectTestBase::kTlsModesAll,
+    ::testing::Combine(TlsConnectTestBase::kTlsVariantsAll,
                        TlsConnectTestBase::kTlsV12,
                        ::testing::Values(TlsAgent::kServerEcdsa256,
                                          TlsAgent::kServerEcdsa384),

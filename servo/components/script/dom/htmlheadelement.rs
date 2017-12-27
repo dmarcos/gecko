@@ -5,8 +5,7 @@
 use dom::bindings::codegen::Bindings::DocumentBinding::DocumentMethods;
 use dom::bindings::codegen::Bindings::HTMLHeadElementBinding;
 use dom::bindings::inheritance::Castable;
-use dom::bindings::js::{Root, RootedReference};
-use dom::bindings::str::DOMString;
+use dom::bindings::root::{DomRoot, RootedReference};
 use dom::document::{Document, determine_policy_for_token};
 use dom::element::Element;
 use dom::htmlelement::HTMLElement;
@@ -15,7 +14,7 @@ use dom::node::{Node, document_from_node};
 use dom::userscripts::load_script;
 use dom::virtualmethods::VirtualMethods;
 use dom_struct::dom_struct;
-use html5ever_atoms::LocalName;
+use html5ever::{LocalName, Prefix};
 
 #[dom_struct]
 pub struct HTMLHeadElement {
@@ -24,7 +23,7 @@ pub struct HTMLHeadElement {
 
 impl HTMLHeadElement {
     fn new_inherited(local_name: LocalName,
-                     prefix: Option<DOMString>,
+                     prefix: Option<Prefix>,
                      document: &Document) -> HTMLHeadElement {
         HTMLHeadElement {
             htmlelement: HTMLElement::new_inherited(local_name, prefix, document)
@@ -33,14 +32,14 @@ impl HTMLHeadElement {
 
     #[allow(unrooted_must_root)]
     pub fn new(local_name: LocalName,
-               prefix: Option<DOMString>,
-               document: &Document) -> Root<HTMLHeadElement> {
-        Node::reflect_node(box HTMLHeadElement::new_inherited(local_name, prefix, document),
+               prefix: Option<Prefix>,
+               document: &Document) -> DomRoot<HTMLHeadElement> {
+        Node::reflect_node(Box::new(HTMLHeadElement::new_inherited(local_name, prefix, document)),
                            document,
                            HTMLHeadElementBinding::Wrap)
     }
 
-    /// https://html.spec.whatwg.org/multipage/#meta-referrer
+    /// <https://html.spec.whatwg.org/multipage/#meta-referrer>
     pub fn set_document_referrer(&self) {
         let doc = document_from_node(self);
 
@@ -50,7 +49,7 @@ impl HTMLHeadElement {
 
         let node = self.upcast::<Node>();
         let candidates = node.traverse_preorder()
-                             .filter_map(Root::downcast::<Element>)
+                             .filter_map(DomRoot::downcast::<Element>)
                              .filter(|elem| elem.is::<HTMLMetaElement>())
                              .filter(|elem| elem.get_string_attribute(&local_name!("name")) == "referrer")
                              .filter(|elem| elem.get_attribute(&ns!(), &local_name!("content")).is_some());

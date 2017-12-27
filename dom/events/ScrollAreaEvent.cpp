@@ -28,14 +28,14 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(ScrollAreaEvent, UIEvent,
 NS_IMPL_ADDREF_INHERITED(ScrollAreaEvent, UIEvent)
 NS_IMPL_RELEASE_INHERITED(ScrollAreaEvent, UIEvent)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ScrollAreaEvent)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ScrollAreaEvent)
 NS_INTERFACE_MAP_END_INHERITING(UIEvent)
 
 void
 ScrollAreaEvent::InitScrollAreaEvent(const nsAString& aEventType,
                                      bool aCanBubble,
                                      bool aCancelable,
-                                     nsGlobalWindow* aView,
+                                     nsGlobalWindowInner* aView,
                                      int32_t aDetail,
                                      float aX,
                                      float aY,

@@ -1,7 +1,3 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-
 from marionette_driver.errors import (
     JavascriptException,
     ScriptTimeoutException,
@@ -93,11 +89,6 @@ marionetteScriptFinished(4);
         self.assertEqual(self.marionette.execute_async_script(
             "marionetteScriptFinished(this.foobar);", new_sandbox=False), [23, 42])
 
-        self.marionette.execute_async_script("global.barfoo = [42, 23];"
-                                             "marionetteScriptFinished();")
-        self.assertEqual(self.marionette.execute_async_script(
-            "marionetteScriptFinished(global.barfoo);", new_sandbox=False), [42, 23])
-
     def test_sandbox_refresh_arguments(self):
         self.marionette.execute_async_script("this.foobar = [arguments[0], arguments[1]];"
                                              "marionetteScriptFinished();",
@@ -105,13 +96,6 @@ marionetteScriptFinished(4);
         self.assertEqual(self.marionette.execute_async_script(
             "marionetteScriptFinished(this.foobar);", new_sandbox=False),
                          [23, 42])
-
-        self.marionette.execute_async_script("global.barfoo = [arguments[0], arguments[1]];"
-                                             "marionetteScriptFinished()",
-                                             script_args=[42, 23], new_sandbox=False)
-        self.assertEqual(self.marionette.execute_async_script(
-            "marionetteScriptFinished(global.barfoo);", new_sandbox=False),
-                         [42, 23])
 
     # Functions defined in higher privilege scopes, such as the privileged
     # content frame script listener.js runs in, cannot be accessed from

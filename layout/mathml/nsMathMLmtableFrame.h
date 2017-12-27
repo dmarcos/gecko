@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,8 +18,9 @@
 // <mtable> -- table or matrix
 //
 
-class nsMathMLmtableWrapperFrame : public nsTableWrapperFrame,
-                                   public nsMathMLFrame
+class nsMathMLmtableWrapperFrame final
+  : public nsTableWrapperFrame
+  , public nsMathMLFrame
 {
 public:
   friend nsContainerFrame*
@@ -26,7 +28,7 @@ public:
                                nsStyleContext* aContext);
 
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsMathMLmtableWrapperFrame)
 
   // overloaded nsTableWrapperFrame methods
 
@@ -38,7 +40,7 @@ public:
 
   virtual nsresult
   AttributeChanged(int32_t  aNameSpaceID,
-                   nsIAtom* aAttribute,
+                   nsAtom* aAttribute,
                    int32_t  aModType) override;
 
   virtual bool IsFrameOfType(uint32_t aFlags) const override
@@ -48,7 +50,9 @@ public:
 
 protected:
   explicit nsMathMLmtableWrapperFrame(nsStyleContext* aContext)
-    : nsTableWrapperFrame(aContext) {}
+    : nsTableWrapperFrame(aContext, kClassID)
+  {}
+
   virtual ~nsMathMLmtableWrapperFrame();
 
   // helper to find the row frame at a given index, positive or negative, e.g.,
@@ -60,12 +64,11 @@ protected:
 
 // --------------
 
-class nsMathMLmtableFrame : public nsTableFrame
+class nsMathMLmtableFrame final : public nsTableFrame
 {
 public:
-  NS_DECL_QUERYFRAME_TARGET(nsMathMLmtableFrame)
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsMathMLmtableFrame)
 
   friend nsContainerFrame*
   NS_NewMathMLmtableFrame(nsIPresShell*   aPresShell,
@@ -155,7 +158,12 @@ public:
 
 protected:
   explicit nsMathMLmtableFrame(nsStyleContext* aContext)
-    : nsTableFrame(aContext) {}
+    : nsTableFrame(aContext, kClassID)
+    , mFrameSpacingX(0)
+    , mFrameSpacingY(0)
+    , mUseCSSSpacing(false)
+  {}
+
   virtual ~nsMathMLmtableFrame();
 
 private:
@@ -168,10 +176,10 @@ private:
 
 // --------------
 
-class nsMathMLmtrFrame : public nsTableRowFrame
+class nsMathMLmtrFrame final : public nsTableRowFrame
 {
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsMathMLmtrFrame)
 
   friend nsContainerFrame*
   NS_NewMathMLmtrFrame(nsIPresShell*   aPresShell,
@@ -181,7 +189,7 @@ public:
 
   virtual nsresult
   AttributeChanged(int32_t  aNameSpaceID,
-                   nsIAtom* aAttribute,
+                   nsAtom* aAttribute,
                    int32_t  aModType) override;
 
   virtual void
@@ -225,7 +233,9 @@ public:
 
 protected:
   explicit nsMathMLmtrFrame(nsStyleContext* aContext)
-    : nsTableRowFrame(aContext) {}
+    : nsTableRowFrame(aContext, kClassID)
+  {}
+
   virtual ~nsMathMLmtrFrame();
 }; // class nsMathMLmtrFrame
 
@@ -234,7 +244,7 @@ protected:
 class nsMathMLmtdFrame : public nsTableCellFrame
 {
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsMathMLmtdFrame)
 
   friend nsContainerFrame*
   NS_NewMathMLmtdFrame(nsIPresShell*   aPresShell,
@@ -249,7 +259,7 @@ public:
 
   virtual nsresult
   AttributeChanged(int32_t  aNameSpaceID,
-                   nsIAtom* aAttribute,
+                   nsAtom* aAttribute,
                    int32_t  aModType) override;
 
   virtual uint8_t GetVerticalAlign() const override;
@@ -257,8 +267,6 @@ public:
                                   nsDisplayListBuilder*   aBuilder,
                                   const nsDisplayListSet& aLists) override;
 
-  virtual int32_t GetRowSpan() override;
-  virtual int32_t GetColSpan() override;
   virtual bool IsFrameOfType(uint32_t aFlags) const override
   {
     return nsTableCellFrame::IsFrameOfType(aFlags & ~(nsIFrame::eMathML));
@@ -270,14 +278,18 @@ public:
 
 protected:
   nsMathMLmtdFrame(nsStyleContext* aContext, nsTableFrame* aTableFrame)
-    : nsTableCellFrame(aContext, aTableFrame) {}
+    : nsTableCellFrame(aContext, aTableFrame, kClassID)
+  {
+  }
+
   virtual ~nsMathMLmtdFrame();
 }; // class nsMathMLmtdFrame
 
 // --------------
 
-class nsMathMLmtdInnerFrame : public nsBlockFrame,
-                              public nsMathMLFrame
+class nsMathMLmtdInnerFrame final
+  : public nsBlockFrame
+  , public nsMathMLFrame
 {
 public:
   friend nsContainerFrame*
@@ -285,7 +297,7 @@ public:
                             nsStyleContext* aContext);
 
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(nsMathMLmtdInnerFrame)
 
   // Overloaded nsIMathMLFrame methods
 

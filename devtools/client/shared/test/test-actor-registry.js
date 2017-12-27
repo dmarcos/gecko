@@ -62,14 +62,12 @@
   // create a front for the given `tab`
   exports.getTestActorWithoutToolbox = Task.async(function* (tab) {
     let { DebuggerServer } = require("devtools/server/main");
-    let { DebuggerClient } = require("devtools/shared/client/main");
+    let { DebuggerClient } = require("devtools/shared/client/debugger-client");
 
     // We need to spawn a client instance,
     // but for that we have to first ensure a server is running
-    if (!DebuggerServer.initialized) {
-      DebuggerServer.init();
-      DebuggerServer.addBrowserActors();
-    }
+    DebuggerServer.init();
+    DebuggerServer.registerAllActors();
     let client = new DebuggerClient(DebuggerServer.connectPipe());
 
     yield client.connect();

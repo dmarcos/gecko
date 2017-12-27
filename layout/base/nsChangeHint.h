@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -16,7 +17,7 @@ struct nsCSSSelector;
 
 // Defines for various style related constants
 
-enum nsChangeHint {
+enum nsChangeHint : uint32_t {
   nsChangeHint_Empty = 0,
 
   // change was visual only (e.g., COLOR=)
@@ -54,8 +55,8 @@ enum nsChangeHint {
    * filter/mask/clip/etc CSS properties changes, causing the element's frame
    * to start/stop referencing (or reference different) SVG resource elements.
    * (_Not_ used to handle changes to referenced resource elements.) Using this
-   * hint results in nsSVGEffects::UpdateEffects being called on the element's
-   * frame.
+   * hint results in SVGObserverUtils::UpdateEffects being called on the
+   * element's frame.
    */
   nsChangeHint_UpdateEffects = 1 << 7,
 
@@ -89,7 +90,7 @@ enum nsChangeHint {
 
   /**
    * The overflow area of the frame and all of its descendants has changed. This
-   * can happen through a text-decoration change.   
+   * can happen through a text-decoration change.
    */
   nsChangeHint_UpdateSubtreeOverflow = 1 << 12,
 
@@ -222,6 +223,28 @@ enum nsChangeHint {
    */
   nsChangeHint_AddOrRemoveTransform = 1 << 27,
 
+  /**
+   * Indicates that the overflow-x and/or overflow-y property changed.
+   *
+   * In most cases, this is equivalent to nsChangeHint_ReconstructFrame. But
+   * in some special cases where the change is really targeting the viewport's
+   * scrollframe, this is instead equivalent to nsChangeHint_AllReflowHints
+   * (because the viewport always has an associated scrollframe).
+   */
+  nsChangeHint_CSSOverflowChange = 1 << 28,
+
+  /**
+   * Indicates that nsIFrame::UpdateWidgetProperties needs to be called.
+   * This is used for -moz-window-* properties.
+   */
+  nsChangeHint_UpdateWidgetProperties = 1 << 29,
+
+  /**
+   *  Indicates that there has been a colspan or rowspan attribute change
+   *  on the cells of a table.
+   */
+  nsChangeHint_UpdateTableCellSpans = 1 << 30,
+
   // IMPORTANT NOTE: When adding a new hint, you will need to add it to
   // one of:
   //
@@ -237,7 +260,7 @@ enum nsChangeHint {
   /**
    * Dummy hint value for all hints. It exists for compile time check.
    */
-  nsChangeHint_AllHints = (1 << 28) - 1,
+  nsChangeHint_AllHints = (1u << 31) - 1,
 };
 
 // Redefine these operators to return nothing. This will catch any use
@@ -326,6 +349,7 @@ inline nsChangeHint operator^=(nsChangeHint& aLeft, nsChangeHint aRight)
 #define nsChangeHint_Hints_NeverHandledForDescendants (    \
   nsChangeHint_BorderStyleNoneChange |                     \
   nsChangeHint_ChildrenOnlyTransform |                     \
+  nsChangeHint_CSSOverflowChange |                         \
   nsChangeHint_InvalidateRenderingObservers |              \
   nsChangeHint_RecomputePosition |                         \
   nsChangeHint_UpdateBackgroundPosition |                  \
@@ -336,9 +360,11 @@ inline nsChangeHint operator^=(nsChangeHint& aLeft, nsChangeHint aRight)
   nsChangeHint_UpdateOverflow |                            \
   nsChangeHint_UpdateParentOverflow |                      \
   nsChangeHint_UpdatePostTransformOverflow |               \
+  nsChangeHint_UpdateTableCellSpans |                          \
   nsChangeHint_UpdateTransformLayer |                      \
   nsChangeHint_UpdateUsesOpacity |                         \
-  nsChangeHint_AddOrRemoveTransform                        \
+  nsChangeHint_AddOrRemoveTransform |                      \
+  nsChangeHint_UpdateWidgetProperties                      \
 )
 
 // The change hints that are sometimes considered to be handled for descendants.
@@ -378,14 +404,58 @@ static_assert(!(nsChangeHint_Hints_AlwaysHandledForDescendants &
                nsChangeHint_ClearAncestorIntrinsics |   \
                nsChangeHint_ClearDescendantIntrinsics | \
                nsChangeHint_NeedDirtyReflow)
+
+// Below are the change hints that we send for ISize & BSize changes.
+// Each is similar to nsChangeHint_AllReflowHints with a few changes.
+
+// * For an ISize change, we send nsChangeHint_AllReflowHints, with two bits
+// excluded: nsChangeHint_ClearDescendantIntrinsics (because an ancestor's
+// inline-size change can't affect descendant intrinsic sizes), and
+// nsChangeHint_NeedDirtyReflow (because ISize changes don't need to *force*
+// all descendants to reflow).
+#define nsChangeHint_ReflowHintsForISizeChange            \
+  nsChangeHint(nsChangeHint_AllReflowHints &              \
+               ~(nsChangeHint_ClearDescendantIntrinsics | \
+                 nsChangeHint_NeedDirtyReflow))
+
+// * For a BSize change, we send almost the same hints as for ISize changes,
+// with one extra: nsChangeHint_UpdateComputedBSize.  We need this hint because
+// BSize changes CAN affect descendant intrinsic sizes, due to replaced
+// elements with percentage BSizes in descendants which also have percentage
+// BSizes. nsChangeHint_UpdateComputedBSize clears intrinsic sizes for frames
+// that have such replaced elements. (We could instead send
+// nsChangeHint_ClearDescendantIntrinsics, but that's broader than we need.)
+//
+// NOTE: You might think that BSize changes could exclude
+// nsChangeHint_ClearAncestorIntrinsics (which is inline-axis specific), but we
+// do need to send it, to clear cached results from CSS Flex measuring reflows.
+#define nsChangeHint_ReflowHintsForBSizeChange            \
+  nsChangeHint((nsChangeHint_AllReflowHints |             \
+                nsChangeHint_UpdateComputedBSize) &       \
+               ~(nsChangeHint_ClearDescendantIntrinsics | \
+                 nsChangeHint_NeedDirtyReflow))
+
+// * For changes to the float area of an already-floated element, we need all
+// reflow hints, but not the ones that apply to descendants.
+// Our descendants aren't impacted when our float area only changes
+// placement but not size/shape. (e.g. if we change which side we float to).
+// But our ancestors/siblings are potentially impacted, so we need to send
+// the non-descendant reflow hints.
+#define nsChangeHint_ReflowHintsForFloatAreaChange            \
+  nsChangeHint(nsChangeHint_AllReflowHints &              \
+               ~(nsChangeHint_ClearDescendantIntrinsics | \
+                 nsChangeHint_NeedDirtyReflow))
+
 #define NS_STYLE_HINT_REFLOW \
   nsChangeHint(NS_STYLE_HINT_VISUAL | nsChangeHint_AllReflowHints)
 
-#define nsChangeHint_Hints_CanIgnoreIfNotVisible   \
-  nsChangeHint(NS_STYLE_HINT_VISUAL |              \
-               nsChangeHint_NeutralChange |        \
-               nsChangeHint_UpdateOpacityLayer |   \
-               nsChangeHint_UpdateTransformLayer | \
+#define nsChangeHint_Hints_CanIgnoreIfNotVisible           \
+  nsChangeHint(NS_STYLE_HINT_VISUAL |                      \
+               nsChangeHint_NeutralChange |                \
+               nsChangeHint_UpdateOpacityLayer |           \
+               nsChangeHint_AddOrRemoveTransform |         \
+               nsChangeHint_UpdatePostTransformOverflow  | \
+               nsChangeHint_UpdateTransformLayer |         \
                nsChangeHint_UpdateUsesOpacity)
 
 // NB: Once we drop support for the old style system, this logic should be
@@ -472,7 +542,7 @@ NS_RemoveSubsumedHints(nsChangeHint aOurChange, nsChangeHint aHintsHandled)
  * NOTE: When adding new restyle hints, please also add them to
  * RestyleManager::RestyleHintToString.
  */
-enum nsRestyleHint {
+enum nsRestyleHint : uint32_t {
   // Rerun selector matching on the element.  If a new style context
   // results, update the style contexts of descendants.  (Irrelevant if
   // eRestyle_Subtree is also set, since that implies a superset of the

@@ -6,13 +6,21 @@
 module.exports = {
   attachRefToHud: () => {},
   emitNewMessage: () => {},
-  hudProxyClient: {},
+  hudProxy: {
+    client: {},
+    releaseActor: actor => console.log("Release actor", actor),
+  },
   onViewSourceInDebugger: () => {},
   onViewSourceInStyleEditor: () => {},
   onViewSourceInScratchpad: () => {},
   openNetworkPanel: () => {},
   sourceMapService: {
     subscribe: () => {},
+    originalPositionFor: () => {
+      return new Promise(resolve => {
+        resolve();
+      });
+    },
   },
   openLink: () => {},
   // eslint-disable-next-line react/display-name

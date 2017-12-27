@@ -116,7 +116,7 @@ BEGIN_TEST(testXDR_source)
         CHECK(script);
         script = FreezeThaw(cx, script);
         CHECK(script);
-        JSString* out = JS_DecompileScript(cx, script, "testing", 0);
+        JSString* out = JS_DecompileScript(cx, script);
         CHECK(out);
         bool equal;
         CHECK(JS_StringEqualsAscii(cx, out, *s, &equal));
@@ -141,8 +141,8 @@ BEGIN_TEST(testXDR_sourceMap)
         CHECK(script);
 
         size_t len = strlen(*sm);
-        JS::UniqueTwoByteChars expected_wrapper(js::InflateString(cx, *sm, &len));
-        char16_t *expected = expected_wrapper.get();
+        JS::UniqueTwoByteChars expected_wrapper(js::InflateString(cx, *sm, len));
+        char16_t* expected = expected_wrapper.get();
         CHECK(expected);
 
         // The script source takes responsibility of free'ing |expected|.

@@ -1,8 +1,8 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
-/* This Source Code is subject to the terms of the Mozilla Public License
- * version 2.0 (the "License"). You can obtain a copy of the License at
- * http://mozilla.org/MPL/2.0/. */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* rendering object for CSS "display: ruby-base-container" */
 
@@ -48,12 +48,6 @@ NS_NewRubyBaseContainerFrame(nsIPresShell* aPresShell,
 // nsRubyBaseContainerFrame Method Implementations
 // ===============================================
 
-nsIAtom*
-nsRubyBaseContainerFrame::GetType() const
-{
-  return nsGkAtoms::rubyBaseContainerFrame;
-}
-
 #ifdef DEBUG_FRAME_DUMP
 nsresult
 nsRubyBaseContainerFrame::GetFrameName(nsAString& aResult) const
@@ -74,7 +68,7 @@ LineBreakBefore(nsIFrame* aFrame,
       // It is not an inline element. We can break before it.
       return gfxBreakPriority::eNormalBreak;
     }
-    if (child->GetType() != nsGkAtoms::textFrame) {
+    if (!child->IsTextFrame()) {
       continue;
     }
 
@@ -85,7 +79,8 @@ LineBreakBefore(nsIFrame* aFrame,
     iter.SetOriginalOffset(textFrame->GetContentOffset());
     uint32_t pos = iter.GetSkippedOffset();
     gfxTextRun* textRun = textFrame->GetTextRun(nsTextFrame::eInflated);
-    if (pos >= textRun->GetLength()) {
+    MOZ_ASSERT(textRun, "fail to build textrun?");
+    if (!textRun || pos >= textRun->GetLength()) {
       // The text frame contains no character at all.
       return gfxBreakPriority::eNoBreak;
     }
@@ -137,7 +132,7 @@ GetIsLineBreakAllowed(nsIFrame* aFrame, bool aIsLineBreakable,
  * happens across the boundary of those frames.
  */
 static nscoord
-CalculateColumnPrefISize(nsRenderingContext* aRenderingContext,
+CalculateColumnPrefISize(gfxContext* aRenderingContext,
                          const RubyColumnEnumerator& aEnumerator,
                          nsIFrame::InlineIntrinsicISizeData* aBaseISizeData)
 {
@@ -173,7 +168,7 @@ CalculateColumnPrefISize(nsRenderingContext* aRenderingContext,
 //       See bug 1134945.
 /* virtual */ void
 nsRubyBaseContainerFrame::AddInlineMinISize(
-  nsRenderingContext *aRenderingContext, nsIFrame::InlineMinISizeData *aData)
+  gfxContext *aRenderingContext, nsIFrame::InlineMinISizeData *aData)
 {
   AutoRubyTextContainerArray textContainers(this);
 
@@ -228,7 +223,7 @@ nsRubyBaseContainerFrame::AddInlineMinISize(
 
 /* virtual */ void
 nsRubyBaseContainerFrame::AddInlinePrefISize(
-  nsRenderingContext *aRenderingContext, nsIFrame::InlinePrefISizeData *aData)
+  gfxContext *aRenderingContext, nsIFrame::InlinePrefISizeData *aData)
 {
   AutoRubyTextContainerArray textContainers(this);
 
@@ -252,8 +247,8 @@ nsRubyBaseContainerFrame::AddInlinePrefISize(
   aData->mCurrentLine += sum;
 }
 
-/* virtual */ bool 
-nsRubyBaseContainerFrame::IsFrameOfType(uint32_t aFlags) const 
+/* virtual */ bool
+nsRubyBaseContainerFrame::IsFrameOfType(uint32_t aFlags) const
 {
   if (aFlags & eSupportsCSSTransforms) {
     return false;
@@ -269,7 +264,7 @@ nsRubyBaseContainerFrame::CanContinueTextRun() const
 }
 
 /* virtual */ LogicalSize
-nsRubyBaseContainerFrame::ComputeSize(nsRenderingContext *aRenderingContext,
+nsRubyBaseContainerFrame::ComputeSize(gfxContext *aRenderingContext,
                                       WritingMode aWM,
                                       const LogicalSize& aCBSize,
                                       nscoord aAvailableISize,
@@ -307,7 +302,7 @@ nsRubyBaseContainerFrame::Reflow(nsPresContext* aPresContext,
   MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsRubyBaseContainerFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowInput, aDesiredSize, aStatus);
-  aStatus.Reset();
+  MOZ_ASSERT(aStatus.IsEmpty(), "Caller should pass a fresh reflow status!");
 
   if (!aReflowInput.mLineLayout) {
     NS_ASSERTION(
@@ -318,12 +313,13 @@ nsRubyBaseContainerFrame::Reflow(nsPresContext* aPresContext,
 
   mDescendantLeadings.Reset();
 
-  MoveOverflowToChildList();
+  nsIFrame* lineContainer = aReflowInput.mLineLayout->LineContainerFrame();
+  MoveInlineOverflowToChildList(lineContainer);
   // Ask text containers to drain overflows
   AutoRubyTextContainerArray textContainers(this);
   const uint32_t rtcCount = textContainers.Length();
   for (uint32_t i = 0; i < rtcCount; i++) {
-    textContainers[i]->MoveOverflowToChildList();
+    textContainers[i]->MoveInlineOverflowToChildList(lineContainer);
   }
 
   WritingMode lineWM = aReflowInput.mLineLayout->GetWritingMode();
@@ -346,6 +342,8 @@ nsRubyBaseContainerFrame::Reflow(nsPresContext* aPresContext,
   bool hasSpan = false;
   for (uint32_t i = 0; i < rtcCount; i++) {
     nsRubyTextContainerFrame* textContainer = textContainers[i];
+    WritingMode rtcWM = textContainer->GetWritingMode();
+    WritingMode reflowWM = lineWM.IsOrthogonalTo(rtcWM) ? rtcWM : lineWM;
     if (textContainer->IsSpanContainer()) {
       hasSpan = true;
     }
@@ -373,7 +371,7 @@ nsRubyBaseContainerFrame::Reflow(nsPresContext* aPresContext,
     // hence leave container size 0 here for now.
     lineLayout->BeginLineReflow(0, 0, reflowInput->ComputedISize(),
                                 NS_UNCONSTRAINEDSIZE,
-                                false, false, lineWM, nsSize(0, 0));
+                                false, false, reflowWM, nsSize(0, 0));
     lineLayout->AttachRootFrameToBaseLineLayout();
   }
 
@@ -547,7 +545,7 @@ nsRubyBaseContainerFrame::ReflowColumns(const RubyReflowInput& aReflowInput,
       baseFrame = nextColumn->mBaseFrame;
     }
     if (baseFrame) {
-      PushChildren(baseFrame, baseFrame->GetPrevSibling());
+      PushChildrenToOverflow(baseFrame, baseFrame->GetPrevSibling());
     }
     for (uint32_t i = 0; i < rtcCount; i++) {
       nsRubyTextFrame* textFrame = column.mTextFrames[i];
@@ -555,8 +553,8 @@ nsRubyBaseContainerFrame::ReflowColumns(const RubyReflowInput& aReflowInput,
         textFrame = nextColumn->mTextFrames[i];
       }
       if (textFrame) {
-        aReflowInput.mTextContainers[i]->PushChildren(
-          textFrame, textFrame->GetPrevSibling());
+        aReflowInput.mTextContainers[i]->
+          PushChildrenToOverflow(textFrame, textFrame->GetPrevSibling());
       }
     }
   } else if (reflowStatus.IsInlineBreakAfter()) {
@@ -726,7 +724,7 @@ nsRubyBaseContainerFrame::PullOneColumn(nsLineLayout* aLineLayout,
   const uint32_t rtcCount = textContainers.Length();
 
   nsIFrame* nextBase = GetNextInFlowChild(aPullFrameState.mBase);
-  MOZ_ASSERT(!nextBase || nextBase->GetType() == nsGkAtoms::rubyBaseFrame);
+  MOZ_ASSERT(!nextBase || nextBase->IsRubyBaseFrame());
   aColumn.mBaseFrame = static_cast<nsRubyBaseFrame*>(nextBase);
   bool foundFrame = !!aColumn.mBaseFrame;
   bool pullingIntraLevelWhitespace =
@@ -736,7 +734,7 @@ nsRubyBaseContainerFrame::PullOneColumn(nsLineLayout* aLineLayout,
   for (uint32_t i = 0; i < rtcCount; i++) {
     nsIFrame* nextText =
       textContainers[i]->GetNextInFlowChild(aPullFrameState.mTexts[i]);
-    MOZ_ASSERT(!nextText || nextText->GetType() == nsGkAtoms::rubyTextFrame);
+    MOZ_ASSERT(!nextText || nextText->IsRubyTextFrame());
     nsRubyTextFrame* textFrame = static_cast<nsRubyTextFrame*>(nextText);
     aColumn.mTextFrames.AppendElement(textFrame);
     foundFrame = foundFrame || nextText;

@@ -21,7 +21,7 @@ using mozilla::UniquePtr;
 // principals to the system principals.
 nsresult
 ReadCachedScript(StartupCache* cache, nsACString& uri, JSContext* cx,
-                 nsIPrincipal* systemPrincipal, MutableHandleScript scriptp)
+                 MutableHandleScript scriptp)
 {
     UniquePtr<char[]> buf;
     uint32_t len;
@@ -44,18 +44,10 @@ ReadCachedScript(StartupCache* cache, nsACString& uri, JSContext* cx,
 }
 
 nsresult
-ReadCachedFunction(StartupCache* cache, nsACString& uri, JSContext* cx,
-                   nsIPrincipal* systemPrincipal, JSFunction** functionp)
-{
-    // This doesn't actually work ...
-    return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-nsresult
 WriteCachedScript(StartupCache* cache, nsACString& uri, JSContext* cx,
-                  nsIPrincipal* systemPrincipal, HandleScript script)
+                  HandleScript script)
 {
-    MOZ_ASSERT(JS_GetScriptPrincipals(script) == nsJSPrincipals::get(systemPrincipal));
+    MOZ_ASSERT(nsJSPrincipals::get(JS_GetScriptPrincipals(script))->GetIsSystemPrincipal());
 
     JS::TranscodeBuffer buffer;
     JS::TranscodeResult code = JS::EncodeScript(cx, buffer, script);
@@ -74,12 +66,4 @@ WriteCachedScript(StartupCache* cache, nsACString& uri, JSContext* cx,
                                    reinterpret_cast<char*>(buffer.begin()),
                                    size);
     return rv;
-}
-
-nsresult
-WriteCachedFunction(StartupCache* cache, nsACString& uri, JSContext* cx,
-                    nsIPrincipal* systemPrincipal, JSFunction* function)
-{
-    // This doesn't actually work ...
-    return NS_ERROR_NOT_IMPLEMENTED;
 }

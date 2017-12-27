@@ -223,7 +223,7 @@ public:
 
     void SetOwner(nsOfflineCacheUpdateOwner *aOwner);
 
-    bool IsForGroupID(const nsCSubstring &groupID);
+    bool IsForGroupID(const nsACString& groupID);
     bool IsForProfile(nsIFile* aCustomProfileDir);
 
     virtual nsresult UpdateFinished(nsOfflineCacheUpdate *aUpdate) override;
@@ -356,8 +356,7 @@ public:
      */
     static nsOfflineCacheUpdateService *EnsureService();
 
-    /** Addrefs and returns the singleton nsOfflineCacheUpdateService. */
-    static nsOfflineCacheUpdateService *GetInstance();
+    static already_AddRefed<nsOfflineCacheUpdateService> GetInstance();
 
     static nsresult OfflineAppPinnedForURI(nsIURI *aDocumentURI,
                                            nsIPrefBranch *aPrefBranch,

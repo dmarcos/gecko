@@ -32,7 +32,7 @@ protected:
 
 public:
   // nsIContent interface
-  NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* name) const override;
+  NS_IMETHOD_(bool) IsAttributeMapped(const nsAtom* name) const override;
 
   // SVGGeometryElement methods:
   virtual bool IsMarkable() override { return true; }
@@ -43,7 +43,8 @@ public:
                                  const Matrix& aToBoundsSpace,
                                  const Matrix* aToNonScalingStrokeSpace = nullptr) override;
 
-  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+                         bool aPreallocateChildren) const override;
 
   // WebIDL
   already_AddRefed<SVGAnimatedLength> X1();

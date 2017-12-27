@@ -7,7 +7,6 @@
 static const unsigned BufferSize = 20;
 static unsigned FinalizeCalls = 0;
 static JSFinalizeStatus StatusBuffer[BufferSize];
-static bool IsZoneGCBuffer[BufferSize];
 
 BEGIN_TEST(testGCFinalizeCallback)
 {
@@ -19,7 +18,6 @@ BEGIN_TEST(testGCFinalizeCallback)
     CHECK(cx->runtime()->gc.isFullGc());
     CHECK(checkSingleGroup());
     CHECK(checkFinalizeStatus());
-    CHECK(checkFinalizeIsZoneGC(false));
 
     /* Full GC, incremental. */
     FinalizeCalls = 0;
@@ -33,7 +31,12 @@ BEGIN_TEST(testGCFinalizeCallback)
     CHECK(cx->runtime()->gc.isFullGc());
     CHECK(checkMultipleGroups());
     CHECK(checkFinalizeStatus());
-    CHECK(checkFinalizeIsZoneGC(false));
+
+#ifdef JS_GC_ZEAL
+    // Bug 1377593 - the below tests want to control how many zones are GC'ing,
+    // and some zeal modes will convert them into all-zones GCs.
+    JS_SetGCZeal(cx, 0, 0);
+#endif
 
     JS::RootedObject global1(cx, createTestGlobal());
     JS::RootedObject global2(cx, createTestGlobal());
@@ -49,7 +52,6 @@ BEGIN_TEST(testGCFinalizeCallback)
     CHECK(!cx->runtime()->gc.isFullGc());
     CHECK(checkSingleGroup());
     CHECK(checkFinalizeStatus());
-    CHECK(checkFinalizeIsZoneGC(true));
 
     /* Zone GC, non-incremental, multiple zones. */
     FinalizeCalls = 0;
@@ -60,7 +62,6 @@ BEGIN_TEST(testGCFinalizeCallback)
     CHECK(!cx->runtime()->gc.isFullGc());
     CHECK(checkSingleGroup());
     CHECK(checkFinalizeStatus());
-    CHECK(checkFinalizeIsZoneGC(true));
 
     /* Zone GC, incremental, single zone. */
     FinalizeCalls = 0;
@@ -74,7 +75,6 @@ BEGIN_TEST(testGCFinalizeCallback)
     CHECK(!cx->runtime()->gc.isFullGc());
     CHECK(checkSingleGroup());
     CHECK(checkFinalizeStatus());
-    CHECK(checkFinalizeIsZoneGC(true));
 
     /* Zone GC, incremental, multiple zones. */
     FinalizeCalls = 0;
@@ -92,7 +92,6 @@ BEGIN_TEST(testGCFinalizeCallback)
     CHECK(!cx->runtime()->gc.isFullGc());
     CHECK(checkMultipleGroups());
     CHECK(checkFinalizeStatus());
-    CHECK(checkFinalizeIsZoneGC(true));
 
 #ifdef JS_GC_ZEAL
 
@@ -112,13 +111,8 @@ BEGIN_TEST(testGCFinalizeCallback)
     while (cx->runtime()->gc.isIncrementalGCInProgress())
         cx->runtime()->gc.debugGCSlice(budget);
     CHECK(!cx->runtime()->gc.isIncrementalGCInProgress());
-    CHECK(!cx->runtime()->gc.isFullGc());
     CHECK(checkMultipleGroups());
     CHECK(checkFinalizeStatus());
-
-    for (unsigned i = 0; i < FinalizeCalls - 1; ++i)
-        CHECK(!IsZoneGCBuffer[i]);
-    CHECK(IsZoneGCBuffer[FinalizeCalls - 1]);
 
     JS_SetGCZeal(cx, 0, 0);
 
@@ -160,15 +154,15 @@ virtual void uninit() override
 bool checkSingleGroup()
 {
     CHECK(FinalizeCalls < BufferSize);
-    CHECK(FinalizeCalls == 3);
+    CHECK(FinalizeCalls == 4);
     return true;
 }
 
 bool checkMultipleGroups()
 {
     CHECK(FinalizeCalls < BufferSize);
-    CHECK(FinalizeCalls % 2 == 1);
-    CHECK((FinalizeCalls - 1) / 2 > 1);
+    CHECK(FinalizeCalls % 3 == 1);
+    CHECK((FinalizeCalls - 1) / 3 > 1);
     return true;
 }
 
@@ -180,9 +174,10 @@ bool checkFinalizeStatus()
      * and then once more with JSFINALIZE_COLLECTION_END.
      */
 
-    for (unsigned i = 0; i < FinalizeCalls - 1; i += 2) {
-        CHECK(StatusBuffer[i] == JSFINALIZE_GROUP_START);
-        CHECK(StatusBuffer[i + 1] == JSFINALIZE_GROUP_END);
+    for (unsigned i = 0; i < FinalizeCalls - 1; i += 3) {
+        CHECK(StatusBuffer[i] == JSFINALIZE_GROUP_PREPARE);
+        CHECK(StatusBuffer[i + 1] == JSFINALIZE_GROUP_START);
+        CHECK(StatusBuffer[i + 2] == JSFINALIZE_GROUP_END);
     }
 
     CHECK(StatusBuffer[FinalizeCalls - 1] == JSFINALIZE_COLLECTION_END);
@@ -190,21 +185,11 @@ bool checkFinalizeStatus()
     return true;
 }
 
-bool checkFinalizeIsZoneGC(bool isZoneGC)
-{
-    for (unsigned i = 0; i < FinalizeCalls; ++i)
-        CHECK(IsZoneGCBuffer[i] == isZoneGC);
-
-    return true;
-}
-
 static void
-FinalizeCallback(JSFreeOp* fop, JSFinalizeStatus status, bool isZoneGC, void* data)
+FinalizeCallback(JSFreeOp* fop, JSFinalizeStatus status, void* data)
 {
-    if (FinalizeCalls < BufferSize) {
+    if (FinalizeCalls < BufferSize)
         StatusBuffer[FinalizeCalls] = status;
-        IsZoneGCBuffer[FinalizeCalls] = isZoneGC;
-    }
     ++FinalizeCalls;
 }
 END_TEST(testGCFinalizeCallback)

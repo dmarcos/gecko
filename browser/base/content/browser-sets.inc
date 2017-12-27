@@ -31,10 +31,10 @@
     <command id="cmd_pageSetup" oncommand="PrintUtils.showPageSetup();"/>
     <command id="cmd_print" oncommand="PrintUtils.printWindow(window.gBrowser.selectedBrowser.outerWindowID, window.gBrowser.selectedBrowser);"/>
     <command id="cmd_printPreview" oncommand="PrintUtils.printPreview(PrintPreviewListener);"/>
-    <command id="cmd_close" oncommand="BrowserCloseTabOrWindow()"/>
+    <command id="cmd_close" oncommand="BrowserCloseTabOrWindow(event);"/>
     <command id="cmd_closeWindow" oncommand="BrowserTryToCloseWindow()"/>
     <command id="cmd_toggleMute" oncommand="gBrowser.selectedTab.toggleMuteAudio()"/>
-    <command id="cmd_CustomizeToolbars" oncommand="BrowserCustomizeToolbar()"/>
+    <command id="cmd_CustomizeToolbars" oncommand="gCustomizeMode.enter()"/>
     <command id="cmd_quitApplication" oncommand="goQuitApplication()"/>
 
 
@@ -58,7 +58,7 @@
 #endif
     <!-- work-around bug 392512 -->
     <command id="Browser:AddBookmarkAs"
-             oncommand="PlacesCommandHook.bookmarkCurrentPage(true, PlacesUtils.bookmarksMenuFolderId);"/>
+             oncommand="PlacesCommandHook.bookmarkPage(gBrowser.selectedBrowser, true);"/>
     <!-- The command disabled state must be manually updated through
          PlacesCommandHook.updateBookmarkAllTabsCommand() -->
     <command id="Browser:BookmarkAllTabs"
@@ -93,7 +93,7 @@
     <command id="Browser:OpenLocation" oncommand="openLocation();"/>
     <command id="Browser:RestoreLastSession" oncommand="restoreLastSession();" disabled="true"/>
     <command id="Browser:NewUserContextTab" oncommand="openNewUserContextTab(event.sourceEvent);"/>
-    <command id="Browser:OpenAboutContainers" oncommand="openPreferences('paneContainers');"/>
+    <command id="Browser:OpenAboutContainers" oncommand="openPreferences('paneContainers', {origin: 'ContainersCommand'});"/>
 
     <command id="Tools:Search" oncommand="BrowserSearch.webSearch();"/>
     <command id="Tools:Downloads" oncommand="BrowserDownloadsUI();"/>
@@ -102,14 +102,8 @@
      oncommand="Cc['@mozilla.org/browser/browserglue;1'].getService(Ci.nsIBrowserGlue).sanitize(window);"/>
     <command id="Tools:PrivateBrowsing"
       oncommand="OpenBrowserWindow({private: true});"/>
-#ifdef E10S_TESTING_ONLY
-    <command id="Tools:NonRemoteWindow"
-      oncommand="OpenBrowserWindow({remote: false});"/>
-#endif
     <command id="History:UndoCloseTab" oncommand="undoCloseTab();"/>
     <command id="History:UndoCloseWindow" oncommand="undoCloseWindow();"/>
-    <command id="Social:SharePage" oncommand="SocialShare.sharePage();"/>
-    <command id="Social:Addons" oncommand="BrowserOpenAddonsMgr('addons://list/service');"/>
   </commandset>
 
   <commandset id="placesCommands">
@@ -120,7 +114,6 @@
   </commandset>
 
   <broadcasterset id="mainBroadcasterSet">
-    <broadcaster id="Social:PageShareable" disabled="true"/>
     <broadcaster id="viewBookmarksSidebar" autoCheck="false" label="&bookmarksButton.label;"
                  type="checkbox" group="sidebar" sidebarurl="chrome://browser/content/bookmarks/bookmarksPanel.xul"
                  oncommand="SidebarUI.toggle('viewBookmarksSidebar');"/>
@@ -173,6 +166,7 @@
     <!-- broadcasters of the "hidden" attribute to reflect setup state for
          menus -->
     <broadcaster id="sync-setup-state"/>
+    <broadcaster id="sync-unverified-state" hidden="true"/>
     <broadcaster id="sync-syncnow-state" hidden="true"/>
     <broadcaster id="sync-reauth-state" hidden="true"/>
     <broadcaster id="viewTabsSidebar" autoCheck="false" sidebartitle="&syncedTabs.sidebar.label;"
@@ -288,6 +282,9 @@
     <key key="&reloadCmd.commandkey;" command="Browser:Reload" modifiers="accel" id="key_reload"/>
     <key key="&reloadCmd.commandkey;" command="Browser:ReloadSkipCache" modifiers="accel,shift"/>
     <key id="key_viewSource" key="&pageSourceCmd.commandkey;" command="View:PageSource" modifiers="accel"/>
+#ifdef XP_MACOSX
+    <key id="key_viewSourceSafari" key="&pageSourceCmd.SafariCommandKey;" command="View:PageSource" modifiers="accel,alt"/>
+#endif
 #ifndef XP_WIN
     <key id="key_viewInfo"   key="&pageInfoCmd.commandkey;"   command="View:PageInfo"   modifiers="accel"/>
 #endif
@@ -347,10 +344,20 @@
     <key id="key_sanitize" command="Tools:Sanitize" keycode="VK_DELETE" modifiers="accel,shift"/>
 #ifdef XP_MACOSX
     <key id="key_sanitize_mac" command="Tools:Sanitize" keycode="VK_BACK" modifiers="accel,shift"/>
-    <key id="key_quitApplication" key="&quitApplicationCmdUnix.key;" modifiers="accel" reserved="true"/>
-#elifdef XP_UNIX
-    <key id="key_quitApplication" key="&quitApplicationCmdUnix.key;" command="cmd_quitApplication" modifiers="accel" reserved="true"/>
 #endif
+    <key id="key_quitApplication" key="&quitApplicationCmd.key;"
+#ifdef XP_WIN
+         modifiers="accel,shift"
+#else
+         modifiers="accel"
+#endif
+# On OS X, dark voodoo magic invokes the quit code for this key.
+# So we're not adding the attribute on OSX because of backwards/add-on compat.
+# See bug 1369909 for background on this.
+#ifndef XP_MACOSX
+         command="cmd_quitApplication"
+#endif
+         reserved="true"/>
 
 #ifdef FULL_BROWSER_WINDOW
     <key id="key_undoCloseTab" command="History:UndoCloseTab" key="&tabCmd.commandkey;" modifiers="accel,shift"/>

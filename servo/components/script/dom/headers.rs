@@ -2,12 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use dom::bindings::cell::DOMRefCell;
+use dom::bindings::cell::DomRefCell;
 use dom::bindings::codegen::Bindings::HeadersBinding::{HeadersInit, HeadersMethods, HeadersWrap};
 use dom::bindings::error::{Error, ErrorResult, Fallible};
 use dom::bindings::iterable::Iterable;
-use dom::bindings::js::Root;
 use dom::bindings::reflector::{Reflector, reflect_dom_object};
+use dom::bindings::root::DomRoot;
 use dom::bindings::str::{ByteString, is_token};
 use dom::globalscope::GlobalScope;
 use dom_struct::dom_struct;
@@ -21,12 +21,12 @@ use std::str;
 pub struct Headers {
     reflector_: Reflector,
     guard: Cell<Guard>,
-    #[ignore_heap_size_of = "Defined in hyper"]
-    header_list: DOMRefCell<HyperHeaders>
+    #[ignore_malloc_size_of = "Defined in hyper"]
+    header_list: DomRefCell<HyperHeaders>
 }
 
 // https://fetch.spec.whatwg.org/#concept-headers-guard
-#[derive(Copy, Clone, JSTraceable, HeapSizeOf, PartialEq)]
+#[derive(Clone, Copy, JSTraceable, MallocSizeOf, PartialEq)]
 pub enum Guard {
     Immutable,
     Request,
@@ -40,19 +40,19 @@ impl Headers {
         Headers {
             reflector_: Reflector::new(),
             guard: Cell::new(Guard::None),
-            header_list: DOMRefCell::new(HyperHeaders::new()),
+            header_list: DomRefCell::new(HyperHeaders::new()),
         }
     }
 
-    pub fn new(global: &GlobalScope) -> Root<Headers> {
-        reflect_dom_object(box Headers::new_inherited(), global, HeadersWrap)
+    pub fn new(global: &GlobalScope) -> DomRoot<Headers> {
+        reflect_dom_object(Box::new(Headers::new_inherited()), global, HeadersWrap)
     }
 
     // https://fetch.spec.whatwg.org/#dom-headers
     pub fn Constructor(global: &GlobalScope, init: Option<HeadersInit>)
-                       -> Fallible<Root<Headers>> {
+                       -> Fallible<DomRoot<Headers>> {
         let dom_headers_new = Headers::new(global);
-        try!(dom_headers_new.fill(init));
+        dom_headers_new.fill(init)?;
         Ok(dom_headers_new)
     }
 }
@@ -63,7 +63,7 @@ impl HeadersMethods for Headers {
         // Step 1
         let value = normalize_value(value);
         // Step 2
-        let (mut valid_name, valid_value) = try!(validate_name_and_value(name, value));
+        let (mut valid_name, valid_value) = validate_name_and_value(name, value)?;
         valid_name = valid_name.to_lowercase();
         // Step 3
         if self.guard.get() == Guard::Immutable {
@@ -95,7 +95,7 @@ impl HeadersMethods for Headers {
     // https://fetch.spec.whatwg.org/#dom-headers-delete
     fn Delete(&self, name: ByteString) -> ErrorResult {
         // Step 1
-        let valid_name = try!(validate_name(name));
+        let valid_name = validate_name(name)?;
         // Step 2
         if self.guard.get() == Guard::Immutable {
             return Err(Error::Type("Guard is immutable".to_string()));
@@ -121,7 +121,7 @@ impl HeadersMethods for Headers {
     // https://fetch.spec.whatwg.org/#dom-headers-get
     fn Get(&self, name: ByteString) -> Fallible<Option<ByteString>> {
         // Step 1
-        let valid_name = &try!(validate_name(name));
+        let valid_name = &validate_name(name)?;
         Ok(self.header_list.borrow().get_raw(&valid_name).map(|v| {
             ByteString::new(v[0].clone())
         }))
@@ -130,7 +130,7 @@ impl HeadersMethods for Headers {
     // https://fetch.spec.whatwg.org/#dom-headers-has
     fn Has(&self, name: ByteString) -> Fallible<bool> {
         // Step 1
-        let valid_name = try!(validate_name(name));
+        let valid_name = validate_name(name)?;
         // Step 2
         Ok(self.header_list.borrow_mut().get_raw(&valid_name).is_some())
     }
@@ -140,7 +140,7 @@ impl HeadersMethods for Headers {
         // Step 1
         let value = normalize_value(value);
         // Step 2
-        let (mut valid_name, valid_value) = try!(validate_name_and_value(name, value));
+        let (mut valid_name, valid_value) = validate_name_and_value(name, value)?;
         valid_name = valid_name.to_lowercase();
         // Step 3
         if self.guard.get() == Guard::Immutable {
@@ -172,10 +172,10 @@ impl Headers {
             // Step 1
             Some(HeadersInit::Headers(h)) => {
                 for header in h.header_list.borrow().iter() {
-                    try!(self.Append(
+                    self.Append(
                         ByteString::new(Vec::from(header.name())),
                         ByteString::new(Vec::from(header.value_string().into_bytes()))
-                    ));
+                    )?;
                 }
                 Ok(())
             },
@@ -185,7 +185,7 @@ impl Headers {
                     if seq.len() == 2 {
                         let val = seq.pop().unwrap();
                         let name = seq.pop().unwrap();
-                        try!(self.Append(name, val));
+                        self.Append(name, val)?;
                     } else {
                         return Err(Error::Type(
                             format!("Each header object must be a sequence of length 2 - found one with length {}",
@@ -194,11 +194,11 @@ impl Headers {
                 }
                 Ok(())
             },
-            Some(HeadersInit::ByteStringMozMap(m)) => {
+            Some(HeadersInit::StringByteStringRecord(m)) => {
                 for (key, value) in m.iter() {
                     let key_vec = key.as_ref().to_string().into();
                     let headers_key = ByteString::new(key_vec);
-                    try!(self.Append(headers_key, value.clone()));
+                    self.Append(headers_key, value.clone())?;
                 }
                 Ok(())
             },
@@ -206,13 +206,13 @@ impl Headers {
         }
     }
 
-    pub fn for_request(global: &GlobalScope) -> Root<Headers> {
+    pub fn for_request(global: &GlobalScope) -> DomRoot<Headers> {
         let headers_for_request = Headers::new(global);
         headers_for_request.guard.set(Guard::Request);
         headers_for_request
     }
 
-    pub fn for_response(global: &GlobalScope) -> Root<Headers> {
+    pub fn for_response(global: &GlobalScope) -> DomRoot<Headers> {
         let headers_for_response = Headers::new(global);
         headers_for_response.guard.set(Guard::Response);
         headers_for_response
@@ -232,6 +232,12 @@ impl Headers {
 
     pub fn set_headers(&self, hyper_headers: HyperHeaders) {
         *self.header_list.borrow_mut() = hyper_headers;
+    }
+
+    pub fn get_headers_list(&self) -> HyperHeaders {
+        let mut headers = HyperHeaders::new();
+        headers.extend(self.header_list.borrow_mut().iter());
+        headers
     }
 
     // https://fetch.spec.whatwg.org/#concept-header-extract-mime-type
@@ -360,7 +366,7 @@ pub fn is_forbidden_header_name(name: &str) -> bool {
 // [4] https://www.rfc-editor.org/errata_search.php?rfc=7230
 fn validate_name_and_value(name: ByteString, value: ByteString)
                            -> Fallible<(String, Vec<u8>)> {
-    let valid_name = try!(validate_name(name));
+    let valid_name = validate_name(name)?;
     if !is_field_content(&value) {
         return Err(Error::Type("Value is not valid".to_string()));
     }

@@ -6,10 +6,10 @@
 
 use gecko_bindings::structs;
 use gecko_bindings::sugar::ownership::HasArcFFI;
-use std::{mem, ptr};
+use servo_arc::Arc;
+use std::{fmt, mem, ptr};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
 
 /// Trait for all objects that have Addref() and Release
 /// methods and can be placed inside RefPtr<T>
@@ -25,10 +25,17 @@ pub unsafe trait ThreadSafeRefCounted: RefCounted {}
 
 /// A custom RefPtr implementation to take into account Drop semantics and
 /// a bit less-painful memory management.
-#[derive(Debug)]
 pub struct RefPtr<T: RefCounted> {
     ptr: *mut T,
     _marker: PhantomData<T>,
+}
+
+impl<T: RefCounted> fmt::Debug for RefPtr<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("RefPtr { ")?;
+        self.ptr.fmt(f)?;
+        f.write_str("}")
+    }
 }
 
 /// A RefPtr that we know is uniquely owned.
@@ -85,6 +92,7 @@ impl<T: RefCounted> RefPtr<T> {
     pub fn forget(self) -> structs::RefPtr<T> {
         let ret = structs::RefPtr {
             mRawPtr: self.ptr,
+            _phantom_0: PhantomData,
         };
         mem::forget(self);
         ret
@@ -210,7 +218,7 @@ impl<T> structs::RefPtr<T> {
     /// Sets the contents to an Arc<T>
     /// will leak existing contents
     pub fn set_arc_leaky<U>(&mut self, other: Arc<U>) where U: HasArcFFI<FFIType = T> {
-        *self = unsafe { mem::transmute(other) }; // Arc::into_raw is unstable :(
+        *self = unsafe { mem::transmute(Arc::into_raw_offset(other)) };
     }
 }
 
@@ -254,6 +262,8 @@ macro_rules! impl_refcount {
 
 impl_refcount!(::gecko_bindings::structs::nsCSSFontFaceRule,
                Gecko_CSSFontFaceRule_AddRef, Gecko_CSSFontFaceRule_Release);
+impl_refcount!(::gecko_bindings::structs::nsCSSCounterStyleRule,
+               Gecko_CSSCounterStyleRule_AddRef, Gecko_CSSCounterStyleRule_Release);
 
 // Companion of NS_DECL_THREADSAFE_FFI_REFCOUNTING.
 //
@@ -277,3 +287,13 @@ impl_threadsafe_refcount!(::gecko_bindings::structs::nsCSSValueSharedList,
 impl_threadsafe_refcount!(::gecko_bindings::structs::mozilla::css::URLValue,
                           Gecko_AddRefCSSURLValueArbitraryThread,
                           Gecko_ReleaseCSSURLValueArbitraryThread);
+impl_threadsafe_refcount!(::gecko_bindings::structs::mozilla::css::GridTemplateAreasValue,
+                          Gecko_AddRefGridTemplateAreasValueArbitraryThread,
+                          Gecko_ReleaseGridTemplateAreasValueArbitraryThread);
+impl_threadsafe_refcount!(::gecko_bindings::structs::ImageValue,
+                          Gecko_AddRefImageValueArbitraryThread,
+                          Gecko_ReleaseImageValueArbitraryThread);
+impl_threadsafe_refcount!(::gecko_bindings::structs::SharedFontList,
+                          Gecko_AddRefSharedFontListArbitraryThread,
+                          Gecko_ReleaseSharedFontListArbitraryThread);
+

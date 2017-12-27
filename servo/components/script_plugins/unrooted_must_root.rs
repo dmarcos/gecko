@@ -55,6 +55,7 @@ fn is_unrooted_ty(cx: &LateContext, ty: &ty::TyS, in_new_function: bool) -> bool
                         || match_def_path(cx, did.did, &["std", "collections", "hash", "map", "Entry"])
                         || match_def_path(cx, did.did, &["std", "collections", "hash", "map", "OccupiedEntry"])
                         || match_def_path(cx, did.did, &["std", "collections", "hash", "map", "VacantEntry"])
+                        || match_def_path(cx, did.did, &["std", "collections", "hash", "map", "Iter"])
                         || match_def_path(cx, did.did, &["std", "collections", "hash", "set", "Iter"]) {
                     // Structures which are semantically similar to an &ptr.
                     false
@@ -95,7 +96,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UnrootedPass {
         if item.attrs.iter().all(|a| !a.check_name("must_root")) {
             for ref field in def.fields() {
                 let def_id = cx.tcx.hir.local_def_id(field.id);
-                if is_unrooted_ty(cx, cx.tcx.item_type(def_id), false) {
+                if is_unrooted_ty(cx, cx.tcx.type_of(def_id), false) {
                     cx.span_lint(UNROOTED_MUST_ROOT, field.span,
                                  "Type must be rooted, use #[must_root] on the struct definition to propagate")
                 }
@@ -111,7 +112,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UnrootedPass {
                 hir::VariantData::Tuple(ref fields, _) => {
                     for ref field in fields {
                         let def_id = cx.tcx.hir.local_def_id(field.id);
-                        if is_unrooted_ty(cx, cx.tcx.item_type(def_id), false) {
+                        if is_unrooted_ty(cx, cx.tcx.type_of(def_id), false) {
                             cx.span_lint(UNROOTED_MUST_ROOT, field.ty.span,
                                          "Type must be rooted, use #[must_root] on \
                                           the enum definition to propagate")
@@ -140,16 +141,16 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UnrootedPass {
 
         if !in_derive_expn(span) {
             let def_id = cx.tcx.hir.local_def_id(id);
-            let ty = cx.tcx.item_type(def_id);
+            let sig = cx.tcx.type_of(def_id).fn_sig(cx.tcx);
 
-            for (arg, ty) in decl.inputs.iter().zip(ty.fn_args().0.iter()) {
+            for (arg, ty) in decl.inputs.iter().zip(sig.inputs().0.iter()) {
                 if is_unrooted_ty(cx, ty, false) {
                     cx.span_lint(UNROOTED_MUST_ROOT, arg.span, "Type must be rooted")
                 }
             }
 
             if !in_new_function {
-                if is_unrooted_ty(cx, ty.fn_ret().0, false) {
+                if is_unrooted_ty(cx, sig.output().0, false) {
                     cx.span_lint(UNROOTED_MUST_ROOT, decl.output.span(), "Type must be rooted")
                 }
             }
@@ -163,7 +164,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for UnrootedPass {
     }
 }
 
-struct FnDefVisitor<'a, 'b: 'a, 'tcx: 'a+'b> {
+struct FnDefVisitor<'a, 'b: 'a, 'tcx: 'a + 'b> {
     cx: &'a LateContext<'b, 'tcx>,
     in_new_function: bool,
 }
@@ -182,15 +183,15 @@ impl<'a, 'b, 'tcx> visit::Visitor<'tcx> for FnDefVisitor<'a, 'b, 'tcx> {
         }
 
         match expr.node {
-            /// Trait casts from #[must_root] types are not allowed
+            // Trait casts from #[must_root] types are not allowed
             hir::ExprCast(ref subexpr, _) => require_rooted(cx, self.in_new_function, &*subexpr),
             // This catches assignments... the main point of this would be to catch mutable
             // references to `JS<T>`.
-            // FIXME: Enable this? Triggers on certain kinds of uses of DOMRefCell.
+            // FIXME: Enable this? Triggers on certain kinds of uses of DomRefCell.
             // hir::ExprAssign(_, ref rhs) => require_rooted(cx, self.in_new_function, &*rhs),
             // This catches calls; basically, this enforces the constraint that only constructors
             // can call other constructors.
-            // FIXME: Enable this? Currently triggers with constructs involving DOMRefCell, and
+            // FIXME: Enable this? Currently triggers with constructs involving DomRefCell, and
             // constructs like Vec<JS<T>> and RootedVec<JS<T>>.
             // hir::ExprCall(..) if !self.in_new_function => {
             //     require_rooted(cx, self.in_new_function, expr);
@@ -206,27 +207,28 @@ impl<'a, 'b, 'tcx> visit::Visitor<'tcx> for FnDefVisitor<'a, 'b, 'tcx> {
     fn visit_pat(&mut self, pat: &'tcx hir::Pat) {
         let cx = self.cx;
 
-        if let hir::PatKind::Binding(hir::BindingMode::BindByValue(_), _, _, _) = pat.node {
-            let ty = cx.tables.pat_ty(pat);
-            if is_unrooted_ty(cx, ty, self.in_new_function) {
-                cx.span_lint(UNROOTED_MUST_ROOT,
-                            pat.span,
-                            &format!("Expression of type {:?} must be rooted", ty))
+        // We want to detect pattern bindings that move a value onto the stack.
+        // When "default binding modes" https://github.com/rust-lang/rust/issues/42640
+        // are implemented, the `Unannotated` case could cause false-positives.
+        // These should be fixable by adding an explicit `ref`.
+        match pat.node {
+            hir::PatKind::Binding(hir::BindingAnnotation::Unannotated, _, _, _) |
+            hir::PatKind::Binding(hir::BindingAnnotation::Mutable, _, _, _) => {
+                let ty = cx.tables.pat_ty(pat);
+                if is_unrooted_ty(cx, ty, self.in_new_function) {
+                    cx.span_lint(UNROOTED_MUST_ROOT,
+                                pat.span,
+                                &format!("Expression of type {:?} must be rooted", ty))
+                }
             }
+            _ => {}
         }
 
         visit::walk_pat(self, pat);
     }
 
-    fn visit_fn(&mut self, kind: visit::FnKind<'tcx>, decl: &'tcx hir::FnDecl,
-                body: hir::BodyId, span: codemap::Span, id: ast::NodeId) {
-        if let visit::FnKind::Closure(_) = kind {
-            visit::walk_fn(self, kind, decl, body, span, id);
-        }
-    }
+    fn visit_ty(&mut self, _: &'tcx hir::Ty) {}
 
-    fn visit_foreign_item(&mut self, _: &'tcx hir::ForeignItem) {}
-    fn visit_ty(&mut self, _: &'tcx hir::Ty) { }
     fn nested_visit_map<'this>(&'this mut self) -> hir::intravisit::NestedVisitorMap<'this, 'tcx> {
         hir::intravisit::NestedVisitorMap::OnlyBodies(&self.cx.tcx.hir)
     }

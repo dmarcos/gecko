@@ -42,23 +42,35 @@
       <field name="_blockingCanvas">null</field>
       <field name="_animating">false</field>
 
+      <property name="_allowAnimation">
+        <getter>
+          <![CDATA[
+            var prefs = Components.classes["@mozilla.org/preferences-service;1"]
+                                  .getService(Components.interfaces.nsIPrefBranch);
+            return prefs.getBoolPref("toolkit.cosmeticAnimations.enabled");
+          ]]>
+        </getter>
+      </property>
+
       <property name="notificationsHidden"
                 onget="return this.getAttribute('notificationshidden') == 'true';">
         <setter>
-          if (val)
-            this.setAttribute("notificationshidden", true);
-          else this.removeAttribute("notificationshidden");
-          return val;
+          <![CDATA[
+            if (val)
+              this.setAttribute("notificationshidden", true);
+            else this.removeAttribute("notificationshidden");
+            return val;
+          ]]>
         </setter>
       </property>
 
       <property name="allNotifications" readonly="true">
         <getter>
-        <![CDATA[
-          var closedNotification = this._closedNotification;
-          var notifications = this.getElementsByTagName("notification");
-          return Array.filter(notifications, n => n != closedNotification);
-        ]]>
+          <![CDATA[
+            var closedNotification = this._closedNotification;
+            var notifications = this.getElementsByTagName("notification");
+            return Array.filter(notifications, n => n != closedNotification);
+          ]]>
         </getter>
       </property>
 
@@ -236,8 +248,13 @@
             }
             this.currentNotification = null;
 
-            // Must clear up any currently animating notification
-            if (aImmediate)
+            // Clean up any currently-animating notification; this is necessary
+            // if a notification was just opened and is still animating, but we
+            // want to close it *without* animating.  This can even happen if
+            // the user toggled `toolkit.cosmeticAnimations.enabled` to false
+            // and called this method immediately after an animated notification
+            // displayed (although this case isn't very likely).
+            if (aImmediate || !this._allowAnimation)
               this._finishAnimation();
           ]]>
         </body>
@@ -267,7 +284,9 @@
             this._finishAnimation();
 
             var height = aNotification.boxObject.height;
-            var skipAnimation = aSkipAnimation || (height == 0);
+            var skipAnimation = aSkipAnimation || height == 0 ||
+                                !this._allowAnimation;
+            aNotification.classList.toggle("animated", !skipAnimation);
 
             if (aSlideIn) {
               this.currentNotification = aNotification;
@@ -380,20 +399,19 @@
 
   <binding id="notification" role="xul:alert">
     <content>
-      <xul:hbox class="notification-inner" flex="1" xbl:inherits="type">
-        <xul:hbox anonid="details" align="center" flex="1"
-                  oncommand="this.parentNode.parentNode._doButtonCommand(event);">
-          <xul:image anonid="messageImage" class="messageImage" xbl:inherits="src=image,type,value"/>
-          <xul:description anonid="messageText" class="messageText" flex="1" xbl:inherits="xbl:text=label"/>
-          <xul:spacer flex="1"/>
-          <children/>
-        </xul:hbox>
-        <xul:toolbarbutton ondblclick="event.stopPropagation();"
-                           class="messageCloseButton close-icon tabbable"
-                           xbl:inherits="hidden=hideclose"
-                           tooltiptext="&closeNotification.tooltip;"
-                           oncommand="document.getBindingParent(this).dismiss();"/>
+      <xul:hbox anonid="details" align="center" flex="1"
+                oncommand="this.parentNode._doButtonCommand(event);">
+        <xul:image anonid="messageImage" class="messageImage" xbl:inherits="src=image,type,value"/>
+        <xul:description anonid="messageText" class="messageText" flex="1" xbl:inherits="xbl:text=label"/>
+        <xul:spacer flex="1"/>
+        <children/>
       </xul:hbox>
+      <xul:toolbarbutton ondblclick="event.stopPropagation();"
+                         class="messageCloseButton close-icon tabbable"
+                         anonid="close-button"
+                         xbl:inherits="hidden=hideclose"
+                         tooltiptext="&closeNotification.tooltip;"
+                         oncommand="document.getBindingParent(this).dismiss();"/>
     </content>
     <resources>
       <stylesheet src="chrome://global/skin/notification.css"/>
@@ -469,7 +487,7 @@
             } else {
               var callback = button.callback;
               if (callback) {
-                var result = callback(this, button, aEvent.target);
+                var result = callback(this, button, aEvent.target, aEvent);
                 if (!result)
                   this.close();
                 aEvent.stopPropagation();
@@ -493,8 +511,7 @@
               <xul:label class="popup-notification-origin header"
                          xbl:inherits="value=origin,tooltiptext=origin"
                          crop="center"/>
-              <xul:description anonid="description"
-                               class="popup-notification-description"
+              <xul:description class="popup-notification-description"
                                xbl:inherits="xbl:text=label,popupid"/>
             </xul:vbox>
             <xul:toolbarbutton anonid="closebutton"
@@ -531,7 +548,7 @@
                     default="true"
                     label="&defaultButton.label;"
                     accesskey="&defaultButton.accesskey;"
-                    xbl:inherits="oncommand=buttoncommand,label=buttonlabel,accesskey=buttonaccesskey,disabled=mainactiondisabled"/>
+                    xbl:inherits="oncommand=buttoncommand,label=buttonlabel,accesskey=buttonaccesskey,highlight=buttonhighlight,disabled=mainactiondisabled"/>
       </xul:hbox>
     </content>
     <resources>
@@ -543,9 +560,6 @@
       </field>
       <field name="closebutton" readonly="true">
         document.getAnonymousElementByAttribute(this, "anonid", "closebutton");
-      </field>
-      <field name="description">
-        document.getAnonymousElementByAttribute(this, "anonid", "description");
       </field>
       <field name="button" readonly="true">
         document.getAnonymousElementByAttribute(this, "anonid", "button");

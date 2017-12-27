@@ -17,8 +17,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "Utils",
 XPCOMUtils.defineLazyModuleGetter(this, "PrivacyLevel",
   "resource://gre/modules/sessionstore/PrivacyLevel.jsm");
 
-// MAX_EXPIRY should be 2^63-1, but JavaScript can't handle that precision.
-const MAX_EXPIRY = Math.pow(2, 62);
+const MAX_EXPIRY = Number.MAX_SAFE_INTEGER;
 
 /**
  * The external API implemented by the SessionCookies module.
@@ -93,7 +92,7 @@ var SessionCookiesInternal = {
         this._removeCookies(subject);
         break;
       default:
-        throw new Error("Unhandled cookie-changed notification.");
+        throw new Error("Unhandled session-cookie-changed notification.");
     }
   },
 
@@ -102,16 +101,17 @@ var SessionCookiesInternal = {
    * cookies service and puts them into the store if they're session cookies.
    */
   _ensureInitialized() {
-    if (!this._initialized) {
-      this._reloadCookies();
-      this._initialized = true;
-      Services.obs.addObserver(this, "cookie-changed");
-
-      // Listen for privacy level changes to reload cookies when needed.
-      Services.prefs.addObserver("browser.sessionstore.privacy_level", () => {
-        this._reloadCookies();
-      });
+    if (this._initialized) {
+      return;
     }
+    this._reloadCookies();
+    this._initialized = true;
+    Services.obs.addObserver(this, "session-cookie-changed");
+
+    // Listen for privacy level changes to reload cookies when needed.
+    Services.prefs.addObserver("browser.sessionstore.privacy_level", () => {
+      this._reloadCookies();
+    });
   },
 
   /**
@@ -172,7 +172,7 @@ var SessionCookiesInternal = {
       return;
     }
 
-    let iter = Services.cookies.enumerator;
+    let iter = Services.cookies.sessionEnumerator;
     while (iter.hasMoreElements()) {
       this._addCookie(iter.getNext());
     }

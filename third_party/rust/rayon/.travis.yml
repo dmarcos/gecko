@@ -3,14 +3,36 @@ rust:
   - 1.12.0
   - stable
   - nightly
+os:
+  - linux
+  - osx
+
+# Using 16MB stacks for deep test/debug recursion
+env:
+  global:
+    - RUST_MIN_STACK=16777216
+
+matrix:
+  include:
+  - rust: stable
+    env: RUSTFLAGS='--cfg rayon_unstable'
+    os: linux
+  - rust: stable
+    env: RUSTFLAGS='--cfg rayon_unstable'
+    os: osx
+  - rust: nightly
+    env: RUSTFLAGS='--cfg rayon_unstable'
+    os: linux
+  - rust: nightly
+    env: RUSTFLAGS='--cfg rayon_unstable'
+    os: osx
+
 script:
   - cargo build
   - |
-    [ $TRAVIS_RUST_VERSION != nightly ] ||
-    cargo test && cargo clean
-  - |
-    [ $TRAVIS_RUST_VERSION != nightly ] ||
-    cargo test --features "unstable"
-  - |
-    [ $TRAVIS_RUST_VERSION != nightly ] ||
-    ( cd rayon-demo && cargo test && cd ../../ )
+    if [ $TRAVIS_RUST_VERSION == nightly ]; then
+      cargo test &&
+      cargo test -p rayon-core &&
+      cargo test -p rayon-demo &&
+      ./ci/highlander.sh
+    fi

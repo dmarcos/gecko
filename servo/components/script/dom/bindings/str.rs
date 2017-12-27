@@ -4,19 +4,23 @@
 
 //! The `ByteString` struct.
 
-use html5ever_atoms::{LocalName, Namespace};
+use chrono::{Datelike, TimeZone};
+use chrono::prelude::{Weekday, Utc};
+use cssparser::CowRcStr;
+use html5ever::{LocalName, Namespace};
 use servo_atoms::Atom;
-use std::ascii::AsciiExt;
 use std::borrow::{Borrow, Cow, ToOwned};
+use std::default::Default;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 use std::ops;
 use std::ops::{Deref, DerefMut};
 use std::str;
 use std::str::{Bytes, FromStr};
 
 /// Encapsulates the IDL `ByteString` type.
-#[derive(JSTraceable, Clone, Eq, PartialEq, HeapSizeOf, Debug)]
+#[derive(Clone, Debug, Default, Eq, JSTraceable, MallocSizeOf, PartialEq)]
 pub struct ByteString(Vec<u8>);
 
 impl ByteString {
@@ -75,7 +79,7 @@ impl ops::Deref for ByteString {
 
 /// A string that is constructed from a UCS-2 buffer by replacing invalid code
 /// points with the replacement character.
-#[derive(Clone, HeapSizeOf)]
+#[derive(Clone, Default, MallocSizeOf)]
 pub struct USVString(pub String);
 
 
@@ -113,63 +117,6 @@ pub fn is_token(s: &[u8]) -> bool {
     })
 }
 
-/// Returns whether the language is matched, as defined by
-/// [RFC 4647](https://tools.ietf.org/html/rfc4647#section-3.3.2).
-pub fn extended_filtering(tag: &str, range: &str) -> bool {
-    let lang_ranges: Vec<&str> = range.split(',').collect();
-
-    lang_ranges.iter().any(|&lang_range| {
-        // step 1
-        let range_subtags: Vec<&str> = lang_range.split('\x2d').collect();
-        let tag_subtags: Vec<&str> = tag.split('\x2d').collect();
-
-        let mut range_iter = range_subtags.iter();
-        let mut tag_iter = tag_subtags.iter();
-
-        // step 2
-        // Note: [Level-4 spec](https://drafts.csswg.org/selectors/#lang-pseudo) check for wild card
-        if let (Some(range_subtag), Some(tag_subtag)) = (range_iter.next(), tag_iter.next()) {
-            if !(range_subtag.eq_ignore_ascii_case(tag_subtag) || range_subtag.eq_ignore_ascii_case("*")) {
-                return false;
-            }
-        }
-
-        let mut current_tag_subtag = tag_iter.next();
-
-        // step 3
-        for range_subtag in range_iter {
-            // step 3a
-            if range_subtag.eq_ignore_ascii_case("*") {
-                continue;
-            }
-            match current_tag_subtag.clone() {
-                Some(tag_subtag) => {
-                    // step 3c
-                    if range_subtag.eq_ignore_ascii_case(tag_subtag) {
-                        current_tag_subtag = tag_iter.next();
-                        continue;
-                    } else {
-                        // step 3d
-                        if tag_subtag.len() == 1 {
-                            return false;
-                        } else {
-                            // else step 3e - continue with loop
-                            current_tag_subtag = tag_iter.next();
-                            if current_tag_subtag.is_none() {
-                                return false;
-                            }
-                        }
-                    }
-                },
-                // step 3b
-                None => { return false; }
-            }
-        }
-        // step 4
-        true
-    })
-}
-
 
 /// A DOMString.
 ///
@@ -177,7 +124,7 @@ pub fn extended_filtering(tag: &str, range: &str) -> bool {
 ///
 /// [idl]: https://heycam.github.io/webidl/#idl-DOMString
 ///
-/// Cenceptually, a DOMString has the same value space as a JavaScript String,
+/// Conceptually, a DOMString has the same value space as a JavaScript String,
 /// i.e., an array of 16-bit *code units* representing UTF-16, potentially with
 /// unpaired surrogates present (also sometimes called WTF-16).
 ///
@@ -207,20 +154,18 @@ pub fn extended_filtering(tag: &str, range: &str) -> bool {
 ///
 /// This type is currently `!Send`, in order to help with an independent
 /// experiment to store `JSString`s rather than Rust `String`s.
-#[derive(Clone, Debug, Eq, Hash, HeapSizeOf, Ord, PartialEq, PartialOrd)]
-pub struct DOMString(String);
-
-impl !Send for DOMString {}
+#[derive(Clone, Debug, Eq, Hash, MallocSizeOf, Ord, PartialEq, PartialOrd)]
+pub struct DOMString(String, PhantomData<*const ()>);
 
 impl DOMString {
     /// Creates a new `DOMString`.
     pub fn new() -> DOMString {
-        DOMString(String::new())
+        DOMString(String::new(), PhantomData)
     }
 
     /// Creates a new `DOMString` from a `String`.
     pub fn from_string(s: String) -> DOMString {
-        DOMString(s)
+        DOMString(s, PhantomData)
     }
 
     /// Appends a given string slice onto the end of this String.
@@ -242,6 +187,121 @@ impl DOMString {
     pub fn bytes(&self) -> Bytes {
         self.0.bytes()
     }
+
+    /// Removes newline characters according to <https://infra.spec.whatwg.org/#strip-newlines>.
+    pub fn strip_newlines(&mut self) {
+        self.0.retain(|c| c != '\r' && c != '\n');
+    }
+
+    /// Removes leading and trailing ASCII whitespaces according to
+    /// <https://infra.spec.whatwg.org/#strip-leading-and-trailing-ascii-whitespace>.
+    pub fn strip_leading_and_trailing_ascii_whitespace(&mut self) {
+        if self.0.len() == 0 { return; }
+
+        let last_non_whitespace = match self.0.rfind(|ref c| !char::is_ascii_whitespace(c)) {
+            Some(idx) => idx + 1,
+            None => {
+                self.0.clear();
+                return;
+            }
+        };
+        let first_non_whitespace = self.0.find(|ref c| !char::is_ascii_whitespace(c)).unwrap();
+
+        self.0.truncate(last_non_whitespace);
+        let _ = self.0.splice(0..first_non_whitespace, "");
+    }
+
+    /// Validates this `DOMString` is a time string according to
+    /// <https://html.spec.whatwg.org/multipage/#valid-time-string>.
+    pub fn is_valid_time_string(&self) -> bool {
+        enum State {
+            HourHigh,
+            HourLow09,
+            HourLow03,
+            MinuteColon,
+            MinuteHigh,
+            MinuteLow,
+            SecondColon,
+            SecondHigh,
+            SecondLow,
+            MilliStop,
+            MilliHigh,
+            MilliMiddle,
+            MilliLow,
+            Done,
+            Error,
+        }
+        let next_state = |valid: bool, next: State| -> State { if valid { next } else { State::Error } };
+
+        let state = self.chars().fold(State::HourHigh, |state, c| {
+            match state {
+                // Step 1 "HH"
+                State::HourHigh => {
+                    match c {
+                        '0' | '1' => State::HourLow09,
+                        '2' => State::HourLow03,
+                        _ => State::Error,
+                    }
+                },
+                State::HourLow09 => next_state(c.is_digit(10), State::MinuteColon),
+                State::HourLow03 => next_state(c.is_digit(4), State::MinuteColon),
+
+                // Step 2 ":"
+                State::MinuteColon => next_state(c == ':', State::MinuteHigh),
+
+                // Step 3 "mm"
+                State::MinuteHigh => next_state(c.is_digit(6), State::MinuteLow),
+                State::MinuteLow => next_state(c.is_digit(10), State::SecondColon),
+
+                // Step 4.1 ":"
+                State::SecondColon => next_state(c == ':', State::SecondHigh),
+                // Step 4.2 "ss"
+                State::SecondHigh => next_state(c.is_digit(6), State::SecondLow),
+                State::SecondLow => next_state(c.is_digit(10), State::MilliStop),
+
+                // Step 4.3.1 "."
+                State::MilliStop => next_state(c == '.', State::MilliHigh),
+                // Step 4.3.2 "SSS"
+                State::MilliHigh => next_state(c.is_digit(6), State::MilliMiddle),
+                State::MilliMiddle => next_state(c.is_digit(10), State::MilliLow),
+                State::MilliLow => next_state(c.is_digit(10), State::Done),
+
+                _ => State::Error,
+            }
+        });
+
+        match state {
+            State::Done |
+            // Step 4 (optional)
+            State::SecondColon |
+            // Step 4.3 (optional)
+            State::MilliStop |
+            // Step 4.3.2 (only 1 digit required)
+            State::MilliMiddle | State::MilliLow => true,
+            _ => false
+        }
+    }
+
+    /// A valid date string should be "YYYY-MM-DD"
+    /// YYYY must be four or more digits, MM and DD both must be two digits
+    /// https://html.spec.whatwg.org/multipage/#valid-date-string
+    pub fn is_valid_date_string(&self) -> bool {
+        parse_date_string(&*self.0).is_ok()
+    }
+
+    /// A valid month string should be "YYYY-MM"
+    /// YYYY must be four or more digits, MM both must be two digits
+    /// https://html.spec.whatwg.org/multipage/#valid-month-string
+    pub fn is_valid_month_string(&self) -> bool {
+        parse_month_string(&*self.0).is_ok()
+    }
+
+    /// A valid week string should be like {YYYY}-W{WW}, such as "2017-W52"
+    /// YYYY must be four or more digits, WW both must be two digits
+    /// https://html.spec.whatwg.org/multipage/#valid-week-string
+    pub fn is_valid_week_string(&self) -> bool {
+        parse_week_string(&*self.0).is_ok()
+    }
 }
 
 impl Borrow<str> for DOMString {
@@ -253,7 +313,7 @@ impl Borrow<str> for DOMString {
 
 impl Default for DOMString {
     fn default() -> Self {
-        DOMString(String::new())
+        DOMString(String::new(), PhantomData)
     }
 }
 
@@ -300,7 +360,7 @@ impl<'a> PartialEq<&'a str> for DOMString {
 
 impl From<String> for DOMString {
     fn from(contents: String) -> DOMString {
-        DOMString(contents)
+        DOMString(contents, PhantomData)
     }
 }
 
@@ -355,8 +415,157 @@ impl<'a> Into<Cow<'a, str>> for DOMString {
     }
 }
 
+impl<'a> Into<CowRcStr<'a>> for DOMString {
+    fn into(self) -> CowRcStr<'a> {
+        self.0.into()
+    }
+}
+
 impl Extend<char> for DOMString {
     fn extend<I>(&mut self, iterable: I) where I: IntoIterator<Item=char> {
         self.0.extend(iterable)
     }
+}
+
+/// https://html.spec.whatwg.org/multipage/#parse-a-month-string
+fn parse_month_string(value: &str) -> Result<(u32, u32), ()> {
+    // Step 1, 2, 3
+    let (year_int, month_int) = parse_month_component(value)?;
+
+    // Step 4
+    if value.split("-").nth(2).is_some() {
+        return Err(());
+    }
+    // Step 5
+    Ok((year_int, month_int))
+}
+
+/// https://html.spec.whatwg.org/multipage/#parse-a-date-string
+fn parse_date_string(value: &str) -> Result<(u32, u32, u32), ()> {
+    // Step 1, 2, 3
+    let (year_int, month_int, day_int) = parse_date_component(value)?;
+
+    // Step 4
+    if value.split('-').nth(3).is_some() {
+        return Err(());
+    }
+
+    // Step 5, 6
+    Ok((year_int, month_int, day_int))
+}
+
+/// https://html.spec.whatwg.org/multipage/#parse-a-week-string
+fn parse_week_string(value: &str) -> Result<(u32, u32), ()> {
+    // Step 1, 2, 3
+    let mut iterator = value.split('-');
+    let year = iterator.next().ok_or(())?;
+
+    // Step 4
+    let year_int = year.parse::<u32>().map_err(|_| ())?;
+    if year.len() < 4 || year_int == 0 {
+        return Err(());
+    }
+
+    // Step 5, 6
+    let week = iterator.next().ok_or(())?;
+    let (week_first, week_last) = week.split_at(1);
+    if week_first != "W" {
+        return Err(());
+    }
+
+    // Step 7
+    let week_int = week_last.parse::<u32>().map_err(|_| ())?;
+    if week_last.len() != 2 {
+        return Err(());
+    }
+
+    // Step 8
+    let max_week = max_week_in_year(year_int);
+
+    // Step 9
+    if week_int < 1 || week_int > max_week {
+        return Err(());
+    }
+
+    // Step 10
+    if iterator.next().is_some() {
+        return Err(());
+    }
+
+    // Step 11
+    Ok((year_int, week_int))
+}
+
+/// https://html.spec.whatwg.org/multipage/#parse-a-month-component
+fn parse_month_component(value: &str) -> Result<(u32, u32), ()> {
+    // Step 3
+    let mut iterator = value.split('-');
+    let year = iterator.next().ok_or(())?;
+    let month = iterator.next().ok_or(())?;
+
+    // Step 1, 2
+    let year_int = year.parse::<u32>().map_err(|_| ())?;
+    if year.len() < 4 || year_int == 0 {
+        return Err(());
+    }
+
+    // Step 4, 5
+    let month_int = month.parse::<u32>().map_err(|_| ())?;
+    if month.len() != 2 ||  month_int > 12 || month_int < 1 {
+        return Err(());
+    }
+
+    // Step 6
+    Ok((year_int, month_int))
+}
+
+/// https://html.spec.whatwg.org/multipage/#parse-a-date-component
+fn parse_date_component(value: &str) -> Result<(u32, u32, u32), ()> {
+    // Step 1
+    let (year_int, month_int) = parse_month_component(value)?;
+
+    // Step 3, 4
+    let day = value.split('-').nth(2).ok_or(())?;
+    let day_int = day.parse::<u32>().map_err(|_| ())?;
+    if day.len() != 2 {
+        return Err(());
+    }
+
+    // Step 2, 5
+    let max_day = max_day_in_month(year_int, month_int)?;
+    if day_int == 0 || day_int > max_day {
+        return Err(());
+    }
+
+    // Step 6
+    Ok((year_int, month_int, day_int))
+}
+
+fn max_day_in_month(year_num: u32, month_num: u32) -> Result<u32, ()> {
+    match month_num {
+        1|3|5|7|8|10|12 => Ok(31),
+        4|6|9|11 => Ok(30),
+        2 => {
+            if is_leap_year(year_num) {
+                Ok(29)
+            } else {
+                Ok(28)
+            }
+        },
+        _ => Err(())
+    }
+}
+
+// https://html.spec.whatwg.org/multipage/#week-number-of-the-last-day
+fn max_week_in_year(year: u32) -> u32 {
+    match Utc.ymd(year as i32, 1, 1).weekday() {
+        Weekday::Thu => 53,
+        Weekday::Wed if is_leap_year(year) => 53,
+        _ => 52
+    }
+}
+
+#[inline]
+fn is_leap_year(year: u32) -> bool {
+    year % 400 == 0 || (year % 4 == 0 && year % 100 != 0)
 }

@@ -1,10 +1,6 @@
 createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "1.9.2");
 
-function run_test() {
-  run_next_test();
-}
-
-add_task(function* () {
+add_task(async function() {
   equal(AddonManager.isReady, false, "isReady should be false before startup");
 
   let gotStartupEvent = false;
@@ -19,7 +15,7 @@ add_task(function* () {
   };
   AddonManager.addManagerListener(listener);
 
-  do_print("Starting manager...");
+  info("Starting manager...");
   startupManager();
   equal(AddonManager.isReady, true, "isReady should be true after startup");
   equal(gotStartupEvent, true, "Should have seen onStartup event after startup");
@@ -28,10 +24,10 @@ add_task(function* () {
   gotStartupEvent = false;
   gotShutdownEvent = false;
 
-  do_print("Shutting down manager...");
+  info("Shutting down manager...");
   let shutdownPromise = promiseShutdownManager();
   equal(AddonManager.isReady, false, "isReady should be false when shutdown commences");
-  yield shutdownPromise;
+  await shutdownPromise;
 
   equal(AddonManager.isReady, false, "isReady should be false after shutdown");
   equal(gotStartupEvent, false, "Should not have seen onStartup event after shutdown");
@@ -41,7 +37,7 @@ add_task(function* () {
   gotStartupEvent = false;
   gotShutdownEvent = false;
 
-  do_print("Starting manager again...");
+  info("Starting manager again...");
   startupManager();
   equal(AddonManager.isReady, true, "isReady should be true after repeat startup");
   equal(gotStartupEvent, true, "Should have seen onStartup event after repeat startup");

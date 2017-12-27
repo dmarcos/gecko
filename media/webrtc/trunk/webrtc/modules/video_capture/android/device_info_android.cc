@@ -18,10 +18,9 @@
 #include "webrtc/modules/utility/include/helpers_android.h"
 #include "webrtc/modules/video_capture/android/video_capture_android.h"
 #include "webrtc/system_wrappers/include/logging.h"
-#include "webrtc/system_wrappers/include/ref_count.h"
 #include "webrtc/system_wrappers/include/trace.h"
 
-#include "AndroidJNIWrapper.h"
+#include "mozilla/jni/Utils.h"
 
 namespace webrtc {
 
@@ -114,10 +113,10 @@ void DeviceInfoAndroid::BuildDeviceList() {
   JNIEnv* jni = ats.env();
 
   g_camera_info = new std::vector<AndroidCameraInfo>();
-  jclass j_info_class =
-    jsjni_GetGlobalClassRef("org/webrtc/videoengine/VideoCaptureDeviceInfoAndroid");
-  jclass j_cap_class =
-    jsjni_GetGlobalClassRef("org/webrtc/videoengine/CaptureCapabilityAndroid");
+  jclass j_info_class = mozilla::jni::GetClassRef(
+    jni, "org/webrtc/videoengine/VideoCaptureDeviceInfoAndroid");
+  jclass j_cap_class = mozilla::jni::GetClassRef(
+    jni, "org/webrtc/videoengine/CaptureCapabilityAndroid");
   assert(j_info_class);
   jmethodID j_initialize = jni->GetStaticMethodID(
     j_info_class, "getDeviceInfo",
@@ -185,8 +184,8 @@ void DeviceInfoAndroid::BuildDeviceList() {
     jni->ReleaseIntArrayElements(heightResArray, heights, JNI_ABORT);
   }
 
-  jni->DeleteGlobalRef(j_info_class);
-  jni->DeleteGlobalRef(j_cap_class);
+  jni->DeleteLocalRef(j_info_class);
+  jni->DeleteLocalRef(j_cap_class);
 }
 
 void DeviceInfoAndroid::DeInitialize() {
@@ -203,13 +202,12 @@ int32_t DeviceInfoAndroid::Refresh() {
   return 0;
 }
 
-VideoCaptureModule::DeviceInfo* VideoCaptureImpl::CreateDeviceInfo(
-    const int32_t id) {
-  return new videocapturemodule::DeviceInfoAndroid(id);
+VideoCaptureModule::DeviceInfo* VideoCaptureImpl::CreateDeviceInfo() {
+  return new videocapturemodule::DeviceInfoAndroid();
 }
 
-DeviceInfoAndroid::DeviceInfoAndroid(const int32_t id) :
-    DeviceInfoImpl(id) {
+DeviceInfoAndroid::DeviceInfoAndroid() :
+    DeviceInfoImpl() {
 }
 
 DeviceInfoAndroid::~DeviceInfoAndroid() {
@@ -225,6 +223,7 @@ int32_t DeviceInfoAndroid::Init() {
 }
 
 uint32_t DeviceInfoAndroid::NumberOfDevices() {
+  Refresh();
   return g_camera_info->size();
 }
 

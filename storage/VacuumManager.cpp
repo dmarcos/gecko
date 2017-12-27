@@ -99,7 +99,7 @@ NS_IMPL_ISUPPORTS(
 , mozIStorageStatementCallback
 )
 
-//////////////////////////////////////////////////////////////////////////////// 
+////////////////////////////////////////////////////////////////////////////////
 //// Vacuumer declaration.
 
 class Vacuumer : public BaseCallback
@@ -275,7 +275,7 @@ Vacuumer::HandleCompletion(uint16_t aReason)
     nsAutoCString prefName(PREF_VACUUM_BRANCH);
     prefName += mDBFilename;
     DebugOnly<nsresult> rv = Preferences::SetInt(prefName.get(), now);
-    MOZ_ASSERT(NS_SUCCEEDED(rv), "Should be able to set a preference"); 
+    MOZ_ASSERT(NS_SUCCEEDED(rv), "Should be able to set a preference");
   }
 
   notifyCompletion(aReason == REASON_FINISHED);
@@ -311,7 +311,7 @@ NS_IMPL_ISUPPORTS(
 VacuumManager *
 VacuumManager::gVacuumManager = nullptr;
 
-VacuumManager *
+already_AddRefed<VacuumManager>
 VacuumManager::getSingleton()
 {
   //Don't allocate it in the child Process.
@@ -319,15 +319,10 @@ VacuumManager::getSingleton()
     return nullptr;
   }
 
-  if (gVacuumManager) {
-    NS_ADDREF(gVacuumManager);
-    return gVacuumManager;
+  if (!gVacuumManager) {
+    gVacuumManager = new VacuumManager();
   }
-  gVacuumManager = new VacuumManager();
-  if (gVacuumManager) {
-    NS_ADDREF(gVacuumManager);
-  }
-  return gVacuumManager;
+  return do_AddRef(gVacuumManager);
 }
 
 VacuumManager::VacuumManager()

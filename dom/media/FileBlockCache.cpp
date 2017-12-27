@@ -5,12 +5,15 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "FileBlockCache.h"
+#include "MediaCache.h"
+#include "MediaPrefs.h"
 #include "mozilla/SharedThreadPool.h"
 #include "VideoUtils.h"
 #include "prio.h"
 #include <algorithm>
 #include "nsAnonymousTemporaryFile.h"
 #include "mozilla/dom/ContentChild.h"
+#include "mozilla/SystemGroup.h"
 #include "nsXULAppAPI.h"
 
 namespace mozilla {
@@ -20,11 +23,20 @@ LazyLogModule gFileBlockCacheLog("FileBlockCache");
 #define LOG(x, ...) MOZ_LOG(gFileBlockCacheLog, LogLevel::Debug, \
   ("%p " x, this, ##__VA_ARGS__))
 
+static void
+CloseFD(PRFileDesc* aFD)
+{
+  PRStatus prrc;
+  prrc = PR_Close(aFD);
+  if (prrc != PR_SUCCESS) {
+    NS_WARNING("PR_Close() failed.");
+  }
+}
+
 void
 FileBlockCache::SetCacheFile(PRFileDesc* aFD)
 {
-  MOZ_ASSERT(NS_IsMainThread());
-  LOG("SetFD(aFD=%p) mIsOpen=%d", aFD, mIsOpen);
+  LOG("SetFD(aFD=%p) mThread=%p", aFD, mThread.get());
 
   if (!aFD) {
     // Failed to get a temporary file. Shutdown.
@@ -32,22 +44,32 @@ FileBlockCache::SetCacheFile(PRFileDesc* aFD)
     return;
   }
   {
-    MonitorAutoLock lock(mFileMonitor);
+    MutexAutoLock lock(mFileMutex);
     mFD = aFD;
   }
   {
-    MonitorAutoLock lock(mDataMonitor);
-    if (!mIsOpen) {
-      // We've been closed while waiting for the file descriptor. Bail out.
-      // Rely on the destructor to close the file descriptor.
+    MutexAutoLock lock(mDataMutex);
+    if (mThread) {
+      // Still open, complete the initialization.
+      mInitialized = true;
+      if (mIsWriteScheduled) {
+        // A write was scheduled while waiting for FD. We need to run/dispatch a
+        // task to service the request.
+        nsCOMPtr<nsIRunnable> event = mozilla::NewRunnableMethod(
+          "FileBlockCache::SetCacheFile -> PerformBlockIOs",
+          this,
+          &FileBlockCache::PerformBlockIOs);
+        mThread->Dispatch(event.forget(), NS_DISPATCH_NORMAL);
+      }
       return;
     }
-    mInitialized = true;
-    if (mIsWriteScheduled) {
-      // A write was scheduled while waiting for FD. We need to dispatch a
-      // task to service the request.
-      mThread->Dispatch(this, NS_DISPATCH_NORMAL);
-    }
+  }
+  // We've been closed while waiting for the file descriptor.
+  // Close the file descriptor we've just received, if still there.
+  MutexAutoLock lock(mFileMutex);
+  if (mFD) {
+    CloseFD(mFD);
+    mFD = nullptr;
   }
 }
 
@@ -55,10 +77,8 @@ nsresult
 FileBlockCache::Init()
 {
   LOG("Init()");
-
-  MOZ_ASSERT(NS_IsMainThread());
-
-  MonitorAutoLock mon(mDataMonitor);
+  MutexAutoLock mon(mDataMutex);
+  MOZ_ASSERT(!mThread);
   nsresult rv = NS_NewNamedThread("FileBlockCache",
                                   getter_AddRefs(mThread),
                                   nullptr,
@@ -66,13 +86,21 @@ FileBlockCache::Init()
   if (NS_FAILED(rv)) {
     return rv;
   }
-  mIsOpen = true;
 
   if (XRE_IsParentProcess()) {
-    rv = NS_OpenAnonymousTemporaryFile(&mFD);
-    if (NS_SUCCEEDED(rv)) {
-      mInitialized = true;
-    }
+    RefPtr<FileBlockCache> self = this;
+    rv = mThread->Dispatch(
+      NS_NewRunnableFunction("FileBlockCache::Init",
+                             [self] {
+                               PRFileDesc* fd = nullptr;
+                               nsresult rv = NS_OpenAnonymousTemporaryFile(&fd);
+                               if (NS_SUCCEEDED(rv)) {
+                                 self->SetCacheFile(fd);
+                               } else {
+                                 self->Close();
+                               }
+                             }),
+      NS_DISPATCH_NORMAL);
   } else {
     // We must request a temporary file descriptor from the parent process.
     RefPtr<FileBlockCache> self = this;
@@ -87,58 +115,113 @@ FileBlockCache::Init()
   return rv;
 }
 
+void
+FileBlockCache::Flush()
+{
+  LOG("Flush()");
+  MutexAutoLock mon(mDataMutex);
+  MOZ_ASSERT(mThread);
+
+  // Dispatch a task so we won't clear the arrays while PerformBlockIOs() is
+  // dropping the data lock and cause InvalidArrayIndex.
+  RefPtr<FileBlockCache> self = this;
+  mThread->Dispatch(NS_NewRunnableFunction("FileBlockCache::Flush", [self]() {
+    MutexAutoLock mon(self->mDataMutex);
+    // Just discard pending changes, assume MediaCache won't read from
+    // blocks it hasn't written to.
+    self->mChangeIndexList.clear();
+    self->mBlockChanges.Clear();
+  }));
+}
+
+int32_t
+FileBlockCache::GetMaxBlocks() const
+{
+  // We look up the cache size every time. This means dynamic changes
+  // to the pref are applied.
+  const uint32_t cacheSizeKb =
+    std::min(MediaPrefs::MediaCacheSizeKb(), uint32_t(INT32_MAX) * 2);
+  // Ensure we can divide BLOCK_SIZE by 1024.
+  static_assert(MediaCacheStream::BLOCK_SIZE % 1024 == 0,
+                "BLOCK_SIZE should be a multiple of 1024");
+  // Ensure BLOCK_SIZE/1024 is at least 2.
+  static_assert(MediaCacheStream::BLOCK_SIZE / 1024 >= 2,
+                "BLOCK_SIZE / 1024 should be at least 2");
+  // Ensure we can convert BLOCK_SIZE/1024 to a uint32_t without truncation.
+  static_assert(MediaCacheStream::BLOCK_SIZE / 1024 <= int64_t(UINT32_MAX),
+                "BLOCK_SIZE / 1024 should be at most UINT32_MAX");
+  // Since BLOCK_SIZE is a strict multiple of 1024,
+  // cacheSizeKb * 1024 / BLOCK_SIZE == cacheSizeKb / (BLOCK_SIZE / 1024),
+  // but the latter formula avoids a potential overflow from `* 1024`.
+  // And because BLOCK_SIZE/1024 is at least 2, the maximum cache size
+  // INT32_MAX*2 will give a maxBlocks that can fit in an int32_t.
+  constexpr uint32_t blockSizeKb =
+    uint32_t(MediaCacheStream::BLOCK_SIZE / 1024);
+  const int32_t maxBlocks = int32_t(cacheSizeKb / blockSizeKb);
+  return std::max(maxBlocks, int32_t(1));
+}
+
 FileBlockCache::FileBlockCache()
-  : mFileMonitor("MediaCache.Writer.IO.Monitor"),
-    mFD(nullptr),
-    mFDCurrentPos(0),
-    mDataMonitor("MediaCache.Writer.Data.Monitor"),
-    mIsWriteScheduled(false),
-    mIsOpen(false)
+  : mFileMutex("MediaCache.Writer.IO.Mutex")
+  , mFD(nullptr)
+  , mFDCurrentPos(0)
+  , mDataMutex("MediaCache.Writer.Data.Mutex")
+  , mIsWriteScheduled(false)
+  , mIsReading(false)
 {
 }
 
 FileBlockCache::~FileBlockCache()
 {
-  NS_ASSERTION(!mIsOpen, "Should Close() FileBlockCache before destroying");
-  {
-    // Note, mThread will be shutdown by the time this runs, so we won't
-    // block while taking mFileMonitor.
-    MonitorAutoLock mon(mFileMonitor);
-    if (mFD) {
-      PRStatus prrc;
-      prrc = PR_Close(mFD);
-      if (prrc != PR_SUCCESS) {
-        NS_WARNING("PR_Close() failed.");
-      }
-      mFD = nullptr;
-    }
-  }
+  Close();
 }
 
-void FileBlockCache::Close()
+void
+FileBlockCache::Close()
 {
   LOG("Close()");
 
-  NS_ASSERTION(NS_IsMainThread(), "Only call on main thread");
+  nsCOMPtr<nsIThread> thread;
+  {
+    MutexAutoLock mon(mDataMutex);
+    if (!mThread) {
+      return;
+    }
+    thread.swap(mThread);
+  }
 
-  MonitorAutoLock mon(mDataMonitor);
-  if (!mIsOpen) {
-    return;
+  PRFileDesc* fd;
+  {
+    MutexAutoLock lock(mFileMutex);
+    fd = mFD;
+    mFD = nullptr;
   }
-  mIsOpen = false;
-  if (!mThread) {
-    return;
-  }
-  // We must shut down the thread in another runnable. This is called
-  // while we're shutting down the media cache, and nsIThread::Shutdown()
-  // can cause events to run before it completes, which could end up
-  // opening more streams, while the media cache is shutting down and
-  // releasing memory etc! Also note we close mFD in the destructor so
-  // as to not disturb any IO that's currently running.
-  nsCOMPtr<nsIRunnable> event = new ShutdownThreadEvent(mThread);
-  SystemGroup::Dispatch(
-    "ShutdownThreadEvent", TaskCategory::Other, event.forget());
-  mThread = nullptr;
+
+  // Let the thread close the FD, and then trigger its own shutdown.
+  // Note that mThread is now empty, so no other task will be posted there.
+  // Also mThread and mFD are empty and therefore can be reused immediately.
+  nsresult rv = thread->Dispatch(
+    NS_NewRunnableFunction("FileBlockCache::Close",
+                           [thread, fd] {
+                             if (fd) {
+                               CloseFD(fd);
+                             }
+                             // We must shut down the thread in another
+                             // runnable. This is called
+                             // while we're shutting down the media cache, and
+                             // nsIThread::Shutdown()
+                             // can cause events to run before it completes,
+                             // which could end up
+                             // opening more streams, while the media cache is
+                             // shutting down and
+                             // releasing memory etc!
+                             nsCOMPtr<nsIRunnable> event =
+                               new ShutdownThreadEvent(thread);
+                             SystemGroup::Dispatch(TaskCategory::Other,
+                                                   event.forget());
+                           }),
+    NS_DISPATCH_NORMAL);
+  NS_ENSURE_SUCCESS_VOID(rv);
 }
 
 template<typename Container, typename Value>
@@ -153,10 +236,11 @@ nsresult
 FileBlockCache::WriteBlock(uint32_t aBlockIndex,
   Span<const uint8_t> aData1, Span<const uint8_t> aData2)
 {
-  MonitorAutoLock mon(mDataMonitor);
+  MutexAutoLock mon(mDataMutex);
 
-  if (!mIsOpen)
+  if (!mThread) {
     return NS_ERROR_FAILURE;
+  }
 
   // Check if we've already got a pending write scheduled for this block.
   mBlockChanges.EnsureLengthAtLeast(aBlockIndex + 1);
@@ -181,10 +265,10 @@ FileBlockCache::WriteBlock(uint32_t aBlockIndex,
 
 void FileBlockCache::EnsureWriteScheduled()
 {
-  mDataMonitor.AssertCurrentThreadOwns();
-  MOZ_ASSERT(mIsOpen);
+  mDataMutex.AssertCurrentThreadOwns();
+  MOZ_ASSERT(mThread);
 
-  if (mIsWriteScheduled) {
+  if (mIsWriteScheduled || mIsReading) {
     return;
   }
   mIsWriteScheduled = true;
@@ -193,12 +277,16 @@ void FileBlockCache::EnsureWriteScheduled()
     // the write will be scheduled.
     return;
   }
-  mThread->Dispatch(this, NS_DISPATCH_NORMAL);
+  nsCOMPtr<nsIRunnable> event = mozilla::NewRunnableMethod(
+    "FileBlockCache::EnsureWriteScheduled -> PerformBlockIOs",
+    this,
+    &FileBlockCache::PerformBlockIOs);
+  mThread->Dispatch(event.forget(), NS_DISPATCH_NORMAL);
 }
 
 nsresult FileBlockCache::Seek(int64_t aOffset)
 {
-  mFileMonitor.AssertCurrentThreadOwns();
+  mFileMutex.AssertCurrentThreadOwns();
 
   if (mFDCurrentPos != aOffset) {
     MOZ_ASSERT(mFD);
@@ -218,7 +306,7 @@ nsresult FileBlockCache::ReadFromFile(int64_t aOffset,
                                       int32_t& aBytesRead)
 {
   LOG("ReadFromFile(offset=%" PRIu64 ", len=%u)", aOffset, aBytesToRead);
-  mFileMonitor.AssertCurrentThreadOwns();
+  mFileMutex.AssertCurrentThreadOwns();
   MOZ_ASSERT(mFD);
 
   nsresult res = Seek(aOffset);
@@ -237,7 +325,7 @@ nsresult FileBlockCache::WriteBlockToFile(int32_t aBlockIndex,
 {
   LOG("WriteBlockToFile(index=%u)", aBlockIndex);
 
-  mFileMonitor.AssertCurrentThreadOwns();
+  mFileMutex.AssertCurrentThreadOwns();
   MOZ_ASSERT(mFD);
 
   nsresult rv = Seek(BlockIndexToOffset(aBlockIndex));
@@ -258,7 +346,7 @@ nsresult FileBlockCache::MoveBlockInFile(int32_t aSourceBlockIndex,
 {
   LOG("MoveBlockInFile(src=%u, dest=%u)", aSourceBlockIndex, aDestBlockIndex);
 
-  mFileMonitor.AssertCurrentThreadOwns();
+  mFileMutex.AssertCurrentThreadOwns();
 
   uint8_t buf[BLOCK_SIZE];
   int32_t bytesRead = 0;
@@ -271,51 +359,61 @@ nsresult FileBlockCache::MoveBlockInFile(int32_t aSourceBlockIndex,
   return WriteBlockToFile(aDestBlockIndex, buf);
 }
 
-nsresult FileBlockCache::Run()
+void
+FileBlockCache::PerformBlockIOs()
 {
-  NS_ASSERTION(!NS_IsMainThread(), "Don't call on main thread");
-  MonitorAutoLock mon(mDataMonitor);
-  NS_ASSERTION(!mChangeIndexList.empty(), "Only dispatch when there's work to do");
+  MOZ_ASSERT(mThread->IsOnCurrentThread());
+  MutexAutoLock mon(mDataMutex);
   NS_ASSERTION(mIsWriteScheduled, "Should report write running or scheduled.");
-  MOZ_ASSERT(mFD);
 
-  LOG("Run() mFD=%p mIsOpen=%d", mFD, mIsOpen);
+  LOG("Run() mFD=%p mThread=%p", mFD, mThread.get());
 
   while (!mChangeIndexList.empty()) {
-    if (!mIsOpen) {
+    if (!mThread) {
       // We've been closed, abort, discarding unwritten changes.
       mIsWriteScheduled = false;
-      return NS_ERROR_FAILURE;
+      return;
+    }
+
+    if (mIsReading) {
+      // We're trying to read; postpone all writes. (Reader will resume writes.)
+      mIsWriteScheduled = false;
+      return;
     }
 
     // Process each pending change. We pop the index out of the change
     // list, but leave the BlockChange in mBlockChanges until the change
     // is written to file. This is so that any read which happens while
-    // we drop mDataMonitor to write will refer to the data's source in
+    // we drop mDataMutex to write will refer to the data's source in
     // memory, rather than the not-yet up to date data written to file.
     // This also ensures we will insert a new index into mChangeIndexList
     // when this happens.
 
     // Hold a reference to the change, in case another change
     // overwrites the mBlockChanges entry for this block while we drop
-    // mDataMonitor to take mFileMonitor.
+    // mDataMutex to take mFileMutex.
     int32_t blockIndex = mChangeIndexList.front();
-    mChangeIndexList.pop_front();
     RefPtr<BlockChange> change = mBlockChanges[blockIndex];
     MOZ_ASSERT(change,
                "Change index list should only contain entries for blocks "
                "with changes");
     {
-      MonitorAutoUnlock unlock(mDataMonitor);
-      MonitorAutoLock lock(mFileMonitor);
+      MutexAutoUnlock unlock(mDataMutex);
+      MutexAutoLock lock(mFileMutex);
+      if (!mFD) {
+        // We may be here if mFD has been reset because we're closing, so we
+        // don't care anymore about writes.
+        return;
+      }
       if (change->IsWrite()) {
         WriteBlockToFile(blockIndex, change->mData.get());
       } else if (change->IsMove()) {
         MoveBlockInFile(change->mSourceBlockIndex, blockIndex);
       }
     }
+    mChangeIndexList.pop_front();
     // If a new change has not been made to the block while we dropped
-    // mDataMonitor, clear reference to the old change. Otherwise, the old
+    // mDataMutex, clear reference to the old change. Otherwise, the old
     // reference has been cleared already.
     if (mBlockChanges[blockIndex] == change) {
       mBlockChanges[blockIndex] = nullptr;
@@ -323,8 +421,6 @@ nsresult FileBlockCache::Run()
   }
 
   mIsWriteScheduled = false;
-
-  return NS_OK;
 }
 
 nsresult FileBlockCache::Read(int64_t aOffset,
@@ -332,10 +428,20 @@ nsresult FileBlockCache::Read(int64_t aOffset,
                               int32_t aLength,
                               int32_t* aBytes)
 {
-  MonitorAutoLock mon(mDataMonitor);
+  MutexAutoLock mon(mDataMutex);
 
-  if (!mIsOpen || (aOffset / BLOCK_SIZE) > INT32_MAX)
+  if (!mThread || (aOffset / BLOCK_SIZE) > INT32_MAX) {
     return NS_ERROR_FAILURE;
+  }
+
+  mIsReading = true;
+  auto exitRead = MakeScopeExit([&] {
+    mIsReading = false;
+    if (!mChangeIndexList.empty()) {
+      // mReading has stopped or prevented pending writes, resume them.
+      EnsureWriteScheduled();
+    }
+  });
 
   int32_t bytesToRead = aLength;
   int64_t offset = aOffset;
@@ -369,8 +475,12 @@ nsresult FileBlockCache::Read(int64_t aOffset,
       // from file.
       nsresult res;
       {
-        MonitorAutoUnlock unlock(mDataMonitor);
-        MonitorAutoLock lock(mFileMonitor);
+        MutexAutoUnlock unlock(mDataMutex);
+        MutexAutoLock lock(mFileMutex);
+        if (!mFD) {
+          // Not initialized yet, or closed.
+          return NS_ERROR_FAILURE;
+        }
         res = ReadFromFile(BlockIndexToOffset(blockIndex) + start,
                            dst,
                            amount,
@@ -388,11 +498,11 @@ nsresult FileBlockCache::Read(int64_t aOffset,
 
 nsresult FileBlockCache::MoveBlock(int32_t aSourceBlockIndex, int32_t aDestBlockIndex)
 {
-  NS_ASSERTION(NS_IsMainThread(), "Only call on main thread");
-  MonitorAutoLock mon(mDataMonitor);
+  MutexAutoLock mon(mDataMutex);
 
-  if (!mIsOpen)
+  if (!mThread) {
     return NS_ERROR_FAILURE;
+  }
 
   mBlockChanges.EnsureLengthAtLeast(std::max(aSourceBlockIndex, aDestBlockIndex) + 1);
 

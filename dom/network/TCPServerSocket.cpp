@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -38,7 +39,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_ADDREF_INHERITED(TCPServerSocket, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(TCPServerSocket, DOMEventTargetHelper)
 
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(TCPServerSocket)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(TCPServerSocket)
   NS_INTERFACE_MAP_ENTRY(nsIServerSocketListener)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
@@ -64,7 +65,12 @@ TCPServerSocket::Init()
   }
 
   if (XRE_GetProcessType() == GeckoProcessType_Content) {
-    mServerBridgeChild = new TCPServerSocketChild(this, mPort, mBacklog, mUseArrayBuffers);
+    nsCOMPtr<nsIEventTarget> target;
+    if (nsCOMPtr<nsIGlobalObject> global = GetOwnerGlobal()) {
+      target = global->EventTargetFor(TaskCategory::Other);
+    }
+    mServerBridgeChild =
+      new TCPServerSocketChild(this, mPort, mBacklog, mUseArrayBuffers, target);
     return NS_OK;
   }
 
@@ -143,10 +149,6 @@ TCPServerSocket::OnSocketAccepted(nsIServerSocket* aServer, nsISocketTransport* 
 {
   nsCOMPtr<nsIGlobalObject> global = GetOwnerGlobal();
   RefPtr<TCPSocket> socket = TCPSocket::CreateAcceptedSocket(global, aTransport, mUseArrayBuffers);
-  if (mServerBridgeParent) {
-    socket->SetAppIdAndBrowser(mServerBridgeParent->GetAppId(),
-                               mServerBridgeParent->GetInIsolatedMozBrowser());
-  }
   FireEvent(NS_LITERAL_STRING("connect"), socket);
   return NS_OK;
 }

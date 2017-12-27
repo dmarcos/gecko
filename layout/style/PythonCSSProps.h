@@ -1,3 +1,9 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 /* A file meant as input to the preprocessor only */
 
 /* DO_PROP serves as an extra level of indirection to allow expansion
@@ -27,7 +33,7 @@
 #undef CSS_PROP_SHORTHAND
 #undef CSS_PROP
 
-#define CSS_PROP_ALIAS(name, id, method, pref) \
+#define CSS_PROP_ALIAS(name, aliasid_, id, method, pref) \
   DO_PROP(name, method, id, 0, pref, "alias")
 
 #include "nsCSSPropAliasList.h"

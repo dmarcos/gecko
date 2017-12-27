@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use dom::activation::Activatable;
-use dom::bindings::cell::DOMRefCell;
+use dom::bindings::cell::DomRefCell;
 use dom::bindings::codegen::Bindings::AttrBinding::AttrMethods;
 use dom::bindings::codegen::Bindings::DOMTokenListBinding::DOMTokenListMethods;
 use dom::bindings::codegen::Bindings::HTMLAnchorElementBinding;
@@ -11,7 +11,7 @@ use dom::bindings::codegen::Bindings::HTMLAnchorElementBinding::HTMLAnchorElemen
 use dom::bindings::codegen::Bindings::MouseEventBinding::MouseEventMethods;
 use dom::bindings::codegen::Bindings::NodeBinding::NodeMethods;
 use dom::bindings::inheritance::Castable;
-use dom::bindings::js::{MutNullableJS, Root};
+use dom::bindings::root::{DomRoot, MutNullableDom};
 use dom::bindings::str::{DOMString, USVString};
 use dom::document::Document;
 use dom::domtokenlist::DOMTokenList;
@@ -25,7 +25,7 @@ use dom::node::{Node, document_from_node};
 use dom::urlhelper::UrlHelper;
 use dom::virtualmethods::VirtualMethods;
 use dom_struct::dom_struct;
-use html5ever_atoms::LocalName;
+use html5ever::{LocalName, Prefix};
 use net_traits::ReferrerPolicy;
 use num_traits::ToPrimitive;
 use script_traits::MozBrowserEvent;
@@ -37,27 +37,27 @@ use style::attr::AttrValue;
 #[dom_struct]
 pub struct HTMLAnchorElement {
     htmlelement: HTMLElement,
-    rel_list: MutNullableJS<DOMTokenList>,
-    url: DOMRefCell<Option<ServoUrl>>,
+    rel_list: MutNullableDom<DOMTokenList>,
+    url: DomRefCell<Option<ServoUrl>>,
 }
 
 impl HTMLAnchorElement {
     fn new_inherited(local_name: LocalName,
-                     prefix: Option<DOMString>,
+                     prefix: Option<Prefix>,
                      document: &Document) -> HTMLAnchorElement {
         HTMLAnchorElement {
             htmlelement:
                 HTMLElement::new_inherited(local_name, prefix, document),
             rel_list: Default::default(),
-            url: DOMRefCell::new(None),
+            url: DomRefCell::new(None),
         }
     }
 
     #[allow(unrooted_must_root)]
     pub fn new(local_name: LocalName,
-               prefix: Option<DOMString>,
-               document: &Document) -> Root<HTMLAnchorElement> {
-        Node::reflect_node(box HTMLAnchorElement::new_inherited(local_name, prefix, document),
+               prefix: Option<Prefix>,
+               document: &Document) -> DomRoot<HTMLAnchorElement> {
+        Node::reflect_node(Box::new(HTMLAnchorElement::new_inherited(local_name, prefix, document)),
                            document,
                            HTMLAnchorElementBinding::Wrap)
     }
@@ -122,7 +122,7 @@ impl HTMLAnchorElementMethods for HTMLAnchorElement {
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-a-rellist
-    fn RelList(&self) -> Root<DOMTokenList> {
+    fn RelList(&self) -> DomRoot<DOMTokenList> {
         self.rel_list.or_init(|| DOMTokenList::new(self.upcast(), &local_name!("rel")))
     }
 
@@ -576,12 +576,12 @@ impl Activatable for HTMLAnchorElement {
     }
 }
 
-/// https://html.spec.whatwg.org/multipage/#the-rules-for-choosing-a-browsing-context-given-a-browsing-context-name
+/// <https://html.spec.whatwg.org/multipage/#the-rules-for-choosing-a-browsing-context-given-a-browsing-context-name>
 fn is_current_browsing_context(target: DOMString) -> bool {
     target.is_empty() || target == "_self"
 }
 
-/// https://html.spec.whatwg.org/multipage/#following-hyperlinks-2
+/// <https://html.spec.whatwg.org/multipage/#following-hyperlinks-2>
 pub fn follow_hyperlink(subject: &Element, hyperlink_suffix: Option<String>, referrer_policy: Option<ReferrerPolicy>) {
     // Step 1: replace.
     // Step 2: source browsing context.

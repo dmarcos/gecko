@@ -2,6 +2,7 @@
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /* eslint-env mozilla/frame-script */
+/* eslint-disable mozilla/no-arbitrary-setTimeout */
 
 "use strict";
 
@@ -117,7 +118,7 @@ function monotinicity_tester(source, testName) {
     ]) {
       SilentAssert.equal(typeof next[probe][k], "number", `Sanity check (${testName}): ${k} is a number.`);
       SilentAssert.leq(prev[probe][k], next[probe][k], `Sanity check (${testName}): ${k} is monotonic.`);
-      SilentAssert.leq(0, next[probe][k], `Sanity check (${testName}): ${k} is >= 0.`)
+      SilentAssert.leq(0, next[probe][k], `Sanity check (${testName}): ${k} is >= 0.`);
     }
     SilentAssert.equal(prev.jank.durations.length, next.jank.durations.length,
                        `Sanity check (${testName}): Jank durations should be equal`);
@@ -129,17 +130,17 @@ function monotinicity_tester(source, testName) {
     }
     for (let i = 0; i < next.jank.durations.length - 1; ++i) {
       SilentAssert.leq(next.jank.durations[i + 1], next.jank.durations[i],
-        `Sanity check (${testName}): durations[${i}] >= durations[${i + 1}].`)
+        `Sanity check (${testName}): durations[${i}] >= durations[${i + 1}].`);
     }
   };
   let iteration = 0;
-  let frameCheck = Task.async(function*() {
+  let frameCheck = async function() {
     if (isShuttingDown) {
       window.clearInterval(interval);
       return;
     }
     let name = `${testName}: ${iteration++}`;
-    let result = yield source();
+    let result = await source();
     if (!result) {
       // This can happen at the end of the test when we attempt
       // to communicate too late with the content process.
@@ -158,17 +159,6 @@ function monotinicity_tester(source, testName) {
     // Sanity check on components data.
     let map = new Map();
     for (let item of snapshot.componentsData) {
-      for (let [probe, k] of [
-        ["jank", "totalUserTime"],
-        ["jank", "totalSystemTime"],
-        ["cpow", "totalCPOWTime"]
-      ]) {
-        // Note that we cannot expect components data to be always smaller
-        // than process data, as `getrusage` & co are not monotonic.
-        SilentAssert.leq(item[probe][k], 3 * snapshot.processData[probe][k],
-          `Sanity check (${name}): ${k} of component is not impossibly larger than that of process`);
-      }
-
       let isCorrectPid = (item.processId == pid && !item.isChildProcess)
         || (item.processId != pid && item.isChildProcess);
       SilentAssert.ok(isCorrectPid, `Pid check (${name}): the item comes from the right process`);
@@ -202,27 +192,27 @@ function monotinicity_tester(source, testName) {
       sanityCheck(previous.componentsMap.get(key), item);
       previous.componentsMap.set(key, item);
     }
-  });
+  };
   let interval = window.setInterval(frameCheck, 300);
   registerCleanupFunction(() => {
     window.clearInterval(interval);
   });
 }
 
-add_task(function* test() {
+add_task(async function test() {
   let monitor = PerformanceStats.getMonitor(["jank", "cpow", "ticks"]);
 
   info("Extracting initial state");
-  let stats0 = yield monitor.promiseSnapshot();
+  let stats0 = await monitor.promiseSnapshot();
   Assert.notEqual(stats0.componentsData.length, 0, "There is more than one component");
   Assert.ok(!stats0.componentsData.find(stat => stat.name.indexOf(URL) != -1),
     "The url doesn't appear yet");
 
-  let newTab = gBrowser.addTab();
+  let newTab = BrowserTestUtils.addTab(gBrowser);
   let browser = newTab.linkedBrowser;
   // Setup monitoring in the tab
   info("Setting up monitoring in the tab");
-  yield ContentTask.spawn(newTab.linkedBrowser, null, frameScript);
+  await ContentTask.spawn(newTab.linkedBrowser, null, frameScript);
 
   info("Opening URL");
   newTab.linkedBrowser.loadURI(URL);
@@ -239,19 +229,19 @@ add_task(function* test() {
 
 
   while (true) {
-    yield new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise(resolve => setTimeout(resolve, 100));
 
     // We may have race conditions with DOM loading.
     // Don't waste too much brainpower here, let's just ask
     // repeatedly for the title to be changed, until this works.
     info("Setting titles");
-    yield promiseContentResponse(browser, "compartments-test:setTitles", {
+    await promiseContentResponse(browser, "compartments-test:setTitles", {
       parent: PARENT_TITLE,
       frames: FRAME_TITLE
     });
     info("Titles set");
 
-    let {snapshot: stats} = (yield promiseContentResponse(browser, "compartments-test:getStatistics", null));
+    let {snapshot: stats} = (await promiseContentResponse(browser, "compartments-test:getStatistics", null));
 
     // Attach titles to components.
     let titles = [];

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -31,18 +32,12 @@ NS_NewDetailsFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 namespace mozilla {
 
 DetailsFrame::DetailsFrame(nsStyleContext* aContext)
-  : nsBlockFrame(aContext)
+  : nsBlockFrame(aContext, kClassID)
 {
 }
 
 DetailsFrame::~DetailsFrame()
 {
-}
-
-nsIAtom*
-DetailsFrame::GetType() const
-{
-  return nsGkAtoms::detailsFrame;
 }
 
 void
@@ -87,10 +82,10 @@ DetailsFrame::CheckValidMainSummary(const nsFrameList& aFrameList) const
 #endif
 
 void
-DetailsFrame::DestroyFrom(nsIFrame* aDestructRoot)
+DetailsFrame::DestroyFrom(nsIFrame* aDestructRoot, PostDestroyData& aPostDestroyData)
 {
-  nsContentUtils::DestroyAnonymousContent(&mDefaultSummary);
-  nsBlockFrame::DestroyFrom(aDestructRoot);
+  aPostDestroyData.AddAnonymousContent(mDefaultSummary.forget());
+  nsBlockFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
 
 nsresult
@@ -111,7 +106,7 @@ DetailsFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
                                  nsIDOMNode::ELEMENT_NODE);
   mDefaultSummary = new HTMLSummaryElement(nodeInfo);
 
-  nsXPIDLString defaultSummaryText;
+  nsAutoString defaultSummaryText;
   nsContentUtils::GetLocalizedString(nsContentUtils::eFORMS_PROPERTIES,
                                      "DefaultSummary", defaultSummaryText);
   RefPtr<nsTextNode> description = new nsTextNode(nodeInfoManager);
@@ -130,6 +125,15 @@ DetailsFrame::AppendAnonymousContentTo(nsTArray<nsIContent*>& aElements,
   if (mDefaultSummary) {
     aElements.AppendElement(mDefaultSummary);
   }
+}
+
+bool
+DetailsFrame::HasMainSummaryFrame(nsIFrame* aSummaryFrame)
+{
+  nsIFrame* firstChild =
+    nsPlaceholderFrame::GetRealFrameFor(mFrames.FirstChild());
+
+  return aSummaryFrame == firstChild;
 }
 
 } // namespace mozilla

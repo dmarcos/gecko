@@ -4,13 +4,11 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-interface MozControllers;
-interface MozFrameLoader;
+interface XULControllers;
 interface MozRDFCompositeDataSource;
 interface MozRDFResource;
-interface MozXULTemplateBuilder;
 
-[Func="IsChromeOrXBL"]
+[HTMLConstructor, Func="IsChromeOrXBL"]
 interface XULElement : Element {
   // Layout properties
   [SetterThrows]
@@ -82,14 +80,18 @@ interface XULElement : Element {
   [SetterThrows]
   attribute DOMString statusText;
 
+  // Properties for images
+  [SetterThrows]
+  attribute DOMString src;
+
   attribute boolean allowEvents;
 
   readonly attribute MozRDFCompositeDataSource? database;
-  readonly attribute MozXULTemplateBuilder?     builder;
+  readonly attribute XULTemplateBuilder?        builder;
   [Throws]
   readonly attribute MozRDFResource?            resource;
-  [Throws]
-  readonly attribute MozControllers             controllers;
+  [Throws, ChromeOnly]
+  readonly attribute XULControllers             controllers;
   [Throws]
   readonly attribute BoxObject?                 boxObject;
 
@@ -117,7 +119,7 @@ interface XULElement : Element {
 [NoInterfaceObject]
 interface MozFrameLoaderOwner {
   [ChromeOnly]
-  readonly attribute MozFrameLoader? frameLoader;
+  readonly attribute FrameLoader? frameLoader;
 
   [ChromeOnly]
   void setIsPrerendered();

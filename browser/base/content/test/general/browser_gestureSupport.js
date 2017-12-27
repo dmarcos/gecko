@@ -115,7 +115,7 @@ function test_clicks(type, clicks) {
 }
 
 function test_TestEventListeners() {
-  let e = test_helper1;  // easier to type this name
+  let e = test_helper1; // easier to type this name
 
   // Swipe gesture animation events
   e("MozSwipeGestureStart", 0, -0.7, 0);
@@ -300,7 +300,7 @@ function test_emitLatchedEvents(eventPrefix, initialDelta, cmd) {
 
   // Now go back in the opposite direction.
   test_utils.sendSimpleGestureEvent(eventPrefix + "Update", 0, 0, 0,
-				    -initialDelta, 0);
+                                    -initialDelta, 0);
   cumulativeDelta += -initialDelta;
   if (isIncreasing) {
     expect.dec++;
@@ -321,7 +321,7 @@ function test_emitLatchedEvents(eventPrefix, initialDelta, cmd) {
 
   // Go back to the original direction. The original command should trigger.
   test_utils.sendSimpleGestureEvent(eventPrefix + "Update", 0, 0, 0,
-				    initialDelta, 0);
+                                    initialDelta, 0);
   cumulativeDelta += initialDelta;
   if (isIncreasing) {
     expect.inc++;
@@ -342,14 +342,14 @@ function test_addCommand(prefName, id) {
   cmd.setAttribute("oncommand", "this.callCount++;");
 
   cmd.origPrefName = prefName;
-  cmd.origPrefValue = gPrefService.getCharPref(prefName);
-  gPrefService.setCharPref(prefName, id);
+  cmd.origPrefValue = Services.prefs.getCharPref(prefName);
+  Services.prefs.setCharPref(prefName, id);
 
   return cmd;
 }
 
 function test_removeCommand(cmd) {
-  gPrefService.setCharPref(cmd.origPrefName, cmd.origPrefValue);
+  Services.prefs.setCharPref(cmd.origPrefName, cmd.origPrefValue);
   test_commandset.removeChild(cmd);
 }
 
@@ -358,8 +358,8 @@ function test_latchedGesture(gesture, inc, dec, eventPrefix) {
   let branch = test_prefBranch + gesture + ".";
 
   // Put the gesture into latched mode.
-  let oldLatchedValue = gPrefService.getBoolPref(branch + "latched");
-  gPrefService.setBoolPref(branch + "latched", true);
+  let oldLatchedValue = Services.prefs.getBoolPref(branch + "latched");
+  Services.prefs.setBoolPref(branch + "latched", true);
 
   // Install the test commands for increasing and decreasing motion.
   let cmd = {
@@ -372,7 +372,7 @@ function test_latchedGesture(gesture, inc, dec, eventPrefix) {
   test_emitLatchedEvents(eventPrefix, -500, cmd);
 
   // Restore the gesture to its original configuration.
-  gPrefService.setBoolPref(branch + "latched", oldLatchedValue);
+  Services.prefs.setBoolPref(branch + "latched", oldLatchedValue);
   for (let dir in cmd)
     test_removeCommand(cmd[dir]);
 }
@@ -382,12 +382,12 @@ function test_thresholdGesture(gesture, inc, dec, eventPrefix) {
   let branch = test_prefBranch + gesture + ".";
 
   // Disable latched mode for this gesture.
-  let oldLatchedValue = gPrefService.getBoolPref(branch + "latched");
-  gPrefService.setBoolPref(branch + "latched", false);
+  let oldLatchedValue = Services.prefs.getBoolPref(branch + "latched");
+  Services.prefs.setBoolPref(branch + "latched", false);
 
   // Set the triggering threshold value to 50.
-  let oldThresholdValue = gPrefService.getIntPref(branch + "threshold");
-  gPrefService.setIntPref(branch + "threshold", 50);
+  let oldThresholdValue = Services.prefs.getIntPref(branch + "threshold");
+  Services.prefs.setIntPref(branch + "threshold", 50);
 
   // Install the test commands for increasing and decreasing motion.
   let cmdInc = test_addCommand(branch + inc, "test:incMotion");
@@ -425,8 +425,8 @@ function test_thresholdGesture(gesture, inc, dec, eventPrefix) {
   ok(cmdDec.callCount == 0, "Decreasing command was triggered");
 
   // Restore the gesture to its original configuration.
-  gPrefService.setBoolPref(branch + "latched", oldLatchedValue);
-  gPrefService.setIntPref(branch + "threshold", oldThresholdValue);
+  Services.prefs.setBoolPref(branch + "latched", oldLatchedValue);
+  Services.prefs.setIntPref(branch + "threshold", oldThresholdValue);
   test_removeCommand(cmdInc);
   test_removeCommand(cmdDec);
 }
@@ -611,7 +611,7 @@ function test_rotateGesturesOnTab() {
     if (rotation < 0)
       rotation += 360;
     return rotation;
-  }
+  };
 
   for (var initRot = 0; initRot < 360; initRot += 90) {
     // Test each case: at each 90 degree snap; cl/ccl;
@@ -641,7 +641,7 @@ function test_rotateGesturesOnTab() {
 }
 
 function test_rotateGestures() {
-  test_imageTab = gBrowser.addTab("chrome://branding/content/about-logo.png");
+  test_imageTab = BrowserTestUtils.addTab(gBrowser, "chrome://branding/content/about-logo.png");
   gBrowser.selectedTab = test_imageTab;
 
   gBrowser.selectedBrowser.addEventListener("load", test_rotateGesturesOnTab, true);

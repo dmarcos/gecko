@@ -15,8 +15,29 @@ test(() => {
 
 test(() => {
   // Constructing ReadableStream with an empty underlying byte source object as parameter shouldn't throw.
-  new ReadableStream({ type: 'bytes' });
+  new ReadableStream({ type: 'bytes' }).getReader({ mode: 'byob' });
+  // Constructor must perform ToString(type).
+  new ReadableStream({ type: { toString() {return 'bytes';} } })
+    .getReader({ mode: 'byob' });
+  new ReadableStream({ type: { toString: null, valueOf() {return 'bytes';} } })
+    .getReader({ mode: 'byob' });
 }, 'ReadableStream with byte source can be constructed with no errors');
+
+test(() => {
+  const ReadableStreamBYOBReader = new ReadableStream({ type: 'bytes' }).getReader({ mode: 'byob' }).constructor;
+  const rs = new ReadableStream({ type: 'bytes' });
+
+  let reader = rs.getReader({ mode: { toString() { return 'byob'; } } });
+  assert_true(reader instanceof ReadableStreamBYOBReader, 'must give a BYOB reader');
+  reader.releaseLock();
+
+  reader = rs.getReader({ mode: { toString: null, valueOf() {return 'byob';} } });
+  assert_true(reader instanceof ReadableStreamBYOBReader, 'must give a BYOB reader');
+  reader.releaseLock();
+
+  reader = rs.getReader({ mode: 'byob', notmode: 'ignored' });
+  assert_true(reader instanceof ReadableStreamBYOBReader, 'must give a BYOB reader');
+}, 'getReader({mode}) must perform ToString()');
 
 promise_test(() => {
   let startCalled = false;
@@ -101,7 +122,7 @@ promise_test(t => {
 }, 'ReadableStream with byte source: Construct with highWaterMark of 0');
 
 test(() => {
-  const rs = new ReadableStream({
+  new ReadableStream({
     start(c) {
       assert_equals(c.desiredSize, 10, 'desiredSize must start at the highWaterMark');
       c.close();
@@ -114,7 +135,7 @@ test(() => {
 }, 'ReadableStream with byte source: desiredSize when closed');
 
 test(() => {
-  const rs = new ReadableStream({
+  new ReadableStream({
     start(c) {
       assert_equals(c.desiredSize, 10, 'desiredSize must start at the highWaterMark');
       c.error();
@@ -1876,6 +1897,28 @@ promise_test(t => {
 }, 'ReadableStream with byte source: Throwing in pull in response to read(view) must be ignored if the stream is ' +
    'errored in it');
 
+promise_test(() => {
+  // Tests https://github.com/whatwg/streams/issues/686
+
+  let controller;
+  const rs = new ReadableStream({
+    autoAllocateChunkSize: 128,
+    start(c) {
+      controller = c;
+    },
+    type: 'bytes'
+  });
+
+  const readPromise = rs.getReader().read();
+
+  const br = controller.byobRequest;
+  controller.close();
+
+  br.respond(0);
+
+  return readPromise;
+}, 'ReadableStream with byte source: default reader + autoAllocateChunkSize + byobRequest interaction');
+
 test(() => {
   const ReadableStreamBYOBReader = new ReadableStream({ type: 'bytes' }).getReader({ mode: 'byob' }).constructor;
   const stream = new ReadableStream({ type: 'bytes' });
@@ -1899,5 +1942,31 @@ test(() => {
   const stream = new ReadableStream();
   assert_throws(new TypeError(), () => new ReadableStreamBYOBReader(stream), 'constructor must throw');
 }, 'ReadableStreamBYOBReader constructor requires a ReadableStream with type "bytes"');
+
+test(() => {
+  assert_throws(new RangeError(), () => new ReadableStream({ type: 'bytes' }, {
+    size() {
+      return 1;
+    }
+  }), 'constructor should throw for size function');
+
+  assert_throws(new RangeError(), () => new ReadableStream({ type: 'bytes' }, { size: null }),
+                'constructor should throw for size defined');
+
+  assert_throws(new RangeError(),
+                () => new ReadableStream({ type: 'bytes' }, new CountQueuingStrategy({ highWaterMark: 1 })),
+                'constructor should throw when strategy is CountQueuingStrategy');
+
+  assert_throws(new RangeError(),
+                () => new ReadableStream({ type: 'bytes' }, new ByteLengthQueuingStrategy({ highWaterMark: 512 })),
+                'constructor should throw when strategy is ByteLengthQueuingStrategy');
+
+  class HasSizeMethod {
+    size() {}
+ }
+
+  assert_throws(new RangeError(), () => new ReadableStream({ type: 'bytes' }, new HasSizeMethod()),
+                'constructor should throw when size on the prototype chain');
+}, 'ReadableStream constructor should not accept a strategy with a size defined if type is "bytes"');
 
 done();

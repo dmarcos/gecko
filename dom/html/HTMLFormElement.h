@@ -75,8 +75,10 @@ public:
                                 HTMLInputElement** aRadioOut) override;
   NS_IMETHOD WalkRadioGroup(const nsAString& aName, nsIRadioVisitor* aVisitor,
                             bool aFlushContent) override;
-  void AddToRadioGroup(const nsAString& aName, nsIFormControl* aRadio) override;
-  void RemoveFromRadioGroup(const nsAString& aName, nsIFormControl* aRadio) override;
+  void AddToRadioGroup(const nsAString& aName,
+                       HTMLInputElement* aRadio) override;
+  void RemoveFromRadioGroup(const nsAString& aName,
+                            HTMLInputElement* aRadio) override;
   virtual uint32_t GetRequiredRadioCount(const nsAString& aName) const override;
   virtual void RadioRequiredWillChange(const nsAString& aName,
                                        bool aRequiredAdded) override;
@@ -90,8 +92,9 @@ public:
 
   // nsIContent
   virtual bool ParseAttribute(int32_t aNamespaceID,
-                                nsIAtom* aAttribute,
+                                nsAtom* aAttribute,
                                 const nsAString& aValue,
+                                nsIPrincipal* aMaybeScriptedPrincipal,
                                 nsAttrValue& aResult) override;
   virtual nsresult GetEventTargetParent(
                      EventChainPreVisitor& aVisitor) override;
@@ -105,16 +108,14 @@ public:
                               bool aCompileEventHandlers) override;
   virtual void UnbindFromTree(bool aDeep = true,
                               bool aNullParent = true) override;
-  nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                   const nsAString& aValue, bool aNotify)
-  {
-    return SetAttr(aNameSpaceID, aName, nullptr, aValue, aNotify);
-  }
-  virtual nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                           nsIAtom* aPrefix, const nsAString& aValue,
-                           bool aNotify) override;
-  virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                const nsAttrValue* aValue, bool aNotify) override;
+  virtual nsresult BeforeSetAttr(int32_t aNamespaceID, nsAtom* aName,
+                                 const nsAttrValueOrString* aValue,
+                                 bool aNotify) override;
+  virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
+                                const nsAttrValue* aValue,
+                                const nsAttrValue* aOldValue,
+                                nsIPrincipal* aSubjectPrincipal,
+                                bool aNotify) override;
 
   /**
    * Forget all information about the current submission (and the fact that we
@@ -122,7 +123,8 @@ public:
    */
   void ForgetCurrentSubmission();
 
-  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult,
+                         bool aPreallocateChildren) const override;
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLFormElement,
                                            nsGenericHTMLElement)
@@ -221,6 +223,12 @@ public:
   bool ImplicitSubmissionIsDisabled() const;
 
   /**
+  * Check whether a given nsIFormControl is the last single line input control
+  * that is not disabled. aControl is expected to not be null.
+  */
+  bool IsLastActiveElement(const nsIFormControl* aControl) const;
+
+  /**
    * Check whether a given nsIFormControl is the default submit
    * element.  This is different from just comparing to
    * GetDefaultSubmitElement() in certain situations inside an update
@@ -316,7 +324,8 @@ public:
     SetHTMLAttr(nsGkAtoms::acceptcharset, aValue, aRv);
   }
 
-  // XPCOM GetAction() is OK
+  void GetAction(nsString& aValue);
+
   void SetAction(const nsAString& aValue, ErrorResult& aRv)
   {
     SetHTMLAttr(nsGkAtoms::action, aValue, aRv);
@@ -411,11 +420,12 @@ public:
   static void
   AssertDocumentOrder(const nsTArray<nsGenericHTMLFormElement*>& aControls,
                       nsIContent* aForm);
+  static void
+  AssertDocumentOrder(const nsTArray<RefPtr<nsGenericHTMLFormElement>>& aControls,
+                      nsIContent* aForm);
 #endif
 
   js::ExpandoAndGeneration mExpandoAndGeneration;
-
-  void RequestAutocomplete();
 
 protected:
   virtual JSObject* WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
@@ -430,7 +440,8 @@ protected:
   class RemoveElementRunnable : public Runnable {
   public:
     explicit RemoveElementRunnable(HTMLFormElement* aForm)
-      : mForm(aForm)
+      : Runnable("dom::HTMLFormElement::RemoveElementRunnable")
+      , mForm(aForm)
     {}
 
     NS_IMETHOD Run() override {
@@ -563,22 +574,6 @@ protected:
   nsDataHashtable<nsStringCaseInsensitiveHashKey,uint32_t> mRequiredRadioButtonCounts;
   /** The value missing state of each group */
   nsDataHashtable<nsStringCaseInsensitiveHashKey,bool> mValueMissingRadioGroups;
-  /** Whether we are currently processing a submit event or not */
-  bool mGeneratingSubmit;
-  /** Whether we are currently processing a reset event or not */
-  bool mGeneratingReset;
-  /** Whether we are submitting currently */
-  bool mIsSubmitting;
-  /** Whether the submission is to be deferred in case a script triggers it */
-  bool mDeferSubmission;
-  /** Whether we notified NS_FORMSUBMIT_SUBJECT listeners already */
-  bool mNotifiedObservers;
-  /** If we notified the listeners early, what was the result? */
-  bool mNotifiedObserversResult;
-  /** Keep track of what the popup state was when the submit was initiated */
-  PopupControlState mSubmitPopupState;
-  /** Keep track of whether a submission was user-initiated or not */
-  bool mSubmitInitiatedFromUserInput;
 
   /** The pending submission object */
   nsAutoPtr<HTMLFormSubmission> mPendingSubmission;
@@ -615,6 +610,9 @@ protected:
 
   nsInterfaceHashtable<nsStringHashKey,nsISupports> mPastNameLookupTable;
 
+  /** Keep track of what the popup state was when the submit was initiated */
+  PopupControlState mSubmitPopupState;
+
   /**
    * Number of invalid and candidate for constraint validation elements in the
    * form the last time UpdateValidity has been called.
@@ -622,6 +620,20 @@ protected:
    */
   int32_t mInvalidElementsCount;
 
+  /** Whether we are currently processing a submit event or not */
+  bool mGeneratingSubmit;
+  /** Whether we are currently processing a reset event or not */
+  bool mGeneratingReset;
+  /** Whether we are submitting currently */
+  bool mIsSubmitting;
+  /** Whether the submission is to be deferred in case a script triggers it */
+  bool mDeferSubmission;
+  /** Whether we notified NS_FORMSUBMIT_SUBJECT listeners already */
+  bool mNotifiedObservers;
+  /** If we notified the listeners early, what was the result? */
+  bool mNotifiedObserversResult;
+  /** Keep track of whether a submission was user-initiated or not */
+  bool mSubmitInitiatedFromUserInput;
   /**
    * Whether the submission of this form has been ever prevented because of
    * being invalid.

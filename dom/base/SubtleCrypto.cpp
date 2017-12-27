@@ -36,12 +36,17 @@ SubtleCrypto::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 
 #define SUBTLECRYPTO_METHOD_BODY(Operation, aRv, ...)                   \
   MOZ_ASSERT(mParent);                                                  \
-  RefPtr<Promise> p = Promise::Create(mParent, aRv);                  \
+  RefPtr<Promise> p = Promise::Create(mParent, aRv);                    \
   if (aRv.Failed()) {                                                   \
     return nullptr;                                                     \
   }                                                                     \
-  RefPtr<WebCryptoTask> task = WebCryptoTask::Create ## Operation ## Task(__VA_ARGS__); \
-  task->DispatchWithPromise(p); \
+  RefPtr<WebCryptoTask> task =                                          \
+    WebCryptoTask::Create ## Operation ## Task(__VA_ARGS__);            \
+  if (!task) {                                                          \
+    aRv.Throw(NS_ERROR_NULL_POINTER);                                   \
+    return nullptr;                                                     \
+  }                                                                     \
+  task->DispatchWithPromise(p);                                         \
   return p.forget();
 
 already_AddRefed<Promise>

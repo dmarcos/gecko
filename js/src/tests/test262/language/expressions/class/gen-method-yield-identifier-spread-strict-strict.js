@@ -2,26 +2,27 @@
 'use strict';
 // This file was procedurally generated from the following sources:
 // - src/generators/yield-identifier-spread-strict.case
-// - src/generators/default/class-method-definition.template
+// - src/generators/default/class-expr-method.template
 /*---
-description: It's an early error if the AssignmentExpression is a function body with yield as an identifier in strict mode. (Generator method as a ClassElement)
+description: It's an early error if the AssignmentExpression is a function body with yield as an identifier in strict mode. (Generator method as a ClassExpression element)
 esid: prod-GeneratorMethod
-features: [object-spread]
+features: [object-spread, generators]
 flags: [generated, onlyStrict]
 negative:
   phase: early
   type: SyntaxError
 info: |
-    ClassElement[Yield, Await]:
-      MethodDefinition[?Yield, ?Await]
+    ClassElement :
+      MethodDefinition
 
-    MethodDefinition[Yield, Await]:
-      GeneratorMethod[?Yield, ?Await]
+    MethodDefinition :
+      GeneratorMethod
 
     14.4 Generator Function Definitions
 
-    GeneratorMethod[Yield, Await]:
-      * PropertyName[?Yield, ?Await] ( UniqueFormalParameters[+Yield, ~Await] ) { GeneratorBody }
+    GeneratorMethod :
+      * PropertyName ( UniqueFormalParameters ) { GeneratorBody }
+
 
     Spread Properties
 
@@ -30,10 +31,11 @@ info: |
       ...AssignmentExpression[In, ?Yield]
 
 ---*/
+throw "Test262: This statement should not be evaluated.";
 
 var callCount = 0;
 
-class C { *gen() {
+var C = class {*gen() {
     callCount += 1;
     return {
          ...(function() {

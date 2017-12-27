@@ -3,7 +3,7 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
 # If we add unicode_literals, Python 2.6.1 (required for OS X 10.6) breaks.
-from __future__ import print_function
+from __future__ import absolute_import, print_function
 
 import platform
 import sys
@@ -27,9 +27,6 @@ from mozboot.util import (
 )
 
 APPLICATION_CHOICE = '''
-Please choose the version of Firefox you want to build:
-%s
-
 Note on Artifact Mode:
 
 Firefox for Desktop and Android supports a fast build mode called
@@ -56,9 +53,11 @@ But don't worry! You can always switch configurations later.
 You can learn more about Artifact mode builds at
 https://developer.mozilla.org/en-US/docs/Artifact_builds.
 
+Please choose the version of Firefox you want to build:
+%s
 Your choice: '''
 
-APPLICATIONS_LIST=[
+APPLICATIONS_LIST = [
     ('Firefox for Desktop Artifact Mode', 'browser_artifact_mode'),
     ('Firefox for Desktop', 'browser'),
     ('Firefox for Android Artifact Mode', 'mobile_android_artifact_mode'),
@@ -92,6 +91,21 @@ Would you like to create this directory?
 
 Your choice: '''
 
+STYLO_DIRECTORY_MESSAGE = '''
+Stylo packages require a directory to store shared, persistent state.
+On this machine, that directory is:
+
+  {statedir}
+
+Please restart bootstrap and create that directory when prompted.
+'''
+
+STYLO_REQUIRES_CLONE = '''
+Installing Stylo packages requires a checkout of mozilla-central. Once you
+have such a checkout, please re-run `./mach bootstrap` from the checkout
+directory.
+'''
+
 FINISHED = '''
 Your system should be ready to build %s!
 '''
@@ -108,7 +122,7 @@ instruction here to clone from the Mercurial repository:
 
 Or, if you really prefer vanilla flavor Git:
 
-    git clone https://git.mozilla.org/integration/gecko-dev.git
+    git clone https://github.com/mozilla/gecko-dev.git
 '''
 
 CONFIGURE_MERCURIAL = '''
@@ -124,13 +138,33 @@ optimally configured?
 Please enter your reply: '''
 
 CLONE_MERCURIAL = '''
-If you would like to clone the canonical Mercurial repository, please
+If you would like to clone the mozilla-unified Mercurial repository, please
 enter the destination path below.
 
 (If you prefer to use Git, leave this blank.)
+'''
 
+CLONE_MERCURIAL_PROMPT = '''
 Destination directory for Mercurial clone (leave empty to not clone): '''.lstrip()
 
+CLONE_MERCURIAL_NOT_EMPTY = '''
+ERROR! Destination directory '{}' is not empty.
+
+Would you like to clone to '{}'?
+
+  1. Yes
+  2. No, let me enter another path
+  3. No, stop cloning
+
+Please enter your reply: '''.lstrip()
+
+CLONE_MERCURIAL_NOT_EMPTY_FALLBACK_FAILED = '''
+ERROR! Destination directory '{}' is not empty.
+'''
+
+CLONE_MERCURIAL_NOT_DIR = '''
+ERROR! Destination '{}' exists but is not a directory.
+'''
 
 DEBIAN_DISTROS = (
     'Debian',
@@ -210,6 +244,39 @@ class Bootstrapper(object):
 
         self.instance = cls(**args)
 
+    def input_clone_dest(self):
+        print(CLONE_MERCURIAL)
+
+        while True:
+            dest = raw_input(CLONE_MERCURIAL_PROMPT)
+            dest = dest.strip()
+            if not dest:
+                return ''
+
+            dest = os.path.expanduser(dest)
+            if not os.path.exists(dest):
+                return dest
+
+            if not os.path.isdir(dest):
+                print(CLONE_MERCURIAL_NOT_DIR.format(dest))
+                continue
+
+            if os.listdir(dest) == []:
+                return dest
+
+            newdest = os.path.join(dest, 'mozilla-unified')
+            if os.path.exists(newdest):
+                print(CLONE_MERCURIAL_NOT_EMPTY_FALLBACK_FAILED.format(dest))
+                continue
+
+            choice = self.instance.prompt_int(prompt=CLONE_MERCURIAL_NOT_EMPTY.format(dest,
+                                              newdest), low=1, high=3)
+            if choice == 1:
+                return newdest
+            if choice == 2:
+                continue
+            return ''
+
     def bootstrap(self):
         if self.choice is None:
             # Like ['1. Firefox for Desktop', '2. Firefox for Android Artifact Mode', ...].
@@ -218,7 +285,8 @@ class Bootstrapper(object):
             prompt_choice = self.instance.prompt_int(prompt=prompt, low=1, high=len(APPLICATIONS))
             name, application = APPLICATIONS_LIST[prompt_choice-1]
         elif self.choice not in APPLICATIONS.keys():
-            raise Exception('Please pick a valid application choice: (%s)' % '/'.join(APPLICATIONS.keys()))
+            raise Exception('Please pick a valid application choice: (%s)' %
+                            '/'.join(APPLICATIONS.keys()))
         else:
             name, application = APPLICATIONS[self.choice]
 
@@ -251,9 +319,13 @@ class Bootstrapper(object):
 
         state_dir_available = os.path.exists(state_dir)
 
-        # Possibly configure Mercurial if the user wants to.
+        r = current_firefox_checkout(check_output=self.instance.check_output,
+                                     hg=self.instance.which('hg'))
+        (checkout_type, checkout_root) = r
+
+        # Possibly configure Mercurial, but not if the current checkout is Git.
         # TODO offer to configure Git.
-        if hg_installed and state_dir_available:
+        if hg_installed and state_dir_available and checkout_type != 'git':
             configure_hg = False
             if not self.instance.no_interactive:
                 choice = self.instance.prompt_int(prompt=CONFIGURE_MERCURIAL,
@@ -267,24 +339,44 @@ class Bootstrapper(object):
                 configure_mercurial(self.instance.which('hg'), state_dir)
 
         # Offer to clone if we're not inside a clone.
-        checkout_type = current_firefox_checkout(check_output=self.instance.check_output,
-                                                 hg=self.instance.which('hg'))
         have_clone = False
 
         if checkout_type:
             have_clone = True
         elif hg_installed and not self.instance.no_interactive:
-            dest = raw_input(CLONE_MERCURIAL)
-            dest = dest.strip()
+            dest = self.input_clone_dest()
             if dest:
-                dest = os.path.expanduser(dest)
                 have_clone = clone_firefox(self.instance.which('hg'), dest)
+                checkout_root = dest
 
         if not have_clone:
             print(SOURCE_ADVERTISE)
 
+        # Install the clang packages needed for developing stylo.
+        if not self.instance.no_interactive:
+            # The best place to install our packages is in the state directory
+            # we have.  If the user doesn't have one, we need them to re-run
+            # bootstrap and create the directory.
+            #
+            # XXX Android bootstrap just assumes the existence of the state
+            # directory and writes the NDK into it.  Should we do the same?
+            if not state_dir_available:
+                print(STYLO_DIRECTORY_MESSAGE.format(statedir=state_dir))
+                sys.exit(1)
+
+            if not have_clone:
+                print(STYLO_REQUIRES_CLONE)
+                sys.exit(1)
+
+            self.instance.state_dir = state_dir
+            self.instance.ensure_stylo_packages(state_dir, checkout_root)
+
+            if 'mobile_android' in application:
+                self.instance.ensure_proguard_packages(state_dir, checkout_root)
+
         print(self.finished % name)
-        if not (self.instance.which('rustc') and self.instance._parse_version('rustc') >= MODERN_RUST_VERSION):
+        if not (self.instance.which('rustc') and self.instance._parse_version('rustc')
+                >= MODERN_RUST_VERSION):
             print("To build %s, please restart the shell (Start a new terminal window)" % name)
 
         # Like 'suggest_browser_mozconfig' or 'suggest_mobile_android_mozconfig'.
@@ -317,8 +409,6 @@ def configure_mercurial(hg, root_state_dir):
 
 def update_mercurial_repo(hg, url, dest, revision):
     """Perform a clone/pull + update of a Mercurial repository."""
-    args = [hg]
-
     # Disable common extensions whose older versions may cause `hg`
     # invocations to abort.
     disable_exts = [
@@ -332,22 +422,31 @@ def update_mercurial_repo(hg, url, dest, revision):
         'push-to-try',
         'reviewboard',
     ]
-    for ext in disable_exts:
-        args.extend(['--config', 'extensions.%s=!' % ext])
+
+    def disable_extensions(args):
+        for ext in disable_exts:
+            args.extend(['--config', 'extensions.%s=!' % ext])
+
+    pull_args = [hg]
+    disable_extensions(pull_args)
 
     if os.path.exists(dest):
-        args.extend(['pull', url])
+        pull_args.extend(['pull', url])
         cwd = dest
     else:
-        args.extend(['clone', '--noupdate', url, dest])
+        pull_args.extend(['clone', '--noupdate', url, dest])
         cwd = '/'
+
+    update_args = [hg]
+    disable_extensions(update_args)
+    update_args.extend(['update', '-r', revision])
 
     print('=' * 80)
     print('Ensuring %s is up to date at %s' % (url, dest))
 
     try:
-        subprocess.check_call(args, cwd=cwd)
-        subprocess.check_call([hg, 'update', '-r', revision], cwd=dest)
+        subprocess.check_call(pull_args, cwd=cwd)
+        subprocess.check_call(update_args, cwd=dest)
     finally:
         print('=' * 80)
 
@@ -391,7 +490,8 @@ def clone_firefox(hg, dest):
     res = subprocess.call([hg, 'pull', 'https://hg.mozilla.org/mozilla-unified'], cwd=dest)
     print('')
     if res:
-        print('error pulling; try running `hg pull https://hg.mozilla.org/mozilla-unified` manually')
+        print('error pulling; try running `hg pull https://hg.mozilla.org/mozilla-unified` '
+              'manually')
         return False
 
     print('updating to "central" - the development head of Gecko and Firefox')
@@ -422,19 +522,22 @@ def current_firefox_checkout(check_output, hg=None):
             try:
                 node = check_output([hg, 'log', '-r', '0', '--template', '{node}'], cwd=path)
                 if node in HG_ROOT_REVISIONS:
-                    return 'hg'
+                    return ('hg', path)
                 # Else the root revision is different. There could be nested
                 # repos. So keep traversing the parents.
             except subprocess.CalledProcessError:
                 pass
 
-        # TODO check git remotes or `git rev-parse -q --verify $sha1^{commit}`
-        # for signs of Firefox.
+        # Just check for known-good files in the checkout, to prevent attempted
+        # foot-shootings.  Determining a canonical git checkout of mozilla-central
+        # is...complicated
         elif os.path.exists(git_dir):
-            return 'git'
+            moz_configure = os.path.join(path, 'moz.configure')
+            if os.path.exists(moz_configure):
+                return ('git', path)
 
         path, child = os.path.split(path)
         if child == '':
             break
 
-    return None
+    return (None, None)

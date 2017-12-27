@@ -6,16 +6,14 @@
 XPCOMUtils.defineLazyModuleGetter(this, "HttpServer",
   "resource://testing-common/httpd.js");
 
-registerCleanupFunction(function*() {
-  yield task_resetState();
-  yield task_clearHistory();
+registerCleanupFunction(async function() {
+  await task_resetState();
+  await PlacesUtils.history.clear();
 });
 
-add_task(function* test_indicatorDrop() {
-  let scriptLoader = Cc["@mozilla.org/moz/jssubscript-loader;1"].
-      getService(Ci.mozIJSSubScriptLoader);
+add_task(async function test_indicatorDrop() {
   let EventUtils = {};
-  scriptLoader.loadSubScript("chrome://mochikit/content/tests/SimpleTest/EventUtils.js", EventUtils);
+  Services.scriptloader.loadSubScript("chrome://mochikit/content/tests/SimpleTest/EventUtils.js", EventUtils);
 
   async function drop(win, urls) {
     let dragData = [[{type: "text/plain", data: urls.join("\n")}]];
@@ -54,19 +52,19 @@ add_task(function* test_indicatorDrop() {
   }
 
   // Ensure that state is reset in case previous tests didn't finish.
-  yield task_resetState();
+  await task_resetState();
 
   setDownloadDir();
 
   startServer();
 
-  let win = yield openLibrary("Downloads");
+  let win = await openLibrary("Downloads");
   registerCleanupFunction(function() {
     win.close();
   });
 
-  yield drop(win, [httpUrl("file1.txt")]);
-  yield drop(win, [httpUrl("file1.txt"),
+  await drop(win, [httpUrl("file1.txt")]);
+  await drop(win, [httpUrl("file1.txt"),
                    httpUrl("file2.txt"),
                    httpUrl("file3.txt")]);
 });

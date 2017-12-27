@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -18,6 +19,8 @@ class nsPresContext;
 
 namespace mozilla {
 
+class ServoRestyleState;
+
 /**
   * ViewportFrame is the parent of a single child - the doc root frame or a scroll frame
   * containing the doc root frame. ViewportFrame stores this child in its primary child
@@ -25,14 +28,13 @@ namespace mozilla {
   */
 class ViewportFrame : public nsContainerFrame {
 public:
-  NS_DECL_QUERYFRAME_TARGET(ViewportFrame)
   NS_DECL_QUERYFRAME
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_FRAMEARENA_HELPERS(ViewportFrame)
 
   explicit ViewportFrame(nsStyleContext* aContext)
-    : nsContainerFrame(aContext)
-    , mView(nullptr)
+    : ViewportFrame(aContext, kClassID)
   {}
+
   virtual ~ViewportFrame() { } // useful for debugging
 
   virtual void Init(nsIContent*       aContent,
@@ -50,25 +52,17 @@ public:
 #endif
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
-                                const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists) override;
 
   void BuildDisplayListForTopLayer(nsDisplayListBuilder* aBuilder,
                                    nsDisplayList* aList);
 
-  virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
-  virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
-  virtual void Reflow(nsPresContext*           aPresContext,
-                      ReflowOutput&     aDesiredSize,
+  virtual nscoord GetMinISize(gfxContext *aRenderingContext) override;
+  virtual nscoord GetPrefISize(gfxContext *aRenderingContext) override;
+  virtual void Reflow(nsPresContext* aPresContext,
+                      ReflowOutput& aDesiredSize,
                       const ReflowInput& aReflowInput,
-                      nsReflowStatus&          aStatus) override;
-
-  /**
-   * Get the "type" of the frame
-   *
-   * @see nsGkAtoms::viewportFrame
-   */
-  virtual nsIAtom* GetType() const override;
+                      nsReflowStatus& aStatus) override;
 
   virtual bool ComputeCustomOverflow(nsOverflowAreas& aOverflowAreas) override;
 
@@ -80,11 +74,27 @@ public:
    */
   nsRect AdjustReflowInputAsContainingBlock(ReflowInput* aReflowInput) const;
 
+  /**
+   * Update our style (and recursively the styles of any anonymous boxes we
+   * might own)
+   */
+  void UpdateStyle(ServoRestyleState& aStyleSet);
+
+  /**
+   * Return our single anonymous box child.
+   */
+  void AppendDirectlyOwnedAnonBoxes(nsTArray<OwnedAnonBox>& aResult) override;
+
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override;
 #endif
 
 protected:
+  ViewportFrame(nsStyleContext* aContext, ClassID aID)
+    : nsContainerFrame(aContext, aID)
+    , mView(nullptr)
+  {}
+
   /**
    * Calculate how much room is available for fixed frames. That means
    * determining if the viewport is scrollable and whether the vertical and/or

@@ -16,7 +16,6 @@ test();
 
 function test()
 {
-  enterFunc ('test');
   printBugNumber(BUGNUMBER);
   printStatus (summary);
  
@@ -24,11 +23,9 @@ function test()
   var cyclic = [];
   cyclic[0] = cyclic;
   ({__proto__: cyclic})
-    for (var y = 0; y < 3; ++y) { for each (let z in ['', function(){}]) { let x =
+    for (var y = 0; y < 3; ++y) { for (let z of ['', function(){}]) { let x =
                                                1, c = []; } }
 
 
   reportCompare(expect, actual, summary);
-
-  exitFunc ('test');
 }

@@ -106,7 +106,6 @@ public:
   LibHandle(const char *path)
   : directRefCnt(0), path(path ? strdup(path) : nullptr), mappable(nullptr)
   {
-    pthread_mutex_init(&mutex, nullptr);
   }
 
   /**
@@ -154,9 +153,8 @@ public:
    */
   void AddDirectRef()
   {
-    AutoLock lock(&mutex);
-    ++directRefCnt;
     mozilla::external::AtomicRefCounted<LibHandle>::AddRef();
+    ++directRefCnt;
   }
 
   /**
@@ -165,16 +163,12 @@ public:
    */
   bool ReleaseDirectRef()
   {
-    AutoLock lock(&mutex);
-    bool ret = false;
-    if (directRefCnt) {
-      MOZ_ASSERT(directRefCnt <=
-                 mozilla::external::AtomicRefCounted<LibHandle>::refCount());
-      if (--directRefCnt)
-        ret = true;
-      mozilla::external::AtomicRefCounted<LibHandle>::Release();
-    }
-    return ret;
+    const MozRefCountType count = --directRefCnt;
+    MOZ_ASSERT(count + 1 > 0);
+    MOZ_ASSERT(count + 1 <=
+               mozilla::external::AtomicRefCounted<LibHandle>::refCount());
+    mozilla::external::AtomicRefCounted<LibHandle>::Release();
+    return !!count;
   }
 
   /**
@@ -211,13 +205,6 @@ public:
   virtual const void *FindExidx(int *pcount) const = 0;
 #endif
 
-  /**
-   * Shows some stats about the Mappable instance. The when argument is to be
-   * used by the caller to give an identifier of the when the stats call is
-   * made.
-   */
-  virtual void stats(const char *when) const { };
-
 protected:
   /**
    * Returns a mappable object for use by MappableMMap and related functions.
@@ -236,13 +223,11 @@ protected:
   virtual SystemElf *AsSystemElf() { return nullptr; }
 
 private:
-  MozRefCountType directRefCnt;
+  mozilla::Atomic<MozRefCountType> directRefCnt;
   char *path;
 
   /* Mappable object keeping the result of GetMappable() */
   mutable RefPtr<Mappable> mappable;
-
-  mutable pthread_mutex_t mutex;
 };
 
 /**
@@ -369,7 +354,7 @@ private:
    * SIGSEGV handler registered with __wrap_signal or __wrap_sigaction.
    */
   struct sigaction action;
-  
+
   /**
    * ElfLoader SIGSEGV handler.
    */
@@ -468,7 +453,11 @@ protected:
   const char *lastError;
 
 private:
-  ElfLoader() : expect_shutdown(true) {}
+  ElfLoader() : expect_shutdown(true)
+  {
+    pthread_mutex_init(&handlesMutex, nullptr);
+  }
+
   ~ElfLoader();
 
   /* Initialization code that can't run during static initialization. */
@@ -484,21 +473,20 @@ private:
    * we wouldn't treat non-Android differently, but glibc uses versioned
    * symbols which this linker doesn't support. */
   RefPtr<LibHandle> libc;
+
+  /* And for libm. */
+  RefPtr<LibHandle> libm;
 #endif
 
   /* Bookkeeping */
   typedef std::vector<LibHandle *> LibHandleList;
   LibHandleList handles;
 
+  pthread_mutex_t handlesMutex;
+
 protected:
   friend class CustomElf;
   friend class LoadedElf;
-  /**
-   * Show some stats about Mappables in CustomElfs. The when argument is to
-   * be used by the caller to give an identifier of the when the stats call
-   * is made.
-   */
-  static void stats(const char *when);
 
   /* Definition of static destructors as to be used for C++ ABI compatibility */
   typedef void (*Destructor)(void *object);
