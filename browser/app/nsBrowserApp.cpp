@@ -2,6 +2,8 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+#include "OVR_Platform.h"
+#include "OVR_Requests_Entitlement.h"
 
 #include "nsXULAppAPI.h"
 #include "mozilla/XREAppData.h"
@@ -163,6 +165,13 @@ Bootstrap::UniquePtr gBootstrap;
 
 static int do_main(int argc, char* argv[], char* envp[])
 {
+  if (ovr_PlatformInitializeWindows("1629560483789871") != ovrPlatformInitialize_Success)
+  {
+    Output( "Error initalizing Oculus Platform\n" );
+  }
+
+  ovr_Entitlement_GetIsViewerEntitled()
+  
   // Allow firefox.exe to launch XULRunner apps via -app <application.ini>
   // Note that -app must be the *first* argument.
   const char *appDataFile = getenv("XUL_APP_FILE");

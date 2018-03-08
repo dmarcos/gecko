@@ -51,7 +51,10 @@ LOCAL_INCLUDES += [
     '/toolkit/xre',
     '/xpcom/base',
     '/xpcom/build',
+    'OVR_PlatformSDK',
 ]
+
+USE_LIBS += [ '/security/nss/LibOVRPlatform64_1.lib' ]
 
 if CONFIG['LIBFUZZER']:
     USE_LIBS += [ 'fuzzer' ]
